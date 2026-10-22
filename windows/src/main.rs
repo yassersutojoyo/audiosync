@@ -31,6 +31,7 @@ mod os_version;
 #[cfg(any(windows, test))]
 mod placement;
 mod platform;
+mod remote;
 #[cfg(any(windows, test))]
 mod settings;
 #[cfg(any(windows, test))]
@@ -490,6 +491,7 @@ fn run(
     log.log(|| "the event loop ended".to_owned());
     // Changes since the last poll, and where the main window is.
     app.save_settings();
+    app.stop_remote_at_exit();
     Ok(())
 }
 

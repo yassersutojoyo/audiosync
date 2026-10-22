@@ -9,7 +9,8 @@
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
 //! auto-connect marks, the groups, the equalizer, View > Show Virtual
-//! Devices, View > Appearance, and the main window's place and size.
+//! Devices, View > Appearance, the main window's place and size, and File >
+//! Web Remote with its port.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
 //! version is read for the fields it has; one from a newer version, one that
@@ -48,6 +49,7 @@ use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sa
 use serde::{Deserialize, Serialize};
 
 use crate::data_folder;
+use crate::remote::RemoteSettings;
 use crate::ui_model::WindowFrame;
 
 /// The file's name in the app's data folder.
@@ -296,6 +298,8 @@ pub struct Settings {
     /// What a session does when the app it captures quits, as the core
     /// stores it: `stop` or `system` (spec S227).
     pub when_source_quits: String,
+    /// File > Web Remote: whether it is on, and its port.
+    pub remote: RemoteSettings,
 }
 
 impl Default for Settings {
@@ -315,6 +319,7 @@ impl Default for Settings {
             window: None,
             airplay_adjustment_ms: 0.0,
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
+            remote: RemoteSettings::default(),
         }
     }
 }
@@ -449,6 +454,7 @@ impl Settings {
             when_source_quits: WhenSourceQuits::from_stored(Some(&self.when_source_quits))
                 .stored()
                 .to_owned(),
+            remote: self.remote.clamped(),
         }
     }
 
@@ -731,6 +737,10 @@ mod tests {
                 height: 700.0,
                 maximized: true,
             }),
+            remote: RemoteSettings {
+                on: true,
+                port: 8123,
+            },
             ..Settings::default()
         };
         settings.outputs.insert(
@@ -782,6 +792,32 @@ mod tests {
                 adjusted: false
             }
         );
+    }
+
+    #[test]
+    fn the_web_remote_is_off_by_default_and_keeps_a_usable_port() {
+        let read = |json: &str| Settings::from_json(json).expect("read");
+        let (older, found) = read(r#"{"version": 2}"#);
+        assert_eq!(older.remote, RemoteSettings::default());
+        assert!(!older.remote.on);
+        assert!(matches!(
+            found,
+            Loaded::Read {
+                adjusted: false,
+                ..
+            }
+        ));
+        let (on, _) = read(r#"{"version": 2, "remote": {"on": true, "port": 9000}}"#);
+        assert_eq!(
+            on.remote,
+            RemoteSettings {
+                on: true,
+                port: 9000
+            }
+        );
+        let (low, found) = read(r#"{"version": 2, "remote": {"on": true, "port": 80}}"#);
+        assert_eq!(low.remote.port, audiosync_remote::DEFAULT_PORT);
+        assert!(matches!(found, Loaded::Read { adjusted: true, .. }));
     }
 
     #[test]

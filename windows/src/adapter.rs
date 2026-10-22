@@ -452,6 +452,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             show_virtual_devices: saved.show_virtual_devices,
             appearance: saved.appearance,
             window: saved.window,
+            remote: saved.remote,
         };
         self.saved = saved;
     }
@@ -547,6 +548,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             window: self.view.window,
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
+            remote: self.view.remote,
         }
         .clamped()
     }
@@ -5190,6 +5192,10 @@ mod tests {
             show_virtual_devices: true,
             appearance: ui_model::Appearance::Light,
             window: None,
+            remote: crate::remote::RemoteSettings {
+                on: true,
+                port: 8123,
+            },
         });
         assert!(adapter.snapshot().running);
         adapter.poll();
@@ -5221,6 +5227,13 @@ mod tests {
         assert_eq!(
             adapter.view_settings().appearance,
             ui_model::Appearance::Light
+        );
+        assert_eq!(
+            adapter.view_settings().remote,
+            crate::remote::RemoteSettings {
+                on: true,
+                port: 8123
+            }
         );
 
         // A new group gets the next number, and streaming starts from the

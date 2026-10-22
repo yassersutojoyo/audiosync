@@ -20,6 +20,12 @@ audiosync-airplay = { path = "../airplay" }
 # AudioSync's own Google Cast sender: discovery and one session at a time, run
 # by the host's worker thread.
 audiosync-cast = { path = "../cast" }
+# AudioSync's own web remote: the page and API a paired phone uses, on the
+# crate's own threads.
+audiosync-remote = { path = "../remote" }
+# The web remote's address as a QR code (MIT OR Apache-2.0); without default
+# features it has no dependencies, and the app draws the modules itself.
+qrcode = { version = "0.14.1", default-features = false }
 # Used under GPL-3.0-only (Slint is also offered under royalty-free and
 # commercial licenses), checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
 # unstable-winit-030: the winit window behind a Slint window, to focus it and

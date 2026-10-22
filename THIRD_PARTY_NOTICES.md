@@ -124,6 +124,12 @@ there, these reach the Windows executable on top of the ones above:
 `byteorder` (Unlicense OR MIT). The macOS and Linux TLS crates and the
 build-time ones aren't compiled into it.
 
+The Windows app also contains AudioSync's own web remote (`remote/`,
+GPL-3.0-or-later), whose `getrandom`, `serde_json` and `sha2` the app already
+contained, and draws the remote's address as a QR code with `qrcode` (MIT OR
+Apache-2.0), built without its optional features, so it brings in no other
+crate.
+
 The Windows app reads and writes its settings file with `serde` and
 `serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
 and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the

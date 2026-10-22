@@ -40,6 +40,7 @@ use crate::{
 };
 
 mod help_window;
+mod remote_window;
 
 /// The digits the PIN field keeps of what was typed: four at most.
 fn pin_digits(text: &str) -> String {
@@ -67,6 +68,8 @@ struct UiState {
     show_virtual: bool,
     /// View > Appearance as chosen, which the theme preview doesn't change.
     appearance: ui_model::Appearance,
+    /// File > Web Remote.
+    remote: crate::remote::RemoteSettings,
     listed_virtual: ListedVirtual,
 }
 
@@ -510,6 +513,9 @@ pub struct App {
     guide_follows_notice: Cell<bool>,
     /// The AudioSync Guide (Help > AudioSync Guide), `help_window.rs`.
     help: crate::HelpWindow,
+    /// File > Web Remote, `remote_window.rs`.
+    remote_window: crate::RemoteWindow,
+    remote: RefCell<remote_window::RemoteHost>,
     log: DebugLog,
     ui: RefCell<UiState>,
     /// What has the keyboard focus in the main window's lists.
@@ -696,6 +702,8 @@ impl App {
             guide_steps: Rc::new(VecModel::default()),
             guide_follows_notice: Cell::new(false),
             help: crate::HelpWindow::new()?,
+            remote_window: crate::RemoteWindow::new()?,
+            remote: RefCell::default(),
             log,
             ui: RefCell::default(),
             main_focus: RefCell::default(),
@@ -727,7 +735,9 @@ impl App {
         app.connect_password_dialog();
         app.connect_guide();
         app.connect_help();
+        app.connect_remote();
         app.restore_view();
+        app.restore_remote();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
@@ -752,7 +762,7 @@ impl App {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn set_media_controls(&self, controls: Box<dyn MediaControls>) {
         self.now_playing.borrow_mut().set_controls(controls);
-        self.sync_now_playing();
+        let _ = self.sync_now_playing();
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -830,19 +840,21 @@ impl App {
         let changed = self.backend.borrow_mut().poll();
         if changed {
             self.refresh();
-        } else {
-            self.sync_now_playing();
+        } else if self.sync_now_playing() {
+            self.publish_remote(&self.snapshot());
         }
+        self.poll_remote();
     }
 
     /// Reads the media sessions for the Now Playing card while the main
-    /// window shows, and shows what changed.
-    fn sync_now_playing(&self) {
+    /// window shows or the web remote listens, and shows what changed.
+    /// Returns whether the track changed.
+    fn sync_now_playing(&self) -> bool {
         let window = self.main.window();
-        let shows = window.is_visible() && !window.is_minimized();
+        let shows = (window.is_visible() && !window.is_minimized()) || self.remote_listening();
         let source = self.now_playing_source.borrow().clone();
         if !self.now_playing.borrow_mut().sync(source, shows) {
-            return;
+            return false;
         }
         let card = self.now_playing.borrow();
         let Some(track) = card.track() else {
@@ -852,7 +864,7 @@ impl App {
                 self.main.invoke_focus_source();
             }
             self.main.set_now_playing_shown(false);
-            return;
+            return true;
         };
         self.main.set_now_playing_title(track.title.as_str().into());
         self.main
@@ -870,6 +882,7 @@ impl App {
         self.main
             .set_now_playing_artwork(artwork.unwrap_or_default());
         self.main.set_now_playing_shown(true);
+        true
     }
 
     fn send_transport(&self, button: i32) {
@@ -964,6 +977,9 @@ impl App {
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.help.global::<Palette>().set_color_scheme(scheme);
+        self.remote_window
+            .global::<Palette>()
+            .set_color_scheme(scheme);
         for window in [
             self.main.window(),
             self.flyout.window(),
@@ -974,6 +990,7 @@ impl App {
             self.about.window(),
             self.guide.window(),
             self.help.window(),
+            self.remote_window.window(),
         ] {
             self.theme_frame(window);
             if std::ptr::eq(window, self.main.window()) {
@@ -1366,7 +1383,8 @@ impl App {
         self.show_equalizer_state(&state.equalizer);
         drop(ui);
         *self.now_playing_source.borrow_mut() = CardSource::of(&state);
-        self.sync_now_playing();
+        let _ = self.sync_now_playing();
+        self.publish_remote(&state);
         if let Some(callback) = self.on_refresh.borrow().as_ref() {
             callback(&state);
         }
@@ -1638,6 +1656,7 @@ impl App {
         self.help.on_exit_requested(quit);
         self.guide.on_exit_requested(quit);
         self.about.on_exit_requested(quit);
+        self.remote_window.on_exit_requested(quit);
         let w = weak.clone();
         main.on_about_requested(move || {
             with_app(&w, |app| {
@@ -2101,6 +2120,7 @@ impl App {
             show_virtual_devices: self.ui.borrow().show_virtual,
             appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
+            remote: self.ui.borrow().remote,
         };
         if settings != saved {
             backend.set_view_settings(settings);
@@ -2115,6 +2135,7 @@ impl App {
         let saved = self.backend.borrow().view_settings();
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
+        self.ui.borrow_mut().remote = saved.remote;
         self.apply_appearance(saved.appearance);
         let Some(saved_frame) = saved.window else {
             return;
