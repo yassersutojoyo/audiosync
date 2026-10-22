@@ -2766,6 +2766,33 @@ pub mod tests {
     }
 
     #[test]
+    fn forgetting_an_airplay2_pairing_reaches_the_senders_copy_once_the_speaker_is_gone() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::HomeKitPaired(homekit(0x33)));
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, false), Ok(()));
+        fake.gone(&tv);
+        airplay.poll();
+        assert!(!airplay.listed.contains_key(&id) && !airplay.added.contains_key(&id));
+
+        fake.take_calls();
+        airplay.forget_pairing(&id);
+        assert_eq!(airplay.store.homekit(&id), None);
+        assert!(
+            fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+            "the sender forgets its copy too"
+        );
+    }
+
+    #[test]
     fn a_forgotten_airplay2_pairing_the_file_cant_take_is_reported() {
         use crate::audio::pairings::tests::{homekit, sealer};
         use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};

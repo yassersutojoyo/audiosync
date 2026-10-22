@@ -5477,6 +5477,42 @@ mod tests {
     }
 
     #[test]
+    fn a_capture_started_while_a_hung_one_holds_the_cast_tap_takes_it_once_its_back() {
+        use crate::audio::cast::tests::FakeCast;
+        let mut backend = backend();
+        backend.set_cast(FakeCast::default().link());
+        let held = backend
+            .cast
+            .as_ref()
+            .and_then(CastSpeakers::lease)
+            .expect("the tap is free");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(!backend.driver().capture_feeds_cast());
+        backend.poll();
+        assert!(!backend.driver().capture_feeds_cast(), "still held");
+
+        drop(held);
+        let events = backend.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Stopped { .. })),
+            "{events:?}"
+        );
+        assert!(
+            backend.driver().capture_feeds_cast(),
+            "the capture feeds the Cast speaker"
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.poll();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            2,
+            "it starts once"
+        );
+    }
+
+    #[test]
     fn a_new_l_from_the_sender_re_anchors_the_playing_outputs() {
         let (mut backend, fake, kitchen) = with_airplay();
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
