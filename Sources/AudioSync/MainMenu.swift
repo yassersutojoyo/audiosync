@@ -59,6 +59,7 @@ enum MainMenu {
         window.addItem(.separator())
         window.addItem(item(t.mainWindowTitle, #selector(AppDelegate.showMainWindow(_:)), "0"))
         window.addItem(item(t.equalizer, #selector(AppDelegate.showEqualizer(_:)), "e", [.command, .option]))
+        window.addItem(item(t.webRemoteMenu, #selector(AppDelegate.showWebRemote(_:))))
         window.addItem(.separator())
         window.addItem(item(t.menuBringAllToFront, #selector(NSApplication.arrangeInFront(_:))))
         NSApp.windowsMenu = window

@@ -87,6 +87,7 @@ final class AppModel: ObservableObject {
         /// The main window came on screen or left it (closed, minimized, covered).
         var mainWindowVisible: (Bool) -> Void = { _ in }
         var openEqualizer: () -> Void = {}
+        var openWebRemote: () -> Void = {}
         /// Dismiss the notice with this subject.
         var dismissNotice: (String) -> Void = { _ in }
         var dismissAllNotices: () -> Void = {}

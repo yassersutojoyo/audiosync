@@ -54,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var equalizerWindow: EqualizerWindowController?
     /// The Guide, made the first time it opens and kept.
     var helpWindow: NSWindow?
+    var webRemote: WebRemote?
+    var webRemoteWindow: WebRemoteWindowController?
 
     // MARK: - AudioSync's own AirPlay sender (`+NativeAirPlay`)
 
@@ -280,6 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // AudioSync's own sender and its discovery start, after the window,
         // so a Local Network prompt they raise comes up in front of it.
         reconcileAirPlaySpeakers()
+        webRemote?.startIfEnabled()   // after the window too: listening on the network can raise that prompt
         pushModel()
     }
 
@@ -484,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let castTeardown = castSender?.beginShutdown()
         let castDeadline = DispatchTime.now() + CastSender.shutdownWait
         castSender = nil
+        webRemote?.shutdown()   // no phone changes anything while the session winds down
         appModel.dropDelayDrafts()
         safetyNetTimer?.invalidate()
         dueTimer?.invalidate()

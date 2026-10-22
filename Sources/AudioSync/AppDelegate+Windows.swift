@@ -29,6 +29,11 @@ extension AppDelegate {
 
         appModel.text = text
         appModel.actions = makeActions()
+        let saved = AppSettings.load(SettingsStore.standard.read)
+        let remote = WebRemote(model: appModel, store: .standard, enabled: saved.webRemote, port: saved.webRemotePort)
+        remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
+        webRemote = remote
+        webRemoteWindow = WebRemoteWindowController(remote: remote, text: text)
         menuBar = MenuBarController(model: appModel)
         pushSources()
         pushModel()
@@ -83,6 +88,7 @@ extension AppDelegate {
         a.openMainWindow = { [weak self] in self?.showMainWindow() }
         a.openGuide = { [weak self] in self?.openGuideWindow() }
         a.openEqualizer = { [weak self] in self?.openEqualizerWindow() }
+        a.openWebRemote = { [weak self] in self?.openWebRemoteWindow() }
         a.refreshDevices = { [weak self] in self?.rescanDevices() }
         a.refreshExternalState = { [weak self] in self?.rereadExternalState() }
         a.mainWindowVisible = { [weak self] visible in
@@ -334,6 +340,11 @@ extension AppDelegate {
         equalizerWindow?.show()
     }
 
+    private func openWebRemoteWindow() {
+        menuBar?.close()
+        webRemoteWindow?.show()
+    }
+
     /// The Guide: the help text in a window of its own, made once and kept
     /// while AudioSync runs, so it opens where the user left it.
     private func openGuideWindow() {
@@ -423,6 +434,8 @@ extension AppDelegate {
     @objc func showEqualizer(_ sender: Any?) { openEqualizerWindow() }
 
     @objc func showGuide(_ sender: Any?) { openGuideWindow() }
+
+    @objc func showWebRemote(_ sender: Any?) { openWebRemoteWindow() }
 
     @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning) }
 

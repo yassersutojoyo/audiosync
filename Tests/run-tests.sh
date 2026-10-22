@@ -126,7 +126,7 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
     AirPlayPairing.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
     AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
     NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift AppSettings.swift SpeakerNames.swift AppLifecycle.swift LocalDelay.swift DeviceVolume.swift \
-    Localization.swift CalibrationFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+    Localization.swift WebRemoteModel.swift CalibrationFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"
   build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
