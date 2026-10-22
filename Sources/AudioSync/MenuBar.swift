@@ -35,6 +35,8 @@ final class AppModel: ObservableObject {
         var waitingForAirPlay2 = false
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
+        /// A stereo pair or home theater group: its kind and members (P176).
+        var airPlayTarget: AirPlayTargetRow? = nil
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
@@ -764,7 +766,8 @@ struct MenuBarView: View {
             ForEach(layout.connected) { speaker in
                 CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
                            text: t, height: rowHeight,
-                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2),
+                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                                           target: speaker.airPlayTarget),
                            renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
                            availability: speaker.availability,
                            deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {

@@ -298,7 +298,8 @@ extension AppDelegate {
                                     systemName: systemName(airPlay: id),
                                     airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
                                     waitingForAirPlay2: receiver.map { native?.isWaiting($0) == true } ?? false,
-                                    paired: receiver.map { native?.isPaired($0) == true } ?? false)
+                                    paired: receiver.map { native?.isPaired($0) == true } ?? false,
+                                    airPlayTarget: receiver.flatMap { native?.targetRow($0) })
         }
     }
 

@@ -718,9 +718,11 @@ struct SpeakerRow: View {
         }
     }
 
-    /// What a Cast speaker does, or that an AirPlay 2 speaker waits for the slot.
+    /// What a Cast speaker does, that an AirPlay 2 speaker waits for the
+    /// slot, or what a stereo pair or home theater group is made of.
     private var note: String? {
-        model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2)
+        model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                           target: speaker.airPlayTarget)
     }
 
     /// The device's own volume moves only while a session reaches it.
