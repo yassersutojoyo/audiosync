@@ -453,7 +453,7 @@ fn other_methods_get_405() {
     server.stop();
 }
 
-// covers: G6
+// The G6 hardware check reads these log lines.
 #[test]
 fn a_fetch_logs_its_header_names_and_three_values_capped_and_never_the_token() {
     let (server, _writer) = server(vec![LOCAL]);
@@ -519,7 +519,7 @@ fn logged_headers(server: &StreamServer, extra: &str) -> FetchHeaders {
         .expect("a fetch event")
 }
 
-// covers: G6
+// The G6 hardware check reads these log lines.
 #[test]
 fn a_token_split_across_header_names_is_redacted() {
     let (server, _writer) = server(vec![LOCAL]);
@@ -537,7 +537,7 @@ fn a_token_split_across_header_names_is_redacted() {
     server.stop();
 }
 
-// covers: G6
+// The G6 hardware check reads these log lines.
 #[test]
 fn an_uppercase_token_is_scrubbed() {
     let (server, _writer) = server(vec![LOCAL]);
@@ -553,7 +553,7 @@ fn an_uppercase_token_is_scrubbed() {
     server.stop();
 }
 
-// covers: G6
+// The G6 hardware check reads these log lines.
 #[test]
 fn a_percent_encoded_token_is_scrubbed() {
     let (server, _writer) = server(vec![LOCAL]);
@@ -570,7 +570,7 @@ fn a_percent_encoded_token_is_scrubbed() {
     server.stop();
 }
 
-// covers: G6
+// The G6 hardware check reads these log lines.
 #[test]
 fn a_decimal_byte_range_is_logged_verbatim_and_a_range_holding_the_token_is_not() {
     let (server, _writer) = server(vec![LOCAL]);
