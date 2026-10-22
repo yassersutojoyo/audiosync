@@ -75,9 +75,11 @@ impl Driver {
         };
         // The PTP ports are bound only for a receiver that may take PTP:
         // one that took it before or sets features bit 41 (P157, P158).
-        let wants = self.speakers.get(key).is_some_and(|speaker| {
-            self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP)
-        });
+        let ntp_only = self.ntp_restart.remove(key);
+        let wants = !ntp_only
+            && self.speakers.get(key).is_some_and(|speaker| {
+                self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP)
+            });
         let mut addresses = self
             .speakers
             .get(key)
@@ -346,6 +348,20 @@ impl Driver {
         }
     }
 
+    /// Closes the session and starts the speaker again asking for NTP
+    /// only, with the warning told once (P158, P179).
+    fn restart_on_ntp(&mut self, key: &DeviceKey, now: Instant) {
+        if self.ptp_family_told.insert(key.clone()) {
+            self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+        }
+        if self.is_target_member(key) {
+            self.note_teardown(key.clone(), now);
+        }
+        self.ntp_restart.insert(key.clone());
+        self.end_session(key, Phase::Idle);
+        self.start_session(key, now);
+    }
+
     /// Sends what the PTP service queued; a Sync's Follow_Up carries the
     /// time read right after the Sync left (P161). True when anything went.
     pub(super) fn send_ptp(&mut self) -> bool {
@@ -455,11 +471,9 @@ impl Driver {
                         {
                             run.service.start(remote.ip(), now);
                         }
-                        // It connected over another family than the
-                        // service's, which serves only its own (P158).
-                        (Some(_), Some(_)) if self.ptp_family_told.insert(key.clone()) => {
-                            self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
-                        }
+                        // It fell back to an address outside the service's
+                        // family, which no clock serves (P158, P179).
+                        (Some(_), Some(_)) => self.restart_on_ntp(key, now),
                         _ => {}
                     }
                 } else if !self.ptp_shared(key)

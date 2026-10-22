@@ -785,6 +785,59 @@ fn a_member_in_another_family_that_comes_into_view_late_plays_on_ntp() {
     sender.shutdown();
 }
 
+// covers: P158, P179
+#[test]
+fn a_member_that_connects_outside_the_services_family_plays_again_on_ntp() {
+    let _serial = serial();
+    let Some(v6) = ipv6_loopback() else {
+        eprintln!("no IPv6 loopback here; skipped");
+        return;
+    };
+    let first = Ap2Server::start(ptp_fake());
+    let second = Ap2Server::start_on(v6, ptp_fake());
+    let port = second.address.port();
+    // Its IPv4 address must refuse, so the session falls back to IPv6.
+    if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
+        eprintln!("port {port} is taken on IPv4; skipped");
+        return;
+    }
+    let listener = PtpListener::bind();
+    let (sender, _host) = ptp_sender(&listener);
+    let mut events = Events::default();
+    let da = airplay2_only(&first, 1, "0x0,0x10240");
+    let mut record = airplay_record(port, 2, "0x0,0x10240");
+    record.addresses = vec![
+        ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        ScopedAddr::new(v6),
+    ];
+    let db =
+        Device::from_records(DeviceKey::Id(device_id(2)), None, Some(&record)).expect("device");
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(
+            playing(&mut events, &sender, key, 1),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    assert_eq!(timing_asked(&first).as_deref(), Some("PTP"));
+    assert_eq!(timing_asked(&second).as_deref(), Some("NTP"));
+    assert_one_clock_keeps_syncing(&listener);
+    events.drain(&sender);
+    assert_eq!(
+        ptp_warnings(&events, &db.key),
+        1,
+        "{:?}",
+        events.of(&db.key)
+    );
+    assert_eq!(
+        states_of(&events, &da.key),
+        [SpeakerState::Connecting, SpeakerState::Playing]
+    );
+    sender.shutdown();
+}
+
 // covers: P179
 #[test]
 fn a_member_on_ntp_leaves_the_ptp_service_to_a_member_still_setting_up() {
