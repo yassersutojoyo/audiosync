@@ -700,3 +700,209 @@ fn an_address_the_group_dropped_gets_403() {
     );
     server.stop();
 }
+
+// covers: C94, C95
+#[test]
+fn mid_session_member_messages_match_by_id_and_an_empty_status_is_a_known_list() {
+    let leader = FakeDevice::start(Behavior {
+        members: Some(members_json()),
+        ..Behavior::default()
+    });
+    let (mut session, _records, _feed) = start_group(&leader);
+    let mut seen = run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Members(_))
+    });
+    assert_eq!(last_members(&seen).expect("members"), ["Kitchen", "Porch"]);
+
+    // The list holds the dashed form; the undashed one refreshes that entry.
+    leader.send(multizone(
+        "DEVICE_ADDED",
+        json!({"device": {"deviceId": MEMBER, "name": "Kitchen Speaker"}}),
+    ));
+    let changed = run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Members(_))
+    });
+    assert_eq!(
+        last_members(&changed).expect("members"),
+        ["Kitchen Speaker", "Porch"]
+    );
+    seen.extend(changed);
+
+    leader.send(multizone(
+        "DEVICE_REMOVED",
+        json!({"deviceId": "c0ffee00c0ffee00c0ffee00c0ffee00"}),
+    ));
+    let quiet = drain(&mut session, Duration::from_millis(600));
+    assert!(
+        last_members(&quiet).is_none(),
+        "removing a stranger changes nothing: {quiet:?}"
+    );
+    seen.extend(quiet);
+
+    leader.send(multizone(
+        "DEVICE_REMOVED",
+        json!({"deviceId": "0B1C2D3E-4F5A-46B7-A8C9-D0E1F2A3B4C5"}),
+    ));
+    let changed = run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Members(_))
+    });
+    assert_eq!(
+        last_members(&changed).expect("members"),
+        ["Kitchen Speaker"]
+    );
+    seen.extend(changed);
+
+    leader.send(multizone(
+        "MULTIZONE_STATUS",
+        json!({"status": {"devices": []}}),
+    ));
+    let changed = run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Members(_))
+    });
+    assert_eq!(
+        last_members(&changed).expect("a known, empty list"),
+        Vec::<String>::new()
+    );
+    seen.extend(changed);
+
+    assert!(!session.is_ended());
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Recovering(_) | SessionEvent::Ended(_))),
+        "{seen:?}"
+    );
+    assert_eq!(leader.connection_count(), 1);
+    session.stop();
+    leader.join();
+}
+
+// covers: C94, C96
+#[test]
+fn member_messages_without_the_fields_they_need_change_nothing() {
+    let mut list = MemberList::new();
+    let status = MultizoneMessage::from_payload(
+        "MULTIZONE_STATUS",
+        &payload(json!({"status": {"devices": [
+            {"name": "No id"},
+            {"deviceId": MEMBER, "name": "Kitchen"},
+        ]}})),
+    );
+    assert!(list.apply(&status));
+    let known = list.members().expect("known");
+    assert_eq!(known.len(), 1, "an entry without deviceId is no member");
+    assert!(known[0].is(MEMBER_DASHED));
+
+    for (kind, fields) in [
+        ("DEVICE_ADDED", json!({"name": "Attic"})),
+        ("DEVICE_UPDATED", json!({"device": {"name": "Attic"}})),
+        ("DEVICE_REMOVED", json!({"deviceId": 7})),
+        ("MULTIZONE_STATUS", json!({"status": {}})),
+    ] {
+        let message = MultizoneMessage::from_payload(kind, &payload(fields));
+        assert_eq!(message, MultizoneMessage::Other(kind.to_owned()), "{kind}");
+        assert!(!list.apply(&message), "{kind}");
+    }
+    assert_eq!(list.members().expect("known").len(), 1);
+
+    // An update for a member the list lacks adds it.
+    let updated = MultizoneMessage::from_payload(
+        "DEVICE_UPDATED",
+        &payload(json!({"device": {"deviceId": OTHER_MEMBER, "name": "Porch"}})),
+    );
+    assert!(list.apply(&updated));
+    assert_eq!(list.members().expect("known").len(), 2);
+}
+
+// covers: C93, C97
+#[test]
+fn records_that_move_under_a_live_channel_open_no_second_channel() {
+    let leader = FakeDevice::start(Behavior {
+        members: Some(members_json()),
+        ..Behavior::default()
+    });
+    let elsewhere = FakeDevice::start(Behavior::default());
+    let (mut session, records, _feed) = start_group(&leader);
+    records.set_group(vec![elsewhere.address]);
+    let seen = drain(&mut session, Duration::from_millis(1_500));
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Recovering(_) | SessionEvent::Ended(_))),
+        "{seen:?}"
+    );
+    assert!(!session.is_ended());
+    assert_eq!(leader.connection_count(), 1);
+    assert_eq!(
+        elsewhere.connection_count(),
+        0,
+        "no channel until a reconnect"
+    );
+    session.stop();
+    leader.join();
+    elsewhere.join();
+}
+
+// covers: C103
+#[test]
+fn the_response_limit_follows_the_member_count() {
+    let (a, b, c, d) = (v4(1), v4(2), v4(3), v4(4));
+    let mut responses = Responses::new(96_000);
+    responses.set_group_limit(3);
+    let (first, _) = responses.open(a);
+    responses.open(b);
+    responses.open(c);
+    assert_eq!(responses.addresses(), [a, b, c]);
+
+    // Members left: the next GET keeps the response count within the new limit.
+    responses.set_group_limit(1);
+    let (kept, _) = responses.open(d);
+    assert_eq!(responses.addresses(), [d]);
+    assert_eq!(responses.pop(first), Popped::Ended);
+
+    // Members joined: new addresses no longer end the older responses.
+    responses.set_group_limit(3);
+    responses.open(a);
+    responses.open(b);
+    assert_eq!(responses.addresses(), [d, a, b]);
+    assert_ne!(responses.pop(kept), Popped::Ended);
+}
+
+// covers: C58, C103
+#[test]
+fn the_stream_answers_members_only_while_they_are_members() {
+    let local = IpAddr::from([127, 0, 0, 1]);
+    let (writer, reader) = audio_ring(48_000);
+    let config = StreamConfig {
+        local_ip: local,
+        allowed: vec![local],
+        format: StreamFormat::wav(48_000).expect("rate"),
+    };
+    let server = StreamServer::start(config, reader).expect("starts");
+    server.set_group_limit(3);
+    let records = GroupRecords::new(vec![SocketAddr::new(v4(10), 32_187)]);
+    records.set_members(vec![v4(11), local]);
+    server.follow_group(records.clone());
+    let (address, path) = http::split_url(&server.url()).expect("url");
+    let ask = |method: &str| {
+        let request = format!("{method} {path} HTTP/1.1\r\nHost: x\r\n\r\n");
+        let mut stream = http::request(address, &request).expect("connects");
+        let (head, _) = http::read_response(&mut stream, Duration::ZERO);
+        http::status(&head)
+    };
+    let _feed = feed(writer);
+    assert_eq!(ask("GET"), 200, "a member's address");
+
+    // The member left the group: the static list no longer counts.
+    records.set_members(vec![v4(11)]);
+    assert_eq!(ask("GET"), 403);
+    assert_eq!(ask("HEAD"), 403);
+
+    // Any of the group's own addresses is served.
+    records.set_group(vec![
+        SocketAddr::new(v4(10), 32_187),
+        SocketAddr::new(local, 32_187),
+    ]);
+    assert_eq!(ask("GET"), 200, "the group's second address");
+    server.stop();
+}
