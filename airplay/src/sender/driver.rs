@@ -311,9 +311,9 @@ pub(crate) struct Driver {
     /// outside the service's: IPv6 when true, or None for NTP only (P158,
     /// P179).
     ptp_restart: BTreeMap<DeviceKey, Option<bool>>,
-    /// Speakers the PTP service already moved to once, so a second
-    /// fallback goes to NTP instead of moving it back.
-    ptp_moved: BTreeSet<DeviceKey>,
+    /// The family, IPv6 when true, the PTP service moved to for a speaker:
+    /// its later sessions start there, and a second fallback goes to NTP.
+    ptp_moved: BTreeMap<DeviceKey, bool>,
 }
 
 impl Driver {
@@ -356,7 +356,7 @@ impl Driver {
             teardowns: HashMap::new(),
             ptp_family_told: BTreeSet::new(),
             ptp_restart: BTreeMap::new(),
-            ptp_moved: BTreeSet::new(),
+            ptp_moved: BTreeMap::new(),
         }
     }
 

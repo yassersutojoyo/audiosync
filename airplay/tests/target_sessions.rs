@@ -7,7 +7,7 @@
 mod common;
 
 use std::collections::{BTreeMap, VecDeque};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -887,6 +887,90 @@ fn a_single_speaker_that_connects_outside_the_services_family_moves_the_service_
     assert_one_clock_keeps_syncing(&listener);
     events.drain(&sender);
     assert_eq!(ptp_warnings(&events, &device.key), 0);
+    sender.shutdown();
+}
+
+/// A dual-stack receiver served on IPv6 only, whose IPv4 address refuses,
+/// played until the PTP service moved to IPv6; None where the runner can't.
+fn moved_to_ipv6() -> Option<(Ap2Server, PtpListener, Sender, HostAudio, Events, Device)> {
+    let Some(v6) = ipv6_loopback() else {
+        eprintln!("no IPv6 loopback here; skipped");
+        return None;
+    };
+    let server = Ap2Server::start_on(v6, ptp_fake());
+    let port = server.address.port();
+    if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err() {
+        eprintln!("port {port} is taken on IPv4; skipped");
+        return None;
+    }
+    let listener = PtpListener::bind_at(v6);
+    let (sender, host) = ptp_sender(&listener);
+    let mut events = Events::default();
+    let mut record = airplay_record(port, 1, "0x0,0x10240");
+    record.addresses = vec![
+        ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        ScopedAddr::new(v6),
+    ];
+    let device =
+        Device::from_records(DeviceKey::Id(device_id(1)), None, Some(&record)).expect("device");
+    sender.add_speaker(device.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &device.key, 1),
+        "{:?}",
+        events.of(&device.key)
+    );
+    assert_eq!(setup_timings(&server), ["NTP", "PTP", "PTP"]);
+    Some((server, listener, sender, host, events, device))
+}
+
+// covers: P158
+#[test]
+fn a_speaker_lost_after_the_service_moved_reconnects_on_ptp_in_the_moved_family() {
+    let _serial = serial();
+    let Some((server, listener, sender, _host, mut events, device)) = moved_to_ipv6() else {
+        return;
+    };
+    server.cut();
+    assert!(
+        playing(&mut events, &sender, &device.key, 2),
+        "{:?}",
+        events.of(&device.key)
+    );
+    assert_eq!(setup_timings(&server), ["NTP", "PTP", "PTP", "PTP"]);
+    // The loss closed the service; its Syncs still queued carry the old clock.
+    listener.syncs(Duration::from_millis(300));
+    assert_one_clock_keeps_syncing(&listener);
+    events.drain(&sender);
+    assert_eq!(ptp_warnings(&events, &device.key), 0);
+    sender.shutdown();
+}
+
+// covers: P158
+#[test]
+fn a_speaker_that_falls_outside_the_moved_family_again_plays_on_ntp() {
+    let _serial = serial();
+    let Some((server, _listener, sender, _host, mut events, device)) = moved_to_ipv6() else {
+        return;
+    };
+    // The receiver now answers on IPv4 only, at the same port.
+    let port = server.address.port();
+    drop(server);
+    let mut fake = ptp_fake();
+    fake.status_once.clear();
+    let moved = Ap2Server::start_at(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port), fake);
+    assert!(
+        playing(&mut events, &sender, &device.key, 2),
+        "{:?}",
+        events.of(&device.key)
+    );
+    assert_eq!(setup_timings(&moved), ["PTP", "NTP"]);
+    events.drain(&sender);
+    assert_eq!(
+        ptp_warnings(&events, &device.key),
+        1,
+        "{:?}",
+        events.of(&device.key)
+    );
     sender.shutdown();
 }
 

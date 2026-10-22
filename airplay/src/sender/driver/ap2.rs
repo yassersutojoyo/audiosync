@@ -280,13 +280,17 @@ impl Driver {
 
     /// The address family, IPv6 when true, of the PTP service for a
     /// session to `key`: the running service's while another member uses
-    /// it, IPv4 for a target with a member reachable over IPv4, and
-    /// otherwise the family of the receiver's first address (P158, P179).
+    /// it, the family it moved to for this speaker, IPv4 for a target with
+    /// a member reachable over IPv4, and otherwise the family of the
+    /// receiver's first address (P158, P179).
     fn ptp_v6(&self, key: &DeviceKey) -> Option<bool> {
         if let Some(run) = &self.ptp
             && self.ptp_shared(key)
         {
             return Some(run.v6);
+        }
+        if let Some(&moved) = self.ptp_moved.get(key) {
+            return Some(moved);
         }
         let has_v4 = |device: &&Device| {
             device
@@ -356,15 +360,17 @@ impl Driver {
 
     /// Closes, without a TEARDOWN, a session that took PTP over an address
     /// outside the service's family and starts the speaker again: with the
-    /// service moved to that family when no other session uses it, else on
-    /// NTP with the warning told once (P158, P179).
+    /// service moved to that family when no other session uses it and it
+    /// never moved for this speaker, else on NTP with the warning told once
+    /// (P158, P179).
     fn restart_outside_family(&mut self, key: &DeviceKey, landed_v6: bool, now: Instant) {
-        let family = if self.ptp_shared(key) || !self.ptp_moved.insert(key.clone()) {
+        let family = if self.ptp_shared(key) || self.ptp_moved.contains_key(key) {
             if self.ptp_family_told.insert(key.clone()) {
                 self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
             }
             None
         } else {
+            self.ptp_moved.insert(key.clone(), landed_v6);
             Some(landed_v6)
         };
         if self.is_target_member(key) {
