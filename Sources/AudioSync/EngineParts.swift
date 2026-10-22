@@ -46,16 +46,23 @@ struct EngineParts {
     /// the ring and AudioSync's own AirPlay and Cast senders when they
     /// run (`NativeAirPlayTap`, `CastTap`), the same samples for all (S7). During a
     /// microphone calibration (`CalibrationTap`) the music fades to silence
-    /// for both and the test signal goes into the ring only. Real-time safe.
+    /// on every path and the test signal goes into the one path it targets.
+    /// Real-time safe.
     @inline(__always)
     func deliver(_ block: UnsafeMutablePointer<Float>, frames: Int) {
         equalizer.process(block, frames: frames)
         if CalibrationTap.isActive {
             CalibrationTap.fadeMusic(block, frames: frames)
-            NativeAirPlayTap.write(block, frames: frames)
-            CastTap.write(block, frames: frames)
+            let target = CalibrationTap.target
+            if target != .local { ring.write(interleaved: block, frames: frames) }
+            if target != .airPlay { NativeAirPlayTap.write(block, frames: frames) }
+            if target != .cast { CastTap.write(block, frames: frames) }
             CalibrationTap.addSignal(block, frames: frames)
-            ring.write(interleaved: block, frames: frames)
+            switch target {
+            case .local: ring.write(interleaved: block, frames: frames)
+            case .airPlay: NativeAirPlayTap.write(block, frames: frames)
+            case .cast: CastTap.write(block, frames: frames)
+            }
             return
         }
         ring.write(interleaved: block, frames: frames)

@@ -10,8 +10,10 @@ import Synchronization
 /// sender alike; disengaged, it fades back in. A signal asked for with
 /// `play` is added into the ring's blocks only, from the start of the next
 /// block, and the host time of that write is kept: the moment the signal
-/// enters every output's path, before its hold-back. Which output is heard is
-/// the host's gains (`AppDelegate.effectiveGain`), not this tap.
+/// enters every output's path, before its hold-back. Which local output is
+/// heard is the host's gains (`AppDelegate.effectiveGain`), not this tap.
+/// Calibrate All Speakers (S235) sends the signal to AudioSync's own AirPlay
+/// or Cast sender instead (`setTarget`); the other paths get silence then.
 ///
 /// The capture thread calls `isActive`, `fadeMusic` and `addSignal` from
 /// `EngineParts.deliver`; everything else runs on the main thread. One
@@ -20,6 +22,14 @@ enum CalibrationTap {
     /// 20 ms at 48 kHz; a fixed count keeps the fade's state one number that
     /// only the capture thread writes.
     static let fadeFrames = 960
+
+    /// Where the signal goes: the ring of the local outputs, or one of the
+    /// network senders.
+    enum Path: UInt8 {
+        case local, airPlay, cast
+    }
+
+    private static let path = Atomic<UInt8>(Path.local.rawValue)
 
     private static let engaged = Atomic<Bool>(false)
     /// The music's level in frames of the fade: 0 silent, `fadeFrames` full.
@@ -41,6 +51,9 @@ enum CalibrationTap {
     private static let users = Atomic<Int>(0)
 
     // MARK: Capture thread
+
+    /// The path the signal goes to. One atomic load.
+    static var target: Path { Path(rawValue: path.load(ordering: .acquiring)) ?? .local }
 
     /// Engaged, or still fading back in. Two atomic loads.
     static var isActive: Bool {
@@ -95,6 +108,9 @@ enum CalibrationTap {
 
     /// The captured audio fades back in.
     static func disengage() { engaged.store(false, ordering: .releasing) }
+
+    /// Sends the signal played next to `target`; set while none plays.
+    static func setTarget(_ target: Path) { path.store(target.rawValue, ordering: .releasing) }
 
     /// Installs `samples` (mono, at the capture rate, kept alive by the caller
     /// until `uninstall` returns) without playing it.

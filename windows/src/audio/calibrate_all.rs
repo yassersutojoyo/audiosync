@@ -1,0 +1,1481 @@
+//! Calibrate All Speakers (spec S235 to S240): the reference and then every
+//! speaker that is on, local outputs, AirPlay speakers and the Cast speaker
+//! alike, each heard alone while the default input device records, in the
+//! order and for as long as the core's [`Run`] asks. Its [`Sheet`] is what
+//! the window shows; nothing changes until the user applies it.
+//!
+//! The sweep reaches a local output through the ring and a network speaker
+//! through its sender's feed ([`Route`]); the others stay silent: the local
+//! outputs at gain 0, the other AirPlay speakers muted, and every feed but
+//! the sweep's carrying the faded music. [`AllRun`] is ticked by the UI
+//! thread; its decisions need no hardware, so they are tested against an
+//! [`AllRig`] of fakes.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+
+use audiosync_core::calibrate::{MAX_RATE, MIN_RATE, SIGNAL_SECONDS};
+use audiosync_core::calibrate_all::{
+    Class, EndReason, PlanError, RowState, Run, Sheet, Speaker, Step as RunStep, Take,
+};
+use audiosync_core::policy::delay::{MAX_HOLD_BACK_MS, native_airplay_latency_ms};
+
+use super::backend::{AudioBackend, CastStatus};
+use super::calibration::{
+    CalibrationTap, Failure, LATENCY_ALLOWANCE_S, Microphone, MicrophoneError, MicrophoneId, Route,
+    SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, ns, trim_start,
+};
+use crate::debug_log::DebugLog;
+
+/// Allowance for a Cast speaker's own buffering on top of its offset.
+const CAST_ALLOWANCE_S: f64 = 3.0;
+
+/// A speaker that is on, as a run sees it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Member {
+    /// Its backend ID: an endpoint ID, or an AirPlay or Cast device ID.
+    pub id: String,
+    pub class: Class,
+    /// Its stored delay as the core reads it for `class`: a local offset,
+    /// the AirPlay delay as shown, or a Cast offset (`None`: none stored).
+    pub offset_ms: Option<f64>,
+    /// When its sweep is expected in a recording that starts as the sweep
+    /// enters its path (S235), in ms.
+    pub latency_ms: f64,
+}
+
+impl Member {
+    /// Its ID on the sheet, unique across the classes.
+    pub fn key(&self) -> String {
+        member_key(self.class, &self.id)
+    }
+
+    fn route(&self) -> Route {
+        match self.class {
+            Class::Local => Route::Ring,
+            Class::AirPlay => Route::AirPlay,
+            Class::Cast => Route::Cast,
+        }
+    }
+}
+
+pub fn member_key(class: Class, id: &str) -> String {
+    let prefix = match class {
+        Class::Local => "local",
+        Class::AirPlay => "airplay",
+        Class::Cast => "cast",
+    };
+    format!("{prefix}:{id}")
+}
+
+/// What plays now, as a run depends on it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Lineup {
+    /// The running session's number; `None` while streaming is off.
+    pub session: Option<u64>,
+    /// The reference output, by endpoint ID.
+    pub reference: Option<String>,
+    /// Every speaker that plays: the reference first, the other local
+    /// outputs, the AirPlay speakers, then the Cast speaker.
+    pub members: Vec<Member>,
+    /// Each playing local output's hold-back, in ms.
+    pub hold_backs_ms: BTreeMap<String, f64>,
+}
+
+/// What a run uses of the app: the backend, through the blanket impl below,
+/// or fakes in the tests.
+pub trait AllRig {
+    fn lineup(&self) -> Lineup;
+    fn tap(&self) -> Option<Arc<CalibrationTap>>;
+    /// Only `who` is heard; `None`: every speaker again.
+    fn solo(&mut self, who: Option<&Member>);
+    /// Starts recording the default input device, with room for `seconds`.
+    fn open_microphone(&mut self, seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError>;
+}
+
+impl<A: AudioBackend> AllRig for A {
+    fn lineup(&self) -> Lineup {
+        lineup(self)
+    }
+
+    fn tap(&self) -> Option<Arc<CalibrationTap>> {
+        self.calibration_tap()
+    }
+
+    fn solo(&mut self, who: Option<&Member>) {
+        // A network speaker's ID matches no local output: they all go quiet.
+        self.set_calibration_solo(who.map(|member| member.id.as_str()));
+        self.set_calibration_airplay_solo(
+            who.filter(|member| member.class == Class::AirPlay)
+                .map(|member| member.id.as_str()),
+        );
+    }
+
+    fn open_microphone(&mut self, seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError> {
+        AudioBackend::open_microphone(self, seconds)
+    }
+}
+
+/// The speakers that play on `audio`, with their stored delays and the
+/// latencies their windows are cut from.
+pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
+    let engine = audio.calibration_engine();
+    let outputs = audio.outputs();
+    let allowance_ms = LATENCY_ALLOWANCE_S * 1000.0;
+    let mut locals: Vec<Member> = engine
+        .playing
+        .iter()
+        .map(|id| Member {
+            id: id.clone(),
+            class: Class::Local,
+            offset_ms: outputs
+                .iter()
+                .find(|output| output.id == *id)
+                .map(|output| output.delay_ms),
+            latency_ms: finite_ms(engine.hold_backs_ms.get(id).copied()) + allowance_ms,
+        })
+        .collect();
+    locals.sort_by(|a, b| {
+        let first = |m: &Member| engine.reference.as_deref() != Some(m.id.as_str());
+        (first(a), &a.id).cmp(&(first(b), &b.id))
+    });
+    let casts: Vec<Member> = audio
+        .cast_speakers()
+        .into_iter()
+        .filter(|cast| cast.enabled && cast.status == CastStatus::Playing)
+        .map(|cast| Member {
+            offset_ms: (cast.offset_ms > 0.0).then_some(cast.offset_ms),
+            latency_ms: finite_ms(Some(cast.offset_ms)) + CAST_ALLOWANCE_S * 1000.0,
+            id: cast.id,
+            class: Class::Cast,
+        })
+        .collect();
+    let cast_wait_ms = casts
+        .iter()
+        .filter_map(|cast| cast.offset_ms)
+        .fold(0.0, f64::max);
+    let mut airplay = Vec::new();
+    if let Some(sender_ms) = audio.airplay_sender_latency_ms() {
+        let shown_ms = native_airplay_latency_ms(sender_ms, audio.airplay_adjustment());
+        let base_ms = shown_ms.max(finite_ms(Some(sender_ms))).max(cast_wait_ms);
+        airplay = audio
+            .airplay_speakers()
+            .into_iter()
+            .filter(|speaker| speaker.enabled && speaker.playing)
+            .map(|speaker| Member {
+                latency_ms: base_ms + finite_ms(Some(speaker.delay_ms)) + allowance_ms,
+                id: speaker.id,
+                class: Class::AirPlay,
+                offset_ms: Some(shown_ms),
+            })
+            .collect();
+    }
+    Lineup {
+        session: engine.session,
+        reference: engine.reference,
+        members: locals.into_iter().chain(airplay).chain(casts).collect(),
+        hold_backs_ms: engine.hold_backs_ms,
+    }
+}
+
+fn finite_ms(ms: Option<f64>) -> f64 {
+    ms.filter(|ms| ms.is_finite()).unwrap_or(0.0).max(0.0)
+}
+
+/// Where a run stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Progress {
+    /// The music fades out and what is on its way plays out.
+    Preparing,
+    /// A sweep plays on the sheet's row `row` alone while the microphone
+    /// records; `searching` for a Cast speaker without a stored offset.
+    Measuring {
+        row: usize,
+        take: Take,
+        searching: bool,
+    },
+    /// The core looks for the sweep in the recording.
+    Estimating {
+        row: usize,
+        take: Take,
+    },
+    Ended,
+}
+
+/// How a run ended.
+pub struct Finished {
+    /// The results; `None` only when the estimate itself was lost.
+    pub sheet: Option<Sheet>,
+    /// The microphone or the capture stopped the run.
+    pub failure: Option<Failure>,
+}
+
+enum Stage {
+    Quiet {
+        until_ns: u64,
+    },
+    Warming {
+        step: RunStep,
+        mic: Box<dyn Microphone>,
+        since_ns: u64,
+    },
+    Playing {
+        step: RunStep,
+        mic: Box<dyn Microphone>,
+        asked_ns: u64,
+    },
+    Recording {
+        step: RunStep,
+        mic: Box<dyn Microphone>,
+        start: usize,
+        deadline_ns: u64,
+    },
+    /// The run is on a thread of its own: a searching window takes an FFT
+    /// of millions of frames.
+    Estimating {
+        step: RunStep,
+        receive: Receiver<Run>,
+    },
+    /// Ended; a cut-off sweep plays out on the speaker heard before the
+    /// others are heard again.
+    Settling {
+        until_ns: u64,
+    },
+    Over,
+}
+
+/// One Calibrate All run, or one Measure Again, from the music fading out
+/// to the sheet. The UI thread ticks it every few tens of ms.
+pub struct AllRun {
+    run: Option<Run>,
+    /// The sheet's rows.
+    members: Vec<Member>,
+    /// The rows this run measures, the reference's first.
+    taking_part: Vec<usize>,
+    /// The row a Measure Again measures.
+    again: Option<usize>,
+    rate: u32,
+    /// The reference, by endpoint ID.
+    reference: String,
+    stage: Stage,
+    tap: Arc<CalibrationTap>,
+    session: u64,
+    /// The hold-backs of the local outputs taking part, at the start.
+    hold_backs_ms: BTreeMap<String, f64>,
+    first_microphone: Option<MicrophoneId>,
+    /// Every speaker on the last sweep's path has played it by then, so
+    /// none of them may be heard again before.
+    clear_ns: u64,
+    progress: Progress,
+    /// A change seen while the estimate ran, applied once it is back.
+    pending_end: Option<EndReason>,
+    finished: Option<Finished>,
+    log: DebugLog,
+}
+
+impl AllRun {
+    /// Starts a run over every speaker that plays: the music fades out.
+    /// Refused with why when it can't start; nothing changed then.
+    pub fn start(rig: &mut dyn AllRig, now_ns: u64, log: DebugLog) -> Result<AllRun, Failure> {
+        let lineup = rig.lineup();
+        let refuse = |failure: Failure| {
+            log.log(|| format!("Calibrate All refused: {failure:?}"));
+            Err(failure)
+        };
+        let Some(reference) = lineup.reference.clone() else {
+            return refuse(Failure::NoReference);
+        };
+        let reference_plays = lineup
+            .members
+            .iter()
+            .any(|m| m.class == Class::Local && m.id == reference);
+        let (Some(session), Some(tap), true) = (lineup.session, rig.tap(), reference_plays) else {
+            return refuse(Failure::NotPlaying);
+        };
+        if lineup.members.len() < 2 {
+            return refuse(Failure::NothingToMeasure);
+        }
+        let rate = match probe(rig) {
+            Ok(rate) => rate,
+            Err(failure) => return refuse(failure),
+        };
+        let speakers = lineup.members.iter().map(speaker).collect();
+        let run = match Run::new(rate, &member_key(Class::Local, &reference), speakers) {
+            Ok(run) => run,
+            Err(error) => return refuse(plan_failure(error)),
+        };
+        let taking_part = (0..lineup.members.len()).collect();
+        log.log(|| {
+            let keys: Vec<String> = lineup.members.iter().map(Member::key).collect();
+            format!("Calibrate All started at {rate} Hz against {reference}: {keys:?}")
+        });
+        Ok(AllRun::new(
+            run,
+            lineup.members.clone(),
+            taking_part,
+            None,
+            rate,
+            reference,
+            session,
+            tap,
+            &lineup,
+            now_ns,
+            log,
+        ))
+    }
+
+    /// Measures the sheet's row `row` again against a new reference sweep
+    /// (S239). `members` and `rate` are the sheet's own.
+    pub fn again(
+        rig: &mut dyn AllRig,
+        sheet: &Sheet,
+        members: &[Member],
+        rate: u32,
+        row: usize,
+        now_ns: u64,
+        log: DebugLog,
+    ) -> Result<AllRun, Failure> {
+        let refuse = |failure: Failure| {
+            log.log(|| format!("Measure Again of row {row} refused: {failure:?}"));
+            Err(failure)
+        };
+        let Some(run) = sheet.measure_again(row) else {
+            return refuse(Failure::Unfinished);
+        };
+        let Some(reference_row) = sheet
+            .rows()
+            .iter()
+            .position(|r| r.state == RowState::Reference)
+        else {
+            return refuse(Failure::NoReference);
+        };
+        let (Some(reference), Some(measured)) = (members.get(reference_row), members.get(row))
+        else {
+            return refuse(Failure::Unfinished);
+        };
+        let lineup = rig.lineup();
+        if lineup.reference.as_deref() != Some(reference.id.as_str()) {
+            return refuse(Failure::NoReference);
+        }
+        let now_of = |m: &Member| {
+            lineup
+                .members
+                .iter()
+                .find(|n| n.class == m.class && n.id == m.id)
+        };
+        let (Some(session), Some(tap), Some(_), Some(now)) = (
+            lineup.session,
+            rig.tap(),
+            now_of(reference),
+            now_of(measured),
+        ) else {
+            return refuse(Failure::NotPlaying);
+        };
+        if now.offset_ms != measured.offset_ms {
+            return refuse(Failure::Interrupted);
+        }
+        match probe(rig) {
+            Ok(heard) if heard == rate => {}
+            Ok(_) => return refuse(Failure::MicrophoneChanged),
+            Err(failure) => return refuse(failure),
+        }
+        log.log(|| format!("Measure Again of {} started", measured.key()));
+        Ok(AllRun::new(
+            run,
+            members.to_vec(),
+            vec![reference_row, row],
+            Some(row),
+            rate,
+            reference.id.clone(),
+            session,
+            tap,
+            &lineup,
+            now_ns,
+            log,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        run: Run,
+        members: Vec<Member>,
+        taking_part: Vec<usize>,
+        again: Option<usize>,
+        rate: u32,
+        reference: String,
+        session: u64,
+        tap: Arc<CalibrationTap>,
+        lineup: &Lineup,
+        now_ns: u64,
+        log: DebugLog,
+    ) -> AllRun {
+        let hold_backs_ms = taking_part
+            .iter()
+            .filter(|row| members[**row].class == Class::Local)
+            .filter_map(|row| {
+                let id = &members[*row].id;
+                lineup.hold_backs_ms.get(id).map(|ms| (id.clone(), *ms))
+            })
+            .collect();
+        // Every speaker still plays the music until it faded: the longest
+        // way any of them has to play out sets the wait.
+        let quiet_ms = lineup
+            .members
+            .iter()
+            .map(|m| m.latency_ms)
+            .fold(LATENCY_ALLOWANCE_S * 1000.0, f64::max)
+            .min(MAX_HOLD_BACK_MS);
+        tap.set_route(Route::Ring);
+        tap.engage();
+        AllRun {
+            run: Some(run),
+            members,
+            taking_part,
+            again,
+            rate,
+            reference,
+            stage: Stage::Quiet {
+                until_ns: now_ns + ns(quiet_ms / 1000.0),
+            },
+            tap,
+            session,
+            hold_backs_ms,
+            first_microphone: None,
+            clear_ns: 0,
+            progress: Progress::Preparing,
+            pending_end: None,
+            finished: None,
+            log,
+        }
+    }
+
+    /// The sheet's rows, with what each speaker was at the start.
+    pub fn members(&self) -> &[Member] {
+        &self.members
+    }
+
+    /// The microphone's rate the run records at.
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// The row a Measure Again measures; `None` for a whole run.
+    pub fn again_row(&self) -> Option<usize> {
+        self.again
+    }
+
+    pub fn progress(&self) -> Progress {
+        self.progress
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.progress != Progress::Ended
+    }
+
+    /// Whether it still holds the outputs (running, or a cut-off sweep
+    /// playing out).
+    pub fn holds_outputs(&self) -> bool {
+        !matches!(self.stage, Stage::Over)
+    }
+
+    /// How the run ended, once; the outputs may still be held a moment.
+    pub fn take_finished(&mut self) -> Option<Finished> {
+        self.finished.take()
+    }
+
+    /// The user's Cancel: the sweep fades out and nothing changes.
+    pub fn cancel(&mut self, rig: &mut dyn AllRig, now_ns: u64) {
+        if !self.is_running() {
+            return;
+        }
+        self.log.log(|| "Calibrate All cancelled".to_owned());
+        if matches!(self.stage, Stage::Estimating { .. }) {
+            self.pending_end.get_or_insert(EndReason::Cancelled);
+        } else {
+            self.end(rig, Some(EndReason::Cancelled), None, now_ns);
+        }
+    }
+
+    /// Moves the run on. Returns whether what the window shows changed.
+    pub fn tick(&mut self, rig: &mut dyn AllRig, now_ns: u64) -> bool {
+        let before = (self.progress, self.holds_outputs());
+        self.advance(rig, now_ns);
+        before != (self.progress, self.holds_outputs())
+    }
+
+    fn advance(&mut self, rig: &mut dyn AllRig, now_ns: u64) {
+        match &self.stage {
+            Stage::Over => return,
+            Stage::Settling { until_ns } => {
+                if rig.lineup().session != Some(self.session) || now_ns >= *until_ns {
+                    self.give_back(rig);
+                }
+                return;
+            }
+            _ => {}
+        }
+        if let Some(reason) = self.change(&rig.lineup()) {
+            if !matches!(self.stage, Stage::Estimating { .. }) {
+                self.log
+                    .log(|| format!("Calibrate All stopped by a change: {reason:?}"));
+                return self.end(rig, Some(reason), None, now_ns);
+            }
+            self.pending_end.get_or_insert(reason);
+        }
+        match std::mem::replace(&mut self.stage, Stage::Over) {
+            Stage::Quiet { until_ns } => {
+                self.stage = Stage::Quiet { until_ns };
+                if now_ns >= until_ns {
+                    self.next_step(rig, now_ns);
+                }
+            }
+            Stage::Warming {
+                step,
+                mic,
+                since_ns,
+            } => {
+                if mic.first_frame_ns().is_some() && now_ns >= since_ns + ns(WARM_UP_S) {
+                    self.tap.play();
+                    // Until it starts, the latest it may start counts.
+                    self.clear_ns = now_ns + ns(SIGNAL_WAIT_S) + self.played_out_ns(step.row);
+                    self.stage = Stage::Playing {
+                        step,
+                        mic,
+                        asked_ns: now_ns,
+                    };
+                } else {
+                    let cold = now_ns >= since_ns + ns(WARM_UP_LIMIT_S);
+                    self.stage = Stage::Warming {
+                        step,
+                        mic,
+                        since_ns,
+                    };
+                    if cold {
+                        self.fail(rig, Failure::NoMicrophone, now_ns);
+                    }
+                }
+            }
+            Stage::Playing {
+                step,
+                mic,
+                asked_ns,
+            } => match (self.tap.played_at_ns(), mic.first_frame_ns()) {
+                (Some(played), Some(first)) => {
+                    let Some(start) = trim_start(played, first, self.rate) else {
+                        self.stage = Stage::Playing {
+                            step,
+                            mic,
+                            asked_ns,
+                        };
+                        return self.fail(rig, Failure::NoMicrophone, now_ns);
+                    };
+                    self.clear_ns = played + self.played_out_ns(step.row);
+                    let seconds = step.window_frames as f64 / f64::from(self.rate);
+                    self.stage = Stage::Recording {
+                        step,
+                        mic,
+                        start,
+                        deadline_ns: now_ns + ns(seconds + STALL_S),
+                    };
+                }
+                _ => {
+                    let silent = now_ns >= asked_ns + ns(SIGNAL_WAIT_S);
+                    self.stage = Stage::Playing {
+                        step,
+                        mic,
+                        asked_ns,
+                    };
+                    if silent {
+                        self.fail(rig, Failure::SourceSilent, now_ns);
+                    }
+                }
+            },
+            Stage::Recording {
+                step,
+                mut mic,
+                start,
+                deadline_ns,
+            } => {
+                let end = start + step.window_frames;
+                let waiting = mic.frames_recorded() < end && now_ns < deadline_ns;
+                let skipped = mic.gap_at().is_some_and(|gap| gap < end);
+                if waiting || skipped {
+                    self.stage = Stage::Recording {
+                        step,
+                        mic,
+                        start,
+                        deadline_ns,
+                    };
+                    if skipped {
+                        self.fail(rig, Failure::MicrophoneSkipped, now_ns);
+                    }
+                    return;
+                }
+                let samples = mic.take(start, step.window_frames);
+                drop(mic);
+                self.log.log(|| {
+                    format!(
+                        "Calibrate All: row {} {:?} recorded, {} frames from frame {start}",
+                        step.row,
+                        step.take,
+                        samples.len()
+                    )
+                });
+                self.estimate(rig, step, samples, now_ns);
+            }
+            Stage::Estimating { step, receive } => match receive.try_recv() {
+                Ok(run) => {
+                    self.run = Some(run);
+                    match self.pending_end.take() {
+                        Some(reason) => self.end(rig, Some(reason), None, now_ns),
+                        None => self.next_step(rig, now_ns),
+                    }
+                }
+                Err(TryRecvError::Empty) => self.stage = Stage::Estimating { step, receive },
+                Err(TryRecvError::Disconnected) => {
+                    self.progress = Progress::Measuring {
+                        row: step.row,
+                        take: step.take,
+                        searching: false,
+                    };
+                    self.fail(rig, Failure::Unfinished, now_ns);
+                }
+            },
+            other => self.stage = other,
+        }
+    }
+
+    /// Why the run can't go on, from what plays now (S240).
+    fn change(&self, lineup: &Lineup) -> Option<EndReason> {
+        if lineup.session != Some(self.session) {
+            return Some(EndReason::SourceChanged);
+        }
+        if lineup.reference.as_deref() != Some(self.reference.as_str()) {
+            return Some(EndReason::SpeakersChanged);
+        }
+        let mut found = 0;
+        for row in &self.taking_part {
+            let member = &self.members[*row];
+            match lineup
+                .members
+                .iter()
+                .find(|now| now.class == member.class && now.id == member.id)
+            {
+                None => return Some(EndReason::SpeakerTurnedOff),
+                Some(now) if now.offset_ms != member.offset_ms => {
+                    return Some(EndReason::SpeakersChanged);
+                }
+                Some(_) => found += 1,
+            }
+        }
+        if self.again.is_none() && lineup.members.len() > found {
+            return Some(EndReason::SpeakersChanged);
+        }
+        let moved = self
+            .hold_backs_ms
+            .iter()
+            .any(|(id, ms)| lineup.hold_backs_ms.get(id) != Some(ms));
+        moved.then_some(EndReason::SpeakersChanged)
+    }
+
+    fn next_step(&mut self, rig: &mut dyn AllRig, now_ns: u64) {
+        match self.run.as_ref().and_then(Run::step) {
+            // A speaker on the last sweep's path that plays it later than
+            // the one measured would play it into this recording.
+            Some(_) if now_ns < self.clear_ns => {
+                self.stage = Stage::Quiet {
+                    until_ns: self.clear_ns,
+                };
+            }
+            Some(step) => self.begin(rig, step, now_ns),
+            None => self.end(rig, None, None, now_ns),
+        }
+    }
+
+    /// One sweep: only the row's speaker is heard, the signal takes its
+    /// path, the microphone starts, and the signal plays once it is warm.
+    fn begin(&mut self, rig: &mut dyn AllRig, step: RunStep, now_ns: u64) {
+        let member = self.members[step.row].clone();
+        self.progress = Progress::Measuring {
+            row: step.row,
+            take: step.take,
+            searching: step.searching,
+        };
+        rig.solo(Some(&member));
+        self.tap.set_route(member.route());
+        let room = WARM_UP_LIMIT_S
+            + SIGNAL_WAIT_S
+            + step.window_frames as f64 / f64::from(self.rate)
+            + STALL_S;
+        let mic = match rig.open_microphone(room) {
+            Ok(mic) => mic,
+            Err(error) => return self.fail(rig, error.into(), now_ns),
+        };
+        let heard = mic.id();
+        let changed = heard.rate != self.rate
+            || self
+                .first_microphone
+                .as_ref()
+                .is_some_and(|first| *first != heard);
+        if changed {
+            drop(mic);
+            return self.fail(rig, Failure::MicrophoneChanged, now_ns);
+        }
+        self.log.log(|| {
+            format!(
+                "Calibrate All: {:?} of {}, only it heard, {} frames{}",
+                step.take,
+                member.key(),
+                step.window_frames,
+                if step.searching { ", searching" } else { "" }
+            )
+        });
+        self.first_microphone.get_or_insert(heard);
+        self.stage = Stage::Warming {
+            step,
+            mic,
+            since_ns: now_ns,
+        };
+    }
+
+    fn estimate(&mut self, rig: &mut dyn AllRig, step: RunStep, samples: Vec<f32>, now_ns: u64) {
+        let Some(mut run) = self.run.take() else {
+            return self.fail(rig, Failure::Unfinished, now_ns);
+        };
+        let (send, receive) = mpsc::channel();
+        let spawned = thread::Builder::new()
+            .name("audiosync-calibrate-all".into())
+            .spawn(move || {
+                run.record(&samples);
+                let _ = send.send(run);
+            });
+        if spawned.is_err() {
+            return self.fail(rig, Failure::Unfinished, now_ns);
+        }
+        self.progress = Progress::Estimating {
+            row: step.row,
+            take: step.take,
+        };
+        self.stage = Stage::Estimating { step, receive };
+    }
+
+    fn fail(&mut self, rig: &mut dyn AllRig, failure: Failure, now_ns: u64) {
+        if !self.is_running() {
+            return;
+        }
+        self.log
+            .log(|| format!("Calibrate All stopped: {failure:?}"));
+        self.end(rig, Some(EndReason::Cancelled), Some(failure), now_ns);
+    }
+
+    /// The sheet is ready at once. A sweep cut off on its way fades out and
+    /// plays out on the one speaker heard before the others are heard again
+    /// and the music fades in.
+    fn end(
+        &mut self,
+        rig: &mut dyn AllRig,
+        reason: Option<EndReason>,
+        failure: Option<Failure>,
+        now_ns: u64,
+    ) {
+        if let (Some(reason), Some(run)) = (reason, self.run.as_mut()) {
+            run.cancel(reason);
+        }
+        let sweeping = match &self.stage {
+            Stage::Playing { step, .. } | Stage::Recording { step, .. } => Some(step.row),
+            _ => None,
+        };
+        // Dropping the stage stops its microphone.
+        self.stage = Stage::Over;
+        self.progress = Progress::Ended;
+        let sheet = self.run.take().map(Run::finish);
+        if let Some(sheet) = &sheet {
+            self.log.log(|| {
+                format!(
+                    "Calibrate All ended ({:?}): {:?}, AirPlay {:?}",
+                    sheet.ended(),
+                    sheet.rows(),
+                    sheet.airplay()
+                )
+            });
+        }
+        self.finished = Some(Finished { sheet, failure });
+        let same_session = rig.lineup().session == Some(self.session);
+        if sweeping.is_some() {
+            self.tap.fade_out_signal();
+        }
+        if same_session && now_ns < self.clear_ns {
+            self.stage = Stage::Settling {
+                until_ns: self.clear_ns,
+            };
+        } else {
+            self.give_back(rig);
+        }
+    }
+
+    /// How long after a sweep enters row `row`'s path every speaker on that
+    /// path has played it: the AirPlay speakers share one feed, each after
+    /// its own delay, and the local outputs share the ring.
+    fn played_out_ns(&self, row: usize) -> u64 {
+        let route = self.members[row].route();
+        let latency_ms = self
+            .members
+            .iter()
+            .filter(|member| member.route() == route)
+            .map(|member| member.latency_ms)
+            .fold(0.0, f64::max)
+            .min(MAX_HOLD_BACK_MS);
+        ns(latency_ms / 1000.0 + SIGNAL_SECONDS)
+    }
+
+    /// Every speaker heard again, the music fading back in and the signal
+    /// back on the ring's path.
+    fn give_back(&mut self, rig: &mut dyn AllRig) {
+        self.stage = Stage::Over;
+        rig.solo(None);
+        self.tap.disengage();
+        self.tap.set_route(Route::Ring);
+    }
+}
+
+impl Drop for AllRun {
+    fn drop(&mut self) {
+        if self.holds_outputs() {
+            self.tap.disengage();
+            self.tap.set_route(Route::Ring);
+        }
+    }
+}
+
+fn speaker(member: &Member) -> Speaker {
+    Speaker {
+        id: member.key(),
+        class: member.class,
+        offset_ms: member.offset_ms,
+        latency_ms: member.latency_ms,
+    }
+}
+
+/// The microphone's rate, from a recording opened and closed at once:
+/// Windows' privacy settings show only when a stream opens, so a denial
+/// comes before the music fades.
+fn probe(rig: &mut dyn AllRig) -> Result<u32, Failure> {
+    let mut probe = rig.open_microphone(0.1).map_err(Failure::from)?;
+    let rate = probe.id().rate;
+    drop(probe.take(0, 0));
+    if !(MIN_RATE..=MAX_RATE).contains(&rate) {
+        return Err(Failure::UnsupportedRate);
+    }
+    Ok(rate)
+}
+
+fn plan_failure(error: PlanError) -> Failure {
+    match error {
+        PlanError::UnsupportedRate => Failure::UnsupportedRate,
+        PlanError::NoReference => Failure::NoReference,
+        PlanError::NothingToMeasure => Failure::NothingToMeasure,
+        PlanError::DuplicateId => Failure::Unfinished,
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use audiosync_core::calibrate;
+    use audiosync_core::calibrate_all::{ApplyRefusal, SharedState};
+
+    use super::*;
+
+    /// The lowest rate the signal is made at keeps the estimates quick.
+    const MIC_RATE: u32 = 22_050;
+    const TICK_NS: u64 = 20_000_000;
+
+    struct FakeMic {
+        id: MicrophoneId,
+        first_ns: u64,
+        now: Rc<Cell<u64>>,
+        tap: Arc<CalibrationTap>,
+        heard_after_ms: Option<f64>,
+    }
+
+    impl Microphone for FakeMic {
+        fn id(&self) -> MicrophoneId {
+            self.id.clone()
+        }
+
+        fn first_frame_ns(&self) -> Option<u64> {
+            (self.now.get() > self.first_ns).then_some(self.first_ns)
+        }
+
+        fn frames_recorded(&self) -> usize {
+            let since = self.now.get().saturating_sub(self.first_ns);
+            (since as f64 * f64::from(self.id.rate) / 1e9) as usize
+        }
+
+        fn gap_at(&self) -> Option<usize> {
+            None
+        }
+
+        fn take(&mut self, start: usize, count: usize) -> Vec<f32> {
+            let count = count.min(self.frames_recorded().saturating_sub(start));
+            let rate = self.id.rate;
+            let mut noise = 0x1234_5678_u32;
+            let mut recording: Vec<f32> = (0..count)
+                .map(|_| {
+                    noise ^= noise << 13;
+                    noise ^= noise >> 17;
+                    noise ^= noise << 5;
+                    (f64::from(noise) / f64::from(u32::MAX) - 0.5) as f32 * 0.001
+                })
+                .collect();
+            let (Some(played), Some(after)) = (self.tap.played_at_ns(), self.heard_after_ms) else {
+                return recording;
+            };
+            let signal = calibrate::signal(rate).unwrap();
+            let heard_ns = played + ns(after / 1000.0);
+            let at = ((heard_ns - self.first_ns) as f64 * f64::from(rate) / 1e9).round() as usize;
+            for (i, sample) in signal.iter().enumerate() {
+                if let Some(slot) = (at + i)
+                    .checked_sub(start)
+                    .and_then(|j| recording.get_mut(j))
+                {
+                    *slot += sample * 0.4;
+                }
+            }
+            recording
+        }
+    }
+
+    struct FakeRig {
+        now: Rc<Cell<u64>>,
+        lineup: Lineup,
+        tap: Arc<CalibrationTap>,
+        solo: Option<Member>,
+        /// Every speaker heard alone, by key, in turn.
+        solos: Vec<String>,
+        /// When each solo began, with the speaker heard alone; `None`:
+        /// every speaker heard again.
+        solo_times: Vec<(u64, Option<String>)>,
+        /// How long after the sweep entered its path each speaker is heard,
+        /// per sweep in turn; the last value repeats.
+        heard_after_ms: BTreeMap<String, Vec<f64>>,
+        sweeps: BTreeMap<String, usize>,
+        mic: Result<MicrophoneId, MicrophoneError>,
+    }
+
+    fn member(class: Class, id: &str, offset_ms: Option<f64>, latency_ms: f64) -> Member {
+        Member {
+            id: id.to_owned(),
+            class,
+            offset_ms,
+            latency_ms,
+        }
+    }
+
+    impl FakeRig {
+        /// The PC's speakers as the reference, a USB speaker, an AirPlay
+        /// speaker at L = 2000 ms and a Cast speaker at 3000 ms.
+        fn new() -> FakeRig {
+            FakeRig {
+                now: Rc::new(Cell::new(1_000_000_000)),
+                lineup: Lineup {
+                    session: Some(1),
+                    reference: Some("builtin".to_owned()),
+                    members: vec![
+                        member(Class::Local, "builtin", Some(0.0), 2500.0),
+                        member(Class::Local, "usb", Some(150.0), 2650.0),
+                        member(Class::AirPlay, "kitchen", Some(2000.0), 2500.0),
+                        member(Class::Cast, "den", Some(3000.0), 6000.0),
+                    ],
+                    hold_backs_ms: BTreeMap::from([
+                        ("builtin".to_owned(), 2000.0),
+                        ("usb".to_owned(), 2150.0),
+                    ]),
+                },
+                tap: Arc::new(CalibrationTap::new()),
+                solo: None,
+                solos: Vec::new(),
+                solo_times: Vec::new(),
+                heard_after_ms: BTreeMap::from([
+                    ("local:builtin".to_owned(), vec![2010.0]),
+                    ("local:usb".to_owned(), vec![2180.0]),
+                    ("airplay:kitchen".to_owned(), vec![2050.0]),
+                    ("cast:den".to_owned(), vec![3100.0]),
+                ]),
+                sweeps: BTreeMap::new(),
+                mic: Ok(MicrophoneId {
+                    device: "mic".to_owned(),
+                    rate: MIC_RATE,
+                }),
+            }
+        }
+
+        /// One capture block of 10 ms through the tap, as the converter
+        /// writes it.
+        fn capture_block(&self) {
+            let mut block = [0.0_f32; 960];
+            let mut cursor = self.tap.block_cursor();
+            let starts = cursor == 0;
+            self.tap.fade_music(&mut block);
+            self.tap.add_signal(&mut block, &mut cursor);
+            if starts {
+                self.tap.signal_started(self.now.get(), 480);
+            }
+        }
+
+        fn remove(&mut self, key: &str) {
+            self.lineup.members.retain(|m| m.key() != key);
+        }
+    }
+
+    impl AllRig for FakeRig {
+        fn lineup(&self) -> Lineup {
+            self.lineup.clone()
+        }
+
+        fn tap(&self) -> Option<Arc<CalibrationTap>> {
+            Some(Arc::clone(&self.tap))
+        }
+
+        fn solo(&mut self, who: Option<&Member>) {
+            if let Some(who) = who {
+                self.solos.push(who.key());
+            }
+            self.solo_times.push((self.now.get(), who.map(Member::key)));
+            self.solo = who.cloned();
+        }
+
+        fn open_microphone(
+            &mut self,
+            _seconds: f64,
+        ) -> Result<Box<dyn Microphone>, MicrophoneError> {
+            let id = self.mic.clone()?;
+            // Heard only along the path that reaches it.
+            let heard = self
+                .solo
+                .clone()
+                .filter(|solo| self.tap.route() == solo.route());
+            let heard_after_ms = heard.and_then(|solo| {
+                let key = solo.key();
+                let turn = self.sweeps.entry(key.clone()).or_default();
+                let values = self.heard_after_ms.get(&key)?;
+                let value = values[(*turn).min(values.len() - 1)];
+                *turn += 1;
+                Some(value)
+            });
+            Ok(Box::new(FakeMic {
+                id,
+                first_ns: self.now.get() + 30_000_000,
+                now: Rc::clone(&self.now),
+                tap: Arc::clone(&self.tap),
+                heard_after_ms,
+            }))
+        }
+    }
+
+    /// Ticks until the run gave the outputs back; `meddle` runs before each
+    /// tick.
+    fn run_to_end(
+        rig: &mut FakeRig,
+        run: &mut AllRun,
+        mut meddle: impl FnMut(&mut FakeRig, &mut AllRun),
+    ) -> Finished {
+        let mut finished = None;
+        for _ in 0..20_000 {
+            if let Some(done) = run.take_finished() {
+                finished = Some(done);
+            }
+            if !run.holds_outputs() {
+                return finished.expect("an ended run has a result");
+            }
+            meddle(rig, &mut *run);
+            rig.now.set(rig.now.get() + TICK_NS);
+            rig.capture_block();
+            if matches!(run.progress(), Progress::Estimating { .. }) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let now = rig.now.get();
+            run.tick(rig, now);
+        }
+        panic!("the run never ended: {:?}", run.progress());
+    }
+
+    /// The results of a run over local speakers `(id, stored offset, heard
+    /// after ms)`, the first the reference.
+    pub(crate) fn local_sheet(speakers: &[(&str, f64, f64)]) -> (Sheet, Vec<Member>, u32) {
+        let speakers: Vec<(Class, &str, Option<f64>, f64)> = speakers
+            .iter()
+            .map(|&(id, offset, after)| (Class::Local, id, Some(offset), after))
+            .collect();
+        sheet_of(&speakers)
+    }
+
+    /// The results of a run over `(class, id, stored offset, heard after
+    /// ms)`, the first a local output and the reference.
+    pub(crate) fn sheet_of(
+        speakers: &[(Class, &str, Option<f64>, f64)],
+    ) -> (Sheet, Vec<Member>, u32) {
+        let mut rig = FakeRig::new();
+        rig.lineup.reference = Some(speakers[0].1.to_owned());
+        rig.lineup.members = speakers
+            .iter()
+            .map(|&(class, id, offset, after)| member(class, id, offset, after + 450.0))
+            .collect();
+        rig.lineup.hold_backs_ms = speakers
+            .iter()
+            .filter(|speaker| speaker.0 == Class::Local)
+            .map(|&(_, id, offset, _)| (id.to_owned(), 2000.0 + offset.unwrap_or(0.0)))
+            .collect();
+        rig.heard_after_ms = speakers
+            .iter()
+            .map(|&(class, id, _, after)| (member_key(class, id), vec![after]))
+            .collect();
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |_, _| {});
+        let sheet = finished.sheet.expect("a sheet");
+        (sheet, run.members().to_vec(), run.rate())
+    }
+
+    fn start(rig: &mut FakeRig) -> AllRun {
+        let now = rig.now.get();
+        AllRun::start(rig, now, DebugLog::default()).expect("it starts")
+    }
+
+    fn measured(sheet: &Sheet, row: usize) -> f64 {
+        match sheet.rows()[row].state {
+            RowState::Certain(m) => m.new_ms,
+            other => panic!("row {row} isn't certain: {other:?}"),
+        }
+    }
+
+    fn given_back(rig: &FakeRig) {
+        assert_eq!(rig.solo, None, "every speaker is heard again");
+        assert_eq!(rig.tap.route(), Route::Ring);
+        // The music fades back in over the next blocks.
+        for _ in 0..10 {
+            rig.capture_block();
+        }
+        assert!(!rig.tap.is_active(), "the music is back");
+    }
+
+    #[test]
+    fn each_speaker_is_heard_alone_on_its_own_path_and_the_sheet_has_every_class() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |_, _| {});
+        assert_eq!(finished.failure, None);
+        let sheet = finished.sheet.expect("a sheet");
+        assert_eq!(sheet.ended(), None);
+        assert_eq!(sheet.rows()[0].state, RowState::Reference);
+        // Heard later than the reference: the USB speaker by 170 ms, so its
+        // offset drops by that; the AirPlay speaker by 40 ms and the Cast
+        // speaker by 1090 ms, so the others wait that much longer for them.
+        assert!((measured(&sheet, 1) - -20.0).abs() <= 2.0);
+        assert!((measured(&sheet, 2) - 2040.0).abs() <= 2.0);
+        assert!((measured(&sheet, 3) - 4090.0).abs() <= 2.0);
+        let airplay = sheet.airplay().expect("an AirPlay delay");
+        assert_eq!(airplay.state, SharedState::Certain);
+        assert!((airplay.new_ms.unwrap() - 2040.0).abs() <= 2.0);
+        assert_eq!(
+            rig.solos,
+            [
+                "local:builtin",
+                "local:usb",
+                "local:usb",
+                "airplay:kitchen",
+                "airplay:kitchen",
+                "cast:den",
+                "cast:den"
+            ]
+        );
+        given_back(&rig);
+    }
+
+    #[test]
+    fn a_cast_speaker_without_an_offset_is_searched_for_first() {
+        let mut rig = FakeRig::new();
+        rig.lineup.members.truncate(1);
+        rig.lineup
+            .members
+            .push(member(Class::Cast, "den", None, 3000.0));
+        let mut run = start(&mut rig);
+        let mut searched = false;
+        let finished = run_to_end(&mut rig, &mut run, |_, run| {
+            searched |= matches!(
+                run.progress(),
+                Progress::Measuring {
+                    row: 1,
+                    take: Take::Sweep(1),
+                    searching: true
+                }
+            );
+        });
+        assert!(searched, "the progress says it searches");
+        let sheet = finished.sheet.expect("a sheet");
+        assert!((measured(&sheet, 1) - 1090.0).abs() <= 2.0);
+    }
+
+    #[test]
+    fn a_speaker_turned_off_mid_run_ends_the_sheet_and_nothing_can_be_applied() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if let Progress::Measuring { row: 2, .. } = run.progress() {
+                rig.remove("airplay:kitchen");
+            }
+        });
+        let mut sheet = finished.sheet.expect("a sheet");
+        assert_eq!(sheet.ended(), Some(EndReason::SpeakerTurnedOff));
+        assert!(
+            sheet.rows()[1].state.is_certain(),
+            "rows measured before stay"
+        );
+        assert_eq!(sheet.rows()[3].state, RowState::NotMeasured);
+        assert_eq!(
+            sheet.apply(),
+            Err(ApplyRefusal::Ended(EndReason::SpeakerTurnedOff))
+        );
+        given_back(&rig);
+    }
+
+    #[test]
+    fn a_source_switch_a_new_speaker_or_a_delay_edit_ends_the_run_with_its_reason() {
+        let switch: fn(&mut FakeRig) = |rig| rig.lineup.session = Some(2);
+        let turn_on: fn(&mut FakeRig) = |rig| {
+            rig.lineup
+                .members
+                .push(member(Class::Local, "hdmi", Some(0.0), 2500.0));
+        };
+        let edit: fn(&mut FakeRig) = |rig| rig.lineup.members[1].offset_ms = Some(400.0);
+        for (meddle, reason) in [
+            (switch, EndReason::SourceChanged),
+            (turn_on, EndReason::SpeakersChanged),
+            (edit, EndReason::SpeakersChanged),
+        ] {
+            let mut rig = FakeRig::new();
+            let mut run = start(&mut rig);
+            let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+                if let Progress::Measuring { row: 1, .. } = run.progress() {
+                    meddle(rig);
+                }
+            });
+            assert_eq!(finished.sheet.unwrap().ended(), Some(reason));
+            given_back(&rig);
+        }
+    }
+
+    #[test]
+    fn cancel_fades_the_sweep_out_and_gives_every_speaker_back() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let mut cut_off = false;
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if rig.tap.played_at_ns().is_some() && run.is_running() {
+                let now = rig.now.get();
+                run.cancel(rig, now);
+                cut_off = run.holds_outputs() && rig.solo.is_some();
+            }
+        });
+        assert!(cut_off, "the sweep on its way plays out on its speaker");
+        let sheet = finished.sheet.expect("a sheet");
+        assert_eq!(sheet.ended(), Some(EndReason::Cancelled));
+        assert!(sheet.rows()[1..].iter().all(|r| !r.state.is_certain()));
+        given_back(&rig);
+    }
+
+    /// Two AirPlay speakers on the one AirPlay feed, the patio's 2 s later
+    /// than the kitchen's.
+    fn two_airplay_rig() -> FakeRig {
+        let mut rig = FakeRig::new();
+        rig.lineup.members = vec![
+            member(Class::Local, "builtin", Some(0.0), 2500.0),
+            member(Class::AirPlay, "kitchen", Some(2000.0), 2500.0),
+            member(Class::AirPlay, "patio", Some(2000.0), 4500.0),
+        ];
+        rig.lineup.hold_backs_ms = BTreeMap::from([("builtin".to_owned(), 2000.0)]);
+        rig.heard_after_ms
+            .insert("airplay:patio".to_owned(), vec![4050.0]);
+        rig
+    }
+
+    /// Whether `key`'s speaker is heard at `at_ns`, from the solo history.
+    fn audible(rig: &FakeRig, key: &str, at_ns: u64) -> bool {
+        rig.solo_times
+            .iter()
+            .rev()
+            .find(|(since, _)| *since <= at_ns)
+            .is_none_or(|(_, solo)| solo.as_deref().is_none_or(|solo| solo == key))
+    }
+
+    /// The AirPlay sweeps that entered the feed, by speaker. A new sweep's
+    /// speaker is the one soloed when it starts playing.
+    fn note_airplay_sweep(rig: &FakeRig, sweeps: &mut Vec<(String, u64)>, seen: &mut Vec<u64>) {
+        let Some(played) = rig.tap.played_at_ns() else {
+            return;
+        };
+        if seen.contains(&played) {
+            return;
+        }
+        seen.push(played);
+        if let Some(solo) = rig.solo.as_ref().filter(|m| m.class == Class::AirPlay) {
+            sweeps.push((solo.key(), played));
+        }
+    }
+
+    /// Every AirPlay speaker but the one measured is quiet while it plays
+    /// another's sweep from the feed.
+    fn assert_no_stray_airplay_sweep(rig: &FakeRig, sweeps: &[(String, u64)]) {
+        let signal_ns = ns(calibrate::SIGNAL_SECONDS);
+        for (measured, played) in sweeps {
+            for (other, after_ms) in [("airplay:kitchen", 2050.0), ("airplay:patio", 4050.0)] {
+                if other == measured {
+                    continue;
+                }
+                let from = played + ns(after_ms / 1000.0);
+                let to = from + signal_ns;
+                let changes = rig
+                    .solo_times
+                    .iter()
+                    .map(|(since, _)| *since)
+                    .filter(|since| (from..=to).contains(since));
+                for at in std::iter::once(from).chain(changes) {
+                    assert!(
+                        !audible(rig, other, at),
+                        "{other} plays the sweep of {measured} at {at}: {:?}",
+                        rig.solo_times
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_airplay_speaker_later_than_another_stays_muted_until_their_sweeps_played_out() {
+        let mut rig = two_airplay_rig();
+        let mut run = start(&mut rig);
+        let (mut sweeps, mut seen) = (Vec::new(), Vec::new());
+        let finished = run_to_end(&mut rig, &mut run, |rig, _| {
+            note_airplay_sweep(rig, &mut sweeps, &mut seen);
+        });
+        assert_eq!(finished.failure, None);
+        assert_eq!(sweeps.len(), 4, "two sweeps each: {sweeps:?}");
+        assert_no_stray_airplay_sweep(&rig, &sweeps);
+        let sheet = finished.sheet.expect("a sheet");
+        assert!(sheet.rows()[1..].iter().all(|row| row.state.is_certain()));
+        given_back(&rig);
+
+        // Cut off in the kitchen's window: the patio still plays it later.
+        let mut rig = two_airplay_rig();
+        let mut run = start(&mut rig);
+        let (mut sweeps, mut seen) = (Vec::new(), Vec::new());
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            note_airplay_sweep(rig, &mut sweeps, &mut seen);
+            if !sweeps.is_empty() && run.is_running() {
+                let now = rig.now.get();
+                run.cancel(rig, now);
+            }
+        });
+        assert_eq!(sweeps.len(), 1);
+        assert_no_stray_airplay_sweep(&rig, &sweeps);
+        given_back(&rig);
+    }
+
+    #[test]
+    fn a_microphone_that_changes_between_sweeps_stops_the_run() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if let Progress::Measuring { row: 1, .. } = run.progress() {
+                rig.mic = Ok(MicrophoneId {
+                    device: "headset".to_owned(),
+                    rate: MIC_RATE,
+                });
+            }
+        });
+        assert_eq!(finished.failure, Some(Failure::MicrophoneChanged));
+        assert_eq!(finished.sheet.unwrap().ended(), Some(EndReason::Cancelled));
+        given_back(&rig);
+    }
+
+    #[test]
+    fn a_run_that_cant_start_says_why_and_leaves_the_music_alone() {
+        let now = 1_000_000_000;
+        let mut rig = FakeRig::new();
+        rig.mic = Err(MicrophoneError::Denied);
+        assert_eq!(
+            AllRun::start(&mut rig, now, DebugLog::default()).err(),
+            Some(Failure::MicrophoneDenied)
+        );
+        let mut rig = FakeRig::new();
+        rig.lineup.members.truncate(1);
+        assert_eq!(
+            AllRun::start(&mut rig, now, DebugLog::default()).err(),
+            Some(Failure::NothingToMeasure)
+        );
+        let mut rig = FakeRig::new();
+        rig.lineup.session = None;
+        assert_eq!(
+            AllRun::start(&mut rig, now, DebugLog::default()).err(),
+            Some(Failure::NotPlaying)
+        );
+        assert!(!rig.tap.is_active());
+    }
+
+    #[test]
+    fn measure_again_replaces_its_row_alone() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let mut sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        let cast_before = measured(&sheet, 3);
+        rig.heard_after_ms
+            .insert("local:usb".to_owned(), vec![2200.0]);
+        let now = rig.now.get();
+        let mut again = AllRun::again(
+            &mut rig,
+            &sheet,
+            &members,
+            MIC_RATE,
+            1,
+            now,
+            DebugLog::default(),
+        )
+        .expect("it starts");
+        rig.solos.clear();
+        let finished = run_to_end(&mut rig, &mut again, |_, _| {});
+        assert_eq!(rig.solos, ["local:builtin", "local:usb", "local:usb"]);
+        assert!(sheet.replace(finished.sheet.expect("a sheet")));
+        assert!((measured(&sheet, 1) - -40.0).abs() <= 2.0);
+        assert_eq!(measured(&sheet, 3), cast_before);
+        given_back(&rig);
+    }
+
+    #[test]
+    fn measure_again_of_a_speaker_turned_off_since_is_refused() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        rig.remove("cast:den");
+        let now = rig.now.get();
+        let again = AllRun::again(
+            &mut rig,
+            &sheet,
+            &members,
+            MIC_RATE,
+            3,
+            now,
+            DebugLog::default(),
+        );
+        assert_eq!(again.err(), Some(Failure::NotPlaying));
+        given_back(&rig);
+    }
+}

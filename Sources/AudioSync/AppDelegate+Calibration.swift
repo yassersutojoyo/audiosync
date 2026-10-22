@@ -13,7 +13,7 @@ extension AppDelegate {
     /// another calibration runs, or when the speaker and the reference
     /// aren't both playing; the row then says why.
     func startCalibration(_ uid: String) {
-        guard calibrationRun == nil else { return }
+        guard calibrationRun == nil, calibrateAllRun == nil, !appModel.calibrateAll.holdsOutputs else { return }
         if let blocker = CalibrationFlow.blocker(streaming: engine.isRunning, reference: localReference, chosen: uid,
                                                  playing: engine.activeOutputUIDs) {
             showCalibration(uid, .failed(blocker))

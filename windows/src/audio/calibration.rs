@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
@@ -36,16 +36,47 @@ const IDLE: i64 = -1;
 /// No time recorded yet.
 const UNSET: u64 = u64::MAX;
 
-/// The capture's way to play the test signal through the session's ring.
+/// Which path the test signal takes: the ring, which reaches the local
+/// outputs, or one network sender's feed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    Ring,
+    AirPlay,
+    Cast,
+}
+
+impl Route {
+    fn from_u8(value: u8) -> Route {
+        match value {
+            1 => Route::AirPlay,
+            2 => Route::Cast,
+            _ => Route::Ring,
+        }
+    }
+
+    fn as_u8(self) -> u8 {
+        match self {
+            Route::Ring => 0,
+            Route::AirPlay => 1,
+            Route::Cast => 2,
+        }
+    }
+}
+
+/// The capture's way to play the test signal through the session's ring or
+/// a network sender's feed.
 ///
 /// While engaged, the captured audio fades out over [`FADE_FRAMES`] and
 /// stays silent, for the ring and the network senders alike; disengaged, it
 /// fades back in. A signal asked for with [`CalibrationTap::play`] starts
-/// with the next block and goes into the ring only; the time of that block
-/// is kept as the moment the signal entered every output's path, before its
-/// hold-back. Which output is heard is the controller's gains, not the tap.
+/// with the next block and goes along its [`Route`] only: into the ring, or
+/// into the AirPlay or the Cast feed; the time of that block is kept as the
+/// moment the signal entered every output's path, before its hold-back.
+/// Which output or AirPlay speaker is heard is the controller's gains and
+/// volumes, not the tap.
 ///
 /// The capture thread calls [`CalibrationTap::is_active`],
+/// [`CalibrationTap::route`],
 /// [`CalibrationTap::fade_music`], [`CalibrationTap::block_cursor`],
 /// [`CalibrationTap::add_signal`] and [`CalibrationTap::signal_started`]:
 /// atomics only, no allocation, lock or wait. The rest runs on the UI thread.
@@ -64,6 +95,8 @@ pub struct CalibrationTap {
     signal_level: AtomicUsize,
     /// The signal fades out instead of playing to its end.
     stopping: AtomicBool,
+    /// The [`Route`] the signal takes.
+    route: AtomicU8,
 }
 
 impl CalibrationTap {
@@ -78,7 +111,18 @@ impl CalibrationTap {
             start_ns: AtomicU64::new(UNSET),
             signal_level: AtomicUsize::new(FADE_FRAMES),
             stopping: AtomicBool::new(false),
+            route: AtomicU8::new(Route::Ring.as_u8()),
         }
+    }
+
+    /// Sends the signal played next along `route`.
+    pub fn set_route(&self, route: Route) {
+        self.route.store(route.as_u8(), Ordering::Release);
+    }
+
+    /// The signal's path. Capture thread.
+    pub fn route(&self) -> Route {
+        Route::from_u8(self.route.load(Ordering::Acquire))
     }
 
     /// The music fades out and stays out.
@@ -140,9 +184,19 @@ impl CalibrationTap {
     }
 
     /// Where a block's signal starts: the next frame to write, or [`IDLE`].
-    /// Read once at the start of each block. Capture thread.
+    /// Read once at the start of each block. A signal for a network feed
+    /// waits for a block that starts with the music fully faded, since the
+    /// block is cleared once that feed has it. Capture thread.
     pub fn block_cursor(&self) -> i64 {
+        if self.route() != Route::Ring && !self.music_silent() {
+            return IDLE;
+        }
         self.position.load(Ordering::Acquire)
+    }
+
+    /// The music faded out completely and stays out.
+    fn music_silent(&self) -> bool {
+        self.engaged.load(Ordering::Acquire) && self.music_level.load(Ordering::Relaxed) == 0
     }
 
     /// Adds the signal from `cursor` to `block`, interleaved stereo, and
@@ -241,6 +295,8 @@ pub enum Failure {
     HandsFreeMicrophone,
     /// The estimate couldn't run.
     Unfinished,
+    /// Calibrate All found no speaker on besides the reference.
+    NothingToMeasure,
     TooShort(Option<Which>),
     TooLong(Option<Which>),
     Clipped(Option<Which>),
@@ -474,18 +530,18 @@ pub const LATENCY_ALLOWANCE_S: f64 = 0.5;
 const MARGIN_S: f64 = 0.5;
 
 /// How long the microphone gets to deliver its first frames.
-const WARM_UP_LIMIT_S: f64 = 2.0;
+pub(crate) const WARM_UP_LIMIT_S: f64 = 2.0;
 
 /// How long the microphone runs before the signal plays, so its own start
 /// is behind it.
-const WARM_UP_S: f64 = 0.2;
+pub(crate) const WARM_UP_S: f64 = 0.2;
 
 /// How long the capture gets to carry the signal into the ring.
-const SIGNAL_WAIT_S: f64 = 1.5;
+pub(crate) const SIGNAL_WAIT_S: f64 = 1.5;
 
 /// Past a run's length, how long a stalled microphone gets before the
 /// estimate judges what came in.
-const STALL_S: f64 = 2.0;
+pub(crate) const STALL_S: f64 = 2.0;
 
 /// Whether output `chosen` can be calibrated now: a reference other than
 /// it is listed, streaming runs, and both play (S232: both take part).
@@ -611,7 +667,7 @@ pub fn outcome(result: &Result<Calibration, Refused>) -> Outcome {
     }
 }
 
-fn ns(seconds: f64) -> u64 {
+pub(crate) fn ns(seconds: f64) -> u64 {
     (seconds.max(0.0) * 1e9) as u64
 }
 

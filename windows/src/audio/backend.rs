@@ -775,6 +775,10 @@ pub trait AudioBackend {
     /// output at its own gain again.
     fn set_calibration_solo(&mut self, id: Option<&str>);
 
+    /// Only AirPlay speaker `id` is heard, the others muted; `None`: every
+    /// AirPlay speaker at its own volume again.
+    fn set_calibration_airplay_solo(&mut self, _id: Option<&str>) {}
+
     /// Starts recording the default input device, with room for `seconds`.
     fn open_microphone(&mut self, seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError>;
 

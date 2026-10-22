@@ -27,7 +27,7 @@ use audiosync_core::ring::{RingWriter, is_supported_rate};
 use super::SESSION_RATE;
 use super::airplay::FeedLease;
 use super::backend::{BackendError, SourceId, SourceInfo};
-use super::calibration::CalibrationTap;
+use super::calibration::{CalibrationTap, Route};
 use super::cast::CastLease;
 use super::outputs::{EndpointReading, is_hands_free};
 use super::process::{IDLE_PID, ProcessTable, SYSTEM_PID};
@@ -370,7 +370,8 @@ const CONVERT_CHUNK: usize = 1024;
 
 /// The network senders' feeds a capture is lent: each gets the same
 /// equalized audio as the ring. The calibration's tap rides along: it fades
-/// the music out of all of them and adds its test signal to the ring alone.
+/// the music out of all of them and adds its test signal to the one path
+/// its route names.
 #[derive(Default)]
 pub struct Feeds {
     pub airplay: Option<FeedLease>,
@@ -379,21 +380,53 @@ pub struct Feeds {
 }
 
 impl Feeds {
-    /// Hands `block` to the senders, after the calibration's fade, and adds
-    /// the calibration's signal from `signal` for the ring.
+    /// Hands `block` to the senders, after the calibration's fade, with the
+    /// calibration's signal from `signal` added for the ring or one feed.
     fn push(&mut self, block: &mut [f32], frames: usize, arrived: Instant, signal: &mut i64) {
-        let tap = self.calibration.as_deref().filter(|tap| tap.is_active());
-        if let Some(tap) = tap {
-            tap.fade_music(block);
+        let Feeds {
+            airplay,
+            cast,
+            calibration,
+        } = self;
+        let mut push_airplay = |block: &[f32]| {
+            if let Some(airplay) = airplay.as_mut() {
+                airplay.push(block, frames, arrived);
+            }
+        };
+        let mut push_cast = |block: &[f32]| {
+            if let Some(cast) = cast.as_mut() {
+                cast.push(block, frames);
+            }
+        };
+        let Some(tap) = calibration.as_deref().filter(|tap| tap.is_active()) else {
+            push_airplay(block);
+            push_cast(block);
+            return;
+        };
+        tap.fade_music(block);
+        let sending = *signal >= 0;
+        let route = tap.route();
+        match route {
+            Route::Ring => {
+                push_airplay(block);
+                push_cast(block);
+                tap.add_signal(block, signal);
+            }
+            Route::AirPlay => {
+                push_cast(block);
+                tap.add_signal(block, signal);
+                push_airplay(block);
+            }
+            Route::Cast => {
+                push_airplay(block);
+                tap.add_signal(block, signal);
+                push_cast(block);
+            }
         }
-        if let Some(airplay) = self.airplay.as_mut() {
-            airplay.push(block, frames, arrived);
-        }
-        if let Some(cast) = self.cast.as_mut() {
-            cast.push(block, frames);
-        }
-        if let Some(tap) = tap {
-            tap.add_signal(block, signal);
+        // A network route's signal only starts in a block of silence
+        // (`block_cursor`), so clearing it keeps the signal out of the ring.
+        if sending && route != Route::Ring {
+            block.fill(0.0);
         }
     }
 }
@@ -1256,6 +1289,37 @@ mod tests {
             played + 10_000_000 >= before,
             "stamped when its block closed"
         );
+    }
+
+    #[test]
+    fn a_signal_for_a_network_speaker_stays_out_of_the_ring_and_waits_for_silence() {
+        let (ring, writer) = session_ring_after_lead_in();
+        let (_control, processor) = equalizer();
+        let tap = Arc::new(CalibrationTap::new());
+        let feeds = Feeds {
+            calibration: Some(Arc::clone(&tap)),
+            ..Feeds::default()
+        };
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, feeds).unwrap();
+        let music = f32_bytes(&[0.5; 960]);
+        tap.set_route(Route::Cast);
+        tap.engage();
+        tap.play();
+        converter.push(&music, 480, false);
+        assert_eq!(
+            tap.played_at_ns(),
+            None,
+            "the music still fades: the signal waits"
+        );
+        for _ in 0..4 {
+            converter.push(&music, 480, false);
+        }
+        assert!(
+            tap.played_at_ns().is_some(),
+            "it started once the music was out"
+        );
+        assert!(newest(&ring, 480 * 3).iter().all(|s| *s == 0.0));
     }
 
     #[test]

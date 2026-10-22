@@ -40,6 +40,15 @@ export enum PinPhase { starting, ready, checking }
 // or the hint under its volume slider (low, muted, or both).
 export enum DeviceVolumeHint { none, low, muted, muted-low }
 
+// A row of the Calibrate All Speakers results.
+export struct CalibrationRowItem {
+    name: string,
+    // Its old and new delay, or why it has none.
+    detail: string,
+    // Measure Again can run for it.
+    can-measure-again: bool,
+}
+
 export struct SpeakerItem {
     id: string,
     name: string,

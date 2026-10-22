@@ -10,9 +10,9 @@ extension AppDelegate {
     // MARK: - Speaker / source state (shared by the window and the menu bar panel)
 
     /// A local speaker's linear gain, through the core's volume curve; 0
-    /// while a calibration plays its signal through another output (S232).
+    /// while a calibration plays its signal through another output (S232, S235).
     private func effectiveGain(_ uid: String) -> Double {
-        if let solo = calibrationRun?.soloUID, solo != uid { return 0 }
+        if let solo = calibrationRun?.soloUID ?? calibrateAllRun?.localSolo, solo != uid { return 0 }
         return engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume,
                                            masterPosition: masterVolume)
     }

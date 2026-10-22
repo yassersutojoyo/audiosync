@@ -39,6 +39,7 @@
 
 pub mod airplay;
 pub mod backend;
+pub mod calibrate_all;
 pub mod calibration;
 pub mod capture;
 pub mod cast;

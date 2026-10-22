@@ -445,6 +445,101 @@ mod tests {
         assert_eq!(pairing.attempt(peer(1), &fresh, later), PairOutcome::Paired);
     }
 
+    #[test]
+    fn tries_refused_as_limited_never_count_toward_the_lock() {
+        // Otherwise one address could lock pairing for every phone within a minute.
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&code);
+        for _ in 0..WRONG_PER_WINDOW {
+            assert_eq!(pairing.attempt(peer(1), &wrong, start), PairOutcome::Wrong);
+        }
+        for _ in 0..WRONG_BEFORE_LOCK * 2 {
+            assert_eq!(
+                pairing.attempt(peer(1), &wrong, start),
+                PairOutcome::Limited
+            );
+        }
+        assert!(!pairing.locked());
+        assert_eq!(pairing.attempt(peer(2), &code, start), PairOutcome::Paired);
+    }
+
+    #[test]
+    fn rotating_retires_the_old_code_and_clears_the_limit() {
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let old = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&old);
+        for _ in 0..WRONG_PER_WINDOW {
+            pairing.attempt(peer(1), &wrong, start);
+        }
+        assert_eq!(pairing.attempt(peer(1), &old, start), PairOutcome::Limited);
+        let fresh = pairing.rotate(start).unwrap();
+        assert_eq!(pairing.current(start), Some(fresh.as_str()));
+        if fresh != old {
+            assert_eq!(pairing.attempt(peer(1), &old, start), PairOutcome::Wrong);
+        }
+        assert_eq!(pairing.attempt(peer(1), &fresh, start), PairOutcome::Paired);
+    }
+
+    #[test]
+    fn a_code_is_matched_whole_after_trimming() {
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let near_misses = [
+            String::new(),
+            code[..5].to_owned(),
+            format!("{code}0"),
+            format!("0{code}"),
+            format!("{} {}", &code[..3], &code[3..]),
+        ];
+        for (index, near) in near_misses.iter().enumerate() {
+            assert_eq!(
+                pairing.attempt(peer(10 + index as u8), near, start),
+                PairOutcome::Wrong,
+                "{near:?}"
+            );
+        }
+        assert_eq!(
+            pairing.attempt(peer(1), &format!(" \t{code}\n"), start),
+            PairOutcome::Paired
+        );
+    }
+
+    #[test]
+    fn the_wrong_code_window_slides_with_each_try() {
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&code);
+        for second in 0..WRONG_PER_WINDOW as u64 {
+            let at = start + Duration::from_secs(second * 10);
+            assert_eq!(pairing.attempt(peer(1), &wrong, at), PairOutcome::Wrong);
+        }
+        let almost = start + Duration::from_secs(60) - Duration::from_millis(1);
+        assert_eq!(
+            pairing.attempt(peer(1), &code, almost),
+            PairOutcome::Limited
+        );
+        // The first wrong try leaves the window, so exactly one more is let through.
+        let first_gone = start + Duration::from_secs(60);
+        assert_eq!(
+            pairing.attempt(peer(1), &wrong, first_gone),
+            PairOutcome::Wrong
+        );
+        assert_eq!(
+            pairing.attempt(peer(1), &code, first_gone),
+            PairOutcome::Limited
+        );
+        let second_gone = start + Duration::from_secs(70);
+        assert_eq!(
+            pairing.attempt(peer(1), &code, second_gone),
+            PairOutcome::Paired
+        );
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")

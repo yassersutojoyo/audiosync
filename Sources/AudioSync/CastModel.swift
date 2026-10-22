@@ -295,7 +295,8 @@ struct CastModel {
     private(set) var volumes: [String: CastVolume] = [:]
     /// A level the user set that no status has answered yet.
     private(set) var requested: (id: String, level: Double)?
-    /// The offset the device memory holds, per device, in ms.
+    /// The offset the device memory holds, per device, in ms. 0 ms counts as
+    /// none: the sender can't forget an offset, so Undo leaves 0 ms behind.
     private(set) var offsets: [String: Double] = [:]
 
     /// The devices listed, by name.
@@ -314,7 +315,7 @@ struct CastModel {
     mutating func apply(_ change: CastDeviceChange) -> Bool {
         switch change {
         case .appeared(let device, let offset), .changed(let device, let offset):
-            if let offset { offsets[device.id] = offset }
+            if let offset { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
             return changed
@@ -445,9 +446,15 @@ struct CastModel {
     /// The user's offset for `id`, as the field takes it; nil when unchanged
     /// or not a number.
     mutating func setOffset(_ id: String, ms: Double) -> Double? {
-        guard let clamped = Self.clampedOffset(ms), offsets[id] != clamped else { return nil }
-        offsets[id] = clamped
+        guard let clamped = Self.clampedOffset(ms), offset(of: id) != clamped else { return nil }
+        offsets[id] = clamped > 0 ? clamped : nil
         return clamped
+    }
+
+    /// Forgets the offset of `id`, so its next calibration searches the
+    /// longest window again; false when none was stored.
+    mutating func clearOffset(_ id: String) -> Bool {
+        offsets.removeValue(forKey: id) != nil
     }
 
     /// An offset in whole ms, clamped to 0 to 20 000; nil when it isn't finite.

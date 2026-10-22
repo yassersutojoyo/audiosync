@@ -13,7 +13,9 @@ use audiosync_core::policy::source_quit::WhenSourceQuits;
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
-use crate::audio::calibration::Phase;
+use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
+
+use crate::audio::calibration::{Failure, Phase};
 
 pub use crate::settings::Appearance;
 
@@ -524,6 +526,78 @@ pub struct AppState {
     pub cast_list: CastList,
     /// The microphone calibration a row shows.
     pub calibration: CalibrationState,
+    /// Calibrate All Speakers, in its own card.
+    pub calibrate_all: CalibrateAllState,
+}
+
+/// Calibrate All Speakers (spec S235 to S240): where a run stands and the
+/// results of the last one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CalibrateAllState {
+    pub phase: AllPhase,
+    /// Why a run can't start now; `None` when the button may try.
+    pub blocked: Option<Failure>,
+    /// The results, while they still describe the stored delays.
+    pub sheet: Option<SheetState>,
+    /// Counts each ending, Apply and Undo, so Narrator hears each once.
+    pub endings: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum AllPhase {
+    #[default]
+    Idle,
+    Running(AllProgress),
+    /// It couldn't start, or the microphone or the capture stopped it.
+    Failed(Failure),
+    /// A delay changed after the run, so its results went.
+    Stale,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AllProgress {
+    /// The music fades out and plays out.
+    Preparing,
+    /// The sweep plays on speaker `name` alone: the reference's one sweep,
+    /// or sweep `take` (1 or 2) of another speaker.
+    Measuring {
+        name: String,
+        reference: bool,
+        take: usize,
+        searching: bool,
+    },
+    Estimating,
+}
+
+/// The results of a run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SheetState {
+    pub rows: Vec<SheetRow>,
+    pub airplay: Option<AirPlayShared>,
+    /// Why the run ended before it could be applied.
+    pub ended: Option<EndReason>,
+    /// The microphone or the capture stopped the run.
+    pub failure: Option<Failure>,
+    /// The last Measure Again ended early, so its row stayed.
+    pub again_ended: Option<EndReason>,
+    pub can_apply: bool,
+    /// Apply or Undo would set the AirPlay delay while AirPlay doesn't
+    /// play, so it can't be worked out: both wait.
+    pub airplay_waits: bool,
+    pub applied: bool,
+    /// Undo restores what Apply replaced, in one step.
+    pub can_undo: bool,
+    pub undone: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SheetRow {
+    pub name: String,
+    pub class: Class,
+    /// The stored delay before the run.
+    pub old_ms: Option<f64>,
+    pub state: RowState,
+    pub can_measure_again: bool,
 }
 
 /// The microphone calibration of one local speaker (spec S232): where it
@@ -533,8 +607,8 @@ pub struct CalibrationState {
     /// The speaker it concerns; `None` when none ran.
     pub speaker_id: Option<String>,
     pub phase: Phase,
-    /// A run holds the outputs (it runs, or a cut-off sweep plays out): no
-    /// other may start.
+    /// A run holds the outputs (it runs, or a cut-off sweep plays out),
+    /// this one or Calibrate All: no other may start.
     pub busy: bool,
 }
 
@@ -673,6 +747,25 @@ pub trait Backend {
 
     /// Cancel on the running calibration: its speaker's delay stays.
     fn cancel_calibration(&mut self) {}
+
+    /// Calibrate All Speakers: measures every speaker that is on.
+    fn start_calibrate_all(&mut self) {}
+
+    /// Cancel on the running Calibrate All or Measure Again: nothing
+    /// changes.
+    fn cancel_calibrate_all(&mut self) {}
+
+    /// Measure Again on the results' row `row`.
+    fn measure_again(&mut self, _row: usize) {}
+
+    /// Apply on the results: the certain rows' delays, as one change.
+    fn apply_calibrate_all(&mut self) {}
+
+    /// Undo after Apply: every replaced delay back, in one step.
+    fn undo_calibrate_all(&mut self) {}
+
+    /// Close on the results.
+    fn close_calibrate_all(&mut self) {}
 
     /// Moves a calibration on; the UI calls it every few tens of ms while
     /// [`CalibrationState::busy`]. Returns whether the snapshot changed.
@@ -918,6 +1011,7 @@ impl MockBackend {
             when_source_quits: WhenSourceQuits::Stop,
             cast_list: CastList::Quiet,
             calibration: CalibrationState::default(),
+            calibrate_all: CalibrateAllState::default(),
         };
         MockBackend {
             state,
