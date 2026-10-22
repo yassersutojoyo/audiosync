@@ -262,6 +262,8 @@ pub enum CastProblem {
     NotResponding,
     /// It turned the stream down.
     Refused,
+    /// It couldn't fetch the stream from this PC.
+    Blocked,
     /// Another app started casting to it.
     TakenOver,
     ConnectionLost,
@@ -559,6 +561,8 @@ pub struct CalibrateAllState {
     pub phase: AllPhase,
     /// Why a run can't start now; `None` when the button may try.
     pub blocked: Option<Failure>,
+    /// A one-speaker calibration holds the outputs.
+    pub other_running: bool,
     /// The results, while they still describe the stored delays.
     pub sheet: Option<SheetState>,
     /// Counts each ending, Apply and Undo, so Narrator hears each once.
@@ -572,6 +576,9 @@ pub enum AllPhase {
     Running(AllProgress),
     /// It couldn't start, or the microphone or the capture stopped it.
     Failed(Failure),
+    /// Measure Again couldn't start: the reference or the named row's
+    /// speaker isn't playing.
+    CannotMeasureAgain(String),
     /// A delay changed after the run, so its results went.
     Stale,
 }

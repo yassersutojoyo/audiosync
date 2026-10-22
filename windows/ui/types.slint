@@ -23,13 +23,13 @@ export enum SpeakerGroup { none, stereo-pair, home-theater }
 export enum CastState { idle, connecting, playing, reconnecting }
 
 // What went wrong with a Google Cast speaker, for its notice.
-export enum CastProblem { busy, not-responding, refused, taken-over, connection-lost }
+export enum CastProblem { busy, not-responding, refused, blocked, taken-over, connection-lost }
 
 // The speaker list's note about Google Cast while none is listed.
 export enum CastList { quiet, searching, none-found, failed }
 
 // Whether an AirPlay speaker can simply play.
-export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, unsupported }
+export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, airplay2-next-launch, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
 export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, one-airplay2-speaker, plays-through-speakers, apple-tv-plays, plays-in-group, unsupported }

@@ -183,7 +183,7 @@ struct UIStrings {
     /// What a running calibration is doing.
     func calibrationStep(_ step: CalibrationPhase.Step) -> String {
         switch step {
-        case .preparing: "Pausing the music…"
+        case .preparing: "Fading the music out…"
         case .measuring(.reference): "Listening to the built-in speakers…"
         case .measuring(.chosen): "Listening to this speaker…"
         case .estimating: "Working out the delay…"
@@ -274,7 +274,7 @@ struct UIStrings {
 
     func calibrateAllProgress(_ progress: CalibrateAllProgress) -> String {
         switch progress {
-        case .preparing: "Pausing the music…"
+        case .preparing: "Fading the music out…"
         case .listening(let name, 0): "Listening to \(name)…"
         case .listening(let name, let sweep): "Listening to \(name), sweep \(sweep) of 2…"
         case .searching(let name): "Listening to \(name), sweep 1 of 2. AudioSync doesn't know this "
@@ -287,8 +287,10 @@ struct UIStrings {
     let calibrateAllNewColumn = "New"
     let calibrateAllNone = "None"
     let calibrateAllApply = "Apply"
+    let calibrateAllApplyHelp = "Sets the new delays of the speakers that were measured clearly. Undo puts them all back."
     let calibrateAllUndo = "Undo"
     let calibrateAllUndoLabel = "Undo the new delays"
+    let calibrateAllUndoHelp = "Puts back every delay that Apply replaced."
     let calibrateAllClose = "Close"
     let calibrateAllDone = "Done"
     let measureAgain = "Measure Again"
@@ -328,7 +330,7 @@ struct UIStrings {
             return clamped ? value + ". The end of the range, so this speaker stays a little out of sync." : value
         case .uncertain(let ms, let u):
             return calibrateAllMeasured(ms, uncertaintyMs: u, kind: kind)
-                + ". The two sweeps differ too much, so the delay stays. Select Measure Again."
+                + ". The two sweeps differ too much, so the delay stays. Click Measure Again."
         case .refused(let failure):
             return calibrateAllRefusal(failure) + " The delay stays."
         }
@@ -397,6 +399,9 @@ struct UIStrings {
     }
 
     let calibrateAllNothingCertain = "No speaker was measured clearly, so there is nothing to apply."
+    func calibrateAllFinished(clear: Int, total: Int) -> String {
+        "Calibration finished. \(clear) of \(total) speakers measured clearly."
+    }
 
     // MARK: Main menu
 
@@ -485,7 +490,7 @@ struct UIStrings {
     /// The notice when AudioSync's own AirPlay sender stopped after an
     /// internal error.
     let nativeAirPlayStopped = "AirPlay stopped after an internal error, so AirPlay speakers aren't playing. "
-        + "Select Retry to start it again. If it keeps stopping, restart AudioSync."
+        + "Click Retry to start it again. If it keeps stopping, restart AudioSync."
 
     /// AudioSync's own AirPlay sender can't play to this receiver.
     func nativeAirPlayCantPlay(name: String) -> String {
@@ -1007,6 +1012,9 @@ struct UIStrings {
     let webRemoteTitle = "Web Remote"
     let webRemoteSummary = "Control the speakers from a phone or tablet on the same network."
     let webRemoteAddressTitle = "Address"
+    /// Above the Bonjour address, then above the IP address.
+    let webRemoteAddressLabel = "On the phone, open"
+    let webRemoteIPLabel = "If that doesn't open, use"
     let webRemoteSteps = "On the phone, open the address or scan the QR code, add the page to the Home Screen, "
         + "then open it from there and enter the pairing code."
     func webRemoteQRLabel(_ address: String) -> String { "QR code for \(address)" }
@@ -1017,9 +1025,10 @@ struct UIStrings {
         "Pairing code " + code.map(String.init).joined(separator: " ")
     }
     let webRemoteCodeNote = "Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one."
-    let webRemoteCodeExpired = "This code has expired. Select New Code to pair another phone."
-    let webRemoteLocked = "Pairing is locked after too many wrong codes. Select New Code to unlock it."
+    let webRemoteCodeExpired = "This code has expired. Click New Code to pair another phone."
+    let webRemoteLocked = "Pairing is locked after too many wrong codes. Click New Code to unlock it."
     let webRemoteNewCode = "New Code"
+    let webRemoteDevicesTitle = "Paired Devices"
     func webRemoteDevices(_ count: Int) -> String {
         switch count {
         case 0: return "No paired devices"
@@ -1029,16 +1038,16 @@ struct UIStrings {
     }
     let webRemoteForgetAll = "Forget All Remote Devices"
     let webRemoteForgetFailed = "AudioSync couldn't save the list of paired devices, so they are paired again "
-        + "after AudioSync restarts. Select Forget All Remote Devices again."
+        + "after AudioSync restarts. Click Forget All Remote Devices again."
     let webRemotePort = "Port"
     let webRemoteUsePort = "Use Port"
     let webRemotePortRange = "Enter a port from 1024 to 65535."
     func webRemotePortInUse(_ port: Int) -> String {
-        "Another app uses port \(port), so the web remote can't start. Enter another port and select Use Port."
+        "Another app uses port \(port), so the web remote can't start. Enter another port and click Use Port."
     }
     func webRemoteListenFailed(_ port: Int) -> String {
         "AudioSync couldn't open port \(port) on this Mac, so the web remote can't start. "
-            + "Enter another port and select Use Port."
+            + "Enter another port and click Use Port."
     }
     let webRemoteStartFailed = "The web remote couldn't start. Turn it off and on again."
     let webRemotePlainHTTP = "The page uses plain HTTP, so use the web remote only on your home network."
@@ -1154,9 +1163,12 @@ struct UIStrings {
         On the phone, open the address it shows or scan its QR code, and add
         the page to the Home Screen first. Then open it from there and enter
         the pairing code: on some phones, a pairing made in the browser
-        doesn't carry over to the Home Screen. The page uses plain HTTP, so
-        use the web remote only on your home network. 'Forget All Remote
-        Devices' unpairs every phone, also while the remote is off.
+        doesn't carry over to the Home Screen. Each code works once and for
+        10 minutes; the window shows the next one, and 'New Code' makes a
+        fresh one. The page uses plain HTTP, so use the web remote only on
+        your home network. 'Forget All Remote Devices' unpairs every phone,
+        also while the remote is off. If another app already uses the port,
+        the window says so and lets you pick another one.
 
         Tips
         - Tune with just two speakers at first: one AirPlay and one local.

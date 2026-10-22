@@ -266,6 +266,11 @@ export component RemoteWindow inherits Window {
                                     }
                                 }
                             }
+
+                            if !root.locked: SecondaryText {
+                                text: Strings.remote-code-note;
+                                min-height: self.preferred-height;
+                            }
                         }
 
                         SecondaryText {

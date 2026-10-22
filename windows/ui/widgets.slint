@@ -491,6 +491,7 @@ export component ToggleSwitch inherits Switch {
 export component VolumeSlider inherits HorizontalLayout {
     in property <float> volume;
     in property <string> label;
+    in property <string> description;
     in property <bool> enabled: true;
     // How far an arrow key moves it; a drag is not snapped to it.
     in property <float> step: 1;
@@ -516,6 +517,7 @@ export component VolumeSlider inherits HorizontalLayout {
         value: root.volume;
         enabled: root.enabled;
         accessible-label: root.label;
+        accessible-description: root.description;
         accessible-value: Strings.volume-value(self.value);
         changed(value) => {
             root.changed(value);
@@ -1409,6 +1411,7 @@ export component SpeakerRow inherits Rectangle {
                                     volume: root.item.volume;
                                     step: root.item.cast ? root.item.volume-step : 1;
                                     label: Strings.volume-of(root.item.name);
+                                    description: root.item.cast && root.item.volume-fixed ? Strings.cast-volume-fixed : "";
                                     enabled: root.item.cast ? root.cast-live && !root.item.volume-fixed : root.item.state != RowState.off;
                                     changed(value) => {
                                         root.volume-changed(value);
@@ -1464,6 +1467,11 @@ export component SpeakerRow inherits Rectangle {
                                 }
                             }
 
+                            if root.cast-live && root.item.volume-fixed: SecondaryText {
+                                text: Strings.cast-volume-fixed;
+                                min-height: self.preferred-height;
+                            }
+
                             if root.cast-live: HorizontalLayout {
                                 alignment: start;
                                 spacing: 8px;
@@ -1471,6 +1479,7 @@ export component SpeakerRow inherits Rectangle {
                                 if !root.item.volume-fixed: LinkButton {
                                     text: root.item.muted ? Strings.cast-unmute : Strings.cast-mute;
                                     label: Strings.cast-button-label(self.text, root.item.name);
+                                    accessible-description: root.item.muted ? Strings.cast-unmute-help : Strings.cast-mute-help;
                                     changed keyboard-focused => {
                                         root.mute-focused = self.keyboard-focused;
                                     }

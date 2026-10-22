@@ -1298,6 +1298,7 @@ impl App {
                 format_offset_ms,
             );
             row.calibration_status = calibration_status(&strings, &state, speaker);
+            row.availability = with_switch(row.availability, ui.airplay2_experimental);
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
             row
@@ -2824,6 +2825,16 @@ fn availability(a: ui_model::Availability) -> Availability {
     }
 }
 
+/// A receiver that needs AirPlay 2 while the switch is on: this launch runs
+/// without it, and the next one plays it.
+fn with_switch(availability: Availability, airplay2_switch: bool) -> Availability {
+    if airplay2_switch && availability == Availability::Airplay2NotYet {
+        Availability::Airplay2NextLaunch
+    } else {
+        availability
+    }
+}
+
 fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
     use ui_model::AirPlayProblem as P;
     match problem {
@@ -2851,6 +2862,7 @@ fn cast_problem(problem: ui_model::CastProblem) -> CastProblem {
         P::Busy => CastProblem::Busy,
         P::NotResponding => CastProblem::NotResponding,
         P::Refused => CastProblem::Refused,
+        P::Blocked => CastProblem::Blocked,
         P::TakenOver => CastProblem::TakenOver,
         P::ConnectionLost => CastProblem::ConnectionLost,
     }
@@ -3103,6 +3115,10 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             strings.invoke_calibrate_all_stopped(calibration_failure(strings, reference, *failure))
         }
         AllPhase::Stale => strings.get_calibrate_all_stale(),
+        AllPhase::CannotMeasureAgain(name) => {
+            strings.invoke_calibrate_all_cannot_again(reference.into(), name.as_str().into())
+        }
+        AllPhase::Idle if all.other_running => strings.get_calibrate_all_busy(),
         AllPhase::Idle => match all.blocked {
             Some(Failure::NoReference) => strings.get_calibration_no_reference(),
             Some(Failure::NothingToMeasure) => {
@@ -3112,7 +3128,10 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             None => strings.invoke_calibrate_all_hint(reference.into()),
         },
     };
-    let failed = matches!(all.phase, AllPhase::Failed(_) | AllPhase::Stale);
+    let failed = matches!(
+        all.phase,
+        AllPhase::Failed(_) | AllPhase::Stale | AllPhase::CannotMeasureAgain(_)
+    );
     let sheet = all.sheet.as_ref();
     let outcome = sheet.map_or_else(SharedString::default, |sheet| {
         sheet_outcome(strings, reference, sheet)
@@ -3210,6 +3229,9 @@ fn sheet_outcome(strings: &Strings<'_>, reference: &str, sheet: &SheetState) -> 
         .clone()
         .filter(|row| row.state.is_certain())
         .count();
+    if clear == 0 {
+        return strings.get_calibrate_all_nothing_certain();
+    }
     strings.invoke_calibrate_all_finished(count(clear), count(measured.count()))
 }
 
@@ -4205,6 +4227,73 @@ mod tests {
         let card = calibrate_all_card(&strings, &state);
         assert!(card.privacy && !card.results_shown);
         assert!(card.said.contains("Privacy"), "{}", card.said);
+    }
+
+    #[test]
+    fn the_calibrate_all_card_says_what_holds_it_and_when_nothing_was_clear() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.calibrate_all.phase = AllPhase::Idle;
+        state.calibrate_all.other_running = true;
+        let card = calibrate_all_card(&strings, &state);
+        assert_eq!(card.status, strings.get_calibrate_all_busy());
+
+        state.calibrate_all.other_running = false;
+        state.calibrate_all.phase = AllPhase::CannotMeasureAgain("Den".into());
+        let card = calibrate_all_card(&strings, &state);
+        assert!(card.status.contains("Den"), "{}", card.status);
+        assert!(
+            card.status.ends_with("to measure it again."),
+            "{}",
+            card.status
+        );
+        assert_eq!(card.said, card.status);
+
+        let unclear = Measurement {
+            new_ms: 2040.0,
+            uncertainty_ms: 14.0,
+            difference_ms: 40.0,
+            clamped: false,
+        };
+        let row = |name: &str, state| SheetRow {
+            name: name.into(),
+            class: Class::Cast,
+            old_ms: None,
+            state,
+            can_measure_again: true,
+        };
+        state.calibrate_all.phase = AllPhase::Idle;
+        state.calibrate_all.sheet = Some(SheetState {
+            rows: vec![
+                row("Speakers", SheetRowState::Reference),
+                row("Den", SheetRowState::Uncertain(unclear)),
+            ],
+            airplay: None,
+            ended: None,
+            failure: None,
+            again_ended: None,
+            can_apply: false,
+            airplay_waits: false,
+            applied: false,
+            can_undo: false,
+            undone: false,
+        });
+        let card = calibrate_all_card(&strings, &state);
+        assert_eq!(card.outcome, strings.get_calibrate_all_nothing_certain());
+    }
+
+    #[test]
+    fn an_airplay2_row_waits_for_the_next_launch_once_the_switch_is_on() {
+        assert_eq!(
+            with_switch(Availability::Airplay2NotYet, false),
+            Availability::Airplay2NotYet
+        );
+        assert_eq!(
+            with_switch(Availability::Airplay2NotYet, true),
+            Availability::Airplay2NextLaunch
+        );
+        assert_eq!(with_switch(Availability::Open, true), Availability::Open);
     }
 
     #[test]

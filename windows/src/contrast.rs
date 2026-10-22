@@ -485,6 +485,7 @@ fn no_text_promises_airplay() {
                 || line.contains("doesn't support yet")
                 || line.contains("return @tr(\"{} plays only AirPlay 2, so it's off.")
                 || line.contains("return @tr(\"AirPlay 2 is off\");")
+                || line.contains("return @tr(\"AirPlay 2 is off until AudioSync reopens\");")
                 || line.contains("property <string> airplay-delay-")
                 || line
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
