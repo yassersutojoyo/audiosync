@@ -79,6 +79,12 @@ extension AppDelegate {
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
         a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
         a.cancelCalibration = { [weak self] in self?.cancelCalibration() }
+        a.calibrateAll = { [weak self] in self?.startCalibrateAll() }
+        a.cancelCalibrateAll = { [weak self] in self?.cancelCalibrateAll() }
+        a.measureAgain = { [weak self] row in self?.measureAgain(row) }
+        a.applyCalibrateAll = { [weak self] in self?.applyCalibrateAll() }
+        a.undoCalibrateAll = { [weak self] in self?.undoCalibrateAll() }
+        a.closeCalibrateAll = { [weak self] in self?.closeCalibrateAll() }
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
         a.setCastEnabled = { [weak self] id, on in self?.setCastEnabled(id, on) }
         a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
@@ -236,6 +242,7 @@ extension AppDelegate {
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
         followCalibrationContext()
+        followCalibrateAll()
         menuBar?.setRunning(engine.isRunning)
         syncTrackInfo()
         scheduleDueReconcile()

@@ -844,6 +844,64 @@ fn a_chunked_body_is_refused() {
 }
 
 #[test]
+fn an_unreadable_body_length_gets_a_json_400_and_pairs_nothing() {
+    let remote = start("body-length");
+    let host = host(&remote);
+    let code = remote.server.pairing_code().unwrap();
+    let body = json!({ "code": code }).to_string();
+    for lengths in [
+        format!("Content-Length: {0}\r\nContent-Length: {0}\r\n", body.len()),
+        "Content-Length: -1\r\n".to_owned(),
+        "Content-Length: twelve\r\n".to_owned(),
+    ] {
+        let raw = format!(
+            "POST /api/pair HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\n{lengths}\r\n{body}"
+        );
+        let reply = exchange(remote.server.port(), raw.as_bytes());
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (400, "bad_request"),
+            "{lengths}"
+        );
+        assert_security_headers(&reply);
+    }
+    assert_eq!(remote.server.device_count(), 0);
+    assert_eq!(remote.server.pairing_code(), Some(code));
+
+    let oversized = format!("{{\"code\": \"{}\"}}", "1".repeat(5000));
+    let reply = post(&remote, "/api/pair", None, &oversized);
+    assert_eq!((reply.status, reply.error().as_str()), (413, "too_large"));
+    let reply = post(&remote, "/api/pair", None, "{}");
+    assert_eq!((reply.status, reply.error().as_str()), (400, "bad_json"));
+}
+
+#[test]
+fn a_speaker_change_needs_a_published_speaker_and_an_id() {
+    let remote = start("no-snapshot");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    for path in ["/api/speakers/kitchen", "/api/speakers/"] {
+        let reply = post(&remote, path, token, "{\"on\": true}");
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (404, "unknown_speaker"),
+            "{path}"
+        );
+    }
+    remote.server.publish(sample());
+    let reply = post(&remote, "/api/speakers/", token, "{\"on\": true}");
+    assert_eq!(reply.error(), "unknown_speaker");
+    let reply = post(
+        &remote,
+        "/api/speakers/kitchen?x=1",
+        token,
+        "{\"on\": true}",
+    );
+    assert_eq!(reply.status, 202, "{}", reply.body);
+    assert_eq!(remote.received.lock().unwrap().len(), 1);
+}
+
+#[test]
 fn a_request_that_takes_too_long_is_closed_unanswered() {
     let timing = Timing {
         request: Duration::from_millis(300),

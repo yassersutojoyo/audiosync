@@ -38,18 +38,32 @@ fn native_global(address: Ipv6Addr) -> bool {
 }
 
 /// Splits `host[:port]` (RFC 9110 §7.2) into the host, without brackets
-/// around an IPv6 literal, and the port.
+/// around an IPv6 literal, and the port. Brackets hold only an IPv6 literal,
+/// an IPv6 literal needs them, and the port is bare ASCII digits.
 fn split_host(value: &str) -> Option<(&str, Option<u16>)> {
-    if let Some(rest) = value.strip_prefix('[') {
-        let (host, after) = rest.split_once(']')?;
-        return match after {
-            "" => Some((host, None)),
-            _ => Some((host, Some(after.strip_prefix(':')?.parse().ok()?))),
-        };
+    let (host, port) = match value.strip_prefix('[') {
+        Some(rest) => {
+            let (host, after) = rest.split_once(']')?;
+            if !matches!(literal(host), Some(IpAddr::V6(_))) {
+                return None;
+            }
+            match after {
+                "" => (host, None),
+                _ => (host, Some(after.strip_prefix(':')?)),
+            }
+        }
+        None => match value.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (value, None),
+        },
+    };
+    if host.is_empty() || (!value.starts_with('[') && host.contains(':')) {
+        return None;
     }
-    match value.rsplit_once(':') {
-        Some((host, port)) => Some((host, Some(port.parse().ok()?))),
-        None => Some((value, None)),
+    match port {
+        Some(port) if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) => None,
+        Some(port) => Some((host, Some(port.parse().ok()?))),
+        None => Some((host, None)),
     }
 }
 
@@ -191,6 +205,7 @@ mod tests {
             Some("kitchen.local")
         ));
         assert!(!host_allowed(&home.to_string(), local, name));
+        assert!(!host_allowed(&format!("[{home}]:7655"), local, name));
         assert!(!host_allowed(&at(80), local, name));
         assert!(!host_allowed(
             &format!("{}:7655", v4(192, 168, 1, 6)),
@@ -213,9 +228,56 @@ mod tests {
         assert!(host_allowed("[fe80::1%25en0]:7655", link, None));
         assert!(!host_allowed("[fe80::2]:7655", link, None));
         assert!(!host_allowed("[fe80::1]", link, None));
+        assert!(!host_allowed("fe80::1:7655", link, None));
+        assert!(!host_allowed("[fe80::1]:+7655", link, None));
 
         let web = SocketAddr::new(v4(10, 0, 0, 2), 80);
         assert!(host_allowed(&v4(10, 0, 0, 2).to_string(), web, None));
+    }
+
+    #[test]
+    fn a_blank_local_name_or_a_lookalike_host_never_matches() {
+        let local = SocketAddr::new(v4(192, 168, 1, 5), 7655);
+        for blank in ["", ".local"] {
+            assert!(
+                !host_allowed(".local:7655", local, Some(blank)),
+                "{blank:?}"
+            );
+            assert!(!host_allowed("local:7655", local, Some(blank)), "{blank:?}");
+        }
+        let name = Some("kitchen");
+        for lookalike in [
+            "kitchen.local.evil.example:7655",
+            "evil.kitchen.local:7655",
+            "kitchen:7655",
+            "user@kitchen.local:7655",
+            "kitchen.local:7655:7655",
+            "kitchen.local:99999",
+            "kitchen.local:",
+            "[kitchen.local]:7655",
+            "kitchen.local:+7655",
+            "kitchen.local: 7655",
+            "kitchen.local:7655 x",
+            "kitchen.local:\u{ff17}655",
+        ] {
+            assert!(!host_allowed(lookalike, local, name), "{lookalike}");
+        }
+    }
+
+    #[test]
+    fn an_origin_with_a_path_or_credentials_is_not_the_pages() {
+        let host = "kitchen.local:7655";
+        assert!(origin_matches(" http://kitchen.local:7655 ", host));
+        for origin in [
+            "http://kitchen.local:7655/",
+            "http://kitchen.local:7655/api/pair",
+            "http://user@kitchen.local:7655",
+            "http://kitchen.local",
+            "HTTP://kitchen.local:7655",
+            "",
+        ] {
+            assert!(!origin_matches(origin, host), "{origin}");
+        }
     }
 
     #[test]

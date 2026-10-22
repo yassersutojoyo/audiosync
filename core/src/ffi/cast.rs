@@ -779,14 +779,12 @@ impl AscCast {
                 event,
             } => {
                 let id = self.attempt_id(attempt, device);
-                let mut pending = match event {
-                    SessionEvent::Members(members) => {
-                        self.members = members;
-                        self.follow_groups();
-                        Pending::new(CAST_EVENT_MEMBERS)
-                    }
-                    event => session_event(event),
-                };
+                let mut members = None;
+                let mut pending = session_event(event, |list| members = Some(list));
+                if let Some(members) = members {
+                    self.members = members;
+                    self.follow_groups();
+                }
                 if pending.kind == CAST_EVENT_ENDED {
                     self.ended(attempt);
                 }
@@ -941,7 +939,7 @@ impl AscCast {
     }
 }
 
-fn session_event(event: SessionEvent) -> Pending {
+fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>)) -> Pending {
     match event {
         SessionEvent::Playing => Pending::new(CAST_EVENT_PLAYING),
         SessionEvent::Diagnostics(diagnostics) => {
@@ -990,7 +988,10 @@ fn session_event(event: SessionEvent) -> Pending {
             pending.detail = format!("{event:?}");
             pending
         }
-        SessionEvent::Members(_) => Pending::new(CAST_EVENT_MEMBERS),
+        SessionEvent::Members(members) => {
+            on_members(members);
+            Pending::new(CAST_EVENT_MEMBERS)
+        }
         SessionEvent::GroupMessage(kind) => {
             let mut pending = Pending::new(CAST_EVENT_GROUP_LOG);
             pending.detail = format!("Cast group message {kind}");

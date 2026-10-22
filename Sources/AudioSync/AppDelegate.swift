@@ -184,6 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var localBoundDevices: [String: AudioObjectID] = [:]
     /// The microphone calibration under way, if any (S232).
     var calibrationRun: CalibrationRun?
+    /// Calibrate All Speakers under way, its sheet and the Undo of its Apply (S235 to S240).
+    var calibrateAllRun: CalibrateAllRun?
+    var calibrateAllSheet: CalibrateAllSheetHandle?
+    var calibrateAllUndo: CalibrateAllUndo?
 
     // MARK: - Session
 

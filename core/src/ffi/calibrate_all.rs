@@ -798,4 +798,180 @@ mod tests {
             asc_calibration_sheet_destroy(ptr::null_mut());
         }
     }
+
+    fn speaker(kind: u32, offset: Option<f64>, latency_ms: f64) -> AscCalibrationSpeaker {
+        AscCalibrationSpeaker {
+            kind,
+            has_offset: offset.is_some(),
+            offset_ms: offset.unwrap_or(0.0),
+            latency_ms,
+        }
+    }
+
+    // covers: S235, S237, S238, S239
+    #[test]
+    fn a_searching_cast_speaker_and_missing_values_cross_the_boundary() {
+        let speakers = [
+            speaker(CALIBRATION_KIND_LOCAL, None, 50.0),
+            speaker(CALIBRATION_KIND_CAST, None, 0.0),
+            speaker(CALIBRATION_KIND_AIRPLAY, None, 2000.0),
+        ];
+        // SAFETY: a null array with no speakers, then live arrays of one and
+        // of three speakers.
+        unsafe {
+            assert!(asc_calibration_run_create(RATE, ptr::null(), 0, 0).is_null());
+            assert!(asc_calibration_run_create(RATE, speakers.as_ptr(), 1, 0).is_null());
+            assert!(asc_calibration_run_create(RATE, speakers.as_ptr(), 3, 3).is_null());
+            assert!(asc_calibration_run_create(8000, speakers.as_ptr(), 3, 0).is_null());
+        }
+        // SAFETY: a live array of three speakers.
+        let run = unsafe { asc_calibration_run_create(RATE, speakers.as_ptr(), 3, 0) };
+        assert!(!run.is_null());
+        let mut step = AscCalibrationStep::default();
+        // SAFETY: a live run, null pointers the calls refuse, a local step.
+        unsafe {
+            assert!(!asc_calibration_run_step(run, ptr::null_mut()));
+            assert!(!asc_calibration_run_step(ptr::null(), &mut step));
+            assert_eq!(step, AscCalibrationStep::default());
+            assert!(asc_calibration_run_step(run, &mut step));
+        }
+        let reference = heard_at(step.window_frames, 50.0);
+        let mut waiting = AscCalibrationStep::default();
+        // SAFETY: a live run, a null recording the call refuses, a live
+        // buffer and local steps.
+        unsafe {
+            assert!(!asc_calibration_run_record(
+                run,
+                ptr::null(),
+                reference.len()
+            ));
+            assert!(asc_calibration_run_step(run, &mut waiting));
+            assert_eq!(waiting, step, "a null recording leaves the step waiting");
+            assert!(asc_calibration_run_record(
+                run,
+                reference.as_ptr(),
+                reference.len()
+            ));
+            assert!(asc_calibration_run_step(run, &mut step));
+        }
+        assert_eq!((step.row, step.sweep, step.searching), (1, 1, true));
+        assert_eq!(step.window_frames, calibrate::MAX_RECORDING_FRAMES);
+        // SAFETY: a live run, then freed by finish.
+        let sheet = unsafe {
+            drive(run, 0, &[0.0, 650.0, 150.0]);
+            asc_calibration_run_finish(run)
+        };
+
+        let tv = row(sheet, 1);
+        assert_eq!(tv.state, CALIBRATION_ROW_CERTAIN);
+        assert_eq!((tv.has_old, tv.new_ms, tv.clamped), (false, 600.0, false));
+        let mut airplay = AscCalibrationAirPlay::default();
+        // SAFETY: a live sheet and a local value.
+        assert!(unsafe { asc_calibration_sheet_airplay(sheet, &mut airplay) });
+        assert_eq!((airplay.has_old, airplay.new_ms), (false, 2100.0));
+        assert_eq!(airplay.certain_rows, 1);
+
+        let mut untouched = AscCalibrationRow::default();
+        // SAFETY: a live sheet, null pointers the calls refuse, a local row.
+        unsafe {
+            assert!(!asc_calibration_sheet_row(sheet, 3, &mut untouched));
+            assert!(!asc_calibration_sheet_row(sheet, 0, ptr::null_mut()));
+            assert!(!asc_calibration_sheet_row(ptr::null(), 0, &mut untouched));
+            assert!(!asc_calibration_sheet_airplay(ptr::null(), &mut airplay));
+            assert!(asc_calibration_sheet_measure_again(ptr::null(), 1).is_null());
+            assert!(asc_calibration_sheet_measure_again(sheet, 3).is_null());
+            assert_eq!(
+                asc_calibration_sheet_ended(ptr::null()),
+                CALIBRATION_END_NONE
+            );
+        }
+        assert_eq!(untouched, AscCalibrationRow::default());
+
+        let mut changes = [AscCalibrationChange::default(); 3];
+        let mut count = 7;
+        // SAFETY: null pointers the call refuses, a live sheet, a live array
+        // and a local count.
+        unsafe {
+            let invalid = [
+                asc_calibration_sheet_apply(ptr::null_mut(), changes.as_mut_ptr(), 3, &mut count),
+                asc_calibration_sheet_apply(sheet, changes.as_mut_ptr(), 3, ptr::null_mut()),
+                asc_calibration_sheet_apply(sheet, ptr::null_mut(), 3, &mut count),
+            ];
+            assert_eq!(invalid, [CALIBRATION_APPLY_INVALID; 3]);
+        }
+        assert_eq!(count, 7);
+        assert_eq!(apply(sheet, &mut changes), (CALIBRATION_APPLY_OK, 2));
+        let change = |row, airplay, new_ms| AscCalibrationChange {
+            row,
+            airplay,
+            has_old: false,
+            old_ms: 0.0,
+            new_ms,
+        };
+        assert_eq!(
+            changes[..2],
+            [change(1, false, 600.0), change(0, true, 2100.0)]
+        );
+
+        // SAFETY: a live array of three speakers; the run is freed by finish
+        // and its sheet by replace, which refuses the null sheet.
+        unsafe {
+            let other = asc_calibration_run_create(RATE, speakers.as_ptr(), 3, 0);
+            let other = asc_calibration_run_finish(other);
+            assert!(!asc_calibration_sheet_replace(ptr::null_mut(), other));
+            asc_calibration_sheet_destroy(sheet);
+        }
+    }
+
+    // covers: S240
+    #[test]
+    fn every_end_code_crosses_the_boundary_and_an_ended_sheet_is_refused() {
+        let speakers = [
+            speaker(CALIBRATION_KIND_LOCAL, None, 50.0),
+            speaker(CALIBRATION_KIND_CAST, Some(100.0), 300.0),
+        ];
+        for (code, ended) in [
+            (CALIBRATION_END_CANCELLED, CALIBRATION_END_CANCELLED),
+            (
+                CALIBRATION_END_SPEAKERS_CHANGED,
+                CALIBRATION_END_SPEAKERS_CHANGED,
+            ),
+            (CALIBRATION_END_SPEAKER_OFF, CALIBRATION_END_SPEAKER_OFF),
+            (
+                CALIBRATION_END_SOURCE_CHANGED,
+                CALIBRATION_END_SOURCE_CHANGED,
+            ),
+            (CALIBRATION_END_NONE, CALIBRATION_END_CANCELLED),
+            (77, CALIBRATION_END_CANCELLED),
+        ] {
+            // SAFETY: a live array of two speakers; the run is cancelled,
+            // then freed by finish.
+            let sheet = unsafe {
+                let run = asc_calibration_run_create(RATE, speakers.as_ptr(), 2, 0);
+                asc_calibration_run_cancel(run, code);
+                let mut step = AscCalibrationStep::default();
+                assert!(!asc_calibration_run_step(run, &mut step));
+                asc_calibration_run_finish(run)
+            };
+            // SAFETY: a live sheet.
+            assert_eq!(unsafe { asc_calibration_sheet_ended(sheet) }, ended);
+            assert_eq!(row(sheet, 1).state, CALIBRATION_ROW_NOT_MEASURED);
+            assert_eq!((row(sheet, 1).has_old, row(sheet, 1).old_ms), (true, 100.0));
+            let mut changes = [AscCalibrationChange::default(); 2];
+            assert_eq!(apply(sheet, &mut changes), (CALIBRATION_APPLY_ENDED, 99));
+            let mut airplay = AscCalibrationAirPlay::default();
+            // SAFETY: a live sheet nothing uses afterwards, a local value.
+            unsafe {
+                assert!(!asc_calibration_sheet_airplay(sheet, &mut airplay));
+                assert!(asc_calibration_sheet_measure_again(sheet, 1).is_null());
+                asc_calibration_sheet_destroy(sheet);
+            }
+        }
+        // SAFETY: a live array of two speakers; the run is freed once.
+        unsafe {
+            let run = asc_calibration_run_create(RATE, speakers.as_ptr(), 2, 0);
+            assert!(!run.is_null());
+            asc_calibration_run_destroy(run);
+        }
+    }
 }

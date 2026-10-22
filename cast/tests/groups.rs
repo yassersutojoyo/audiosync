@@ -1,7 +1,7 @@
-//! Cast groups (C3, C14, C89 to C102): a group is listed under its own
+//! Cast groups (C3, C14, C89 to C103): a group is listed under its own
 //! `id`, played as one device over one channel to its port, follows its
 //! leader's records, lists its members from the multizone namespace and
-//! keeps its own volume and offset.
+//! keeps its own volume, offset and one stream response per address.
 
 mod common;
 
@@ -333,6 +333,13 @@ fn the_member_list_comes_from_the_multizone_namespace() {
     // The member messages read without a channel too.
     let mut list = MemberList::new();
     assert_eq!(list.members(), None);
+    let removed =
+        MultizoneMessage::from_payload("DEVICE_REMOVED", &payload(json!({"deviceId": MEMBER})));
+    assert!(
+        !list.apply(&removed),
+        "a removal before any list knows nothing"
+    );
+    assert_eq!(list.members(), None, "still shown without members");
     let status = MultizoneMessage::from_payload(
         "MULTIZONE_STATUS",
         &payload(json!({"status": {"devices": members_json()}})),
@@ -612,7 +619,8 @@ fn a_group_keeps_one_stream_response_per_address() {
     group.close(again);
     assert_eq!(group.addresses(), [c, d]);
 
-    // The server answers what the group's records and members allow.
+    // The server answers what the group's records and members hold at the
+    // time of each request, with nothing for the session to refresh.
     let local = IpAddr::from([127, 0, 0, 1]);
     let (writer, reader) = audio_ring(48_000);
     let config = StreamConfig {
@@ -622,6 +630,8 @@ fn a_group_keeps_one_stream_response_per_address() {
     };
     let server = StreamServer::start(config, reader).expect("starts");
     server.set_group_limit(3);
+    let records = GroupRecords::new(vec![SocketAddr::new(v4(9), 32_187)]);
+    server.follow_group(records.clone());
     let (address, path) = http::split_url(&server.url()).expect("url");
     let get = || {
         let request = format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -630,9 +640,7 @@ fn a_group_keeps_one_stream_response_per_address() {
     let mut refused = get();
     let (head, _) = http::read_response(&mut refused, Duration::ZERO);
     assert_eq!(http::status(&head), 403);
-    let records = GroupRecords::new(vec![SocketAddr::new(v4(9), 32_187)]);
-    records.set_members(vec![local]);
-    server.set_allowed(records.allowed());
+    records.set_group(vec![SocketAddr::new(local, 32_187)]);
     let _feed = feed(writer);
     let mut first = get();
     let (head, _) = http::read_response(&mut first, Duration::from_millis(200));
@@ -650,5 +658,10 @@ fn a_group_keeps_one_stream_response_per_address() {
         thread::sleep(Duration::from_millis(20));
     }
     assert!(seen.contains(&ServerEvent::ResponseEnded(ResponseEnd::Replaced)));
+    records.set_group(vec![SocketAddr::new(v4(10), 32_187)]);
+    records.set_members(vec![local]);
+    let mut member = get();
+    let (head, _) = http::read_response(&mut member, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
     server.stop();
 }

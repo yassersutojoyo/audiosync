@@ -110,8 +110,9 @@ impl MemberList {
                 }
             }
             MultizoneMessage::Removed(device_id) => {
-                let list = self.members.get_or_insert_with(Vec::new);
-                list.retain(|known| !known.is(device_id));
+                if let Some(list) = &mut self.members {
+                    list.retain(|known| !known.is(device_id));
+                }
             }
             MultizoneMessage::Other(_) => {}
         }

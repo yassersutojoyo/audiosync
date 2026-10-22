@@ -259,8 +259,6 @@ pub struct CastSession {
     members: MemberList,
     /// Multizone types already logged this session (C96).
     group_types_logged: Vec<String>,
-    /// What the stream server answers now, besides the channel's address.
-    allowed: Vec<IpAddr>,
 }
 
 fn teardown_budget(quitting: &AtomicBool) -> Duration {
@@ -328,7 +326,7 @@ impl CastSession {
             }
         };
         let mut allowed: Vec<IpAddr> = match &group {
-            Some(records) => records.allowed(),
+            Some(_) => Vec::new(),
             None => config.addresses.iter().map(SocketAddr::ip).collect(),
         };
         allowed.push(client.address().ip());
@@ -336,7 +334,7 @@ impl CastSession {
         allowed.dedup();
         let stream_config = StreamConfig {
             local_ip: client.local_address().ip(),
-            allowed: allowed.clone(),
+            allowed,
             format: config.format,
         };
         let server = match StreamServer::start(stream_config, reader) {
@@ -346,7 +344,8 @@ impl CastSession {
                 return Err(error.into());
             }
         };
-        if group.is_some() {
+        if let Some(records) = &group {
+            server.follow_group(records.clone());
             server.set_group_limit(1);
         }
         let mut addresses = vec![client.address()];
@@ -381,7 +380,6 @@ impl CastSession {
             group,
             members: MemberList::new(),
             group_types_logged: Vec::new(),
-            allowed,
         };
         if let Err(error) = session.load_with_fallback() {
             session.teardown(teardown_budget(&session.quitting));
@@ -510,7 +508,6 @@ impl CastSession {
                 }
             }
             self.collect_server_events();
-            self.follow_group();
             if self.playing && Instant::now() >= self.next_diagnostics {
                 let diagnostics = self.diagnostics();
                 self.report(SessionEvent::Diagnostics(diagnostics));
@@ -569,22 +566,6 @@ impl CastSession {
         }
         self.teardown(teardown_budget(&self.quitting));
         self.report(SessionEvent::Ended(end));
-    }
-
-    /// Keeps the stream server answering a group's current addresses and
-    /// its members' (C103).
-    fn follow_group(&mut self) {
-        let Some(records) = &self.group else {
-            return;
-        };
-        let mut allowed = records.allowed();
-        allowed.push(self.client.address().ip());
-        allowed.sort();
-        allowed.dedup();
-        if allowed != self.allowed {
-            self.server.set_allowed(allowed.clone());
-            self.allowed = allowed;
-        }
     }
 
     fn on_multizone(&mut self, message: MultizoneMessage) {
@@ -757,6 +738,7 @@ impl CastSession {
             Ok(mut client) => {
                 client.set_selected(Arc::clone(&self.selected));
                 if group.is_some() {
+                    self.server.set_allowed(vec![client.address().ip()]);
                     client.request_members();
                 }
                 client
