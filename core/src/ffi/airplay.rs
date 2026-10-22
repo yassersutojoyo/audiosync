@@ -167,8 +167,9 @@ pub const AIRPLAY_FLAG_PAIRED: u32 = 512;
 /// `theater:<group>`, and the host adds it like a speaker. Listed only with
 /// the AirPlay 2 switch on.
 pub const AIRPLAY_FLAG_TARGET: u32 = 1024;
-/// A target with a member out of view, or one whose partner is
-/// unreachable (P181).
+/// A target with a member out of view, playing nothing, or reporting its
+/// partner unreachable (P181). An added target's state and errors come
+/// under its own ID, derived from its members'.
 pub const AIRPLAY_FLAG_INCOMPLETE: u32 = 2048;
 
 /// What a sender event reports ([`AscAirPlayEvent::kind`]): a speaker's
@@ -320,6 +321,8 @@ struct Added {
     position: f64,
     /// Set when the host added a stereo pair or home theater group.
     target: Option<TargetId>,
+    /// A target's member IDs.
+    members: Vec<String>,
 }
 
 impl Added {
@@ -397,6 +400,12 @@ pub struct AscAirPlay {
     targets_reported: HashSet<String>,
     /// The speakers the host added, by ID.
     added: HashMap<String, Added>,
+    /// The last state of each member of an added target, by member ID.
+    member_states: HashMap<String, SpeakerState>,
+    /// The state last reported for each added target, by target ID.
+    target_states: HashMap<String, SpeakerState>,
+    /// The members of each added target that play nothing now (P181).
+    target_missing: HashMap<String, Vec<String>>,
     /// How the AirPlay 1 attempt ended of each added speaker the sender
     /// then moved to AirPlay 2 (P2), by ID: its listing follows the path.
     airplay1_outcome: HashMap<String, ErrorKind>,
@@ -672,6 +681,7 @@ impl AscAirPlay {
                     self.homekit_keys.remove(&id);
                     return;
                 }
+                self.member_event(&id, &event);
                 if matches!(
                     event,
                     SpeakerEvent::State(_) | SpeakerEvent::Error(_) | SpeakerEvent::Latency(_)
@@ -692,8 +702,61 @@ impl AscAirPlay {
             // Discovery's browser died (a bug in it): the sender no
             // longer lists anything new, so it counts as dead too.
             SenderEvent::DiscoveryFailed => self.death.dead.store(true, Ordering::Release),
-            // The members' own state events say which ones play.
-            SenderEvent::TargetMissing { .. } => {}
+            // The listing turns incomplete; the members' own events say
+            // which ones play.
+            SenderEvent::TargetMissing { id, missing } => {
+                let id = id.to_string();
+                let missing = missing.iter().map(receiver_id).collect();
+                self.target_missing.insert(id.clone(), missing);
+                if let Some(target) = self.targets.get(&id) {
+                    let event = TargetChange::Updated(Box::new(target.clone()));
+                    self.queue_receiver(ReceiverEvent::Target(event));
+                }
+            }
+        }
+    }
+
+    /// A member's state and errors reach the host under the target it
+    /// added as well: the target plays while any member plays, and a
+    /// member's error is the target's while none does (P181).
+    fn member_event(&mut self, member: &str, event: &SpeakerEvent) {
+        let Some(target) = self
+            .added
+            .iter()
+            .find(|(_, added)| added.members.iter().any(|id| id == member))
+            .map(|(id, _)| id.clone())
+        else {
+            return;
+        };
+        match event {
+            SpeakerEvent::State(state) => {
+                self.member_states.insert(member.to_owned(), *state);
+            }
+            SpeakerEvent::Error(_) => {
+                if self.target_states.get(&target) != Some(&SpeakerState::Playing) {
+                    self.queue_event(Pending::Speaker(target, event.clone()));
+                }
+                return;
+            }
+            _ => return,
+        }
+        let rank = |state: &SpeakerState| match state {
+            SpeakerState::Playing => (0, None),
+            SpeakerState::Connecting => (1, None),
+            SpeakerState::Retrying { at } => (2, Some(*at)),
+            SpeakerState::Failed => (3, None),
+            SpeakerState::Stopped => (4, None),
+        };
+        let derived = self.added[&target]
+            .members
+            .iter()
+            .filter_map(|id| self.member_states.get(id))
+            .min_by_key(|state| rank(state))
+            .copied();
+        if let Some(state) = derived
+            && self.target_states.insert(target.clone(), state) != Some(state)
+        {
+            self.queue_event(Pending::Speaker(target, SpeakerEvent::State(state)));
         }
     }
 
@@ -981,7 +1044,11 @@ impl AscAirPlay {
             ReceiverEvent::Target(TargetChange::Updated(found)) => {
                 let id = found.id.to_string();
                 let mut flags = AIRPLAY_FLAG_TARGET;
-                if !found.complete() {
+                let missing = self
+                    .target_missing
+                    .get(&id)
+                    .is_some_and(|missing| !missing.is_empty());
+                if !found.complete() || missing {
                     flags |= AIRPLAY_FLAG_INCOMPLETE;
                 }
                 let airplay2 = found.members.iter().any(|member| {
@@ -1441,6 +1508,9 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
                 targets_reported: HashSet::new(),
                 airplay1_outcome: HashMap::new(),
                 homekit_keys: HashMap::new(),
+                member_states: HashMap::new(),
+                target_states: HashMap::new(),
+                target_missing: HashMap::new(),
                 added: HashMap::new(),
                 store: PairingStore::in_memory(),
                 airplay2,
@@ -1667,6 +1737,11 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 let mut options = SpeakerOptions::new(speaker_volume(position, airplay.master));
                 options.delay = airplay.hold_back;
                 let target_id = target.id.clone();
+                let members = target
+                    .members
+                    .iter()
+                    .map(|member| receiver_id(&member.key))
+                    .collect();
                 let (passwords, store, identity) =
                     (&airplay.passwords, &airplay.store, &airplay.identity);
                 airplay
@@ -1682,6 +1757,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                     key,
                     position,
                     target: Some(target_id),
+                    members,
                 };
                 airplay.added.insert(id.to_owned(), added);
                 return true;
@@ -1702,6 +1778,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 key,
                 position,
                 target: None,
+                members: Vec::new(),
             };
             airplay.added.insert(id.to_owned(), added);
             true
@@ -1735,9 +1812,16 @@ pub unsafe extern "C" fn asc_airplay_remove_speaker(
                 return false;
             };
             added.remove(&airplay.sender);
+            airplay.target_states.remove(id);
+            airplay.target_missing.remove(id);
+            for member in &added.members {
+                airplay.member_states.remove(member);
+            }
             // Added again, it starts over on AirPlay 1 first, as the sender does.
-            if airplay.airplay1_outcome.remove(id).is_some() {
-                airplay.relist(id);
+            for id in std::iter::once(id).chain(added.members.iter().map(String::as_str)) {
+                if airplay.airplay1_outcome.remove(id).is_some() {
+                    airplay.relist(id);
+                }
             }
             true
         })
@@ -4926,6 +5010,36 @@ mod tests {
         // SAFETY: a live handle and a NUL-terminated ID.
         unsafe {
             assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0));
+        }
+        for (key, state) in [
+            (&left.key, SpeakerState::Connecting),
+            (&right.key, SpeakerState::Playing),
+            (&left.key, SpeakerState::Playing),
+        ] {
+            let event = SpeakerEvent::State(state);
+            inside(handle).take_in(SenderEvent::Speaker {
+                key: key.clone(),
+                event,
+            });
+        }
+        let states: Vec<_> = inside(handle)
+            .events
+            .iter()
+            .filter_map(|(_, pending)| match pending {
+                Pending::Speaker(id, SpeakerEvent::State(state)) if *id == pair_id => Some(*state),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states, [SpeakerState::Connecting, SpeakerState::Playing]);
+        inside(handle).take_in(SenderEvent::TargetMissing {
+            id: pair.id.clone(),
+            missing: vec![left.key.clone()],
+        });
+        let queued = inside(handle).receivers.pop_back().expect("queued");
+        let report = inside(handle).report(queued);
+        assert_ne!(report.flags & AIRPLAY_FLAG_INCOMPLETE, 0);
+        // SAFETY: a live handle and a NUL-terminated ID.
+        unsafe {
             assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 60.0));
             assert!(asc_airplay_remove_speaker(handle, c_id.as_ptr()));
         }

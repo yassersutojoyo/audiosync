@@ -573,11 +573,7 @@ fn a_member_in_another_address_family_leaves_the_playing_members_ptp_alone() {
         let (sender, _host) = ptp_sender(&listener);
         let mut events = Events::default();
         let da = airplay2_only(&first, 1, "0x0,0x10240");
-        let closed = TcpListener::bind("127.0.0.1:0")
-            .and_then(|socket| socket.local_addr())
-            .expect("a port")
-            .port();
-        let mut record = airplay_record(closed, 2, "0x0,0x10240");
+        let mut record = airplay_record(closed_port(), 2, "0x0,0x10240");
         record.addresses = vec![ScopedAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST))];
         let db =
             Device::from_records(DeviceKey::Id(device_id(2)), None, Some(&record)).expect("device");
@@ -833,5 +829,103 @@ fn a_pairing_refusal_soon_after_the_senders_teardown_is_retried_as_a_loss() {
         "{:?}",
         events.of(&da.key)
     );
+    sender.shutdown();
+}
+
+// covers: P177
+#[test]
+fn a_speaker_the_host_added_on_its_own_stays_the_hosts() {
+    let _serial = serial();
+    let a = NetReceiver::start(Behavior::default());
+    let b = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start(false);
+    let mut events = Events::default();
+    let (da, db) = (a.device(1, PCM_TXT), b.device(2, PCM_TXT));
+    sender.add_speaker(da.clone(), options());
+    assert!(playing(&mut events, &sender, &da.key, 1));
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    assert!(playing(&mut events, &sender, &db.key, 1));
+
+    // The host removes a member only through its target.
+    sender.remove_speaker(&db.key);
+    let stopped = |s: &SpeakerState| *s == SpeakerState::Stopped;
+    assert!(
+        events
+            .wait_state(&sender, &db.key, 1, Duration::from_millis(800), stopped)
+            .is_none()
+    );
+    sender.remove_target(&id);
+    assert!(
+        events
+            .wait_state(&sender, &db.key, 1, LONG, stopped)
+            .is_some()
+    );
+    events.drain(&sender);
+    let states: Vec<_> = events
+        .of(&da.key)
+        .into_iter()
+        .filter_map(|event| match event {
+            SpeakerEvent::State(state) => Some(state),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        states,
+        [SpeakerState::Connecting, SpeakerState::Playing],
+        "the host's own speaker plays on untouched"
+    );
+    sender.shutdown();
+}
+
+fn closed_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .and_then(|socket| socket.local_addr())
+        .expect("a port")
+        .port()
+}
+
+// covers: P181
+#[test]
+fn a_target_with_no_member_reachable_fails_as_a_single_speaker_would() {
+    let _serial = serial();
+    let (sender, _host) = start(true);
+    let mut events = Events::default();
+    let devices: Vec<Device> = [1u8, 2]
+        .into_iter()
+        .map(|n| {
+            let record = airplay_record(closed_port(), n, "0x0,0x10040");
+            Device::from_records(DeviceKey::Id(device_id(n)), None, Some(&record)).expect("device")
+        })
+        .collect();
+    let target = pair(
+        vec![member(Some(&devices[0]), 1), member(Some(&devices[1]), 2)],
+        None,
+    );
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    let retrying = |s: &SpeakerState| matches!(s, SpeakerState::Retrying { .. });
+    for device in &devices {
+        assert!(
+            events
+                .wait_state(&sender, &device.key, 1, LONG, retrying)
+                .is_some(),
+            "{:?}",
+            events.of(&device.key)
+        );
+        assert_eq!(
+            errors(&events, &device.key).first(),
+            Some(&ErrorKind::Unreachable)
+        );
+    }
+    // A member between two attempts is missing; one connecting again isn't.
+    assert!(wait_until(LONG, || {
+        events.drain(&sender);
+        let reports = missing_reports(&events, &id);
+        devices
+            .iter()
+            .all(|device| reports.iter().any(|missing| missing.contains(&device.key)))
+    }));
     sender.shutdown();
 }

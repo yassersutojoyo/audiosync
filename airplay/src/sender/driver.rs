@@ -375,6 +375,7 @@ impl Driver {
             let now = Instant::now();
             self.run_timers(now);
             self.flush(now);
+            self.report_missing_members();
             if self.finished(Instant::now()) {
                 break;
             }
@@ -454,7 +455,6 @@ impl Driver {
             Input::Command(command) => self.command(*command, now),
             Input::Io(event) => self.io_event(event, now),
         }
-        self.report_missing_members();
     }
 
     fn next_deadline(&self, now: Instant) -> Instant {
@@ -1207,12 +1207,22 @@ impl Driver {
 
     fn command(&mut self, command: Command, now: Instant) {
         match command {
+            // A target's members stay the target's: the host adds and
+            // removes them through the target.
             Command::AddSpeaker {
                 device,
                 options,
                 counters,
-            } => self.add_speaker(*device, options, counters, now),
-            Command::RemoveSpeaker(key) => self.remove_speaker(&key, now),
+            } => {
+                if !self.is_target_member(&device.key) {
+                    self.add_speaker(*device, options, counters, now);
+                }
+            }
+            Command::RemoveSpeaker(key) => {
+                if !self.is_target_member(&key) {
+                    self.remove_speaker(&key, now);
+                }
+            }
             Command::SetDelay(key, delay) => {
                 let Some(speaker) = self.speakers.get_mut(&key) else {
                     return;

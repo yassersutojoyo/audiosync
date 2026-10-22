@@ -49,12 +49,8 @@ impl Driver {
                     .get(&key)
                     .map(|speaker| speaker.device.clone())
                     .or_else(|| self.directory.device(&key).cloned());
-                match device {
-                    Some(device) if self.speakers.contains_key(&key) => {
-                        self.add_speaker(device, options, counters, now)
-                    }
-                    Some(device) => self.insert_member(&id, device, options, counters, now),
-                    None => {}
+                if let Some(device) = device {
+                    self.insert_member(&id, device, options, counters, now);
                 }
             }
             return;
@@ -100,26 +96,32 @@ impl Driver {
             };
             if refused {
                 let key = device.key.clone();
-                self.insert_speaker(&id, device, options, counters);
-                let error = ErrorKind::Unsupported(UnsupportedReason::PlaysThroughSpeakers);
-                self.refuse(&key, SessionError::new(error), now);
+                if self.insert_speaker(&id, device, options, counters) {
+                    let error = ErrorKind::Unsupported(UnsupportedReason::PlaysThroughSpeakers);
+                    self.refuse(&key, SessionError::new(error), now);
+                }
             } else {
                 self.insert_member(&id, device, options, counters, now);
             }
         }
     }
 
+    /// Makes the device a speaker of the target; false, changing nothing,
+    /// for a speaker the host added on its own, which stays the host's.
     fn insert_speaker(
         &mut self,
         id: &TargetId,
         device: Device,
         options: SpeakerOptions,
         counters: Arc<SpeakerCounters>,
-    ) {
+    ) -> bool {
         let key = device.key.clone();
         if let Some(speaker) = self.speakers.get_mut(&key) {
+            if speaker.target.as_ref() != Some(id) && !speaker.removing {
+                return false;
+            }
             speaker.target = Some(id.clone());
-            return;
+            return true;
         }
         self.speakers.insert(
             key,
@@ -136,6 +138,7 @@ impl Driver {
                 target: Some(id.clone()),
             },
         );
+        true
     }
 
     /// Adds one member as a speaker of the target and starts its session.
@@ -149,8 +152,10 @@ impl Driver {
     ) {
         let key = device.key.clone();
         if self.speakers.contains_key(&key) {
-            self.insert_speaker(id, device.clone(), options.clone(), counters.clone());
-            return self.add_speaker(device, options, counters, now);
+            if self.insert_speaker(id, device.clone(), options.clone(), counters.clone()) {
+                self.add_speaker(device, options, counters, now);
+            }
+            return;
         }
         self.insert_speaker(id, device, options, counters);
         self.start_session(&key, now);
@@ -364,6 +369,13 @@ impl Driver {
             return;
         };
         self.insert_member(&id, device, options, counters, now);
+    }
+
+    /// Whether the speaker plays as a member of a target the host added.
+    pub(super) fn is_target_member(&self, key: &DeviceKey) -> bool {
+        self.speakers
+            .get(key)
+            .is_some_and(|speaker| speaker.target.is_some() && !speaker.removing)
     }
 
     /// The members in view of the target `key` is a member of: as
