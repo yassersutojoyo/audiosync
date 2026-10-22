@@ -7,7 +7,11 @@ use std::path::PathBuf;
 
 fn main() {
     // The Windows look on every host, so the UI previewed elsewhere matches.
-    let config = slint_build::CompilerConfiguration::new().with_style("fluent".into());
+    // Slint's element search, which the view tests use, needs debug info;
+    // the release build leaves it out.
+    let config = slint_build::CompilerConfiguration::new()
+        .with_style("fluent".into())
+        .with_debug_info(env::var("PROFILE").as_deref() != Ok("release"));
     slint_build::compile_with_config("ui/main.slint", config).expect("the Slint UI compiles");
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {

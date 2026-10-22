@@ -536,6 +536,7 @@ dependencies = [
  "audiosync-core",
  "audiosync-remote",
  "embed-resource",
+ "i-slint-backend-testing",
  "qrcode",
  "serde",
  "serde_json",

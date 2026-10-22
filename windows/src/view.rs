@@ -3526,6 +3526,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
 mod tests {
     use super::*;
     use crate::ui_model::MockBackend;
+    use i_slint_backend_testing::{AccessibleLiveness, ElementHandle};
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
@@ -5510,31 +5511,39 @@ mod tests {
         app.main.invoke_cast_add_address_requested();
         let dialog = &app.cast_address_dialog;
         let window = dialog.window();
-        let mut refusals = dialog.get_refusals();
+        let mut previous: Option<ElementHandle> = None;
         for address in [
             "not an address",
             "not an address",
             "speaker.full",
             "speaker.full",
         ] {
-            let reason = dialog.get_error();
             type_text(window, address);
             press(window, Key::Return);
             assert!(!dialog.get_checking(), "{address}: turned down at once");
-            assert!(
-                dialog.get_refusals() > refusals,
-                "{address}: announced again after {reason:?}"
-            );
-            refusals = dialog.get_refusals();
+            let region = live_region(dialog, &dialog.get_error());
+            if let Some(previous) = previous {
+                // Windows raises a live-region event when a region appears,
+                // not when the same words are set on the one already there.
+                assert!(!previous.is_valid(), "{address}: a new region says it");
+            }
+            previous = Some(region);
         }
 
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
+        live_region(dialog, &app.strings().get_cast_address_checking());
         wait_for_cast_check(&app);
-        assert!(
-            dialog.get_refusals() > refusals,
-            "nothing answered: announced"
-        );
+        live_region(dialog, &app.strings().get_cast_address_not_found());
+    }
+
+    /// The one polite live region in `dialog` that reads `said`.
+    fn live_region(dialog: &CastAddressDialog, said: &str) -> ElementHandle {
+        let mut regions: Vec<_> = ElementHandle::find_by_accessible_label(dialog, said)
+            .filter(|element| element.accessible_live_region() == Some(AccessibleLiveness::Polite))
+            .collect();
+        assert_eq!(regions.len(), 1, "one live region reads {said:?}");
+        regions.pop().unwrap()
     }
 
     /// Waits for the Add by Address… check on its thread, then lets the
@@ -5560,6 +5569,9 @@ mod tests {
         let window = dialog.window();
         type_text(window, "speaker.local");
         press(window, Key::Return);
+        // The mock answers at once; on a slow runner the timer would take the
+        // answer during the key presses below, so only this test takes it.
+        app.cast_check_timer.stop();
 
         assert!(window.is_visible(), "open while it checks");
         assert!(dialog.get_checking());
