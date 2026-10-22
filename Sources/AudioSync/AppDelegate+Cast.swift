@@ -82,19 +82,15 @@ extension AppDelegate {
         castFollow()
     }
 
-    /// What was said about a device added by address goes with it to the
-    /// ID a browse found it under.
+    /// A problem said about a device added by address goes with it to the
+    /// ID a browse found it under. The AirPlay-ahead notice is left to
+    /// `syncNetworkHoldBacks`, which posts it again under the new ID.
     private func moveCastNotices(from old: String, to new: String) {
         var list = appModel.notices
-        let moves = [(Notice.cast(old), Notice.cast(new)), (Notice.airPlayAhead(old), Notice.airPlayAhead(new))]
-        var moved = false
-        for (from, to) in moves {
-            guard let notice = list.items.first(where: { $0.subject == from }) else { continue }
-            list.clear([from])
-            list.post(notice.text, subject: to, at: notice.date, title: notice.title, settings: notice.settings)
-            moved = true
-        }
-        if moved { appModel.notices = list }
+        guard let notice = list.items.first(where: { $0.subject == Notice.cast(old) }) else { return }
+        list.clear([Notice.cast(old)])
+        list.post(notice.text, subject: Notice.cast(new), at: notice.date, title: notice.title, settings: notice.settings)
+        appModel.notices = list
     }
 
     /// The session follows the model, then local outputs and the views.
@@ -223,6 +219,10 @@ extension AppDelegate {
         let generation = appModel.castAddGeneration
         let stillWanted = { [weak self] in self?.appModel.castAddGeneration == generation }
         sender.addDevice(address, probe: true, stillWanted: stillWanted) { [weak self] id in
+            if id == nil, self?.appModel.castAddGeneration != generation {
+                DebugTrace.log("[AudioSync] Cast: adding \(address.text) was cancelled")
+                return completion(.notFound)
+            }
             guard let self, self.castSender === sender, let id else {
                 DebugTrace.log("[AudioSync] Cast: nothing answers at \(address.text)")
                 completion(.notFound)

@@ -51,25 +51,28 @@ struct CastAddressSheet: View {
         .frame(width: 420, alignment: .leading)
         .onAppear { fieldFocused = true }
         .onDisappear { model.castAddGeneration += 1 }
-        .onChange(of: problem) {
-            if let problem { AccessibilityNotification.Announcement(t.castAddProblem(problem)).post() }
-        }
+    }
+
+    /// Shows the reason and has VoiceOver read it, the same one again too.
+    private func report(_ found: CastAddProblem) {
+        problem = found
+        AccessibilityNotification.Announcement(model.text.castAddProblem(found)).post()
     }
 
     private func add() {
         guard !adding else { return }
+        problem = nil
         guard CastManualAddress(typed) != nil else {
-            problem = .unreadable
+            report(.unreadable)
             return
         }
-        problem = nil
         adding = true
         let generation = model.castAddGeneration
         model.actions.addCastAddress(typed) { found in
             guard model.castAddGeneration == generation else { return }
             adding = false
             if let found {
-                problem = found
+                report(found)
                 fieldFocused = true
             } else {
                 model.castAddShown = false
