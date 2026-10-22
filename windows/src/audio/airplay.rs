@@ -2814,6 +2814,79 @@ pub mod tests {
     }
 
     #[test]
+    fn forgetting_a_session_paired_speaker_reaches_only_the_sender_that_paired_it() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let paired = |fake: &FakeAirPlay| {
+            fake.set_airplay2(true);
+            let mut airplay = speakers(fake);
+            fake.push(SenderEvent::Speaker {
+                key: tv.key.clone(),
+                event: SpeakerEvent::HomeKitPaired(homekit(0x33)),
+            });
+            airplay.poll();
+            fake.take_calls();
+            airplay
+        };
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        airplay.forget_pairing(&id);
+        assert!(fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())));
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        let second = FakeAirPlay::new();
+        airplay.replace_link(second.link());
+        second.take_calls();
+        airplay.forget_pairing(&id);
+        assert_eq!(airplay.store.homekit(&id), None);
+        assert!(
+            !second
+                .take_calls()
+                .contains(&Call::ForgetHomeKit(id.clone())),
+            "a new sender never had the copy"
+        );
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        fake.stop_running();
+        airplay.poll();
+        fake.take_calls();
+        airplay.forget_pairing(&id);
+        assert!(
+            !fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+            "a stopped sender's copies are gone"
+        );
+    }
+
+    #[test]
+    fn a_receiver_rejecting_its_airplay2_credentials_drops_the_senders_key() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::HomeKitPaired(homekit(0x33)),
+        });
+        airplay.poll();
+        assert!(airplay.homekit_keys.contains_key(&id));
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::HomeKitRejected,
+        });
+        airplay.poll();
+        assert!(!airplay.homekit_keys.contains_key(&id));
+        assert_eq!(airplay.store.homekit(&id), None);
+    }
+
+    #[test]
     fn a_forgotten_airplay2_pairing_the_file_cant_take_is_reported() {
         use crate::audio::pairings::tests::{homekit, sealer};
         use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};
