@@ -155,6 +155,34 @@ fn certain_rows_move_each_class_its_own_way() {
     assert!(sheet.airplay().is_none());
 }
 
+// covers: S236
+#[test]
+fn a_cast_offset_past_the_range_counts_from_its_end_and_only_a_cut_value_is_clamped() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("above", Class::Cast, Some(30_000.0), 50.0),
+        speaker("lands", Class::Cast, Some(19_900.0), 50.0),
+        speaker("cut", Class::Cast, Some(19_990.0), 50.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    drive(
+        &mut run,
+        arrivals(&[
+            (1, [Heard::At(10.0), Heard::At(10.0)]),
+            (2, [Heard::At(150.0), Heard::At(150.0)]),
+            (3, [Heard::At(150.0), Heard::At(150.0)]),
+        ]),
+    );
+    let sheet = run.finish();
+    let moved = |row: usize| match sheet.rows()[row].state {
+        RowState::Certain(m) => (m.new_ms, m.clamped),
+        other => panic!("row {row} not certain: {other:?}"),
+    };
+    assert_eq!(moved(1), (19_960.0, false), "30 000 counts as 20 000");
+    assert_eq!(moved(2), (20_000.0, false), "landing on the end is no cut");
+    assert_eq!(moved(3), (20_000.0, true));
+}
+
 // covers: S236, S238
 #[test]
 fn sweeps_too_far_apart_leave_the_row_uncertain_and_apply_is_refused() {
