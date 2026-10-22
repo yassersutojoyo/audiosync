@@ -77,6 +77,28 @@ struct WebRemoteView: View {
         .tint(Brand.teal)
         .onAppear { portText = String(settings.port) }
         .onChange(of: settings.port) { _, port in portText = String(port) }
+        .onChange(of: settings.status) { _, now in
+            if case .failed(let error, let port) = now {
+                AccessibilityNotification.Announcement(failure(error, port: port, t)).post()
+            }
+        }
+        .onChange(of: settings.locked) { _, now in
+            if now { AccessibilityNotification.Announcement(t.webRemoteLocked).post() }
+        }
+        // Stopping the remote clears the code; only a running, unlocked remote shows it.
+        .onChange(of: settings.code) { _, now in
+            guard isRunning, !settings.locked else { return }
+            let line = now.map { t.webRemoteCodeLabel($0) } ?? t.webRemoteCodeExpired
+            AccessibilityNotification.Announcement(line).post()
+        }
+        .onChange(of: settings.forgetFailed) { _, now in
+            if now { AccessibilityNotification.Announcement(t.webRemoteForgetFailed).post() }
+        }
+        .onChange(of: RemotePort.parse(portText) == nil) { _, outOfRange in
+            if outOfRange && settings.enabled {
+                AccessibilityNotification.Announcement(t.webRemotePortRange).post()
+            }
+        }
     }
 
     private var isRunning: Bool {
