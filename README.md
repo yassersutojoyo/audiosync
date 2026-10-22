@@ -79,7 +79,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 ## What doesn't work (yet)
 
 - Everything is about two seconds late. Fine for music, bad for video and games.
-- AirPlay 1 only by default. AirPlay 2 is experimental and off: start AudioSync with `AUDIOSYNC_AIRPLAY2=1` to try it. It plays one AirPlay 2 speaker at a time and hasn't been tried on a real AirPlay 2 receiver yet.
+- AirPlay 1 only by default. AirPlay 2 is experimental and off: start AudioSync with `AUDIOSYNC_AIRPLAY2=1` to try it. It plays one AirPlay 2 speaker at a time and hasn't been tried on a real AirPlay 2 receiver yet. On `main` (coming in 0.7), with the switch on, a stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. That row is in the Windows app now; the Mac gets it next. No real pair has been tried yet.
 - Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - Now Playing only works with Spotify and Music.

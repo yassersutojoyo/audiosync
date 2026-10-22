@@ -1066,8 +1066,11 @@ struct UIStrings {
         automatically, so each one has an offset you set by ear: click the time
         next to it. If the Cast speaker sounds late, raise it, and the other
         speakers wait longer; if it sounds early, lower it. AudioSync keeps the
-        offset for that speaker. One Google Cast speaker plays at a time, and
-        speaker groups made in the Google Home app can't play. While it plays,
+        offset for that speaker. One Google Cast speaker plays at a time. A
+        speaker group made in the Google Home app plays as one speaker, with
+        one volume and one offset, and its note names the speakers in it once
+        the group reports them. Those speakers keep their own rows and are
+        busy while the group plays. While a Cast speaker or group plays,
         Resync under its volume restarts the stream, with a short gap, so it
         lines up at its offset again.
 
