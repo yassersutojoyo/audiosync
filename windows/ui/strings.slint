@@ -123,8 +123,8 @@ export global Strings {
     // off) while a network speaker is on: apps have nowhere to play.
     // File > AirPlay 2 (Experimental) was turned on or off; the AirPlay
     // sender keeps the mode it started with until the next launch.
-    out property <string> notice-airplay2-on-next-launch: @tr("Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
-    out property <string> notice-airplay2-off-next-launch: @tr("AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
+    out property <string> notice-airplay2-on-next-launch: @tr("AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
+    out property <string> notice-airplay2-off-next-launch: @tr("AirPlay 2 (Experimental) is off. AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
     out property <string> notice-no-sound-output: @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
@@ -223,7 +223,7 @@ export global Strings {
     out property <string> menu-remote: @tr("Web Remote…");
     out property <string> remote-title: @tr("Web Remote");
     out property <string> remote-switch: @tr("Web Remote");
-    out property <string> remote-intro: @tr("Control your speakers from a phone on the same network as this PC. Open the address below on the phone and add it to the Home Screen first, then open it from there and enter the code.");
+    out property <string> remote-intro: @tr("Control your speakers from a phone on the same network as this PC. Open the address below on the phone or scan the QR code, add the page to the Home Screen, then open it from there and enter the pairing code.");
     out property <string> remote-address-title: @tr("Address");
     out property <string> remote-address-label: @tr("On the phone, open");
     out property <string> remote-ip-label: @tr("If that doesn't open, use");
@@ -262,7 +262,7 @@ export global Strings {
     out property <string> remote-use-port: @tr("Use Port");
     out property <string> remote-port-invalid: @tr("Enter a port from 1024 to 65535.");
     out property <string> remote-failed: @tr("The web remote couldn't start. Turn it off and on again.");
-    out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices. Select Forget All Remote Devices again.");
+    out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices, so they are paired again after AudioSync restarts. Select Forget All Remote Devices again.");
     // A check item in File: on, the captured app quitting moves streaming to
     // the whole system; off, streaming stops. "Source app", since "the app"
     // in AudioSync's own File menu can read as AudioSync itself.
@@ -454,7 +454,7 @@ export global Strings {
             return @tr("{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.", speaker);
         }
         if problem == AirPlayProblem.airplay2-not-yet {
-            return @tr("{} plays only AirPlay 2, which AudioSync for Windows doesn't support yet, so it's off.", speaker);
+            return @tr("{} plays only AirPlay 2, so it's off. Turn on File > AirPlay 2 (Experimental), then quit and reopen AudioSync.", speaker);
         }
         if problem == AirPlayProblem.timing-unavailable {
             return @tr("{} needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.", speaker);
@@ -780,7 +780,7 @@ export global Strings {
             return @tr("Pairing not supported yet");
         }
         if a == Availability.airplay2-not-yet {
-            return @tr("AirPlay 2 not supported yet");
+            return @tr("AirPlay 2 is off");
         }
         if a == Availability.unsupported {
             return @tr("Not supported");
@@ -885,6 +885,9 @@ export global Strings {
     // names joined by list-and; `missing` is empty when no name is known.
     public pure function group-note(group: SpeakerGroup, members: string, missing: string, incomplete: bool) -> string {
         if group == SpeakerGroup.stereo-pair {
+            if !incomplete && members == "" {
+                return @tr("Stereo pair");
+            }
             if !incomplete {
                 return @tr("Stereo pair: {}", members);
             }
@@ -894,6 +897,9 @@ export global Strings {
             return @tr("Stereo pair, a speaker is missing");
         }
         if group == SpeakerGroup.home-theater {
+            if !incomplete && members == "" {
+                return @tr("Home theater group");
+            }
             if !incomplete {
                 return @tr("Home theater group: {}", members);
             }
@@ -1157,7 +1163,7 @@ export global Strings {
     // A Cast speaker without a stored delay: its first recording is the
     // longest one, since nothing says when it plays.
     public pure function calibrate-all-searching(name: string) -> string {
-        return @tr("Searching for {}. Without a stored delay this takes longer…", name);
+        return @tr("Listening to {}, sweep 1 of 2. AudioSync doesn't know this speaker's delay yet, so this can take up to a minute.", name);
     }
 
     public pure function calibrate-all-ms(ms: int) -> string {
@@ -1169,15 +1175,15 @@ export global Strings {
     }
 
     public pure function calibrate-all-clamped(old: string, new: string, uncertainty: int) -> string {
-        return @tr("Was {}. New: {} ± {} ms, the end of the range, so it stays a little out of sync.", old, new, uncertainty);
+        return @tr("Was {}. New: {} ± {} ms, the end of the range, so this speaker stays a little out of sync.", old, new, uncertainty);
     }
 
     public pure function calibrate-all-uncertain(old: string, new: string, uncertainty: int) -> string {
-        return @tr("Was {}. Measured {} ± {} ms, too uncertain to apply. Try Measure Again.", old, new, uncertainty);
+        return @tr("Was {}. Measured {} ± {} ms. The two sweeps differ too much, so the delay stays. Select Measure Again.", old, new, uncertainty);
     }
 
     public pure function calibrate-all-refused(reason: string) -> string {
-        return @tr("Not measured. {}", reason);
+        return @tr("{} The delay stays.", reason);
     }
 
     // Old is a delay ("2000 ms") or calibrate-all-none.

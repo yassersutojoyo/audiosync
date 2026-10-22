@@ -1330,6 +1330,7 @@ do {
             && model.apply(.error(id: "A1", .wrongPassword, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsPassword)
             && model.apply(.error(id: "A1", .unsupported, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
             && model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
+            && model.apply(.error(id: "A1", .airPlay2Only, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsAirPlay2)
             && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
     model.removed("A1")
@@ -4101,14 +4102,14 @@ do {
             && CalibrateAllFlow.end(start: connecting, now: connected, taking: taking) == .speakersChanged,
           "calibrate all: a speaker still connecting at the start that begins playing stops the run, unmuted (S240)")
     check(t.calibrateAllLine(.ended(.rateChanged))
-                == "The audio's sample rate changed during the measurement. Nothing was changed."
+                == "The audio's sample rate changed during the measurement. No delay was changed."
             && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk"))
                 == "Turn on streaming, the built-in speakers and Desk to measure it again.",
           "calibrate all: a changed sample rate and a Measure Again that can't start say so in their own words")
     check(CalibrateAllEnd.delaysChanged.core == UInt32(ASC_CALIBRATION_END_CANCELLED)
             && CalibrateAllEnd.speakerOff.core == UInt32(ASC_CALIBRATION_END_SPEAKER_OFF)
             && t.calibrateAllLine(.ended(.sourceChanged))
-                == "The source was switched during the measurement. Nothing was changed.",
+                == "The source was switched during the measurement. No delay was changed.",
           "calibrate all: a stopped run tells the core why and says that nothing changed")
 
     // A whole run through the core on synthetic recordings at 48 kHz.

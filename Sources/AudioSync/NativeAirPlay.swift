@@ -480,6 +480,7 @@ final class NativeAirPlay {
         switch reason {
         case ASC_AIRPLAY_REASON_TIMING: return .timingUnavailable
         case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return .oneAirPlay2
+        case ASC_AIRPLAY_REASON_AIRPLAY2_ONLY: return .airPlay2Only
         case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return .playsThroughSpeakers
         default: return .unsupported
         }

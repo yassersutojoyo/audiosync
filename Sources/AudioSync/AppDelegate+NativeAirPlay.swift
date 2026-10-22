@@ -430,6 +430,7 @@ extension AppDelegate {
         case .needsCode, .needsPassword: return text.airPlayTurnedOff(name: name, reason: .needsCode)
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
+        case .needsAirPlay2: return text.nativeAirPlayNeedsAirPlay2(name: name)
         case .timingUnavailable: return text.nativeAirPlayTimingUnavailable(name: name)
         case .playsThroughSpeakers:
             return NativeAirPlayID.receiver(id).flatMap(NativeTarget.kind) == nil

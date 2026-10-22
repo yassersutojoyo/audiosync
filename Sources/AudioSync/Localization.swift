@@ -215,10 +215,10 @@ struct UIStrings {
         case .notPlaying:
             return "Turn on streaming, this speaker and the built-in speakers first."
         case .microphoneDenied:
-            return "AudioSync isn't allowed to use the microphone. Turn it on in System Settings, "
-                + "Privacy & Security, Microphone."
+            return "AudioSync isn't allowed to use the microphone. Turn it on in System Settings → "
+                + "Privacy & Security → Microphone."
         case .noMicrophone:
-            return "AudioSync couldn't record from the microphone. Check the input in System Settings, Sound."
+            return "AudioSync couldn't record from the microphone. Check the input in System Settings → Sound."
         case .unsupportedRate:
             return "The audio source runs at a sample rate calibration can't use."
         case .sourceSilent:
@@ -256,8 +256,9 @@ struct UIStrings {
     // MARK: Calibrate All Speakers (S235 to S240)
 
     let calibrateAll = "Calibrate All Speakers"
-    let calibrateAllHint = "Put the microphone where you listen. AudioSync pauses the music, plays a short sweep "
-        + "on each speaker that is on, one at a time, and shows the new delays before anything changes."
+    let calibrateAllHint = "Put the microphone where you listen. AudioSync fades the music out, plays a short sweep "
+        + "on the built-in speakers and then on every other speaker that is on, one at a time, twice each, "
+        + "and fades the music back in. Nothing changes until you click Apply."
     let calibrateAllIntro = "Put the microphone where you listen and keep the room quiet. "
         + "Nothing changes until you click Apply."
 
@@ -266,7 +267,7 @@ struct UIStrings {
         switch blocker {
         case .noReference: "Calibration measures against the Mac's built-in speakers, and they aren't listed."
         case .notPlaying: "Turn on streaming and the built-in speakers first."
-        case .noOtherSpeaker: "Turn on another speaker to measure it against the built-in speakers."
+        case .noOtherSpeaker: "Only the built-in speakers are on. Turn on another speaker to calibrate it."
         case .busy: "Another calibration is still running."
         }
     }
@@ -327,7 +328,7 @@ struct UIStrings {
             return clamped ? value + ". The end of the range, so this speaker stays a little out of sync." : value
         case .uncertain(let ms, let u):
             return calibrateAllMeasured(ms, uncertaintyMs: u, kind: kind)
-                + ". The two sweeps differ too much, so the delay stays. Measure again."
+                + ". The two sweeps differ too much, so the delay stays. Select Measure Again."
         case .refused(let failure):
             return calibrateAllRefusal(failure) + " The delay stays."
         }
@@ -381,7 +382,7 @@ struct UIStrings {
     func calibrateAllLine(_ line: CalibrateAllLine) -> String {
         switch line {
         case .ended(let end):
-            return calibrateAllEndReason(end) + " Nothing was changed."
+            return calibrateAllEndReason(end) + " No delay was changed."
         case .againEnded(let name, let end):
             return calibrateAllEndReason(end) + " The row for \(name) wasn't changed."
         case .changedSinceMeasured:
@@ -391,7 +392,7 @@ struct UIStrings {
         case .applied:
             return "New delays applied."
         case .undone:
-            return "Undone. The delays are back as they were."
+            return "The delays are back to what they were."
         }
     }
 
@@ -488,7 +489,13 @@ struct UIStrings {
 
     /// AudioSync's own AirPlay sender can't play to this receiver.
     func nativeAirPlayCantPlay(name: String) -> String {
-        "AudioSync can't play to \(name) yet, so it's off."
+        "AudioSync can't play to \(name), so it's off."
+    }
+
+    /// The receiver plays only AirPlay 2, and this launch runs without it.
+    func nativeAirPlayNeedsAirPlay2(name: String) -> String {
+        "\(name) plays only AirPlay 2, so it's off. Turn on AirPlay 2 (Experimental) in the gear menu "
+            + "or the AudioSync menu, then quit and reopen AudioSync."
     }
 
     /// The receiver turned NTP timing down, and PTP timing isn't available.
@@ -1003,7 +1010,7 @@ struct UIStrings {
     let webRemoteSteps = "On the phone, open the address or scan the QR code, add the page to the Home Screen, "
         + "then open it from there and enter the pairing code."
     func webRemoteQRLabel(_ address: String) -> String { "QR code for \(address)" }
-    let webRemoteNoAddress = "This Mac has no network address right now."
+    let webRemoteNoAddress = "This Mac has no address on a home network right now. Connect it to your Wi-Fi or Ethernet network."
     let webRemoteCodeTitle = "Pairing Code"
     /// Spaced out so VoiceOver reads the digits one by one.
     func webRemoteCodeLabel(_ code: String) -> String {
@@ -1021,13 +1028,18 @@ struct UIStrings {
         }
     }
     let webRemoteForgetAll = "Forget All Remote Devices"
-    let webRemoteForgetFailed = "The devices are forgotten, but that couldn't be saved: "
-        + "they are paired again after AudioSync restarts."
+    let webRemoteForgetFailed = "AudioSync couldn't save the list of paired devices, so they are paired again "
+        + "after AudioSync restarts. Select Forget All Remote Devices again."
     let webRemotePort = "Port"
     let webRemoteUsePort = "Use Port"
     let webRemotePortRange = "Enter a port from 1024 to 65535."
-    func webRemotePortInUse(_ port: Int) -> String { "Another app is using port \(port). Pick another port." }
-    func webRemoteListenFailed(_ port: Int) -> String { "AudioSync couldn't open port \(port) on this Mac. Pick another port." }
+    func webRemotePortInUse(_ port: Int) -> String {
+        "Another app uses port \(port), so the web remote can't start. Enter another port and select Use Port."
+    }
+    func webRemoteListenFailed(_ port: Int) -> String {
+        "AudioSync couldn't open port \(port) on this Mac, so the web remote can't start. "
+            + "Enter another port and select Use Port."
+    }
     let webRemoteStartFailed = "The web remote couldn't start. Turn it off and on again."
     let webRemotePlainHTTP = "The page uses plain HTTP, so use the web remote only on your home network."
     /// On the phone, under a speaker that asks for a code AudioSync doesn't keep.

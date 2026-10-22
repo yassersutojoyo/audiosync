@@ -3712,7 +3712,7 @@ mod tests {
         let strings = app.main.global::<Strings>();
         assert_eq!(
             notice_item(&strings, &notices[0]).message,
-            "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+            "AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
         );
 
         app.main.invoke_airplay2_experimental_toggled(false);
@@ -4110,7 +4110,7 @@ mod tests {
             searching: true,
         });
         let card = calibrate_all_card(&strings, &state);
-        assert!(card.status.starts_with("Searching"), "{}", card.status);
+        assert!(card.status.contains("up to a minute"), "{}", card.status);
 
         let clear = Measurement {
             new_ms: 2040.0,
@@ -5606,6 +5606,12 @@ mod tests {
             note(HomeTheater, &["Left", "Right"], &["Left", "Right"], true),
             "Home theater group, missing Left and Right"
         );
+        assert_eq!(
+            note(StereoPair, &[], &[], false),
+            "Stereo pair",
+            "no member names known yet"
+        );
+        assert_eq!(note(HomeTheater, &[], &[], false), "Home theater group");
         // Narrator reads the note before what the toggle does.
         assert_eq!(
             strings
