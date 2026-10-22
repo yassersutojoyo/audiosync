@@ -11,6 +11,8 @@ pub const VOLUME_MAX: f64 = 100.0;
 /// Everything the page shows, as the app last published it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
+    /// The computer's name as the app shows it, for the page's footer.
+    pub computer_name: String,
     /// 0 to 100.
     pub master_volume: f64,
     pub now_playing: Option<NowPlaying>,
@@ -108,6 +110,10 @@ impl State {
         let value: Value =
             serde_json::from_str(text).map_err(|error| invalid(format!("not JSON: {error}")))?;
         let root = value.as_object().ok_or_else(|| invalid("not an object"))?;
+        let computer_name = match root.get("computer_name") {
+            None => String::new(),
+            Some(_) => text_field(root, "computer_name", "")?,
+        };
         let master = field(root, "master", "")?
             .as_object()
             .ok_or_else(|| invalid("master is not an object"))?;
@@ -159,6 +165,7 @@ impl State {
             speakers.push(speaker);
         }
         Ok(State {
+            computer_name,
             master_volume,
             now_playing,
             speakers,
@@ -194,6 +201,7 @@ impl State {
         });
         json!({
             "revision": revision,
+            "computer_name": self.computer_name,
             "master": { "volume": self.master_volume },
             "now_playing": now_playing,
             "speakers": speakers,
@@ -342,6 +350,7 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"{
+        "computer_name": "Den Mac",
         "master": {"volume": 70},
         "now_playing": {"title": "Song", "artist": "Band", "source": "Music"},
         "speakers": [
@@ -363,12 +372,29 @@ mod tests {
         );
         let written: Value = serde_json::from_str(&state.to_json(7)).unwrap();
         assert_eq!(written["revision"], 7);
+        assert_eq!(written["computer_name"], "Den Mac");
         assert_eq!(written["master"]["volume"], 70.0);
         assert_eq!(written["now_playing"]["source"], "Music");
         assert_eq!(written["speakers"][0]["delay_max_ms"], 3000);
         assert_eq!(written["speakers"][0]["notice"], Value::Null);
         let again = State::from_json(&state.to_json(7)).unwrap();
         assert_eq!(again, state);
+    }
+
+    #[test]
+    fn the_computer_name_is_optional_text_and_never_quoted_in_an_error() {
+        let unnamed = State::from_json(r#"{"master": {"volume": 50}, "speakers": []}"#).unwrap();
+        assert_eq!(unnamed.computer_name, "");
+        let written: Value = serde_json::from_str(&unnamed.to_json(1)).unwrap();
+        assert_eq!(written["computer_name"], "");
+        let error = State::from_json(
+            r#"{"computer_name": ["Den Mac"], "master": {"volume": 50}, "speakers": []}"#,
+        )
+        .unwrap_err();
+        assert!(!error.to_string().contains("Den Mac"), "{error}");
+        let bad_volume = SAMPLE.replace("\"volume\": 70", "\"volume\": 700");
+        let error = State::from_json(&bad_volume).unwrap_err();
+        assert!(!error.to_string().contains("Den Mac"), "{error}");
     }
 
     #[test]

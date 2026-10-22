@@ -13,6 +13,7 @@ use audiosync_remote::{Command, Config, RemoteServer, ServerEvent, SpeakerChange
 use serde_json::{Value, json};
 
 const SAMPLE: &str = r#"{
+    "computer_name": "Den Mac",
     "master": {"volume": 70},
     "now_playing": {"title": "Song", "artist": "Band", "source": "Music"},
     "speakers": [
@@ -467,6 +468,7 @@ fn each_endpoint_answers_and_hands_over_exactly_what_was_posted() {
     assert_eq!(state.header("cache-control"), Some("no-store"));
     let value = state.json();
     assert_eq!(value["revision"], 1);
+    assert_eq!(value["computer_name"], "Den Mac");
     assert_eq!(value["speakers"][1]["notice"], "Not on the network");
 
     let reply = post(

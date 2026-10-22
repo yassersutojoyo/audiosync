@@ -343,7 +343,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    const STATE: &CStr = c"{\"master\": {\"volume\": 50}, \"now_playing\": null, \"speakers\": [{\"id\": \"den\", \"name\": \"Den\", \"kind\": \"local\", \"on\": true, \"volume\": 40, \"delay_ms\": 0, \"delay_min_ms\": 0, \"delay_max_ms\": 500, \"available\": true, \"notice\": null}]}";
+    const STATE: &CStr = c"{\"computer_name\": \"Den Mac\", \"master\": {\"volume\": 50}, \"now_playing\": null, \"speakers\": [{\"id\": \"den\", \"name\": \"Den\", \"kind\": \"local\", \"on\": true, \"volume\": 40, \"delay_ms\": 0, \"delay_min_ms\": 0, \"delay_max_ms\": 500, \"available\": true, \"notice\": null}]}";
 
     unsafe extern "C" fn record(context: *mut c_void, command_json: *const c_char) {
         // SAFETY: the tests pass a live Mutex<Vec<String>> as the context and
@@ -424,6 +424,13 @@ mod tests {
             .to_owned();
         // SAFETY: a live handle.
         assert_eq!(unsafe { asc_remote_device_count(remote) }, 1);
+        let state = exchange(
+            port,
+            &format!(
+                "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie}\r\n\r\n"
+            ),
+        );
+        assert!(state.contains("\"computer_name\":\"Den Mac\""), "{state}");
 
         let changed = post(port, "/api/speakers/den", &cookie, "{\"delay_ms\": 250}");
         assert!(changed.starts_with("HTTP/1.1 202 "), "{changed}");

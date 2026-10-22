@@ -1590,12 +1590,14 @@ AscRemote *asc_remote_start(const char *config_json, AscRemoteCommand command, v
 uint32_t asc_remote_port(AscRemote *remote);
 
 /*
- * Publishes the snapshot in state_json: {"master": {"volume"}, "now_playing":
- * {"title", "artist", "source"} or null, "speakers": [{"id", "name", "kind",
- * "on", "volume", "delay_ms", "delay_min_ms", "delay_max_ms", "available",
- * "notice"}]}, volumes 0 to 100, ids unique. The server numbers it and
- * streams it to the open pages; an unchanged snapshot sends nothing.
- * Returns false when it doesn't read; the previous one then stays.
+ * Publishes the snapshot in state_json: {"computer_name", "master": {"volume"},
+ * "now_playing": {"title", "artist", "source"} or null, "speakers": [{"id",
+ * "name", "kind", "on", "volume", "delay_ms", "delay_min_ms", "delay_max_ms",
+ * "available", "notice"}]}, volumes 0 to 100, ids unique; computer_name is
+ * the name the page's footer shows, empty when left out. The server numbers
+ * it and streams it to the open pages; an unchanged snapshot sends nothing.
+ * Returns false when it doesn't read; the previous one then stays. Neither
+ * the snapshot nor the name ever reaches the log.
  */
 bool asc_remote_publish(AscRemote *remote, const char *state_json);
 
