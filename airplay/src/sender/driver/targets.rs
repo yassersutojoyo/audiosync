@@ -384,7 +384,8 @@ impl Driver {
                     .speakers
                     .get(&member.key)
                     .map(|speaker| &speaker.device)
-                    .or_else(|| self.directory.device(&member.key))?;
+                    .or_else(|| self.directory.device(&member.key))
+                    .or(member.device.as_deref())?;
                 device
                     .airplay_socket_addrs()
                     .first()
