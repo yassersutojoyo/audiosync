@@ -242,6 +242,9 @@ struct Speaker {
     /// Refused only because another AirPlay 2 session ran (P169): it starts
     /// once that session ends for good.
     ap2_waiting: bool,
+    /// When it was refused for that, as a count of such refusals: the
+    /// lowest waiting one is the first refused (P169).
+    ap2_refusal: u64,
     /// Its AirPlay 2 session failed and waits for its own retry, so it
     /// keeps the one AirPlay 2 place (P169).
     ap2_retry: bool,
@@ -273,6 +276,8 @@ pub(crate) struct Driver {
     pairing_sessions: HashMap<SessionKey, DeviceKey>,
     stream_ids: HashMap<stream::SpeakerId, DeviceKey>,
     next_session: u64,
+    /// Refusals for the one AirPlay 2 place so far (P169).
+    ap2_refusals: u64,
     directory: Directory,
     browser: Option<Box<dyn Browser + Send>>,
     reported: BTreeSet<DeviceKey>,
@@ -339,6 +344,7 @@ impl Driver {
             pairing_sessions: HashMap::new(),
             stream_ids: HashMap::new(),
             next_session: 0,
+            ap2_refusals: 0,
             directory: Directory::new(),
             browser: None,
             reported: BTreeSet::new(),
@@ -1046,9 +1052,14 @@ impl Driver {
         if self.stopping.is_some() || self.speakers.values().any(Speaker::holds_ap2) {
             return;
         }
-        let Some((key, speaker)) = self.speakers.iter_mut().find(|(_, speaker)| {
-            speaker.ap2_waiting && !speaker.removing && matches!(speaker.phase, Phase::Failed)
-        }) else {
+        let Some((key, speaker)) = self
+            .speakers
+            .iter_mut()
+            .filter(|(_, speaker)| {
+                speaker.ap2_waiting && !speaker.removing && matches!(speaker.phase, Phase::Failed)
+            })
+            .min_by_key(|(_, speaker)| speaker.ap2_refusal)
+        else {
             return;
         };
         speaker.ap2_waiting = false;
@@ -1326,6 +1337,7 @@ impl Driver {
                     removing: false,
                     airplay1_outcome: None,
                     ap2_waiting: false,
+                    ap2_refusal: 0,
                     ap2_retry: false,
                     target: None,
                 },
@@ -1875,6 +1887,7 @@ mod tests {
                 removing: false,
                 airplay1_outcome: None,
                 ap2_waiting: false,
+                ap2_refusal: 0,
                 ap2_retry: false,
                 target: None,
             },

@@ -63,8 +63,10 @@ impl Driver {
                 UnsupportedReason::OneAirPlay2Session,
             ));
             self.refuse(key, error, now);
+            self.ap2_refusals += 1;
             if let Some(speaker) = self.speakers.get_mut(key) {
                 speaker.ap2_waiting = true;
+                speaker.ap2_refusal = self.ap2_refusals;
             }
             return;
         }
