@@ -1219,7 +1219,7 @@ export component SpeakerRow inherits Rectangle {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-members) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
-                            description: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state);
+                            description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();
                             }
@@ -1263,6 +1263,14 @@ export component SpeakerRow inherits Rectangle {
                                         font-size: Tokens.font-size-caption;
                                         color: Tokens.teal-text;
                                     }
+                                }
+
+                                // A stereo pair or home theater group names its members
+                                // on a line of its own, above the note.
+                                if root.item.group-note != "": QuietText {
+                                    text: root.item.group-note;
+                                    wrap: no-wrap;
+                                    overflow: elide;
                                 }
 
                                 // An AirPlay speaker's note can be long; it ends in "…"
