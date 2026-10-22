@@ -240,7 +240,7 @@ mod tests {
             "speaker.local:80:81",
             "2001:db8::1",
             "[2001:db8::1]:8009",
-            "spe aker.local",
+            "my speaker.local",
             "-speaker.local",
             "speaker-.local",
             "speaker..local",
@@ -333,9 +333,6 @@ mod tests {
         let many: Vec<String> = (0..200).map(|n| format!("speaker-{n}.local")).collect();
         assert_eq!(clamped(many).len(), MAX_ADDRESSES);
         let mut full: Vec<String> = (0..MAX_ADDRESSES).map(|n| format!("s{n}.local")).collect();
-        assert!(!add(
-            &mut full,
-            &CastAddress::parse("one-more.local").unwrap()
-        ));
+        assert!(!add(&mut full, &CastAddress::parse("den.local").unwrap()));
     }
 }
