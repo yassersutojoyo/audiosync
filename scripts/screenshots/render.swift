@@ -49,26 +49,33 @@ enum Mock {
         model.equalizerOn = true
         model.groups = [AppModel.Group(id: "downstairs", name: "Downstairs", memberCount: 2, available: 2, allOn: true)]
         model.airplay = [
-            AppModel.Speaker(id: "living", name: "Living Room", tag: .airplay, enabled: true, volume: 64, delayMs: nil),
-            AppModel.Speaker(id: "kitchen", name: "Kitchen", tag: .airplay, enabled: true, volume: 48, delayMs: nil,
+            AppModel.Speaker(id: "living", name: "Living Room", tag: .airplay, enabled: true, volume: 64, offsetMs: nil),
+            AppModel.Speaker(id: "kitchen", name: "Kitchen", tag: .airplay, enabled: true, volume: 48, offsetMs: nil,
                              autoConnect: true),
-            AppModel.Speaker(id: "bedroom", name: "Bedroom", tag: .airplay, enabled: false, volume: 35, delayMs: nil,
+            AppModel.Speaker(id: "bedroom", name: "Bedroom", tag: .airplay, enabled: false, volume: 35, offsetMs: nil,
                              availability: .needsCode),
         ]
+        // Offsets are relative to the built-in speakers, the reference, which has none.
         model.local = [
             AppModel.Speaker(id: "built-in", name: "MacBook Pro Speakers", tag: .builtIn, enabled: true, volume: 60,
-                             delayMs: 1950),
+                             offsetMs: nil),
             AppModel.Speaker(id: "headphones", name: "Studio Headphones", tag: .bluetooth, enabled: true, volume: 40,
-                             delayMs: 1780),
-            AppModel.Speaker(id: "desk", name: "Desk Speakers", tag: .usb, enabled: false, volume: 55, delayMs: 2000),
+                             offsetMs: -170),
+            AppModel.Speaker(id: "desk", name: "Desk Speakers", tag: .usb, enabled: false, volume: 55, offsetMs: 50),
         ]
-        model.expandedSync = ["headphones"]
+        model.cast = [
+            AppModel.Speaker(id: CastID.app("living-tv"), name: "Living Room TV", tag: .cast, enabled: true,
+                             volume: 50, offsetMs: 120,
+                             cast: CastRow(status: .playing, muted: false, volumeFixed: false, group: false)),
+        ]
+        model.toggleDelayPanel("headphones")
         configure(model)
         return model
     }
 
-    /// Nothing streaming, a notice waiting, no AirPlay speaker found yet, and the
-    /// local speakers chosen last time waiting for streaming to start.
+    /// Nothing streaming, a notice waiting, no network speaker found yet while
+    /// the Google Cast search runs, and the local speakers chosen last time
+    /// waiting for streaming to start.
     static func idleModel() -> AppModel {
         model { model in
             model.running = false
@@ -77,7 +84,9 @@ enum Mock {
             model.equalizerOn = false
             model.groups = []
             model.airplay = []
-            model.expandedSync = []
+            model.cast = []
+            model.castList = .searching
+            model.closeDelayPanels()
         }
     }
 
@@ -88,6 +97,9 @@ enum Mock {
             model.groups = []
             model.airplay = []
             model.local = []
+            model.cast = []
+            model.castList = .noneFound
+            model.closeDelayPanels()
         }
     }
 
@@ -211,12 +223,21 @@ func write(_ rep: NSBitmapImageRep, _ name: String) {
 /// Corner radius of a titled window on current macOS.
 let windowCornerRadius: CGFloat = 16
 
-/// The main window as MainWindowController sets it up, at a size that fits the
-/// mock speakers without scrolling.
+/// How far the tallest scroll view under `view` would have to scroll; 0 when
+/// none has to.
+func scrollOverflow(in view: NSView) -> CGFloat {
+    if let scroll = view as? NSScrollView, let document = scroll.documentView {
+        return max(0, document.frame.height - scroll.contentView.bounds.height)
+    }
+    return view.subviews.map(scrollOverflow).max() ?? 0
+}
+
+/// The main window as MainWindowController sets it up, grown from its usual
+/// size until the mock speakers fit without scrolling.
 func mainWindowShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
     let host = NSHostingController(rootView: MainView(model: model))
     host.sizingOptions = [.minSize]
-    let shotSize = NSSize(width: 860, height: 610)
+    var shotSize = NSSize(width: 860, height: 610)
     let chrome: NSWindow.StyleMask = [.titled, .resizable, .closable, .miniaturizable]
     let window = ShotWindow(contentRect: NSRect(origin: .zero, size: shotSize),
                             styleMask: chrome, backing: .buffered, defer: false)
@@ -225,6 +246,15 @@ func mainWindowShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
     window.setContentSize(shotSize)
+    window.contentView?.layoutSubtreeIfNeeded()
+    settle()
+    if let content = window.contentView {
+        let overflow = scrollOverflow(in: content).rounded(.up)
+        if overflow > 0 {
+            shotSize.height += overflow
+            window.setContentSize(shotSize)
+        }
+    }
     // The frame view draws the title bar and its window buttons too.
     guard let frameView = window.contentView?.superview else { fatalError("The window has no frame view") }
     return framed(capture(frameView), cornerRadius: windowCornerRadius, look: look)
