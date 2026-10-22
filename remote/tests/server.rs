@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_remote::page::{self, hash_source};
-use audiosync_remote::{Command, Config, RemoteServer, SpeakerChange, State, Timing};
+use audiosync_remote::{Command, Config, RemoteServer, ServerEvent, SpeakerChange, State, Timing};
 use serde_json::{Value, json};
 
 const SAMPLE: &str = r#"{
@@ -753,6 +753,110 @@ fn the_event_stream_delivers_each_revision_once_and_heartbeats() {
         !late.read_for(Duration::from_secs(2)),
         "the stream stays open"
     );
+}
+
+#[test]
+fn a_device_keeps_two_event_streams_and_a_third_ends_the_oldest() {
+    let remote = start("streams");
+    let token = pair(&remote);
+    remote.server.publish(sample());
+    // Each waits for its first snapshot, so the server registered it before the next opens.
+    let mut streams: Vec<Events> = Vec::new();
+    for _ in 0..3 {
+        let mut events = Events::open(&remote, &token);
+        events.read_until(|events| !events.revisions().is_empty());
+        streams.push(events);
+    }
+    assert!(
+        !streams[0].read_for(Duration::from_secs(2)),
+        "the oldest stays open"
+    );
+    let mut state = sample();
+    state.master_volume = 5.0;
+    remote.server.publish(state);
+    for events in &mut streams[1..] {
+        events.read_until(|events| events.revisions().len() >= 2);
+        assert_eq!(events.revisions(), [1, 2]);
+    }
+}
+
+fn idle_connection(remote: &Remote) -> TcpStream {
+    TcpStream::connect((Ipv4Addr::LOCALHOST, remote.server.port())).unwrap()
+}
+
+fn read_all(stream: &mut TcpStream) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut data = Vec::new();
+    // A reset after the server closed counts as closed.
+    let _ = stream.read_to_end(&mut data);
+    String::from_utf8_lossy(&data).into_owned()
+}
+
+#[test]
+fn one_address_holds_eight_connections_at_most() {
+    let remote = start("per-peer");
+    let idle: Vec<TcpStream> = (0..8).map(|_| idle_connection(&remote)).collect();
+    // Sends nothing: a request left unread could reset the connection before the answer arrives.
+    let mut ninth = idle_connection(&remote);
+    let answer = read_all(&mut ninth);
+    assert!(answer.starts_with("HTTP/1.1 503 "), "{answer:?}");
+    let mut turned_away = false;
+    while let Some(event) = remote.server.poll_event() {
+        turned_away |= matches!(event, ServerEvent::PeerBusy { .. });
+    }
+    assert!(turned_away);
+
+    drop(idle);
+    let until = Instant::now() + Duration::from_secs(5);
+    while get(&remote, "/", None).status != 200 {
+        assert!(Instant::now() < until, "the closed connections still count");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_head_over_8_kib_gets_431() {
+    let remote = start("head-too-large");
+    let raw = format!(
+        "GET / HTTP/1.1\r\nHost: {}\r\nX-Padding: {}\r\n\r\n",
+        host(&remote),
+        "a".repeat(9 * 1024)
+    );
+    let reply = exchange(remote.server.port(), raw.as_bytes());
+    assert_eq!(reply.status, 431);
+    assert_security_headers(&reply);
+}
+
+#[test]
+fn a_chunked_body_is_refused() {
+    let remote = start("chunked");
+    let host = host(&remote);
+    let raw = format!(
+        "POST /api/pair HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+    );
+    let reply = exchange(remote.server.port(), raw.as_bytes());
+    assert_eq!(reply.status, 400);
+    assert_eq!(remote.server.device_count(), 0);
+}
+
+#[test]
+fn a_request_that_takes_too_long_is_closed_unanswered() {
+    let timing = Timing {
+        request: Duration::from_millis(300),
+        ..Timing::default()
+    };
+    let remote = start_with(config("slow", timing));
+    let mut stream = idle_connection(&remote);
+    let started = Instant::now();
+    stream.write_all(b"GET / HTTP/1.1\r\nHo").unwrap();
+    thread::sleep(Duration::from_millis(150));
+    // A byte now and then doesn't buy more time.
+    let _ = stream.write_all(b"s");
+    let answer = read_all(&mut stream);
+    assert_eq!(answer, "");
+    assert!(started.elapsed() < Duration::from_secs(3));
 }
 
 #[test]

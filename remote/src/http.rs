@@ -123,9 +123,10 @@ fn find_blank_line(data: &[u8]) -> Option<usize> {
     data.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
-/// Reads one request, its body included, within [`REQUEST_TIMEOUT`].
-pub fn read_request(stream: &mut TcpStream) -> Result<Request, ReadError> {
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
+/// Reads one request, its body included, within `limit` however it
+/// trickles ([`REQUEST_TIMEOUT`] in the product).
+pub fn read_request(stream: &mut TcpStream, limit: Duration) -> Result<Request, ReadError> {
+    let deadline = Instant::now() + limit;
     let mut data = Vec::new();
     let mut buffer = [0u8; 1024];
     let mut fill = |data: &mut Vec<u8>, stream: &mut TcpStream| -> Result<(), ReadError> {

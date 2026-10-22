@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -188,12 +189,14 @@ fn from_hex(text: &str) -> Option<TokenHash> {
     Some(hash)
 }
 
-/// The paired devices: only each token's SHA-256, oldest first, kept in a
-/// file when the store has a path.
+/// The paired devices: only each token's SHA-256, oldest first. A change
+/// returns a [`Snapshot`] that the caller saves after letting go of its
+/// lock, so a slow disk never holds up a reader.
 #[derive(Debug)]
 pub struct TokenStore {
     path: Option<PathBuf>,
     hashes: Vec<TokenHash>,
+    generation: u64,
 }
 
 /// Why the paired-device file was not read at start; the store starts empty.
@@ -203,6 +206,39 @@ pub enum LoadProblem {
     NotInFormat,
 }
 
+/// The devices as one change left them, for [`DeviceFile::save`].
+#[derive(Debug)]
+#[must_use = "a change reaches the file only once its snapshot is saved"]
+pub struct Snapshot {
+    path: Option<PathBuf>,
+    hashes: Vec<TokenHash>,
+    generation: u64,
+}
+
+/// Writes snapshots to the paired-device file one at a time; one older
+/// than the last written is skipped, so the file never goes back.
+#[derive(Debug, Default)]
+pub struct DeviceFile {
+    written: Mutex<u64>,
+}
+
+impl DeviceFile {
+    pub fn save(&self, snapshot: Snapshot) -> io::Result<()> {
+        let Some(path) = snapshot.path.as_deref() else {
+            return Ok(());
+        };
+        let mut written = self.written.lock().unwrap_or_else(PoisonError::into_inner);
+        if snapshot.generation <= *written {
+            return Ok(());
+        }
+        let devices: Vec<String> = snapshot.hashes.iter().map(|hash| hex(hash)).collect();
+        let text = json!({ "version": FILE_VERSION, "devices": devices }).to_string();
+        write_replacing(path, text.as_bytes())?;
+        *written = snapshot.generation;
+        Ok(())
+    }
+}
+
 impl TokenStore {
     /// The store at `path`; a missing file is an empty store, an unreadable
     /// or damaged one too, reported so the host can log it.
@@ -210,6 +246,7 @@ impl TokenStore {
         let mut store = TokenStore {
             path,
             hashes: Vec::new(),
+            generation: 0,
         };
         let Some(path) = store.path.as_deref() else {
             return (store, None);
@@ -248,41 +285,38 @@ impl TokenStore {
     }
 
     /// Remembers a new device's token, dropping the oldest beyond
-    /// [`MAX_DEVICES`]. The token works even when saving fails, until the
+    /// [`MAX_DEVICES`]. The token works at once, saved or not, until the
     /// app quits.
-    pub fn add(&mut self, token: &str) -> io::Result<()> {
+    pub fn add(&mut self, token: &str) -> Snapshot {
         self.hashes.push(token_hash(token));
         if self.hashes.len() > MAX_DEVICES {
             let excess = self.hashes.len() - MAX_DEVICES;
             self.hashes.drain(..excess);
         }
-        self.save()
+        self.snapshot()
     }
 
-    /// Forgets one device; false when it wasn't paired.
-    pub fn remove(&mut self, token: &str) -> io::Result<bool> {
+    /// Forgets one device; none when it wasn't paired.
+    pub fn remove(&mut self, token: &str) -> Option<Snapshot> {
         let hash = token_hash(token);
         let before = self.hashes.len();
         self.hashes.retain(|kept| *kept != hash);
-        if self.hashes.len() == before {
-            return Ok(false);
-        }
-        self.save().map(|()| true)
+        (self.hashes.len() != before).then(|| self.snapshot())
     }
 
     /// Forgets every device.
-    pub fn clear(&mut self) -> io::Result<()> {
+    pub fn clear(&mut self) -> Snapshot {
         self.hashes.clear();
-        self.save()
+        self.snapshot()
     }
 
-    fn save(&self) -> io::Result<()> {
-        let Some(path) = self.path.as_deref() else {
-            return Ok(());
-        };
-        let devices: Vec<String> = self.hashes.iter().map(|hash| hex(hash)).collect();
-        let text = json!({ "version": FILE_VERSION, "devices": devices }).to_string();
-        write_replacing(path, text.as_bytes())
+    fn snapshot(&mut self) -> Snapshot {
+        self.generation += 1;
+        Snapshot {
+            path: self.path.clone(),
+            hashes: self.hashes.clone(),
+            generation: self.generation,
+        }
     }
 }
 
@@ -425,11 +459,12 @@ mod tests {
         let path = scratch("auth-tokens");
         let (mut store, problem) = TokenStore::open(Some(path.clone()));
         assert!(problem.is_none());
+        let device_file = DeviceFile::default();
         let tokens: Vec<String> = (0..MAX_DEVICES + 1)
             .map(|_| random_token().unwrap())
             .collect();
         for token in &tokens {
-            store.add(token).unwrap();
+            device_file.save(store.add(token)).unwrap();
         }
         assert_eq!(store.len(), MAX_DEVICES);
         assert!(!store.contains(&tokens[0]), "the oldest is dropped");
@@ -444,11 +479,25 @@ mod tests {
         assert_eq!(reopened.len(), MAX_DEVICES);
         assert!(reopened.contains(&tokens[MAX_DEVICES]));
 
-        assert!(store.remove(&tokens[3]).unwrap());
-        assert!(!store.remove(&tokens[3]).unwrap());
+        device_file.save(store.remove(&tokens[3]).unwrap()).unwrap();
+        assert!(store.remove(&tokens[3]).is_none());
         assert!(!TokenStore::open(Some(path.clone())).0.contains(&tokens[3]));
-        store.clear().unwrap();
+        device_file.save(store.clear()).unwrap();
         assert!(TokenStore::open(Some(path)).0.is_empty());
+    }
+
+    #[test]
+    fn a_snapshot_saved_late_never_takes_the_file_back() {
+        let path = scratch("auth-order");
+        let (mut store, _) = TokenStore::open(Some(path.clone()));
+        let device_file = DeviceFile::default();
+        let first = random_token().unwrap();
+        let second = random_token().unwrap();
+        let older = store.add(&first);
+        let newer = store.add(&second);
+        device_file.save(newer).unwrap();
+        device_file.save(older).unwrap();
+        assert!(TokenStore::open(Some(path)).0.contains(&second));
     }
 
     #[test]
@@ -465,7 +514,7 @@ mod tests {
     fn only_well_formed_tokens_are_looked_up() {
         let (mut store, _) = TokenStore::open(None);
         let token = random_token().unwrap();
-        store.add(&token).unwrap();
+        DeviceFile::default().save(store.add(&token)).unwrap();
         assert!(store.contains(&token));
         assert!(!store.contains(""));
         assert!(!store.contains(&token[..31]));

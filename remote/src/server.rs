@@ -7,14 +7,16 @@ use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use crate::auth::{self, Limits, LoadProblem, PairOutcome, Pairing, TokenStore};
+use crate::auth::{
+    self, DeviceFile, Limits, LoadProblem, PairOutcome, Pairing, Snapshot, TokenStore,
+};
 use crate::http::{self, Request, Response};
 use crate::net;
 use crate::page::{self, PageError};
@@ -31,6 +33,10 @@ const COOKIE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
 const ACCEPT_POLL: Duration = Duration::from_millis(20);
 /// Connections served at once, event streams included.
 const MAX_CONNECTIONS: usize = 32;
+/// Connections one address may hold, so one device can't take every slot.
+const MAX_CONNECTIONS_PER_PEER: usize = 8;
+/// Event streams one paired device may hold; a new one ends the oldest.
+const MAX_STREAMS_PER_DEVICE: usize = 2;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a stop waits for the connection threads.
 const STOP_GRACE: Duration = Duration::from_millis(500);
@@ -48,6 +54,8 @@ pub struct Timing {
     pub wrong_code_window: Duration,
     /// The longest an event stream stays silent; a comment line fills it.
     pub heartbeat: Duration,
+    /// How long a client has to send its whole request; a slower one is closed unanswered.
+    pub request: Duration,
 }
 
 impl Default for Timing {
@@ -57,6 +65,7 @@ impl Default for Timing {
             code_lifetime: limits.code_lifetime,
             wrong_code_window: limits.window,
             heartbeat: Duration::from_secs(15),
+            request: http::REQUEST_TIMEOUT,
         }
     }
 }
@@ -181,6 +190,10 @@ pub enum ServerEvent {
     Busy {
         from: IpAddr,
     },
+    /// The peer already held its share of the connections (503).
+    PeerBusy {
+        from: IpAddr,
+    },
     /// The paired-device file couldn't be written; the devices work until the app quits.
     DevicesNotSaved(String),
     /// The paired-device file couldn't be read at start; no device is paired.
@@ -216,6 +229,12 @@ impl fmt::Display for ServerEvent {
             }
             ServerEvent::Busy { from } => {
                 write!(f, "remote: turned {from} away, all connections in use")
+            }
+            ServerEvent::PeerBusy { from } => {
+                write!(
+                    f,
+                    "remote: turned {from} away, it has too many connections open"
+                )
             }
             ServerEvent::DevicesNotSaved(error) => {
                 write!(f, "remote: the paired devices were not saved: {error}")
@@ -268,13 +287,24 @@ struct Shared {
     local_name: Option<String>,
     content_security_policy: String,
     heartbeat: Duration,
+    request_timeout: Duration,
     pairing: Mutex<Pairing>,
     devices: Mutex<TokenStore>,
+    device_file: DeviceFile,
     published: Mutex<Published>,
     changed: Condvar,
     sink: Mutex<Option<CommandSink>>,
     events: Mutex<VecDeque<ServerEvent>>,
-    connections: Mutex<Vec<(TcpStream, JoinHandle<()>)>>,
+    connections: Mutex<Vec<Connection>>,
+    /// The open event streams, oldest first, with the token each belongs to.
+    streams: Mutex<Vec<(u64, String)>>,
+    next_stream: AtomicU64,
+}
+
+struct Connection {
+    from: IpAddr,
+    stream: TcpStream,
+    thread: JoinHandle<()>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -295,6 +325,43 @@ impl Shared {
         // Taking the lock first means no stream is between its check and its wait.
         drop(lock(&self.published));
         self.changed.notify_all();
+    }
+
+    /// Writes a change to the paired devices; called with no lock held.
+    fn save(&self, snapshot: Snapshot) {
+        if let Err(problem) = self.device_file.save(snapshot) {
+            self.report(ServerEvent::DevicesNotSaved(problem.to_string()));
+        }
+    }
+
+    /// Registers a new event stream for `token`, ending the device's oldest
+    /// beyond [`MAX_STREAMS_PER_DEVICE`].
+    fn open_stream(&self, token: &str) -> u64 {
+        let id = self.next_stream.fetch_add(1, Ordering::SeqCst);
+        let ended = {
+            let mut streams = lock(&self.streams);
+            streams.push((id, token.to_owned()));
+            let mine: Vec<u64> = streams
+                .iter()
+                .filter(|(_, owner)| owner == token)
+                .map(|(id, _)| *id)
+                .collect();
+            let excess = mine.len().saturating_sub(MAX_STREAMS_PER_DEVICE);
+            streams.retain(|(id, _)| !mine[..excess].contains(id));
+            excess > 0
+        };
+        if ended {
+            self.wake_streams();
+        }
+        id
+    }
+
+    fn stream_open(&self, id: u64) -> bool {
+        lock(&self.streams).iter().any(|(open, _)| *open == id)
+    }
+
+    fn close_stream(&self, id: u64) {
+        lock(&self.streams).retain(|(open, _)| *open != id);
     }
 
     fn paired(&self, request: &Request) -> Option<String> {
@@ -384,13 +451,17 @@ impl RemoteServer {
                 .map(str::to_owned),
             content_security_policy,
             heartbeat: config.timing.heartbeat,
+            request_timeout: config.timing.request,
             pairing: Mutex::new(pairing),
             devices: Mutex::new(devices),
+            device_file: DeviceFile::default(),
             published: Mutex::new(Published::default()),
             changed: Condvar::new(),
             sink: Mutex::new(Some(Box::new(on_command))),
             events: Mutex::new(VecDeque::new()),
             connections: Mutex::new(Vec::new()),
+            streams: Mutex::new(Vec::new()),
+            next_stream: AtomicU64::new(0),
         });
         match problem {
             Some(LoadProblem::Unreadable(error)) => {
@@ -484,9 +555,9 @@ impl RemoteServer {
     /// Forgets every paired device; their next request gets 401 and their
     /// event streams end. In memory even when the file can't be written.
     pub fn forget_all(&self) -> io::Result<()> {
-        let saved = lock(&self.shared.devices).clear();
+        let snapshot = lock(&self.shared.devices).clear();
         self.shared.wake_streams();
-        saved
+        self.shared.device_file.save(snapshot)
     }
 
     /// The oldest event not taken yet.
@@ -514,13 +585,13 @@ impl RemoteServer {
             let _ = accept.join();
         }
         let connections = std::mem::take(&mut *lock(&self.shared.connections));
-        for (stream, _) in &connections {
-            let _ = stream.shutdown(Shutdown::Both);
+        for connection in &connections {
+            let _ = connection.stream.shutdown(Shutdown::Both);
         }
         // A send blocked on a peer that stopped reading may not return when
         // its socket is shut (WinSock); it ends within its write timeout.
         let until = Instant::now() + STOP_GRACE;
-        for (_, thread) in connections {
+        for Connection { thread, .. } in connections {
             while !thread.is_finished() && Instant::now() < until {
                 thread::sleep(Duration::from_millis(5));
             }
@@ -571,11 +642,23 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
     }
     // Accepted sockets inherit the listener's non-blocking mode on WinSock and BSD.
     let _ = stream.set_nonblocking(false);
-    let mut connections = lock(&shared.connections);
-    connections.retain(|(_, thread)| !thread.is_finished());
-    if connections.len() >= MAX_CONNECTIONS {
-        drop(connections);
-        shared.report(ServerEvent::Busy { from });
+    let refused = {
+        let mut connections = lock(&shared.connections);
+        connections.retain(|connection| !connection.thread.is_finished());
+        let from_peer = connections
+            .iter()
+            .filter(|connection| connection.from == from)
+            .count();
+        if connections.len() >= MAX_CONNECTIONS {
+            Some(ServerEvent::Busy { from })
+        } else if from_peer >= MAX_CONNECTIONS_PER_PEER {
+            Some(ServerEvent::PeerBusy { from })
+        } else {
+            None
+        }
+    };
+    if let Some(event) = refused {
+        shared.report(event);
         let mut stream = stream;
         let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
         let _ = http::write_response(
@@ -585,7 +668,6 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
         );
         return;
     }
-    drop(connections);
     let Ok(handle) = stream.try_clone() else {
         return;
     };
@@ -605,8 +687,12 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
         });
     if let Ok(thread) = spawned {
         let mut connections = lock(&shared.connections);
-        connections.retain(|(_, thread)| !thread.is_finished());
-        connections.push((handle, thread));
+        connections.retain(|connection| !connection.thread.is_finished());
+        connections.push(Connection {
+            from,
+            stream: handle,
+            thread,
+        });
     }
 }
 
@@ -633,7 +719,7 @@ fn serve(mut stream: TcpStream, from: IpAddr, shared: &Shared) {
         return;
     };
     let csp = shared.content_security_policy.as_str();
-    let request = match http::read_request(&mut stream) {
+    let request = match http::read_request(&mut stream, shared.request_timeout) {
         Ok(request) => request,
         Err(problem) => {
             let answer = match problem.status() {
@@ -820,9 +906,8 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
         shared.report(ServerEvent::PairFailed { from, why: outcome });
         return error(failure);
     }
-    if let Err(problem) = lock(&shared.devices).add(&token) {
-        shared.report(ServerEvent::DevicesNotSaved(problem.to_string()));
-    }
+    let snapshot = lock(&shared.devices).add(&token);
+    shared.save(snapshot);
     shared.report(ServerEvent::Paired { from });
     Response::json(200, json!({ "paired": true }).to_string())
         .with("Set-Cookie", token_cookie(&token, COOKIE_MAX_AGE))
@@ -830,10 +915,11 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
 }
 
 fn unpair(token: &str, from: IpAddr, shared: &Shared) -> Answer {
-    if let Err(problem) = lock(&shared.devices).remove(token) {
-        shared.report(ServerEvent::DevicesNotSaved(problem.to_string()));
-    }
+    let snapshot = lock(&shared.devices).remove(token);
     shared.wake_streams();
+    if let Some(snapshot) = snapshot {
+        shared.save(snapshot);
+    }
     shared.report(ServerEvent::Unpaired { from });
     Response::json(200, json!({ "paired": false }).to_string())
         .with("Set-Cookie", token_cookie("", 0))
@@ -898,8 +984,15 @@ fn speaker(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
 
 /// The event stream (HTML Living Standard §9.2): the current snapshot at
 /// once, then each new revision once, a comment line when it has been quiet
-/// for a heartbeat. It ends when the server stops or the device is forgotten.
-fn stream_events(mut stream: TcpStream, token: &str, shared: &Shared) {
+/// for a heartbeat. It ends when the server stops, the device is forgotten
+/// or the device opens a stream too many.
+fn stream_events(stream: TcpStream, token: &str, shared: &Shared) {
+    let id = shared.open_stream(token);
+    send_events(stream, token, id, shared);
+    shared.close_stream(id);
+}
+
+fn send_events(mut stream: TcpStream, token: &str, id: u64, shared: &Shared) {
     let headers = [
         ("Content-Type", "text/event-stream".to_owned()),
         ("Cache-Control", "no-store".to_owned()),
@@ -918,7 +1011,10 @@ fn stream_events(mut stream: TcpStream, token: &str, shared: &Shared) {
         let batch = {
             let mut published = lock(&shared.published);
             loop {
-                if shared.stopped.load(Ordering::SeqCst) || !lock(&shared.devices).contains(token) {
+                if shared.stopped.load(Ordering::SeqCst)
+                    || !shared.stream_open(id)
+                    || !lock(&shared.devices).contains(token)
+                {
                     return;
                 }
                 let batch = published.since(sent);
