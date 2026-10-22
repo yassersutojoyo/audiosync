@@ -1778,9 +1778,9 @@ do {
     check(texts == ["Den TV plays through its home theater speakers, and AudioSync already plays to them, so it's off. "
                         + "Turn the group off to play to the Apple TV itself.",
                     "AudioSync already plays to Den's Apple TV, so the group is off. Turn the Apple TV off to play to the group.",
-                    "Right plays only as part of Living Room, so it stays off by itself."]
+                    "Right plays as part of Living Room, so it stays off by itself."]
             && !texts.joined().contains("\u{2014}"),
-          "P177 native airplay: the Apple TV, its group and a held member each say why they are off, as on Windows")
+          "P177 native airplay: the Apple TV, its group and a held member each say why they are off")
 
     var pw = NativeAirPlayModel()
     pw.apply(.appeared(member(left, "Left", of: pair)))
@@ -1803,9 +1803,27 @@ do {
           "P176 native airplay: cancelling the member's password turns the pair off and drops the prompt")
     var auto = listedPair()
     auto.added(pair)
-    check(auto.apply(.error(id: pair, .passwordRequired, retryMs: nil, detail: "")) == .turnOff(app(pair), .needsPassword)
-            && auto.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: "")) == nil,
-          "P176 native airplay: a pair auto-connect turned on goes off when a member asks for a password")
+    check(auto.apply(.error(id: pair, .passwordRequired, retryMs: nil, detail: "")) == nil
+            && auto.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: ""))
+                == .turnOff(app(pair), .memberNeedsPassword(right)),
+          "P176 native airplay: a pair auto-connect turned on goes off when a member asks for a password, naming the member")
+
+    var oneSide = listedPair()
+    _ = oneSide.turnedOnByUser(pair)
+    oneSide.added(pair)
+    _ = oneSide.apply(.state(id: pair, .playing, retryMs: nil))   // Left plays: the attempt is over
+    check(oneSide.apply(.error(id: right, .wrongPassword, retryMs: nil, detail: ""))
+            == .turnOff(app(pair), .memberNeedsPassword(right)) && !oneSide.passwords.contains(right),
+          "P176 native airplay: Left plays, then Right refuses its password: the pair goes off, naming Right, and asks again when turned on")
+    oneSide.removed(pair)
+    var asksAgain = oneSide
+    asksAgain.apply(.changed(member(right, "Right", of: pair, .needsPassword)))
+    check(asksAgain.turnedOnByUser(pair) == .prompt
+            && asksAgain.nextPrompt() == NativePrompt(id: right, password: true, wrong: false),
+          "P176 native airplay: turned on again, the pair asks for the member's password")
+    check(t.nativeAirPlayMemberNeedsPassword(member: "Right", target: "Living Room")
+            == "Right in Living Room asks for a password, so Living Room is off. Turn Living Room on again to enter it.",
+          "P176 native airplay: the notice names the member and its pair")
 
     var plain = NativeAirPlayModel()
     plain.apply(.appeared(NativeReceiver(id: left, name: "Left", model: "", availability: .available, reason: nil,
