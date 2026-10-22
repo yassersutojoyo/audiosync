@@ -36,7 +36,7 @@ AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay s
 ## What's new in 0.6
 
 - Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
-- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s.
+- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 20 s.
 - On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
 - On the Mac, rename a speaker with a double-click on its name.
 - If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
@@ -55,7 +55,7 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
 Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
 
-Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. Speaker groups made in the Google Home app can't play. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait up to 3 s. Past that a notice tells you how far ahead AirPlay plays.
+Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. Speaker groups made in the Google Home app can't play. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait up to 20 s. Past that a notice tells you how far ahead AirPlay plays.
 
 ## Install
 

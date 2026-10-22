@@ -343,6 +343,35 @@ fn buffers_are_sized_by_the_spec_and_allocated_at_the_start() {
     }
 }
 
+// covers: P99, P100, P111, P121
+#[test]
+fn an_own_encoding_joining_late_finds_packets_a_long_delay_back() {
+    let mut rig = Rig::with_host();
+    rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(25));
+    let joined = rig.t();
+    let mut config = speaker(2, Codec::Alac);
+    config.software_volume = Some(Volume::Db(0.0));
+    config.delay = Duration::from_millis(15_000);
+    let sv = rig.add(config);
+    rig.run_for(Duration::from_secs(2));
+    let audio = rig.audio(sv);
+    let first = audio.first().expect("a first packet");
+    let n = rig.frame_of(sv, first.header.timestamp);
+    // Its first packet was cut about 15 s before it joined, and the own
+    // store was filled back that far (P121).
+    assert!(
+        rig.c(n) < joined - 14.0,
+        "cut at {}, joined at {joined}",
+        rig.c(n)
+    );
+    assert!(audio.len() > 100);
+    for packet in &audio {
+        let n = rig.frame_of(sv, packet.header.timestamp) as u64;
+        assert_eq!(decode(Codec::Alac, &packet.payload)[0], host_frame(n));
+    }
+}
+
 // covers: P84, P99
 #[test]
 fn pacing() {

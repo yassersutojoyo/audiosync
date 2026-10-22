@@ -4388,7 +4388,7 @@ do {
             && ahead.update(device: nil, aheadMs: 60) == AirPlayAheadNotice.Step(clear: kitchen, post: nil),
           "cast+airplay: a small lead reads as 0.1 s, and the notice clears when the Cast speaker goes off")
     let text = t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen")
-    check(text == "AirPlay speakers can wait at most 3 s for a Google Cast speaker, so they play about 1.5 s ahead of "
+    check(text == "AirPlay speakers can wait at most 20 s for a Google Cast speaker, so they play about 1.5 s ahead of "
             + "Kitchen. Lower its offset to keep them together." && !text.contains("\u{2014}")
             && t.airPlayAheadOfCast(tenths: 20, speaker: "Den").contains("about 2.0 s ahead of Den"),
           "cast+airplay: the notice says how far ahead, with no em dash")
