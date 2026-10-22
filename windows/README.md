@@ -139,8 +139,10 @@ notice says "AirPlay stopped or couldn't start" with a Retry button that
 starts it again.
 
 Not supported yet: speakers that need another kind of pairing (the Apple
-TV code is the one AudioSync does), and speakers that only play AirPlay 2.
-They're listed with a note saying so, and AudioSync never connects to them.
+TV code is the one AudioSync does). They're listed with a note saying so,
+and AudioSync never connects to them. Speakers that only play AirPlay 2 get
+the same note unless you turn on File > AirPlay 2 (Experimental), then quit
+and reopen AudioSync.
 
 ## On a Mac
 
