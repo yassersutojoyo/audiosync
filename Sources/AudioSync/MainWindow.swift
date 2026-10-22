@@ -221,7 +221,7 @@ struct MainView: View {
             Toggle(isOn: Binding(get: { model.airPlay2 },
                                  set: { model.actions.setAirPlay2($0) })) {
                 Text(t.airPlay2Toggle)
-                Text(t.airPlay2Note)
+                Text(t.airPlay2Note(on: model.airPlay2, onAtLaunch: model.airPlay2AtLaunch))
             }
             Divider()
             Button(t.guideTitle) { model.actions.openGuide() }

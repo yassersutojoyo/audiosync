@@ -244,6 +244,7 @@ extension AppDelegate {
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
         publish(\.airPlay2, airPlay2)
+        publish(\.airPlay2AtLaunch, airPlay2AtLaunch)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
         followCalibrationContext()
@@ -501,6 +502,9 @@ extension AppDelegate {
             menuItem.state = whenSourceQuits == .system ? .on : .off
         case #selector(toggleAirPlay2(_:)):
             menuItem.state = airPlay2 ? .on : .off
+            let note = text.airPlay2Note(on: airPlay2, onAtLaunch: airPlay2AtLaunch)
+            menuItem.subtitle = note
+            menuItem.toolTip = note
         default:
             break
         }
