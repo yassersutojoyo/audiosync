@@ -446,6 +446,9 @@ pub enum BackendEvent {
     /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
     /// sender.
     AirPlayStopped,
+    /// Another app holds PTP port 319 or 320, so AirPlay speakers that need
+    /// PTP timing can't play (P158); reported once per sender.
+    AirPlayPtpPortsTaken,
     /// Google Cast speakers appeared, changed or went away, or one's state
     /// changed: list them again.
     CastChanged,

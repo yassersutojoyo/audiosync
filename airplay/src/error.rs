@@ -207,8 +207,10 @@ pub enum Warning {
     /// verification goes on (P56).
     ReceiverSignatureInvalid,
     /// PTP port 319 or 320 couldn't be bound, so a receiver that needs PTP
-    /// timing is Unsupported; told once per sender (P158). Also told once
-    /// to a target member with no address in the family the target's PTP
-    /// service runs in, whose session then goes without PTP (P179).
+    /// timing is Unsupported; told once per sender (P158).
     PtpUnavailable,
+    /// A speaker or target member with no address in the family the PTP
+    /// service runs in plays without PTP; told once per speaker (P158,
+    /// P179).
+    PtpOutsideFamily,
 }

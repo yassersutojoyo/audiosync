@@ -96,7 +96,7 @@ impl Driver {
                 }
                 None => {
                     if self.ptp_family_told.insert(key.clone()) {
-                        self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+                        self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpOutsideFamily));
                     }
                 }
             }
@@ -361,7 +361,7 @@ impl Driver {
     fn restart_outside_family(&mut self, key: &DeviceKey, landed_v6: bool, now: Instant) {
         let family = if self.ptp_shared(key) || !self.ptp_moved.insert(key.clone()) {
             if self.ptp_family_told.insert(key.clone()) {
-                self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+                self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpOutsideFamily));
             }
             None
         } else {

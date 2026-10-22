@@ -2003,6 +2003,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::CastMemoryChanged => self.save_cast_memory(),
             BackendEvent::AirPlayPlaying { id } => {
                 self.reconnecting.remove(&id);
+                self.notices.clear(&[NoticeSubject::AirPlayPtp]);
                 self.clear_if(airplay_subject(&id), |message| {
                     matches!(message, NoticeMessage::AirPlayRetrying { .. })
                 });
@@ -2038,6 +2039,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::AirPlayStopped => {
                 self.reconnecting.clear();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
+            }
+            BackendEvent::AirPlayPtpPortsTaken => {
+                self.post(
+                    NoticeSubject::AirPlayPtp,
+                    NoticeMessage::AirPlayPtpPortsTaken,
+                );
             }
             // The next snapshot shows it; no notice, no focus change (S198).
             BackendEvent::DeviceVolumeChanged { .. } => {}
@@ -5446,6 +5453,23 @@ mod tests {
         // Nothing it listed is there anymore, and the notice comes once.
         assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
         adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn the_ptp_port_clash_leaves_a_notice_until_a_speaker_plays() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(
+                audiosync_airplay::error::Warning::PtpUnavailable,
+            ),
+        });
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();
         assert!(messages(&adapter).is_empty());
     }

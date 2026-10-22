@@ -67,11 +67,12 @@ use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ProtocolPath, ServiceKind};
-use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
+use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::metadata::MetadataError;
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
+use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
@@ -134,6 +135,14 @@ pub trait AirPlayLink {
 
     /// Sets a speaker's volume.
     fn set_volume(&mut self, key: &DeviceKey, volume: Volume);
+
+    /// Asks a playing speaker for its own volume (P122); the answer comes
+    /// as [`SpeakerEvent::VolumeReported`].
+    fn read_volume(&mut self, key: &DeviceKey);
+
+    /// Asks a target's leader, or the first member that plays, for its
+    /// volume (P180); the answer comes under that member's key.
+    fn read_target_volume(&mut self, id: &TargetId);
 
     /// Sets a speaker's own delay d_s.
     fn set_delay(&mut self, key: &DeviceKey, delay: Duration);
@@ -277,6 +286,14 @@ impl AirPlayLink for SenderLink {
 
     fn set_volume(&mut self, key: &DeviceKey, volume: Volume) {
         self.sender.set_volume(key, volume);
+    }
+
+    fn read_volume(&mut self, key: &DeviceKey) {
+        self.sender.read_volume(key);
+    }
+
+    fn read_target_volume(&mut self, id: &TargetId) {
+        self.sender.read_target_volume(id);
     }
 
     fn set_delay(&mut self, key: &DeviceKey, delay: Duration) {
@@ -604,6 +621,76 @@ pub fn airplay_volume(position: f64, master: f64) -> Volume {
     }
 }
 
+/// The slider position, rounded to a whole step, that plays at `db` with
+/// the master at `master` ([`airplay_volume`] backwards): 0 at −30 dB and
+/// below, muted included. None when the master is 0, where every position
+/// sounds the same, or `db` isn't finite.
+fn slider_position(db: f64, master: f64) -> Option<f64> {
+    let master = (master / 100.0).clamp(0.0, 1.0);
+    if master == 0.0 || !db.is_finite() {
+        return None;
+    }
+    let level = (1.0 - db / MIN_DB).clamp(0.0, 1.0);
+    Some((level / master * 100.0).clamp(0.0, 100.0).round())
+}
+
+/// How often playing speakers are asked for their own volume (P122).
+const VOLUME_READ_INTERVAL: Duration = Duration::from_secs(2);
+
+/// A reported level this close to the one sent is the speaker's rounding,
+/// not a person's change.
+const VOLUME_TOLERANCE_DB: f64 = 0.5;
+
+/// After a volume is set, a reported level is ignored this long: the set
+/// may still wait behind the read in the session's queue (P120).
+const VOLUME_SETTLE: Duration = Duration::from_secs(1);
+
+/// The volume reads of one row in the sender.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct VolumeRead {
+    /// A read was asked since the volume was last set.
+    reading: bool,
+    /// When the volume was last set: its own, the master or a calibration.
+    set_at: Instant,
+    /// It turned a read down: it isn't asked again.
+    unreadable: bool,
+}
+
+impl VolumeRead {
+    fn new(now: Instant) -> VolumeRead {
+        VolumeRead {
+            reading: false,
+            set_at: now,
+            unreadable: false,
+        }
+    }
+
+    fn settled(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.set_at) >= VOLUME_SETTLE
+    }
+
+    /// The volume was set: an answer to a read asked before is old.
+    fn set(&mut self, now: Instant) {
+        self.reading = false;
+        self.set_at = now;
+    }
+
+    /// Asks when an answer could count; returns whether it asked.
+    fn ask(&mut self, now: Instant) -> bool {
+        if self.unreadable || !self.settled(now) {
+            return false;
+        }
+        self.reading = true;
+        true
+    }
+
+    /// Whether an answer arriving now counts: one was asked since the last
+    /// set, and the set has settled. The read is answered either way.
+    fn answered(&mut self, now: Instant) -> bool {
+        std::mem::take(&mut self.reading) && self.settled(now)
+    }
+}
+
 /// A delay setting as the sender's d_s, 0 to 3000 ms.
 fn speaker_delay(delay_ms: f64) -> Duration {
     Duration::from_secs_f64(delay_ms.clamp(0.0, MAX_DELAY.as_secs_f64() * 1000.0) / 1000.0)
@@ -707,6 +794,7 @@ struct Added {
     counters: Vec<(String, Arc<SpeakerCounters>)>,
     /// A target's members by speaker ID, with the last state each reported.
     members: BTreeMap<String, Option<SpeakerState>>,
+    read: VolumeRead,
 }
 
 impl Added {
@@ -720,6 +808,7 @@ impl Added {
                 .into_iter()
                 .collect(),
             members: BTreeMap::new(),
+            read: VolumeRead::new(Instant::now()),
         }
     }
 
@@ -734,6 +823,13 @@ impl Added {
         match &self.joined {
             Joined::Speaker(key) => link.set_volume(key, volume),
             Joined::Target(id) => link.set_target_volume(id, volume),
+        }
+    }
+
+    fn read_volume(&self, link: &mut dyn AirPlayLink) {
+        match &self.joined {
+            Joined::Speaker(key) => link.read_volume(key),
+            Joined::Target(id) => link.read_target_volume(id),
         }
     }
 
@@ -835,6 +931,8 @@ pub struct AirPlaySpeakers {
     /// While Calibrate All plays a speaker's sweep, the one speaker heard;
     /// the others are muted.
     calibration_solo: Option<String>,
+    /// When the playing speakers were last asked for their own volume.
+    volume_read_at: Instant,
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
@@ -889,6 +987,7 @@ impl AirPlaySpeakers {
             latency,
             hold_back_ms: 0.0,
             calibration_solo: None,
+            volume_read_at: Instant::now(),
             stopped: false,
             store_unsaved: false,
             store_change: None,
@@ -1766,7 +1865,8 @@ impl AirPlaySpeakers {
                 describe_volume(volume)
             )
         });
-        if let Some(added) = self.added.get(id) {
+        if let Some(added) = self.added.get_mut(id) {
+            added.read.set(Instant::now());
             added.set_volume(self.link.as_mut(), volume);
         }
     }
@@ -1804,10 +1904,94 @@ impl AirPlaySpeakers {
     }
 
     fn send_volumes(&mut self) {
-        for (id, added) in &self.added {
-            let volume = self.volume_of(id);
+        let now = Instant::now();
+        let volumes: Vec<(String, Volume)> = self
+            .added
+            .keys()
+            .map(|id| (id.clone(), self.volume_of(id)))
+            .collect();
+        for (id, volume) in volumes {
+            if let Some(added) = self.added.get_mut(&id) {
+                added.read.set(now);
+                added.set_volume(self.link.as_mut(), volume);
+            }
+        }
+    }
+
+    /// Asks every playing row that may answer for its own volume, every
+    /// [`VOLUME_READ_INTERVAL`]: a level changed on the speaker moves its
+    /// slider (P122), a target's through its leader (P180). Not while a
+    /// calibration mutes the others, nor a speaker that scales the samples
+    /// itself (`sv`), whose level isn't the one the slider sets (P121).
+    fn read_volumes(&mut self, now: Instant) {
+        if now.saturating_duration_since(self.volume_read_at) < VOLUME_READ_INTERVAL {
+            return;
+        }
+        self.volume_read_at = now;
+        if self.calibration_solo.is_some() {
+            return;
+        }
+        for (id, added) in &mut self.added {
+            let software = self
+                .listed
+                .get(id)
+                .and_then(|listed| listed.device().raop_txt.as_ref())
+                .and_then(|txt| txt.software_volume)
+                == Some(true);
+            if software || added.state != SpeakerState::Playing {
+                continue;
+            }
+            if added.read.ask(now) {
+                added.read_volume(self.link.as_mut());
+            }
+        }
+    }
+
+    /// The added row `id` reports for: itself, or the target it's a member
+    /// of.
+    fn row_of(&self, id: &str) -> Option<String> {
+        if self.added.contains_key(id) {
+            return Some(id.to_owned());
+        }
+        self.added_target_of(id)
+    }
+
+    /// A read answered `db`: a level other than the one sent, read after
+    /// the volume was last set, becomes the row's slider position without
+    /// going back as a slider change. The sender keeps it too, so a session
+    /// that starts again or a member that joins late gets it. Returns
+    /// whether the speaker list changed.
+    fn volume_reported(&mut self, id: &str, db: f64, now: Instant) -> bool {
+        let Some(row) = self.row_of(id) else {
+            return false;
+        };
+        let sent = self.volume_of(&row).wire_db();
+        let solo = self.calibration_solo.is_some();
+        let Some(added) = self.added.get_mut(&row) else {
+            return false;
+        };
+        if !added.read.answered(now) || solo || (db - sent).abs() < VOLUME_TOLERANCE_DB {
+            return false;
+        }
+        let Some(position) = slider_position(db, self.master) else {
+            return false;
+        };
+        if position == self.settings(&row).volume {
+            return false;
+        }
+        self.entry(&row).volume = position;
+        let volume = self.volume_of(&row);
+        self.log.log(|| {
+            format!(
+                "AirPlay speaker {} volume changed on the speaker: slider at {position} ({})",
+                self.label(&row),
+                describe_volume(volume)
+            )
+        });
+        if let Some(added) = self.added.get(&row) {
             added.set_volume(self.link.as_mut(), volume);
         }
+        true
     }
 
     /// Sets a speaker's own delay d_s, live.
@@ -2003,6 +2187,7 @@ impl AirPlaySpeakers {
                 .into_iter()
                 .map(|(key, counters)| (speaker_id(&key), counters))
                 .collect(),
+            read: VolumeRead::new(Instant::now()),
         }
     }
 
@@ -2100,7 +2285,9 @@ impl AirPlaySpeakers {
             }
         }
         // Events it sent before it stopped were taken in above.
-        if !self.link.is_running() {
+        if self.link.is_running() {
+            self.read_volumes(Instant::now());
+        } else {
             changed |= self.sender_stopped(&mut events);
         }
         if let Some(saved) = self.store_change.take() {
@@ -2724,8 +2911,21 @@ impl AirPlaySpeakers {
             SpeakerEvent::Warning(warning) => {
                 self.log
                     .log(|| format!("AirPlay speaker {} warning: {warning:?}", self.label(id)));
+                if let Warning::RequestFailed {
+                    method: Method::GetParameter,
+                    ..
+                } = warning
+                    && let Some(row) = self.row_of(id)
+                    && let Some(added) = self.added.get_mut(&row)
+                {
+                    added.read.unreadable = true;
+                }
+                if warning == Warning::PtpUnavailable {
+                    events.push(BackendEvent::AirPlayPtpPortsTaken);
+                }
                 false
             }
+            SpeakerEvent::VolumeReported(db) => self.volume_reported(id, db, Instant::now()),
             SpeakerEvent::Latency(latency) => {
                 self.log.log(|| {
                     format!(
@@ -2767,9 +2967,7 @@ impl AirPlaySpeakers {
                 });
                 false
             }
-            SpeakerEvent::Methods(_)
-            | SpeakerEvent::AudioJack(_)
-            | SpeakerEvent::VolumeReported(_) => false,
+            SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) => false,
         }
     }
 
@@ -2998,6 +3196,8 @@ pub mod tests {
     #[derive(Default)]
     struct FakeState {
         calls: Vec<Call>,
+        /// Each volume read asked: a speaker ID, or `target ` and a target ID.
+        reads: Vec<String>,
         events: VecDeque<SenderEvent>,
         latency: Duration,
         /// The sender stopped after an internal error.
@@ -3135,6 +3335,10 @@ pub mod tests {
         pub fn take_calls(&self) -> Vec<Call> {
             std::mem::take(&mut self.0.borrow_mut().calls)
         }
+
+        pub fn take_reads(&self) -> Vec<String> {
+            std::mem::take(&mut self.0.borrow_mut().reads)
+        }
     }
 
     impl AirPlayLink for FakeAirPlay {
@@ -3214,6 +3418,14 @@ pub mod tests {
                 .borrow_mut()
                 .calls
                 .push(Call::Volume(speaker_id(key), volume));
+        }
+
+        fn read_volume(&mut self, key: &DeviceKey) {
+            self.0.borrow_mut().reads.push(speaker_id(key));
+        }
+
+        fn read_target_volume(&mut self, id: &TargetId) {
+            self.0.borrow_mut().reads.push(format!("target {id}"));
         }
 
         fn set_delay(&mut self, key: &DeviceKey, delay: Duration) {
@@ -4828,6 +5040,215 @@ pub mod tests {
     }
 
     /// A stereo pair of two AirPlay 2 speakers, Left and Right (P173).
+    /// Lets the volume set when `id` joined settle, so a read counts.
+    fn settle(airplay: &mut AirPlaySpeakers, id: &str) {
+        let read = &mut airplay.added.get_mut(id).expect("added").read;
+        read.set_at = Instant::now()
+            .checked_sub(VOLUME_SETTLE * 2)
+            .expect("the clock runs past a few seconds");
+    }
+
+    /// Asks the playing speakers for their volume, as the next poll that
+    /// finds the interval over does.
+    fn read_now(airplay: &mut AirPlaySpeakers) {
+        let now = Instant::now();
+        airplay.volume_read_at = now
+            .checked_sub(VOLUME_READ_INTERVAL)
+            .expect("the clock runs past a few seconds");
+        airplay.read_volumes(now);
+    }
+
+    fn report_volume(fake: &FakeAirPlay, device: &Device, db: f64) {
+        fake.push(SenderEvent::Speaker {
+            key: device.key.clone(),
+            event: SpeakerEvent::VolumeReported(db),
+        });
+    }
+
+    fn warn(fake: &FakeAirPlay, device: &Device, warning: Warning) {
+        fake.push(SenderEvent::Speaker {
+            key: device.key.clone(),
+            event: SpeakerEvent::Warning(warning),
+        });
+    }
+
+    /// Kitchen on, streaming and playing at 50, its set settled.
+    fn kitchen_playing(fake: &FakeAirPlay, txt: &[&str]) -> (AirPlaySpeakers, Device, String) {
+        let mut airplay = speakers(fake);
+        let kitchen = device(1, "Kitchen", txt);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        airplay.set_volume(&id, 50.0);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        settle(&mut airplay, &id);
+        fake.take_calls();
+        (airplay, kitchen, id)
+    }
+
+    #[test]
+    fn a_read_counts_only_when_asked_after_the_last_set_has_settled() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let mut read = VolumeRead::new(t0);
+        assert!(!read.ask(at(500)), "the set when it joined still settles");
+        assert!(!read.answered(at(1200)), "nobody asked");
+        assert!(read.ask(at(1000)));
+        assert!(read.answered(at(1200)));
+        assert!(!read.answered(at(1300)), "one answer per read");
+        // A set after the read: its answer is old.
+        assert!(read.ask(at(2000)));
+        read.set(at(2100));
+        assert!(!read.answered(at(3500)));
+        // Within 1 s of the set nothing is asked, and an answer to a read
+        // asked then (a read already queued) is dropped.
+        assert!(!read.ask(at(2500)));
+        read.reading = true;
+        assert!(!read.answered(at(2900)));
+        assert!(read.ask(at(3100)));
+        assert!(read.answered(at(3200)));
+        read.unreadable = true;
+        assert!(!read.ask(at(9000)), "it turned a read down");
+    }
+
+    #[test]
+    fn slider_positions_are_the_airplay_volume_backwards() {
+        for master in [100.0, 50.0, 25.0] {
+            for position in (1..=100).map(f64::from) {
+                if position * master / 100.0 < 1.0 {
+                    continue;
+                }
+                let db = airplay_volume(position, master).wire_db();
+                let back = slider_position(db, master).expect("a master above 0");
+                assert!(
+                    (back - position).abs() <= 1.0,
+                    "{position} at {master}: {back}"
+                );
+            }
+        }
+        assert_eq!(slider_position(-144.0, 100.0), Some(0.0), "muted");
+        assert_eq!(slider_position(3.0, 100.0), Some(100.0));
+        assert_eq!(slider_position(-6.0, 0.0), None);
+        assert_eq!(slider_position(f64::NAN, 100.0), None);
+    }
+
+    #[test]
+    fn a_volume_changed_on_the_speaker_moves_its_slider_without_an_echo() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // Not asked yet: the answer isn't counted.
+        report_volume(&fake, &kitchen, -6.0);
+        assert!(airplay.poll().is_empty());
+        read_now(&mut airplay);
+        assert_eq!(fake.take_reads(), [id.as_str()]);
+        // Its own level (−15 dB at 50), within the speaker's rounding.
+        report_volume(&fake, &kitchen, -15.2);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 50.0);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -6.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 80.0);
+        // The sender keeps the level for a restart; nothing else goes out.
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Volume(id.clone(), airplay_volume(80.0, 100.0))]
+        );
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -6.0);
+        assert!(airplay.poll().is_empty(), "the same level is no news");
+        assert!(fake.take_calls().is_empty());
+    }
+
+    #[test]
+    fn a_volume_read_before_the_slider_moved_is_dropped() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        read_now(&mut airplay);
+        airplay.set_volume(&id, 70.0);
+        report_volume(&fake, &kitchen, -3.0);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 70.0);
+        // The master sets every speaker, so it drops a read too.
+        settle(&mut airplay, &id);
+        read_now(&mut airplay);
+        airplay.set_master(50.0);
+        report_volume(&fake, &kitchen, -3.0);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 70.0);
+    }
+
+    #[test]
+    fn speakers_that_cant_answer_are_not_asked() {
+        let fake = FakeAirPlay::new();
+        let mut txt = OPEN_TXT.to_vec();
+        txt.push("sv=true");
+        let (mut airplay, _, _) = kitchen_playing(&fake, &txt);
+        read_now(&mut airplay);
+        assert!(fake.take_reads().is_empty(), "it scales the samples itself");
+
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen_open, open) = kitchen_playing(&fake, OPEN_TXT);
+        read_now(&mut airplay);
+        assert_eq!(fake.take_reads(), [open.as_str()]);
+        warn(
+            &fake,
+            &kitchen_open,
+            Warning::RequestFailed {
+                method: Method::GetParameter,
+                status: 501,
+            },
+        );
+        airplay.poll();
+        read_now(&mut airplay);
+        assert!(fake.take_reads().is_empty(), "it turned a read down");
+    }
+
+    #[test]
+    fn nothing_is_read_while_a_calibration_mutes_the_others() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_calibration_solo(Some(&id));
+        settle(&mut airplay, &id);
+        read_now(&mut airplay);
+        assert!(fake.take_reads().is_empty());
+    }
+
+    #[test]
+    fn a_pair_reads_through_its_leader_and_keeps_the_level_in_the_sender() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.state(&left, SpeakerState::Playing);
+        airplay.poll();
+        settle(&mut airplay, PAIR);
+        fake.take_calls();
+        read_now(&mut airplay);
+        assert_eq!(fake.take_reads(), [format!("target {PAIR}")]);
+        report_volume(&fake, &left, -144.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 0.0, "muted on the speaker");
+        assert_eq!(
+            fake.take_calls(),
+            [Call::TargetVolume(PAIR.to_owned(), Volume::Muted)]
+        );
+    }
+
+    #[test]
+    fn only_the_ptp_port_clash_asks_for_a_notice() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        warn(&fake, &kitchen, Warning::PtpOutsideFamily);
+        assert!(airplay.poll().is_empty());
+        warn(&fake, &kitchen, Warning::PtpUnavailable);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayPtpPortsTaken]);
+    }
+
     fn stereo_pair() -> (Target, Device, Device) {
         let left = airplay2_device(21, "Left", false);
         let right = airplay2_device(22, "Right", false);
