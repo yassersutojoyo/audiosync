@@ -165,7 +165,8 @@ OR Apache-2.0 OR MIT); native-tls uses the platform's TLS stack: `schannel`
 (MIT) on Windows, `security-framework`, `security-framework-sys`,
 `core-foundation` and `core-foundation-sys` on macOS, and on Linux the system
 OpenSSL through `openssl` (Apache-2.0), `openssl-sys` (MIT), `openssl-macros`,
-`openssl-probe`, `foreign-types` and `foreign-types-shared`; `prost` and `prost-derive`
+`openssl-probe`, `foreign-types` and `foreign-types-shared`, with `vcpkg` (MIT
+OR Apache-2.0) at build time; `prost` and `prost-derive`
 (Apache-2.0) for the protocol buffer messages, with `bytes` (MIT), `anyhow`,
 `itertools` and `either`; `flacenc` (Apache-2.0) to encode the FLAC stream
 some devices need instead of WAV, with `crc`, `crc-catalog`, `heapless`,
@@ -182,7 +183,8 @@ MIT), `ring` (Apache-2.0 AND ISC), `rustls-webpki` and `untrusted` (ISC) for a
 fake device's TLS server, with `rustls-pki-types`, `yasna`, `x509-parser`,
 `asn1-rs`, `der-parser`, `oid-registry`, `nom` (MIT), `data-encoding` (MIT),
 `time`, `time-core`, `deranged`, `powerfmt`, `num-conv`, `subtle`
-(BSD-3-Clause) and `zeroize`; those are never part of a build that ships. CI
+(BSD-3-Clause), `zeroize`, `asn1-rs-derive`, `asn1-rs-impl`, `num-bigint`,
+`num-integer` and `rusticata-macros` (MIT OR Apache-2.0); those are never part of a build that ships. CI
 checks every crate of `cast/`, development dependencies included, with `cargo
 deny check licenses` against `cast/deny.toml`.
 
