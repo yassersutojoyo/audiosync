@@ -234,6 +234,38 @@ extern "C" {
 #define ASC_CALIBRATION_RECORDING_REFERENCE 1 /* the reference's recording */
 #define ASC_CALIBRATION_RECORDING_CHOSEN 2    /* the chosen output's recording */
 
+/* How a speaker's delay is kept (AscCalibrationSpeaker.kind). */
+#define ASC_CALIBRATION_KIND_LOCAL 0   /* a local output's offset, -2000...+20 000 ms */
+#define ASC_CALIBRATION_KIND_CAST 1    /* a Cast speaker's measured offset, kept to 0...20 000 ms (the sender stores up to 120 000) */
+#define ASC_CALIBRATION_KIND_AIRPLAY 2 /* the one AirPlay delay as shown, 0...20 000 ms */
+
+/* What the sheet says about a speaker (AscCalibrationRow.state). */
+#define ASC_CALIBRATION_ROW_REFERENCE 0    /* the reference, never measured */
+#define ASC_CALIBRATION_ROW_NOT_MEASURED 1 /* the run ended before its turn */
+#define ASC_CALIBRATION_ROW_CERTAIN 2      /* new_ms applies */
+#define ASC_CALIBRATION_ROW_UNCERTAIN 3    /* uncertainty over 10 ms: shown, never applied */
+#define ASC_CALIBRATION_ROW_REFUSED 4      /* a sweep was refused: reason and recording say why */
+
+/* What the shared AirPlay delay comes to (AscCalibrationAirPlay.state). */
+#define ASC_CALIBRATION_AIRPLAY_NONE_CERTAIN 0 /* no AirPlay row is certain: the delay stays */
+#define ASC_CALIBRATION_AIRPLAY_CERTAIN 1      /* the median applies */
+#define ASC_CALIBRATION_AIRPLAY_SPREAD 2       /* the median applies, but the speakers differ by spread_ms, over 10 ms */
+
+/* Why a run or a sheet ended (asc_calibration_run_cancel, asc_calibration_sheet_ended). */
+#define ASC_CALIBRATION_END_NONE 0             /* it goes on */
+#define ASC_CALIBRATION_END_CANCELLED 1        /* the user cancelled */
+#define ASC_CALIBRATION_END_SPEAKERS_CHANGED 2 /* the speaker list changed */
+#define ASC_CALIBRATION_END_SPEAKER_OFF 3      /* a speaker taking part was turned off */
+#define ASC_CALIBRATION_END_SOURCE_CHANGED 4   /* the source was switched */
+
+/* What asc_calibration_sheet_apply answers. */
+#define ASC_CALIBRATION_APPLY_OK 0              /* the changes were written */
+#define ASC_CALIBRATION_APPLY_ENDED 1           /* the sheet ended: nothing to apply */
+#define ASC_CALIBRATION_APPLY_NOTHING_CERTAIN 2 /* no row is certain */
+#define ASC_CALIBRATION_APPLY_TOO_MANY 3        /* more changes than capacity: *count says how many */
+#define ASC_CALIBRATION_APPLY_INVALID 4         /* a NULL argument */
+#define ASC_CALIBRATION_APPLY_ALREADY_APPLIED 5 /* the sheet was applied once */
+
 /* What asc_source_quit_decide answers. */
 #define ASC_SOURCE_QUIT_KEEP 0             /* nothing changes */
 #define ASC_SOURCE_QUIT_STOP 1             /* stop, post the "source" notice, drop a pending rebuild */
@@ -976,6 +1008,139 @@ typedef struct AscCalibration {
  * array with a nonzero count or a NULL result.
  */
 bool asc_calibration_estimate(const float *signal, size_t signal_frames, const float *reference, size_t reference_frames, const float *chosen, size_t chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result);
+
+/*
+ * Calibrate All Speakers: the reference's sweep, then every other speaker's
+ * two, one speaker at a time, each estimated against the reference as
+ * asc_calibration_estimate does. A row's result is the mean of its two
+ * sweeps with an uncertainty of half their difference plus 3 ms; over
+ * 10 ms the row is uncertain, and any refused sweep refuses the row. The
+ * AirPlay speakers share one delay, the median of the certain AirPlay rows.
+ * Nothing changes until the host writes what asc_calibration_sheet_apply
+ * lists. Speakers are named by their index in the array given to
+ * asc_calibration_run_create; rows keep that order. Every call is for one
+ * control thread at a time per handle; recording runs an FFT.
+ */
+typedef struct AscCalibrationRun AscCalibrationRun;
+typedef struct AscCalibrationSheet AscCalibrationSheet;
+
+/* A speaker that is on when the run starts. */
+typedef struct AscCalibrationSpeaker {
+    uint32_t kind;     /* an ASC_CALIBRATION_KIND_ code */
+    bool has_offset;   /* false: no stored delay (a Cast speaker's first window is then the longest) */
+    double offset_ms;  /* its stored delay; every AirPlay speaker carries the shared AirPlay delay */
+    double latency_ms; /* when its sweep is expected, from the moment it enters its path before the hold-back: hold-back plus latency, the reference's too */
+} AscCalibrationSpeaker;
+
+/* What to play and record next. */
+typedef struct AscCalibrationStep {
+    size_t row;           /* the speaker's index */
+    uint32_t sweep;       /* 0 the reference's sweep, else the speaker's first or second */
+    size_t window_frames; /* frames to record from the moment the sweep enters the speaker's path */
+    bool searching;       /* a Cast speaker without a stored offset: the longest window, show that it searches */
+} AscCalibrationStep;
+
+/* One row of the sheet. */
+typedef struct AscCalibrationRow {
+    uint32_t state;        /* an ASC_CALIBRATION_ROW_ code */
+    uint32_t reason;       /* refused: an ASC_CALIBRATION_ refusal code; else 0 */
+    uint32_t recording;    /* refused: an ASC_CALIBRATION_RECORDING_ code; else 0 */
+    bool has_old;          /* the speaker had a stored delay */
+    double old_ms;         /* that delay as given */
+    double new_ms;         /* certain or uncertain: the new delay, whole ms; else 0 */
+    double uncertainty_ms; /* certain or uncertain: the U of new_ms +- U; else 0 */
+    double difference_ms;  /* certain or uncertain: how much later than the reference it was heard */
+    bool clamped;          /* new_ms hit an end of its range */
+} AscCalibrationRow;
+
+/* The shared AirPlay delay. */
+typedef struct AscCalibrationAirPlay {
+    uint32_t state;      /* an ASC_CALIBRATION_AIRPLAY_ code */
+    bool has_old;        /* the AirPlay speakers carried a delay */
+    double old_ms;       /* that delay as given */
+    double new_ms;       /* the median, whole ms; NONE_CERTAIN: old_ms */
+    double spread_ms;    /* the largest minus the smallest difference among the certain rows */
+    size_t certain_rows; /* how many AirPlay rows are certain */
+} AscCalibrationAirPlay;
+
+/* One change Apply lists; writing back old_ms, or removing the stored value when has_old is false, undoes it. */
+typedef struct AscCalibrationChange {
+    size_t row;    /* the speaker's index; 0 for the AirPlay delay */
+    bool airplay;  /* the one AirPlay delay rather than the speaker on row */
+    bool has_old;  /* the value replaced was stored */
+    double old_ms; /* the value replaced */
+    double new_ms; /* the value to write */
+} AscCalibrationChange;
+
+/*
+ * A run over `count` speakers, `reference` the index of the reference, a
+ * local output. NULL for an unsupported rate, a reference that isn't a
+ * local output among them, only the reference, an unknown kind or a NULL
+ * array with a nonzero count.
+ */
+AscCalibrationRun *asc_calibration_run_create(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference);
+
+/* The next step into *step; false, writing nothing, once the run is over or for a NULL argument. */
+bool asc_calibration_run_step(const AscCalibrationRun *run, AscCalibrationStep *step);
+
+/*
+ * The recording the last step asked for, mono at the run's rate. A refused
+ * reference sweep refuses every row and ends the steps; a refused first
+ * sweep skips the second. False when no step waits or for a NULL argument.
+ */
+bool asc_calibration_run_record(AscCalibrationRun *run, const float *recording, size_t frames);
+
+/* Ends the run with an ASC_CALIBRATION_END_ reason (unknown counts as cancelled); its sheet applies nothing. */
+void asc_calibration_run_cancel(AscCalibrationRun *run, uint32_t reason);
+
+/* The run's sheet; frees the run. A run with steps still waiting ends as cancelled. NULL for a NULL run. */
+AscCalibrationSheet *asc_calibration_run_finish(AscCalibrationRun *run);
+
+/* Frees a run without a sheet. */
+void asc_calibration_run_destroy(AscCalibrationRun *run);
+
+/* The number of rows, one per speaker; 0 for a NULL sheet. */
+size_t asc_calibration_sheet_rows(const AscCalibrationSheet *sheet);
+
+/* Row `index` into *row; false, writing nothing, out of range or for a NULL argument. */
+bool asc_calibration_sheet_row(const AscCalibrationSheet *sheet, size_t index, AscCalibrationRow *row);
+
+/* The shared AirPlay delay into *airplay; false, writing nothing, without AirPlay speakers or for a NULL argument. */
+bool asc_calibration_sheet_airplay(const AscCalibrationSheet *sheet, AscCalibrationAirPlay *airplay);
+
+/* Why the sheet ended, an ASC_CALIBRATION_END_ code; END_NONE while it can be applied. */
+uint32_t asc_calibration_sheet_ended(const AscCalibrationSheet *sheet);
+
+/*
+ * The changes Apply writes, one per certain local or Cast row and one for
+ * the AirPlay delay when an AirPlay row is certain, into `changes` and
+ * their number into *count, with an ASC_CALIBRATION_APPLY_ code. Only
+ * APPLY_OK writes changes, and spends the sheet: from then on its rows
+ * describe offsets no longer stored, so a second Apply answers
+ * APPLY_ALREADY_APPLIED and Measure Again is refused. APPLY_TOO_MANY sets
+ * *count to the number needed, never more than the rows, and leaves the
+ * sheet as it was. Keep the old values of one Apply for its Undo.
+ */
+uint32_t asc_calibration_sheet_apply(AscCalibrationSheet *sheet, AscCalibrationChange *changes, size_t capacity, size_t *count);
+
+/*
+ * Measure Again: a run of a new reference sweep and row `index`'s two,
+ * from the values the sheet started with; its steps name the sheet's rows.
+ * NULL for the reference's row, a row out of range, an ended, applied or
+ * NULL sheet. Finish it and pass its sheet to asc_calibration_sheet_replace.
+ */
+AscCalibrationRun *asc_calibration_sheet_measure_again(const AscCalibrationSheet *sheet, size_t index);
+
+/*
+ * Puts the row of a Measure Again sheet in place of the old one and frees
+ * `again`. False, leaving `sheet` and its rows as they were, for an `again`
+ * that was cancelled or ended by a change, one not from this sheet's
+ * Measure Again, or a NULL argument; `again` is freed either way.
+ */
+bool asc_calibration_sheet_replace(AscCalibrationSheet *sheet, AscCalibrationSheet *again);
+
+/* Frees a sheet. */
+void asc_calibration_sheet_destroy(AscCalibrationSheet *sheet);
 
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 
