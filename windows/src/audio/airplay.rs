@@ -658,6 +658,10 @@ pub struct AirPlaySpeakers {
     names: BTreeMap<String, String>,
     /// The credentials of the paired Apple TVs.
     store: PairingStore,
+    /// The key of every speaker the sender paired on AirPlay 2, by speaker
+    /// ID: Forget Pairing drops the sender's copy of a speaker no longer
+    /// listed or added through it.
+    homekit_keys: BTreeMap<String, DeviceKey>,
     /// The pairings running, by speaker ID.
     pairings: BTreeMap<String, PairingRun>,
     /// The speakers whose cancelled pairing hasn't reported its end yet.
@@ -732,6 +736,7 @@ impl AirPlaySpeakers {
             added: BTreeMap::new(),
             names: BTreeMap::new(),
             store,
+            homekit_keys: BTreeMap::new(),
             pairings: BTreeMap::new(),
             ending: BTreeSet::new(),
             next_shown_order: 0,
@@ -804,6 +809,7 @@ impl AirPlaySpeakers {
         self.link = link;
         self.listed.clear();
         self.added.clear();
+        self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
         // A password prompt still waiting (discovery stopped, the sessions
@@ -847,6 +853,7 @@ impl AirPlaySpeakers {
             && self.password_asks.is_empty());
         self.listed.clear();
         self.added.clear();
+        self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
         self.password_attempts.clear();
@@ -1210,7 +1217,9 @@ impl AirPlaySpeakers {
             .listed
             .get(id)
             .map(|listed| listed.device().key.clone())
-            .or_else(|| self.added.get(id).map(|added| added.key.clone()));
+            .or_else(|| self.added.get(id).map(|added| added.key.clone()))
+            .or_else(|| self.homekit_keys.get(id).cloned());
+        self.homekit_keys.remove(id);
         if let Some(key) = key {
             self.link.forget_homekit(&key);
         }
@@ -1590,6 +1599,15 @@ impl AirPlaySpeakers {
                 }
                 SenderEvent::Speaker { key, event } => {
                     let id = speaker_id(&key);
+                    match event {
+                        SpeakerEvent::HomeKitPaired(_) => {
+                            self.homekit_keys.insert(id.clone(), key);
+                        }
+                        SpeakerEvent::HomeKitRejected => {
+                            self.homekit_keys.remove(&id);
+                        }
+                        _ => {}
+                    }
                     changed |= self.speaker_event(&id, event, &mut events);
                 }
                 SenderEvent::Timeline {
@@ -1608,6 +1626,9 @@ impl AirPlaySpeakers {
                 }
                 SenderEvent::Pairing { key, event } => {
                     let id = speaker_id(&key);
+                    if matches!(event, PairingEvent::HomeKitPaired(_)) {
+                        self.homekit_keys.insert(id.clone(), key);
+                    }
                     changed |= self.pairing_event(&id, event, &mut events);
                 }
                 // The receivers it listed were reported gone just before;
@@ -2763,6 +2784,106 @@ pub mod tests {
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
         );
+    }
+
+    #[test]
+    fn forgetting_an_airplay2_pairing_reaches_the_senders_copy_once_the_speaker_is_gone() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::HomeKitPaired(homekit(0x33)));
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, false), Ok(()));
+        fake.gone(&tv);
+        airplay.poll();
+        assert!(!airplay.listed.contains_key(&id) && !airplay.added.contains_key(&id));
+
+        fake.take_calls();
+        airplay.forget_pairing(&id);
+        assert_eq!(airplay.store.homekit(&id), None);
+        assert!(
+            fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+            "the sender forgets its copy too"
+        );
+    }
+
+    #[test]
+    fn forgetting_a_session_paired_speaker_reaches_only_the_sender_that_paired_it() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let paired = |fake: &FakeAirPlay| {
+            fake.set_airplay2(true);
+            let mut airplay = speakers(fake);
+            fake.push(SenderEvent::Speaker {
+                key: tv.key.clone(),
+                event: SpeakerEvent::HomeKitPaired(homekit(0x33)),
+            });
+            airplay.poll();
+            fake.take_calls();
+            airplay
+        };
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        airplay.forget_pairing(&id);
+        assert!(fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())));
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        let second = FakeAirPlay::new();
+        airplay.replace_link(second.link());
+        second.take_calls();
+        airplay.forget_pairing(&id);
+        assert_eq!(airplay.store.homekit(&id), None);
+        assert!(
+            !second
+                .take_calls()
+                .contains(&Call::ForgetHomeKit(id.clone())),
+            "a new sender never had the copy"
+        );
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        fake.stop_running();
+        airplay.poll();
+        fake.take_calls();
+        airplay.forget_pairing(&id);
+        assert!(
+            !fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+            "a stopped sender's copies are gone"
+        );
+    }
+
+    #[test]
+    fn a_receiver_rejecting_its_airplay2_credentials_drops_the_senders_key() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::HomeKitPaired(homekit(0x33)),
+        });
+        airplay.poll();
+        assert!(airplay.homekit_keys.contains_key(&id));
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::HomeKitRejected,
+        });
+        airplay.poll();
+        assert!(!airplay.homekit_keys.contains_key(&id));
+        assert_eq!(airplay.store.homekit(&id), None);
     }
 
     #[test]

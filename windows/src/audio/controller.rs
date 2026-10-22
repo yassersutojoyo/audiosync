@@ -288,10 +288,17 @@ struct Session<D: Driver> {
     /// Polls left in the trial of a capture that started again after a loss
     /// ([`RESTART_TRIAL_POLLS`]); 0 for one that runs as it should.
     trial_polls: u32,
-    /// Whether the capture started without the AirPlay sender's feed because
-    /// an earlier capture, let go while Windows audio hung, still held it:
-    /// the session starts again once that one gives it back.
-    waits_for_feed: bool,
+    /// The senders' feeds the capture started without because an earlier
+    /// capture, let go while Windows audio hung, still held them: the
+    /// session starts again once that one gives one back.
+    waits_for_feed: MissingFeeds,
+}
+
+/// Which of the senders' feeds a capture started without.
+#[derive(Clone, Copy)]
+struct MissingFeeds {
+    airplay: bool,
+    cast: bool,
 }
 
 /// A playing output and the handles its delay and gain are changed through.
@@ -1380,26 +1387,33 @@ impl<D: Driver> Controller<D> {
         Ok(())
     }
 
-    /// Starts the session again once the AirPlay sender's feed, which an
-    /// earlier capture let go while Windows audio hung still held when it
-    /// started, is back in its slot: the capture can't take a feed while it
-    /// runs, as for Retry. Streaming stays on meanwhile.
+    /// Starts the session again once a sender's feed (AirPlay or Google
+    /// Cast), which an earlier capture let go while Windows audio hung still
+    /// held when it started, is back in its slot: the capture can't take a
+    /// feed while it runs, as for Retry. Streaming stays on meanwhile.
     fn take_back_feed(&mut self) {
-        let Some(source) = self
+        let Some((source, missing)) = self
             .session
             .as_ref()
-            .filter(|session| session.waits_for_feed)
-            .map(|session| session.source.clone())
+            .map(|session| (session.source.clone(), session.waits_for_feed))
         else {
             return;
         };
-        if !self.feed.as_ref().is_some_and(FeedSlot::is_free) {
+        let airplay_back = missing.airplay && self.feed.as_ref().is_some_and(FeedSlot::is_free);
+        let cast_back = missing.cast && self.cast.as_ref().is_some_and(CastSpeakers::is_free);
+        if !airplay_back && !cast_back {
             return;
         }
+        let sender = if airplay_back {
+            "AirPlay"
+        } else {
+            "Google Cast"
+        };
         self.log.log(|| {
-            "the AirPlay feed is back from the capture that hung: the capture starts again to \
-             feed the speakers"
-                .to_owned()
+            format!(
+                "the {sender} feed is back from the capture that hung: the capture starts again \
+                 to feed the speakers"
+            )
         });
         self.end_session();
         if let Err(error) = self.begin_session(&source) {
@@ -1584,22 +1598,32 @@ impl<D: Driver> Controller<D> {
         equalizer.set_settings(self.equalizer);
         let feed = self.feed.as_ref().and_then(FeedSlot::lease);
         let feeds_airplay = feed.is_some();
-        let waits_for_feed = self.feed.is_some() && !feeds_airplay;
+        let cast = self.cast.as_ref().and_then(CastSpeakers::lease);
+        let waits_for_feed = MissingFeeds {
+            airplay: self.feed.is_some() && !feeds_airplay,
+            cast: self.cast.is_some() && cast.is_none(),
+        };
         let feeds = Feeds {
             airplay: feed,
-            cast: self.cast.as_ref().and_then(CastSpeakers::lease),
+            cast,
         };
         let capture = self
             .driver
             .start_capture(target.clone(), writer, processor, feeds)?;
         self.log
             .log(|| describe_capture_start(&target, capture.setup(), feeds_airplay));
-        if waits_for_feed {
-            self.log.log(|| {
-                "the AirPlay feed is still held by an earlier capture that hung: the capture \
-                 starts again once it's back"
-                    .to_owned()
-            });
+        for (missing, sender) in [
+            (waits_for_feed.airplay, "AirPlay"),
+            (waits_for_feed.cast, "Google Cast"),
+        ] {
+            if missing {
+                self.log.log(|| {
+                    format!(
+                        "the {sender} feed is still held by an earlier capture that hung: the \
+                         capture starts again once it's back"
+                    )
+                });
+            }
         }
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.restart_timeline();
@@ -5474,6 +5498,42 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         backend.poll();
         assert!(backend.driver().capture_feeds_airplay(), "it starts once");
+    }
+
+    #[test]
+    fn a_capture_started_while_a_hung_one_holds_the_cast_tap_takes_it_once_its_back() {
+        use crate::audio::cast::tests::FakeCast;
+        let mut backend = backend();
+        backend.set_cast(FakeCast::default().link());
+        let held = backend
+            .cast
+            .as_ref()
+            .and_then(CastSpeakers::lease)
+            .expect("the tap is free");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(!backend.driver().capture_feeds_cast());
+        backend.poll();
+        assert!(!backend.driver().capture_feeds_cast(), "still held");
+
+        drop(held);
+        let events = backend.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Stopped { .. })),
+            "{events:?}"
+        );
+        assert!(
+            backend.driver().capture_feeds_cast(),
+            "the capture feeds the Cast speaker"
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.poll();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            2,
+            "it starts once"
+        );
     }
 
     #[test]
