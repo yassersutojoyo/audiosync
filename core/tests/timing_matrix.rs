@@ -32,9 +32,12 @@
 //!   and then plays on later gets at most one correction for it, runs dry
 //!   none, and every output it doesn't stall gets none.
 //!
-//! In the late-first stratum the first output's callbacks come 15.4 or
-//! 45 ms late for its first 0.6 to 1.8 s, so its prime and its floor take
-//! them as on time, and then on time.
+//! The late-first stratum is its own nine cases after the stall cases, each
+//! a twin of one even Mac case that is not finding 2's (2, 4, 6, 18, 20,
+//! 22, 34, 36 and 38), on its draw and named after it with an f: the first
+//! output's callbacks come 15.4 or 45 ms late for its first 0.6 to 1.8 s,
+//! so its prime and its floor take them as on time, and then on time,
+//! without wander. The nine cases themselves keep their wander.
 //!
 //! A Bluetooth output adds a capture block to its start lead (S230); the
 //! random mixes have none yet, see [`device`].
@@ -352,8 +355,26 @@ fn device(o: &RawOutput, platform: Platform, shared: Option<(u64, u64)>) -> Devi
 /// Case `k` of the matrix, from `raw` and the strata of `k`.
 fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
     if stall {
-        return build_stall(raw, k);
+        build_stall(raw, k)
+    } else {
+        build_mix(raw, k, false)
     }
+}
+
+/// Whether case `k`'s strata have a late-first case: a Mac case, since
+/// without output times the core never sees a late wake, at an even `k`
+/// that is not finding 2's.
+fn late_first_strata(k: usize) -> bool {
+    k % 2 == 0 && k % 8 != 0 && (k / 8) % 2 == 0
+}
+
+/// The late-first case on the strata of case `k`, from `raw`.
+fn build_late_first(raw: &RawCase, k: usize) -> Case {
+    assert!(late_first_strata(k), "case {k} has no late-first strata");
+    build_mix(raw, k, true)
+}
+
+fn build_mix(raw: &RawCase, k: usize, late_first: bool) -> Case {
     let stratum = k % 8;
     let first_held = stratum & 1 != 0;
     let first_converts = stratum & 2 != 0;
@@ -361,7 +382,6 @@ fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
     // Finding 2: the first output alone sets the session lead and has no
     // other slack.
     let finding_2 = stratum == 0;
-    let late_first = k % 2 == 0 && !finding_2;
     let platform = if (k / 8) % 2 == 1 {
         Platform::Windows
     } else {
@@ -412,8 +432,7 @@ fn build(raw: &RawCase, k: usize, stall: bool) -> Case {
                 }
                 _ => {}
             }
-            // Mac only: without output times the core never sees a late wake.
-            if late_first && i == 0 && platform == Platform::Mac {
+            if late_first && i == 0 {
                 let ms = if (stratum / 2 + k / 16) % 2 == 0 {
                     FIRST_LATE_BT_MS
                 } else {
@@ -993,7 +1012,11 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         0,
         format!(
             "case {}{} {:?} {} block {} align {:.2} ms {failed:?}",
-            if case.is_stall() { "s" } else { "" },
+            match (case.is_stall(), case.devices[0].first_late.is_some()) {
+                (true, _) => "s",
+                (false, true) => "f",
+                (false, false) => "",
+            },
             case.k,
             case.platform,
             if case.airplay { "airplay" } else { "local" },
@@ -1020,12 +1043,15 @@ fn run_all(cases: &[Case]) -> (Vec<Outcome>, f64) {
     std::thread::scope(|scope| {
         for _ in 0..workers.min(cases.len()) {
             scope.spawn(|| {
-                while let Some(case) = cases.get(next.fetch_add(1, Ordering::Relaxed)) {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(case) = cases.get(i) else {
+                        break;
+                    };
                     let started = Instant::now();
                     let outcome = simulate(case);
                     let took = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
                     busy_us.fetch_add(took, Ordering::Relaxed);
-                    let i = case.k + if case.is_stall() { CASES } else { 0 };
                     *results[i].lock().unwrap() = Some(outcome);
                 }
             });
@@ -1083,14 +1109,24 @@ fn seed_bytes(seed: u64) -> [u8; 32] {
 }
 
 /// The pinned cases, drawn once by proptest from [`SEED`], then the stall
-/// cases.
+/// cases, then the late-first ones, each on its strata case's draw.
 fn pinned_cases() -> Vec<Case> {
     let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
     let mut runner = TestRunner::new_with_rng(Config::default(), rng);
     let strategy = raw_case();
     let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
-    let mut cases: Vec<Case> = (0..CASES).map(|k| build(&draw(), k, false)).collect();
+    let raws: Vec<RawCase> = (0..CASES).map(|_| draw()).collect();
+    let mut cases: Vec<Case> = raws
+        .iter()
+        .enumerate()
+        .map(|(k, raw)| build(raw, k, false))
+        .collect();
     cases.extend((0..STALL_CASES).map(|k| build(&draw(), k, true)));
+    cases.extend(
+        (0..CASES)
+            .filter(|&k| late_first_strata(k))
+            .map(|k| build_late_first(&raws[k], k)),
+    );
     cases
 }
 
@@ -1263,6 +1299,16 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
                 .any(|(case, _)| case.devices[0].first_late.is_some_and(|(m, _)| m == ms))
         );
     }
+    // The late-first cases are twins of their strata cases, which keep
+    // their wander.
+    assert!(
+        matrix()
+            .cases_where(|c| !c.is_stall() && late_first_strata(c.k))
+            .iter()
+            .any(
+                |(case, _)| case.devices[0].first_late.is_none() && case.devices[0].wander_ms > 0.0
+            )
+    );
     let on_time: Vec<Case> = late
         .iter()
         .map(|(case, _)| {
@@ -1300,7 +1346,7 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
             && !seen.fails.iter().any(|&f| f);
         failed += usize::from(!ok);
         lines.push(format!(
-            "case {}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
+            "case f{}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
             case.k,
             fall.drop_ms,
             fall.least_ms,
@@ -1349,7 +1395,11 @@ proptest! {
     #[test]
     #[ignore = "512 cases of up to 180 s take minutes"]
     fn every_output_of_every_mix_holds_every_invariant(raw in raw_case()) {
-        let case = build(&raw, raw.k, raw.stall);
+        let case = if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
+            build_late_first(&raw, raw.k)
+        } else {
+            build(&raw, raw.k, raw.stall)
+        };
         let outcome = simulate(&case);
         prop_assert!(!outcome.fails.iter().any(|&f| f), "{}", outcome.lines.join("\n"));
     }
