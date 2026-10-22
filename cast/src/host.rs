@@ -308,6 +308,24 @@ fn flush(held: &mut VecDeque<HostEvent>, outbox: &SyncSender<HostEvent>) {
     }
 }
 
+/// Sends `event` live from outside the worker loop, after the held events;
+/// it comes back when they or a full outbox are still in the way.
+fn send_after_held(
+    held: &Mutex<VecDeque<HostEvent>>,
+    outbox: &SyncSender<HostEvent>,
+    event: HostEvent,
+) -> Option<HostEvent> {
+    let mut held = lock(held);
+    flush(&mut held, outbox);
+    if !held.is_empty() {
+        return Some(event);
+    }
+    match outbox.try_send(event) {
+        Err(TrySendError::Full(event)) => Some(event),
+        _ => None,
+    }
+}
+
 impl Shared {
     /// Frees the slot when it still belongs to `attempt`.
     fn release(&self, attempt: AttemptId) {
@@ -733,10 +751,10 @@ impl Worker {
             group: target.group,
         };
         // Connect retries go out live, while the start still runs; one that
-        // finds the outbox full, or held events not yet sent, is dropped
+        // finds the outbox full, or held events still in the way, is dropped
         // rather than block the worker or overtake them.
         let outbox = self.outbox.clone();
-        let in_order = self.nothing_held();
+        let held = Arc::clone(&self.held);
         let quitting = Arc::clone(&self.shared.quitting);
         let result = CastSession::start_with(
             config,
@@ -744,15 +762,13 @@ impl Worker {
             Arc::clone(&selected),
             quitting,
             |error, retry_in| {
-                if !in_order {
-                    return;
-                }
                 let event = SessionEvent::ConnectFailed { error, retry_in };
-                let _ = outbox.try_send(HostEvent::Session {
+                let session = HostEvent::Session {
                     attempt,
                     device,
                     event,
-                });
+                };
+                let _ = send_after_held(&held, &outbox, session);
             },
         );
         match result {
@@ -813,18 +829,13 @@ impl Worker {
         let outbox = self.outbox.clone();
         let held = Arc::clone(&self.held);
         Box::new(move |event| {
-            let mut held = lock(&held);
-            flush(&mut held, &outbox);
-            if !held.is_empty() {
-                return Err(event);
-            }
-            let sent = outbox.try_send(HostEvent::Session {
+            let session = HostEvent::Session {
                 attempt,
                 device,
                 event,
-            });
-            match sent {
-                Err(TrySendError::Full(HostEvent::Session { event, .. })) => Err(event),
+            };
+            match send_after_held(&held, &outbox, session) {
+                Some(HostEvent::Session { event, .. }) => Err(event),
                 _ => Ok(()),
             }
         })

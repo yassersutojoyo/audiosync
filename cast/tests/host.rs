@@ -657,3 +657,54 @@ fn held_events_do_not_hold_back_a_later_recovery() {
     wait_for(&host, Duration::from_secs(3), ended(A));
     assert!(host.shutdown());
 }
+
+// Partly C80: a start that begins while events are held still reports its
+// connect retries once the host polls again, after the held events.
+#[test]
+fn connect_retries_follow_events_held_when_the_start_began() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    for _ in 0..MAX_HOST_EVENTS + 16 {
+        host.set_volume(f64::NAN);
+    }
+    thread::sleep(Duration::from_millis(500));
+    // The outbox is full, so this session's end is held.
+    host.stop();
+    thread::sleep(Duration::from_millis(500));
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.local_addr().expect("address")
+    };
+    let (_feed, reader) = ring();
+    let unreachable = CastTarget {
+        id: B,
+        addresses: vec![closed],
+        group: None,
+    };
+    host.start(unreachable, 48_000, Metadata::default(), reader)
+        .expect("starts");
+    let events = wait_for(&host, Duration::from_secs(15), |event| {
+        matches!(
+            event,
+            HostEvent::Session {
+                event: SessionEvent::ConnectFailed { .. },
+                ..
+            }
+        )
+    });
+    let ended_a = events
+        .iter()
+        .position(|event| matches!(event, HostEvent::Ended { device, .. } if *device == A));
+    assert!(
+        ended_a.is_some_and(|index| index + 1 < events.len()),
+        "{events:?}"
+    );
+    host.stop();
+    wait_for(&host, Duration::from_secs(3), ended(B));
+    assert!(host.shutdown());
+    device.join();
+}
