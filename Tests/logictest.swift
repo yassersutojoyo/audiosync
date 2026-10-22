@@ -4035,11 +4035,11 @@ do {
     check(castMemory.offsets["tv"] == nil && reannounced.count > 2 && reannounced[2].offsetMs == nil,
           "calibrate all: the 0 ms the sender keeps after Undo doesn't come back when the device re-announces",
           "\(castMemory.offsets)")
-    var restarted = CastModel()
-    restarted.apply(.appeared(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
-    again.cast = (id: "cast:tv", name: "TV", offsetMs: restarted.offsets["tv"], waitMs: 0)
+    var castAfterRestart = CastModel()
+    castAfterRestart.apply(.appeared(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castAfterRestart.offsets["tv"], waitMs: 0)
     let afterRestart = (try? CalibrateAllFlow.plan(again).get()) ?? []
-    check(restarted.offsets["tv"] == nil && restarted.offset(of: "tv") == 0
+    check(castAfterRestart.offsets["tv"] == nil && castAfterRestart.offset(of: "tv") == 0
             && afterRestart.count > 2 && afterRestart[2].offsetMs == nil,
           "calibrate all: after Undo and a restart, the 0 ms the sender reports is no stored offset",
           "\(afterRestart)")
