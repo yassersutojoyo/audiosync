@@ -16,6 +16,9 @@ use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
+use audiosync_core::calibrate_all::{
+    AirPlayShared, Class, EndReason, Measurement, RowState as SheetRowState, SharedState,
+};
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
@@ -30,14 +33,14 @@ use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
-    self, AppState, Backend, MainWindowShows, NoticeMessage, PinPrompt, SourceKind, SpeakerState,
-    ViewSettings, WindowFrame,
+    self, AllPhase, AllProgress, AppState, Backend, MainWindowShows, NoticeMessage, PinPrompt,
+    SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings, WindowFrame,
 };
 use crate::{
-    AboutDialog, AirPlayProblem, Availability, CastList, CastProblem, CastState, DeviceVolumeHint,
-    EqualizerWindow, GroupItem, GroupNameDialog, GuidePage, GuideStepItem, GuideWindow, MainWindow,
-    NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState,
-    SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout,
+    AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastList, CastProblem,
+    CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog, GuidePage,
+    GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind, Palette, PasswordDialog,
+    PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout,
 };
 
 mod help_window;
@@ -173,6 +176,7 @@ struct Models {
     flyout_notices: Rc<VecModel<NoticeItem>>,
     gains: Rc<VecModel<f32>>,
     presets: Rc<VecModel<SharedString>>,
+    calibration_rows: Rc<VecModel<CalibrationRowItem>>,
 }
 
 /// How many notices the main window lists, newest first.
@@ -545,6 +549,8 @@ pub struct App {
     notice_announcer: RefCell<NoticeAnnouncer>,
     /// The calibration ending Narrator was last told about.
     calibration_announced: RefCell<Option<(String, Phase)>>,
+    /// The Calibrate All ending Narrator was last told about.
+    calibrate_all_announced: Cell<u64>,
     /// The delay fields holding a number out of range, so Narrator hears
     /// the range once as a field goes out of it (`newly_out_of_range`).
     out_of_range: RefCell<HashSet<String>>,
@@ -694,6 +700,7 @@ impl App {
             flyout_notices: Rc::new(VecModel::default()),
             gains: Rc::new(VecModel::default()),
             presets: Rc::new(VecModel::default()),
+            calibration_rows: Rc::new(VecModel::default()),
         };
         let app = Rc::new(App {
             backend: RefCell::new(backend),
@@ -726,6 +733,7 @@ impl App {
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
             calibration_announced: RefCell::default(),
+            calibrate_all_announced: Cell::new(0),
             out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
@@ -1209,6 +1217,8 @@ impl App {
         self.main.set_connected(ModelRc::from(m.connected.clone()));
         self.main.set_groups(ModelRc::from(m.groups.clone()));
         self.main.set_notices(ModelRc::from(m.notices.clone()));
+        self.main
+            .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
         self.flyout.set_sources(ModelRc::from(m.sources.clone()));
         self.flyout
             .set_speakers(ModelRc::from(m.all_speakers.clone()));
@@ -1338,6 +1348,22 @@ impl App {
             self.announce(said.clone());
             notice_said = Some(said);
         }
+        let card = calibrate_all_card(&strings, &state);
+        if self
+            .calibrate_all_announced
+            .replace(state.calibrate_all.endings)
+            != state.calibrate_all.endings
+        {
+            let said = card.said.clone();
+            if !said.is_empty() {
+                let said = match notice_said.take() {
+                    Some(notice) => strings.invoke_announcements(notice, said),
+                    None => said,
+                };
+                self.announce(said.clone());
+                notice_said = Some(said);
+            }
+        }
         let sources: Vec<SharedString> = state
             .sources
             .iter()
@@ -1430,6 +1456,7 @@ impl App {
             });
         }
 
+        self.show_calibrate_all(card);
         self.show_equalizer_state(&state.equalizer);
         drop(ui);
         *self.now_playing_source.borrow_mut() = CardSource::of(&state);
@@ -1461,6 +1488,20 @@ impl App {
     }
 
     /// Empties both live regions now.
+    fn show_calibrate_all(&self, card: CalibrateAllCard) {
+        let main = &self.main;
+        main.set_calibrate_all_running(card.running);
+        main.set_calibrate_all_can_start(card.can_start);
+        main.set_calibrate_all_status(card.status);
+        main.set_calibrate_all_privacy(card.privacy);
+        main.set_calibrate_all_results_shown(card.results_shown);
+        main.set_calibrate_all_airplay(card.airplay);
+        main.set_calibrate_all_outcome(card.outcome);
+        main.set_calibrate_all_can_apply(card.can_apply);
+        main.set_calibrate_all_can_undo(card.can_undo);
+        sync_model(&self.models.calibration_rows, card.rows);
+    }
+
     fn clear_announcement(&self) {
         self.announcement_timer.stop();
         clear_announcement(&self.main.as_weak(), &self.flyout.as_weak());
@@ -1653,6 +1694,38 @@ impl App {
         });
         let w = weak.clone();
         main.on_calibration_privacy_requested(move || with_app(&w, App::open_microphone_privacy));
+        let w = weak.clone();
+        main.on_calibrate_all_requested(move || {
+            with_app(&w, |app| {
+                app.update(|b| b.start_calibrate_all());
+                app.follow_calibration(&w);
+            });
+        });
+        let w = weak.clone();
+        main.on_cancel_calibrate_all_requested(move || {
+            with_app(&w, |app| app.update(|b| b.cancel_calibrate_all()))
+        });
+        let w = weak.clone();
+        main.on_calibrate_all_again_requested(move |row| {
+            with_app(&w, |app| {
+                if let Ok(row) = usize::try_from(row) {
+                    app.update(|b| b.measure_again(row));
+                    app.follow_calibration(&w);
+                }
+            });
+        });
+        let w = weak.clone();
+        main.on_calibrate_all_apply_requested(move || {
+            with_app(&w, |app| app.update(|b| b.apply_calibrate_all()))
+        });
+        let w = weak.clone();
+        main.on_calibrate_all_undo_requested(move || {
+            with_app(&w, |app| app.update(|b| b.undo_calibrate_all()))
+        });
+        let w = weak.clone();
+        main.on_calibrate_all_close_requested(move || {
+            with_app(&w, |app| app.update(|b| b.close_calibrate_all()))
+        });
         let w = weak.clone();
         main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
         let w = weak.clone();
@@ -2904,6 +2977,200 @@ fn calibration_ended(
     now.map(|(id, _)| id)
 }
 
+/// What the Calibrate All card shows.
+struct CalibrateAllCard {
+    running: bool,
+    can_start: bool,
+    status: SharedString,
+    privacy: bool,
+    results_shown: bool,
+    rows: Vec<CalibrationRowItem>,
+    airplay: SharedString,
+    outcome: SharedString,
+    can_apply: bool,
+    can_undo: bool,
+    /// What Narrator hears when the run, Apply or Undo ends.
+    said: SharedString,
+}
+
+fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCard {
+    let all = &state.calibrate_all;
+    let busy = state.calibration.busy;
+    let reference = state.reference_name.as_deref().unwrap_or_default();
+    let status = match &all.phase {
+        AllPhase::Running(progress) => all_progress_text(strings, progress),
+        AllPhase::Failed(failure) => {
+            strings.invoke_calibrate_all_stopped(calibration_failure(strings, reference, *failure))
+        }
+        AllPhase::Stale => strings.get_calibrate_all_stale(),
+        AllPhase::Idle => match all.blocked {
+            Some(Failure::NoReference) => strings.get_calibration_no_reference(),
+            Some(Failure::NothingToMeasure) => {
+                strings.invoke_calibrate_all_nothing(reference.into())
+            }
+            Some(_) => strings.invoke_calibrate_all_turn_on(reference.into()),
+            None => strings.invoke_calibrate_all_hint(reference.into()),
+        },
+    };
+    let failed = matches!(all.phase, AllPhase::Failed(_) | AllPhase::Stale);
+    let sheet = all.sheet.as_ref();
+    let outcome = sheet.map_or_else(SharedString::default, |sheet| {
+        sheet_outcome(strings, reference, sheet)
+    });
+    let said = if failed || outcome.is_empty() {
+        status.clone()
+    } else {
+        outcome.clone()
+    };
+    CalibrateAllCard {
+        running: matches!(all.phase, AllPhase::Running(_)),
+        can_start: !busy && all.blocked.is_none(),
+        privacy: all.phase == AllPhase::Failed(Failure::MicrophoneDenied)
+            || sheet.is_some_and(|sheet| sheet.failure == Some(Failure::MicrophoneDenied)),
+        results_shown: sheet.is_some(),
+        rows: sheet.map_or_else(Vec::new, |sheet| {
+            sheet
+                .rows
+                .iter()
+                .map(|row| CalibrationRowItem {
+                    name: row.name.as_str().into(),
+                    detail: row_detail(strings, reference, row),
+                    can_measure_again: row.can_measure_again && !busy,
+                })
+                .collect()
+        }),
+        airplay: sheet
+            .and_then(|sheet| sheet.airplay.as_ref())
+            .map_or_else(SharedString::default, |shared| {
+                airplay_line(strings, shared)
+            }),
+        outcome,
+        can_apply: sheet.is_some_and(|sheet| sheet.can_apply),
+        can_undo: sheet.is_some_and(|sheet| sheet.can_undo),
+        status,
+        said,
+    }
+}
+
+fn all_progress_text(strings: &Strings<'_>, progress: &AllProgress) -> SharedString {
+    match progress {
+        AllProgress::Preparing => strings.get_calibration_preparing(),
+        AllProgress::Measuring {
+            name,
+            reference: true,
+            ..
+        } => strings.invoke_calibration_listening(name.as_str().into()),
+        AllProgress::Measuring {
+            name,
+            searching: true,
+            ..
+        } => strings.invoke_calibrate_all_searching(name.as_str().into()),
+        AllProgress::Measuring { name, take, .. } => strings
+            .invoke_calibrate_all_sweep(name.as_str().into(), i32::try_from(*take).unwrap_or(1)),
+        AllProgress::Estimating => strings.get_calibrate_all_estimating(),
+    }
+}
+
+fn ended_text(strings: &Strings<'_>, reason: EndReason) -> SharedString {
+    match reason {
+        EndReason::Cancelled => strings.get_calibrate_all_ended_cancelled(),
+        EndReason::SpeakersChanged => strings.get_calibrate_all_ended_speakers(),
+        EndReason::SpeakerTurnedOff => strings.get_calibrate_all_ended_off(),
+        EndReason::SourceChanged => strings.get_calibrate_all_ended_source(),
+    }
+}
+
+/// The line under the results: how the run, Apply, Undo or the last
+/// Measure Again ended.
+fn sheet_outcome(strings: &Strings<'_>, reference: &str, sheet: &SheetState) -> SharedString {
+    if let Some(failure) = sheet.failure {
+        return strings
+            .invoke_calibrate_all_stopped(calibration_failure(strings, reference, failure));
+    }
+    if let Some(reason) = sheet.ended {
+        return strings.invoke_calibrate_all_stopped(ended_text(strings, reason));
+    }
+    if sheet.undone {
+        return strings.get_calibrate_all_undone();
+    }
+    if sheet.applied {
+        return strings.get_calibrate_all_applied();
+    }
+    if let Some(reason) = sheet.again_ended {
+        return strings.invoke_calibrate_all_again_stopped(ended_text(strings, reason));
+    }
+    let measured = sheet
+        .rows
+        .iter()
+        .filter(|row| row.state != SheetRowState::Reference);
+    let clear = measured
+        .clone()
+        .filter(|row| row.state.is_certain())
+        .count();
+    strings.invoke_calibrate_all_finished(count(clear), count(measured.count()))
+}
+
+/// A delay as its field shows it: a local speaker's relative to the
+/// reference, with its sign; a Cast or AirPlay delay as is.
+fn sheet_ms(strings: &Strings<'_>, class: Class, ms: f64) -> SharedString {
+    let ms = ms.round() as i32;
+    match class {
+        Class::Local => strings.invoke_delay_value(ms),
+        Class::Cast | Class::AirPlay => strings.invoke_calibrate_all_ms(ms),
+    }
+}
+
+fn row_detail(strings: &Strings<'_>, reference: &str, row: &SheetRow) -> SharedString {
+    let old = sheet_ms(strings, row.class, row.old_ms.unwrap_or(0.0));
+    let measured = |m: &Measurement| {
+        (
+            old.clone(),
+            sheet_ms(strings, row.class, m.new_ms),
+            m.uncertainty_ms.ceil().max(1.0) as i32,
+        )
+    };
+    match &row.state {
+        SheetRowState::Reference => strings.get_calibrate_all_reference(),
+        SheetRowState::NotMeasured => strings.get_calibrate_all_not_measured(),
+        SheetRowState::Certain(m) => {
+            let (old, new, uncertainty) = measured(m);
+            if m.clamped {
+                strings.invoke_calibrate_all_clamped(old, new, uncertainty)
+            } else {
+                strings.invoke_calibrate_all_certain(old, new, uncertainty)
+            }
+        }
+        SheetRowState::Uncertain(m) => {
+            let (old, new, uncertainty) = measured(m);
+            strings.invoke_calibrate_all_uncertain(old, new, uncertainty)
+        }
+        SheetRowState::Refused(refused) => match calibration::outcome(&Err(*refused)) {
+            calibration::Outcome::Refuse(failure) => strings
+                .invoke_calibrate_all_refused(calibration_failure(strings, reference, failure)),
+            calibration::Outcome::Commit { .. } => strings.get_calibrate_all_not_measured(),
+        },
+    }
+}
+
+fn airplay_line(strings: &Strings<'_>, shared: &AirPlayShared) -> SharedString {
+    let old = shared.old_ms.unwrap_or(0.0).round() as i32;
+    let new = shared.new_ms.unwrap_or(0.0).round() as i32;
+    let set = if shared.certain_rows == 1 {
+        strings.invoke_calibrate_all_airplay_one(old, new)
+    } else {
+        strings.invoke_calibrate_all_airplay_median(old, new, count(shared.certain_rows))
+    };
+    match shared.state {
+        SharedState::NoneCertain => strings.invoke_calibrate_all_airplay_none(old),
+        SharedState::Certain => set,
+        SharedState::Spread => {
+            let spread =
+                strings.invoke_calibrate_all_airplay_spread(shared.spread_ms.round() as i32);
+            format!("{set} {spread}").into()
+        }
+    }
+}
+
 fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure) -> SharedString {
     let subject = |which: Option<Which>| -> SharedString {
         match which {
@@ -2924,6 +3191,7 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
         Failure::MicrophoneSkipped => strings.get_calibration_microphone_skipped(),
         Failure::HandsFreeMicrophone => strings.get_calibration_hands_free(),
         Failure::Unfinished => strings.get_calibration_unfinished(),
+        Failure::NothingToMeasure => strings.invoke_calibrate_all_nothing(reference.into()),
         Failure::TooShort(_) => strings.get_calibration_too_short(),
         Failure::TooLong(_) => strings.get_calibration_too_long(),
         Failure::Clipped(which) => strings.invoke_calibration_clipped(subject(which)),
@@ -5062,9 +5330,9 @@ mod tests {
     fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_next_rows_options() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        // Switch, source, master volume, Equalizer, then the rows: the
-        // group's, This PC's, then the connected speakers' by name.
-        tab(window, 16);
+        // Switch, source, master volume, Equalizer, Calibrate All, then the
+        // rows: the group's, This PC's, then the connected speakers' by name.
+        tab(window, 17);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -5095,7 +5363,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 24);
+        tab(window, 25);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -5140,7 +5408,7 @@ mod tests {
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 14);
+        tab(window, 15);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -5344,7 +5612,7 @@ mod tests {
         let window = app.main.window();
         // As in the example's order without the group's row and Bedroom's:
         // the cable row's toggle.
-        tab(window, 12);
+        tab(window, 13);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");

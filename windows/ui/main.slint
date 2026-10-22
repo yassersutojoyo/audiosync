@@ -4,11 +4,11 @@
 // and the speaker list (This PC, Groups, Connected Speakers). The menu bar
 // carries the Windows shortcuts. Tab order follows the reading order.
 
-import { ComboBox, ScrollView } from "std-widgets.slint";
+import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CastList, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Appearance, CalibrationRowItem, CastList, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -256,6 +256,175 @@ component EqualizerCard inherits Rectangle {
     }
 }
 
+// Calibrate All Speakers (spec S235 to S240): the button, which cancels a
+// run under way, what the run does, and the results with Measure Again on
+// each row, Apply, Undo and Close.
+component CalibrationCard inherits Card {
+    in property <bool> running;
+    in property <bool> can-start;
+    // What the run does, how it ended, or why it can't start.
+    in property <string> status;
+    // The microphone was blocked: Open Privacy Settings.
+    in property <bool> privacy;
+    in property <bool> results-shown;
+    in property <[CalibrationRowItem]> rows;
+    // The AirPlay delay's line, empty without AirPlay speakers.
+    in property <string> airplay;
+    // How the run or the last action on its results ended.
+    in property <string> outcome;
+    in property <bool> can-apply;
+    in property <bool> can-undo;
+    callback start();
+    callback cancel();
+    callback privacy-requested();
+    callback measure-again(int);
+    callback apply();
+    callback undo();
+    callback close();
+
+    accessible-role: groupbox;
+    accessible-label: Strings.calibrate-all-title;
+
+    VerticalLayout {
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            Glyph {
+                glyph: Glyphs.microphone;
+                color: Tokens.teal-text;
+                width: 20px;
+            }
+
+            SectionTitle {
+                text: Strings.calibrate-all-title;
+            }
+        }
+
+        // One button for both, so the keyboard focus stays on it when a run
+        // starts or ends.
+        HorizontalLayout {
+            alignment: LayoutAlignment.start;
+
+            Button {
+                text: root.running ? Strings.calibration-cancel : Strings.calibrate-all;
+                enabled: root.running || root.can-start;
+                accessible-label: root.running ? Strings.calibrate-all-cancel-label : Strings.calibrate-all;
+                accessible-description: root.status;
+                clicked => {
+                    if root.running {
+                        root.cancel();
+                    } else {
+                        root.start();
+                    }
+                }
+            }
+        }
+
+        if root.privacy: HorizontalLayout {
+            alignment: LayoutAlignment.start;
+
+            Button {
+                text: Strings.notice-open-privacy;
+                accessible-label: Strings.notice-open-privacy-label;
+                clicked => {
+                    root.privacy-requested();
+                }
+            }
+        }
+
+        // The button's description says it already.
+        QuietText {
+            text: root.status;
+        }
+
+        if root.results-shown: VerticalLayout {
+            spacing: 8px;
+            accessible-role: groupbox;
+            accessible-label: Strings.calibrate-all-results;
+
+            Divider { }
+
+            SectionTitle {
+                text: Strings.calibrate-all-results;
+            }
+
+            for row[index] in root.rows: VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: row.name;
+                    font-size: Tokens.font-size-body;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    wrap: word-wrap;
+                }
+
+                SecondaryText {
+                    text: row.detail;
+                }
+
+                if row.can-measure-again: HorizontalLayout {
+                    alignment: LayoutAlignment.start;
+
+                    Button {
+                        text: Strings.calibrate-all-again;
+                        enabled: !root.running;
+                        accessible-label: Strings.calibrate-all-again-label(row.name);
+                        accessible-description: row.detail;
+                        clicked => {
+                            root.measure-again(index);
+                        }
+                    }
+                }
+            }
+
+            if root.airplay != "": SecondaryText {
+                text: root.airplay;
+            }
+
+            if root.outcome != "": SecondaryText {
+                text: root.outcome;
+            }
+
+            HorizontalLayout {
+                alignment: LayoutAlignment.start;
+                spacing: 8px;
+
+                Button {
+                    text: Strings.calibrate-all-apply;
+                    accessible-label: Strings.calibrate-all-apply;
+                    primary: true;
+                    enabled: root.can-apply && !root.running;
+                    accessible-description: Strings.calibrate-all-apply-help;
+                    clicked => {
+                        root.apply();
+                    }
+                }
+
+                if root.can-undo: Button {
+                    text: Strings.calibrate-all-undo;
+                    accessible-label: Strings.calibrate-all-undo;
+                    accessible-description: Strings.calibrate-all-undo-help;
+                    clicked => {
+                        root.undo();
+                    }
+                }
+
+                Button {
+                    text: Strings.calibrate-all-close;
+                    enabled: !root.running;
+                    accessible-label: Strings.calibrate-all-close-label;
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+        }
+    }
+}
+
 // The Now Playing card: the track of the media session that counts for the
 // chosen source, with Previous, Play or Pause, and Next, as on the Mac.
 component NowPlayingCard inherits Card {
@@ -425,6 +594,17 @@ export component MainWindow inherits Window {
     // A delay field, a speaker's or the AirPlay one, holds typing not yet
     // applied: File > Apply Typed Delay is enabled only then.
     in property <bool> delay-typing;
+    // Calibrate All Speakers (see CalibrationCard).
+    in property <bool> calibrate-all-running;
+    in property <bool> calibrate-all-can-start;
+    in property <string> calibrate-all-status;
+    in property <bool> calibrate-all-privacy;
+    in property <bool> calibrate-all-results-shown;
+    in property <[CalibrationRowItem]> calibrate-all-rows;
+    in property <string> calibrate-all-airplay;
+    in property <string> calibrate-all-outcome;
+    in property <bool> calibrate-all-can-apply;
+    in property <bool> calibrate-all-can-undo;
 
     callback power-toggled(bool);
     callback source-selected(int);
@@ -462,6 +642,12 @@ export component MainWindow inherits Window {
     callback calibrate-requested(string);
     callback cancel-calibration-requested();
     callback calibration-privacy-requested();
+    callback calibrate-all-requested();
+    callback cancel-calibrate-all-requested();
+    callback calibrate-all-again-requested(int);
+    callback calibrate-all-apply-requested();
+    callback calibrate-all-undo-requested();
+    callback calibrate-all-close-requested();
     callback group-toggled(string);
 
     callback group-rename-requested(string);
@@ -883,6 +1069,40 @@ export component MainWindow inherits Window {
                         on: root.equalizer-on;
                         clicked => {
                             root.equalizer-requested();
+                        }
+                    }
+
+                    CalibrationCard {
+                        running: root.calibrate-all-running;
+                        can-start: root.calibrate-all-can-start;
+                        status: root.calibrate-all-status;
+                        privacy: root.calibrate-all-privacy;
+                        results-shown: root.calibrate-all-results-shown;
+                        rows: root.calibrate-all-rows;
+                        airplay: root.calibrate-all-airplay;
+                        outcome: root.calibrate-all-outcome;
+                        can-apply: root.calibrate-all-can-apply;
+                        can-undo: root.calibrate-all-can-undo;
+                        start => {
+                            root.calibrate-all-requested();
+                        }
+                        cancel => {
+                            root.cancel-calibrate-all-requested();
+                        }
+                        privacy-requested => {
+                            root.calibration-privacy-requested();
+                        }
+                        measure-again(row) => {
+                            root.calibrate-all-again-requested(row);
+                        }
+                        apply => {
+                            root.calibrate-all-apply-requested();
+                        }
+                        undo => {
+                            root.calibrate-all-undo-requested();
+                        }
+                        close => {
+                            root.calibrate-all-close-requested();
                         }
                     }
                 }

@@ -79,7 +79,10 @@ use crate::audio::backend::{
     StopReason,
 };
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
-use crate::audio::calibration::{self, CalibrationRun};
+use audiosync_core::calibrate_all::{Applied, Class, EndReason, RowState, Sheet, Take, Target};
+
+use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress};
+use crate::audio::calibration::{self, CalibrationRun, Failure};
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
@@ -89,15 +92,42 @@ use crate::settings::{
     SettingsFile,
 };
 use crate::ui_model::{
-    self, AppState, Availability, Backend, CalibrationState, CastList, CastRow, CastState, Group,
-    GroupError, Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, Source, SourceKind,
-    Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
+    self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
+    CalibrationState, CastList, CastRow, CastState, Group, GroupError, Notice, NoticeMessage,
+    PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker,
+    SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
 /// seconds: it takes a snapshot of the running processes, and apps that play
 /// audio come and go rarely.
 const SOURCE_POLLS: u32 = 6;
+
+/// The results of the last Calibrate All, kept until closed or out of date.
+struct KeptSheet {
+    sheet: Sheet,
+    /// The speakers its rows describe, as they were at the start.
+    members: Vec<Member>,
+    /// The microphone's rate the run recorded at.
+    rate: u32,
+    /// The microphone or the capture stopped the run.
+    failure: Option<Failure>,
+    /// The last Measure Again ended early, so its row stayed.
+    again_ended: Option<EndReason>,
+    /// What Apply wrote, kept for Undo while every value still holds.
+    applied: Option<Applied>,
+    undone: bool,
+}
+
+#[derive(Default)]
+struct CalibrateAll {
+    /// A run or a Measure Again, while it holds the outputs.
+    run: Option<AllRun>,
+    /// What the card shows while no run is under way.
+    phase: AllPhase,
+    sheet: Option<KeptSheet>,
+    endings: u64,
+}
 
 /// After this many polls, 20 seconds, of AirPlay discovery without a single
 /// AirPlay speaker found, the speaker list says so and what to check: a
@@ -289,6 +319,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     calibration_run: Option<CalibrationRun>,
     /// What the rows show of the last calibration.
     calibration: calibration::Status,
+    calibrate_all: CalibrateAll,
 }
 
 impl<A: AudioBackend> AudioAdapter<A> {
@@ -365,6 +396,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             when_source_quits: WhenSourceQuits::Stop,
             calibration_run: None,
             calibration: calibration::Status::default(),
+            calibrate_all: CalibrateAll::default(),
         };
         adapter.restore(saved);
         // Settings ignored at launch: the user is told now why the defaults
@@ -695,6 +727,261 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .as_ref()
                 .is_some_and(CalibrationRun::holds_outputs),
         };
+    }
+
+    /// Moves a Calibrate All or Measure Again on, and takes in how it ended.
+    /// Returns whether what the card shows changed.
+    fn tick_calibrate_all(&mut self) -> bool {
+        let Some(run) = self.calibrate_all.run.as_mut() else {
+            return false;
+        };
+        let mut changed = run.tick(&mut self.audio, clock::now_ns());
+        let finished = run.take_finished().map(|finished| {
+            (
+                finished,
+                run.again_row(),
+                run.members().to_vec(),
+                run.rate(),
+            )
+        });
+        if !run.holds_outputs() {
+            self.calibrate_all.run = None;
+            changed = true;
+        }
+        if let Some((finished, again, members, rate)) = finished {
+            self.finish_calibrate_all(finished, again, members, rate);
+            changed = true;
+        }
+        changed
+    }
+
+    /// A whole run's results replace the card's; a Measure Again's replace
+    /// its row, unless it ended early (S239).
+    fn finish_calibrate_all(
+        &mut self,
+        finished: Finished,
+        again: Option<usize>,
+        members: Vec<Member>,
+        rate: u32,
+    ) {
+        let all = &mut self.calibrate_all;
+        all.endings += 1;
+        let Finished { sheet, failure } = finished;
+        let Some(sheet) = sheet else {
+            all.phase = AllPhase::Failed(failure.unwrap_or(Failure::Unfinished));
+            return;
+        };
+        if again.is_none() {
+            all.phase = AllPhase::Idle;
+            all.sheet = Some(KeptSheet {
+                sheet,
+                members,
+                rate,
+                failure,
+                again_ended: None,
+                applied: None,
+                undone: false,
+            });
+            return;
+        }
+        all.phase = failure.map_or(AllPhase::Idle, AllPhase::Failed);
+        let Some(kept) = all.sheet.as_mut() else {
+            return;
+        };
+        let ended = sheet.ended();
+        if !kept.sheet.replace(sheet) && failure.is_none() {
+            kept.again_ended = Some(ended.unwrap_or(EndReason::Cancelled));
+        }
+    }
+
+    /// Writes a value of the results, as the speaker's delay field or the
+    /// AirPlay delay field would; `None` puts back "none stored", which
+    /// counts as 0 for a local or Cast speaker.
+    fn write_calibrated(&mut self, members: &[Member], target: &Target, value: Option<f64>) {
+        match target {
+            Target::AirPlay => {
+                if let Some(ms) = value {
+                    <Self as Backend>::set_airplay_delay(self, ms);
+                }
+            }
+            Target::Speaker(key) => {
+                let Some(member) = members.iter().find(|m| m.key() == *key) else {
+                    return;
+                };
+                let id = match member.class {
+                    Class::Local => speaker_key(&member.id),
+                    Class::Cast => cast_key(&member.id),
+                    Class::AirPlay => return,
+                };
+                <Self as Backend>::set_speaker_delay(self, &id, value.unwrap_or(0.0));
+            }
+        }
+    }
+
+    /// A speaker's stored delay as the results read it; `None` while it
+    /// isn't listed.
+    fn calibrated_now(&self, class: Class, id: &str) -> Option<f64> {
+        match class {
+            Class::Local => self
+                .audio
+                .outputs()
+                .into_iter()
+                .find(|output| output.id == id)
+                .map(|output| output.delay_ms),
+            Class::Cast => self
+                .audio
+                .cast_speakers()
+                .into_iter()
+                .find(|cast| cast.id == id)
+                .map(|cast| cast.offset_ms),
+            Class::AirPlay => self.airplay_delay_ms(),
+        }
+    }
+
+    /// Results that no longer describe the stored delays go: a measured
+    /// speaker's delay changed before Apply (its new value would undo that
+    /// change), or a value Apply wrote changed since (Undo would undo it).
+    /// Returns whether the card changed.
+    fn follow_calibrate_all(&mut self) -> bool {
+        if self.calibrate_all.run.is_some() {
+            return false;
+        }
+        let Some(kept) = self.calibrate_all.sheet.as_ref() else {
+            return false;
+        };
+        // A speaker that isn't listed can't be compared: its row stays.
+        let holds = |now: Option<f64>, then: Option<f64>| {
+            now.is_none_or(|now| (now - then.unwrap_or(0.0)).abs() < 0.5)
+        };
+        if let Some(applied) = &kept.applied {
+            let held = applied.changes.iter().all(|change| {
+                let now = match &change.target {
+                    Target::AirPlay => self.airplay_delay_ms(),
+                    Target::Speaker(key) => kept
+                        .members
+                        .iter()
+                        .find(|m| m.key() == *key)
+                        .and_then(|m| self.calibrated_now(m.class, &m.id)),
+                };
+                holds(now, Some(change.new_ms))
+            });
+            if held {
+                return false;
+            }
+            self.log
+                .log(|| "Calibrate All: a delay changed after Apply, Undo goes".to_owned());
+            if let Some(kept) = self.calibrate_all.sheet.as_mut() {
+                kept.applied = None;
+            }
+            return true;
+        }
+        if kept.sheet.applied() || kept.sheet.ended().is_some() {
+            return false;
+        }
+        let moved = kept
+            .sheet
+            .rows()
+            .iter()
+            .zip(&kept.members)
+            .filter(|(row, _)| row.state != RowState::Reference)
+            .any(|(_, m)| !holds(self.calibrated_now(m.class, &m.id), m.offset_ms));
+        if !moved {
+            return false;
+        }
+        self.log
+            .log(|| "Calibrate All: a delay changed before Apply, the results go".to_owned());
+        self.calibrate_all.sheet = None;
+        self.calibrate_all.phase = AllPhase::Stale;
+        self.calibrate_all.endings += 1;
+        true
+    }
+
+    fn member_name(&self, member: &Member) -> String {
+        match member.class {
+            Class::Local => self.output_name(&member.id),
+            Class::AirPlay => self.airplay_name(&member.id),
+            Class::Cast => self.cast_name(&member.id),
+        }
+    }
+
+    /// Why Calibrate All can't start now: a reference that plays and
+    /// another speaker that plays (S235).
+    fn calibrate_all_blocked(&self) -> Option<Failure> {
+        let lineup = calibrate_all::lineup(&self.audio);
+        let Some(reference) = lineup.reference.as_deref() else {
+            return Some(Failure::NoReference);
+        };
+        let reference_plays = lineup
+            .members
+            .iter()
+            .any(|m| m.class == Class::Local && m.id == reference);
+        if lineup.session.is_none() || !reference_plays {
+            return Some(Failure::NotPlaying);
+        }
+        (lineup.members.len() < 2).then_some(Failure::NothingToMeasure)
+    }
+
+    fn calibrate_all_state(&self) -> CalibrateAllState {
+        let all = &self.calibrate_all;
+        let running = all.run.as_ref().filter(|run| run.is_running());
+        let phase = match running {
+            Some(run) => AllPhase::Running(self.all_progress(run)),
+            None => all.phase.clone(),
+        };
+        let busy = all.run.is_some();
+        CalibrateAllState {
+            phase,
+            blocked: self.calibrate_all_blocked(),
+            sheet: all.sheet.as_ref().map(|kept| self.sheet_state(kept, busy)),
+            endings: all.endings,
+        }
+    }
+
+    fn all_progress(&self, run: &AllRun) -> AllProgress {
+        match run.progress() {
+            Progress::Preparing | Progress::Ended => AllProgress::Preparing,
+            Progress::Measuring {
+                row,
+                take,
+                searching,
+            } => AllProgress::Measuring {
+                name: self.member_name(&run.members()[row]),
+                reference: take == Take::Reference,
+                take: match take {
+                    Take::Sweep(n) => n,
+                    Take::Reference => 1,
+                },
+                searching,
+            },
+            Progress::Estimating { .. } => AllProgress::Estimating,
+        }
+    }
+
+    fn sheet_state(&self, kept: &KeptSheet, busy: bool) -> SheetState {
+        let sheet = &kept.sheet;
+        let open = sheet.ended().is_none() && !sheet.applied();
+        SheetState {
+            rows: sheet
+                .rows()
+                .iter()
+                .zip(&kept.members)
+                .map(|(row, member)| SheetRow {
+                    name: self.member_name(member),
+                    class: row.class,
+                    old_ms: row.old_ms,
+                    state: row.state,
+                    can_measure_again: open && row.state != RowState::Reference,
+                })
+                .collect(),
+            airplay: sheet.airplay().copied(),
+            ended: sheet.ended(),
+            failure: kept.failure,
+            again_ended: kept.again_ended,
+            can_apply: !busy && sheet.changes().is_ok(),
+            applied: sheet.applied(),
+            can_undo: !busy && kept.applied.is_some(),
+            undone: kept.undone,
+        }
     }
 
     /// An ended calibration's line goes once streaming, the reference or
@@ -2053,8 +2340,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             calibration: CalibrationState {
                 speaker_id: self.calibration.id.as_deref().map(speaker_key),
                 phase: self.calibration.phase,
-                busy: self.calibration_run.is_some(),
+                busy: self.calibration_run.is_some() || self.calibrate_all.run.is_some(),
             },
+            calibrate_all: self.calibrate_all_state(),
         }
     }
 
@@ -2488,6 +2776,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         changed |= self.keep_settings_aside(true);
         changed |= self.tick_calibration();
         changed |= self.follow_calibration_context();
+        changed |= self.follow_calibrate_all();
         changed |= self.persist();
         changed
     }
@@ -2496,7 +2785,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let Some(SpeakerKey::Local(endpoint_id)) = SpeakerKey::parse(id) else {
             return;
         };
-        if self.calibration_run.is_some() {
+        if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
             return;
         }
         let started = CalibrationRun::start(
@@ -2524,9 +2813,117 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let _ = self.tick_calibration();
     }
 
+    fn start_calibrate_all(&mut self) {
+        if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
+            return;
+        }
+        match AllRun::start(&mut self.audio, clock::now_ns(), self.log.clone()) {
+            Ok(run) => {
+                self.calibrate_all.phase = AllPhase::Idle;
+                self.calibrate_all.sheet = None;
+                self.calibrate_all.run = Some(run);
+            }
+            Err(failure) => {
+                self.calibrate_all.phase = AllPhase::Failed(failure);
+                self.calibrate_all.endings += 1;
+            }
+        }
+    }
+
+    fn cancel_calibrate_all(&mut self) {
+        if let Some(run) = self.calibrate_all.run.as_mut() {
+            run.cancel(&mut self.audio, clock::now_ns());
+        }
+        let _ = self.tick_calibrate_all();
+    }
+
+    fn measure_again(&mut self, row: usize) {
+        if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
+            return;
+        }
+        let Some(kept) = self.calibrate_all.sheet.as_mut() else {
+            return;
+        };
+        let started = AllRun::again(
+            &mut self.audio,
+            &kept.sheet,
+            &kept.members,
+            kept.rate,
+            row,
+            clock::now_ns(),
+            self.log.clone(),
+        );
+        match started {
+            Ok(run) => {
+                kept.again_ended = None;
+                self.calibrate_all.phase = AllPhase::Idle;
+                self.calibrate_all.run = Some(run);
+            }
+            Err(failure) => {
+                self.calibrate_all.phase = AllPhase::Failed(failure);
+                self.calibrate_all.endings += 1;
+            }
+        }
+    }
+
+    fn apply_calibrate_all(&mut self) {
+        if self.calibrate_all.run.is_some() {
+            return;
+        }
+        let Some(kept) = self.calibrate_all.sheet.as_mut() else {
+            return;
+        };
+        let applied = match kept.sheet.apply() {
+            Ok(applied) => applied,
+            Err(refusal) => {
+                self.log
+                    .log(|| format!("Calibrate All: Apply refused: {refusal:?}"));
+                return;
+            }
+        };
+        let members = kept.members.clone();
+        self.log
+            .log(|| format!("Calibrate All applied: {:?}", applied.changes));
+        for change in &applied.changes {
+            self.write_calibrated(&members, &change.target, Some(change.new_ms));
+        }
+        if let Some(kept) = self.calibrate_all.sheet.as_mut() {
+            kept.applied = Some(applied);
+        }
+        self.calibrate_all.endings += 1;
+    }
+
+    fn undo_calibrate_all(&mut self) {
+        let Some(kept) = self.calibrate_all.sheet.as_mut() else {
+            return;
+        };
+        let Some(applied) = kept.applied.take() else {
+            return;
+        };
+        kept.undone = true;
+        let members = kept.members.clone();
+        let previous = applied.undo.undo();
+        self.log
+            .log(|| format!("Calibrate All undone: {previous:?}"));
+        for (target, value) in &previous {
+            self.write_calibrated(&members, target, *value);
+        }
+        self.calibrate_all.endings += 1;
+    }
+
+    fn close_calibrate_all(&mut self) {
+        if self.calibrate_all.run.is_none() {
+            self.calibrate_all = CalibrateAll {
+                endings: self.calibrate_all.endings,
+                ..CalibrateAll::default()
+            };
+        }
+    }
+
     fn tick_calibration(&mut self) -> bool {
+        let all = self.tick_calibrate_all();
         let Some(run) = self.calibration_run.as_mut() else {
-            return false;
+            return all;
         };
         let changed = run.tick(&mut self.audio, clock::now_ns());
         let chosen = run.chosen().to_owned();
@@ -2540,7 +2937,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         } else {
             self.calibration.holds_outputs = self.calibration_run.is_some();
         }
-        changed || before != self.calibration
+        all || changed || before != self.calibration
     }
 
     fn view_settings(&self) -> ViewSettings {

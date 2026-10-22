@@ -2288,6 +2288,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn set_calibration_airplay_solo(&mut self, id: Option<&str>) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_calibration_solo(id);
+        }
+    }
+
     fn open_microphone(&mut self, seconds: f64) -> Result<Box<dyn Microphone>, MicrophoneError> {
         self.driver.open_microphone(seconds)
     }
