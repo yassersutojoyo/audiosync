@@ -134,12 +134,20 @@ impl fmt::Debug for CastClient {
 
 impl CastClient {
     /// Connects to a discovered device on its announced addresses and port
-    /// (C3, C15).
+    /// (C15); a group the same way, to its leader (C93), and then asks for
+    /// its members (C94).
     pub fn connect_device(device: &CastDevice) -> Result<CastClient, ConnectError> {
+        let mut client = CastClient::connect(&device.socket_addresses(), RequestIds::random())?;
         if device.kind == DeviceKind::Group {
-            return Err(ConnectError::Group);
+            client.request_members();
         }
-        CastClient::connect(&device.socket_addresses(), RequestIds::random())
+        Ok(client)
+    }
+
+    /// Sends the multizone `GET_STATUS` of a group session (C94).
+    pub fn request_members(&mut self) {
+        self.channel.request_members();
+        self.flush();
     }
 
     /// Tries each address in turn (IPv4 first, C16) and returns once the

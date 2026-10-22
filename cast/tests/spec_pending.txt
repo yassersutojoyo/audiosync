@@ -6,24 +6,6 @@
 # Connection.
 C20 TLS 1.2 with ECDHE-RSA AES-GCM and CBC suites: the platform TLS stacks offer them, but native-tls can't pin a server suite in a test; G4 records what devices accept (partly done: TLS 1.2 minimum, a TLS 1.2-only server connects, handshake errors carry the TLS stack's reason).
 
-# Groups: a later stage drives a group as one target; the sender still refuses groups.
-C3 Groups driven as one target: the group stage (the client refuses a group today, tests/session.rs).
-C89 Group announcement and its logged ca and md: the group stage (partly done: a port other than 8009 marks a group, C14).
-C90 Group records follow the leader and are resolved afresh on every connect: the group stage.
-C91 Temporary groups listed like saved ones: the group stage.
-C92 No query to the HTTP setup interface: the group stage.
-C93 One channel to the group's port, no channel to a member: the group stage.
-C94 Member list from the multizone namespace: the group stage.
-C95 deviceId matched to a discovered id: the group stage.
-C96 Other multizone message types logged only: the group stage.
-C97 Leader handover recovery: the group stage.
-C98 Membership changes during a session: the group stage.
-C99 A member stays a target of its own: the group stage.
-C100 Group volume: the group stage.
-C101 Group offset stored under the group's id: the group stage and the host.
-C102 No group offset derived from members: the group stage and the host.
-C103 Stream fetches from the group's and members' addresses: the group stage.
-
 # Timing: hardware, and the app's interface.
 C74 Latency of seconds: hardware, G7.
 C75 Growing latency: hardware, G7 (partly done: drops and rebuffers are counted, C79).

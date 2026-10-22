@@ -67,6 +67,7 @@ fn target(id: DeviceId, device: &FakeDevice) -> CastTarget {
     CastTarget {
         id,
         addresses: vec![device.address],
+        group: None,
     }
 }
 
@@ -395,6 +396,7 @@ fn a_rate_the_spec_does_not_allow_is_refused_at_once() {
     let target = CastTarget {
         id: A,
         addresses: Vec::new(),
+        group: None,
     };
     assert_eq!(
         host.start(target, 32_000, Metadata::default(), reader),

@@ -41,6 +41,7 @@ use audiosync_cast::discovery::{
     BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
 };
 use audiosync_cast::error::ConnectError;
+use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, CommandError, DeviceMemory, HostEvent, StartRefused,
 };
@@ -70,7 +71,7 @@ pub const CAST_CHANGED: i32 = 2;
 pub const CAST_GONE: i32 = 3;
 
 /// What a device is ([`AscCastDevice::flags`]), bit by bit: a Cast group,
-/// listed but never driven (C3, C14).
+/// which plays as one device with its own volume and offset (C3, C14).
 pub const CAST_FLAG_GROUP: u32 = 1;
 /// Its records went away while a session with it runs (C17).
 pub const CAST_FLAG_OFFLINE: u32 = 2;
@@ -83,7 +84,8 @@ pub const CAST_REFUSED_NONE: i32 = 0;
 pub const CAST_REFUSED_BUSY: i32 = 1;
 /// The ID is not a listed device.
 pub const CAST_REFUSED_UNKNOWN: i32 = 2;
-/// The device is a Cast group (C3).
+/// No longer reported: a Cast group starts like a device (C3). Kept so
+/// hosts built against it still compile.
 pub const CAST_REFUSED_GROUP: i32 = 3;
 /// The handle is dead or its worker gone.
 pub const CAST_REFUSED_CLOSED: i32 = 4;
@@ -124,6 +126,12 @@ pub const CAST_EVENT_MEMORY_CHANGED: i32 = 14;
 pub const CAST_EVENT_DISCOVERY_STOPPED: i32 = 15;
 /// The handle is dead (see the module's Panics).
 pub const CAST_EVENT_FAILED: i32 = 16;
+/// The playing group's member list changed: read it with
+/// [`asc_cast_member_count`] and [`asc_cast_member`] (C94, C95).
+pub const CAST_EVENT_MEMBERS: i32 = 17;
+/// A line about a Cast group for the debug log, in `detail`: what a group
+/// announces (C89), or a multizone message the sender doesn't act on (C96).
+pub const CAST_EVENT_GROUP_LOG: i32 = 18;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
 /// teardown (C87).
@@ -155,7 +163,8 @@ pub const CAST_ERROR_VOLUME_FIXED: i32 = 7;
 pub const CAST_ERROR_VOLUME: i32 = 8;
 /// Artwork that is not PNG or JPEG, or over 1280 by 720 (C53).
 pub const CAST_ERROR_ARTWORK: i32 = 9;
-/// The device is a Cast group (C3).
+/// No longer reported: a Cast group plays like a device (C3). Kept so
+/// hosts built against it still compile.
 pub const CAST_ERROR_GROUP: i32 = 10;
 
 /// A stream's format ([`AscCastEvent::format`]): live WAV.
@@ -191,6 +200,19 @@ pub struct AscCastDevice {
     /// The `md` TXT value; "" when it has none.
     pub model: *const c_char,
     pub flags: u32,
+}
+
+/// One member of the playing group (C94, C95). The strings are
+/// NUL-terminated UTF-8 owned by the handle, valid until the next
+/// `asc_cast_member` call on it or its destroy.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AscCastMember {
+    /// The listed device it is, as [`AscCastDevice::id`] names it; "" when
+    /// no discovered device matches, and the host shows the name alone.
+    pub id: *const c_char,
+    /// The name the group gives it; "" when none.
+    pub name: *const c_char,
 }
 
 /// One event. The strings are NUL-terminated UTF-8 owned by the handle,
@@ -316,6 +338,8 @@ struct Attempt {
     attempt: AttemptId,
     key: DeviceKey,
     id: String,
+    /// A group's addresses, kept current from discovery (C90, C103).
+    group: Option<GroupRecords>,
 }
 
 /// What the handle and its input share: the writing end of the running
@@ -450,6 +474,10 @@ pub struct AscCast {
     feeding: Option<AttemptId>,
     panics_before: u64,
     failure_reported: bool,
+    /// The playing group's members, as its session last reported them.
+    members: Vec<GroupMember>,
+    /// The strings of the last member handed out: ID, name.
+    member_strings: [CString; 2],
 }
 
 /// `text` as a C string; a NUL inside becomes U+FFFD.
@@ -548,11 +576,8 @@ fn stream_code(error: &StreamError) -> i32 {
     }
 }
 
-fn connect_code(error: &ConnectError) -> i32 {
-    match error {
-        ConnectError::Group => CAST_ERROR_GROUP,
-        _ => CAST_ERROR_CONNECT,
-    }
+fn connect_code(_: &ConnectError) -> i32 {
+    CAST_ERROR_CONNECT
 }
 
 fn session_code(error: &SessionError) -> i32 {
@@ -638,9 +663,46 @@ impl AscCast {
         self.changes.push_back(change);
     }
 
+    /// Logs what a group announces when it is first listed (C89).
+    fn log_group(&mut self, key: DeviceKey) {
+        let line = self
+            .list
+            .get(key)
+            .and_then(|entry| entry.device.as_ref())
+            .and_then(|device| device.group_log_line());
+        if let Some(line) = line {
+            let mut pending = Pending::new(CAST_EVENT_GROUP_LOG);
+            pending.detail = line;
+            self.events.push_back(pending);
+        }
+    }
+
+    /// Hands the playing group's latest records and its members' addresses
+    /// to its session (C90, C103).
+    fn follow_groups(&mut self) {
+        let member_ips: Vec<IpAddr> = self
+            .members
+            .iter()
+            .filter_map(|member| self.list.member(member))
+            .flat_map(|entry| entry.addresses.iter().map(SocketAddr::ip))
+            .collect();
+        for attempt in &self.attempts {
+            let Some(records) = &attempt.group else {
+                continue;
+            };
+            if let Some(entry) = self.list.get(attempt.key) {
+                records.set_group(entry.addresses.clone());
+            }
+            records.set_members(member_ips.clone());
+        }
+    }
+
     fn listed(&mut self, event: ListEvent) {
         match event {
-            ListEvent::Added(key) => self.change(CAST_APPEARED, key),
+            ListEvent::Added(key) => {
+                self.change(CAST_APPEARED, key);
+                self.log_group(key);
+            }
             ListEvent::Updated(key) | ListEvent::Offline(key) => self.change(CAST_CHANGED, key),
             ListEvent::Removed(key) => self.change(CAST_GONE, key),
             ListEvent::Identified { from, id } => {
@@ -651,6 +713,7 @@ impl AscCast {
                 }
                 self.change(CAST_GONE, DeviceKey::Manual(from));
                 self.change(CAST_APPEARED, DeviceKey::Id(id));
+                self.log_group(DeviceKey::Id(id));
             }
             ListEvent::Skipped(_) => {}
         }
@@ -669,6 +732,7 @@ impl AscCast {
             let event = self.list.apply(event);
             self.listed(event);
         }
+        self.follow_groups();
         if dead {
             self.end_discovery();
             self.events
@@ -715,7 +779,12 @@ impl AscCast {
                 event,
             } => {
                 let id = self.attempt_id(attempt, device);
-                let mut pending = session_event(event);
+                let mut members = None;
+                let mut pending = session_event(event, |list| members = Some(list));
+                if let Some(members) = members {
+                    self.members = members;
+                    self.follow_groups();
+                }
                 if pending.kind == CAST_EVENT_ENDED {
                     self.ended(attempt);
                 }
@@ -778,7 +847,11 @@ impl AscCast {
         else {
             return;
         };
-        let key = self.attempts.remove(index).key;
+        let removed = self.attempts.remove(index);
+        let key = removed.key;
+        if removed.group.is_some() {
+            self.members.clear();
+        }
         if self.feeding == Some(attempt) {
             self.feeding = None;
             self.shared.attach(None);
@@ -797,16 +870,13 @@ impl AscCast {
         self.pump_discovery();
         let key = device_key(id).ok_or(CAST_REFUSED_UNKNOWN)?;
         let entry = self.list.get(key).ok_or(CAST_REFUSED_UNKNOWN)?;
-        if entry
-            .device
-            .as_ref()
-            .is_some_and(|device| device.kind == DeviceKind::Group)
-        {
-            return Err(CAST_REFUSED_GROUP);
-        }
+        let group = entry
+            .is_group()
+            .then(|| GroupRecords::new(entry.addresses.clone()));
         let target = CastTarget {
             id: memory_id(key),
             addresses: entry.addresses.clone(),
+            group: group.clone(),
         };
         let (writer, reader) = audio_ring(RING_FRAMES);
         let attempt = self
@@ -819,10 +889,14 @@ impl AscCast {
         self.shared.attach(Some(writer));
         self.feeding = Some(attempt);
         self.list.set_in_session(key, true);
+        if group.is_some() {
+            self.members.clear();
+        }
         self.attempts.push(Attempt {
             attempt,
             key,
             id: device_id_text(key),
+            group,
         });
         Ok(attempt)
     }
@@ -865,7 +939,7 @@ impl AscCast {
     }
 }
 
-fn session_event(event: SessionEvent) -> Pending {
+fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>)) -> Pending {
     match event {
         SessionEvent::Playing => Pending::new(CAST_EVENT_PLAYING),
         SessionEvent::Diagnostics(diagnostics) => {
@@ -912,6 +986,15 @@ fn session_event(event: SessionEvent) -> Pending {
         SessionEvent::Stream(event) => {
             let mut pending = Pending::new(CAST_EVENT_STREAM);
             pending.detail = format!("{event:?}");
+            pending
+        }
+        SessionEvent::Members(members) => {
+            on_members(members);
+            Pending::new(CAST_EVENT_MEMBERS)
+        }
+        SessionEvent::GroupMessage(kind) => {
+            let mut pending = Pending::new(CAST_EVENT_GROUP_LOG);
+            pending.detail = format!("Cast group message {kind}");
             pending
         }
         SessionEvent::Ended(end) => ended_event(end),
@@ -1017,6 +1100,8 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             feeding: None,
             panics_before,
             failure_reported: false,
+            members: Vec::new(),
+            member_strings: Default::default(),
         }))
     });
     created.unwrap_or_else(|_| {
@@ -1209,8 +1294,8 @@ fn failure(cast: &mut AscCast) -> Option<AscCastEvent> {
 /// returns its attempt number (1 or more); its events carry it. The stream
 /// plays what the input writes from now on, with the metadata and artwork
 /// set last. Returns 0, starting nothing, for a null or dead handle, an ID
-/// that isn't listed, a group, or while another device plays or starts
-/// (C2); `*refused` (when not null) gets the `CAST_REFUSED_*` code, 0 on
+/// that isn't listed, or while another device or group plays or starts
+/// (C2); a group plays as one device (C3, C93). `*refused` (when not null) gets the `CAST_REFUSED_*` code, 0 on
 /// success. The format that worked last on the device is tried first (C84).
 ///
 /// # Safety
@@ -1469,6 +1554,62 @@ pub unsafe extern "C" fn asc_cast_set_offset(
             true
         })
     }
+}
+
+/// How many members the playing group has, as its latest
+/// [`CAST_EVENT_MEMBERS`] reported; 0 while none are known, when no group
+/// plays, and for a null or dead handle.
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_member_count(cast: *mut AscCast) -> usize {
+    // SAFETY: as the caller's.
+    unsafe { live(cast, 0, |cast| cast.members.len()) }
+}
+
+/// Writes member `index` of the playing group into `*member` and returns
+/// true; false, leaving it as it was, for an index past the count or a null
+/// pointer or handle. A member matches the listed single device whose `id`
+/// equals its `deviceId` read as a UUID (C95).
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract;
+/// `member` is null or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_member(
+    cast: *mut AscCast,
+    index: usize,
+    member: *mut AscCastMember,
+) -> bool {
+    if member.is_null() {
+        return false;
+    }
+    // SAFETY: as the caller's.
+    let found = unsafe {
+        live(cast, None, |cast| {
+            let found = cast.members.get(index)?;
+            let id = cast
+                .list
+                .member(found)
+                .map(|entry| device_id_text(entry.key))
+                .unwrap_or_default();
+            let name = found.name.clone().unwrap_or_default();
+            cast.member_strings = [c_string(&id), c_string(&name)];
+            Some(AscCastMember {
+                id: cast.member_strings[0].as_ptr(),
+                name: cast.member_strings[1].as_ptr(),
+            })
+        })
+    };
+    let Some(found) = found else {
+        return false;
+    };
+    // SAFETY: non-null and writable by the caller's contract.
+    unsafe { member.write(found) };
+    true
 }
 
 /// The offset stored for device `id`, in ms; -1 when none is, and for a
@@ -2081,8 +2222,86 @@ mod tests {
                 gone
             ]
         );
-        assert_eq!(start(handle, group), (0, CAST_REFUSED_GROUP));
+        let logged: Vec<Pending> = waiting(handle)
+            .into_iter()
+            .filter(|pending| pending.kind == CAST_EVENT_GROUP_LOG)
+            .collect();
+        assert_eq!(logged.len(), 1);
+        assert!(logged[0].detail.contains(group), "{}", logged[0].detail);
         assert_eq!(start(handle, KITCHEN), (0, CAST_REFUSED_UNKNOWN));
+        let (attempt, refused) = start(handle, group);
+        assert!(attempt > 0);
+        assert_eq!(refused, CAST_REFUSED_NONE);
+        // SAFETY: a live handle.
+        unsafe { asc_cast_stop(handle) };
+        destroy(handle);
+    }
+
+    // CAST_SPEC: C95
+    #[test]
+    fn the_playing_groups_members_cross_the_boundary_matched_to_listed_devices() {
+        let handle = create();
+        let group = "fedcba9876543210fedcba9876543210";
+        let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
+        let downstairs = record(group, "Downstairs", 32_000, Ipv4Addr::new(192, 0, 2, 6));
+        browse(
+            handle,
+            vec![
+                BrowseEvent::Resolved(kitchen),
+                BrowseEvent::Resolved(downstairs),
+            ],
+            false,
+        );
+        devices(handle);
+        // SAFETY: a live handle.
+        assert_eq!(unsafe { asc_cast_member_count(handle) }, 0);
+        let (attempt, _) = start(handle, group);
+        assert!(attempt > 0);
+        let member = |device_id: &str, name: &str| GroupMember {
+            device_id: device_id.to_owned(),
+            id: DeviceId::parse(device_id),
+            name: Some(name.to_owned()),
+        };
+        let dashed = "01234567-89AB-CDEF-0123-456789ABCDEF";
+        assert_eq!(dashed.replace('-', "").to_ascii_lowercase(), KITCHEN);
+        inside(handle).take_in(HostEvent::Session {
+            attempt: AttemptId(attempt - 1),
+            device: DeviceId::parse(group).unwrap(),
+            event: SessionEvent::Members(vec![
+                member(dashed, "Kitchen speaker"),
+                member("not-a-uuid", "Porch"),
+            ]),
+        });
+        // SAFETY: a live handle.
+        assert_eq!(unsafe { asc_cast_member_count(handle) }, 2);
+        let mut found = AscCastMember {
+            id: ptr::null(),
+            name: ptr::null(),
+        };
+        // SAFETY: a live handle and a writable member.
+        assert!(unsafe { asc_cast_member(handle, 0, &mut found) });
+        assert_eq!(
+            (text(found.id), text(found.name)),
+            (KITCHEN.to_owned(), "Kitchen speaker".to_owned())
+        );
+        // SAFETY: as above.
+        assert!(unsafe { asc_cast_member(handle, 1, &mut found) });
+        assert_eq!(
+            (text(found.id), text(found.name)),
+            (String::new(), "Porch".to_owned())
+        );
+        // SAFETY: as above.
+        assert!(!unsafe { asc_cast_member(handle, 2, &mut found) });
+        // SAFETY: a null member pointer is refused.
+        assert!(!unsafe { asc_cast_member(handle, 0, ptr::null_mut()) });
+        let records = inside(handle).attempts[0].group.clone().expect("a group");
+        assert_eq!(records.get().members, [IpAddr::from([192, 0, 2, 5])]);
+        assert_eq!(
+            records.get().group,
+            [SocketAddr::new(IpAddr::from([192, 0, 2, 6]), 32_000)]
+        );
+        // SAFETY: a live handle.
+        unsafe { asc_cast_stop(handle) };
         destroy(handle);
     }
 

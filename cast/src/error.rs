@@ -10,9 +10,6 @@ use crate::framing::FrameError;
 /// Why a connection attempt failed (C80). Each says its cause.
 #[derive(Debug)]
 pub enum ConnectError {
-    /// The device is a Cast group, which this version lists but never
-    /// drives (C3).
-    Group,
     /// No address to try.
     NoAddress,
     /// No TCP connection to any address; the last error.
@@ -35,7 +32,6 @@ pub enum ConnectError {
 impl fmt::Display for ConnectError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConnectError::Group => f.write_str("Cast groups are not supported yet"),
             ConnectError::NoAddress => f.write_str("the device has no address"),
             ConnectError::Tcp { address, error } => {
                 write!(f, "no connection to {address}: {error}")

@@ -10,6 +10,8 @@ pub mod mdns;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
+use crate::group::GroupMember;
+
 /// The service the sender browses for (C10).
 pub const SERVICE_TYPE: &str = "_googlecast._tcp.local.";
 /// The port single devices announce; any other marks a group (C14, C15).
@@ -117,8 +119,7 @@ impl fmt::Display for DeviceId {
     }
 }
 
-/// A single device, or a Cast group the sender lists but never drives
-/// (C3, C14).
+/// A single device, or a Cast group, which plays as one target (C3, C14).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceKind {
     Single,
@@ -139,6 +140,8 @@ pub struct CastDevice {
     pub version: Option<String>,
     /// `ic`, a path on the device; not fetched by this version.
     pub icon_path: Option<String>,
+    /// `ca`, for the log only: nothing depends on it (C13, C89).
+    pub capabilities: Option<String>,
     pub kind: DeviceKind,
     pub port: u16,
     pub addresses: Vec<IpAddr>,
@@ -196,6 +199,7 @@ impl CastDevice {
             model: txt.text("md"),
             version: txt.text("ve"),
             icon_path: txt.text("ic"),
+            capabilities: txt.text("ca"),
             kind,
             port: record.port,
             addresses: ordered(&record.addresses),
@@ -204,6 +208,20 @@ impl CastDevice {
                 .filter(|key| !READ_KEYS.contains(key))
                 .map(str::to_owned)
                 .collect(),
+        })
+    }
+
+    /// What a group announces, for the debug log (C89); `None` for a single
+    /// device.
+    pub fn group_log_line(&self) -> Option<String> {
+        (self.kind == DeviceKind::Group).then(|| {
+            format!(
+                "Cast group {} on port {}: ca={} md={}",
+                self.id,
+                self.port,
+                self.capabilities.as_deref().unwrap_or("-"),
+                self.model.as_deref().unwrap_or("-"),
+            )
         })
     }
 
@@ -252,6 +270,14 @@ pub struct Entry {
     pub in_session: bool,
 }
 
+impl Entry {
+    pub fn is_group(&self) -> bool {
+        self.device
+            .as_ref()
+            .is_some_and(|device| device.kind == DeviceKind::Group)
+    }
+}
+
 /// A change of the list.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ListEvent {
@@ -288,6 +314,14 @@ impl DeviceList {
         self.entries.iter().find(|entry| entry.key == key)
     }
 
+    /// The single device a group member names (C95): its `deviceId` read
+    /// as a UUID equals the device's `id`.
+    pub fn member(&self, member: &GroupMember) -> Option<&Entry> {
+        let id = member.id?;
+        self.get(DeviceKey::Id(id))
+            .filter(|entry| entry.device.is_some() && !entry.is_group())
+    }
+
     fn get_mut(&mut self, key: DeviceKey) -> Option<&mut Entry> {
         self.entries.iter_mut().find(|entry| entry.key == key)
     }
@@ -320,9 +354,13 @@ impl DeviceList {
         }
     }
 
-    /// Moves the address that worked to the front (C16).
+    /// Moves the address that worked to the front (C16). A group keeps the
+    /// order of its records, which follow its leader (C90).
     pub fn remember_address(&mut self, key: DeviceKey, address: SocketAddr) {
         if let Some(entry) = self.get_mut(key) {
+            if entry.is_group() {
+                return;
+            }
             entry.addresses.retain(|&known| known != address);
             entry.addresses.insert(0, address);
         }
@@ -343,6 +381,12 @@ impl DeviceList {
         let key = DeviceKey::Id(id);
         let fresh = device.socket_addresses();
         if let Some(entry) = self.get_mut(key) {
+            if device.kind == DeviceKind::Group {
+                entry.addresses = fresh;
+                entry.device = Some(device);
+                entry.online = true;
+                return ListEvent::Updated(key);
+            }
             let mut addresses = entry.addresses.clone();
             // The address that worked stays first; the rest follow the
             // records, which are the current truth.

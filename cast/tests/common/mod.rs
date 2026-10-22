@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::framing::{FrameReader, encode_frame};
 use audiosync_cast::message::{
-    CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_MEDIA, NS_RECEIVER,
-    PLATFORM, PayloadType, ProtocolVersion,
+    CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_MEDIA, NS_MULTIZONE,
+    NS_RECEIVER, PLATFORM, PayloadType, ProtocolVersion,
 };
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -76,6 +76,9 @@ pub struct Behavior {
     pub tls12_only: bool,
     /// The certificate's subject names; never the address the client uses.
     pub names: Vec<String>,
+    /// A group's `status.devices`, sent as `MULTIZONE_STATUS` to a
+    /// multizone `GET_STATUS`; `None` leaves it unanswered.
+    pub members: Option<Value>,
 }
 
 impl Default for Behavior {
@@ -92,6 +95,7 @@ impl Default for Behavior {
             volume: json!({"level": 0.4, "muted": false, "controlType": "attenuation", "stepInterval": 0.05}),
             tls12_only: false,
             names: vec!["not-this-device.example".to_owned()],
+            members: None,
         }
     }
 }
@@ -431,6 +435,15 @@ impl Device {
                 "PLAYING",
                 None,
             )],
+            (NS_MULTIZONE, "GET_STATUS") => match &self.behavior.members {
+                Some(devices) => vec![json_message(
+                    PLATFORM,
+                    &message.source_id,
+                    NS_MULTIZONE,
+                    json!({"type": "MULTIZONE_STATUS", "requestId": id, "status": {"devices": devices}}),
+                )],
+                None => Vec::new(),
+            },
             (NS_CONNECTION, _) => Vec::new(),
             _ => Vec::new(),
         }

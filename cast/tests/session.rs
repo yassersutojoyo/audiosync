@@ -10,7 +10,7 @@ use audiosync_cast::channel::Event;
 use audiosync_cast::client::{
     CastClient, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS,
 };
-use audiosync_cast::discovery::{CastDevice, DeviceId, DeviceKind};
+use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::error::{Backoff, ConnectError, EndReason, LaunchError};
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::message::{
@@ -178,27 +178,6 @@ fn a_host_that_never_polls_keeps_a_bounded_event_queue() {
     );
     let _ = client.stop(Duration::from_secs(1));
     device.join();
-}
-
-// The refusal stays until the group stage (CAST_SPEC C3, C89 to C103) lands.
-#[test]
-fn a_group_is_never_driven() {
-    let group = CastDevice {
-        id: DeviceId([1; 16]),
-        instance: "Group._googlecast._tcp.local.".to_owned(),
-        name: Some("Downstairs".to_owned()),
-        model: None,
-        version: None,
-        icon_path: None,
-        kind: DeviceKind::Group,
-        port: 32187,
-        addresses: vec![IpAddr::from([127, 0, 0, 1])],
-        other_keys: Vec::new(),
-    };
-    assert!(matches!(
-        CastClient::connect_device(&group),
-        Err(ConnectError::Group)
-    ));
 }
 
 // covers: C4

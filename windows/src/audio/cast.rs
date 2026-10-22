@@ -41,7 +41,6 @@ use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::{
     BrowseEvent, DeviceId, DeviceKey, DeviceKind, DeviceList, Entry, ListEvent,
 };
-use audiosync_cast::error::ConnectError;
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, StartRefused,
 };
@@ -675,6 +674,7 @@ impl CastSpeakers {
         let target = CastTarget {
             id,
             addresses: entry.addresses.clone(),
+            group: None,
         };
         let Some(link) = self.link.as_mut() else {
             return;
@@ -943,7 +943,8 @@ impl CastSpeakers {
             }
             SessionEvent::Rebuffering => self.log.log(|| "Cast: the device ran dry".to_owned()),
             SessionEvent::Stream(event) => self.log.log(|| format!("Cast stream: {event:?}")),
-            SessionEvent::Ended(_) => {}
+            SessionEvent::GroupMessage(kind) => self.log.log(|| format!("Cast group: {kind}")),
+            SessionEvent::Members(_) | SessionEvent::Ended(_) => {}
         }
     }
 
@@ -987,7 +988,6 @@ fn problem_of(end: &SessionEnd) -> Option<CastProblem> {
     match end {
         SessionEnd::Stopped | SessionEnd::Deselected => None,
         SessionEnd::TakenOver => Some(CastProblem::TakenOver),
-        SessionEnd::Failed(SessionError::Connect(ConnectError::Group)) => Some(CastProblem::Group),
         SessionEnd::Failed(SessionError::Connect(_)) => Some(CastProblem::NotResponding),
         SessionEnd::Failed(SessionError::Launch(_) | SessionError::Media(_)) => {
             Some(CastProblem::Refused)
@@ -1011,6 +1011,7 @@ pub mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     use audiosync_cast::discovery::{DEVICE_PORT, ServiceRecord};
+    use audiosync_cast::error::ConnectError;
 
     use super::*;
 

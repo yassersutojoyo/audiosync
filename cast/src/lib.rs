@@ -23,6 +23,8 @@
 //!   volume errors.
 //! - [`audio`], [`stream`]: the host's audio ring, the WAV and FLAC
 //!   formats, and the HTTP server the device fetches the live stream from.
+//! - [`group`]: a Cast group's member list and the addresses a group
+//!   session follows while its leader changes.
 //! - [`session`]: one Cast session end to end, with the FLAC fallback,
 //!   recovery, Resync, volume, diagnostics and teardown.
 //! - [`host`]: what the host apps call. A worker thread owns the session
@@ -35,6 +37,7 @@ pub mod client;
 pub mod discovery;
 pub mod error;
 pub mod framing;
+pub mod group;
 pub mod host;
 pub mod ids;
 pub mod media;

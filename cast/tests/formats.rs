@@ -188,6 +188,7 @@ fn config(device: &FakeDevice, format: StreamFormat) -> SessionConfig {
         addresses: vec![device.address],
         format,
         metadata: Metadata::default(),
+        group: None,
     }
 }
 
