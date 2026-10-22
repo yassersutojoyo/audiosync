@@ -484,7 +484,7 @@ struct UIStrings {
     /// The notice when AudioSync's own AirPlay sender stopped after an
     /// internal error.
     let nativeAirPlayStopped = "AirPlay stopped after an internal error, so AirPlay speakers aren't playing. "
-        + "Select Retry to start it again. If it keeps stopping, restart AudioSync."
+        + "Click Retry to start it again. If it keeps stopping, restart AudioSync."
 
     /// AudioSync's own AirPlay sender can't play to this receiver.
     func nativeAirPlayCantPlay(name: String) -> String {
@@ -1010,8 +1010,8 @@ struct UIStrings {
         "Pairing code " + code.map(String.init).joined(separator: " ")
     }
     let webRemoteCodeNote = "Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one."
-    let webRemoteCodeExpired = "This code has expired. Select New Code to pair another phone."
-    let webRemoteLocked = "Pairing is locked after too many wrong codes. Select New Code to unlock it."
+    let webRemoteCodeExpired = "This code has expired. Click New Code to pair another phone."
+    let webRemoteLocked = "Pairing is locked after too many wrong codes. Click New Code to unlock it."
     let webRemoteNewCode = "New Code"
     func webRemoteDevices(_ count: Int) -> String {
         switch count {
