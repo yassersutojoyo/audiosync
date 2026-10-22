@@ -1711,12 +1711,22 @@ export component Divider inherits Rectangle {
 // window's bounds and Windows keeps it in the accessibility tree.
 export component Announcer inherits Rectangle {
     in property <string> said;
+    // Raising it says `said` again even when the words are the same: each
+    // parity is a region of its own, so a new count makes a new one appear.
+    in property <int> count;
     x: 0px;
     y: 0px;
     width: 1px;
     height: 1px;
 
-    if root.said != "": Rectangle {
+    if root.said != "" && Math.mod(root.count, 2) == 0: Rectangle {
+        width: 1px;
+        height: 1px;
+        accessible-role: text;
+        accessible-label: root.said;
+        accessible-live-region: polite;
+    }
+    if root.said != "" && Math.mod(root.count, 2) != 0: Rectangle {
         width: 1px;
         height: 1px;
         accessible-role: text;

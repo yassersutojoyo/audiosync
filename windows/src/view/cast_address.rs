@@ -143,8 +143,10 @@ impl App {
             CastAddressError::NotFound => strings.get_cast_address_not_found(),
             CastAddressError::Full => strings.get_cast_address_full(),
         };
-        self.cast_address_dialog.set_error(reason);
-        self.cast_address_dialog.invoke_prepare();
+        let dialog = &self.cast_address_dialog;
+        dialog.set_error(reason);
+        dialog.set_refusals(dialog.get_refusals().wrapping_add(1));
+        dialog.invoke_prepare();
     }
 
     /// Closes the dialog; a check still running is let go, and its answer

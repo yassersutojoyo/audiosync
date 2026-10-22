@@ -5503,6 +5503,40 @@ mod tests {
         assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
     }
 
+    // covers: C18
+    #[test]
+    fn add_by_address_announces_the_same_reason_each_time_it_is_turned_down() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_cast_add_address_requested();
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        let mut refusals = dialog.get_refusals();
+        for address in [
+            "not an address",
+            "not an address",
+            "speaker.full",
+            "speaker.full",
+        ] {
+            let reason = dialog.get_error();
+            type_text(window, address);
+            press(window, Key::Return);
+            assert!(!dialog.get_checking(), "{address}: turned down at once");
+            assert!(
+                dialog.get_refusals() > refusals,
+                "{address}: announced again after {reason:?}"
+            );
+            refusals = dialog.get_refusals();
+        }
+
+        type_text(window, "speaker.invalid");
+        press(window, Key::Return);
+        wait_for_cast_check(&app);
+        assert!(
+            dialog.get_refusals() > refusals,
+            "nothing answered: announced"
+        );
+    }
+
     /// Waits for the Add by Address… check on its thread, then lets the
     /// dialog take its answer.
     fn wait_for_cast_check(app: &App) {

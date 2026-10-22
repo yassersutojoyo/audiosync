@@ -389,6 +389,8 @@ export component CastAddressDialog inherits Dialog {
     in-out property <string> address;
     // Why the last address was turned down; "" while there is none.
     in property <string> error;
+    // Raised with every turn-down, so the same reason twice is read twice.
+    in property <int> refusals;
     in property <bool> checking;
     callback confirmed(string);
     callback cancelled();
@@ -486,6 +488,7 @@ export component CastAddressDialog inherits Dialog {
         // without moving the focus off the field.
         Announcer {
             said: root.status;
+            count: root.refusals;
         }
     }
 
