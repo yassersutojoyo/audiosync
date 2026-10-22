@@ -961,6 +961,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
     callback committed();
     // Escape in the field or on a step: drop what was typed.
     callback cancelled();
+    callback focus-changed(bool);
 
     spacing: 8px;
     accessible-role: groupbox;
@@ -1002,6 +1003,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     for delta in [-100, -10]: Button {
                         text: Strings.delay-step(delta);
                         accessible-label: Strings.delay-step-accessibility(delta);
+                        changed has-focus => {
+                            root.focus-changed(self.has-focus);
+                        }
                         clicked => {
                             root.stepped(delta);
                         }
@@ -1016,6 +1020,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                             text: root.delay-text;
                             horizontal-alignment: center;
                             accessible-label: Strings.airplay-delay-title;
+                            changed has-focus => {
+                                root.focus-changed(self.has-focus);
+                            }
                             accessible-description: root.range-hint != "" ? root.range-hint : root.pending ? Strings.delay-draft-hint : Strings.airplay-delay-hint;
                             edited(text) => {
                                 root.edited(text);
@@ -1041,6 +1048,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     for delta in [10, 100]: Button {
                         text: Strings.delay-step(delta);
                         accessible-label: Strings.delay-step-accessibility(delta);
+                        changed has-focus => {
+                            root.focus-changed(self.has-focus);
+                        }
                         clicked => {
                             root.stepped(delta);
                         }

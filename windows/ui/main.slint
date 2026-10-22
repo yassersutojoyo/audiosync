@@ -8,7 +8,7 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { Appearance, CalibrationRowItem, CastList, GroupItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -190,6 +190,7 @@ component SpeakerSection inherits VerticalLayout {
 component EqualizerCard inherits Rectangle {
     in property <bool> on;
     callback clicked();
+    callback focus-changed(bool);
 
     // A Windows 11 settings card: the whole card is the button.
     background: touch.pressed ? Tokens.surface.mix(Tokens.text, 0.97) : touch.has-hover ? Tokens.surface.mix(Tokens.text, 0.95) : Tokens.surface;
@@ -207,6 +208,9 @@ component EqualizerCard inherits Rectangle {
 
     focus := FocusScope {
         focus-on-click: false;
+        changed has-focus => {
+            root.focus-changed(self.has-focus);
+        }
         key-pressed(event) => {
             if event.text == " " || event.text == Key.Return {
                 root.clicked();
@@ -298,6 +302,7 @@ component CalibrationCard inherits Card {
     callback measure-again(int);
     callback apply();
     callback undo();
+    callback focus-changed(bool);
     callback close();
 
     accessible-role: groupbox;
@@ -326,6 +331,9 @@ component CalibrationCard inherits Card {
             alignment: LayoutAlignment.start;
 
             Button {
+                changed has-focus => {
+                    root.focus-changed(self.has-focus);
+                }
                 text: root.running ? Strings.calibration-cancel : Strings.calibrate-all;
                 enabled: root.running || root.can-start;
                 accessible-label: root.running ? Strings.calibrate-all-cancel-label : Strings.calibrate-all;
@@ -344,6 +352,9 @@ component CalibrationCard inherits Card {
             alignment: LayoutAlignment.start;
 
             Button {
+                changed has-focus => {
+                    root.focus-changed(self.has-focus);
+                }
                 text: Strings.notice-open-privacy;
                 accessible-label: Strings.notice-open-privacy-label;
                 clicked => {
@@ -387,6 +398,9 @@ component CalibrationCard inherits Card {
                     alignment: LayoutAlignment.start;
 
                     Button {
+                        changed has-focus => {
+                            root.focus-changed(self.has-focus);
+                        }
                         text: Strings.calibrate-all-again;
                         enabled: !root.running;
                         accessible-label: Strings.calibrate-all-again-label(row.name);
@@ -411,6 +425,9 @@ component CalibrationCard inherits Card {
                 spacing: 8px;
 
                 Button {
+                    changed has-focus => {
+                        root.focus-changed(self.has-focus);
+                    }
                     text: Strings.calibrate-all-apply;
                     accessible-label: Strings.calibrate-all-apply;
                     primary: true;
@@ -427,6 +444,9 @@ component CalibrationCard inherits Card {
                 }
 
                 undo-button := Button {
+                    changed has-focus => {
+                        root.focus-changed(self.has-focus);
+                    }
                     text: Strings.calibrate-all-undo;
                     enabled: root.can-undo && !root.running;
                     accessible-label: Strings.calibrate-all-undo;
@@ -440,6 +460,9 @@ component CalibrationCard inherits Card {
                 }
 
                 close-button := Button {
+                    changed has-focus => {
+                        root.focus-changed(self.has-focus);
+                    }
                     text: Strings.calibrate-all-close;
                     enabled: !root.running;
                     accessible-label: Strings.calibrate-all-close-label;
@@ -722,6 +745,7 @@ export component MainWindow inherits Window {
     callback dismiss-all-focus-changed(bool);
     callback speaker-focus-changed(string, RowPart);
     callback group-focus-changed(string, RowPart);
+    callback control-focus-changed(MainControl, bool);
     in-out property <int> focus-notice-index: -1;
     in-out property <string> focus-speaker-id;
     in-out property <RowPart> focus-speaker-part;
@@ -978,6 +1002,9 @@ export component MainWindow inherits Window {
                     text: Strings.streaming-switch;
                     checked: root.running;
                     accessible-label: Strings.streaming-switch;
+                    changed has-focus => {
+                        root.control-focus-changed(MainControl.power, self.has-focus);
+                    }
                     toggled => {
                         root.power-toggled(self.checked);
                         // Show what the engine did, even if it refused.
@@ -1051,6 +1078,9 @@ export component MainWindow inherits Window {
                                 model: root.sources;
                                 current-index: root.source-index;
                                 accessible-label: Strings.source-label;
+                                changed has-focus => {
+                                    root.control-focus-changed(MainControl.source, self.has-focus);
+                                }
                                 selected => {
                                     root.source-selected(self.current-index);
                                     self.current-index = root.source-index;
@@ -1066,6 +1096,9 @@ export component MainWindow inherits Window {
                         has-artwork: root.now-playing-has-artwork;
                         artwork: root.now-playing-artwork;
                         focused-button <=> root.now-playing-focused-button;
+                        changed focused-button => {
+                            root.control-focus-changed(MainControl.transport, self.focused-button >= 0);
+                        }
                         transport(button) => {
                             root.now-playing-transport(button);
                         }
@@ -1092,6 +1125,9 @@ export component MainWindow inherits Window {
                             VolumeSlider {
                                 volume: root.master-volume;
                                 label: Strings.master-volume;
+                                changed slider-focused => {
+                                    root.control-focus-changed(MainControl.master-volume, self.slider-focused);
+                                }
                                 changed(value) => {
                                     root.master-volume-changed(value);
                                 }
@@ -1103,6 +1139,9 @@ export component MainWindow inherits Window {
                         on: root.equalizer-on;
                         clicked => {
                             root.equalizer-requested();
+                        }
+                        focus-changed(has) => {
+                            root.control-focus-changed(MainControl.equalizer, has);
                         }
                     }
 
@@ -1128,6 +1167,9 @@ export component MainWindow inherits Window {
                         }
                         measure-again(row) => {
                             root.calibrate-all-again-requested(row);
+                        }
+                        focus-changed(has) => {
+                            root.control-focus-changed(MainControl.calibration, has);
                         }
                         apply => {
                             root.calibrate-all-apply-requested();
@@ -1368,6 +1410,9 @@ export component MainWindow inherits Window {
                         }
                         cancelled => {
                             root.airplay-delay-cancelled();
+                        }
+                        focus-changed(has) => {
+                            root.control-focus-changed(MainControl.airplay-delay, has);
                         }
                     }
                 }

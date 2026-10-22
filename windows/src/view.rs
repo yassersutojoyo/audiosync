@@ -40,9 +40,9 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastList, CastProblem,
     CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog, GuidePage,
-    GuideStepItem, GuideWindow, MainWindow, NameField, NoticeItem, NoticeKind, Palette,
-    PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind,
-    Strings, Tokens, TrayFlyout, speaker_names,
+    GuideStepItem, GuideWindow, MainControl, MainWindow, NameField, NoticeItem, NoticeKind,
+    Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem,
+    SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
 };
 
 mod help_window;
@@ -355,6 +355,10 @@ struct MainFocus {
     speaker: Option<(SharedString, RowPart)>,
     /// A group row's control: the group id and the row's part.
     group: Option<(SharedString, RowPart)>,
+    /// Another main-window control: the streaming switch, the source, the
+    /// transport, the master volume, the equalizer or calibration card or
+    /// the AirPlay delay.
+    control: Option<MainControl>,
 }
 
 /// Notes that the notice `id` gained or lost the focus.
@@ -1841,6 +1845,13 @@ impl App {
             apply_rename_left(&w);
         });
         let w = weak.clone();
+        main.on_control_focus_changed(move |control, focused| {
+            with_app(&w, |app| {
+                note_focus(&mut app.main_focus.borrow_mut().control, control, focused);
+            });
+            apply_rename_left(&w);
+        });
+        let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
             let _ = slint::quit_event_loop();
@@ -2499,6 +2510,9 @@ impl App {
                 ui.rename = Some((id.to_owned(), name));
                 ui.rename_focused = false;
             }
+            // The field takes the focus; a control that went while it had
+            // the focus never reported losing it.
+            self.main_focus.borrow_mut().control = None;
             self.refresh();
         }
         // After the menu that asked for it has closed and given the focus
@@ -2570,7 +2584,8 @@ impl App {
         let elsewhere = focus.speaker.is_some()
             || focus.group.is_some()
             || focus.notice.is_some()
-            || focus.dismiss_all;
+            || focus.dismiss_all
+            || focus.control.is_some();
         (ui.rename_focused && elsewhere).then_some(id)
     }
 
@@ -5087,6 +5102,45 @@ mod tests {
         draw_frames();
         assert!(app.ui.borrow().rename.is_none(), "Tab left the field");
         assert_eq!(name_of(&app, "local:desk"), "Desk");
+    }
+
+    #[test]
+    fn leaving_the_name_field_for_the_master_volume_or_airplay_delay_applies_the_name() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        let rename = |name: &str| {
+            app.main
+                .invoke_speaker_rename_requested("local:desk".into());
+            draw_frames();
+            app.main
+                .invoke_speaker_rename_edited("local:desk".into(), name.into());
+        };
+
+        rename("Desk");
+        // The master volume's slider, in the left column.
+        click(window, 150.0, 275.0);
+        assert_eq!(
+            app.main_focus.borrow().control,
+            Some(MainControl::MasterVolume)
+        );
+        assert!(
+            app.ui.borrow().rename.is_none(),
+            "the volume took the focus"
+        );
+        assert_eq!(name_of(&app, "local:desk"), "Desk");
+
+        rename("Desk left");
+        // The AirPlay delay's field, under the lists scrolled to the end.
+        scroll(window, 640.0, 600.0, -2000.0);
+        click(window, 470.0, 620.0);
+        assert_eq!(
+            app.main_focus.borrow().control,
+            Some(MainControl::AirplayDelay)
+        );
+        assert!(app.ui.borrow().rename.is_none(), "the delay field took it");
+        assert_eq!(name_of(&app, "local:desk"), "Desk left");
     }
 
     #[test]

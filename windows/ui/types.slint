@@ -11,6 +11,10 @@ export enum RowState { off, will-play, playing, waiting-for-device, reconnecting
 // field. A row rebuilt under the focus takes it back on the same part.
 export enum RowPart { none, toggle, delay, volume, sync, options, name }
 
+// A main-window control outside the notices and the speaker and group rows;
+// one taking the focus applies an open speaker rename.
+export enum MainControl { power, source, transport, master-volume, equalizer, calibration, airplay-delay }
+
 // The kind of output: the icon in a speaker's toggle, and the line under a
 // connected speaker's name.
 export enum SpeakerKind { airplay, airplay2, cast, built-in, headphones, bluetooth, usb, usb-headphones, usb-speakers, hdmi, display-port, virtual, other }
