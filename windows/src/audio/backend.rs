@@ -155,6 +155,28 @@ pub struct AirPlayInfo {
     /// AudioSync reaches it over AirPlay 2, which happens only while the
     /// AirPlay 2 switch is on.
     pub airplay2: bool,
+    /// Set for a stereo pair or home theater group, listed as one speaker
+    /// while the AirPlay 2 switch is on (spec P176).
+    pub group: Option<AirPlayGroup>,
+}
+
+/// What a stereo pair or home theater group row says about its members.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AirPlayGroup {
+    pub kind: AirPlayGroupKind,
+    /// Every member's name, in view or not.
+    pub members: Vec<String>,
+    /// The members out of view or playing nothing now (P181).
+    pub missing: Vec<String>,
+    /// A member is missing, or reports its partner unreachable, even when
+    /// no name is known for it.
+    pub incomplete: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPlayGroupKind {
+    StereoPair,
+    HomeTheater,
 }
 
 /// The PIN prompt of a running pairing: the Apple TV shows a PIN for the
@@ -224,6 +246,12 @@ pub enum AirPlayProblem {
     /// Another AirPlay 2 speaker plays: it stays on and starts once that
     /// one stops.
     OneAirPlay2Speaker,
+    /// An Apple TV whose home theater group plays: its sound goes to those
+    /// speakers, so it is off.
+    PlaysThroughSpeakers,
+    /// A home theater group whose Apple TV plays by itself, so the group is
+    /// off.
+    AppleTvPlays,
     /// AudioSync can't play to it at all.
     Unsupported,
 }

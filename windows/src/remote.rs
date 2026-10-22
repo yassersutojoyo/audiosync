@@ -371,6 +371,7 @@ mod tests {
             device_volume: None,
             waiting: None,
             cast: None,
+            group: None,
         }
     }
 

@@ -1143,7 +1143,8 @@ export component SpeakerRow inherits Rectangle {
     // ("Waiting for device", "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.availability == Availability.unsupported);
     property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
-    property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", root.note);
+    // A stereo pair or home theater group says what it is first.
+    property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", Strings.speaker-caption(root.item.group-note, root.note));
 
     border-radius: Fluent.radius-control;
     background: root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
@@ -1219,7 +1220,7 @@ export component SpeakerRow inherits Rectangle {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
                             label: Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind);
-                            description: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state);
+                            description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();
                             }
