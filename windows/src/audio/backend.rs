@@ -283,8 +283,6 @@ pub enum CastProblem {
     TakenOver,
     /// The connection was lost and couldn't be brought back.
     ConnectionLost,
-    /// A Cast group, which AudioSync can't play to (spec C3).
-    Group,
 }
 
 /// Whether Google Cast discovery runs.
@@ -304,8 +302,8 @@ pub struct CastInfo {
     pub id: String,
     /// The name it announces.
     pub name: String,
-    /// A Cast group, listed but never played to.
-    pub group: bool,
+    /// Set for a Cast group, which plays as one speaker (spec C3).
+    pub group: Option<CastGroup>,
     /// Whether the user turned it on.
     pub enabled: bool,
     /// The device's volume as it last reported it, 0 to 100.
@@ -317,6 +315,14 @@ pub struct CastInfo {
     /// the other outputs wait for this speaker while it is on (spec C77).
     pub offset_ms: f64,
     pub status: CastStatus,
+}
+
+/// A Cast group as its row shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CastGroup {
+    /// Its members by name, as its latest session listed them; `None`
+    /// until one did (spec C94).
+    pub members: Option<Vec<String>>,
 }
 
 /// Something the UI should know about, from [`AudioBackend::poll`].

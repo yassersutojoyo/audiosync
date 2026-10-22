@@ -466,10 +466,7 @@ export global Strings {
         if problem == CastProblem.taken-over {
             return @tr("Another app started casting to {}, so it's off in AudioSync.", speaker);
         }
-        if problem == CastProblem.connection-lost {
-            return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
-        }
-        return @tr("{} is a speaker group, which AudioSync can't play to. Turn on one of its speakers instead.", speaker);
+        return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
     }
 
     // Windows can't mute the captured app, so it also plays straight from
@@ -573,7 +570,7 @@ export global Strings {
     out property <string> help-sync-title: @tr("Sync");
     out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S (File > Apply Typed Delay); the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay card under Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.");
     // The Sync section's second part, after the delay illustration.
-    out property <string> help-sync-cast: @tr("Local and AirPlay speakers play in step: once their delays are set, AudioSync keeps them together. It can't sync Google Cast speakers automatically, so each one has an offset you set by ear in its row. If the Cast speaker sounds late, raise it, and the other speakers wait longer; if it sounds early, lower it. AudioSync keeps the offset for that speaker. One Google Cast speaker plays at a time, and speaker groups made in the Google Home app can't play. While it plays, Resync under its volume restarts the stream, with a short gap, so it lines up at its offset again.");
+    out property <string> help-sync-cast: @tr("Local and AirPlay speakers play in step: once their delays are set, AudioSync keeps them together. It can't sync Google Cast speakers automatically, so each one has an offset you set by ear in its row. If the Cast speaker sounds late, raise it, and the other speakers wait longer; if it sounds early, lower it. AudioSync keeps the offset for that speaker. One Google Cast speaker plays at a time. A speaker group made in the Google Home app plays as one speaker, with one volume and one offset, and its speakers stay listed on their own. While a Google Cast speaker plays, Resync under its volume restarts the stream, with a short gap, so it lines up at its offset again.");
     // The Sync section's last part, after the illustration of the two kinds of timing.
     out property <string> help-sync-tune: @tr("Tune with two speakers at first, then add the others one at a time. A track with sharp sounds, such as drums or speech, makes an offset easy to hear.");
     // What each Guide illustration shows, for Narrator, worded as in the Mac Guide.
@@ -755,19 +752,34 @@ export global Strings {
         return "";
     }
 
-    // The note under a Google Cast speaker's name: a group can't play, and
-    // one that is on says where it is; empty otherwise.
-    public pure function cast-note(state: CastState, muted: bool, group: bool) -> string {
-        if group {
-            return @tr("Speaker groups not supported");
-        }
+    // The note under a Google Cast speaker's name: where one that is on is,
+    // else a group's `group-note`; empty otherwise.
+    public pure function cast-note(state: CastState, muted: bool, group-note: string) -> string {
         if state == CastState.connecting {
             return @tr("Connecting…");
         }
         if muted {
             return @tr("Muted on the speaker");
         }
-        return "";
+        return group-note;
+    }
+
+    // Under a Google Cast group's name: its members as "A, B and C"
+    // (list-and), or empty while no session has named them.
+    public pure function cast-group-note(members: string) -> string {
+        if members == "" {
+            return @tr("Group, members unknown");
+        }
+        return @tr("Group of {}", members);
+    }
+
+    // What Narrator reads for a Google Cast group's switch: "Attic, Google
+    // Cast group of Kitchen and Living Room".
+    public pure function cast-group-label(name: string, members: string) -> string {
+        if members == "" {
+            return @tr("{}, Google Cast group, members unknown", name);
+        }
+        return @tr("{}, Google Cast group of {}", name, members);
     }
 
     // Under a Google Cast speaker's volume while it connects or plays.

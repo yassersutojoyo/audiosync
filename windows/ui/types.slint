@@ -19,7 +19,7 @@ export enum SpeakerKind { airplay, airplay2, cast, built-in, headphones, bluetoo
 export enum CastState { idle, connecting, playing, reconnecting }
 
 // What went wrong with a Google Cast speaker, for its notice.
-export enum CastProblem { busy, not-responding, refused, taken-over, connection-lost, group }
+export enum CastProblem { busy, not-responding, refused, taken-over, connection-lost }
 
 // The speaker list's note about Google Cast while none is listed.
 export enum CastList { quiet, searching, none-found, failed }
@@ -94,6 +94,10 @@ export struct SpeakerItem {
     muted: bool,
     // The Cast speaker's volume can't be changed from here.
     volume-fixed: bool,
+    // A Google Cast group, and its members as "A, B and C"; empty while
+    // they are unknown.
+    cast-group: bool,
+    cast-members: string,
 }
 
 export struct GroupItem {

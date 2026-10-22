@@ -186,13 +186,22 @@ pub struct Speaker {
 
 /// A Google Cast speaker's own state. Its delay is the measured offset the
 /// user sets, since Cast can't be kept in sync automatically.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CastRow {
     pub state: CastState,
     /// The speaker reports itself muted.
     pub muted: bool,
     /// The speaker's volume can't be changed from here.
     pub volume_fixed: bool,
+    /// Set for a Cast group, which plays as one speaker.
+    pub group: Option<CastGroup>,
+}
+
+/// A Google Cast group: its members by name, as its latest session listed
+/// them; `None` until one did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CastGroup {
+    pub members: Option<Vec<String>>,
 }
 
 /// Where a Google Cast speaker that is on is.
@@ -244,8 +253,6 @@ pub enum CastProblem {
     /// Another app started casting to it.
     TakenOver,
     ConnectionLost,
-    /// A speaker group, which AudioSync can't play to.
-    Group,
 }
 
 /// Why a speaker that is on can't play right now. Its row says so instead
