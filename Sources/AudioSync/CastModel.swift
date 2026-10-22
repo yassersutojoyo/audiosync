@@ -51,9 +51,18 @@ struct CastDevice: Equatable {
 
 enum CastDeviceChange: Equatable {
     /// `offsetMs`: what the device memory holds for it, nil when nothing.
-    case appeared(CastDevice, offsetMs: Double?)
+    /// `former`: the `manual:` ID it was listed under until a browse found
+    /// it (C18), nil otherwise.
+    case appeared(CastDevice, offsetMs: Double?, former: String? = nil)
     case changed(CastDevice, offsetMs: Double?)
     case gone(id: String)
+
+    var id: String {
+        switch self {
+        case .appeared(let device, _, _), .changed(let device, _): return device.id
+        case .gone(let id): return id
+        }
+    }
 }
 
 /// One member of the playing group, as its session reports it (C94, C95).
@@ -231,7 +240,9 @@ extension CastDeviceChange {
                                 offline: raw.flags & UInt32(ASC_CAST_FLAG_OFFLINE) != 0,
                                 manual: raw.flags & UInt32(ASC_CAST_FLAG_MANUAL) != 0)
         switch raw.event {
-        case ASC_CAST_APPEARED: self = .appeared(device, offsetMs: offsetMs(id))
+        case ASC_CAST_APPEARED:
+            let former = raw.former.map { String(cString: $0) } ?? ""
+            self = .appeared(device, offsetMs: offsetMs(id), former: former.isEmpty ? nil : former)
         case ASC_CAST_CHANGED: self = .changed(device, offsetMs: offsetMs(id))
         case ASC_CAST_GONE: self = .gone(id: id)
         default: return nil
@@ -260,6 +271,8 @@ struct CastRow: Equatable {
     var group: CastGroupMembers?
     /// Added by address and not found by a browse yet (C18).
     var manual = false
+    /// Added by address, so Remove can forget the address.
+    var removable = false
     /// A session runs or starts: the volume, Mute and Resync reach the device.
     var live: Bool { status != .idle }
 }
@@ -329,6 +342,8 @@ struct CastModel {
     /// The playing group's members as its session last reported them; nil
     /// until it does, and once the session is over.
     private(set) var members: [CastMember]?
+    /// How the sender's ID of a device added by address starts.
+    static let manualPrefix = "manual:"
     /// The address each device added by hand was added with, by ID.
     private(set) var manualAddresses: [String: CastManualAddress] = [:]
     /// Devices added by hand that the user removed: the sender can't drop
@@ -350,8 +365,12 @@ struct CastModel {
     @discardableResult
     mutating func apply(_ change: CastDeviceChange) -> Bool {
         switch change {
-        case .appeared(let device, let offset), .changed(let device, let offset):
+        case .appeared(let device, let offset, _), .changed(let device, let offset):
             if removedManual.contains(device.id) { return false }
+            // Found by a browse: Remove goes on to forget the address it was added with.
+            if case .appeared(_, _, let former?) = change, let address = manualAddresses.removeValue(forKey: former) {
+                manualAddresses[device.id] = address
+            }
             if let offset { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
@@ -386,14 +405,18 @@ struct CastModel {
         return before == address ? nil : before
     }
 
-    /// The user's Remove on a device added by address, which must be off
-    /// already: it leaves the list. Returns the address it was added with.
+    /// The user's Remove on a device added by address. One no browse found
+    /// must be off already, and leaves the list; one a browse found stays,
+    /// and only its address is forgotten. Returns that address.
     mutating func removeManual(_ id: String) -> CastManualAddress? {
-        guard devices[id]?.manual == true, enabled != id else { return nil }
-        removedManual.insert(id)
-        devices.removeValue(forKey: id)
-        offsets.removeValue(forKey: id)
-        return manualAddresses.removeValue(forKey: id)
+        let unfound = devices[id]?.manual == true
+        guard !(unfound && enabled == id), let address = manualAddresses.removeValue(forKey: id) else { return nil }
+        if unfound {
+            removedManual.insert(id)
+            devices.removeValue(forKey: id)
+            offsets.removeValue(forKey: id)
+        }
+        return address
     }
 
     /// The device that is on while its session plays, a group included: the
@@ -721,6 +744,15 @@ struct CastManualAddress: Hashable {
                 && label.allSatisfy { $0 == "-" || $0.isASCIIDigit || ("a"..."z").contains($0) }
         }
     }
+}
+
+/// Why the address sheet stays open.
+enum CastAddProblem: Equatable {
+    /// Not a host name or IPv4 address with an optional port.
+    case unreadable
+    /// A name that doesn't resolve, an address where nothing answers, or a
+    /// sender that is gone.
+    case notFound
 }
 
 /// The addresses the user added, in the order added, one entry each; the

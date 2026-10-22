@@ -4851,6 +4851,42 @@ do {
             && t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil
             && t.helpText.contains("click\nAdd by Address… under"),
           "cast row: a device added by address says so under its name, and the Guide names the action")
+
+    let manualID = "manual:192.0.2.9:8009", realID = "00112233445566778899aabbccddeeff"
+    let identified: (String) -> CastDeviceChange? = { former in
+        former.withCString { former in
+            realID.withCString { id in
+                "Lounge".withCString { name in
+                    "".withCString { model in
+                        CastDeviceChange(AscCastDevice(event: ASC_CAST_APPEARED, id: id, name: name, model: model,
+                                                       flags: 0, former: former), offsetMs: { _ in nil })
+                    }
+                }
+            }
+        }
+    }
+    let lounge = CastManualAddress("192.0.2.9")!
+    var found = CastModel()
+    found.addedManually(manualID, address: lounge)
+    found.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    found.apply(.gone(id: manualID))
+    let browsed = identified(manualID)
+    if let browsed { found.apply(browsed) }
+    let moved = found.manualAddresses == [realID: lounge]
+    let forgotten = found.removeManual(realID)
+    check(browsed == .appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil, former: manualID)
+            && identified("") == .appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil, former: nil)
+            && browsed?.id == realID
+            && moved && forgotten == lounge && found.devices[realID] != nil && found.manualAddresses.isEmpty,
+          "cast model: a manual device a browse finds keeps its address under the new id, and Remove there forgets "
+            + "only the address")
+
+    check(t.castAddProblem(.notFound)
+            == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
+            && t.castAddProblem(.unreadable) == t.castAddInvalid
+            && CastSender.ipv4Address(of: "speaker.invalid") == nil
+            && !CastSender.answers(ip: "127.0.0.1", port: 9, timeout: 1),
+          "cast address: a name that doesn't resolve or an address where nothing answers is not found, with its own text")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

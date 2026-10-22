@@ -1,13 +1,13 @@
 import SwiftUI
 
 /// Adds a Google Cast speaker by address when discovery can't find it (C18).
-/// Return adds and Esc cancels. An address that doesn't read, or a name
-/// that doesn't resolve, keeps the sheet open with the reason under the field.
+/// Return adds and Esc cancels. An address that doesn't read, or one where
+/// no speaker answers, keeps the sheet open with the reason under the field.
 struct CastAddressSheet: View {
     @ObservedObject var model: AppModel
     @State private var typed = ""
-    @State private var invalid = false
-    /// A host name is being looked up; Add waits for it.
+    @State private var problem: CastAddProblem?
+    /// The address is being looked up and tried; Add waits for it.
     @State private var adding = false
     @FocusState private var fieldFocused: Bool
 
@@ -28,11 +28,11 @@ struct CastAddressSheet: View {
                     .autocorrectionDisabled()
                     .focused($fieldFocused)
                     .disabled(adding)
-                    .onChange(of: typed) { invalid = false }
+                    .onChange(of: typed) { problem = nil }
                     .onSubmit(add)
             }
-            if invalid {
-                Text(t.castAddInvalid)
+            if let problem {
+                Text(t.castAddProblem(problem))
                     .font(.callout)
                     .foregroundStyle(Brand.errorText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -50,25 +50,25 @@ struct CastAddressSheet: View {
         .padding(20)
         .frame(width: 420, alignment: .leading)
         .onAppear { fieldFocused = true }
-        .onChange(of: invalid) {
-            if invalid { AccessibilityNotification.Announcement(t.castAddInvalid).post() }
+        .onChange(of: problem) {
+            if let problem { AccessibilityNotification.Announcement(t.castAddProblem(problem)).post() }
         }
     }
 
     private func add() {
         guard !adding else { return }
         guard CastManualAddress(typed) != nil else {
-            invalid = true
+            problem = .unreadable
             return
         }
         adding = true
-        model.actions.addCastAddress(typed) { added in
+        model.actions.addCastAddress(typed) { found in
             adding = false
-            if added {
-                model.castAddShown = false
-            } else {
-                invalid = true
+            if let found {
+                problem = found
                 fieldFocused = true
+            } else {
+                model.castAddShown = false
             }
         }
     }

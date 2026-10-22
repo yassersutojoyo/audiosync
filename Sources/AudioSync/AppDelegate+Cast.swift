@@ -51,7 +51,8 @@ extension AppDelegate {
     /// keeps nothing added by hand from one launch to the next.
     private func addStoredCastAddresses(_ sender: CastSender) {
         for address in SettingsStore.standard.castManualList.addresses {
-            sender.addDevice(address) { [weak self] id in
+            // Not probed: a speaker that is off now still comes back once it answers.
+            sender.addDevice(address, probe: false) { [weak self] id in
                 guard let self, self.castSender === sender else { return }
                 guard let id else {
                     DebugTrace.log("[AudioSync] Cast: the stored address \(address.text) could not be added")
@@ -196,18 +197,22 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// The user's Add in the address sheet: `completion` gets true once the
-    /// sender lists the device and the address is stored, false when the
-    /// address doesn't read or its name doesn't resolve.
-    func addCastAddress(_ typed: String, completion: @escaping (Bool) -> Void) {
-        guard let address = CastManualAddress(typed), let sender = castSender else {
-            completion(false)
-            return
-        }
-        sender.addDevice(address) { [weak self] id in
+    /// The user's Add in the address sheet: `completion` gets nil once the
+    /// sender lists the device (a new row whose address is stored, or the
+    /// row already listed at that address), else why it wasn't added.
+    func addCastAddress(_ typed: String, completion: @escaping (CastAddProblem?) -> Void) {
+        guard let address = CastManualAddress(typed) else { return completion(.unreadable) }
+        guard let sender = castSender else { return completion(.notFound) }
+        sender.addDevice(address, probe: true) { [weak self] id in
             guard let self, self.castSender === sender, let id else {
-                DebugTrace.log("[AudioSync] Cast: \(address.text) could not be added")
-                completion(false)
+                DebugTrace.log("[AudioSync] Cast: nothing answers at \(address.text)")
+                completion(.notFound)
+                return
+            }
+            guard id.hasPrefix(CastModel.manualPrefix) else {
+                // Already listed by a browse: its row is the one, nothing to keep.
+                DebugTrace.log("[AudioSync] Cast: \(address.text) is \(id), listed already")
+                completion(nil)
                 return
             }
             DebugTrace.log("[AudioSync] Cast: \(address.text) added by address as \(id)")
@@ -218,15 +223,15 @@ extension AppDelegate {
             list.add(address)
             store.save(list)
             self.pushModel()
-            completion(true)
+            completion(nil)
         }
     }
 
-    /// Remove on a device added by address: it goes off, leaves the list
-    /// and isn't added at the next launch.
+    /// Remove on a device added by address: its address isn't added at the
+    /// next launch, and one no browse found goes off and leaves the list.
     func removeCastAddress(_ appID: String) {
-        guard let id = CastID.device(appID), castModel.devices[id]?.manual == true else { return }
-        if castModel.enabled == id { setCastEnabled(appID, false) }
+        guard let id = CastID.device(appID), castModel.manualAddresses[id] != nil else { return }
+        if castModel.devices[id]?.manual == true, castModel.enabled == id { setCastEnabled(appID, false) }
         guard let address = castModel.removeManual(id) else { return }
         DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
         let store = SettingsStore.standard
@@ -251,7 +256,8 @@ extension AppDelegate {
                                     cast: CastRow(status: castModel.status(of: id), muted: volume?.muted ?? false,
                                                   volumeFixed: volume?.fixed ?? false,
                                                   group: castModel.groupMembers(of: id, name: castMemberName),
-                                                  manual: device.manual))
+                                                  manual: device.manual,
+                                                  removable: castModel.manualAddresses[id] != nil))
         }
     }
 
@@ -281,7 +287,8 @@ extension AppDelegate {
                 + (d.offline ? ", offline" : "") + (offset.map { ", offset \(Int($0)) ms" } ?? "")
         }
         switch change {
-        case .appeared(let d, let offset): return "appeared: " + describe(d, offset)
+        case .appeared(let d, let offset, let former):
+            return "appeared: " + describe(d, offset) + (former.map { ", was \($0)" } ?? "")
         case .changed(let d, let offset): return "changed: " + describe(d, offset)
         case .gone(let id): return "gone: \(id)"
         }

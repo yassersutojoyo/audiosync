@@ -92,7 +92,7 @@ extension AppDelegate {
         a.resyncCast = { [weak self] id in self?.resyncCast(id) }
         a.setCastOffset = { [weak self] id, ms in self?.setCastOffset(id, ms) }
         a.addCastAddress = { [weak self] typed, done in
-            guard let self else { return done(false) }
+            guard let self else { return done(.notFound) }
             self.addCastAddress(typed, completion: done)
         }
         a.removeCastAddress = { [weak self] id in self?.removeCastAddress(id) }

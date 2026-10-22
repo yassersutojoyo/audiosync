@@ -727,7 +727,7 @@ struct SpeakerRow: View {
                 Button(cast.muted ? t.castUnmute : t.castMute) { model.actions.setCastMuted(speaker.id, !cast.muted) }
                 Button(t.castResync) { model.actions.resyncCast(speaker.id) }
             }
-            if cast.manual { Button(t.castRemove) { model.actions.removeCastAddress(speaker.id) } }
+            if cast.removable { Button(t.castRemove) { model.actions.removeCastAddress(speaker.id) } }
         } else {
             autoConnectToggle(t)
             if speaker.paired {

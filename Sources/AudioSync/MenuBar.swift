@@ -80,9 +80,9 @@ final class AppModel: ObservableObject {
         var resyncCast: (String) -> Void = { _ in }
         /// The offset the user set by ear, 0 to 20 000 ms.
         var setCastOffset: (String, Double) -> Void = { _, _ in }
-        /// The address typed in the sheet; the completion gets whether the
-        /// device was added (C18).
-        var addCastAddress: (String, @escaping (Bool) -> Void) -> Void = { _, done in done(false) }
+        /// The address typed in the sheet; the completion gets why it wasn't
+        /// added, nil once it is listed (C18).
+        var addCastAddress: (String, @escaping (CastAddProblem?) -> Void) -> Void = { _, done in done(.notFound) }
         var removeCastAddress: (String) -> Void = { _ in }
         var openMainWindow: () -> Void = {}
         var openGuide: () -> Void = {}

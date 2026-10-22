@@ -875,6 +875,13 @@ struct UIStrings {
     let castAddBody = "Use this when a Google Cast speaker doesn't show up. Enter its IP address or host name, and add :port only if it doesn't use 8009."
     let castAddField = "Address"
     let castAddInvalid = "That isn't an IP address or host name. Check it and try again."
+    let castAddNotFound = "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
+    func castAddProblem(_ problem: CastAddProblem) -> String {
+        switch problem {
+        case .unreadable: return castAddInvalid
+        case .notFound: return castAddNotFound
+        }
+    }
     let castAdd = "Add"
     let castRemove = "Remove"
     /// Under the name of a speaker added by address until a search finds it.
