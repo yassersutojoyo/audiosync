@@ -10,6 +10,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Calibrate All Speakers, on the Mac and on Windows. It plays the test sweep on each speaker that's on, one at a time, and lists each speaker's new delay, or why it couldn't be measured. Apply sets them all as one change, Undo puts them all back, and Measure Again repeats one speaker. A Cast speaker that had no offset goes back to none on Undo, so the next run searches for it again, also after a restart.
 - On Windows, Calibrate with Microphone under a local speaker sets its delay for you, as on the Mac. If the microphone is blocked, AudioSync says so and offers to open the privacy settings.
 - A speaker group made in the Google Home app now plays as one Cast speaker, with one volume and one offset. Its row names the speakers in the group once the group reports them. Those speakers keep their own rows, but they're busy while the group plays.
+- AirPlay 2 has a switch now: turn on "AirPlay 2 (Experimental)" in the app menu or the gear menu on the Mac, or in the File menu on Windows. It's off by default, it's saved, and it takes effect the next time AudioSync starts.
 - With AirPlay 2 on, a stereo pair, or an Apple TV with HomePods as its home theater speakers, shows as one row with one switch and one volume. The row says "Stereo pair" or "Home theater group" with the speakers in it, or which one is missing. Like the rest of AirPlay 2, this hasn't been tried on real speakers yet.
 
 ### Changed
