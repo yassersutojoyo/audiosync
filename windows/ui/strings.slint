@@ -228,7 +228,7 @@ export global Strings {
     public pure function remote-code-label(digits: string) -> string {
         return @tr("Pairing code {}", digits);
     }
-    out property <string> remote-no-code: @tr("This code was used or has expired. Select New Code to pair another phone.");
+    out property <string> remote-no-code: @tr("This code has expired. Select New Code to pair another phone.");
     out property <string> remote-new-code: @tr("New Code");
     out property <string> remote-locked: @tr("Too many wrong codes were entered, so pairing is locked. Select New Code to unlock it.");
     out property <string> remote-devices-title: @tr("Paired Devices");
@@ -246,12 +246,15 @@ export global Strings {
     public pure function remote-port-in-use(port: int) -> string {
         return @tr("Another app uses port {}, so the web remote can't start. Enter another port and select Use Port.", port);
     }
+    // Windows keeps some ports for itself (Hyper-V, WSL) or refuses them for another reason.
+    public pure function remote-port-unavailable(port: int) -> string {
+        return @tr("Windows doesn't let AudioSync use port {}, so the web remote can't start. Enter another port and select Use Port.", port);
+    }
     out property <string> remote-port-label: @tr("Port");
     out property <string> remote-use-port: @tr("Use Port");
     out property <string> remote-port-invalid: @tr("Enter a port from 1024 to 65535.");
-    public pure function remote-failed(detail: string) -> string {
-        return @tr("The web remote couldn't start: {}", detail);
-    }
+    out property <string> remote-failed: @tr("The web remote couldn't start. Turn it off and on again.");
+    out property <string> remote-forget-failed: @tr("The devices are forgotten until AudioSync quits, but AudioSync couldn't save that. Select Forget All Remote Devices again.");
     // A check item in File: on, the captured app quitting moves streaming to
     // the whole system; off, streaming stops. "Source app", since "the app"
     // in AudioSync's own File menu can read as AudioSync itself.
@@ -588,7 +591,7 @@ export global Strings {
     out property <string> help-airplay-title: @tr("AirPlay");
     out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off.\n\nAn Apple TV that asks for a PIN shows \"Asks for a code\". When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead.\n\nA speaker protected by a password shows \"Asks for a code\" too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.");
     out property <string> help-remote-title: @tr("Web Remote");
-    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off and set their volume and delay and the master volume. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen first, then open it from there and enter the code: on some phones, a pairing made in the browser doesn't carry over to the Home Screen. Each code works once, and New Code makes another one.\n\nThe page uses plain HTTP, so use it only on your home network. Forget All Remote Devices unpairs every phone. If another app already uses the port, the window says so and lets you pick another one.");
+    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off and set their volume and delay and the master volume. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen first, then open it from there and enter the code: on some phones, a pairing made in the browser doesn't carry over to the Home Screen. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use it only on your home network. Forget All Remote Devices unpairs every phone. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-notices-title: @tr("Notices");
     out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in quick settings. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on File > Switch to All System Audio When the Source App Quits: AudioSync then moves to All System Audio, and stays there when the app opens again.");
 

@@ -47,11 +47,15 @@ export component RemoteWindow inherits Window {
     in property <string> code-spoken;
     in property <int> devices;
     in property <bool> locked;
-    // The port the remote was asked to use is taken by another app.
+    // The port the remote was asked to use can't be listened on.
+    in property <bool> port-problem;
+    // Another app has it (else Windows refuses it).
     in property <bool> port-in-use;
     in property <int> port;
     // Why the remote couldn't start, when the port isn't the reason.
     in property <string> problem;
+    // Forget All Remote Devices couldn't save the empty list.
+    in property <bool> forget-failed;
     in property <bool> port-invalid;
 
     callback remote-toggled(bool);
@@ -124,11 +128,11 @@ export component RemoteWindow inherits Window {
                         }
                     }
 
-                    if root.remote-on && root.port-in-use: VerticalLayout {
+                    if root.remote-on && root.port-problem: VerticalLayout {
                         spacing: 8px;
 
                         Text {
-                            text: Strings.remote-port-in-use(root.port);
+                            text: root.port-in-use ? Strings.remote-port-in-use(root.port) : Strings.remote-port-unavailable(root.port);
                             color: Tokens.error-text;
                             wrap: word-wrap;
                             min-height: self.preferred-height;
@@ -164,7 +168,7 @@ export component RemoteWindow inherits Window {
                         }
                     }
 
-                    if root.remote-on && !root.port-in-use && root.problem != "": Text {
+                    if root.remote-on && !root.port-problem && root.problem != "": Text {
                         text: root.problem;
                         color: Tokens.error-text;
                         wrap: word-wrap;
@@ -264,37 +268,44 @@ export component RemoteWindow inherits Window {
                             }
                         }
 
-                        VerticalLayout {
-                            spacing: 8px;
-                            accessible-role: groupbox;
-                            accessible-label: Strings.remote-devices-title;
-
-                            SectionTitle {
-                                text: Strings.remote-devices-title;
-                            }
-
-                            Text {
-                                text: Strings.remote-devices(root.devices);
-                                color: Tokens.text;
-                                wrap: word-wrap;
-                            }
-
-                            HorizontalLayout {
-                                alignment: start;
-
-                                Button {
-                                    text: Strings.remote-forget-all;
-                                    enabled: root.devices > 0;
-                                    clicked => {
-                                        root.forget-all-requested();
-                                    }
-                                }
-                            }
-                        }
-
                         SecondaryText {
                             text: Strings.remote-http-note;
                             min-height: self.preferred-height;
+                        }
+                    }
+
+                    if root.listening || root.devices > 0: VerticalLayout {
+                        spacing: 8px;
+                        accessible-role: groupbox;
+                        accessible-label: Strings.remote-devices-title;
+
+                        SectionTitle {
+                            text: Strings.remote-devices-title;
+                        }
+
+                        Text {
+                            text: Strings.remote-devices(root.devices);
+                            color: Tokens.text;
+                            wrap: word-wrap;
+                        }
+
+                        if root.forget-failed: Text {
+                            text: Strings.remote-forget-failed;
+                            color: Tokens.error-text;
+                            wrap: word-wrap;
+                            min-height: self.preferred-height;
+                        }
+
+                        HorizontalLayout {
+                            alignment: start;
+
+                            Button {
+                                text: Strings.remote-forget-all;
+                                enabled: root.devices > 0 || root.forget-failed;
+                                clicked => {
+                                    root.forget-all-requested();
+                                }
+                            }
                         }
                     }
                 }
