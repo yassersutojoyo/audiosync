@@ -75,16 +75,18 @@ impl Driver {
         };
         // The PTP ports are bound only for a receiver that may take PTP:
         // one that took it before or sets features bit 41 (P157, P158).
-        let wants = self.speakers.get(key).is_some_and(|speaker| {
-            self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP)
-        });
+        let restart = self.ptp_restart.remove(key);
+        let wants = restart != Some(None)
+            && self.speakers.get(key).is_some_and(|speaker| {
+                self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP)
+            });
         let mut addresses = self
             .speakers
             .get(key)
             .map(|speaker| speaker.device.airplay_socket_addrs())
             .unwrap_or_default();
         let mut ptp = None;
-        if wants && let Some(v6) = self.ptp_v6(key) {
+        if wants && let Some(v6) = restart.flatten().or_else(|| self.ptp_v6(key)) {
             let in_family = |address: &SocketAddr| address.ip().to_canonical().is_ipv6() == v6;
             match addresses.iter().copied().find(in_family) {
                 Some(address) => {
@@ -263,7 +265,8 @@ impl Driver {
     /// The AirPlay 2 session is over: the PTP ports are let go.
     pub(super) fn close_ptp(&mut self) {
         if let Some(run) = self.ptp.take() {
-            self.retired.extend(run.io.close());
+            self.ptp_closing.retain(|thread| !thread.is_finished());
+            self.ptp_closing.extend(run.io.close());
         }
     }
 
@@ -320,6 +323,11 @@ impl Driver {
         let mut uuid = [0u8; 16];
         uuid.copy_from_slice(&random[6..]);
         let identity = clock_identity(identity_random);
+        // An IPv6 wildcard socket takes the IPv4 port too on most systems, so
+        // the old service's ports must be free first; this waits one read timeout at most.
+        for thread in self.ptp_closing.drain(..) {
+            let _ = thread.join();
+        }
         match PtpIo::open(family.to_canonical(), self.ptp_ports, self.notify()) {
             Ok(io) => {
                 let peer = PtpPeer {
@@ -344,6 +352,27 @@ impl Driver {
                 None
             }
         }
+    }
+
+    /// Closes, without a TEARDOWN, a session that took PTP over an address
+    /// outside the service's family and starts the speaker again: with the
+    /// service moved to that family when no other session uses it, else on
+    /// NTP with the warning told once (P158, P179).
+    fn restart_outside_family(&mut self, key: &DeviceKey, landed_v6: bool, now: Instant) {
+        let family = if self.ptp_shared(key) || !self.ptp_moved.insert(key.clone()) {
+            if self.ptp_family_told.insert(key.clone()) {
+                self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+            }
+            None
+        } else {
+            Some(landed_v6)
+        };
+        if self.is_target_member(key) {
+            self.note_teardown(key.clone(), now);
+        }
+        self.ptp_restart.insert(key.clone(), family);
+        self.end_session(key, Phase::Idle);
+        self.start_session(key, now);
     }
 
     /// Sends what the PTP service queued; a Sync's Follow_Up carries the
@@ -455,10 +484,11 @@ impl Driver {
                         {
                             run.service.start(remote.ip(), now);
                         }
-                        // It connected over another family than the
-                        // service's, which serves only its own (P158).
-                        (Some(_), Some(_)) if self.ptp_family_told.insert(key.clone()) => {
-                            self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
+                        // It fell back to an address outside the service's
+                        // family, which no clock serves (P158, P179).
+                        (Some(_), Some(remote)) => {
+                            let landed_v6 = remote.ip().to_canonical().is_ipv6();
+                            self.restart_outside_family(key, landed_v6, now);
                         }
                         _ => {}
                     }

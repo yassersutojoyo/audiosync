@@ -278,6 +278,9 @@ pub(crate) struct Driver {
     reported: BTreeSet<DeviceKey>,
     now_playing: Option<NowPlaying>,
     retired: Vec<JoinHandle<()>>,
+    /// The threads of a closed PTP service, which keep its ports bound
+    /// until they end (P158).
+    ptp_closing: Vec<JoinHandle<()>>,
     /// Set by shutdown: sessions still open at this time are closed.
     stopping: Option<Instant>,
     /// The AirPlay 2 switch (P2, P170).
@@ -304,6 +307,13 @@ pub(crate) struct Driver {
     /// Speakers told their session goes without PTP because the service
     /// runs in another address family (P158, P179).
     ptp_family_told: BTreeSet<DeviceKey>,
+    /// The PTP family of a speaker's next session after one connected
+    /// outside the service's: IPv6 when true, or None for NTP only (P158,
+    /// P179).
+    ptp_restart: BTreeMap<DeviceKey, Option<bool>>,
+    /// Speakers the PTP service already moved to once, so a second
+    /// fallback goes to NTP instead of moving it back.
+    ptp_moved: BTreeSet<DeviceKey>,
 }
 
 impl Driver {
@@ -331,6 +341,7 @@ impl Driver {
             reported: BTreeSet::new(),
             now_playing: None,
             retired: Vec::new(),
+            ptp_closing: Vec::new(),
             stopping: None,
             airplay2: false,
             ptp_timing: BTreeSet::new(),
@@ -344,6 +355,8 @@ impl Driver {
             driven: BTreeMap::new(),
             teardowns: HashMap::new(),
             ptp_family_told: BTreeSet::new(),
+            ptp_restart: BTreeMap::new(),
+            ptp_moved: BTreeSet::new(),
         }
     }
 
@@ -390,6 +403,8 @@ impl Driver {
     /// then is blocked in a send that only its own timeout ends; it holds
     /// nothing but its socket, and is left to end by itself (P129).
     fn join_threads(&mut self, deadline: Instant) {
+        let closing = std::mem::take(&mut self.ptp_closing);
+        self.retired.extend(closing);
         loop {
             let (done, running): (Vec<_>, Vec<_>) = self
                 .retired
@@ -1345,6 +1360,8 @@ impl Driver {
             self.note_teardown(key.clone(), now);
         }
         self.ptp_family_told.remove(key);
+        self.ptp_restart.remove(key);
+        self.ptp_moved.remove(key);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };

@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -690,16 +690,21 @@ pub struct Ap2Server {
 }
 
 impl Ap2Server {
-    pub fn start(mut fake: FakeAp2) -> Ap2Server {
-        let rtsp = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback listener");
-        let events = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback listener");
+    pub fn start(fake: FakeAp2) -> Ap2Server {
+        Ap2Server::start_on(IpAddr::V4(Ipv4Addr::LOCALHOST), fake)
+    }
+
+    /// Serves on `ip`, so a test can reach a receiver over IPv6.
+    pub fn start_on(ip: IpAddr, mut fake: FakeAp2) -> Ap2Server {
+        let rtsp = TcpListener::bind((ip, 0)).expect("a loopback listener");
+        let events = TcpListener::bind((ip, 0)).expect("a loopback listener");
         rtsp.set_nonblocking(true).expect("nonblocking");
         events.set_nonblocking(true).expect("nonblocking");
         fake.event_port = events.local_addr().expect("address").port();
         let mut udp = Vec::new();
         for port in [&mut fake.data_port, &mut fake.control_port] {
             if *port == DATA_PORT || *port == RECEIVER_CONTROL_PORT {
-                let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a UDP socket");
+                let socket = UdpSocket::bind((ip, 0)).expect("a UDP socket");
                 *port = socket.local_addr().expect("address").port();
                 udp.push(socket);
             }
