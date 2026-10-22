@@ -5451,7 +5451,7 @@ mod tests {
     // covers: C18
     #[test]
     fn add_by_address_keeps_a_turned_down_address_open_with_the_reason() {
-        let app = app_over(MockBackend::new());
+        let (app, release) = app_holding_cast_checks();
         let strings = app.strings();
         app.main.invoke_cast_add_address_requested();
         let dialog = &app.cast_address_dialog;
@@ -5486,7 +5486,7 @@ mod tests {
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
         assert!(dialog.get_checking());
-        wait_for_cast_check(&app);
+        release_cast_check(&app, &release);
         assert!(window.is_visible());
         assert!(!dialog.get_checking());
         assert_eq!(
@@ -5496,7 +5496,7 @@ mod tests {
 
         type_text(window, "speaker.local");
         press(window, Key::Return);
-        wait_for_cast_check(&app);
+        release_cast_check(&app, &release);
         assert!(!window.is_visible(), "Enter added it");
         assert_eq!(dialog.get_address(), "", "the field is cleared");
         let state = app.snapshot();
@@ -5506,8 +5506,12 @@ mod tests {
 
     // covers: C18
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "reads Slint debug info, left out of release builds by build.rs"
+    )]
     fn add_by_address_announces_the_same_reason_each_time_it_is_turned_down() {
-        let app = app_over(MockBackend::new());
+        let (app, release) = app_holding_cast_checks();
         app.main.invoke_cast_add_address_requested();
         let dialog = &app.cast_address_dialog;
         let window = dialog.window();
@@ -5533,7 +5537,7 @@ mod tests {
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
         live_region(dialog, &app.strings().get_cast_address_checking());
-        wait_for_cast_check(&app);
+        release_cast_check(&app, &release);
         live_region(dialog, &app.strings().get_cast_address_not_found());
     }
 
@@ -5544,6 +5548,21 @@ mod tests {
             .collect();
         assert_eq!(regions.len(), 1, "one live region reads {said:?}");
         regions.pop().unwrap()
+    }
+
+    /// The App over a MockBackend whose Add by Address checks answer only
+    /// when the returned sender lets them, so the dialog's 50 ms timer can't
+    /// take an answer while a slow frame draws.
+    fn app_holding_cast_checks() -> (Rc<App>, std::sync::mpsc::Sender<()>) {
+        let mut backend = MockBackend::new();
+        let release = backend.hold_cast_checks();
+        (app_over(backend), release)
+    }
+
+    /// Lets the running Add by Address check answer, then waits for it.
+    fn release_cast_check(app: &App, release: &std::sync::mpsc::Sender<()>) {
+        release.send(()).unwrap();
+        wait_for_cast_check(app);
     }
 
     /// Waits for the Add by Address… check on its thread, then lets the
@@ -5561,7 +5580,7 @@ mod tests {
     // covers: C18
     #[test]
     fn add_by_address_waits_for_the_check_with_the_field_and_add_held() {
-        let app = app_over(MockBackend::new());
+        let (app, release) = app_holding_cast_checks();
         let strings = app.strings();
         let speakers = app.snapshot().speakers.len();
         app.main.invoke_cast_add_address_requested();
@@ -5569,9 +5588,6 @@ mod tests {
         let window = dialog.window();
         type_text(window, "speaker.local");
         press(window, Key::Return);
-        // The mock answers at once; on a slow runner the timer would take the
-        // answer during the key presses below, so only this test takes it.
-        app.cast_check_timer.stop();
 
         assert!(window.is_visible(), "open while it checks");
         assert!(dialog.get_checking());
@@ -5591,6 +5607,7 @@ mod tests {
         dialog.invoke_confirmed("kitchen.local".into());
         // The answer came back on the check's thread; the dialog takes it
         // only from the UI thread.
+        release.send(()).unwrap();
         std::thread::sleep(Duration::from_millis(20));
         assert!(dialog.get_checking());
 
@@ -5610,7 +5627,7 @@ mod tests {
     #[test]
     fn closing_add_by_address_while_it_checks_drops_the_answer() {
         for close in ["Escape", "Cancel", "close button"] {
-            let app = app_over(MockBackend::new());
+            let (app, release) = app_holding_cast_checks();
             let speakers = app.snapshot().speakers.len();
             app.main.invoke_cast_add_address_requested();
             let dialog = &app.cast_address_dialog;
@@ -5626,6 +5643,7 @@ mod tests {
             assert!(!window.is_visible(), "{close} closed it");
             assert!(!dialog.get_checking());
 
+            release.send(()).unwrap();
             std::thread::sleep(Duration::from_millis(20));
             assert!(app.finish_cast_check(), "nothing left to wait for");
             assert_eq!(

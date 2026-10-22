@@ -957,6 +957,9 @@ pub struct MockBackend {
     state: AppState,
     next_id: u64,
     view: ViewSettings,
+    /// Set by `hold_cast_checks`: each Add by Address check answers only
+    /// once the test sends on its sender, or drops it.
+    cast_gate: Option<std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>>,
 }
 
 #[cfg(any(not(windows), test))]
@@ -1078,7 +1081,17 @@ impl MockBackend {
             state,
             next_id: 1,
             view: ViewSettings::default(),
+            cast_gate: None,
         }
+    }
+
+    /// Holds every Add by Address check until the returned sender sends one
+    /// `()` for it, so a test sees the check running however slow it is.
+    #[cfg(test)]
+    pub fn hold_cast_checks(&mut self) -> std::sync::mpsc::Sender<()> {
+        let (release, gate) = std::sync::mpsc::channel();
+        self.cast_gate = Some(std::sync::Arc::new(std::sync::Mutex::new(gate)));
+        release
     }
 
     /// Posts a notice about `subject`, replacing an older one about it.
@@ -1264,7 +1277,13 @@ impl Backend for MockBackend {
             return Err(CastAddressError::Full);
         }
         let answers = !address.host().ends_with(".invalid");
-        Ok(CastAddressCheck::new(move || answers))
+        let gate = self.cast_gate.clone();
+        Ok(CastAddressCheck::new(move || {
+            if let Some(gate) = gate {
+                let _ = gate.lock().map(|gate| gate.recv());
+            }
+            answers
+        }))
     }
 
     fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
