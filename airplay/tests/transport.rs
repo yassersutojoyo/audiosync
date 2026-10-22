@@ -412,7 +412,7 @@ fn a_lost_speaker_leaves_the_others_playing_and_rejoins_in_step() {
         "frames both played after the rejoin: {common}"
     );
     assert!(error < 0.002, "in step after the rejoin, got {error}");
-    let first = {
+    let (first, since_kill) = {
         let log = a.log();
         let rejoined: std::collections::BTreeSet<u32> = log
             .audio
@@ -420,15 +420,24 @@ fn a_lost_speaker_leaves_the_others_playing_and_rejoins_in_step() {
             .filter(|p| p.header.ssrc != first_ssrc)
             .map(|p| p.header.timestamp)
             .collect();
-        log.syncs
+        let first = log
+            .syncs
             .iter()
             .find(|(_, _, sync)| rejoined.contains(&sync.next_rtp))
-            .map(|(_, _, sync)| sync.first)
+            .map(|(_, _, sync)| sync.first);
+        let since_kill: Vec<(SocketAddr, SyncPacket)> = log
+            .syncs
+            .iter()
+            .filter(|(at, _, _)| *at >= killed)
+            .map(|(_, from, sync)| (*from, *sync))
+            .take(4)
+            .collect();
+        (first, since_kill)
     };
     assert_eq!(
         first,
         Some(true),
-        "the rejoin starts with a first-flagged sync"
+        "the rejoin starts with a first-flagged sync; syncs since the kill: {since_kill:?}"
     );
     sender.shutdown();
 }

@@ -33,7 +33,8 @@ use audiosync_airplay::sender::{Sender, SenderEvent, SpeakerEvent, SpeakerState}
 use super::{FakeReceiver, PasswordGate, key};
 
 pub const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
-/// How often the receiver's threads look at their stop flags.
+/// How often the receiver's RTSP and timing threads look at their stop
+/// flags.
 const POLL: Duration = Duration::from_millis(10);
 
 /// Serializes the network tests of one test binary, so their real-time
@@ -196,6 +197,8 @@ pub struct NetReceiver {
     pub address: SocketAddr,
     shared: Arc<Shared>,
     control: Mutex<Option<Arc<UdpSocket>>>,
+    /// The audio and control sockets, which `wake_udp` reaches.
+    udp_addresses: [SocketAddr; 2],
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -210,14 +213,17 @@ impl NetReceiver {
         let listener = TcpListener::bind(SocketAddr::new(ip, 0))?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?;
-        let udp = || -> std::io::Result<UdpSocket> {
+        // Audio and control block without a timeout: on Windows a timed
+        // receive loses a datagram that lands as the timeout expires.
+        let udp = |timeout: Option<Duration>| -> std::io::Result<UdpSocket> {
             let socket = UdpSocket::bind(SocketAddr::new(ip, 0))?;
-            socket.set_read_timeout(Some(POLL))?;
+            socket.set_read_timeout(timeout)?;
             Ok(socket)
         };
-        let audio = udp()?;
-        let control = Arc::new(udp()?);
-        let timing = udp()?;
+        let audio = udp(None)?;
+        let control = Arc::new(udp(None)?);
+        let timing = udp(Some(POLL))?;
+        let udp_addresses = [audio.local_addr()?, control.local_addr()?];
         let shared = Arc::new(Shared {
             ip,
             log: Mutex::new(Log::default()),
@@ -243,6 +249,7 @@ impl NetReceiver {
             address,
             shared,
             control: Mutex::new(Some(control)),
+            udp_addresses,
             threads,
         })
     }
@@ -304,12 +311,25 @@ impl NetReceiver {
     pub fn close_udp(&self) {
         lock(&self.control).take();
         self.shared.udp_closed.store(true, Ordering::SeqCst);
+        self.wake_udp();
+    }
+
+    /// Sends an empty datagram to the audio and control sockets, so their
+    /// blocked receives return and the threads see the flags.
+    fn wake_udp(&self) {
+        let Ok(socket) = UdpSocket::bind(SocketAddr::new(self.shared.ip, 0)) else {
+            return;
+        };
+        for address in self.udp_addresses {
+            let _ = socket.send_to(&[], address);
+        }
     }
 }
 
 impl Drop for NetReceiver {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
+        self.wake_udp();
         for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
