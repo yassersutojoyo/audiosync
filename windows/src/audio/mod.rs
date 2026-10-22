@@ -43,6 +43,7 @@ pub mod calibrate_all;
 pub mod calibration;
 pub mod capture;
 pub mod cast;
+pub mod cast_address;
 pub mod controller;
 #[cfg(test)]
 pub mod mock;

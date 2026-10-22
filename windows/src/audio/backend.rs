@@ -15,6 +15,7 @@ use audiosync_core::policy::device_volume::DeviceVolume;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
+use super::cast_address::CastAddress;
 use super::routing::DirectPath;
 
 /// What AudioSync captures.
@@ -335,6 +336,9 @@ pub struct CastInfo {
     pub name: String,
     /// Set for a Cast group, which plays as one speaker (spec C3).
     pub group: Option<CastGroup>,
+    /// Set for a speaker the user added by address (spec C18): the address
+    /// as the settings keep it.
+    pub address: Option<String>,
     /// Whether the user turned it on.
     pub enabled: bool,
     /// The device's volume as it last reported it, 0 to 100.
@@ -819,6 +823,13 @@ pub trait AudioBackend {
     /// The user's Resync: the playing Cast speaker loads the stream again,
     /// back at its starting latency, after a short gap (spec C79).
     fn resync_cast(&mut self, _id: &str) {}
+
+    /// Lists a Cast speaker at `address` for a network where discovery
+    /// can't find it (spec C18); a host name is looked up off this thread.
+    fn add_cast_address(&mut self, _address: CastAddress) {}
+
+    /// Takes back a speaker added by address, turning it off first.
+    fn remove_cast_address(&mut self, _address: &CastAddress) {}
 
     /// What AudioSync keeps per Cast device, as JSON to save; `None` while
     /// there is no Cast sender.

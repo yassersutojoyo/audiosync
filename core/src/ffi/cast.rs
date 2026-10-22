@@ -200,6 +200,10 @@ pub struct AscCastDevice {
     /// The `md` TXT value; "" when it has none.
     pub model: *const c_char,
     pub flags: u32,
+    /// On the [`CAST_APPEARED`] of a device a browse found that was added
+    /// by address, the `manual:<address>` ID it was listed under, so the
+    /// host moves what it kept for it (C18); "" otherwise.
+    pub former: *const c_char,
 }
 
 /// One member of the playing group (C94, C95). The strings are
@@ -331,6 +335,7 @@ struct Change {
     name: String,
     model: String,
     flags: u32,
+    former: String,
 }
 
 /// An attempt whose `Ended` hasn't come yet.
@@ -460,7 +465,7 @@ pub struct AscCast {
     open_browser: OpenBrowser,
     changes: VecDeque<Change>,
     /// The strings of the last device change handed out: ID, name, model.
-    change_strings: [CString; 3],
+    change_strings: [CString; 4],
     events: VecDeque<Pending>,
     /// The strings of the last event handed out: ID, detail.
     event_strings: [CString; 2],
@@ -644,6 +649,7 @@ impl AscCast {
             name: String::new(),
             model: String::new(),
             flags: 0,
+            former: String::new(),
         };
         if let Some(entry) = entry {
             if let Some(device) = &entry.device {
@@ -713,6 +719,9 @@ impl AscCast {
                 }
                 self.change(CAST_GONE, DeviceKey::Manual(from));
                 self.change(CAST_APPEARED, DeviceKey::Id(id));
+                if let Some(appeared) = self.changes.back_mut() {
+                    appeared.former = device_id_text(DeviceKey::Manual(from));
+                }
                 self.log_group(DeviceKey::Id(id));
             }
             ListEvent::Skipped(_) => {}
@@ -909,6 +918,7 @@ impl AscCast {
             c_string(&change.id),
             c_string(&change.name),
             c_string(&change.model),
+            c_string(&change.former),
         ];
         AscCastDevice {
             event: change.event,
@@ -916,6 +926,7 @@ impl AscCast {
             name: self.change_strings[1].as_ptr(),
             model: self.change_strings[2].as_ptr(),
             flags: change.flags,
+            former: self.change_strings[3].as_ptr(),
         }
     }
 
@@ -1981,6 +1992,7 @@ mod tests {
             name: ptr::null(),
             model: ptr::null(),
             flags: 0,
+            former: ptr::null(),
         }
     }
 
@@ -1995,6 +2007,7 @@ mod tests {
                 name: text(device.name),
                 model: text(device.model),
                 flags: device.flags,
+                former: text(device.former),
             });
         }
         found
@@ -2214,6 +2227,7 @@ mod tests {
             name: name.to_owned(),
             model: "Chromecast Audio".to_owned(),
             flags,
+            former: String::new(),
         };
         let gone = Change {
             event: CAST_GONE,
@@ -2221,6 +2235,7 @@ mod tests {
             name: String::new(),
             model: String::new(),
             flags: 0,
+            former: String::new(),
         };
         assert_eq!(
             devices(handle),
@@ -2325,6 +2340,7 @@ mod tests {
             name: String::new(),
             model: String::new(),
             flags,
+            former: String::new(),
         };
         assert_eq!(
             devices(handle),
@@ -2342,6 +2358,7 @@ mod tests {
             (seen[1].event, seen[1].id.as_str()),
             (CAST_APPEARED, KITCHEN)
         );
+        assert_eq!(seen[1].former, "manual:192.0.2.5:8009", "what it was");
         destroy(handle);
     }
 

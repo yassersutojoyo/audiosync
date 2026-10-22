@@ -9,12 +9,12 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
 export { TrayFlyout } from "flyout.slint";
-export { GroupNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
+export { CastAddressDialog, GroupNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
 export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
@@ -43,6 +43,10 @@ component SpeakerSection inherits VerticalLayout {
     callback device-volume-fix(string);
     callback cast-muted(string, bool);
     callback cast-resync(string);
+    callback cast-remove(string);
+    // Add by Address…, under the note while no Google Cast speaker is found.
+    in property <bool> show-add-address;
+    callback add-address();
     callback calibrate(string);
     callback cancel-calibration();
     callback calibration-privacy();
@@ -129,6 +133,9 @@ component SpeakerSection inherits VerticalLayout {
                 cast-resync => {
                     root.cast-resync(speaker.id);
                 }
+                cast-remove => {
+                    root.cast-remove(speaker.id);
+                }
                 calibrate => {
                     root.calibrate(speaker.id);
                 }
@@ -162,6 +169,20 @@ component SpeakerSection inherits VerticalLayout {
                     SecondaryText {
                         text: root.note;
                         font-size: Tokens.font-size-callout;
+                    }
+                }
+            }
+
+            if root.show-add-address: HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: 12px;
+                alignment: start;
+                LinkButton {
+                    text: Strings.cast-add-address;
+                    label: Strings.cast-add-address;
+                    clicked => {
+                        root.add-address();
                     }
                 }
             }
@@ -597,6 +618,8 @@ export component MainWindow inherits Window {
     in property <bool> airplay-none-found;
     // What the Google Cast search says while it lists no speaker.
     in property <CastList> cast-list;
+    // A Google Cast sender runs, so Add by Address… can list a speaker.
+    in property <bool> cast-by-address;
     in property <string> airplay-delay-text;
     // The AirPlay delay field holds typing not yet applied.
     in property <bool> airplay-delay-pending;
@@ -650,6 +673,9 @@ export component MainWindow inherits Window {
     // A Google Cast speaker's Mute or Unmute, and its Resync.
     callback cast-muted-requested(string, bool);
     callback cast-resync-requested(string);
+    // Speakers > Add by Address…, and Remove on a row added that way.
+    callback cast-add-address-requested();
+    callback cast-remove-requested(string);
     // Calibrate with Microphone on a speaker's row, and its Cancel.
     callback calibrate-requested(string);
     callback cancel-calibration-requested();
@@ -831,6 +857,14 @@ export component MainWindow inherits Window {
                 shortcut: @keys(F5);
                 activated => {
                     root.refresh-devices();
+                }
+            }
+
+            MenuItem {
+                title: Strings.cast-add-address;
+                enabled: root.cast-by-address;
+                activated => {
+                    root.cast-add-address-requested();
                 }
             }
         }
@@ -1269,6 +1303,13 @@ export component MainWindow inherits Window {
                         }
                         cast-resync(id) => {
                             root.cast-resync-requested(id);
+                        }
+                        cast-remove(id) => {
+                            root.cast-remove-requested(id);
+                        }
+                        show-add-address: root.cast-by-address && root.cast-list == CastList.none-found;
+                        add-address => {
+                            root.cast-add-address-requested();
                         }
                         // While AirPlay finds nothing, the note says what to
                         // check, after the hidden virtual outputs' note; the

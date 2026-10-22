@@ -48,6 +48,7 @@ use audiosync_core::policy::speakers::SpeakerKey;
 use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_position};
 use serde::{Deserialize, Serialize};
 
+use crate::audio::cast_address;
 use crate::data_folder;
 use crate::remote::RemoteSettings;
 use crate::ui_model::WindowFrame;
@@ -302,6 +303,9 @@ pub struct Settings {
     pub remote: RemoteSettings,
     /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
     pub airplay2_experimental: bool,
+    /// The Google Cast speakers added by address (spec C18), as
+    /// `host` or `host:port`.
+    pub cast_addresses: Vec<String>,
 }
 
 impl Default for Settings {
@@ -323,6 +327,7 @@ impl Default for Settings {
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
             remote: RemoteSettings::default(),
             airplay2_experimental: false,
+            cast_addresses: Vec::new(),
         }
     }
 }
@@ -459,6 +464,7 @@ impl Settings {
                 .to_owned(),
             remote: self.remote.clamped(),
             airplay2_experimental: self.airplay2_experimental,
+            cast_addresses: cast_address::clamped(self.cast_addresses),
         }
     }
 
@@ -745,6 +751,7 @@ mod tests {
                 on: true,
                 port: 8123,
             },
+            cast_addresses: vec!["speaker.local".to_owned(), "192.0.2.10:8010".to_owned()],
             ..Settings::default()
         };
         settings.outputs.insert(
@@ -796,6 +803,20 @@ mod tests {
                 adjusted: false
             }
         );
+    }
+
+    #[test]
+    fn cast_addresses_are_kept_normalized_and_once() {
+        let text = r#"{
+            "version": 2,
+            "cast_addresses": ["Speaker.Local", "speaker.local:8009", "bad address", "192.0.2.10:8010"]
+        }"#;
+        let (settings, _) = Settings::from_json(text).expect("reads");
+        assert_eq!(
+            settings.cast_addresses,
+            ["speaker.local", "192.0.2.10:8010"]
+        );
+        assert!(Settings::default().cast_addresses.is_empty());
     }
 
     #[test]

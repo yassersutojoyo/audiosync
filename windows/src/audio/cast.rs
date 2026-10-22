@@ -28,14 +28,20 @@
 //!
 //! The sender sits behind [`CastLink`], so this logic is tested with a fake;
 //! [`HostLink`] is the real one.
+//!
+//! A speaker the user adds by address is listed under that address until a
+//! browse finds its `id` (C18). Until then its session and offset are kept
+//! under an ID that follows from the address ([`CastAddress::device_id`]),
+//! and a host name is looked up on a thread of its own.
 
 use std::collections::BTreeMap;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioReader, AudioWriter, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
@@ -54,6 +60,7 @@ use super::SESSION_RATE;
 use super::backend::{
     BackendEvent, CastDiscovery, CastGroup, CastInfo, CastMembers, CastProblem, CastStatus,
 };
+use super::cast_address::{self, CastAddress};
 use crate::debug_log::DebugLog;
 
 /// The ring between the capture and a Cast session: 2 s at the session
@@ -477,6 +484,27 @@ impl CastLink for HostLink {
     }
 }
 
+/// How long a host name that didn't resolve waits for the next lookup.
+const LOOKUP_RETRY: Duration = Duration::from_secs(30);
+
+/// Looks a host name up, IPv4 only; it may block.
+type Resolver = fn(&str, u16) -> io::Result<SocketAddr>;
+
+/// A finished lookup: the address's text, and where it is.
+type Lookup = (String, io::Result<SocketAddr>);
+
+/// A speaker the user added by address (C18).
+struct Manual {
+    address: CastAddress,
+    id: DeviceId,
+    /// Where it is: known at once for an IPv4 address, after a lookup for a
+    /// host name.
+    resolved: Option<SocketAddr>,
+    looking_up: bool,
+    /// When a lookup that failed is tried again.
+    retry_at: Option<Instant>,
+}
+
 /// The session of the device that is on.
 #[derive(Clone, Copy, Debug)]
 struct Attempt {
@@ -510,6 +538,9 @@ pub struct CastSpeakers {
     sent: Option<CastTrack>,
     log: DebugLog,
     pending: Vec<BackendEvent>,
+    manual: Vec<Manual>,
+    lookups: (mpsc::Sender<Lookup>, Receiver<Lookup>),
+    resolver: Resolver,
 }
 
 impl CastSpeakers {
@@ -529,7 +560,208 @@ impl CastSpeakers {
             sent: None,
             log,
             pending: Vec::new(),
+            manual: Vec::new(),
+            lookups: mpsc::channel(),
+            resolver: cast_address::resolve,
         }
+    }
+
+    #[cfg(test)]
+    pub fn set_resolver(&mut self, resolver: Resolver) {
+        self.resolver = resolver;
+    }
+
+    /// Adds a speaker by address (C18); one added before stays as it is.
+    pub fn add_address(&mut self, address: CastAddress) {
+        if self.manual.iter().any(|manual| manual.address == address) {
+            return;
+        }
+        self.log
+            .log(|| format!("Cast: {} added by address", address.text()));
+        let socket = address.socket_address();
+        self.manual.push(Manual {
+            id: address.device_id(),
+            address,
+            resolved: socket,
+            looking_up: false,
+            retry_at: None,
+        });
+        if socket.is_none() {
+            self.look_up(self.manual.len() - 1);
+        }
+        self.keep_manual_listed();
+        self.pending.push(BackendEvent::CastChanged);
+    }
+
+    /// Takes back a speaker added by address, off first if it is on. One a
+    /// browse found stays listed as the device it is.
+    pub fn remove_address(&mut self, address: &CastAddress) {
+        let Some(index) = self
+            .manual
+            .iter()
+            .position(|manual| manual.address == *address)
+        else {
+            return;
+        };
+        let id = self.manual[index].id;
+        if self.enabled == Some(id) {
+            self.enabled = None;
+            self.sync();
+        }
+        let manual = self.manual.remove(index);
+        if let Some(socket) = manual.resolved
+            && !self
+                .manual
+                .iter()
+                .any(|other| other.resolved == Some(socket))
+        {
+            self.list.remove_manual(socket);
+        }
+        self.log
+            .log(|| format!("Cast: {} removed", manual.address.text()));
+        self.pending.push(BackendEvent::CastChanged);
+    }
+
+    /// Looks the host name of `self.manual[index]` up on a thread of its own.
+    fn look_up(&mut self, index: usize) {
+        let manual = &mut self.manual[index];
+        manual.looking_up = true;
+        let text = manual.address.text();
+        let host = manual.address.host().to_owned();
+        let port = manual.address.port();
+        let sender = self.lookups.0.clone();
+        let resolve = self.resolver;
+        let spawned = thread::Builder::new()
+            .name("cast-lookup".to_owned())
+            .spawn(move || {
+                let result = resolve(&host, port);
+                let _ = sender.send((text, result));
+            });
+        if let Err(error) = spawned {
+            manual.looking_up = false;
+            manual.retry_at = Some(Instant::now() + LOOKUP_RETRY);
+            self.log
+                .log(|| format!("Cast: the lookup thread couldn't start: {error}"));
+        }
+    }
+
+    /// Takes in finished lookups, and starts again the ones due.
+    fn poll_lookups(&mut self) {
+        while let Ok((text, result)) = self.lookups.1.try_recv() {
+            let Some(manual) = self
+                .manual
+                .iter_mut()
+                .find(|manual| manual.looking_up && manual.address.text() == text)
+            else {
+                continue;
+            };
+            manual.looking_up = false;
+            match result {
+                Ok(socket) => {
+                    manual.resolved = Some(socket);
+                    self.log.log(|| format!("Cast: {text} is at {socket}"));
+                    self.pending.push(BackendEvent::CastChanged);
+                }
+                Err(error) => {
+                    manual.retry_at = Some(Instant::now() + LOOKUP_RETRY);
+                    self.log.log(|| {
+                        format!(
+                            "Cast: {text} couldn't be looked up ({error}); trying again in 30 s"
+                        )
+                    });
+                }
+            }
+        }
+        let now = Instant::now();
+        let due: Vec<usize> = (0..self.manual.len())
+            .filter(|&index| {
+                let manual = &self.manual[index];
+                manual.resolved.is_none()
+                    && !manual.looking_up
+                    && manual.retry_at.is_some_and(|at| at <= now)
+            })
+            .collect();
+        for index in due {
+            self.look_up(index);
+        }
+    }
+
+    /// Lists each speaker added by address whose address no entry has, so
+    /// it shows again after the device a browse found is gone.
+    fn keep_manual_listed(&mut self) {
+        let missing: Vec<SocketAddr> = self
+            .manual
+            .iter()
+            .filter_map(|manual| manual.resolved)
+            .filter(|socket| {
+                !self
+                    .list
+                    .entries()
+                    .iter()
+                    .any(|entry| entry.addresses.contains(socket))
+            })
+            .collect();
+        for socket in missing {
+            if let ListEvent::Added(_) = self.list.add_manual(socket) {
+                self.pending.push(BackendEvent::CastChanged);
+            }
+        }
+    }
+
+    /// A browse found the device a speaker added by address is (C18): one
+    /// that is on stays on as that device, and its offset goes with it.
+    fn identified(&mut self, from: SocketAddr, id: DeviceId) {
+        let Some(manual) = self
+            .manual
+            .iter()
+            .find(|manual| manual.resolved == Some(from))
+            .map(|manual| manual.id)
+        else {
+            return;
+        };
+        let memory = self.memory();
+        if let (Some(offset), None, Some(link)) = (
+            memory.offset(&manual),
+            memory.offset(&id),
+            self.link.as_mut(),
+        ) {
+            link.set_offset(id, offset);
+            self.pending.push(BackendEvent::CastMemoryChanged);
+        }
+        if self.enabled == Some(manual) {
+            if self.attempt.is_some() {
+                self.stop_session();
+                self.list.set_in_session(DeviceKey::Id(id), false);
+            }
+            self.enabled = Some(id);
+            self.log
+                .log(|| format!("Cast: {from} stays on as {}", self.name(id)));
+        }
+    }
+
+    /// How the list keys device `id`: by its address while it is a speaker
+    /// added by address that no browse has found.
+    fn key_of(&self, id: DeviceId) -> DeviceKey {
+        self.manual
+            .iter()
+            .find(|manual| manual.id == id)
+            .and_then(|manual| manual.resolved)
+            .map(DeviceKey::Manual)
+            .filter(|&key| self.list.get(key).is_some())
+            .unwrap_or(DeviceKey::Id(id))
+    }
+
+    /// What the user typed for the speaker added by address that `entry`
+    /// is, if it is one.
+    fn added_as(&self, entry: &Entry) -> Option<String> {
+        self.manual
+            .iter()
+            .find(|manual| {
+                manual
+                    .resolved
+                    .is_some_and(|socket| entry.addresses.contains(&socket))
+            })
+            .map(|manual| manual.address.text())
     }
 
     pub fn set_debug_log(&mut self, log: DebugLog) {
@@ -572,15 +804,51 @@ impl CastSpeakers {
             .iter()
             .filter_map(|entry| self.info(entry, &memory))
             .collect();
+        speakers.extend(
+            self.manual
+                .iter()
+                .filter(|manual| manual.resolved.is_none())
+                .map(|manual| {
+                    let text = manual.address.text();
+                    self.row(manual.id, text.clone(), None, Some(text), &memory)
+                }),
+        );
         speakers.sort_by_key(|speaker| speaker.name.to_lowercase());
         speakers
     }
 
     fn info(&self, entry: &Entry, memory: &DeviceMemory) -> Option<CastInfo> {
-        let DeviceKey::Id(id) = entry.key else {
-            return None;
+        let (id, name, group) = match entry.key {
+            DeviceKey::Id(id) => {
+                let device = entry.device.as_ref()?;
+                let name = device
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| device.instance.clone());
+                let group = entry.is_group().then(|| CastGroup {
+                    members: self.group_members(id),
+                });
+                (id, name, group)
+            }
+            DeviceKey::Manual(socket) => {
+                let manual = self
+                    .manual
+                    .iter()
+                    .find(|manual| manual.resolved == Some(socket))?;
+                (manual.id, manual.address.text(), None)
+            }
         };
-        let device = entry.device.as_ref()?;
+        Some(self.row(id, name, group, self.added_as(entry), memory))
+    }
+
+    fn row(
+        &self,
+        id: DeviceId,
+        name: String,
+        group: Option<CastGroup>,
+        address: Option<String>,
+        memory: &DeviceMemory,
+    ) -> CastInfo {
         let reported = self.volumes.get(&id);
         let level = match self.requested {
             Some((device, level)) if device == id => level,
@@ -590,15 +858,11 @@ impl CastSpeakers {
             Some(attempt) if attempt.device == id => attempt.status,
             _ => CastStatus::Idle,
         };
-        Some(CastInfo {
+        CastInfo {
             id: id.to_string(),
-            name: device
-                .name
-                .clone()
-                .unwrap_or_else(|| device.instance.clone()),
-            group: entry.is_group().then(|| CastGroup {
-                members: self.group_members(id),
-            }),
+            name,
+            group,
+            address,
             enabled: self.enabled == Some(id),
             volume: (level * 100.0).clamp(0.0, 100.0),
             muted: reported.is_some_and(|volume| volume.muted),
@@ -606,7 +870,7 @@ impl CastSpeakers {
             volume_step: volume_step(reported),
             offset_ms: offset_ms(memory, &id),
             status,
-        })
+        }
     }
 
     /// Whether a device is on and either listed or in a session: then local
@@ -704,10 +968,13 @@ impl CastSpeakers {
     }
 
     fn entry(&self, id: DeviceId) -> Option<&Entry> {
-        self.list.get(DeviceKey::Id(id))
+        self.list.get(self.key_of(id))
     }
 
     fn name(&self, id: DeviceId) -> String {
+        if let Some(manual) = self.manual.iter().find(|manual| manual.id == id) {
+            return manual.address.text();
+        }
         self.entry(id)
             .and_then(|entry| entry.device.as_ref())
             .and_then(|device| device.name.clone())
@@ -806,7 +1073,8 @@ impl CastSpeakers {
                     self.members.remove(&id);
                 }
                 self.records = records;
-                self.list.set_in_session(DeviceKey::Id(id), true);
+                let key = self.key_of(id);
+                self.list.set_in_session(key, true);
                 self.log
                     .log(|| format!("Cast: {} connects (attempt {})", self.name(id), attempt.0));
                 self.pending.push(BackendEvent::CastChanged);
@@ -833,8 +1101,8 @@ impl CastSpeakers {
             link.stop();
         }
         self.feed.hand(None);
-        self.list
-            .set_in_session(DeviceKey::Id(attempt.device), false);
+        let key = self.key_of(attempt.device);
+        self.list.set_in_session(key, false);
         self.log.log(|| {
             format!(
                 "Cast: {} stops (attempt {})",
@@ -966,10 +1234,15 @@ impl CastSpeakers {
                     {
                         self.log_group(id);
                     }
+                    if let ListEvent::Identified { from, id } = change {
+                        self.identified(from, id);
+                    }
                     self.pending.push(BackendEvent::CastChanged);
                 }
             }
         }
+        self.poll_lookups();
+        self.keep_manual_listed();
         self.follow_group();
         while let Some(event) = self.link.as_mut().and_then(|link| link.poll_event()) {
             self.handle(event);
@@ -1052,7 +1325,8 @@ impl CastSpeakers {
                 self.records = None;
                 self.sent = None;
                 self.feed.hand(None);
-                self.list.set_in_session(DeviceKey::Id(device), false);
+                let key = self.key_of(device);
+                self.list.set_in_session(key, false);
                 self.log
                     .log(|| format!("Cast: {} ended: {}", self.name(device), describe_end(&end)));
                 self.enabled = None;
@@ -1232,6 +1506,8 @@ pub mod tests {
         pub readers: Vec<AudioReader>,
         /// The group records each start was handed.
         pub groups: Vec<Option<GroupRecords>>,
+        /// The addresses each start was handed.
+        pub targets: Vec<Vec<SocketAddr>>,
         pub events: VecDeque<HostEvent>,
         pub browse: VecDeque<BrowseEvent>,
         next: u64,
@@ -1288,6 +1564,7 @@ pub mod tests {
             }
             state.start_tracks.push(track);
             state.started.push(target.id);
+            state.targets.push(target.addresses);
             state.groups.push(target.group);
             state.readers.push(reader);
             state.next += 1;
@@ -1929,5 +2206,154 @@ pub mod tests {
         });
         cast.poll();
         assert!((step_of(&cast).unwrap() - 2.0).abs() < 1e-9);
+    }
+
+    fn address(text: &str) -> CastAddress {
+        CastAddress::parse(text).expect("an address")
+    }
+
+    /// Polls until the fake was asked to start a session, for a lookup
+    /// that answers on its own thread.
+    fn poll_until_started(fake: &FakeCast, cast: &mut CastSpeakers) {
+        for _ in 0..400 {
+            cast.poll();
+            if !fake.state().started.is_empty() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("no session started");
+    }
+
+    // covers: C18
+    #[test]
+    fn a_speaker_added_by_address_plays_under_its_address_until_removed() {
+        let (fake, mut cast) = listed();
+        cast.add_address(address("192.0.2.20"));
+        cast.add_address(address("192.0.2.20:8009"));
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 4, "listed once");
+        let row = speakers
+            .iter()
+            .find(|speaker| speaker.address.is_some())
+            .expect("the added one");
+        assert_eq!(row.name, "192.0.2.20");
+        assert_eq!(row.address.as_deref(), Some("192.0.2.20"));
+        assert_eq!(row.id, address("192.0.2.20").device_id().to_string());
+        let row_id = row.id.clone();
+
+        assert_eq!(cast.set_enabled(&row_id, true), Ok(()));
+        cast.set_streaming(true);
+        assert_eq!(fake.state().started, [address("192.0.2.20").device_id()]);
+        assert_eq!(
+            fake.state().targets,
+            [vec![SocketAddr::from(([192, 0, 2, 20], 8009))]]
+        );
+        assert_eq!(status(&cast, &row_id), CastStatus::Connecting);
+
+        cast.remove_address(&address("192.0.2.20"));
+        assert_eq!(fake.state().stops, 1, "switched off first");
+        assert_eq!(cast.speakers().len(), 3);
+        assert!(!cast.chosen());
+    }
+
+    // covers: C16, C18
+    #[test]
+    fn the_address_of_a_listed_device_marks_that_device_instead_of_a_second_row() {
+        let fake = FakeCast::default();
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.poll();
+        cast.add_address(address("192.0.2.30"));
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 1, "no second row");
+        assert_eq!(speakers[0].id, KITCHEN);
+        assert_eq!(speakers[0].address.as_deref(), Some("192.0.2.30"));
+
+        cast.remove_address(&address("192.0.2.30"));
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 1, "a found device stays");
+        assert_eq!(speakers[0].address, None);
+    }
+
+    // covers: C18
+    #[test]
+    fn a_browse_that_finds_a_speaker_added_by_address_keeps_it_on_with_its_offset() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.add_address(address("192.0.2.30"));
+        let manual = address("192.0.2.30").device_id();
+        assert!(cast.set_offset(&manual.to_string(), 400.0));
+        assert_eq!(cast.set_enabled(&manual.to_string(), true), Ok(()));
+        cast.set_streaming(true);
+
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        cast.poll();
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 1);
+        assert_eq!(
+            (speakers[0].id.as_str(), speakers[0].name.as_str()),
+            (KITCHEN, "Kitchen")
+        );
+        assert_eq!(
+            speakers[0].address.as_deref(),
+            Some("192.0.2.30"),
+            "still added by address, so it can be removed"
+        );
+        assert!(speakers[0].enabled);
+        assert_eq!(speakers[0].offset_ms, 400.0);
+        assert_eq!(fake.state().started, [manual, id(KITCHEN)]);
+        assert_eq!(fake.state().stops, 1);
+    }
+
+    // covers: C18
+    #[test]
+    fn a_host_name_is_listed_at_once_and_plays_once_looked_up() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_resolver(|host, port| {
+            assert_eq!(host, "speaker.local");
+            Ok(SocketAddr::from(([192, 0, 2, 40], port)))
+        });
+        cast.add_address(address("Speaker.local:8010"));
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 1);
+        assert_eq!(speakers[0].name, "speaker.local:8010");
+        let row_id = speakers[0].id.clone();
+        assert_eq!(cast.set_enabled(&row_id, true), Ok(()));
+        cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
+        assert_eq!(
+            fake.state().targets,
+            [vec![SocketAddr::from(([192, 0, 2, 40], 8010))]]
+        );
+        assert_eq!(cast.speakers().len(), 1);
+    }
+
+    #[test]
+    fn a_host_name_that_doesnt_resolve_stays_listed_until_removed() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_resolver(|_, _| Err(io::Error::new(io::ErrorKind::NotFound, "unknown")));
+        cast.add_address(address("speaker.local"));
+        for _ in 0..20 {
+            cast.poll();
+            thread::sleep(Duration::from_millis(5));
+        }
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 1);
+        assert_eq!(speakers[0].address.as_deref(), Some("speaker.local"));
+        cast.remove_address(&address("speaker.local"));
+        assert!(cast.speakers().is_empty());
     }
 }

@@ -24,6 +24,7 @@ use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
+mod cast_address;
 mod password;
 
 use crate::audio::backend::AirPlayGroupKind;
@@ -38,11 +39,11 @@ use crate::ui_model::{
     SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings, WindowFrame,
 };
 use crate::{
-    AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastList, CastProblem,
-    CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog, GuidePage,
-    GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind, Palette, PasswordDialog,
-    PinDialog, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings,
-    Tokens, TrayFlyout,
+    AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
+    CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog,
+    GuidePage, GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind, Palette,
+    PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind,
+    Strings, Tokens, TrayFlyout,
 };
 
 mod help_window;
@@ -527,6 +528,12 @@ pub struct App {
     password_dialog: PasswordDialog,
     /// The speaker the password dialog is open for, while it is.
     password_for: RefCell<Option<String>>,
+    /// Add by Address…, for a Google Cast speaker discovery can't find.
+    cast_address_dialog: CastAddressDialog,
+    /// The address check that runs while that dialog says it is checking.
+    cast_check: RefCell<Option<cast_address::PendingCheck>>,
+    /// Looks for that check's answer.
+    cast_check_timer: Timer,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -727,6 +734,9 @@ impl App {
             pin_preview: Cell::new(false),
             password_dialog: PasswordDialog::new()?,
             password_for: RefCell::new(None),
+            cast_address_dialog: CastAddressDialog::new()?,
+            cast_check: RefCell::new(None),
+            cast_check_timer: Timer::default(),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
@@ -766,6 +776,7 @@ impl App {
         app.connect_equalizer();
         app.connect_dialogs();
         app.connect_password_dialog();
+        app.connect_cast_address_dialog();
         app.connect_guide();
         app.connect_help();
         app.connect_remote();
@@ -1035,6 +1046,9 @@ impl App {
         self.password_dialog
             .global::<Palette>()
             .set_color_scheme(scheme);
+        self.cast_address_dialog
+            .global::<Palette>()
+            .set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.help.global::<Palette>().set_color_scheme(scheme);
@@ -1048,6 +1062,7 @@ impl App {
             self.group_dialog.window(),
             self.pin_dialog.window(),
             self.password_dialog.window(),
+            self.cast_address_dialog.window(),
             self.about.window(),
             self.guide.window(),
             self.help.window(),
@@ -1309,6 +1324,7 @@ impl App {
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_cast_list(cast_list(state.cast_list));
+        self.main.set_cast_by_address(state.cast_by_address);
         let listed = |s: &&ui_model::Speaker| lists(s);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
@@ -1704,6 +1720,12 @@ impl App {
         let w = weak.clone();
         main.on_cast_resync_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.resync_speaker(&id)))
+        });
+        let w = weak.clone();
+        main.on_cast_add_address_requested(move || with_app(&w, App::ask_cast_address));
+        let w = weak.clone();
+        main.on_cast_remove_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.remove_cast_address(&id)))
         });
         let w = weak.clone();
         main.on_calibrate_requested(move |id| {
@@ -2949,6 +2971,10 @@ pub fn speaker_item(
         volume_fixed: speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed),
         volume_step: speaker.cast.as_ref().map_or(1.0, |cast| cast.volume_step) as f32,
         cast_group: cast_group(speaker).is_some(),
+        cast_added_by_address: speaker
+            .cast
+            .as_ref()
+            .is_some_and(|cast| cast.added_by_address),
         // Needs the strings: set by the caller (`App::refresh`).
         cast_group_note: SharedString::default(),
         group_note: SharedString::default(),
@@ -3560,6 +3586,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
 mod tests {
     use super::*;
     use crate::ui_model::MockBackend;
+    use i_slint_backend_testing::{AccessibleLiveness, ElementHandle};
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
@@ -4980,6 +5007,7 @@ mod tests {
             volume_fixed: false,
             volume_step: 1.0,
             group: None,
+            added_by_address: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert_eq!(row.kind, SpeakerKind::Cast);
@@ -5042,6 +5070,7 @@ mod tests {
             volume_fixed: false,
             volume_step: 1.0,
             group: group(ui_model::CastMembers::NotReported),
+            added_by_address: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert!(row.cast && row.cast_group);
@@ -5505,6 +5534,262 @@ mod tests {
             assert_eq!(state.password_prompt, None);
             assert!(!state.speaker("airplay:kitchen").unwrap().enabled);
         }
+    }
+
+    fn type_text(window: &slint::Window, text: &str) {
+        for character in text.chars() {
+            press(window, character.to_string());
+        }
+    }
+
+    // covers: C18
+    #[test]
+    fn add_by_address_keeps_a_turned_down_address_open_with_the_reason() {
+        let (app, release) = app_holding_cast_checks();
+        let strings = app.strings();
+        app.main.invoke_cast_add_address_requested();
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        assert!(window.is_visible(), "Speakers > Add by Address… opens it");
+        assert_eq!(dialog.get_error(), "");
+
+        type_text(window, "not an address");
+        press(window, Key::Return);
+        assert!(window.is_visible(), "stays open");
+        assert_eq!(dialog.get_error(), strings.get_cast_address_invalid());
+        assert_eq!(
+            dialog.get_error(),
+            "That isn't an IP address or host name. Check it and try again."
+        );
+
+        // The field took the cursor back with its text selected.
+        type_text(window, "speaker.full");
+        press(window, Key::Return);
+        assert!(!dialog.get_checking(), "turned down before any check");
+        assert_eq!(dialog.get_error(), strings.get_cast_address_full());
+        assert_eq!(
+            dialog.get_error(),
+            "AudioSync keeps up to 64 speakers added by address. Remove one you don't use, then try again."
+        );
+        assert!(
+            strings
+                .get_cast_address_full()
+                .contains(&crate::audio::cast_address::MAX_ADDRESSES.to_string())
+        );
+
+        type_text(window, "speaker.invalid");
+        press(window, Key::Return);
+        assert!(dialog.get_checking());
+        release_cast_check(&app, &release);
+        assert!(window.is_visible());
+        assert!(!dialog.get_checking());
+        assert_eq!(
+            dialog.get_error(),
+            "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
+        );
+
+        type_text(window, "speaker.local");
+        press(window, Key::Return);
+        release_cast_check(&app, &release);
+        assert!(!window.is_visible(), "Enter added it");
+        assert_eq!(dialog.get_address(), "", "the field is cleared");
+        let state = app.snapshot();
+        let row = state.speaker("cc:speaker.local").expect("listed");
+        assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
+    }
+
+    // covers: C18
+    #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "reads Slint debug info, left out of release builds by build.rs"
+    )]
+    fn add_by_address_announces_the_same_reason_each_time_it_is_turned_down() {
+        let (app, release) = app_holding_cast_checks();
+        app.main.invoke_cast_add_address_requested();
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        let mut previous: Option<ElementHandle> = None;
+        for address in [
+            "not an address",
+            "not an address",
+            "speaker.full",
+            "speaker.full",
+        ] {
+            type_text(window, address);
+            press(window, Key::Return);
+            assert!(!dialog.get_checking(), "{address}: turned down at once");
+            let region = live_region(dialog, &dialog.get_error());
+            if let Some(previous) = previous {
+                // Windows raises a live-region event when a region appears,
+                // not when the same words are set on the one already there.
+                assert!(!previous.is_valid(), "{address}: a new region says it");
+            }
+            previous = Some(region);
+        }
+
+        type_text(window, "speaker.invalid");
+        press(window, Key::Return);
+        live_region(dialog, &app.strings().get_cast_address_checking());
+        release_cast_check(&app, &release);
+        live_region(dialog, &app.strings().get_cast_address_not_found());
+    }
+
+    /// The one polite live region in `dialog` that reads `said`.
+    fn live_region(dialog: &CastAddressDialog, said: &str) -> ElementHandle {
+        let mut regions: Vec<_> = ElementHandle::find_by_accessible_label(dialog, said)
+            .filter(|element| element.accessible_live_region() == Some(AccessibleLiveness::Polite))
+            .collect();
+        assert_eq!(regions.len(), 1, "one live region reads {said:?}");
+        regions.pop().unwrap()
+    }
+
+    /// The App over a MockBackend whose Add by Address checks answer only
+    /// when the returned sender lets them, so the dialog's 50 ms timer can't
+    /// take an answer while a slow frame draws.
+    fn app_holding_cast_checks() -> (Rc<App>, std::sync::mpsc::Sender<()>) {
+        let mut backend = MockBackend::new();
+        let release = backend.hold_cast_checks();
+        (app_over(backend), release)
+    }
+
+    /// Lets the running Add by Address check answer, then waits for it.
+    fn release_cast_check(app: &App, release: &std::sync::mpsc::Sender<()>) {
+        release.send(()).unwrap();
+        wait_for_cast_check(app);
+    }
+
+    /// Waits for the Add by Address… check on its thread, then lets the
+    /// dialog take its answer.
+    fn wait_for_cast_check(app: &App) {
+        for _ in 0..400 {
+            if app.finish_cast_check() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the address check didn't answer");
+    }
+
+    // covers: C18
+    #[test]
+    fn add_by_address_waits_for_the_check_with_the_field_and_add_held() {
+        let (app, release) = app_holding_cast_checks();
+        let strings = app.strings();
+        let speakers = app.snapshot().speakers.len();
+        app.main.invoke_cast_add_address_requested();
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        type_text(window, "speaker.local");
+        press(window, Key::Return);
+
+        assert!(window.is_visible(), "open while it checks");
+        assert!(dialog.get_checking());
+        assert_eq!(dialog.get_error(), "");
+        assert_eq!(
+            strings.get_cast_address_checking(),
+            "Looking for the speaker…"
+        );
+        assert_eq!(
+            app.snapshot().speakers.len(),
+            speakers,
+            "nothing listed yet"
+        );
+        type_text(window, "x");
+        assert_eq!(dialog.get_address(), "speaker.local", "the field waits");
+        press(window, Key::Return);
+        dialog.invoke_confirmed("kitchen.local".into());
+        // The answer came back on the check's thread; the dialog takes it
+        // only from the UI thread.
+        release.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(dialog.get_checking());
+
+        wait_for_cast_check(&app);
+        assert!(!window.is_visible());
+        assert!(!dialog.get_checking());
+        let state = app.snapshot();
+        assert!(state.speaker("cc:speaker.local").is_some());
+        assert!(
+            state.speaker("cc:kitchen.local").is_none(),
+            "one check at a time"
+        );
+        assert_eq!(state.speakers.len(), speakers + 1);
+    }
+
+    // covers: C18
+    #[test]
+    fn closing_add_by_address_while_it_checks_drops_the_answer() {
+        for close in ["Escape", "Cancel", "close button"] {
+            let (app, release) = app_holding_cast_checks();
+            let speakers = app.snapshot().speakers.len();
+            app.main.invoke_cast_add_address_requested();
+            let dialog = &app.cast_address_dialog;
+            let window = dialog.window();
+            type_text(window, "speaker.local");
+            press(window, Key::Return);
+            assert!(dialog.get_checking());
+            match close {
+                "Escape" => press(window, Key::Escape),
+                "Cancel" => dialog.invoke_cancelled(),
+                _ => window.dispatch_event(WindowEvent::CloseRequested),
+            }
+            assert!(!window.is_visible(), "{close} closed it");
+            assert!(!dialog.get_checking());
+
+            release.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            assert!(app.finish_cast_check(), "nothing left to wait for");
+            assert_eq!(
+                app.snapshot().speakers.len(),
+                speakers,
+                "{close}: nothing added"
+            );
+
+            app.main.invoke_cast_add_address_requested();
+            assert!(window.is_visible());
+            assert!(!dialog.get_checking());
+            assert_eq!(dialog.get_address(), "");
+            assert_eq!(dialog.get_error(), "");
+        }
+    }
+
+    #[test]
+    fn escape_on_the_add_by_address_dialog_cancels_from_the_field_or_a_button() {
+        for tabs in [0, 1, 2] {
+            let app = app_over(MockBackend::new());
+            let speakers = app.snapshot().speakers.len();
+            app.main.invoke_cast_add_address_requested();
+            let window = app.cast_address_dialog.window();
+            type_text(window, "speaker.local");
+            tab(window, tabs);
+            press(window, Key::Escape);
+            assert!(!window.is_visible(), "Escape closed it ({tabs} tabs)");
+            assert_eq!(app.snapshot().speakers.len(), speakers, "nothing added");
+        }
+    }
+
+    // covers: C18
+    #[test]
+    fn a_speaker_added_by_address_says_so_and_can_be_removed() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        app.update(|b| {
+            b.add_cast_address("192.0.2.20").expect("added");
+        });
+        let state = app.snapshot();
+        let speaker = state.speaker("cc:192.0.2.20").expect("listed");
+        let row = speaker_item(&state, speaker, true, false, None);
+        assert!(row.cast && row.cast_added_by_address);
+        assert!(!row.cast_group);
+        assert_eq!(strings.get_cast_added_by_address(), "Added by address");
+        assert_eq!(strings.get_cast_remove(), "Remove");
+        let desk = state.speaker("local:desk").unwrap();
+        assert!(!speaker_item(&state, desk, true, false, None).cast_added_by_address);
+
+        app.main
+            .invoke_cast_remove_requested("cc:192.0.2.20".into());
+        assert!(app.snapshot().speaker("cc:192.0.2.20").is_none());
     }
 
     #[test]

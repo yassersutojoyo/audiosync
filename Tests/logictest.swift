@@ -4418,7 +4418,7 @@ do {
         "Kitchen".withCString { name in
             "Nest Audio".withCString { model in
                 CastDeviceChange(AscCastDevice(event: ASC_CAST_APPEARED, id: id, name: name, model: model,
-                                               flags: UInt32(ASC_CAST_FLAG_GROUP)),
+                                               flags: UInt32(ASC_CAST_FLAG_GROUP), former: nil),
                                  offsetMs: { $0 == kitchen ? 40 : nil })
             }
         }

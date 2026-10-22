@@ -95,3 +95,8 @@ tray-icon = { version = "0.26.1", default-features = false }
 embed-resource = "3.0.12"
 # The same Slint as the slint dependency, pinned for the same reason.
 slint-build = "=1.18.1"
+
+[dev-dependencies]
+# Slint's element search, so view tests can read the accessibility tree; the
+# same pinned Slint release, already in the build through slint, tests only.
+i-slint-backend-testing = "=1.18.1"

@@ -7,7 +7,7 @@
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { PinPhase } from "types.slint";
-import { Card, DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
+import { Announcer, Card, DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;
@@ -362,6 +362,143 @@ export component PasswordDialog inherits Dialog {
         dialog-button-role: accept;
         clicked => {
             root.confirmed(root.password);
+        }
+        escape-pressed => {
+            root.cancelled();
+        }
+    }
+
+    DialogButton {
+        text: Strings.cancel;
+        dialog-button-role: reject;
+        clicked => {
+            root.cancelled();
+        }
+        escape-pressed => {
+            root.cancelled();
+        }
+    }
+}
+
+// Add by Address…: one field for a Google Cast speaker's IP address or host
+// name, with an optional port. Enter adds, Escape cancels. An address that
+// is turned down keeps the dialog open with the reason above the field.
+// While the app checks that something answers there, the field and Add wait
+// and the dialog says it is checking; Cancel and Escape still close it.
+export component CastAddressDialog inherits Dialog {
+    in-out property <string> address;
+    // Why the last address was turned down; "" while there is none.
+    in property <string> error;
+    // Raised with every turn-down, so the same reason twice is read twice.
+    in property <int> refusals;
+    in property <bool> checking;
+    callback confirmed(string);
+    callback cancelled();
+
+    property <string> status: root.checking ? Strings.cast-address-checking : root.error;
+
+    title: Strings.cast-add-address-title;
+    icon: @image-url("../res/audiosync-256.png");
+    background: Tokens.background;
+    default-font-family: Fluent.font;
+    default-font-size: Tokens.font-size-body;
+    preferred-width: 420px;
+
+    // Bumped each time the dialog opens or turns an address down, so the
+    // field takes the cursor.
+    property <int> focus-request;
+
+    public function prepare() {
+        root.focus-request += 1;
+    }
+
+    FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
+                root.cancelled();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 12px;
+
+            Text {
+                text: Strings.cast-add-address-message;
+                color: Tokens.text;
+                wrap: word-wrap;
+            }
+
+            // A turned-down address sits on the notice color, as a wrong
+            // PIN does.
+            if root.error != "": Rectangle {
+                background: Tokens.notice;
+                border-radius: Fluent.radius-control;
+
+                HorizontalLayout {
+                    padding: 8px;
+                    spacing: 8px;
+
+                    Glyph {
+                        glyph: Glyphs.warning;
+                        font-size: 14px;
+                        vertical-alignment: top;
+                    }
+
+                    Text {
+                        text: root.error;
+                        color: Tokens.text;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+
+            if root.checking: Text {
+                text: Strings.cast-address-checking;
+                color: Tokens.muted;
+                wrap: word-wrap;
+            }
+
+            TextField {
+                property <int> focus-request: root.focus-request;
+                text <=> root.address;
+                read-only: root.checking;
+                placeholder-text: Strings.cast-address-placeholder;
+                accessible-label: Strings.cast-address-label;
+                accessible-description: root.status != "" ? root.status : Strings.cast-add-address-message;
+                init => {
+                    self.focus();
+                }
+                changed focus-request => {
+                    self.focus();
+                    self.select-all();
+                }
+                accepted => {
+                    if !root.checking {
+                        root.confirmed(root.address);
+                    }
+                }
+            }
+        }
+
+        // Narrator reads the check and why an address was turned down
+        // without moving the focus off the field.
+        Announcer {
+            said: root.status;
+            count: root.refusals;
+        }
+    }
+
+    DialogButton {
+        text: Strings.add;
+        primary: true;
+        active: !root.checking;
+        dialog-button-role: accept;
+        clicked => {
+            root.confirmed(root.address);
         }
         escape-pressed => {
             root.cancelled();
