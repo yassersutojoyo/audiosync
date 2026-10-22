@@ -217,6 +217,38 @@ enum RemotePort {
     }
 }
 
+/// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…]}`),
+/// read and cleared here while the remote is off, so a lost phone can be
+/// unpaired before the remote is turned on again.
+enum RemoteDevicesFile {
+    static let maxDevices = 8
+
+    /// The core starts empty from a file it can't read, so such a file counts as none.
+    static func count(_ data: Data?) -> Int {
+        guard let data, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let version = object["version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(),
+              version.doubleValue == 1, let devices = object["devices"] as? [Any],
+              devices.allSatisfy({ ($0 as? String).map(isHash) ?? false }) else { return 0 }
+        return min(devices.count, maxDevices)
+    }
+
+    static func count(at url: URL) -> Int { count(try? Data(contentsOf: url)) }
+
+    /// A file that isn't there is already forgotten.
+    static func forget(at url: URL) -> Bool {
+        do {
+            try FileManager.default.removeItem(at: url)
+            return true
+        } catch {
+            return !FileManager.default.fileExists(atPath: url.path)
+        }
+    }
+
+    private static func isHash(_ text: String) -> Bool {
+        text.utf8.count == 64 && text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0) }
+    }
+}
+
 /// The addresses the setting shows: the Bonjour name first, since it
 /// survives a new IP address from the router, then the IP address.
 struct RemoteAddresses: Equatable {

@@ -193,12 +193,12 @@ extension AppDelegate {
     }
 
     /// With every model update: Now Playing polls the players while the window
-    /// shows it, while the web remote runs or while AirPlay receivers show the track, and receivers get
+    /// shows it, while a paired phone may show it or while AirPlay receivers show the track, and receivers get
     /// everything once sending starts. The sender keeps what was set and
     /// sends it to every speaker that starts.
     func syncTrackInfo() {
         let sending = sendsTrackInfo
-        let polling = nowPlayingOnScreen || sending || webRemote?.isRunning == true
+        let polling = nowPlayingOnScreen || sending || webRemote?.showsNowPlaying == true
         if polling != nowPlaying.isRunning {
             if polling {
                 updateNowPlayingTarget()

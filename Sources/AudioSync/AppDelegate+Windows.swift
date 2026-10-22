@@ -31,7 +31,7 @@ extension AppDelegate {
         appModel.actions = makeActions()
         let saved = AppSettings.load(SettingsStore.standard.read)
         let remote = WebRemote(model: appModel, store: .standard, enabled: saved.webRemote, port: saved.webRemotePort)
-        remote.onRunningChange = { [weak self] in self?.syncTrackInfo() }   // the page shows Now Playing
+        remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
         webRemote = remote
         webRemoteWindow = WebRemoteWindowController(remote: remote, text: text)
         menuBar = MenuBarController(model: appModel)

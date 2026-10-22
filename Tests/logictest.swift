@@ -4179,6 +4179,32 @@ do {
           "web remote: the .local address comes first, the IP address second")
     check(t.webRemoteCodeLabel("042917") == "Pairing code 0 4 2 9 1 7",
           "web remote: VoiceOver reads the code digit by digit")
+
+    let hashA = String(repeating: "a1", count: 32), hashB = String(repeating: "0f", count: 32)
+    let devicesJSON = { (body: String) in Data(body.utf8) }
+    let twoDevices = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"\(hashB)\"]}"))
+    let tenDevices = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\(Array(repeating: "\"\(hashA)\"", count: 10).joined(separator: ","))]}"))
+    let unreadable = [
+        RemoteDevicesFile.count(nil),
+        RemoteDevicesFile.count(devicesJSON("not json")),
+        RemoteDevicesFile.count(devicesJSON("{\"version\":2,\"devices\":[\"\(hashA)\"]}")),
+        RemoteDevicesFile.count(devicesJSON("{\"version\":true,\"devices\":[\"\(hashA)\"]}")),
+        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"short\"]}")),
+    ]
+    check(twoDevices == 2 && tenDevices == RemoteDevicesFile.maxDevices && unreadable.allSatisfy { $0 == 0 },
+          "web remote: the paired count comes from the devices file, capped at 8; a file the core can't read counts as none")
+
+    let devicesFolder = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-remote-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: devicesFolder, withIntermediateDirectories: true)
+    let devicesURL = devicesFolder.appendingPathComponent("RemoteDevices.json")
+    try? devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\"]}").write(to: devicesURL)
+    let countedBefore = RemoteDevicesFile.count(at: devicesURL)
+    let forgot = RemoteDevicesFile.forget(at: devicesURL)
+    let countedAfter = RemoteDevicesFile.count(at: devicesURL)
+    let forgotMissing = RemoteDevicesFile.forget(at: devicesURL)
+    try? FileManager.default.removeItem(at: devicesFolder)
+    check(countedBefore == 1 && forgot && countedAfter == 0 && forgotMissing,
+          "web remote: Forget All clears the devices file without a running remote; a missing file is already forgotten")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

@@ -51,8 +51,8 @@ final class WebRemoteSettings: ObservableObject {
 /// in progress.
 final class WebRemote {
     let settings: WebRemoteSettings
-    /// Called on the main queue when the remote starts or stops.
-    var onRunningChange: () -> Void = {}
+    /// Called on the main queue when `showsNowPlaying` changes.
+    var onNowPlayingNeedChange: () -> Void = {}
 
     private let model: AppModel
     private let store: SettingsStore
@@ -63,8 +63,13 @@ final class WebRemote {
     private var publishPending = false
     private var lastPublished = ""
     private var computerName = ""
+    /// The server accepts only the `.local` name it started with as a Host.
+    private var startedLocalName: String?
+    private var nowPlayingNeeded = false
 
     var isRunning: Bool { handle != nil }
+    /// A remote nobody paired with costs no Now Playing polling and raises no Automation prompt.
+    var showsNowPlaying: Bool { isRunning && settings.deviceCount > 0 }
 
     init(model: AppModel, store: SettingsStore, enabled: Bool, port: Int) {
         self.model = model
@@ -75,6 +80,7 @@ final class WebRemote {
             newCode: { [weak self] in self?.newCode() },
             forgetAll: { [weak self] in self?.forgetAll() },
             usePort: { [weak self] port in self?.usePort(port) })
+        readDevicesFile()
     }
 
     func startIfEnabled() {
@@ -84,7 +90,7 @@ final class WebRemote {
     /// The window opened: a code shown earlier stops working (design: a new code each time).
     func windowOpened() {
         refreshAddresses()
-        if isRunning { newCode() }
+        if isRunning { newCode() } else { readDevicesFile() }
     }
 
     func shutdown() { stop() }
@@ -114,9 +120,26 @@ final class WebRemote {
     }
 
     private func forgetAll() {
-        guard let handle else { return }
-        settings.forgetFailed = !asc_remote_forget_all(handle)
-        poll()
+        if let handle {
+            settings.forgetFailed = !asc_remote_forget_all(handle)
+            poll()
+        } else if let file = Self.devicesFile {
+            settings.forgetFailed = !RemoteDevicesFile.forget(at: file)
+            readDevicesFile()
+        }
+        DebugTrace.log("[AudioSync] web remote: paired devices forgotten\(settings.forgetFailed ? ", not saved" : "")")
+    }
+
+    /// While the server is off its device count lives only in the file.
+    private func readDevicesFile() {
+        settings.set(\.deviceCount, Self.devicesFile.map(RemoteDevicesFile.count(at:)) ?? 0)
+        noteNowPlayingNeed()
+    }
+
+    private func noteNowPlayingNeed() {
+        guard showsNowPlaying != nowPlayingNeeded else { return }
+        nowPlayingNeeded = showsNowPlaying
+        onNowPlayingNeedChange()
     }
 
     // MARK: - Start and stop
@@ -125,7 +148,8 @@ final class WebRemote {
         guard handle == nil else { return }
         refreshAddresses()
         var config: [String: Any] = ["port": settings.port]
-        if let name = settings.addresses.localHostName { config["local_name"] = name }
+        startedLocalName = settings.addresses.localHostName
+        if let name = startedLocalName { config["local_name"] = name }
         if let file = Self.devicesFile { config["devices_path"] = file.path }
         guard let data = try? JSONSerialization.data(withJSONObject: config) else { return }
         let box = Unmanaged.passRetained(RemoteInbox(owner: self))
@@ -152,7 +176,6 @@ final class WebRemote {
         lastPublished = ""
         publishNow()
         poll()
-        onRunningChange()
     }
 
     private func stop() {
@@ -169,8 +192,7 @@ final class WebRemote {
         settings.status = .off
         settings.code = nil
         settings.locked = false
-        settings.deviceCount = 0
-        onRunningChange()
+        readDevicesFile()
     }
 
     // MARK: - Snapshot
@@ -262,6 +284,7 @@ final class WebRemote {
         settings.set(\.code, asc_remote_pairing_code(handle).map { String(cString: $0) })
         settings.set(\.locked, asc_remote_pairing_locked(handle))
         settings.set(\.deviceCount, Int(asc_remote_device_count(handle)))
+        noteNowPlayingNeed()
         drainLog()
         let name = Self.currentComputerName()
         if name != computerName {
@@ -269,6 +292,11 @@ final class WebRemote {
             publishNow()
         }
         refreshAddresses()
+        if settings.addresses.localHostName != startedLocalName {
+            DebugTrace.log("[AudioSync] web remote restarts: the Mac's local name changed")
+            stop()
+            start()
+        }
     }
 
     private func drainLog() {
@@ -318,7 +346,8 @@ final class WebRemote {
     }
 }
 
-/// The callback's context: weak, so a command queued before the stop finds no owner.
+/// The callback's context. `received` drops a command queued before a stop; the
+/// weak owner only keeps a queued command from outliving the `WebRemote` itself.
 private final class RemoteInbox {
     weak var owner: WebRemote?
     init(owner: WebRemote) { self.owner = owner }

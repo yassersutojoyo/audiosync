@@ -806,9 +806,9 @@ struct UIStrings {
     func webRemoteCodeLabel(_ code: String) -> String {
         "Pairing code " + code.map(String.init).joined(separator: " ")
     }
-    let webRemoteCodeNote = "A code works once, for 10 minutes."
-    let webRemoteCodeExpired = "This code expired. Make a new one to pair a phone."
-    let webRemoteLocked = "Pairing is locked after too many wrong codes. Make a new code to pair again."
+    let webRemoteCodeNote = "Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one."
+    let webRemoteCodeExpired = "This code has expired. Select New Code to pair another phone."
+    let webRemoteLocked = "Pairing is locked after too many wrong codes. Select New Code to unlock it."
     let webRemoteNewCode = "New Code"
     func webRemoteDevices(_ count: Int) -> String {
         switch count {
@@ -824,7 +824,7 @@ struct UIStrings {
     let webRemoteUsePort = "Use Port"
     let webRemotePortRange = "Enter a port from 1024 to 65535."
     func webRemotePortInUse(_ port: Int) -> String { "Another app is using port \(port). Pick another port." }
-    func webRemoteListenFailed(_ port: Int) -> String { "AudioSync couldn't open port \(port) on this Mac." }
+    func webRemoteListenFailed(_ port: Int) -> String { "AudioSync couldn't open port \(port) on this Mac. Pick another port." }
     let webRemoteStartFailed = "The web remote couldn't start. Turn it off and on again to retry."
     let webRemotePlainHTTP = "The remote uses plain HTTP, so use it on your home network only."
     /// On the phone, under a speaker that asks for a code AudioSync doesn't keep.
@@ -925,14 +925,15 @@ struct UIStrings {
         cause is gone.
 
         Web Remote
-        Choose 'Web Remote…' in the gear menu or the AudioSync menu and turn it
+        Choose 'Web Remote…' in the gear menu or the Window menu and turn it
         on to control the speakers from a phone on the same network: each
         speaker's switch, volume and delay, Master Volume, and what's playing.
         On the phone, open the address it shows or scan its QR code, and add
         the page to the Home Screen first. Then open it from there and enter
-        the pairing code: a page paired in the browser loses its pairing once
-        it's added to the Home Screen. The remote uses plain HTTP, so keep it
-        to your home network. 'Forget All Remote Devices' unpairs every phone.
+        the pairing code: on some phones, a pairing made in the browser
+        doesn't carry over to the Home Screen. The remote uses plain HTTP, so
+        keep it to your home network. 'Forget All Remote Devices' unpairs
+        every phone, also while the remote is off.
 
         Tips
         - Tune with just two speakers at first: one AirPlay and one local.

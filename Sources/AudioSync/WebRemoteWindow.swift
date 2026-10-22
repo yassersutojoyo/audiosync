@@ -52,8 +52,6 @@ struct WebRemoteView: View {
                     addressSection(port: port, t)
                     Divider()
                     codeSection(t)
-                    Divider()
-                    devicesSection(t)
                 case .failed(let error, let port):
                     Label(failure(error, port: port, t), systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(Brand.errorText)
@@ -63,6 +61,11 @@ struct WebRemoteView: View {
                 }
                 Divider()
                 portSection(t)
+            }
+            // A lost phone can be unpaired before the remote is turned on again.
+            if isRunning || settings.deviceCount > 0 || settings.forgetFailed {
+                Divider()
+                devicesSection(t)
             }
             Text(t.webRemotePlainHTTP)
                 .font(.caption)
@@ -74,6 +77,11 @@ struct WebRemoteView: View {
         .tint(Brand.teal)
         .onAppear { portText = String(settings.port) }
         .onChange(of: settings.port) { _, port in portText = String(port) }
+    }
+
+    private var isRunning: Bool {
+        if case .running = settings.status { return true }
+        return false
     }
 
     private func failure(_ error: Int32, port: Int, _ t: UIStrings) -> String {
