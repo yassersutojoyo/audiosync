@@ -18,6 +18,18 @@ use crate::session::MediaDestinations;
 use crate::stream::Ap2Audio;
 use crate::transport::PtpIo;
 
+/// How often a session waiting for the old PTP service's ports looks again.
+const PTP_PORTS_POLL: Duration = Duration::from_millis(10);
+
+/// What a session to start gets from the PTP service (P158).
+enum PtpBind {
+    Peer(PtpPeer),
+    /// No PTP for this session; it asks for NTP only.
+    Without,
+    /// The old service's threads still hold its ports.
+    Later,
+}
+
 /// The bound PTP service (P158).
 pub(super) struct PtpRun {
     pub(super) service: PtpService,
@@ -108,7 +120,11 @@ impl Driver {
                 Some(address) => {
                     // The session goes over the service's family first (P158).
                     addresses.sort_by_key(|address| !in_family(address));
-                    ptp = self.ptp_peer(key, address.ip());
+                    match self.ptp_peer(key, address.ip()) {
+                        PtpBind::Peer(peer) => ptp = Some(peer),
+                        PtpBind::Without => {}
+                        PtpBind::Later => return self.start_ap2_later(key, restart, now),
+                    }
                 }
                 None => {
                     if self.ptp_family_told.insert(key.clone()) {
@@ -324,30 +340,34 @@ impl Driver {
 
     /// The PTP service for a session to a receiver in `family`'s address
     /// family, bound now if it isn't (P158). When a port can't be bound the
-    /// host is told once and the session goes without PTP.
-    fn ptp_peer(&mut self, key: &DeviceKey, family: IpAddr) -> Option<PtpPeer> {
+    /// host is told once and the session goes without PTP; while the old
+    /// service's threads still run, the bind waits for a later turn.
+    fn ptp_peer(&mut self, key: &DeviceKey, family: IpAddr) -> PtpBind {
         let v6 = family.to_canonical().is_ipv6();
         if let Some(run) = &self.ptp {
             if run.v6 == v6 {
-                return Some(run.peer.clone());
+                return PtpBind::Peer(run.peer.clone());
             }
             if self.ptp_shared(key) {
-                return None;
+                return PtpBind::Without;
             }
         }
         self.close_ptp();
+        // An IPv6 wildcard socket takes the IPv4 port too on most systems, so
+        // the old service's ports must be free first; joining here would stall every stream.
+        self.ptp_closing.retain(|thread| !thread.is_finished());
+        if !self.ptp_closing.is_empty() {
+            return PtpBind::Later;
+        }
         let mut random = [0u8; 22];
-        OsEntropy.fill(&mut random).ok()?;
+        if OsEntropy.fill(&mut random).is_err() {
+            return PtpBind::Without;
+        }
         let mut identity_random = [0u8; 6];
         identity_random.copy_from_slice(&random[..6]);
         let mut uuid = [0u8; 16];
         uuid.copy_from_slice(&random[6..]);
         let identity = clock_identity(identity_random);
-        // An IPv6 wildcard socket takes the IPv4 port too on most systems, so
-        // the old service's ports must be free first; this waits one read timeout at most.
-        for thread in self.ptp_closing.drain(..) {
-            let _ = thread.join();
-        }
         match PtpIo::open(family.to_canonical(), self.ptp_ports, self.notify()) {
             Ok(io) => {
                 let peer = PtpPeer {
@@ -365,15 +385,27 @@ impl Driver {
                 if std::mem::take(&mut self.ptp_unavailable_told) {
                     self.emit_speaker(key, SpeakerEvent::PtpOpened);
                 }
-                Some(peer)
+                PtpBind::Peer(peer)
             }
             Err(_) => {
                 if !self.ptp_unavailable_told {
                     self.ptp_unavailable_told = true;
                     self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpUnavailable));
                 }
-                None
+                PtpBind::Without
             }
+        }
+    }
+
+    /// The session waits for the old PTP service's ports: the speaker keeps
+    /// the AirPlay 2 place and starts again on a later turn (P169).
+    fn start_ap2_later(&mut self, key: &DeviceKey, restart: Option<Option<bool>>, now: Instant) {
+        if let Some(restart) = restart {
+            self.ptp_restart.insert(key.clone(), restart);
+        }
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.ap2_retry = true;
+            speaker.phase = Phase::Waiting(now + PTP_PORTS_POLL);
         }
     }
 
