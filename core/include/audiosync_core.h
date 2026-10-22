@@ -1584,6 +1584,14 @@ void asc_cast_stop_discovery(AscCast *cast);
 bool asc_cast_add_device(AscCast *cast, const char *address);
 
 /*
+ * Takes back a device added by address that no browse has found yet, by its
+ * "manual:<ip:port>" ID; its gone change follows. Turn it off first. Returns
+ * false for a NULL or dead handle, or an ID that names no such device: one a
+ * browse found stays listed under its id.
+ */
+bool asc_cast_remove_device(AscCast *cast, const char *id);
+
+/*
  * Takes the next device change, if one is waiting, into *device and returns
  * true. Returns false, leaving *device as it was, when none is waiting or
  * either pointer is NULL. Never waits.

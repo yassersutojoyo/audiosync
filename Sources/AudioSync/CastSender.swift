@@ -192,6 +192,15 @@ final class CastSender {
         }
     }
 
+    /// Takes back a device added by address that no browse has found (C18);
+    /// it is off already, and its gone change comes with the next poll.
+    func removeDevice(_ id: String) {
+        queue.async { [weak self] in
+            guard let self, let handle = self.handle else { return }
+            _ = asc_cast_remove_device(handle, id)
+        }
+    }
+
     static let probeTimeout: TimeInterval = 3
 
     /// Whether something at `ip:port` takes a TCP connection within

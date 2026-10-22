@@ -346,8 +346,8 @@ struct CastModel {
     static let manualPrefix = "manual:"
     /// The address each device added by hand was added with, by ID.
     private(set) var manualAddresses: [String: CastManualAddress] = [:]
-    /// Devices added by hand that the user removed: the sender can't drop
-    /// one, so the list leaves them out until they are added again.
+    /// Devices added by hand that the user removed: a change the sender
+    /// queued before it dropped one doesn't bring the row back.
     private(set) var removedManual: Set<String> = []
 
     /// The devices listed, by name.

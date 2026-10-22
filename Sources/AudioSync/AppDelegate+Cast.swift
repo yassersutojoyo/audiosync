@@ -251,7 +251,9 @@ extension AppDelegate {
     func removeCastAddress(_ appID: String) {
         guard let id = CastID.device(appID), castModel.manualAddresses[id] != nil else { return }
         if castModel.devices[id]?.manual == true, castModel.enabled == id { setCastEnabled(appID, false) }
+        let unfound = castModel.devices[id]?.manual == true
         guard let address = castModel.removeManual(id) else { return }
+        if unfound { castSender?.removeDevice(id) }
         DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
         let store = SettingsStore.standard
         var list = store.castManualList
