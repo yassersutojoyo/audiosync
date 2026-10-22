@@ -248,11 +248,11 @@ final class WebRemote {
         guard let context, let json else { return }
         let text = String(cString: json)
         let inbox = Unmanaged<RemoteInbox>.fromOpaque(context).takeUnretainedValue()
-        DispatchQueue.main.async { inbox.owner?.received(text) }
+        DispatchQueue.main.async { inbox.owner?.received(text, via: inbox) }
     }
 
-    fileprivate func received(_ json: String) {
-        guard isRunning else { return }
+    fileprivate func received(_ json: String, via box: RemoteInbox) {
+        guard box === inbox?.takeUnretainedValue() else { return }
         guard let command = RemoteCommand(json: json) else {
             DebugTrace.log("[AudioSync] web remote: a command didn't read")
             return
@@ -347,8 +347,8 @@ final class WebRemote {
     }
 }
 
-/// The callback's context. `received` drops a command queued before a stop; the
-/// weak owner only keeps a queued command from outliving the `WebRemote` itself.
+/// The callback's context, one per start: `received` drops a command from an older one, even
+/// across a stop and start in one main-queue turn. The weak owner keeps it from outliving `WebRemote`.
 private final class RemoteInbox {
     weak var owner: WebRemote?
     init(owner: WebRemote) { self.owner = owner }
