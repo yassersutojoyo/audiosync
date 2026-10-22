@@ -1131,6 +1131,19 @@ impl AirPlaySpeakers {
             || (self.target_of(id).is_some() && !self.settings(id).enabled)
     }
 
+    /// The name of the stereo pair or home theater group that holds the
+    /// speaker `id`, which then stays off by itself
+    /// ([`AirPlayProblem::PlaysInGroup`]).
+    pub fn holding_target(&self, id: &str) -> Option<String> {
+        if !self.held_by_target(id) {
+            return None;
+        }
+        let target = self
+            .added_target_of(id)
+            .or_else(|| self.target_of(id).map(|target| target.id.to_string()))?;
+        self.targets.get(&target).map(|target| target.name.clone())
+    }
+
     /// The listed stereo pair or home theater group that the listed speaker
     /// `id` is a member of (P176).
     fn target_of(&self, id: &str) -> Option<&Target> {
@@ -2578,8 +2591,9 @@ impl AirPlaySpeakers {
 
     /// A member of the added target `target` asks for a password, or turned
     /// the one typed down. On the user's own switch-on the prompt asks for
-    /// it by the member's name while the target waits; otherwise the target
-    /// goes off with a notice, and switching it on asks. Returns whether the
+    /// it by the member's name while the target waits; otherwise, or once
+    /// discovery dropped the target, the target goes off with a notice that
+    /// names the member, and switching it on asks. Returns whether the
     /// speaker list changed.
     fn member_password(
         &mut self,
@@ -2592,18 +2606,28 @@ impl AirPlaySpeakers {
             self.passwords.remove(member).is_some() || reason == UserReason::WrongPassword;
         self.password_seen.insert(member.to_owned());
         if self.password_attempts.contains(target)
+            && !self.gone_targets.contains(target)
             && let Some(added) = self.added.remove(target)
         {
             added.remove(self.link.as_mut());
             self.airplay1_outcome.remove(target);
             self.target_missing.remove(target);
-            if self.gone_targets.remove(target) {
-                self.targets.remove(target);
-            }
             self.queue_password_ask(member, turned_down, false, Some(target));
             return true;
         }
-        self.turn_off(target, AirPlayProblem::NeedsPassword, events);
+        self.drop_password_ask(target, "its member asks for a password");
+        if self.settings(target).enabled {
+            self.entry(target).enabled = false;
+            self.reconcile();
+            events.push(BackendEvent::AirPlayMemberNeedsPassword {
+                id: target.to_owned(),
+                member: self
+                    .names
+                    .get(member)
+                    .cloned()
+                    .unwrap_or_else(|| member.to_owned()),
+            });
+        }
         true
     }
 
@@ -5209,6 +5233,31 @@ pub mod tests {
     }
 
     #[test]
+    fn a_member_stays_held_while_its_pair_is_listed_even_with_the_pair_off() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        assert!(airplay.enabled_ids().is_empty(), "the pair is off");
+        assert_eq!(
+            airplay.set_enabled(&id_of(&left), true),
+            Err(AirPlayProblem::PlaysInGroup)
+        );
+        assert_eq!(
+            airplay.holding_target(&id_of(&left)).as_deref(),
+            Some("Living Room")
+        );
+
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        airplay.set_enabled(PAIR, false).expect("off");
+        assert_eq!(
+            airplay.set_enabled(&id_of(&right), true),
+            Err(AirPlayProblem::PlaysInGroup),
+            "turning the pair off doesn't free it"
+        );
+    }
+
+    #[test]
     fn a_pair_whose_playing_member_drops_waits_on_the_one_connecting() {
         let fake = FakeAirPlay::new();
         let (pair, left, right) = stereo_pair();
@@ -5264,9 +5313,9 @@ pub mod tests {
         // off, and switching it on asks for Right's password.
         fake.fail(&right, ErrorKind::WrongPassword);
         let events = airplay.poll();
-        assert!(events.contains(&BackendEvent::AirPlayFailed {
+        assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
             id: PAIR.to_owned(),
-            problem: AirPlayProblem::NeedsPassword,
+            member: "Right".to_owned(),
         }));
         assert_eq!(
             airplay.set_enabled(PAIR, true),
@@ -5278,6 +5327,34 @@ pub mod tests {
         airplay.cancel_password(&id_of(&right));
         assert!(airplay.enabled_ids().is_empty());
         assert_eq!(airplay.password_prompt(), None);
+    }
+
+    #[test]
+    fn a_gone_pair_whose_member_wants_a_password_goes_off_without_a_prompt() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        airplay.begin_attempt(PAIR);
+        fake.state(&left, SpeakerState::Connecting);
+        fake.target_gone(&pair);
+        airplay.poll();
+        fake.fail(&right, ErrorKind::PasswordRequired);
+        let events = airplay.poll();
+        assert_eq!(
+            airplay.password_prompt(),
+            None,
+            "no prompt for a pair discovery dropped"
+        );
+        assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
+            id: PAIR.to_owned(),
+            member: "Right".to_owned(),
+        }));
+        assert!(!airplay.submit_password(&id_of(&right), "hunter2"));
+        assert!(airplay.enabled_ids().is_empty());
+        let ids: Vec<String> = airplay.speakers().into_iter().map(|row| row.id).collect();
+        assert_eq!(ids, [id_of(&left), id_of(&right)]);
     }
 
     #[test]

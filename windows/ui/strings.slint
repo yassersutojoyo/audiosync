@@ -404,6 +404,18 @@ export global Strings {
         return @tr("{} is in use by another app. Close that app, or stop apps from taking exclusive control of it in Sound settings. AudioSync plays to it as soon as it's free.", speaker);
     }
 
+    // A member of the stereo pair or home theater group `target` stays off
+    // by itself while the target is listed, on or off.
+    public pure function notice-airplay-plays-in-group(speaker: string, target: string) -> string {
+        return @tr("{0} plays as part of {1}, so it stays off by itself.", speaker, target);
+    }
+
+    // A member of a stereo pair or home theater group asks for a password,
+    // so the target is off.
+    public pure function notice-airplay-member-password(member: string, target: string) -> string {
+        return @tr("{0} in {1} asks for a password, so {1} is off. Turn {1} on again to enter it.", member, target);
+    }
+
     // An AirPlay speaker stopped playing or can't play. For the first four
     // problems it stays on and AudioSync keeps trying, and one waiting for
     // the AirPlay 2 slot stays on too; for the others it is off, because
@@ -450,7 +462,7 @@ export global Strings {
             return @tr("AudioSync already plays to {}'s Apple TV, so the group is off. Turn the Apple TV off to play to the group.", speaker);
         }
         if problem == AirPlayProblem.plays-in-group {
-            return @tr("{} plays as part of its stereo pair or home theater group, so it stays off by itself. Turn the group off to play to it alone.", speaker);
+            return @tr("{} plays as part of its stereo pair or home theater group, so it stays off by itself.", speaker);
         }
         return @tr("AudioSync can't play to {}, so it's off.", speaker);
     }
@@ -763,10 +775,13 @@ export global Strings {
     }
 
     // The note under a Google Cast speaker's name: where one that is on is,
-    // else a group's `group-note`; empty otherwise.
+    // else a group's `group-note` (empty for a single speaker).
     public pure function cast-note(state: CastState, muted: bool, group-note: string) -> string {
         if state == CastState.connecting {
             return @tr("Connecting…");
+        }
+        if muted && group-note != "" {
+            return @tr("Muted on the group");
         }
         if muted {
             return @tr("Muted on the speaker");
@@ -775,21 +790,22 @@ export global Strings {
     }
 
     // Under a Google Cast group's name: its members as "A, B and C"
-    // (list-and), or empty while no session has named them.
-    public pure function cast-group-note(members: string) -> string {
-        if members == "" {
-            return @tr("Group, members unknown");
+    // (list-and) once a session named them; `unknown` once one played
+    // without naming them.
+    public pure function cast-group-note(members: string, unknown: bool) -> string {
+        if members != "" {
+            return @tr("Google Cast group: {}", members);
         }
-        return @tr("Group of {}", members);
+        if unknown {
+            return @tr("Google Cast group, members unknown");
+        }
+        return @tr("Google Cast group");
     }
 
     // What Narrator reads for a Google Cast group's switch: "Attic, Google
-    // Cast group of Kitchen and Living Room".
-    public pure function cast-group-label(name: string, members: string) -> string {
-        if members == "" {
-            return @tr("{}, Google Cast group, members unknown", name);
-        }
-        return @tr("{}, Google Cast group of {}", name, members);
+    // Cast group: Kitchen and Living Room", the group's note after its name.
+    public pure function cast-group-label(name: string, note: string) -> string {
+        return @tr("{0}, {1}", name, note);
     }
 
     // Under a Google Cast speaker's volume while it connects or plays.

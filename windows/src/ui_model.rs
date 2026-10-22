@@ -15,6 +15,7 @@ use audiosync_core::volume;
 
 use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
 
+pub use crate::audio::backend::CastMembers;
 use crate::audio::calibration::{Failure, Phase};
 
 pub use crate::settings::Appearance;
@@ -207,11 +208,10 @@ pub struct CastRow {
     pub group: Option<CastGroup>,
 }
 
-/// A Google Cast group: its members by name, as its latest session listed
-/// them; `None` until one did.
+/// A Google Cast group and what its row knows of its members.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CastGroup {
-    pub members: Option<Vec<String>>,
+    pub members: CastMembers,
 }
 
 /// Where a Google Cast speaker that is on is.
@@ -409,6 +409,12 @@ pub enum NoticeMessage {
         speaker: String,
         problem: AirPlayProblem,
     },
+    /// A member of the stereo pair or home theater group `target` stays off
+    /// by itself while the target is listed.
+    AirPlayPlaysInGroup { speaker: String, target: String },
+    /// A member of a stereo pair or home theater group asks for a password,
+    /// so the target is off.
+    AirPlayMemberNeedsPassword { target: String, member: String },
     /// AudioSync's AirPlay sender stopped after an internal error or
     /// couldn't start, so AirPlay speakers aren't listed or playing. The
     /// notice offers Retry ([`Backend::retry_airplay`]).
