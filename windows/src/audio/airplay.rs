@@ -78,6 +78,7 @@ use audiosync_airplay::sender::{
     SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState, airplay2_switch,
 };
 use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, StreamCounters};
+use audiosync_airplay::targets::{Target, TargetChange, TargetId, TargetKind};
 use audiosync_airplay::volume::{MIN_DB, Volume};
 use audiosync_core::fade::InputFade;
 use audiosync_core::resample::Resampler;
@@ -85,8 +86,8 @@ use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, sanitize_position};
 
 use super::SESSION_RATE;
 use super::backend::{
-    AirPlayAvailability, AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem,
-    BackendEvent, PairingPhase,
+    AirPlayAvailability, AirPlayGroup, AirPlayGroupKind, AirPlayInfo, AirPlayPasswordPrompt,
+    AirPlayPinPrompt, AirPlayProblem, BackendEvent, PairingPhase,
 };
 use super::pairings::PairingStore;
 use crate::debug_log::DebugLog;
@@ -110,6 +111,26 @@ pub trait AirPlayLink {
 
     /// Stops a speaker: TEARDOWN, then its connection closes.
     fn remove_speaker(&mut self, key: &DeviceKey);
+
+    /// Plays a stereo pair or home theater group with one delay and one
+    /// volume, those of `options`; `members` holds each member's own
+    /// password and credentials (P177). Returns the members' counters when
+    /// the sender keeps them.
+    fn add_target(
+        &mut self,
+        target: &Target,
+        options: SpeakerOptions,
+        members: BTreeMap<DeviceKey, SpeakerOptions>,
+    ) -> Vec<(DeviceKey, Arc<SpeakerCounters>)>;
+
+    /// Stops every member of a target.
+    fn remove_target(&mut self, id: &TargetId);
+
+    /// Sets a target's one volume (P180).
+    fn set_target_volume(&mut self, id: &TargetId, volume: Volume);
+
+    /// Sets a target's one delay d_s (P179).
+    fn set_target_delay(&mut self, id: &TargetId, delay: Duration);
 
     /// Sets a speaker's volume.
     fn set_volume(&mut self, key: &DeviceKey, volume: Volume);
@@ -227,6 +248,31 @@ impl AirPlayLink for SenderLink {
 
     fn remove_speaker(&mut self, key: &DeviceKey) {
         self.sender.remove_speaker(key);
+    }
+
+    fn add_target(
+        &mut self,
+        target: &Target,
+        options: SpeakerOptions,
+        members: BTreeMap<DeviceKey, SpeakerOptions>,
+    ) -> Vec<(DeviceKey, Arc<SpeakerCounters>)> {
+        self.sender.add_target(target.clone(), options, |key, own| {
+            if let Some(member) = members.get(key) {
+                *own = member.clone();
+            }
+        })
+    }
+
+    fn remove_target(&mut self, id: &TargetId) {
+        self.sender.remove_target(id);
+    }
+
+    fn set_target_volume(&mut self, id: &TargetId, volume: Volume) {
+        self.sender.set_target_volume(id, volume);
+    }
+
+    fn set_target_delay(&mut self, id: &TargetId, delay: Duration) {
+        self.sender.set_target_delay(id, delay);
     }
 
     fn set_volume(&mut self, key: &DeviceKey, volume: Volume) {
@@ -539,6 +585,9 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
         UserReason::Unsupported(UnsupportedReason::OneAirPlay2Session) => {
             AirPlayProblem::OneAirPlay2Speaker
         }
+        UserReason::Unsupported(UnsupportedReason::PlaysThroughSpeakers) => {
+            AirPlayProblem::PlaysThroughSpeakers
+        }
         UserReason::Unsupported(_) => AirPlayProblem::Unsupported,
     }
 }
@@ -635,13 +684,84 @@ struct PasswordAsk {
     /// It is for a pairing with an Apple TV that asks for a password too,
     /// which starts again with it.
     pair: bool,
+    /// The stereo pair or home theater group whose member asks: the
+    /// password typed switches that target on.
+    target: Option<String>,
+}
+
+/// What the sender plays for one row: a speaker, or a stereo pair or home
+/// theater group, whose members each get a session (P177).
+enum Joined {
+    Speaker(DeviceKey),
+    Target(TargetId),
 }
 
 /// A speaker in the sender.
 struct Added {
-    key: DeviceKey,
+    joined: Joined,
+    /// A target's state is the best of its members' states: it plays while
+    /// one of them does (P181).
     state: SpeakerState,
-    counters: Option<Arc<SpeakerCounters>>,
+    /// Each session's counters, by speaker ID: the speaker's own, or each
+    /// member's.
+    counters: Vec<(String, Arc<SpeakerCounters>)>,
+    /// A target's members by speaker ID, with the last state each reported.
+    members: BTreeMap<String, Option<SpeakerState>>,
+}
+
+impl Added {
+    fn speaker(key: DeviceKey, counters: Option<Arc<SpeakerCounters>>) -> Added {
+        let id = speaker_id(&key);
+        Added {
+            joined: Joined::Speaker(key),
+            state: SpeakerState::Connecting,
+            counters: counters
+                .map(|counters| (id, counters))
+                .into_iter()
+                .collect(),
+            members: BTreeMap::new(),
+        }
+    }
+
+    fn key(&self) -> Option<&DeviceKey> {
+        match &self.joined {
+            Joined::Speaker(key) => Some(key),
+            Joined::Target(_) => None,
+        }
+    }
+
+    fn set_volume(&self, link: &mut dyn AirPlayLink, volume: Volume) {
+        match &self.joined {
+            Joined::Speaker(key) => link.set_volume(key, volume),
+            Joined::Target(id) => link.set_target_volume(id, volume),
+        }
+    }
+
+    fn set_delay(&self, link: &mut dyn AirPlayLink, delay: Duration) {
+        match &self.joined {
+            Joined::Speaker(key) => link.set_delay(key, delay),
+            Joined::Target(id) => link.set_target_delay(id, delay),
+        }
+    }
+
+    fn remove(&self, link: &mut dyn AirPlayLink) {
+        match &self.joined {
+            Joined::Speaker(key) => link.remove_speaker(key),
+            Joined::Target(id) => link.remove_target(id),
+        }
+    }
+}
+
+/// How a member's state ranks for its target's: playing first, then
+/// connecting, retrying, failed, stopped.
+fn state_rank(state: &SpeakerState) -> u8 {
+    match state {
+        SpeakerState::Playing => 0,
+        SpeakerState::Connecting => 1,
+        SpeakerState::Retrying { .. } => 2,
+        SpeakerState::Failed => 3,
+        SpeakerState::Stopped => 4,
+    }
 }
 
 /// The AirPlay side of the backend: what discovery lists, the user's
@@ -652,8 +772,19 @@ pub struct AirPlaySpeakers {
     listed: BTreeMap<String, Listed>,
     /// The settings of every speaker the user changed, kept while it's gone.
     settings: BTreeMap<String, Settings>,
-    /// The speakers in the sender, by speaker ID.
+    /// The speakers in the sender, by speaker ID; a stereo pair or home
+    /// theater group by its target ID.
     added: BTreeMap<String, Added>,
+    /// The stereo pairs and home theater groups listed now, by target ID,
+    /// only while the AirPlay 2 switch is on (P176).
+    targets: BTreeMap<String, Target>,
+    /// The members of each added target that play nothing now, as the
+    /// sender last reported them (P181).
+    target_missing: BTreeMap<String, Vec<String>>,
+    /// The targets discovery no longer reports that the sender still plays:
+    /// they stay in `targets` until they leave it, so their row can be
+    /// switched off and their members stay held.
+    gone_targets: BTreeSet<String>,
     /// The last name of every speaker seen, for logs and notices.
     names: BTreeMap<String, String>,
     /// The credentials of the paired Apple TVs.
@@ -737,6 +868,9 @@ impl AirPlaySpeakers {
             listed: BTreeMap::new(),
             settings: BTreeMap::new(),
             added: BTreeMap::new(),
+            targets: BTreeMap::new(),
+            target_missing: BTreeMap::new(),
+            gone_targets: BTreeSet::new(),
             names: BTreeMap::new(),
             store,
             homekit_keys: BTreeMap::new(),
@@ -813,6 +947,9 @@ impl AirPlaySpeakers {
         self.link = link;
         self.listed.clear();
         self.added.clear();
+        self.targets.clear();
+        self.target_missing.clear();
+        self.gone_targets.clear();
         self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
@@ -857,14 +994,18 @@ impl AirPlaySpeakers {
             && self.password_asks.is_empty());
         self.listed.clear();
         self.added.clear();
+        self.targets.clear();
+        self.target_missing.clear();
+        self.gone_targets.clear();
         self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
         self.password_attempts.clear();
         // Its prompts go with it, as on the Mac. A speaker left on without
         // its password would stay silent, so it goes off with a notice.
-        for id in std::mem::take(&mut self.password_asks).into_keys() {
-            self.turn_off(&id, AirPlayProblem::NeedsPassword, events);
+        for (id, ask) in std::mem::take(&mut self.password_asks) {
+            let owner = ask.target.unwrap_or(id);
+            self.turn_off(&owner, AirPlayProblem::NeedsPassword, events);
         }
         if changed || !self.stopped {
             self.log.log(|| {
@@ -929,6 +1070,9 @@ impl AirPlaySpeakers {
 
     /// Whether a listed speaker can play now, with the credentials kept.
     fn listed_availability(&self, id: &str) -> Option<AirPlayAvailability> {
+        if let Some(target) = self.targets.get(id) {
+            return Some(self.target_availability(target));
+        }
         self.listed
             .get(id)
             .map(|listed| match self.availability_of(id, &listed.info) {
@@ -969,10 +1113,122 @@ impl AirPlaySpeakers {
     /// Whether a listed speaker can join the stream: it can play, or it asks
     /// for a password the user typed.
     fn can_join(&self, id: &str) -> bool {
+        if self.held_by_target(id) {
+            return false;
+        }
         match self.listed_availability(id) {
             Some(AirPlayAvailability::Open) => true,
             Some(AirPlayAvailability::NeedsPassword) => self.passwords.contains_key(id),
             _ => false,
+        }
+    }
+
+    /// Whether the speaker `id` plays only as part of its target: the sender
+    /// holds it for one, or it is off and its target is listed (P176). One
+    /// left on by itself before its target was listed still plays alone.
+    fn held_by_target(&self, id: &str) -> bool {
+        self.added_target_of(id).is_some()
+            || (self.target_of(id).is_some() && !self.settings(id).enabled)
+    }
+
+    /// The listed stereo pair or home theater group that the listed speaker
+    /// `id` is a member of (P176).
+    fn target_of(&self, id: &str) -> Option<&Target> {
+        let target = self.listed.get(id)?.info.target.as_ref()?;
+        self.targets.get(&target.to_string())
+    }
+
+    /// Whether the members of `target` in view can play; otherwise why the
+    /// first that can't doesn't. A member that asks for a PIN is paired
+    /// from its own row only, which a target hides; one that asks for a
+    /// password is asked for it by name when the target is switched on.
+    fn target_availability(&self, target: &Target) -> AirPlayAvailability {
+        target
+            .members
+            .iter()
+            .map(|member| speaker_id(&member.key))
+            .filter_map(|id| match self.listed_availability(&id)? {
+                AirPlayAvailability::Open => None,
+                AirPlayAvailability::NeedsPassword if self.passwords.contains_key(&id) => None,
+                AirPlayAvailability::NeedsPin | AirPlayAvailability::PairingNotYet => {
+                    Some(AirPlayAvailability::PairingNotYet)
+                }
+                availability => Some(availability),
+            })
+            .next()
+            .unwrap_or(AirPlayAvailability::Open)
+    }
+
+    /// The listed home theater group whose Apple TV is `id`.
+    fn group_controlled_by(&self, id: &str) -> Option<&Target> {
+        self.targets.values().find(|target| {
+            target
+                .control
+                .as_ref()
+                .is_some_and(|control| speaker_id(control) == id)
+        })
+    }
+
+    /// Whether the speaker or target `id` is on and plays, or can.
+    fn on_and_able(&self, id: &str) -> bool {
+        self.settings(id).enabled && (self.can_join(id) || self.is_playing(id))
+    }
+
+    /// Why the speaker or target `id` can't be switched on next to the
+    /// other side of a home theater group: an Apple TV and its group never
+    /// play at once (P177).
+    fn home_theater_conflict(&self, id: &str) -> Option<AirPlayProblem> {
+        if let Some(target) = self.targets.get(id)
+            && let Some(control) = &target.control
+            && self.on_and_able(&speaker_id(control))
+        {
+            return Some(AirPlayProblem::AppleTvPlays);
+        }
+        let group = self.group_controlled_by(id)?;
+        let group = group.id.to_string();
+        self.on_and_able(&group)
+            .then_some(AirPlayProblem::PlaysThroughSpeakers)
+    }
+
+    /// What a target's row says about its members (P176, P181).
+    fn group_info(&self, target: &Target) -> AirPlayGroup {
+        let id = target.id.to_string();
+        let name_of = |member: &str| {
+            target
+                .members
+                .iter()
+                .find(|known| speaker_id(&known.key) == member)
+                .map(|known| known.name.clone())
+                .or_else(|| self.names.get(member).cloned())
+        };
+        let mut missing: Vec<String> = target
+            .missing()
+            .filter_map(|key| name_of(&speaker_id(key)))
+            .collect();
+        let silent = self
+            .target_missing
+            .get(&id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        for member in silent {
+            if let Some(name) = name_of(member)
+                && !missing.contains(&name)
+            {
+                missing.push(name);
+            }
+        }
+        AirPlayGroup {
+            kind: match target.id.kind {
+                TargetKind::StereoPair => AirPlayGroupKind::StereoPair,
+                TargetKind::HomeTheater => AirPlayGroupKind::HomeTheater,
+            },
+            members: target
+                .members
+                .iter()
+                .map(|member| member.name.clone())
+                .collect(),
+            missing,
+            incomplete: !target.complete() || !silent.is_empty(),
         }
     }
 
@@ -987,16 +1243,39 @@ impl AirPlaySpeakers {
     /// The speakers to show: the listed ones, and any that still plays
     /// while its announcement lapsed, by name.
     pub fn speakers(&self) -> Vec<AirPlayInfo> {
-        let mut ids: Vec<&String> = self.listed.keys().collect();
-        ids.extend(
-            self.added
-                .keys()
-                .filter(|id| !self.listed.contains_key(*id) && self.is_playing(id)),
-        );
+        // A member of a listed target shows as part of it, unless it is on
+        // by itself, so it can be switched off (P176).
+        let mut ids: Vec<&String> = self
+            .listed
+            .keys()
+            .filter(|id| !self.held_by_target(id))
+            .collect();
+        ids.extend(self.targets.keys());
+        ids.extend(self.added.keys().filter(|id| {
+            !self.listed.contains_key(*id) && !self.targets.contains_key(*id) && self.is_playing(id)
+        }));
         let mut speakers: Vec<AirPlayInfo> = ids
             .into_iter()
             .map(|id| {
                 let settings = self.settings(id);
+                if let Some(target) = self.targets.get(id) {
+                    return AirPlayInfo {
+                        id: id.clone(),
+                        name: target.name.clone(),
+                        availability: self.target_availability(target),
+                        enabled: settings.enabled,
+                        volume: settings.volume,
+                        delay_ms: settings.delay_ms,
+                        playing: self.is_playing(id),
+                        paired: false,
+                        pairing: false,
+                        airplay2: target
+                            .members
+                            .iter()
+                            .any(|member| self.over_airplay2(&speaker_id(&member.key))),
+                        group: Some(self.group_info(target)),
+                    };
+                }
                 AirPlayInfo {
                     id: id.clone(),
                     name: self.names.get(id).cloned().unwrap_or_else(|| id.clone()),
@@ -1014,6 +1293,7 @@ impl AirPlaySpeakers {
                     paired: self.store.contains(id) || self.store.homekit(id).is_some(),
                     pairing: self.pairings.contains_key(id),
                     airplay2: self.over_airplay2(id),
+                    group: None,
                 }
             })
             .collect();
@@ -1040,6 +1320,15 @@ impl AirPlaySpeakers {
     /// (see [`AirPlaySpeakers::start_pairing`]). Turning a speaker off stops
     /// its pairing.
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), AirPlayProblem> {
+        if enabled && self.held_by_target(id) {
+            self.log.log(|| {
+                format!(
+                    "AirPlay speaker {} stays off: it plays as part of its stereo pair or home theater group",
+                    self.label(id)
+                )
+            });
+            return Err(AirPlayProblem::PlaysInGroup);
+        }
         if enabled
             && !self.can_join(id)
             && let Some(availability) = self.listed_availability(id)
@@ -1054,10 +1343,39 @@ impl AirPlaySpeakers {
             });
             return Err(problem);
         }
+        if enabled && let Some(problem) = self.home_theater_conflict(id) {
+            self.log.log(|| {
+                format!(
+                    "AirPlay speaker {} stays off: its home theater group and Apple TV can't play at once",
+                    self.label(id)
+                )
+            });
+            return Err(problem);
+        }
         self.log.log(|| {
             let state = if enabled { "on" } else { "off" };
             format!("AirPlay speaker {} switched {state}", self.label(id))
         });
+        // The target takes over its members that played on their own.
+        if enabled && let Some(target) = self.targets.get(id) {
+            let members: Vec<String> = target
+                .members
+                .iter()
+                .map(|member| speaker_id(&member.key))
+                .filter(|member| self.settings(member).enabled)
+                .collect();
+            for member in members {
+                self.log.log(|| {
+                    format!(
+                        "AirPlay speaker {} switched off: it plays as part of {}",
+                        self.label(&member),
+                        self.label(id)
+                    )
+                });
+                self.drop_password_ask(&member, "it plays as part of its target");
+                self.entry(&member).enabled = false;
+            }
+        }
         if !enabled {
             self.stop_pairing(id, "the speaker was switched off");
             self.drop_password_ask(id, "the speaker was switched off");
@@ -1221,7 +1539,7 @@ impl AirPlaySpeakers {
             .listed
             .get(id)
             .map(|listed| listed.device().key.clone())
-            .or_else(|| self.added.get(id).map(|added| added.key.clone()))
+            .or_else(|| self.added.get(id).and_then(|added| added.key().cloned()))
             .or_else(|| self.homekit_keys.get(id).cloned());
         self.homekit_keys.remove(id);
         if let Some(key) = key {
@@ -1271,6 +1589,22 @@ impl AirPlaySpeakers {
     /// asks for one AudioSync doesn't have. It stays off until the password
     /// is typed ([`AirPlaySpeakers::submit_password`]).
     pub fn ask_password(&mut self, id: &str) -> Result<(), AirPlayProblem> {
+        // A target asks for its member's password by the member's name.
+        if let Some(target) = self.targets.get(id) {
+            let member = target
+                .members
+                .iter()
+                .map(|member| speaker_id(&member.key))
+                .find(|member| {
+                    self.listed_availability(member) == Some(AirPlayAvailability::NeedsPassword)
+                        && !self.passwords.contains_key(member)
+                });
+            let Some(member) = member else {
+                return Err(AirPlayProblem::Unsupported);
+            };
+            self.queue_password_ask(&member, false, false, Some(id));
+            return Ok(());
+        }
         if !self.listed.contains_key(id) {
             self.log.log(|| {
                 format!(
@@ -1280,13 +1614,13 @@ impl AirPlaySpeakers {
             });
             return Err(AirPlayProblem::Unsupported);
         }
-        self.queue_password_ask(id, false, false);
+        self.queue_password_ask(id, false, false, None);
         Ok(())
     }
 
     /// Queues the speaker's password prompt; one already waiting keeps its
     /// place.
-    fn queue_password_ask(&mut self, id: &str, wrong: bool, pair: bool) {
+    fn queue_password_ask(&mut self, id: &str, wrong: bool, pair: bool, target: Option<&str>) {
         let order = match self.password_asks.get(id) {
             Some(ask) => ask.order,
             None => {
@@ -1294,8 +1628,15 @@ impl AirPlaySpeakers {
                 self.next_ask_order
             }
         };
-        self.password_asks
-            .insert(id.to_owned(), PasswordAsk { wrong, order, pair });
+        self.password_asks.insert(
+            id.to_owned(),
+            PasswordAsk {
+                wrong,
+                order,
+                pair,
+                target: target.map(str::to_owned),
+            },
+        );
         self.log.log(|| {
             let again = if wrong {
                 " again, it turned the last one down"
@@ -1330,6 +1671,19 @@ impl AirPlaySpeakers {
             });
             return self.start_pairing(id).is_ok();
         }
+        if let Some(target) = ask.target {
+            self.log.log(|| {
+                format!(
+                    "AirPlay speaker {}: password typed, {} switched on",
+                    self.label(id),
+                    self.label(&target)
+                )
+            });
+            self.password_attempts.insert(target.clone());
+            self.entry(&target).enabled = true;
+            self.reconcile();
+            return true;
+        }
         self.log.log(|| {
             format!(
                 "AirPlay speaker {}: password typed, switched on",
@@ -1344,26 +1698,39 @@ impl AirPlaySpeakers {
 
     /// The user cancelled the speaker's password prompt: it is off.
     pub fn cancel_password(&mut self, id: &str) {
-        if self.drop_password_ask(id, "cancelled by the user") && self.settings(id).enabled {
-            self.entry(id).enabled = false;
+        let owner = self
+            .password_asks
+            .get(id)
+            .and_then(|ask| ask.target.clone())
+            .unwrap_or_else(|| id.to_owned());
+        if self.drop_password_ask(id, "cancelled by the user") && self.settings(&owner).enabled {
+            self.password_attempts.remove(&owner);
+            self.entry(&owner).enabled = false;
             self.reconcile();
         }
     }
 
     /// Drops the speaker's password prompt, if one waits, saying why in the
-    /// log, and ends its attempt. Returns whether a prompt waited.
+    /// log, and ends its attempt; for a target, its members' prompts.
+    /// Returns whether a prompt waited.
     fn drop_password_ask(&mut self, id: &str, why: &str) -> bool {
         self.password_attempts.remove(id);
-        let dropped = self.password_asks.remove(id).is_some();
-        if dropped {
+        let askers: Vec<String> = self
+            .password_asks
+            .iter()
+            .filter(|(asker, ask)| asker.as_str() == id || ask.target.as_deref() == Some(id))
+            .map(|(asker, _)| asker.clone())
+            .collect();
+        for asker in &askers {
+            self.password_asks.remove(asker);
             self.log.log(|| {
                 format!(
                     "AirPlay speaker {}: password prompt closed, {why}",
-                    self.label(id)
+                    self.label(asker)
                 )
             });
         }
-        dropped
+        !askers.is_empty()
     }
 
     /// The password prompt to show: the oldest one waiting, while no PIN
@@ -1400,7 +1767,7 @@ impl AirPlaySpeakers {
             )
         });
         if let Some(added) = self.added.get(id) {
-            self.link.set_volume(&added.key, volume);
+            added.set_volume(self.link.as_mut(), volume);
         }
     }
 
@@ -1439,7 +1806,7 @@ impl AirPlaySpeakers {
     fn send_volumes(&mut self) {
         for (id, added) in &self.added {
             let volume = self.volume_of(id);
-            self.link.set_volume(&added.key, volume);
+            added.set_volume(self.link.as_mut(), volume);
         }
     }
 
@@ -1513,7 +1880,7 @@ impl AirPlaySpeakers {
             });
         }
         if let Some(added) = self.added.get(id) {
-            self.link.set_delay(&added.key, delay);
+            added.set_delay(self.link.as_mut(), delay);
         }
     }
 
@@ -1558,8 +1925,12 @@ impl AirPlaySpeakers {
             .collect();
         for id in leaving {
             if let Some(added) = self.added.remove(&id) {
-                self.link.remove_speaker(&added.key);
+                added.remove(self.link.as_mut());
                 self.airplay1_outcome.remove(&id);
+                self.target_missing.remove(&id);
+                if self.gone_targets.remove(&id) {
+                    self.targets.remove(&id);
+                }
                 self.log
                     .log(|| format!("AirPlay speaker {} removed", self.label(&id)));
             }
@@ -1577,8 +1948,6 @@ impl AirPlaySpeakers {
             .collect();
         for id in joining {
             let options = self.options(&id);
-            let device = self.listed[&id].device();
-            let key = device.key.clone();
             self.log.log(|| {
                 let paired = if options.credentials.is_some() {
                     ", with the stored pairing credentials"
@@ -1593,15 +1962,47 @@ impl AirPlaySpeakers {
                     options.delay.as_millis()
                 )
             });
-            let counters = self.link.add_speaker(device, options);
-            self.added.insert(
-                id,
-                Added {
-                    key,
-                    state: SpeakerState::Connecting,
-                    counters,
-                },
-            );
+            let added = match self.targets.get(&id) {
+                Some(target) => self.add_target(target.clone(), options),
+                None => {
+                    let device = self.listed[&id].device();
+                    let key = device.key.clone();
+                    let counters = self.link.add_speaker(device, options);
+                    Added::speaker(key, counters)
+                }
+            };
+            self.added.insert(id, added);
+        }
+    }
+
+    /// Hands the sender a target to play; each member joins with its own
+    /// password and credentials, and the target's delay and volume.
+    fn add_target(&mut self, target: Target, options: SpeakerOptions) -> Added {
+        let members: BTreeMap<DeviceKey, SpeakerOptions> = target
+            .members
+            .iter()
+            .map(|member| {
+                let id = speaker_id(&member.key);
+                let mut own = options.clone();
+                own.credentials = self.store.get(&id).cloned();
+                own.homekit_credentials = self.store.homekit(&id).cloned();
+                own.password = self.password(&id);
+                (member.key.clone(), own)
+            })
+            .collect();
+        let counters = self.link.add_target(&target, options, members);
+        Added {
+            members: target
+                .members
+                .iter()
+                .map(|member| (speaker_id(&member.key), None))
+                .collect(),
+            joined: Joined::Target(target.id),
+            state: SpeakerState::Connecting,
+            counters: counters
+                .into_iter()
+                .map(|(key, counters)| (speaker_id(&key), counters))
+                .collect(),
         }
     }
 
@@ -1673,8 +2074,29 @@ impl AirPlaySpeakers {
                     });
                     self.mark_stopped(&mut events);
                 }
-                // Stereo pairs and home theater groups are not listed here yet.
-                SenderEvent::TargetMissing { .. } => {}
+                SenderEvent::TargetMissing { id, missing } => {
+                    let id = id.to_string();
+                    let missing: Vec<String> = missing.iter().map(speaker_id).collect();
+                    self.log.log(|| {
+                        let names: Vec<String> =
+                            missing.iter().map(|member| self.label(member)).collect();
+                        format!(
+                            "AirPlay target {}: members playing nothing: {}",
+                            self.label(&id),
+                            if names.is_empty() {
+                                "none".to_owned()
+                            } else {
+                                names.join("; ")
+                            }
+                        )
+                    });
+                    changed = true;
+                    if missing.is_empty() {
+                        self.target_missing.remove(&id);
+                    } else {
+                        self.target_missing.insert(id, missing);
+                    }
+                }
             }
         }
         // Events it sent before it stopped were taken in above.
@@ -1782,7 +2204,7 @@ impl AirPlaySpeakers {
                 }
                 let wrong = self.passwords.remove(id).is_some()
                     || matches!(error.kind, ErrorKind::WrongPassword);
-                self.queue_password_ask(id, wrong, true);
+                self.queue_password_ask(id, wrong, true, None);
                 true
             }
             PairingEvent::Failed { .. } => {
@@ -1955,8 +2377,243 @@ impl AirPlaySpeakers {
                         .log(|| format!("AirPlay receiver gone: {}", self.label(&id)));
                 }
             }
-            ReceiverEvent::Target(_) => {}
+            // Listed only while the AirPlay 2 switch is on, as on the Mac.
+            ReceiverEvent::Target(_) if !self.link.airplay2() => {}
+            ReceiverEvent::Target(TargetChange::Updated(target)) => {
+                let id = target.id.to_string();
+                self.names.insert(id.clone(), target.name.clone());
+                self.log.log(|| {
+                    let kind = match target.id.kind {
+                        TargetKind::StereoPair => "stereo pair",
+                        TargetKind::HomeTheater => "home theater group",
+                    };
+                    let members: Vec<String> = target
+                        .members
+                        .iter()
+                        .map(|member| {
+                            let seen = if member.in_view() {
+                                ""
+                            } else {
+                                ", out of view"
+                            };
+                            format!("\"{}\" ({}{seen})", member.name, speaker_id(&member.key))
+                        })
+                        .collect();
+                    let complete = if target.complete() {
+                        ""
+                    } else {
+                        ", incomplete"
+                    };
+                    format!(
+                        "AirPlay {kind} {}: {}{complete}",
+                        self.label(&id),
+                        members.join(", ")
+                    )
+                });
+                self.gone_targets.remove(&id);
+                self.targets.insert(id, *target);
+                self.reconcile();
+            }
+            ReceiverEvent::Target(TargetChange::Gone(id)) => {
+                let id = id.to_string();
+                // One the sender plays stays until it is switched off, so its
+                // members never join twice.
+                if self.added.contains_key(&id) {
+                    if self.targets.contains_key(&id) && self.gone_targets.insert(id.clone()) {
+                        self.log.log(|| {
+                            format!(
+                                "AirPlay target gone: {}; kept while it plays",
+                                self.label(&id)
+                            )
+                        });
+                    }
+                } else if self.targets.remove(&id).is_some() {
+                    self.log
+                        .log(|| format!("AirPlay target gone: {}", self.label(&id)));
+                }
+            }
         }
+    }
+
+    /// The added target whose member is the speaker `id`.
+    fn added_target_of(&self, id: &str) -> Option<String> {
+        self.added
+            .iter()
+            .find(|(_, added)| added.members.contains_key(id))
+            .map(|(target, _)| target.clone())
+    }
+
+    fn log_state(&self, id: &str, state: SpeakerState) {
+        self.log.log(|| {
+            let state = match state {
+                SpeakerState::Connecting => "connecting".to_owned(),
+                SpeakerState::Playing => "playing".to_owned(),
+                SpeakerState::Retrying { at } => format!(
+                    "trying again in {:.1} s",
+                    at.saturating_duration_since(Instant::now()).as_secs_f64()
+                ),
+                SpeakerState::Failed => "failed".to_owned(),
+                SpeakerState::Stopped => "stopped".to_owned(),
+            };
+            format!("AirPlay speaker {}: {state}", self.label(id))
+        });
+    }
+
+    /// Takes in the new state of an added speaker or target. Returns whether
+    /// the speaker list changed.
+    fn take_state(
+        &mut self,
+        id: &str,
+        state: SpeakerState,
+        events: &mut Vec<BackendEvent>,
+    ) -> bool {
+        let Some(added) = self.added.get_mut(id) else {
+            return false;
+        };
+        let was_playing = added.state == SpeakerState::Playing;
+        added.state = state;
+        if state == SpeakerState::Playing {
+            // Its password worked: one turned down later turns it off.
+            self.password_attempts.remove(id);
+        }
+        if state == SpeakerState::Playing && !was_playing {
+            events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
+        }
+        was_playing != (state == SpeakerState::Playing)
+    }
+
+    /// Takes in a state or error of a member of the added target `target`:
+    /// the target plays while one member does, and a member's error is the
+    /// target's only while no other member plays or connects (P181).
+    /// `None` for any other event, which is the member's own.
+    fn member_event(
+        &mut self,
+        target: &str,
+        member: &str,
+        event: &SpeakerEvent,
+        events: &mut Vec<BackendEvent>,
+    ) -> Option<bool> {
+        match event {
+            SpeakerEvent::State(state) => {
+                self.log_state(member, *state);
+                self.added
+                    .get_mut(target)?
+                    .members
+                    .insert(member.to_owned(), Some(*state));
+                Some(self.target_state(target, events))
+            }
+            SpeakerEvent::Error(SpeakerError {
+                error,
+                reason,
+                retry_at,
+            }) => {
+                self.note_path_switch(member, error.kind, retry_at.is_some());
+                self.log.log(|| {
+                    format!(
+                        "AirPlay speaker {} of {} error: {error} ({reason:?})",
+                        self.label(member),
+                        self.label(target)
+                    )
+                });
+                let problem = match problem(*reason) {
+                    AirPlayProblem::PlaysThroughSpeakers => AirPlayProblem::AppleTvPlays,
+                    AirPlayProblem::PairingNotYet
+                        if self.over_airplay2(member) && self.asks_password_only(member) =>
+                    {
+                        AirPlayProblem::NeedsPassword
+                    }
+                    problem => problem,
+                };
+                if problem == AirPlayProblem::NeedsPassword {
+                    return Some(self.member_password(target, member, *reason, events));
+                }
+                let added = self.added.get_mut(target)?;
+                added.members.insert(member.to_owned(), None);
+                let others_on =
+                    added.members.values().flatten().any(|state| {
+                        matches!(state, SpeakerState::Playing | SpeakerState::Connecting)
+                    });
+                if others_on {
+                    return Some(self.target_state(target, events));
+                }
+                if let Some(at) = retry_at
+                    && problem.retried()
+                {
+                    added.state = SpeakerState::Retrying { at: *at };
+                    events.push(BackendEvent::AirPlayTrouble {
+                        id: target.to_owned(),
+                        problem,
+                    });
+                } else if problem == AirPlayProblem::OneAirPlay2Speaker {
+                    events.push(BackendEvent::AirPlayTrouble {
+                        id: target.to_owned(),
+                        problem,
+                    });
+                } else {
+                    self.turn_off(target, problem, events);
+                }
+                Some(true)
+            }
+            _ => None,
+        }
+    }
+
+    /// Takes the best state of the added target's members as its own.
+    /// Returns whether the speaker list changed.
+    fn target_state(&mut self, target: &str, events: &mut Vec<BackendEvent>) -> bool {
+        let Some(added) = self.added.get(target) else {
+            return false;
+        };
+        let best = added
+            .members
+            .values()
+            .flatten()
+            .min_by_key(|state| state_rank(state))
+            .copied();
+        match best {
+            Some(best) if best != added.state => self.take_state(target, best, events),
+            _ => false,
+        }
+    }
+
+    /// A member of the added target `target` asks for a password, or turned
+    /// the one typed down. On the user's own switch-on the prompt asks for
+    /// it by the member's name while the target waits; otherwise the target
+    /// goes off with a notice, and switching it on asks. Returns whether the
+    /// speaker list changed.
+    fn member_password(
+        &mut self,
+        target: &str,
+        member: &str,
+        reason: UserReason,
+        events: &mut Vec<BackendEvent>,
+    ) -> bool {
+        let turned_down =
+            self.passwords.remove(member).is_some() || reason == UserReason::WrongPassword;
+        self.password_seen.insert(member.to_owned());
+        if self.password_attempts.contains(target)
+            && let Some(added) = self.added.remove(target)
+        {
+            added.remove(self.link.as_mut());
+            self.airplay1_outcome.remove(target);
+            self.target_missing.remove(target);
+            if self.gone_targets.remove(target) {
+                self.targets.remove(target);
+            }
+            self.queue_password_ask(member, turned_down, false, Some(target));
+            return true;
+        }
+        self.turn_off(target, AirPlayProblem::NeedsPassword, events);
+        true
+    }
+
+    /// Whether discovery says the speaker asks for a password and no
+    /// pairing.
+    fn asks_password_only(&self, id: &str) -> bool {
+        self.listed.get(id).is_some_and(|listed| {
+            let verdict = &listed.info.device.verdict;
+            verdict.needs_password && !verdict.needs_pairing
+        })
     }
 
     /// Returns whether the speaker list changed.
@@ -1966,34 +2623,15 @@ impl AirPlaySpeakers {
         event: SpeakerEvent,
         events: &mut Vec<BackendEvent>,
     ) -> bool {
+        if let Some(target) = self.added_target_of(id)
+            && let Some(changed) = self.member_event(&target, id, &event, events)
+        {
+            return changed;
+        }
         match event {
             SpeakerEvent::State(state) => {
-                self.log.log(|| {
-                    let state = match state {
-                        SpeakerState::Connecting => "connecting".to_owned(),
-                        SpeakerState::Playing => "playing".to_owned(),
-                        SpeakerState::Retrying { at } => format!(
-                            "trying again in {:.1} s",
-                            at.saturating_duration_since(Instant::now()).as_secs_f64()
-                        ),
-                        SpeakerState::Failed => "failed".to_owned(),
-                        SpeakerState::Stopped => "stopped".to_owned(),
-                    };
-                    format!("AirPlay speaker {}: {state}", self.label(id))
-                });
-                let Some(added) = self.added.get_mut(id) else {
-                    return false;
-                };
-                let was_playing = added.state == SpeakerState::Playing;
-                added.state = state;
-                if state == SpeakerState::Playing {
-                    // Its password worked: one turned down later turns it off.
-                    self.password_attempts.remove(id);
-                }
-                if state == SpeakerState::Playing && !was_playing {
-                    events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
-                }
-                was_playing != (state == SpeakerState::Playing)
+                self.log_state(id, state);
+                self.take_state(id, state, events)
             }
             SpeakerEvent::Error(SpeakerError {
                 error,
@@ -2006,11 +2644,7 @@ impl AirPlaySpeakers {
                 // switching it on pairs it with a PIN, or with its password
                 // when it asks for one (P61, P154).
                 if problem == AirPlayProblem::PairingNotYet && self.over_airplay2(id) {
-                    let password = self.listed.get(id).is_some_and(|listed| {
-                        let verdict = &listed.info.device.verdict;
-                        verdict.needs_password && !verdict.needs_pairing
-                    });
-                    if password {
+                    if self.asks_password_only(id) {
                         problem = AirPlayProblem::NeedsPassword;
                     } else {
                         problem = AirPlayProblem::NeedsPin;
@@ -2060,9 +2694,9 @@ impl AirPlaySpeakers {
                 {
                     // The user's switch-on asks for it; the speaker stays on
                     // meanwhile.
-                    self.link.remove_speaker(&added.key);
+                    added.remove(self.link.as_mut());
                     self.airplay1_outcome.remove(id);
-                    self.queue_password_ask(id, turned_down, false);
+                    self.queue_password_ask(id, turned_down, false, None);
                     return true;
                 }
                 let Some(added) = self.added.get_mut(id) else {
@@ -2161,7 +2795,10 @@ impl AirPlaySpeakers {
                 self.label(id),
                 added.state
             ));
-            if let Some(counters) = &added.counters {
+            for (member, counters) in &added.counters {
+                if !added.members.is_empty() {
+                    text.push_str(&format!("\n    member {}", self.label(member)));
+                }
                 text.push_str(&format!(
                     "; {} packets sent, {} late, {} resend requests, {} resent, {} timing replies, \
                      {} datagrams from other addresses dropped",
@@ -2202,6 +2839,7 @@ pub mod tests {
     use audiosync_airplay::error::SessionError;
     use audiosync_airplay::rtsp::{Message, Method, Parser, Request, Response};
     use audiosync_airplay::stream::{Stream, StreamConfig};
+    use audiosync_airplay::targets::Member;
 
     use super::*;
     use crate::audio::backend::{AudioBackend, SourceId};
@@ -2331,6 +2969,16 @@ pub mod tests {
         Remove(String),
         Volume(String, Volume),
         Delay(String, Duration),
+        /// A target added, with its members' speaker IDs.
+        AddTarget {
+            id: String,
+            volume: Volume,
+            delay: Duration,
+            members: Vec<String>,
+        },
+        RemoveTarget(String),
+        TargetVolume(String, Volume),
+        TargetDelay(String, Duration),
         RestartTimeline,
         NowPlaying(NowPlaying),
         /// The speaker added just before came with credentials of this
@@ -2399,6 +3047,29 @@ pub mod tests {
             self.push(SenderEvent::Receiver(ReceiverEvent::Changed(Box::new(
                 ReceiverInfo::new(device.clone()),
             ))));
+        }
+
+        /// Discovery found `device`, a member of the target `target`.
+        pub fn appear_in(&self, device: &Device, target: &Target) {
+            let mut info = ReceiverInfo::new(device.clone());
+            info.target = Some(target.id.clone());
+            self.push(SenderEvent::Receiver(ReceiverEvent::Appeared(Box::new(
+                info,
+            ))));
+        }
+
+        /// Discovery reported `target`, new or changed.
+        pub fn target(&self, target: &Target) {
+            self.push(SenderEvent::Receiver(ReceiverEvent::Target(
+                TargetChange::Updated(Box::new(target.clone())),
+            )));
+        }
+
+        /// Discovery no longer reports `target`.
+        pub fn target_gone(&self, target: &Target) {
+            self.push(SenderEvent::Receiver(ReceiverEvent::Target(
+                TargetChange::Gone(target.id.clone()),
+            )));
         }
 
         /// Discovery lost `device`.
@@ -2500,6 +3171,42 @@ pub mod tests {
                 .borrow_mut()
                 .calls
                 .push(Call::Remove(speaker_id(key)));
+        }
+
+        fn add_target(
+            &mut self,
+            target: &Target,
+            options: SpeakerOptions,
+            members: BTreeMap<DeviceKey, SpeakerOptions>,
+        ) -> Vec<(DeviceKey, Arc<SpeakerCounters>)> {
+            self.0.borrow_mut().calls.push(Call::AddTarget {
+                id: target.id.to_string(),
+                volume: options.volume,
+                delay: options.delay,
+                members: members.keys().map(speaker_id).collect(),
+            });
+            Vec::new()
+        }
+
+        fn remove_target(&mut self, id: &TargetId) {
+            self.0
+                .borrow_mut()
+                .calls
+                .push(Call::RemoveTarget(id.to_string()));
+        }
+
+        fn set_target_volume(&mut self, id: &TargetId, volume: Volume) {
+            self.0
+                .borrow_mut()
+                .calls
+                .push(Call::TargetVolume(id.to_string(), volume));
+        }
+
+        fn set_target_delay(&mut self, id: &TargetId, delay: Duration) {
+            self.0
+                .borrow_mut()
+                .calls
+                .push(Call::TargetDelay(id.to_string(), delay));
         }
 
         fn set_volume(&mut self, key: &DeviceKey, volume: Volume) {
@@ -4110,6 +4817,467 @@ pub mod tests {
         assert_eq!(airplay.password_prompt(), None);
         assert!(airplay.enabled_ids().is_empty());
         assert!(fake.take_calls().is_empty(), "no pairing runs any more");
+    }
+
+    fn member_of(device: &Device) -> Member {
+        Member {
+            key: device.key.clone(),
+            name: device.name.clone(),
+            device: Some(Box::new(device.clone())),
+        }
+    }
+
+    /// A stereo pair of two AirPlay 2 speakers, Left and Right (P173).
+    fn stereo_pair() -> (Target, Device, Device) {
+        let left = airplay2_device(21, "Left", false);
+        let right = airplay2_device(22, "Right", false);
+        let target = Target {
+            id: TargetId::parse("pair:5f0c").expect("a target ID"),
+            name: "Living Room".to_owned(),
+            members: vec![member_of(&left), member_of(&right)],
+            leader: Some(left.key.clone()),
+            control: None,
+            expected_members: Some(2),
+            partner_unreachable: false,
+        };
+        (target, left, right)
+    }
+
+    const PAIR: &str = "pair:5f0c";
+
+    /// The AirPlay side with the switch on and `target` listed.
+    fn with_target(fake: &FakeAirPlay, target: &Target, members: &[&Device]) -> AirPlaySpeakers {
+        fake.set_airplay2(true);
+        let mut airplay = speakers(fake);
+        for member in members {
+            fake.appear_in(member, target);
+        }
+        fake.target(target);
+        airplay.poll();
+        airplay
+    }
+
+    #[test]
+    fn a_stereo_pair_is_one_row_that_names_its_members() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let airplay = with_target(&fake, &pair, &[&left, &right]);
+        let rows = airplay.speakers();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the members show as part of the pair: {rows:?}"
+        );
+        let row = &rows[0];
+        assert_eq!((row.id.as_str(), row.name.as_str()), (PAIR, "Living Room"));
+        assert_eq!(row.availability, AirPlayAvailability::Open);
+        assert!(row.airplay2);
+        assert_eq!(
+            row.group,
+            Some(AirPlayGroup {
+                kind: AirPlayGroupKind::StereoPair,
+                members: vec!["Left".to_owned(), "Right".to_owned()],
+                missing: Vec::new(),
+                incomplete: false,
+            })
+        );
+    }
+
+    #[test]
+    fn targets_are_not_listed_with_the_airplay2_switch_off() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = speakers(&fake);
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        airplay.poll();
+        let ids: Vec<String> = airplay.speakers().into_iter().map(|row| row.id).collect();
+        assert_eq!(ids, [id_of(&left), id_of(&right)]);
+    }
+
+    #[test]
+    fn the_pair_row_plays_both_members_with_one_switch_volume_and_delay() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        let volume = airplay_volume(DEFAULT_LOCAL_POSITION, 100.0);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::AddTarget {
+                id: PAIR.to_owned(),
+                volume,
+                delay: Duration::ZERO,
+                members: vec![id_of(&left), id_of(&right)],
+            }]
+        );
+        assert!(airplay.chosen());
+
+        airplay.set_volume(PAIR, 40.0);
+        airplay.set_delay(PAIR, 120.0);
+        assert_eq!(
+            fake.take_calls(),
+            [
+                Call::TargetVolume(PAIR.to_owned(), airplay_volume(40.0, 100.0)),
+                Call::TargetDelay(PAIR.to_owned(), Duration::from_millis(120)),
+            ]
+        );
+
+        // The pair plays once one member does.
+        fake.state(&left, SpeakerState::Connecting);
+        fake.state(&right, SpeakerState::Connecting);
+        fake.state(&right, SpeakerState::Playing);
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayPlaying {
+            id: PAIR.to_owned()
+        }));
+        assert!(airplay.speakers()[0].playing);
+
+        airplay.set_enabled(PAIR, false).expect("off");
+        assert_eq!(fake.take_calls(), [Call::RemoveTarget(PAIR.to_owned())]);
+    }
+
+    #[test]
+    fn a_member_out_of_view_or_playing_nothing_is_named_missing() {
+        let fake = FakeAirPlay::new();
+        let (mut pair, left, right) = stereo_pair();
+        pair.members[1].device = None;
+        let mut airplay = with_target(&fake, &pair, &[&left]);
+        let group = airplay.speakers()[0].group.clone().expect("a group");
+        assert!(group.incomplete);
+        assert_eq!(group.missing, ["Right"]);
+
+        // In view again, but the sender says it plays nothing (P181).
+        pair.members[1] = member_of(&right);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.push(SenderEvent::TargetMissing {
+            id: pair.id.clone(),
+            missing: vec![right.key.clone()],
+        });
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayChanged));
+        let group = airplay.speakers()[0].group.clone().expect("a group");
+        assert!(group.incomplete);
+        assert_eq!(group.missing, ["Right"]);
+
+        fake.push(SenderEvent::TargetMissing {
+            id: pair.id.clone(),
+            missing: Vec::new(),
+        });
+        airplay.poll();
+        let group = airplay.speakers()[0].group.clone().expect("a group");
+        assert!(!group.incomplete && group.missing.is_empty());
+
+        // A member that reports its partner unreachable, with no name known.
+        pair.partner_unreachable = true;
+        fake.target(&pair);
+        airplay.poll();
+        assert!(
+            airplay.speakers()[0]
+                .group
+                .clone()
+                .expect("a group")
+                .incomplete
+        );
+    }
+
+    #[test]
+    fn a_member_on_by_itself_shows_until_the_pair_takes_it_over() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let (pair, left, right) = stereo_pair();
+        fake.appear(&left);
+        airplay.poll();
+        airplay.set_streaming(true);
+        airplay
+            .set_enabled(&id_of(&left), true)
+            .expect("left plays");
+        fake.take_calls();
+
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        airplay.poll();
+        let ids: Vec<String> = airplay.speakers().into_iter().map(|row| row.id).collect();
+        assert_eq!(
+            ids,
+            [id_of(&left), PAIR.to_owned()],
+            "Left stays to be switched off"
+        );
+        assert!(fake.take_calls().is_empty(), "Left keeps playing");
+
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        let calls = fake.take_calls();
+        assert_eq!(calls[0], Call::Remove(id_of(&left)));
+        assert!(matches!(&calls[1], Call::AddTarget { id, .. } if id == PAIR));
+        let ids: Vec<String> = airplay.speakers().into_iter().map(|row| row.id).collect();
+        assert_eq!(ids, [PAIR]);
+    }
+
+    #[test]
+    fn a_member_error_is_the_pairs_only_while_no_other_member_plays() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.state(&left, SpeakerState::Playing);
+        fake.fail(&right, ErrorKind::Unreachable);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayTrouble { .. })),
+            "{events:?}"
+        );
+
+        fake.fail(&left, ErrorKind::Lost);
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayTrouble {
+            id: PAIR.to_owned(),
+            problem: AirPlayProblem::ConnectionLost,
+        }));
+        assert!(airplay.speakers()[0].enabled, "AudioSync keeps trying");
+    }
+
+    #[test]
+    fn an_apple_tv_and_its_home_theater_group_never_play_at_once() {
+        let fake = FakeAirPlay::new();
+        let (_, left, right) = stereo_pair();
+        let tv = airplay2_device(23, "Den TV", false);
+        let theater = Target {
+            id: TargetId::parse("theater:9a1e").expect("a target ID"),
+            name: "Den".to_owned(),
+            members: vec![member_of(&left), member_of(&right)],
+            leader: Some(left.key.clone()),
+            control: Some(tv.key.clone()),
+            expected_members: Some(2),
+            partner_unreachable: false,
+        };
+        let group = "theater:9a1e";
+        let mut airplay = with_target(&fake, &theater, &[&left, &right]);
+        fake.appear(&tv);
+        airplay.poll();
+        let rows: Vec<String> = airplay.speakers().into_iter().map(|row| row.id).collect();
+        assert_eq!(rows, [group.to_owned(), id_of(&tv)]);
+        let row = &airplay.speakers()[0];
+        assert_eq!(
+            row.group.as_ref().map(|group| group.kind),
+            Some(AirPlayGroupKind::HomeTheater)
+        );
+
+        airplay.set_streaming(true);
+        airplay
+            .set_enabled(&id_of(&tv), true)
+            .expect("the Apple TV plays");
+        assert_eq!(
+            airplay.set_enabled(group, true),
+            Err(AirPlayProblem::AppleTvPlays)
+        );
+        airplay.set_enabled(&id_of(&tv), false).expect("off");
+        airplay.set_enabled(group, true).expect("the group plays");
+        assert_eq!(
+            airplay.set_enabled(&id_of(&tv), true),
+            Err(AirPlayProblem::PlaysThroughSpeakers)
+        );
+
+        // The sender refuses too (P177): the group goes off with a notice.
+        fake.fail(
+            &left,
+            ErrorKind::Unsupported(UnsupportedReason::PlaysThroughSpeakers),
+        );
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayFailed {
+            id: group.to_owned(),
+            problem: AirPlayProblem::AppleTvPlays,
+        }));
+        assert!(!airplay.speakers()[0].enabled);
+
+        // And an Apple TV it refuses says it plays through its speakers.
+        airplay
+            .set_enabled(&id_of(&tv), true)
+            .expect("the Apple TV plays");
+        fake.fail(
+            &tv,
+            ErrorKind::Unsupported(UnsupportedReason::PlaysThroughSpeakers),
+        );
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayFailed {
+            id: id_of(&tv),
+            problem: AirPlayProblem::PlaysThroughSpeakers,
+        }));
+    }
+
+    #[test]
+    fn calibration_hears_a_playing_pair_as_one_airplay_speaker() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        airplay
+            .set_enabled(&id_of(&kitchen), true)
+            .expect("Kitchen plays");
+        fake.state(&left, SpeakerState::Playing);
+        fake.state(&right, SpeakerState::Playing);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        let playing: Vec<String> = airplay
+            .speakers()
+            .into_iter()
+            .filter(|row| row.enabled && row.playing)
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(playing, [id_of(&kitchen), PAIR.to_owned()]);
+
+        fake.take_calls();
+        airplay.set_calibration_solo(Some(PAIR));
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::Volume(id_of(&kitchen), Volume::Muted)));
+        assert!(calls.contains(&Call::TargetVolume(
+            PAIR.to_owned(),
+            airplay_volume(DEFAULT_LOCAL_POSITION, 100.0)
+        )));
+    }
+
+    #[test]
+    fn a_pair_gone_while_playing_keeps_its_row_and_its_members() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.state(&left, SpeakerState::Playing);
+        fake.target_gone(&pair);
+        airplay.poll();
+        fake.take_calls();
+        let ids: Vec<String> = airplay.speakers().into_iter().map(|row| row.id).collect();
+        assert_eq!(ids, [PAIR], "the pair stays to be switched off");
+
+        // The sender holds Left for the pair: switched on by itself, it
+        // would join nothing and stay on Connecting.
+        assert_eq!(
+            airplay.set_enabled(&id_of(&left), true),
+            Err(AirPlayProblem::PlaysInGroup)
+        );
+        assert!(fake.take_calls().is_empty());
+        assert_eq!(airplay.enabled_ids(), [PAIR]);
+
+        airplay.set_enabled(PAIR, false).expect("off");
+        assert_eq!(fake.take_calls(), [Call::RemoveTarget(PAIR.to_owned())]);
+        let ids: Vec<String> = airplay.speakers().into_iter().map(|row| row.id).collect();
+        assert_eq!(ids, [id_of(&left), id_of(&right)]);
+        airplay
+            .set_enabled(&id_of(&left), true)
+            .expect("Left plays by itself");
+        assert!(matches!(&fake.take_calls()[..], [Call::Add { id, .. }] if *id == id_of(&left)));
+    }
+
+    #[test]
+    fn a_member_left_on_before_its_pair_was_listed_still_joins() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let (pair, left, right) = stereo_pair();
+        fake.appear(&left);
+        airplay.poll();
+        airplay
+            .set_enabled(&id_of(&left), true)
+            .expect("left is on");
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        airplay.poll();
+        assert!(airplay.chosen(), "Left counts as chosen");
+        airplay.set_streaming(true);
+        assert!(matches!(&fake.take_calls()[..], [Call::Add { id, .. }] if *id == id_of(&left)));
+
+        // Right, held back by the pair, says why it stays off.
+        assert_eq!(
+            airplay.set_enabled(&id_of(&right), true),
+            Err(AirPlayProblem::PlaysInGroup)
+        );
+    }
+
+    #[test]
+    fn a_pair_whose_playing_member_drops_waits_on_the_one_connecting() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.state(&left, SpeakerState::Playing);
+        fake.state(&right, SpeakerState::Connecting);
+        airplay.poll();
+        assert!(airplay.speakers()[0].playing);
+        fake.fail(&left, ErrorKind::Lost);
+        airplay.poll();
+        assert!(
+            !airplay.speakers()[0].playing,
+            "Right only connects, so the pair doesn't play"
+        );
+    }
+
+    #[test]
+    fn a_member_that_wants_a_password_is_asked_for_by_name() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        airplay.begin_attempt(PAIR);
+        fake.take_calls();
+        fake.fail(&right, ErrorKind::PasswordRequired);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayFailed { .. })),
+            "the prompt asks instead: {events:?}"
+        );
+        assert_eq!(fake.take_calls(), [Call::RemoveTarget(PAIR.to_owned())]);
+        let prompt = airplay.password_prompt().expect("a prompt");
+        assert_eq!(
+            (prompt.id.as_str(), prompt.name.as_str()),
+            (id_of(&right).as_str(), "Right")
+        );
+        assert!(airplay.submit_password(&id_of(&right), "hunter2"));
+        assert!(matches!(&fake.take_calls()[..], [Call::AddTarget { id, .. }] if id == PAIR));
+        assert_eq!(
+            airplay.enabled_ids(),
+            [PAIR],
+            "Right stays part of the pair"
+        );
+        fake.state(&left, SpeakerState::Playing);
+        airplay.poll();
+
+        // Turned down again with no switch-on of the user's: the pair goes
+        // off, and switching it on asks for Right's password.
+        fake.fail(&right, ErrorKind::WrongPassword);
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayFailed {
+            id: PAIR.to_owned(),
+            problem: AirPlayProblem::NeedsPassword,
+        }));
+        assert_eq!(
+            airplay.set_enabled(PAIR, true),
+            Err(AirPlayProblem::NeedsPassword)
+        );
+        airplay.ask_password(PAIR).expect("the prompt opens");
+        let prompt = airplay.password_prompt().expect("a prompt");
+        assert_eq!(prompt.name, "Right");
+        airplay.cancel_password(&id_of(&right));
+        assert!(airplay.enabled_ids().is_empty());
+        assert_eq!(airplay.password_prompt(), None);
     }
 
     #[test]

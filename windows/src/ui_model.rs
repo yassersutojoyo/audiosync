@@ -153,6 +153,12 @@ pub enum AirPlayProblem {
     TimingUnavailable,
     /// Another AirPlay 2 speaker plays; it starts once that one stops.
     OneAirPlay2Speaker,
+    /// An Apple TV whose home theater group plays, so it is off.
+    PlaysThroughSpeakers,
+    /// A home theater group whose Apple TV plays by itself, so it is off.
+    AppleTvPlays,
+    /// A member of a pair or group that plays as part of it, so it is off.
+    PlaysInGroup,
     /// AudioSync can't play to it.
     Unsupported,
 }
@@ -184,6 +190,8 @@ pub struct Speaker {
     pub waiting: Option<Waiting>,
     /// What only a Google Cast speaker's row shows.
     pub cast: Option<CastRow>,
+    /// A stereo pair or home theater group: what kind, and its members.
+    pub group: Option<crate::audio::backend::AirPlayGroup>,
 }
 
 /// A Google Cast speaker's own state. Its delay is the measured offset the
@@ -928,6 +936,7 @@ impl MockBackend {
             device_volume: None,
             waiting: None,
             cast: None,
+            group: None,
         };
         let mut speakers = vec![
             // The reference: no delay of its own.
@@ -1354,6 +1363,7 @@ mod tests {
             device_volume: None,
             waiting: None,
             cast: None,
+            group: None,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));
