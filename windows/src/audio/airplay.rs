@@ -938,9 +938,6 @@ pub struct AirPlaySpeakers {
     calibration_solo: Option<String>,
     /// When the playing speakers were last asked for their own volume.
     volume_read_at: Instant,
-    /// The speakers whose session bound the PTP ports after another app
-    /// held them; the first to play says the ports are free.
-    ptp_opened: BTreeSet<String>,
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
@@ -996,7 +993,6 @@ impl AirPlaySpeakers {
             hold_back_ms: 0.0,
             calibration_solo: None,
             volume_read_at: Instant::now(),
-            ptp_opened: BTreeSet::new(),
             stopped: false,
             store_unsaved: false,
             store_change: None,
@@ -1984,15 +1980,15 @@ impl AirPlaySpeakers {
         if !added.read.answered(now) || solo || !db.is_finite() {
             return false;
         }
-        let has = added.read.level.unwrap_or(from_slider).wire_db();
-        if (db - has).abs() < VOLUME_TOLERANCE_DB {
-            return false;
-        }
         let level = if db <= MUTED_DB {
             Volume::Muted
         } else {
-            Volume::Db(db)
+            Volume::from_db(db).unwrap_or(Volume::Muted)
         };
+        let has = added.read.level.unwrap_or(from_slider).wire_db();
+        if (level.wire_db() - has).abs() < VOLUME_TOLERANCE_DB {
+            return false;
+        }
         added.read.level = Some(level);
         added.set_volume(self.link.as_mut(), level);
         let position = slider_position(db, self.master);
@@ -2829,9 +2825,6 @@ impl AirPlaySpeakers {
         event: SpeakerEvent,
         events: &mut Vec<BackendEvent>,
     ) -> bool {
-        if event == SpeakerEvent::State(SpeakerState::Playing) && self.ptp_opened.remove(id) {
-            events.push(BackendEvent::AirPlayPtpFree);
-        }
         if let Some(target) = self.added_target_of(id)
             && let Some(changed) = self.member_event(&target, id, &event, events)
         {
@@ -2943,13 +2936,14 @@ impl AirPlaySpeakers {
                     added.read.unreadable = true;
                 }
                 if warning == Warning::PtpUnavailable {
-                    self.ptp_opened.clear();
                     events.push(BackendEvent::AirPlayPtpPortsTaken);
                 }
                 false
             }
+            // A bind that worked proves the ports free, whether or not this
+            // session ever plays.
             SpeakerEvent::PtpOpened => {
-                self.ptp_opened.insert(id.to_owned());
+                events.push(BackendEvent::AirPlayPtpFree);
                 false
             }
             SpeakerEvent::VolumeReported(db) => self.volume_reported(id, db, Instant::now()),
@@ -5236,7 +5230,7 @@ pub mod tests {
     }
 
     #[test]
-    fn only_a_speaker_that_bound_ptp_after_the_clash_clears_it() {
+    fn only_a_ptp_bind_after_the_clash_says_the_ports_are_free() {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
         warn(&fake, &kitchen, Warning::PtpUnavailable);
@@ -5244,20 +5238,30 @@ pub mod tests {
         fake.state(&kitchen, SpeakerState::Connecting);
         fake.state(&kitchen, SpeakerState::Playing);
         assert!(!airplay.poll().contains(&BackendEvent::AirPlayPtpFree));
+        fake.state(&kitchen, SpeakerState::Connecting);
         fake.push(SenderEvent::Speaker {
             key: kitchen.key.clone(),
             event: SpeakerEvent::PtpOpened,
         });
-        fake.state(&kitchen, SpeakerState::Connecting);
-        assert!(!airplay.poll().contains(&BackendEvent::AirPlayPtpFree));
-        fake.state(&kitchen, SpeakerState::Playing);
         assert!(airplay.poll().contains(&BackendEvent::AirPlayPtpFree));
-        fake.state(&kitchen, SpeakerState::Connecting);
-        fake.state(&kitchen, SpeakerState::Playing);
-        assert!(
-            !airplay.poll().contains(&BackendEvent::AirPlayPtpFree),
-            "told once"
+    }
+
+    #[test]
+    fn a_level_past_the_wire_range_is_kept_once_as_its_nearest() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -40.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 0.0);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Volume(id.clone(), Volume::Db(MIN_DB))]
         );
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -40.0);
+        assert!(airplay.poll().is_empty());
+        assert!(fake.take_calls().is_empty(), "kept once");
     }
 
     #[test]

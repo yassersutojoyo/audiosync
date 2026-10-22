@@ -2945,7 +2945,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             "the AirPlay sender stopped; it waits for the user's Retry".to_owned()
         }
         BackendEvent::AirPlayPtpFree => {
-            "an AirPlay speaker plays with PTP; the ports are free again".to_owned()
+            "an AirPlay session bound the PTP ports; they are free again".to_owned()
         }
         BackendEvent::AirPlayPtpPortsTaken => {
             "PTP port 319 or 320 is taken; AirPlay speakers that need PTP can't play".to_owned()

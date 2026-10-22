@@ -5460,7 +5460,7 @@ mod tests {
     }
 
     #[test]
-    fn the_ptp_port_clash_leaves_a_notice_until_a_speaker_plays() {
+    fn the_ptp_port_clash_leaves_a_notice_until_ptp_binds() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         fake.push(SenderEvent::Speaker {
@@ -5482,10 +5482,37 @@ mod tests {
             event: audiosync_airplay::sender::SpeakerEvent::PtpOpened,
         });
         adapter.poll();
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_ptp_bind_clears_the_notice_even_if_its_session_never_plays() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(
+                audiosync_airplay::error::Warning::PtpUnavailable,
+            ),
+        });
+        adapter.poll();
         assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        // It binds PTP, then fails before playing; the next session binds
+        // with no clash to tell and says nothing about the ports.
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::PtpOpened,
+        });
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        fake.state(&kitchen, AirPlayState::Connecting);
         fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();
-        assert!(messages(&adapter).is_empty());
+        assert!(
+            !messages(&adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken),
+            "{:?}",
+            messages(&adapter)
+        );
     }
 
     #[test]
