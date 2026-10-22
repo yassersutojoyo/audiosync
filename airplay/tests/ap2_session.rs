@@ -804,3 +804,28 @@ fn teardown_during_the_stream_setup_still_tears_the_stream_down() {
     );
     assert_eq!(rig.events.last(), Some(&Ap2Event::Closed));
 }
+
+// covers: P42, P106
+#[test]
+fn volume_set_before_the_startup_volume_goes_out_once() {
+    let mut fake = ptp_fake();
+    fake.status_once.insert("SETUP session".to_owned(), 501);
+    fake.hold = Some("SETPEERS".to_owned());
+    let mut config = ap2_config();
+    config.ptp = Some(ptp_peer());
+    let mut rig = Ap2Rig::new(config, fake);
+    assert_eq!(rig.keys().last(), Some(&"SETPEERS"));
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-30.0), now);
+    rig.pump();
+    rig.release();
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let volumes: Vec<&[u8]> = rig
+        .fake
+        .requests
+        .iter()
+        .filter(|(request, _)| request.method.as_str() == "SET_PARAMETER")
+        .map(|(request, _)| request.body.as_slice())
+        .collect();
+    assert_eq!(volumes, [b"volume: -30.000000\r\n".as_slice()]);
+}

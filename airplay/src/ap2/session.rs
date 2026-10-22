@@ -282,6 +282,8 @@ pub struct Ap2Session {
     set_up: bool,
     /// RECORD was answered 200 (P137).
     recorded: bool,
+    /// The startup SET_PARAMETER with `initial_volume` went out (P42).
+    startup_volume_sent: bool,
     event_port: Option<u16>,
     events: Option<Events>,
     events_attempts: u32,
@@ -365,6 +367,7 @@ impl Ap2Session {
             outputs: VecDeque::new(),
             set_up: false,
             recorded: false,
+            startup_volume_sent: false,
             event_port: None,
             events: None,
             events_attempts: 0,
@@ -826,8 +829,8 @@ impl Ap2Session {
             Ap2State::Closed | Ap2State::TearingDown => {}
             _ => {
                 self.config.initial_volume = volume;
-                // The startup volume may already be out; Ready sends this one.
-                if self.recorded {
+                // The startup volume is already out; Ready sends this one.
+                if self.startup_volume_sent {
                     self.pending_volume = Some(volume);
                 }
             }
@@ -1178,14 +1181,14 @@ impl Ap2Session {
                 if self.timing == Timing::Ptp {
                     self.send(Kind::SetPeers, now, false);
                 } else {
-                    self.send(Kind::Volume(self.config.initial_volume), now, false);
+                    self.send_startup_volume(now);
                 }
             }
             Kind::SetPeers => {
                 if !success {
                     self.warn(method, code);
                 }
-                self.send(Kind::Volume(self.config.initial_volume), now, false);
+                self.send_startup_volume(now);
             }
             Kind::Volume(_) => {
                 if !success {
@@ -1244,6 +1247,11 @@ impl Ap2Session {
             }
             Kind::TeardownStream | Kind::TeardownSession => {}
         }
+    }
+
+    fn send_startup_volume(&mut self, now: Instant) {
+        self.startup_volume_sent = true;
+        self.send(Kind::Volume(self.config.initial_volume), now, false);
     }
 
     /// A stream SETUP answered after `teardown()`: the stream exists on the
