@@ -66,7 +66,7 @@ enum Mock {
         model.cast = [
             AppModel.Speaker(id: CastID.app("living-tv"), name: "Living Room TV", tag: .cast, enabled: true,
                              volume: 50, offsetMs: 120,
-                             cast: CastRow(status: .playing, muted: false, volumeFixed: false, group: false)),
+                             cast: CastRow(status: .playing, muted: false, volumeFixed: false, group: nil)),
         ]
         model.toggleDelayPanel("headphones")
         configure(model)

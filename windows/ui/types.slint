@@ -15,6 +15,10 @@ export enum RowPart { none, toggle, delay, volume, sync, options }
 // connected speaker's name.
 export enum SpeakerKind { airplay, airplay2, cast, built-in, headphones, bluetooth, usb, usb-headphones, usb-speakers, hdmi, display-port, virtual, other }
 
+// An AirPlay row that plays a stereo pair or a home theater group (an Apple
+// TV's speakers) as one speaker; none for any other row.
+export enum SpeakerGroup { none, stereo-pair, home-theater }
+
 // Where a Google Cast speaker that is on is: idle while streaming is off.
 export enum CastState { idle, connecting, playing, reconnecting }
 
@@ -28,7 +32,7 @@ export enum CastList { quiet, searching, none-found, failed }
 export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, one-airplay2-speaker, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, one-airplay2-speaker, plays-through-speakers, apple-tv-plays, plays-in-group, unsupported }
 
 // View > Appearance: as Windows is set, or always light or dark.
 export enum Appearance { system, light, dark }
@@ -107,6 +111,9 @@ export struct SpeakerItem {
     // they are unknown.
     cast-group: bool,
     cast-members: string,
+    // A stereo pair or home theater group: what it is and its members, or
+    // which member is missing (Strings.group-note); empty for any other row.
+    group-note: string,
 }
 
 export struct GroupItem {

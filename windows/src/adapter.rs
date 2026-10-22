@@ -1259,6 +1259,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     members: group.members,
                 }),
             }),
+            group: None,
         }
     }
 
@@ -2224,6 +2225,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .copied()
                 .filter(|_| speaker.enabled),
             cast: None,
+            group: speaker.group,
         }
     }
 
@@ -2261,6 +2263,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             waiting: (output.enabled && self.busy.contains(&output.id))
                 .then_some(Waiting::ForDevice),
             cast: None,
+            group: None,
         }
     }
 
@@ -3108,6 +3111,9 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::AirPlay2NotYet => P::AirPlay2NotYet,
         AirPlayProblem::TimingUnavailable => P::TimingUnavailable,
         AirPlayProblem::OneAirPlay2Speaker => P::OneAirPlay2Speaker,
+        AirPlayProblem::PlaysThroughSpeakers => P::PlaysThroughSpeakers,
+        AirPlayProblem::AppleTvPlays => P::AppleTvPlays,
+        AirPlayProblem::PlaysInGroup => P::PlaysInGroup,
         AirPlayProblem::Unsupported => P::Unsupported,
     }
 }

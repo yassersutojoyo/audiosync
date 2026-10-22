@@ -26,6 +26,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 
 mod password;
 
+use crate::audio::backend::AirPlayGroupKind;
 use crate::audio::calibration::{self, Failure, Phase, Step, Which};
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
@@ -40,7 +41,8 @@ use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastList, CastProblem,
     CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog, GuidePage,
     GuideStepItem, GuideWindow, MainWindow, NoticeItem, NoticeKind, Palette, PasswordDialog,
-    PinDialog, PinPhase, RowPart, RowState, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout,
+    PinDialog, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings,
+    Tokens, TrayFlyout,
 };
 
 mod help_window;
@@ -1279,6 +1281,7 @@ impl App {
             );
             row.calibration_status = calibration_status(&strings, &state, speaker);
             row.cast_members = cast_members(&strings, speaker);
+            row.group_note = group_note(&strings, speaker);
             row
         };
         let (this_pc, connected) = state.layout();
@@ -2785,6 +2788,9 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
         P::TimingUnavailable => AirPlayProblem::TimingUnavailable,
         P::OneAirPlay2Speaker => AirPlayProblem::OneAirplay2Speaker,
+        P::PlaysThroughSpeakers => AirPlayProblem::PlaysThroughSpeakers,
+        P::AppleTvPlays => AirPlayProblem::AppleTvPlays,
+        P::PlaysInGroup => AirPlayProblem::PlaysInGroup,
         P::Unsupported => AirPlayProblem::Unsupported,
     }
 }
@@ -2894,6 +2900,7 @@ pub fn speaker_item(
         cast_group: cast_group(speaker).is_some(),
         // Needs the strings: set by the caller (`App::refresh`).
         cast_members: SharedString::default(),
+        group_note: SharedString::default(),
     }
 }
 
@@ -2908,6 +2915,25 @@ fn cast_members(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> SharedStr
         .and_then(|group| group.members.as_deref())
         .map(|members| joined(strings, members))
         .unwrap_or_default()
+}
+
+/// The line a stereo pair or home theater group row shows after its kind,
+/// which Narrator reads too: what it is and its members, or which member is
+/// missing (spec P176, P181). Empty for any other row.
+fn group_note(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> SharedString {
+    let Some(group) = &speaker.group else {
+        return SharedString::default();
+    };
+    let kind = match group.kind {
+        AirPlayGroupKind::StereoPair => SpeakerGroup::StereoPair,
+        AirPlayGroupKind::HomeTheater => SpeakerGroup::HomeTheater,
+    };
+    strings.invoke_group_note(
+        kind,
+        joined(strings, &group.members),
+        joined(strings, &group.missing),
+        group.incomplete,
+    )
 }
 
 /// A local output with an offset (not the reference, AirPlay or Cast): it
@@ -5385,6 +5411,91 @@ mod tests {
         tab(window, 1);
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape on a focused button");
+    }
+
+    #[test]
+    fn a_stereo_pair_or_home_theater_row_names_its_members_or_the_missing_one() {
+        use crate::audio::backend::AirPlayGroup;
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut row = MockBackend::new()
+            .snapshot()
+            .speakers
+            .into_iter()
+            .find(|speaker| speaker.id == "airplay:kitchen")
+            .expect("the mock lists Kitchen");
+        assert_eq!(group_note(&strings, &row), "", "a single speaker");
+        let mut note = |kind, members: &[&str], missing: &[&str], incomplete| {
+            row.group = Some(AirPlayGroup {
+                kind,
+                members: members.iter().map(|name| (*name).to_owned()).collect(),
+                missing: missing.iter().map(|name| (*name).to_owned()).collect(),
+                incomplete,
+            });
+            group_note(&strings, &row).to_string()
+        };
+        use AirPlayGroupKind::{HomeTheater, StereoPair};
+        assert_eq!(
+            note(StereoPair, &["Left", "Right"], &[], false),
+            "Stereo pair: Left and Right"
+        );
+        assert_eq!(
+            note(StereoPair, &["Left", "Right"], &["Right"], true),
+            "Stereo pair, missing Right"
+        );
+        assert_eq!(
+            note(StereoPair, &["Left"], &[], true),
+            "Stereo pair, a speaker is missing",
+            "a partner reported unreachable that was never seen"
+        );
+        assert_eq!(
+            note(HomeTheater, &["Left", "Right", "Sub"], &[], false),
+            "Home theater group: Left, Right and Sub"
+        );
+        assert_eq!(
+            note(HomeTheater, &["Left", "Right"], &["Left", "Right"], true),
+            "Home theater group, missing Left and Right"
+        );
+        // Narrator reads the note before what the toggle does.
+        assert_eq!(
+            strings
+                .invoke_with_group_note("Stereo pair: Left and Right".into(), "Turn on".into())
+                .to_string(),
+            "Stereo pair: Left and Right. Turn on"
+        );
+        assert_eq!(
+            strings
+                .invoke_with_group_note("".into(), "Turn on".into())
+                .to_string(),
+            "Turn on"
+        );
+        for (problem, speaker, says) in [
+            (
+                ui_model::AirPlayProblem::PlaysThroughSpeakers,
+                "Den TV",
+                "Den TV plays through its home theater speakers",
+            ),
+            (
+                ui_model::AirPlayProblem::AppleTvPlays,
+                "Den",
+                "AudioSync already plays to Den's Apple TV",
+            ),
+            (
+                ui_model::AirPlayProblem::PlaysInGroup,
+                "Right",
+                "Right plays as part of its stereo pair or home theater group",
+            ),
+        ] {
+            let text = notice_text(
+                &strings,
+                &NoticeMessage::AirPlayCantPlay {
+                    speaker: speaker.into(),
+                    problem,
+                },
+            );
+            assert!(text.starts_with(says), "{text}");
+            assert!(!text.contains('\u{2014}'), "no em dash: {text}");
+        }
     }
 
     #[test]
