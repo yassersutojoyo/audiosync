@@ -7,9 +7,11 @@ mod common;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
+use audiosync_airplay::ap2::{Ap2Event, PtpPeer};
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
+use audiosync_airplay::error::Warning;
 use audiosync_airplay::metadata::{Metadata, MetadataError, TrackInfo};
 use audiosync_airplay::rtsp::{Method, Request, Response};
 use audiosync_airplay::sender::{
@@ -30,6 +32,7 @@ const TEXT: i64 = 1 << 17;
 const ARTWORK: i64 = 1 << 15;
 const PROGRESS: i64 = 1 << 16;
 const BINARY_PLIST: i64 = 1 << 50;
+const PTP: i64 = 1 << 41;
 
 fn fake_with(features: i64) -> FakeAp2 {
     let mut fake = FakeAp2::new();
@@ -88,6 +91,10 @@ fn metadata_sent(fake: &FakeAp2) -> Vec<(Request, bool)> {
 
 /// Answers the last request the fake read and left unanswered, with 200.
 fn answer_last(rig: &mut Ap2Rig) {
+    answer_last_with(rig, 200, "OK");
+}
+
+fn answer_last_with(rig: &mut Ap2Rig, code: u16, reason: &str) {
     let cseq = rig
         .fake
         .requests
@@ -95,7 +102,7 @@ fn answer_last(rig: &mut Ap2Rig) {
         .and_then(|(request, _)| request.headers.get("CSeq"))
         .expect("a request with a CSeq")
         .to_owned();
-    let mut response = Response::new(200, "OK");
+    let mut response = Response::new(code, reason);
     response.headers.push("CSeq", cseq);
     let framing = rig.fake.framing.as_mut().expect("framing has started");
     let bytes = framing.seal(&response.encode());
@@ -208,9 +215,115 @@ fn a_failed_ap2_metadata_request_is_a_warning() {
     rig.pump();
     assert_eq!(metadata_sent(&rig.fake).len(), 1);
     assert!(rig.failure().is_none());
+    assert!(
+        rig.events.contains(&Ap2Event::Warning(Warning::RequestFailed {
+            method: Method::SetParameter,
+            status: 500,
+        })),
+        "{:?}",
+        rig.events
+    );
     rig.session.set_volume(Volume::Db(-5.0), now);
     rig.pump();
     assert!(rig.failure().is_none());
+}
+
+/// The SET_PARAMETER requests after the FLUSH, by what they carry.
+fn set_parameters_after_flush(fake: &FakeAp2) -> Vec<&'static str> {
+    let flush = fake
+        .requests
+        .iter()
+        .position(|(request, _)| request.method == Method::Flush)
+        .expect("a FLUSH");
+    fake.requests[flush..]
+        .iter()
+        .filter(|(request, _)| request.method == Method::SetParameter)
+        .map(|(request, _)| {
+            let body = String::from_utf8_lossy(&request.body);
+            match request.headers.get("Content-Type") {
+                Some("application/x-dmap-tagged") => "track",
+                Some("image/jpeg") => "artwork",
+                _ if body.starts_with("progress:") => "progress",
+                _ if body.starts_with("volume:") => "volume",
+                _ => "other",
+            }
+        })
+        .collect()
+}
+
+// covers: P123, P127
+#[test]
+fn a_new_ap2_volume_goes_before_queued_metadata() {
+    let mut rig = Ap2Rig::new(ap2_config(), fake_with(TEXT | PROGRESS));
+    assert!(rig.ready());
+    let now = rig.now;
+    let [track, _, progress] = all_three();
+    // The track goes out at once, so the progress waits behind it.
+    assert_eq!(rig.session.send_metadata(track, now), Ok(()));
+    assert_eq!(rig.session.send_metadata(progress, now), Ok(()));
+    rig.session.set_volume(Volume::Db(-5.0), now);
+    rig.pump();
+    assert_eq!(
+        set_parameters_after_flush(&rig.fake),
+        ["track", "volume", "progress"],
+        "{:?}",
+        rig.keys()
+    );
+    assert!(rig.failure().is_none());
+}
+
+// covers: P123
+#[test]
+fn ap2_metadata_queued_before_ready_is_dropped_by_teardown() {
+    let mut fake = fake_with(TEXT | ARTWORK | PROGRESS);
+    fake.silent.push("SET_PARAMETER".to_owned());
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(!rig.ready());
+    let now = rig.now;
+    for metadata in all_three() {
+        assert_eq!(rig.session.send_metadata(metadata, now), Ok(()));
+    }
+    rig.pump();
+    rig.session.teardown(now);
+    rig.pump();
+    let [track, ..] = all_three();
+    assert_eq!(
+        rig.session.send_metadata(track, now),
+        Err(MetadataError::SessionEnded)
+    );
+
+    // The initial volume's late answer lets the TEARDOWN go out.
+    rig.fake.silent.clear();
+    answer_last(&mut rig);
+    rig.advance(Duration::from_secs(10));
+    let keys = rig.keys();
+    assert!(keys.contains(&"TEARDOWN"), "{keys:?}");
+    assert!(metadata_sent(&rig.fake).is_empty(), "{keys:?}");
+}
+
+// covers: P123, P157
+#[test]
+fn ap2_metadata_queued_before_a_ptp_reconnect_is_dropped() {
+    let mut fake = fake_with(TEXT | PTP);
+    fake.silent.push("SETUP session".to_owned());
+    let mut config = ap2_config();
+    config.ptp = Some(PtpPeer {
+        clock_id: 0xFFFF_0000_0000_0001,
+        id: "6f1e7c9a-3b2d-4c5e-8f90-a1b2c3d4e5f6".to_owned(),
+    });
+    let mut rig = Ap2Rig::new(config, fake);
+    assert!(!rig.ready());
+    let now = rig.now;
+    let [track, ..] = all_three();
+    assert_eq!(rig.session.send_metadata(track, now), Ok(()));
+    rig.pump();
+
+    // A refused NTP session SETUP: the session reconnects for PTP.
+    rig.fake.silent.clear();
+    answer_last_with(&mut rig, 501, "Not Implemented");
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    assert_eq!(rig.connects.len(), 2);
+    assert!(metadata_sent(&rig.fake).is_empty(), "{:?}", rig.keys());
 }
 
 fn airplay_record(port: u16, id: u8, features: &str) -> ServiceRecord {

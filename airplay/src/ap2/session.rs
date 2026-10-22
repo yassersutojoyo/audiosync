@@ -3,9 +3,8 @@
 //! every byte framed; the session SETUP, the event connection, the second
 //! `/info`, RECORD, SETPEERS under PTP, the volume, the stream SETUP and
 //! FLUSH; now-playing metadata after that (P123); `POST /feedback` every
-//! 2 s; TEARDOWN of the stream and then of
-//! the session. Audio packets come in a later stage: a ready session sends
-//! none.
+//! 2 s; TEARDOWN of the stream and then of the session. Audio packets come
+//! in a later stage: a ready session sends none.
 
 use std::collections::VecDeque;
 use std::fmt;
