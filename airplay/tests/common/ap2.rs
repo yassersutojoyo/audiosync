@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -684,6 +684,8 @@ pub struct Ap2Server {
     /// The answers the sender wrote on the event connection.
     pub event_answers: Arc<Mutex<Vec<Response>>>,
     stop: Arc<AtomicBool>,
+    /// Bumped by [`Ap2Server::cut`]; a connection opened before the bump closes.
+    cuts: Arc<AtomicUsize>,
     /// Open data and control ports for a fake that names none of its own,
     /// so the audio has somewhere to go and no send comes back unreachable.
     _udp: Vec<UdpSocket>,
@@ -695,8 +697,15 @@ impl Ap2Server {
     }
 
     /// Serves on `ip`, so a test can reach a receiver over IPv6.
-    pub fn start_on(ip: IpAddr, mut fake: FakeAp2) -> Ap2Server {
-        let rtsp = TcpListener::bind((ip, 0)).expect("a loopback listener");
+    pub fn start_on(ip: IpAddr, fake: FakeAp2) -> Ap2Server {
+        Ap2Server::start_at(SocketAddr::new(ip, 0), fake)
+    }
+
+    /// Serves RTSP on `address`, so a test can move a receiver to another
+    /// address family on the same port.
+    pub fn start_at(address: SocketAddr, mut fake: FakeAp2) -> Ap2Server {
+        let ip = address.ip();
+        let rtsp = TcpListener::bind(address).expect("a loopback listener");
         let events = TcpListener::bind((ip, 0)).expect("a loopback listener");
         rtsp.set_nonblocking(true).expect("nonblocking");
         events.set_nonblocking(true).expect("nonblocking");
@@ -713,18 +722,25 @@ impl Ap2Server {
         let fake = Arc::new(Mutex::new(fake));
         let event_answers = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let cuts = Arc::new(AtomicUsize::new(0));
         let (shared, flag) = (fake.clone(), stop.clone());
+        let line = Lifeline {
+            stop: stop.clone(),
+            cuts: cuts.clone(),
+        };
         thread::spawn(move || {
-            let serve_flag = flag.clone();
             accept(&rtsp, &flag, move |stream| {
-                serve_rtsp(stream, &shared, &serve_flag)
+                serve_rtsp(stream, &shared, &line)
             });
         });
         let (shared, answers, flag) = (fake.clone(), event_answers.clone(), stop.clone());
+        let line = Lifeline {
+            stop: stop.clone(),
+            cuts: cuts.clone(),
+        };
         thread::spawn(move || {
-            let serve_flag = flag.clone();
             accept(&events, &flag, move |stream| {
-                serve_events(stream, &shared, &answers, &serve_flag)
+                serve_events(stream, &shared, &answers, &line)
             });
         });
         Ap2Server {
@@ -732,6 +748,7 @@ impl Ap2Server {
             fake,
             event_answers,
             stop,
+            cuts,
             _udp: udp,
         }
     }
@@ -742,6 +759,29 @@ impl Ap2Server {
 
     pub fn event_answers(&self) -> Vec<Response> {
         lock(&self.event_answers).clone()
+    }
+
+    /// Closes every open connection, as a receiver that drops the sender
+    /// does, and keeps accepting new ones.
+    pub fn cut(&self) {
+        self.cuts.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// What ends the connections of an [`Ap2Server`]: its drop, or a cut.
+#[derive(Clone)]
+struct Lifeline {
+    stop: Arc<AtomicBool>,
+    cuts: Arc<AtomicUsize>,
+}
+
+impl Lifeline {
+    fn generation(&self) -> usize {
+        self.cuts.load(Ordering::SeqCst)
+    }
+
+    fn ended(&self, generation: usize) -> bool {
+        self.stop.load(Ordering::SeqCst) || self.generation() != generation
     }
 }
 
@@ -767,10 +807,10 @@ fn accept(
     }
 }
 
-fn read_some(stream: &mut TcpStream, stop: &AtomicBool) -> Option<Vec<u8>> {
+fn read_some(stream: &mut TcpStream, line: &Lifeline, generation: usize) -> Option<Vec<u8>> {
     let mut buffer = [0u8; 16 * 1024];
     loop {
-        if stop.load(Ordering::SeqCst) {
+        if line.ended(generation) {
             return None;
         }
         match stream.read(&mut buffer) {
@@ -786,11 +826,12 @@ fn read_some(stream: &mut TcpStream, stop: &AtomicBool) -> Option<Vec<u8>> {
     }
 }
 
-fn serve_rtsp(mut stream: TcpStream, fake: &Mutex<FakeAp2>, stop: &AtomicBool) {
+fn serve_rtsp(mut stream: TcpStream, fake: &Mutex<FakeAp2>, line: &Lifeline) {
+    let generation = line.generation();
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
     lock(fake).connect();
-    while let Some(bytes) = read_some(&mut stream, stop) {
+    while let Some(bytes) = read_some(&mut stream, line, generation) {
         let answer = lock(fake).feed(&bytes);
         if !answer.is_empty() && stream.write_all(&answer).is_err() {
             return;
@@ -802,8 +843,9 @@ fn serve_events(
     mut stream: TcpStream,
     fake: &Mutex<FakeAp2>,
     answers: &Mutex<Vec<Response>>,
-    stop: &AtomicBool,
+    line: &Lifeline,
 ) {
+    let generation = line.generation();
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
     lock(fake).open_events();
@@ -815,7 +857,7 @@ fn serve_events(
     if stream.write_all(&bytes).is_err() {
         return;
     }
-    while let Some(bytes) = read_some(&mut stream, stop) {
+    while let Some(bytes) = read_some(&mut stream, line, generation) {
         let read = lock(fake).event_answers(&bytes);
         lock(answers).extend(read);
     }

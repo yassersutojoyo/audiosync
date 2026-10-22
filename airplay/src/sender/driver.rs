@@ -311,9 +311,12 @@ pub(crate) struct Driver {
     /// outside the service's: IPv6 when true, or None for NTP only (P158,
     /// P179).
     ptp_restart: BTreeMap<DeviceKey, Option<bool>>,
-    /// Speakers the PTP service already moved to once, so a second
-    /// fallback goes to NTP instead of moving it back.
-    ptp_moved: BTreeSet<DeviceKey>,
+    /// The family, IPv6 when true, the PTP service moved to for a speaker:
+    /// its later sessions start there while it still has an address in it.
+    ptp_moved: BTreeMap<DeviceKey, bool>,
+    /// Speakers whose current session is the restart after a move, so a
+    /// fallback in it goes to NTP instead of moving the service back.
+    ptp_retrying: BTreeSet<DeviceKey>,
 }
 
 impl Driver {
@@ -356,7 +359,8 @@ impl Driver {
             teardowns: HashMap::new(),
             ptp_family_told: BTreeSet::new(),
             ptp_restart: BTreeMap::new(),
-            ptp_moved: BTreeSet::new(),
+            ptp_moved: BTreeMap::new(),
+            ptp_retrying: BTreeSet::new(),
         }
     }
 
@@ -1362,6 +1366,7 @@ impl Driver {
         self.ptp_family_told.remove(key);
         self.ptp_restart.remove(key);
         self.ptp_moved.remove(key);
+        self.ptp_retrying.remove(key);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
