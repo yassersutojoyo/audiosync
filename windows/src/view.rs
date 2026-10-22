@@ -2947,6 +2947,7 @@ pub fn speaker_item(
             .map_or(CastState::Idle, |cast| cast_state(cast.state)),
         muted: speaker.cast.as_ref().is_some_and(|cast| cast.muted),
         volume_fixed: speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed),
+        volume_step: speaker.cast.as_ref().map_or(1.0, |cast| cast.volume_step) as f32,
         cast_group: cast_group(speaker).is_some(),
         // Needs the strings: set by the caller (`App::refresh`).
         cast_group_note: SharedString::default(),
@@ -4975,6 +4976,7 @@ mod tests {
             state: ui_model::CastState::Connecting,
             muted: true,
             volume_fixed: false,
+            volume_step: 1.0,
             group: None,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
@@ -5036,6 +5038,7 @@ mod tests {
             state: ui_model::CastState::Idle,
             muted: false,
             volume_fixed: false,
+            volume_step: 1.0,
             group: group(ui_model::CastMembers::NotReported),
         });
         let row = speaker_item(&state, &speaker, true, false, None);

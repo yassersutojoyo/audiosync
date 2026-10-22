@@ -107,6 +107,9 @@ export struct SpeakerItem {
     muted: bool,
     // The Cast speaker's volume can't be changed from here.
     volume-fixed: bool,
+    // How far the arrow keys move the volume: the Cast device's own step,
+    // 1 for every other row.
+    volume-step: float,
     // A Google Cast group, and the note under its name
     // (Strings.cast-group-note); empty for any other row.
     cast-group: bool,

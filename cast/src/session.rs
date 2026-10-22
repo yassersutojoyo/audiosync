@@ -170,6 +170,9 @@ pub struct SessionConfig {
     /// device (C84).
     pub format: StreamFormat,
     pub metadata: Metadata,
+    /// PNG or JPEG artwork served before the first `LOAD`; its URL joins
+    /// `metadata` (C53). Artwork the stream server refuses is left out.
+    pub artwork: Option<Vec<u8>>,
     /// Set for a Cast group: every connect takes the addresses from its
     /// latest records instead of `addresses` (C90, C93), and the stream
     /// server answers its members too (C103).
@@ -354,10 +357,17 @@ impl CastSession {
         }
         let mut addresses = vec![client.address()];
         addresses.extend(config.addresses.iter().filter(|a| **a != client.address()));
+        let mut metadata = config.metadata;
+        if let Some(url) = config
+            .artwork
+            .and_then(|bytes| server.set_artwork(bytes).ok())
+        {
+            metadata.images = vec![url];
+        }
         let load = LoadRequest {
             url: server.url(),
             content_type: config.format.content_type().to_owned(),
-            metadata: config.metadata,
+            metadata,
         };
         let mut session = CastSession {
             client,
@@ -444,14 +454,18 @@ impl CastSession {
     }
 
     /// Keeps `metadata` for the next `LOAD` (a Resync); the playing stream
-    /// is not reloaded for it (C54).
+    /// is not reloaded for it (C54). Its artwork, if any, follows through
+    /// [`CastSession::set_artwork`].
     pub fn set_metadata(&mut self, metadata: Metadata) {
         self.load.metadata = metadata;
     }
 
-    /// Serves artwork for the metadata (C53); returns its URL.
-    pub fn set_artwork(&self, bytes: Vec<u8>) -> Result<String, StreamError> {
-        self.server.set_artwork(bytes)
+    /// Serves artwork for the metadata (C53) and puts its URL in the
+    /// metadata of the next `LOAD`; returns the URL.
+    pub fn set_artwork(&mut self, bytes: Vec<u8>) -> Result<String, StreamError> {
+        let url = self.server.set_artwork(bytes)?;
+        self.load.metadata.images = vec![url.clone()];
+        Ok(url)
     }
 
     /// The sender's view of the session now (C78).

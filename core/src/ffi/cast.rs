@@ -797,9 +797,6 @@ impl AscCast {
                 device,
                 format,
             } => {
-                if let Some(artwork) = &self.artwork {
-                    self.host.set_artwork(artwork.clone());
-                }
                 let mut pending = Pending::new(CAST_EVENT_STARTED);
                 pending.attempt = attempt_number(attempt);
                 pending.id = self.attempt_id(attempt, device);
@@ -881,7 +878,13 @@ impl AscCast {
         let (writer, reader) = audio_ring(RING_FRAMES);
         let attempt = self
             .host
-            .start(target, CAST_RATE, self.metadata.clone(), reader)
+            .start_with_artwork(
+                target,
+                CAST_RATE,
+                self.metadata.clone(),
+                self.artwork.clone(),
+                reader,
+            )
             .map_err(|refused| match refused {
                 StartRefused::Busy { .. } => CAST_REFUSED_BUSY,
                 StartRefused::Rate(_) | StartRefused::Closed => CAST_REFUSED_CLOSED,
@@ -1439,6 +1442,9 @@ pub unsafe extern "C" fn asc_cast_set_metadata(
             cast.metadata = metadata.clone();
             if cast.host.playing().is_some() {
                 cast.host.set_metadata(metadata);
+                if let Some(artwork) = &cast.artwork {
+                    cast.host.set_artwork(artwork.clone());
+                }
             }
             true
         })
@@ -1472,10 +1478,12 @@ pub unsafe extern "C" fn asc_cast_set_artwork(
     unsafe {
         live(cast, false, |cast| {
             cast.artwork = (!bytes.is_empty()).then(|| bytes.to_vec());
-            if let Some(artwork) = &cast.artwork
-                && cast.host.playing().is_some()
-            {
-                cast.host.set_artwork(artwork.clone());
+            if cast.host.playing().is_some() {
+                // New metadata drops the session's artwork; it is then served again if kept.
+                cast.host.set_metadata(cast.metadata.clone());
+                if let Some(artwork) = &cast.artwork {
+                    cast.host.set_artwork(artwork.clone());
+                }
             }
             true
         })
