@@ -1300,6 +1300,10 @@ do {
             && model.access("C3") == .code(password: true) && model.access("D4") == nil,
           "native airplay: a needs-PIN or password receiver shows as asking for a code")
     check(model.soundingIDs == ["native:A1"], "native airplay: only a receiver able to play holds local outputs back")
+    check(model.joinable(model.rows(enabled: []) + ["native:Z9"], after: ["native:C3"]) == ["native:A1"]
+            && model.joinable(model.rows(enabled: []), after: ["native:A1"]).isEmpty,
+          "native airplay: auto-connect may switch on only a new row whose receiver can play",
+          "\(model.joinable(model.rows(enabled: []), after: []))")
 
     let all: Set<String> = ["native:A1", "native:B2", "native:C3", "native:D4", "123456789012"]
     check(model.plan(streaming: false, enabled: all).isEmpty, "native airplay: nothing joins while not streaming")
