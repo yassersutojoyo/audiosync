@@ -1,0 +1,469 @@
+//! The snapshot the app publishes and the commands the page sends back.
+
+use std::collections::HashSet;
+use std::fmt;
+
+use serde_json::{Map, Value, json};
+
+/// The top of every volume scale; the bottom is 0.
+pub const VOLUME_MAX: f64 = 100.0;
+
+/// Everything the page shows, as the app last published it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct State {
+    /// 0 to 100.
+    pub master_volume: f64,
+    pub now_playing: Option<NowPlaying>,
+    /// In the app's order.
+    pub speakers: Vec<Speaker>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NowPlaying {
+    pub title: String,
+    pub artist: String,
+    /// The app the audio comes from.
+    pub source: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Speaker {
+    /// Unique in a snapshot; the page puts it in `/api/speakers/{id}`.
+    pub id: String,
+    pub name: String,
+    /// The label the app shows: local, Bluetooth, AirPlay, AirPlay 2, Google Cast.
+    pub kind: String,
+    pub on: bool,
+    /// 0 to 100.
+    pub volume: f64,
+    pub delay_ms: i64,
+    pub delay_min_ms: i64,
+    pub delay_max_ms: i64,
+    /// False when the speaker can't be driven now; its controls then fail with 409.
+    pub available: bool,
+    /// The row's notice text, if any.
+    pub notice: Option<String>,
+}
+
+/// Why a published snapshot was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StateError(pub String);
+
+impl fmt::Display for StateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the remote state is not valid: {}", self.0)
+    }
+}
+
+impl std::error::Error for StateError {}
+
+fn invalid(what: impl Into<String>) -> StateError {
+    StateError(what.into())
+}
+
+fn volume_in_range(volume: f64) -> bool {
+    volume.is_finite() && (0.0..=VOLUME_MAX).contains(&volume)
+}
+
+fn field<'a>(
+    object: &'a Map<String, Value>,
+    name: &str,
+    at: &str,
+) -> Result<&'a Value, StateError> {
+    object
+        .get(name)
+        .ok_or_else(|| invalid(format!("{at}{name} is missing")))
+}
+
+fn text_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<String, StateError> {
+    field(object, name, at)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| invalid(format!("{at}{name} is not a string")))
+}
+
+fn bool_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<bool, StateError> {
+    field(object, name, at)?
+        .as_bool()
+        .ok_or_else(|| invalid(format!("{at}{name} is not true or false")))
+}
+
+fn int_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<i64, StateError> {
+    field(object, name, at)?
+        .as_i64()
+        .ok_or_else(|| invalid(format!("{at}{name} is not a whole number")))
+}
+
+fn volume_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<f64, StateError> {
+    field(object, name, at)?
+        .as_f64()
+        .filter(|volume| volume_in_range(*volume))
+        .ok_or_else(|| invalid(format!("{at}{name} is not a number from 0 to 100")))
+}
+
+impl State {
+    /// Reads the app's snapshot: the JSON of the API's state without
+    /// `revision`, which the server assigns (one given is ignored).
+    pub fn from_json(text: &str) -> Result<State, StateError> {
+        let value: Value =
+            serde_json::from_str(text).map_err(|error| invalid(format!("not JSON: {error}")))?;
+        let root = value.as_object().ok_or_else(|| invalid("not an object"))?;
+        let master = field(root, "master", "")?
+            .as_object()
+            .ok_or_else(|| invalid("master is not an object"))?;
+        let master_volume = volume_field(master, "volume", "master.")?;
+        let now_playing = match root.get("now_playing") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(playing)) => Some(NowPlaying {
+                title: text_field(playing, "title", "now_playing.")?,
+                artist: text_field(playing, "artist", "now_playing.")?,
+                source: text_field(playing, "source", "now_playing.")?,
+            }),
+            Some(_) => return Err(invalid("now_playing is not an object or null")),
+        };
+        let list = field(root, "speakers", "")?
+            .as_array()
+            .ok_or_else(|| invalid("speakers is not a list"))?;
+        let mut speakers = Vec::with_capacity(list.len());
+        let mut ids = HashSet::new();
+        for (index, item) in list.iter().enumerate() {
+            let at = format!("speakers[{index}].");
+            let object = item
+                .as_object()
+                .ok_or_else(|| invalid(format!("speakers[{index}] is not an object")))?;
+            let speaker = Speaker {
+                id: text_field(object, "id", &at)?,
+                name: text_field(object, "name", &at)?,
+                kind: text_field(object, "kind", &at)?,
+                on: bool_field(object, "on", &at)?,
+                volume: volume_field(object, "volume", &at)?,
+                delay_ms: int_field(object, "delay_ms", &at)?,
+                delay_min_ms: int_field(object, "delay_min_ms", &at)?,
+                delay_max_ms: int_field(object, "delay_max_ms", &at)?,
+                available: bool_field(object, "available", &at)?,
+                notice: match object.get("notice") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(notice)) => Some(notice.clone()),
+                    Some(_) => return Err(invalid(format!("{at}notice is not a string or null"))),
+                },
+            };
+            if speaker.id.is_empty() {
+                return Err(invalid(format!("{at}id is empty")));
+            }
+            if !ids.insert(speaker.id.clone()) {
+                return Err(invalid(format!("{at}id is used twice")));
+            }
+            if speaker.delay_min_ms > speaker.delay_max_ms {
+                return Err(invalid(format!("{at}delay_min_ms is above delay_max_ms")));
+            }
+            speakers.push(speaker);
+        }
+        Ok(State {
+            master_volume,
+            now_playing,
+            speakers,
+        })
+    }
+
+    /// The API's JSON of this snapshot as revision `revision`, on one line.
+    pub fn to_json(&self, revision: u64) -> String {
+        let speakers: Vec<Value> = self
+            .speakers
+            .iter()
+            .map(|speaker| {
+                json!({
+                    "id": speaker.id,
+                    "name": speaker.name,
+                    "kind": speaker.kind,
+                    "on": speaker.on,
+                    "volume": speaker.volume,
+                    "delay_ms": speaker.delay_ms,
+                    "delay_min_ms": speaker.delay_min_ms,
+                    "delay_max_ms": speaker.delay_max_ms,
+                    "available": speaker.available,
+                    "notice": speaker.notice,
+                })
+            })
+            .collect();
+        let now_playing = self.now_playing.as_ref().map(|playing| {
+            json!({
+                "title": playing.title,
+                "artist": playing.artist,
+                "source": playing.source,
+            })
+        });
+        json!({
+            "revision": revision,
+            "master": { "volume": self.master_volume },
+            "now_playing": now_playing,
+            "speakers": speakers,
+        })
+        .to_string()
+    }
+
+    pub fn speaker(&self, id: &str) -> Option<&Speaker> {
+        self.speakers.iter().find(|speaker| speaker.id == id)
+    }
+}
+
+/// What one `POST /api/speakers/{id}` asks to change; at least one field is set.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpeakerChange {
+    pub on: Option<bool>,
+    pub volume: Option<f64>,
+    pub delay_ms: Option<i64>,
+}
+
+/// A change the page asks for, as the app's callback receives it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Command {
+    Speaker { id: String, change: SpeakerChange },
+    Master { volume: f64 },
+}
+
+impl Command {
+    /// `{"type":"speaker","id":…,"on"?,"volume"?,"delay_ms"?}` or
+    /// `{"type":"master","volume":…}`, with only the fields that were posted.
+    pub fn to_json(&self) -> String {
+        let mut object = Map::new();
+        match self {
+            Command::Speaker { id, change } => {
+                object.insert("type".to_owned(), json!("speaker"));
+                object.insert("id".to_owned(), json!(id));
+                if let Some(on) = change.on {
+                    object.insert("on".to_owned(), json!(on));
+                }
+                if let Some(volume) = change.volume {
+                    object.insert("volume".to_owned(), json!(volume));
+                }
+                if let Some(delay) = change.delay_ms {
+                    object.insert("delay_ms".to_owned(), json!(delay));
+                }
+            }
+            Command::Master { volume } => {
+                object.insert("type".to_owned(), json!("master"));
+                object.insert("volume".to_owned(), json!(volume));
+            }
+        }
+        Value::Object(object).to_string()
+    }
+}
+
+/// Why a request body was refused before any range check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BodyError {
+    /// Not a JSON object, or a field of the wrong type.
+    Malformed,
+    /// No field that changes anything.
+    Empty,
+}
+
+/// Why a change is outside what the speaker or the master takes (422).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RangeError {
+    Volume,
+    Delay { min_ms: i64, max_ms: i64 },
+}
+
+fn body_object(body: &[u8]) -> Result<Map<String, Value>, BodyError> {
+    match serde_json::from_slice(body) {
+        Ok(Value::Object(object)) => Ok(object),
+        _ => Err(BodyError::Malformed),
+    }
+}
+
+fn optional<T>(
+    object: &Map<String, Value>,
+    name: &str,
+    read: impl Fn(&Value) -> Option<T>,
+) -> Result<Option<T>, BodyError> {
+    match object.get(name) {
+        None => Ok(None),
+        Some(value) => read(value).map(Some).ok_or(BodyError::Malformed),
+    }
+}
+
+/// Reads `{on?, volume?, delay_ms?}`; unknown fields are ignored.
+pub fn speaker_change_from_body(body: &[u8]) -> Result<SpeakerChange, BodyError> {
+    let object = body_object(body)?;
+    let change = SpeakerChange {
+        on: optional(&object, "on", Value::as_bool)?,
+        volume: optional(&object, "volume", Value::as_f64)?,
+        delay_ms: optional(&object, "delay_ms", Value::as_i64)?,
+    };
+    if change == SpeakerChange::default() {
+        return Err(BodyError::Empty);
+    }
+    Ok(change)
+}
+
+/// Reads `{volume}`; unknown fields are ignored.
+pub fn master_volume_from_body(body: &[u8]) -> Result<f64, BodyError> {
+    let object = body_object(body)?;
+    optional(&object, "volume", Value::as_f64)?.ok_or(BodyError::Empty)
+}
+
+/// Reads `{code}`, the code as a string.
+pub fn pairing_code_from_body(body: &[u8]) -> Result<String, BodyError> {
+    let object = body_object(body)?;
+    optional(&object, "code", |value| value.as_str().map(str::to_owned))?
+        .ok_or(BodyError::Malformed)
+}
+
+pub fn check_master_volume(volume: f64) -> Result<(), RangeError> {
+    if volume_in_range(volume) {
+        Ok(())
+    } else {
+        Err(RangeError::Volume)
+    }
+}
+
+impl Speaker {
+    /// Whether `change` stays inside this speaker's volume and delay ranges,
+    /// both ends included.
+    pub fn check(&self, change: &SpeakerChange) -> Result<(), RangeError> {
+        if let Some(volume) = change.volume {
+            check_master_volume(volume)?;
+        }
+        if let Some(delay) = change.delay_ms
+            && !(self.delay_min_ms..=self.delay_max_ms).contains(&delay)
+        {
+            return Err(RangeError::Delay {
+                min_ms: self.delay_min_ms,
+                max_ms: self.delay_max_ms,
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = r#"{
+        "master": {"volume": 70},
+        "now_playing": {"title": "Song", "artist": "Band", "source": "Music"},
+        "speakers": [
+            {"id": "kitchen", "name": "Kitchen", "kind": "AirPlay 2", "on": true, "volume": 40,
+             "delay_ms": 120, "delay_min_ms": 0, "delay_max_ms": 3000, "available": true, "notice": null},
+            {"id": "den", "name": "Den", "kind": "Google Cast", "on": false, "volume": 10,
+             "delay_ms": 0, "delay_min_ms": -500, "delay_max_ms": 500, "available": false,
+             "notice": "Not on the network"}
+        ]
+    }"#;
+
+    #[test]
+    fn a_snapshot_reads_and_writes_back_with_its_revision() {
+        let state = State::from_json(SAMPLE).unwrap();
+        assert_eq!(state.speakers.len(), 2);
+        assert_eq!(
+            state.speakers[1].notice.as_deref(),
+            Some("Not on the network")
+        );
+        let written: Value = serde_json::from_str(&state.to_json(7)).unwrap();
+        assert_eq!(written["revision"], 7);
+        assert_eq!(written["master"]["volume"], 70.0);
+        assert_eq!(written["now_playing"]["source"], "Music");
+        assert_eq!(written["speakers"][0]["delay_max_ms"], 3000);
+        assert_eq!(written["speakers"][0]["notice"], Value::Null);
+        let again = State::from_json(&state.to_json(7)).unwrap();
+        assert_eq!(again, state);
+    }
+
+    #[test]
+    fn a_bad_snapshot_is_refused() {
+        for bad in [
+            "[]",
+            r#"{"master": {"volume": 101}, "speakers": []}"#,
+            r#"{"master": {"volume": 50}}"#,
+            r#"{"master": {"volume": 50}, "now_playing": 3, "speakers": []}"#,
+            r#"{"master": {"volume": 50}, "speakers": [{"id": ""}]}"#,
+        ] {
+            assert!(State::from_json(bad).is_err(), "{bad}");
+        }
+        let twice = SAMPLE.replace("\"den\"", "\"kitchen\"");
+        assert!(State::from_json(&twice).is_err());
+        let upside_down = SAMPLE.replace("\"delay_min_ms\": -500", "\"delay_min_ms\": 900");
+        assert!(State::from_json(&upside_down).is_err());
+    }
+
+    #[test]
+    fn bodies_read_only_the_fields_they_know() {
+        assert_eq!(
+            speaker_change_from_body(br#"{"on": false, "extra": 1}"#),
+            Ok(SpeakerChange {
+                on: Some(false),
+                ..SpeakerChange::default()
+            })
+        );
+        assert_eq!(
+            speaker_change_from_body(br#"{"delay_ms": 1.5}"#),
+            Err(BodyError::Malformed)
+        );
+        assert_eq!(
+            speaker_change_from_body(br#"{"on": "yes"}"#),
+            Err(BodyError::Malformed)
+        );
+        assert_eq!(speaker_change_from_body(b"{}"), Err(BodyError::Empty));
+        assert_eq!(
+            speaker_change_from_body(b"not json"),
+            Err(BodyError::Malformed)
+        );
+        assert_eq!(master_volume_from_body(br#"{"volume": 12.5}"#), Ok(12.5));
+        assert_eq!(master_volume_from_body(b"{}"), Err(BodyError::Empty));
+        assert_eq!(
+            pairing_code_from_body(br#"{"code": "012345"}"#),
+            Ok("012345".to_owned())
+        );
+        assert_eq!(
+            pairing_code_from_body(br#"{"code": 12345}"#),
+            Err(BodyError::Malformed)
+        );
+    }
+
+    #[test]
+    fn ranges_include_both_ends() {
+        let state = State::from_json(SAMPLE).unwrap();
+        let den = state.speaker("den").unwrap();
+        let delay = |ms| SpeakerChange {
+            delay_ms: Some(ms),
+            ..SpeakerChange::default()
+        };
+        assert_eq!(den.check(&delay(-500)), Ok(()));
+        assert_eq!(den.check(&delay(500)), Ok(()));
+        let outside = Err(RangeError::Delay {
+            min_ms: -500,
+            max_ms: 500,
+        });
+        assert_eq!(den.check(&delay(-501)), outside);
+        assert_eq!(den.check(&delay(501)), outside);
+        let volume = |v| SpeakerChange {
+            volume: Some(v),
+            ..SpeakerChange::default()
+        };
+        assert_eq!(den.check(&volume(0.0)), Ok(()));
+        assert_eq!(den.check(&volume(100.0)), Ok(()));
+        assert_eq!(den.check(&volume(100.5)), Err(RangeError::Volume));
+        assert_eq!(check_master_volume(-0.1), Err(RangeError::Volume));
+    }
+
+    #[test]
+    fn a_command_carries_only_what_was_posted() {
+        let command = Command::Speaker {
+            id: "den".to_owned(),
+            change: SpeakerChange {
+                volume: Some(30.0),
+                ..SpeakerChange::default()
+            },
+        };
+        let value: Value = serde_json::from_str(&command.to_json()).unwrap();
+        assert_eq!(
+            value,
+            json!({"type": "speaker", "id": "den", "volume": 30.0})
+        );
+        let master: Value =
+            serde_json::from_str(&Command::Master { volume: 5.0 }.to_json()).unwrap();
+        assert_eq!(master, json!({"type": "master", "volume": 5.0}));
+    }
+}

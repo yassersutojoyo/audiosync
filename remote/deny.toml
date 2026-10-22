@@ -1,0 +1,34 @@
+# cargo-deny configuration for audiosync-remote.
+#
+# `cargo deny check licenses` (run from remote/, and in CI) fails when any
+# crate in the build graph, development dependencies included, is under a
+# license that is not on this list. The remote itself is GPL-3.0-or-later;
+# third-party crates must be permissive. The list mirrors core/deny.toml.
+
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "ISC",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+exceptions = [
+    # AudioSync's own code is GPL-3.0-or-later; the exception names only our
+    # own crate, so no third-party crate may bring a GPL license in.
+    { crate = "audiosync-remote", allow = ["GPL-3.0-or-later"] },
+]
+# Test and build tools are held to the same list as the library.
+include-dev = true
+include-build = true
+# The list is a policy, not an inventory: a license nobody uses yet is fine.
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = false
