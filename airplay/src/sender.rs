@@ -362,6 +362,10 @@ pub enum SpeakerEvent {
     AudioJack(JackStatus),
     /// The level a volume read reported (P122).
     VolumeReported(f64),
+    /// Its session bound the PTP ports after the host was told they were
+    /// taken ([`Warning::PtpUnavailable`]): a clash after this is told
+    /// again (P158).
+    PtpOpened,
     /// A PIN or password pairing on the AirPlay 2 path gave these HomeKit
     /// credentials (P152): the host stores them where secrets go and hands
     /// them back in [`SpeakerOptions::homekit_credentials`]. The sender

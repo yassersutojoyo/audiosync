@@ -699,7 +699,7 @@ fn a_member_in_another_address_family_leaves_the_playing_members_ptp_alone() {
         assert!(
             events
                 .of(&db.key)
-                .contains(&SpeakerEvent::Warning(Warning::PtpUnavailable)),
+                .contains(&SpeakerEvent::Warning(Warning::PtpOutsideFamily)),
             "{:?}",
             events.of(&db.key)
         );
@@ -723,7 +723,7 @@ fn ptp_warnings(events: &Events, key: &DeviceKey) -> usize {
     events
         .of(key)
         .iter()
-        .filter(|event| **event == SpeakerEvent::Warning(Warning::PtpUnavailable))
+        .filter(|event| **event == SpeakerEvent::Warning(Warning::PtpOutsideFamily))
         .count()
 }
 

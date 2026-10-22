@@ -456,7 +456,8 @@ fn keyboard_shortcuts_are_declared() {
 /// that AirPlay speakers playing can't wait long enough for a Google Cast
 /// speaker, with its short name, and the notice
 /// that the sender stopped or couldn't start, with its Retry button and its
-/// short name for the dismiss button, and the note that discovery has found
+/// short name for the dismiss button, the notice that another app holds
+/// the PTP ports, and the note that discovery has found
 /// no speaker yet (alone, or with Google Cast's in one sentence), which
 /// shows only while it runs. The note and row state for a speaker waiting
 /// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
@@ -485,6 +486,9 @@ fn no_text_promises_airplay() {
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
                 || line.contains("notice-retry-label: @tr(\"Start AirPlay again\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
+                || line.contains(
+                    "notice-airplay-ptp-ports-taken: @tr(\"Another app is using port 319 or 320,"
+                )
                 || line.contains(
                     "return @tr(\"AirPlay speakers can wait at most 20 s for a Google Cast speaker,"
                 )

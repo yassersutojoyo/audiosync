@@ -109,6 +109,8 @@ export global Strings {
     out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. Select Retry to try again. If it keeps happening, restart AudioSync.");
     // The settings file in the app's data folder couldn't be written.
     out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
+    // Another app holds a PTP port, so AirPlay 2 speakers that need PTP timing can't play.
+    out property <string> notice-airplay-ptp-ports-taken: @tr("Another app is using port 319 or 320, so AirPlay speakers that need PTP timing can't play. Close that app, then turn the speaker on again.");
     // The file with the AirPlay pairings couldn't be written.
     out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your AirPlay pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
     // Launch at Sign-In: Windows refused to add AudioSync to its startup
@@ -678,6 +680,9 @@ export global Strings {
         }
         if kind == NoticeKind.airplay-stopped {
             return @tr("AirPlay stopped");
+        }
+        if kind == NoticeKind.airplay-ptp-ports-taken {
+            return @tr("PTP ports in use");
         }
         if kind == NoticeKind.settings-not-saved {
             return @tr("settings not saved");

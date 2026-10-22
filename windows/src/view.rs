@@ -3459,6 +3459,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_airplay_ahead(seconds.into(), speaker.as_str().into())
         }
         NoticeMessage::AirPlayStopped => strings.get_notice_airplay_stopped(),
+        NoticeMessage::AirPlayPtpPortsTaken => strings.get_notice_airplay_ptp_ports_taken(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
         NoticeMessage::SettingsKeptAside { file } => {
@@ -3540,6 +3541,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
             (NoticeKind::AirplayAheadOfCast, speaker.as_str())
         }
         NoticeMessage::AirPlayStopped => (NoticeKind::AirplayStopped, ""),
+        NoticeMessage::AirPlayPtpPortsTaken => (NoticeKind::AirplayPtpPortsTaken, ""),
         NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
         NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
         NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
@@ -5724,6 +5726,7 @@ mod tests {
                 problem: ui_model::AirPlayProblem::Refused,
             },
             NoticeMessage::AirPlayStopped,
+            NoticeMessage::AirPlayPtpPortsTaken,
             NoticeMessage::SettingsNotSaved,
             NoticeMessage::PairingsNotSaved,
             NoticeMessage::SettingsKeptAside { file: "f".into() },

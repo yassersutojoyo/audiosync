@@ -421,6 +421,9 @@ pub enum NoticeMessage {
     /// couldn't start, so AirPlay speakers aren't listed or playing. The
     /// notice offers Retry ([`Backend::retry_airplay`]).
     AirPlayStopped,
+    /// Another app holds PTP port 319 or 320, so AirPlay speakers that need
+    /// PTP timing can't play. An AirPlay speaker that plays clears it.
+    AirPlayPtpPortsTaken,
     /// The settings file couldn't be written, so changes made now last only
     /// until AudioSync quits. Posted once until a save works again, which
     /// clears it.
