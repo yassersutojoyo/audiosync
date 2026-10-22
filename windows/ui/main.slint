@@ -308,7 +308,7 @@ component CalibrationCard inherits Card {
         HorizontalLayout {
             alignment: LayoutAlignment.start;
 
-            Button {
+            calibrate-button := Button {
                 text: root.running ? Strings.calibration-cancel : Strings.calibrate-all;
                 enabled: root.running || root.can-start;
                 accessible-label: root.running ? Strings.calibrate-all-cancel-label : Strings.calibrate-all;
@@ -426,7 +426,9 @@ component CalibrationCard inherits Card {
                     text: Strings.calibrate-all-close;
                     enabled: !root.running;
                     accessible-label: Strings.calibrate-all-close-label;
+                    // Close removes the results and this button with them.
                     clicked => {
+                        calibrate-button.focus();
                         root.close();
                     }
                 }
