@@ -635,22 +635,19 @@ mod tests {
 
     #[test]
     fn addresses_codes_and_the_qr_code() {
-        assert_eq!(local_host("DESKTOP-AB12").as_deref(), Some("desktop-ab12"));
+        assert_eq!(local_host("Kitchen").as_deref(), Some("kitchen"));
         assert_eq!(local_host("my pc"), None);
         assert_eq!(local_host(""), None);
+        assert_eq!(local_url("kitchen", 7655), "http://kitchen.local:7655");
         assert_eq!(
-            local_url("desktop-ab12", 7655),
-            "http://desktop-ab12.local:7655"
-        );
-        assert_eq!(
-            ip_url(Ipv4Addr::new(192, 168, 1, 20), 7655),
-            "http://192.168.1.20:7655"
+            ip_url(Ipv4Addr::new(198, 51, 100, 20), 7655),
+            "http://198.51.100.20:7655"
         );
         assert_eq!(spaced_digits("042917"), "0 4 2 9 1 7");
-        let (width, modules) = qr_modules("http://desktop-ab12.local:7655").unwrap();
+        let (width, modules) = qr_modules("http://kitchen.local:7655").unwrap();
         assert!(width >= 21 && width % 2 == 1);
         assert_eq!(modules.len(), width * width);
-        let (side, pixels) = qr_pixels("http://desktop-ab12.local:7655", 3).unwrap();
+        let (side, pixels) = qr_pixels("http://kitchen.local:7655", 3).unwrap();
         assert_eq!(side, (width + 8) * 3);
         assert_eq!(pixels.len(), side * side);
         assert_eq!(pixels[0], [255; 3], "the quiet zone is light");

@@ -49,7 +49,7 @@ pub(super) struct RemoteHost {
     computer_name: String,
     /// The same name as a `.local` host, when it is one.
     host: Option<String>,
-    lan: Option<Ipv4Addr>,
+    lan_address: Option<Ipv4Addr>,
     /// The addresses the server listens on; the tests keep to loopback.
     pub(super) listen: Vec<IpAddr>,
     /// The paired-device file; `None` keeps the devices in memory.
@@ -68,7 +68,7 @@ impl Default for RemoteHost {
             port_invalid: false,
             host: remote::local_host(&computer_name),
             computer_name,
-            lan: None,
+            lan_address: None,
             listen: Config::default().listen,
             devices_path: devices_path(),
             qr: None,
@@ -217,7 +217,7 @@ impl App {
     fn start_remote(&self) {
         self.stop_remote();
         let port = self.ui.borrow().remote.port;
-        let (config, lan) = {
+        let (config, lan_address) = {
             let host = self.remote.borrow();
             let config = Config {
                 port,
@@ -235,7 +235,7 @@ impl App {
             }
         });
         let mut host = self.remote.borrow_mut();
-        host.lan = lan;
+        host.lan_address = lan_address;
         host.port_invalid = false;
         match started {
             Ok(server) => {
@@ -422,7 +422,7 @@ impl App {
             .map(|name| remote::local_url(name, port));
         window.set_local_address(local.clone().unwrap_or_default().into());
         window.set_ip_address(
-            host.lan
+            host.lan_address
                 .map(|address| remote::ip_url(address, port))
                 .unwrap_or_default()
                 .into(),
