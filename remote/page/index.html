@@ -1,71 +1,763 @@
 <!doctype html>
-<!-- Placeholder page for the server's tests and first trials: it pairs and shows the raw state. The real page comes with its own design. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F1F7F6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1E1E1E" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="AudioSync">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="format-detection" content="telephone=no">
 <link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <title>AudioSync</title>
-<style>:root { color-scheme: light dark; }</style>
+<style>
+:root {
+  color-scheme: light dark;
+  --background: #F1F7F6;
+  --surface: #FFFFFF;
+  --text: #292929;
+  --muted: #525C5A;
+  --accent-text: #147167;
+  --accent: #147167;
+  --on-accent: #FFFFFF;
+  --control-border: #6B7573;
+  --separator: #D9DEDD;
+  --notice: #FFF2E0;
+  --error: #C42B1C;
+  --focus: #147167;
+  --knob: #FFFFFF;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #1E1E1E;
+    --surface: #2B2B2B;
+    --text: #F6F6F6;
+    --muted: #B8C2C0;
+    --accent-text: #20B6A6;
+    --accent: #20B6A6;
+    --on-accent: #1E1E1E;
+    --control-border: #8A9492;
+    --separator: #3D3D3D;
+    --notice: #443927;
+    --error: #FF99A4;
+    --focus: #63DAC2;
+    --knob: #F6F6F6;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  accent-color: var(--accent);
+}
+main {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+h1 { font-size: 1.25rem; margin: 4px 0 16px; letter-spacing: -0.01em; }
+h1 span { color: var(--accent-text); }
+h2 { font-size: 1rem; margin: 0; overflow-wrap: anywhere; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+button, input { font: inherit; color: inherit; }
+button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--control-border);
+  background: var(--surface);
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button:disabled, input:disabled { cursor: default; opacity: 0.5; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+input[type=text], input[type=number] {
+  min-height: 44px;
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0 12px;
+  font-size: 1rem;
+}
+input[type=range] { width: 100%; min-width: 0; height: 44px; margin: 0; background: transparent; }
+.pair label { display: block; font-weight: 600; margin: 16px 0 8px; }
+.pair-line { display: flex; gap: 8px; }
+.pair-line input { flex: 1; min-width: 0; font-size: 1.5rem; letter-spacing: 0.2em; text-align: center; font-variant-numeric: tabular-nums; }
+.error { color: var(--error); margin-top: 8px; }
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--notice);
+  border-radius: 12px;
+  padding: 8px 8px 8px 16px;
+  margin-bottom: 12px;
+}
+.banner p { flex: 1; }
+.playing { margin-bottom: 12px; }
+.playing .title { font-weight: 600; overflow-wrap: anywhere; }
+.playing .detail { overflow-wrap: anywhere; }
+.slider-line { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 12px; margin-top: 8px; }
+.slider-line input { grid-row: 2; grid-column: 1 / -1; }
+.slider-line output { font-variant-numeric: tabular-nums; }
+.speaker-head { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.speaker-head .names { flex: 1; min-width: 0; }
+.kind { font-size: 0.875rem; }
+.switch { flex: none; display: flex; align-items: center; justify-content: center; min-width: 60px; min-height: 44px; cursor: pointer; }
+input[role=switch] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 52px;
+  height: 32px;
+  margin: 0;
+  border-radius: 16px;
+  border: 2px solid var(--control-border);
+  background: var(--surface);
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+input[role=switch]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--control-border);
+  transition: transform 0.15s;
+}
+input[role=switch]:checked { background: var(--accent); border-color: var(--accent); }
+input[role=switch]:checked::before { background: var(--knob); transform: translateX(20px); }
+.delay-line { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 4px 8px; margin-top: 4px; }
+.delay-line label { grid-column: 1 / -1; }
+.delay-line input { min-width: 0; width: 100%; text-align: center; font-variant-numeric: tabular-nums; }
+.delay-line button { padding: 0; font-size: 1.25rem; }
+.notice { background: var(--notice); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+.speaker.off-line { background: var(--background); border-style: dashed; border-color: var(--control-border); }
+.speaker.off-line h2 { color: var(--muted); }
+.state-text { padding: 24px 0; text-align: center; }
+footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+@media (prefers-reduced-motion: reduce) {
+  input[role=switch], input[role=switch]::before { transition: none; }
+}
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+</style>
 </head>
 <body>
 <main>
-<h1>AudioSync remote (placeholder)</h1>
-<form id="pair" hidden>
+<h1>Audio<span>Sync</span></h1>
+<p id="live" class="sr-only" aria-live="polite"></p>
+
+<form id="pair" class="pair card" hidden novalidate>
+<p id="pair-hint"></p>
 <label for="code">Pairing code</label>
-<input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
-<button type="submit">Pair</button>
+<div class="pair-line">
+<input id="code" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" aria-describedby="pair-error">
+<button id="pair-button" class="primary" type="submit">Pair</button>
+</div>
+<p id="pair-error" class="error" hidden></p>
 </form>
-<p id="status" aria-live="polite">Connecting to AudioSync…</p>
-<pre id="state"></pre>
+
+<section id="remote" hidden>
+<div id="banner" class="banner" hidden>
+<p id="banner-text">Can't reach AudioSync. Retrying…</p>
+<button id="retry" type="button">Retry</button>
+</div>
+<p id="loading" class="state-text muted">Connecting to AudioSync…</p>
+<fieldset id="controls" hidden>
+<section class="playing card" aria-labelledby="playing-label">
+<h2 id="playing-label" class="sr-only">Now playing</h2>
+<p id="playing-title" class="title"></p>
+<p id="playing-detail" class="detail muted"></p>
+<div class="slider-line">
+<label for="master">Master volume</label>
+<input id="master" type="range" min="0" max="100" step="1">
+<output id="master-value" for="master"></output>
+</div>
+<p id="master-error" class="error" hidden></p>
+</section>
+<p id="empty" class="state-text muted" hidden>No speakers yet. Add one in AudioSync on your computer.</p>
+<div id="speakers"></div>
+<footer>
+<p id="computer" class="muted"></p>
+<button id="unpair" type="button">Unpair this phone</button>
+</footer>
+</fieldset>
+</section>
 </main>
 <script>
 "use strict";
-const form = document.getElementById("pair");
-const status = document.getElementById("status");
-const view = document.getElementById("state");
-let events = null;
 
-function showPairing(message) {
-  if (events) { events.close(); events = null; }
-  form.hidden = false;
-  status.textContent = message;
+const TEXT = {
+  hintBrowser: "Add to Home Screen first, then open it from there and enter the code.",
+  hintStandalone: "Enter the code AudioSync shows.",
+  codeShape: "The code has 6 digits.",
+  pairing: "Pairing…",
+  paired: "Paired.",
+  unpaired: "This phone was unpaired.",
+  unpairedHere: "This phone is unpaired.",
+  unpairConfirm: "Unpair this phone? You'll need a new code from AudioSync to use it again.",
+  lost: "Can't reach AudioSync. Retrying…",
+  noUpdates: "AudioSync answers but isn't sending updates. Retrying…",
+  busy: "AudioSync is serving too many connections. Retrying…",
+  waiting: "AudioSync is starting. Retrying…",
+  back: "Connected to AudioSync.",
+  unreachable: "Can't reach AudioSync.",
+  failed: "That didn't work. Try again.",
+  nothingPlaying: "Nothing playing",
+  computer: (name) => `AudioSync on ${name}`,
+  volume: "Volume",
+  delay: "Delay",
+  ms: "ms",
+  lessDelay: "10 ms less delay",
+  moreDelay: "10 ms more delay",
+  delayRange: (min, max) => `Delay must be from ${min} to ${max} ms.`,
+  unavailable: "Not available right now.",
+  percent: (value) => `${value}%`,
+};
+
+const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
+const SEND_EVERY_MS = 100;
+const DELAY_STEP_MS = 10;
+const PAIRED_KEY = "audiosync.paired";
+
+const byId = (id) => document.getElementById(id);
+const ui = {
+  live: byId("live"),
+  pair: byId("pair"),
+  pairHint: byId("pair-hint"),
+  code: byId("code"),
+  pairButton: byId("pair-button"),
+  pairError: byId("pair-error"),
+  remote: byId("remote"),
+  banner: byId("banner"),
+  bannerText: byId("banner-text"),
+  retry: byId("retry"),
+  loading: byId("loading"),
+  controls: byId("controls"),
+  playingTitle: byId("playing-title"),
+  playingDetail: byId("playing-detail"),
+  master: byId("master"),
+  masterValue: byId("master-value"),
+  masterError: byId("master-error"),
+  empty: byId("empty"),
+  speakers: byId("speakers"),
+  computer: byId("computer"),
+  unpair: byId("unpair"),
+};
+
+let events = null;
+let retryTimer = null;
+let failures = 0;
+let lost = false;
+let streamed = false;
+let snapshot = null;
+let rowCount = 0;
+const rows = new Map();
+
+function remember(paired) {
+  try {
+    if (paired) { localStorage.setItem(PAIRED_KEY, "1"); } else { localStorage.removeItem(PAIRED_KEY); }
+  } catch (_) { /* storage can be off in private mode; the page works without it */ }
 }
 
-function listen() {
-  form.hidden = true;
+function wasPaired() {
+  try { return localStorage.getItem(PAIRED_KEY) === "1"; } catch (_) { return false; }
+}
+
+function announce(message) {
+  ui.live.textContent = "";
+  window.setTimeout(() => { ui.live.textContent = message; }, 50);
+}
+
+function showError(element, message) {
+  element.textContent = message || "";
+  element.hidden = !message;
+}
+
+function isStandalone() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function stopStream() {
+  window.clearTimeout(retryTimer);
+  retryTimer = null;
+  if (events) { events.close(); events = null; }
+}
+
+function showPairing(message) {
+  stopStream();
+  snapshot = null;
+  lost = false;
+  ui.remote.hidden = true;
+  ui.pair.hidden = false;
+  ui.pairHint.textContent = isStandalone() ? TEXT.hintStandalone : TEXT.hintBrowser;
+  ui.pairButton.disabled = false;
+  showError(ui.pairError, message);
+  if (message) { announce(message); }
+}
+
+function showRemote() {
+  ui.pair.hidden = true;
+  ui.remote.hidden = false;
+  ui.loading.hidden = snapshot !== null;
+  ui.controls.hidden = snapshot === null;
+}
+
+function setLost(value, message) {
+  const text = message || TEXT.lost;
+  if (value && (!lost || ui.bannerText.textContent !== text)) { announce(text); }
+  if (!value && lost) { announce(TEXT.back); }
+  if (value) { ui.bannerText.textContent = text; }
+  lost = value;
+  ui.banner.hidden = !value;
+  ui.controls.disabled = value;
+}
+
+function connect() {
+  stopStream();
+  showRemote();
   events = new EventSource("/api/events");
   events.addEventListener("state", (event) => {
-    status.textContent = "";
-    view.textContent = JSON.stringify(JSON.parse(event.data), null, 2);
+    let next;
+    try { next = JSON.parse(event.data); } catch (_) { return; }
+    failures = 0;
+    streamed = true;
+    remember(true);
+    setLost(false);
+    render(next);
   });
   events.onerror = () => {
-    events.close();
-    events = null;
-    fetch("/api/state").then((response) => {
-      if (response.status === 401) { showPairing("Enter the code AudioSync shows."); }
-      else { status.textContent = "Can't reach AudioSync. Retrying…"; setTimeout(listen, 2000); }
-    }, () => { status.textContent = "Can't reach AudioSync. Retrying…"; setTimeout(listen, 2000); });
+    stopStream();
+    checkAccess();
   };
 }
 
-form.addEventListener("submit", (event) => {
+function checkAccess() {
+  fetch("/api/state", { cache: "no-store", credentials: "same-origin" }).then((response) => {
+    if (response.status === 401) {
+      unpairedByApp();
+    } else if (response.ok) {
+      retryLater(TEXT.noUpdates);
+    } else {
+      response.json().then((answer) => answer, () => ({})).then((answer) => {
+        if (response.status === 403) {
+          setLost(true, answer.message || TEXT.unreachable);
+        } else if (answer.error === "busy") {
+          retryLater(TEXT.busy);
+        } else if (answer.error === "not_ready") {
+          retryLater(TEXT.waiting);
+        } else {
+          retryLater(TEXT.lost);
+        }
+      });
+    }
+  }, () => retryLater(TEXT.lost));
+}
+
+function unpairedByApp() {
+  const message = streamed || wasPaired() ? TEXT.unpaired : "";
+  remember(false);
+  showPairing(message);
+}
+
+function retryLater(message) {
+  const wait = RETRY_STEPS_MS[Math.min(failures, RETRY_STEPS_MS.length - 1)];
+  failures += 1;
+  if (snapshot !== null || failures >= 2) { setLost(true, message); }
+  retryTimer = window.setTimeout(connect, wait);
+}
+
+function post(path, body) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+    body: JSON.stringify(body),
+  }).then((response) => {
+    if (response.ok) { return response; }
+    if (response.status === 401) {
+      unpairedByApp();
+      throw null;
+    }
+    return response.json().then(
+      (answer) => { throw new Error(answer.message || TEXT.failed); },
+      () => { throw new Error(TEXT.failed); },
+    );
+  }, () => { throw new Error(TEXT.unreachable); });
+}
+
+// One request at a time per control, at most one every SEND_EVERY_MS, and
+// only the newest value waits: two requests in flight could reach the app in
+// the wrong order and leave the older value applied.
+function sender(send, onFail) {
+  let lastSent = 0;
+  let timer = null;
+  let pending = null;
+  let sentValue = null;
+  let inFlight = false;
+  const fire = () => {
+    window.clearTimeout(timer);
+    timer = null;
+    if (pending === null || inFlight) { return; }
+    const wait = lastSent + SEND_EVERY_MS - Date.now();
+    if (wait > 0) {
+      timer = window.setTimeout(fire, wait);
+      return;
+    }
+    const value = pending;
+    pending = null;
+    sentValue = value;
+    lastSent = Date.now();
+    inFlight = true;
+    send(value).then(() => {
+      inFlight = false;
+      fire();
+    }, (problem) => {
+      inFlight = false;
+      onFail(problem, pending === null);
+      fire();
+    });
+  };
+  return {
+    set(value) {
+      if (inFlight && pending === null && value === sentValue) { return; }
+      pending = value;
+      if (timer === null) { fire(); }
+    },
+    busy() { return inFlight || pending !== null; },
+  };
+}
+
+function rangeControl(input, output, read, write, onFail) {
+  let held = false;
+  const send = sender(write, (problem, settled) => {
+    if (problem) { onFail(problem.message); }
+    if (settled && !held) { control.show(read()); }
+  });
+  const control = {
+    held: () => held || send.busy(),
+    show(value) {
+      input.value = String(Math.round(value));
+      output.value = TEXT.percent(Math.round(value));
+    },
+  };
+  input.addEventListener("pointerdown", () => { held = true; });
+  input.addEventListener("input", () => {
+    const value = Number(input.value);
+    output.value = TEXT.percent(value);
+    send.set(value);
+  });
+  input.addEventListener("change", () => {
+    held = false;
+    send.set(Number(input.value));
+  });
+  input.addEventListener("pointerup", () => { held = false; });
+  input.addEventListener("pointercancel", () => { held = false; });
+  return control;
+}
+
+function makeRow(speaker) {
+  rowCount += 1;
+  const key = `s${rowCount}`;
+  const root = document.createElement("article");
+  root.className = "speaker card";
+  root.setAttribute("aria-labelledby", `${key}-name`);
+
+  const head = document.createElement("div");
+  head.className = "speaker-head";
+  const names = document.createElement("div");
+  names.className = "names";
+  const name = document.createElement("h2");
+  name.id = `${key}-name`;
+  const kind = document.createElement("p");
+  kind.className = "kind muted";
+  names.append(name, kind);
+  const switchLabel = document.createElement("label");
+  switchLabel.className = "switch";
+  const power = document.createElement("input");
+  power.type = "checkbox";
+  power.setAttribute("role", "switch");
+  power.setAttribute("aria-labelledby", `${key}-name`);
+  switchLabel.append(power);
+  head.append(names, switchLabel);
+
+  const body = document.createElement("div");
+
+  const volumeLine = document.createElement("div");
+  volumeLine.className = "slider-line";
+  const volumeLabel = document.createElement("label");
+  volumeLabel.id = `${key}-volume-label`;
+  volumeLabel.htmlFor = `${key}-volume`;
+  volumeLabel.textContent = TEXT.volume;
+  const volume = document.createElement("input");
+  volume.type = "range";
+  volume.id = `${key}-volume`;
+  volume.min = "0";
+  volume.max = "100";
+  volume.step = "1";
+  volume.setAttribute("aria-labelledby", `${key}-volume-label ${key}-name`);
+  const volumeValue = document.createElement("output");
+  volumeValue.htmlFor = volume.id;
+  volumeLine.append(volumeLabel, volume, volumeValue);
+
+  const delayLine = document.createElement("div");
+  delayLine.className = "delay-line";
+  const delayLabel = document.createElement("label");
+  delayLabel.id = `${key}-delay-label`;
+  delayLabel.htmlFor = `${key}-delay`;
+  delayLabel.textContent = TEXT.delay;
+  const less = document.createElement("button");
+  less.type = "button";
+  less.textContent = "−";
+  const delay = document.createElement("input");
+  delay.type = "number";
+  delay.id = `${key}-delay`;
+  delay.step = "1";
+  delay.setAttribute("aria-labelledby", `${key}-delay-label ${key}-name`);
+  delay.setAttribute("aria-describedby", `${key}-ms`);
+  const unit = document.createElement("span");
+  unit.id = `${key}-ms`;
+  unit.className = "muted";
+  unit.textContent = TEXT.ms;
+  const more = document.createElement("button");
+  more.type = "button";
+  more.textContent = "+";
+  delayLine.append(delayLabel, less, delay, unit, more);
+
+  body.append(volumeLine, delayLine);
+
+  const notice = document.createElement("p");
+  notice.className = "notice";
+  const error = document.createElement("p");
+  error.className = "error";
+  error.hidden = true;
+  root.append(head, body, notice, error);
+
+  const row = { id: speaker.id, root, name, kind, power, body, volume, less, delay, more, notice, error, speaker };
+
+  const fail = (message) => {
+    showError(row.error, message);
+    announce(`${row.speaker.name}: ${message}`);
+  };
+  const change = (fields) => {
+    showError(row.error, "");
+    return post(`/api/speakers/${encodeURIComponent(row.id)}`, fields);
+  };
+
+  row.volumeControl = rangeControl(volume, volumeValue, () => row.speaker.volume,
+    (value) => change({ volume: value }), fail);
+
+  row.powerSender = sender((on) => change({ on }), (problem, settled) => {
+    if (problem) { fail(problem.message); }
+    if (settled) { power.checked = row.speaker.on; }
+  });
+  power.addEventListener("change", () => row.powerSender.set(power.checked));
+
+  row.delaySender = sender((value) => change({ delay_ms: value }), (problem, settled) => {
+    if (problem) { fail(problem.message); }
+    if (settled) { showDelay(row, row.speaker.delay_ms); }
+  });
+
+  const sendDelay = (value) => {
+    const min = row.speaker.delay_min_ms;
+    const max = row.speaker.delay_max_ms;
+    if (!Number.isInteger(value) || value < min || value > max) {
+      showDelay(row, row.speaker.delay_ms);
+      fail(TEXT.delayRange(min, max));
+      return;
+    }
+    showDelay(row, value);
+    row.delaySender.set(value);
+  };
+  const step = (direction) => {
+    const now = Number(delay.value);
+    const min = row.speaker.delay_min_ms;
+    const max = row.speaker.delay_max_ms;
+    sendDelay(Math.min(max, Math.max(min, Math.round(now) + direction * DELAY_STEP_MS)));
+  };
+  less.addEventListener("click", () => step(-1));
+  more.addEventListener("click", () => step(1));
+  delay.addEventListener("change", () => sendDelay(Number(delay.value.trim() === "" ? NaN : delay.value)));
+  delay.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { delay.blur(); }
+  });
+
+  return row;
+}
+
+function showDelay(row, value) {
+  if (document.activeElement !== row.delay || Number(row.delay.value) !== value) {
+    row.delay.value = String(value);
+  }
+  row.less.disabled = value <= row.speaker.delay_min_ms;
+  row.more.disabled = value >= row.speaker.delay_max_ms;
+}
+
+function updateRow(row, speaker) {
+  row.speaker = speaker;
+  row.name.textContent = speaker.name;
+  row.kind.textContent = speaker.kind;
+  row.root.classList.toggle("off-line", !speaker.available);
+  row.body.hidden = !speaker.available;
+  row.power.parentElement.hidden = !speaker.available;
+  row.less.setAttribute("aria-label", `${TEXT.lessDelay}, ${speaker.name}`);
+  row.more.setAttribute("aria-label", `${TEXT.moreDelay}, ${speaker.name}`);
+  row.delay.min = String(speaker.delay_min_ms);
+  row.delay.max = String(speaker.delay_max_ms);
+  // The numeric keypad has no minus sign; without inputmode a number field gets one.
+  if (speaker.delay_min_ms < 0) { row.delay.removeAttribute("inputmode"); } else { row.delay.inputMode = "numeric"; }
+
+  const reason = speaker.available ? speaker.notice : (speaker.notice || TEXT.unavailable);
+  row.notice.textContent = reason || "";
+  row.notice.hidden = !reason;
+  if (!speaker.available) { showError(row.error, ""); return; }
+
+  if (!row.powerSender.busy()) { row.power.checked = speaker.on; }
+  if (!row.volumeControl.held()) { row.volumeControl.show(speaker.volume); }
+  const editing = document.activeElement === row.delay;
+  if (!row.delaySender.busy() && !editing) { showDelay(row, speaker.delay_ms); }
+}
+
+function showComputer(name) {
+  const shown = (typeof name === "string" && name.trim()) || localName;
+  ui.computer.textContent = shown ? TEXT.computer(shown) : "";
+  ui.computer.hidden = !shown;
+}
+
+function render(next) {
+  snapshot = next;
+  showRemote();
+  showComputer(next.computer_name);
+
+  const playing = next.now_playing;
+  if (playing && (playing.title || playing.artist)) {
+    ui.playingTitle.textContent = playing.title || playing.artist;
+    ui.playingDetail.textContent = [playing.title ? playing.artist : "", playing.source].filter(Boolean).join(" · ");
+  } else {
+    ui.playingTitle.textContent = TEXT.nothingPlaying;
+    ui.playingDetail.textContent = playing && playing.source ? playing.source : "";
+  }
+  ui.playingDetail.hidden = ui.playingDetail.textContent === "";
+  if (!masterControl.held()) { masterControl.show(next.master.volume); }
+
+  const seen = new Set();
+  let previous = null;
+  for (const speaker of next.speakers) {
+    seen.add(speaker.id);
+    let row = rows.get(speaker.id);
+    if (!row) {
+      row = makeRow(speaker);
+      rows.set(speaker.id, row);
+    }
+    updateRow(row, speaker);
+    const place = previous ? previous.root.nextSibling : ui.speakers.firstChild;
+    if (place !== row.root) { ui.speakers.insertBefore(row.root, place); }
+    previous = row;
+  }
+  for (const [id, row] of rows) {
+    if (!seen.has(id)) { row.root.remove(); rows.delete(id); }
+  }
+  ui.empty.hidden = next.speakers.length > 0;
+}
+
+const masterControl = rangeControl(ui.master, ui.masterValue, () => (snapshot ? snapshot.master.volume : 0),
+  (value) => {
+    showError(ui.masterError, "");
+    return post("/api/master", { volume: value });
+  },
+  (message) => {
+    showError(ui.masterError, message);
+    announce(message);
+  });
+
+ui.pair.addEventListener("submit", (event) => {
   event.preventDefault();
-  const code = document.getElementById("code").value;
+  const code = ui.code.value.replace(/\s+/g, "");
+  if (!/^[0-9]{6}$/.test(code)) {
+    showError(ui.pairError, TEXT.codeShape);
+    announce(TEXT.codeShape);
+    ui.code.focus();
+    return;
+  }
+  ui.pairButton.disabled = true;
+  showError(ui.pairError, "");
+  announce(TEXT.pairing);
   fetch("/api/pair", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
     body: JSON.stringify({ code }),
-  }).then((response) => response.json().then((body) => {
-    if (response.ok) { listen(); } else { status.textContent = body.message; }
-  }), () => { status.textContent = "Can't reach AudioSync."; });
+  }).then((response) => {
+    if (response.ok) {
+      remember(true);
+      ui.code.value = "";
+      announce(TEXT.paired);
+      failures = 0;
+      connect();
+      return null;
+    }
+    return response.json().then((answer) => answer.message || TEXT.failed, () => TEXT.failed);
+  }, () => TEXT.unreachable).then((message) => {
+    ui.pairButton.disabled = false;
+    if (message) {
+      showError(ui.pairError, message);
+      announce(message);
+      ui.code.focus();
+    }
+  });
 });
 
-listen();
+ui.retry.addEventListener("click", connect);
+
+ui.unpair.addEventListener("click", () => {
+  if (!window.confirm(TEXT.unpairConfirm)) { return; }
+  post("/api/unpair", {}).then(() => {
+    remember(false);
+    showPairing("");
+    announce(TEXT.unpairedHere);
+  }, (problem) => {
+    if (problem) { announce(problem.message); }
+  });
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && ui.pair.hidden && events === null) {
+    failures = 0;
+    connect();
+  }
+});
+
+const host = window.location.hostname.replace(/\.$/, "");
+const localName = host.toLowerCase().endsWith(".local") ? host.slice(0, -".local".length) : "";
+showComputer("");
+
+connect();
 </script>
 </body>
 </html>
