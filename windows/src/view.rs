@@ -73,6 +73,9 @@ struct UiState {
     /// The speaker whose name is being edited in its row, and what is typed
     /// there; one at a time (spec S228).
     rename: Option<(String, String)>,
+    /// The open rename's field has had the focus; only then does the focus
+    /// moving to another control apply the name.
+    rename_focused: bool,
     /// View > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
     /// View > Appearance as chosen, which the theme preview doesn't change.
@@ -597,6 +600,17 @@ impl MenuBarTheme {
 fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     if let Some(app) = app.upgrade() {
         action(&app);
+    }
+}
+
+/// Applies the open rename once the focus has left its field for another
+/// control, outside the focus callback, which must not rebuild the list.
+fn apply_rename_left(app: &Weak<App>) {
+    if let Some(id) = app.upgrade().and_then(|app| app.focus_left_rename()) {
+        let app = app.clone();
+        Timer::single_shot(Duration::ZERO, move || {
+            with_app(&app, |app| app.end_rename_in(&id, true));
+        });
     }
 }
 
@@ -1696,9 +1710,13 @@ impl App {
             with_app(&w, |app| app.edit_rename(&id, &text))
         });
         let w = weak.clone();
-        main.on_speaker_rename_committed(move |_| with_app(&w, |app| app.end_rename(true)));
+        main.on_speaker_rename_committed(move |id| {
+            with_app(&w, |app| app.end_rename_in(&id, true))
+        });
         let w = weak.clone();
-        main.on_speaker_rename_cancelled(move |_| with_app(&w, |app| app.end_rename(false)));
+        main.on_speaker_rename_cancelled(move |id| {
+            with_app(&w, |app| app.end_rename_in(&id, false))
+        });
         let w = weak.clone();
         main.on_auto_connect_toggled(move |id, on| {
             with_app(&w, |app| app.update(|b| b.set_auto_connect(&id, on)))
@@ -1797,24 +1815,30 @@ impl App {
         let w = weak.clone();
         main.on_notice_focus_changed(move |id, focused| {
             with_app(&w, |app| {
-                note_focus(&mut app.main_focus.borrow_mut().notice, id, focused)
-            })
+                note_focus(&mut app.main_focus.borrow_mut().notice, id, focused);
+            });
+            apply_rename_left(&w);
         });
         let w = weak.clone();
         main.on_dismiss_all_focus_changed(move |focused| {
-            with_app(&w, |app| app.main_focus.borrow_mut().dismiss_all = focused)
+            with_app(&w, |app| {
+                app.main_focus.borrow_mut().dismiss_all = focused;
+            });
+            apply_rename_left(&w);
         });
         let w = weak.clone();
         main.on_speaker_focus_changed(move |id, part| {
             with_app(&w, |app| {
-                note_row_focus(&mut app.main_focus.borrow_mut().speaker, id, part)
-            })
+                note_row_focus(&mut app.main_focus.borrow_mut().speaker, id, part);
+            });
+            apply_rename_left(&w);
         });
         let w = weak.clone();
         main.on_group_focus_changed(move |id, part| {
             with_app(&w, |app| {
-                note_row_focus(&mut app.main_focus.borrow_mut().group, id, part)
-            })
+                note_row_focus(&mut app.main_focus.borrow_mut().group, id, part);
+            });
+            apply_rename_left(&w);
         });
         let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
@@ -2470,11 +2494,23 @@ impl App {
             let Some(name) = self.snapshot().speaker(id).map(|s| s.name.clone()) else {
                 return;
             };
-            self.ui.borrow_mut().rename = Some((id.to_owned(), name));
+            {
+                let mut ui = self.ui.borrow_mut();
+                ui.rename = Some((id.to_owned(), name));
+                ui.rename_focused = false;
+            }
             self.refresh();
         }
-        self.main.set_focus_speaker_part(RowPart::Name);
-        self.main.set_focus_speaker_id(id.into());
+        // After the menu that asked for it has closed and given the focus
+        // back to the control that had it, as on the Mac.
+        let main = self.main.as_weak();
+        let id = SharedString::from(id);
+        Timer::single_shot(Duration::ZERO, move || {
+            if let Some(main) = main.upgrade() {
+                main.set_focus_speaker_part(RowPart::Name);
+                main.set_focus_speaker_id(id);
+            }
+        });
     }
 
     fn edit_rename(&self, id: &str, text: &str) {
@@ -2485,14 +2521,26 @@ impl App {
         }
     }
 
-    /// Ends the rename open in a row, if any: Enter or a click outside the
-    /// field applies the name (`apply`), Escape keeps the old one. The
+    /// Ends the rename only if it is open in row `id`: a field that loses
+    /// the focus as it closes, after another row's rename began, must not
+    /// end that one.
+    fn end_rename_in(&self, id: &str, apply: bool) {
+        let open = matches!(&self.ui.borrow().rename, Some((open, _)) if open.as_str() == id);
+        if open {
+            self.end_rename(apply);
+        }
+    }
+
+    /// Ends the rename open in a row, if any: Enter, the field losing the
+    /// focus or a click outside it applies the name (`apply`), Escape keeps
+    /// the old one. The
     /// keyboard focus, when it was in the field, goes to the row's toggle,
     /// which Narrator reads with the name.
     fn end_rename(&self, apply: bool) {
         let Some((id, text)) = self.ui.borrow_mut().rename.take() else {
             return;
         };
+        self.ui.borrow_mut().rename_focused = false;
         let focused = matches!(
             &self.main_focus.borrow().speaker,
             Some((focused, RowPart::Name)) if focused.as_str() == id
@@ -2506,6 +2554,24 @@ impl App {
             self.main.set_focus_speaker_part(RowPart::Toggle);
             self.main.set_focus_speaker_id(id.as_str().into());
         }
+    }
+
+    /// The speaker whose rename to apply, once the focus has left its name
+    /// field for another control, as on the Mac. Losing the focus to another
+    /// window or a popup, which give it back, applies nothing.
+    fn focus_left_rename(&self) -> Option<String> {
+        let mut ui = self.ui.borrow_mut();
+        let id = ui.rename.as_ref()?.0.clone();
+        let focus = self.main_focus.borrow();
+        if matches!(&focus.speaker, Some((held, RowPart::Name)) if *held == id) {
+            ui.rename_focused = true;
+            return None;
+        }
+        let elsewhere = focus.speaker.is_some()
+            || focus.group.is_some()
+            || focus.notice.is_some()
+            || focus.dismiss_all;
+        (ui.rename_focused && elsewhere).then_some(id)
     }
 
     /// The speaker's sync controls closed under the keyboard focus: its
@@ -4797,6 +4863,12 @@ mod tests {
             .invoke_speaker_rename_requested("local:desk".into());
         let row = row_of(&app, "local:desk");
         assert!(row.renaming && row.name_text == "Desk Speaker");
+        assert_eq!(
+            app.main.get_focus_speaker_part(),
+            RowPart::None,
+            "the focus waits for the menu to close"
+        );
+        slint::platform::update_timers_and_animations();
         assert_eq!(app.main.get_focus_speaker_part(), RowPart::Name);
 
         app.main
@@ -4987,6 +5059,62 @@ mod tests {
             app.main_focus.borrow().speaker,
             Some(("local:desk".into(), RowPart::Toggle)),
             "the focus went to the row's toggle"
+        );
+    }
+
+    #[test]
+    fn leaving_the_name_field_for_another_control_applies_the_name() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        draw_frames();
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
+
+        let window = app.main.window();
+        window.dispatch_event(WindowEvent::WindowActiveChanged(false));
+        draw_frames();
+        window.dispatch_event(WindowEvent::WindowActiveChanged(true));
+        draw_frames();
+        assert!(
+            app.ui.borrow().rename.is_some(),
+            "another window taking the focus applies nothing"
+        );
+
+        press(window, Key::Tab);
+        draw_frames();
+        assert!(app.ui.borrow().rename.is_none(), "Tab left the field");
+        assert_eq!(name_of(&app, "local:desk"), "Desk");
+    }
+
+    #[test]
+    fn an_idle_cast_speakers_menu_button_works_for_rename() {
+        let mut backend = MockBackend::new();
+        let mut speaker = backend.snapshot().speaker("local:desk").unwrap().clone();
+        speaker.id = "cc:attic".into();
+        speaker.name = "Attic".into();
+        speaker.system_name = "Attic".into();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.enabled = false;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Idle,
+            muted: false,
+            volume_fixed: false,
+            group: None,
+        });
+        backend.add_speaker(speaker);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        app.main.set_focus_speaker_part(RowPart::Options);
+        app.main.set_focus_speaker_id("cc:attic".into());
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().speaker,
+            Some(("cc:attic".into(), RowPart::Options)),
+            "the … button takes the focus: its menu has Rename"
         );
     }
 

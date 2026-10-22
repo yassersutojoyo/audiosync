@@ -141,7 +141,7 @@ const NONE_FOUND_POLLS: u32 = 40;
 
 /// The prefix of a Google Cast speaker's UI ID; the core's speaker keys
 /// know only local and AirPlay speakers.
-const CAST_PREFIX: &str = "cc:";
+pub(crate) const CAST_PREFIX: &str = "cc:";
 
 /// The UI's ID of the whole-system source.
 const SYSTEM_KEY: &str = "system";

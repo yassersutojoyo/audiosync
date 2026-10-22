@@ -398,6 +398,16 @@ fn usable_key(key: &str) -> bool {
     key.len() <= MAX_TEXT && SpeakerKey::parse(key).is_some_and(|key| !key.id().is_empty())
 }
 
+/// A key a speaker's name may be saved under: a Google Cast speaker can be
+/// renamed too, though the core's keys don't know it.
+fn usable_name_key(key: &str) -> bool {
+    usable_key(key)
+        || key.len() <= MAX_TEXT
+            && key
+                .strip_prefix(crate::adapter::CAST_PREFIX)
+                .is_some_and(|id| !id.is_empty())
+}
+
 /// `text` cut to at most [`MAX_TEXT`] bytes, at a character boundary.
 fn cut(mut text: String) -> String {
     if text.len() > MAX_TEXT {
@@ -474,7 +484,7 @@ impl Settings {
                 &self
                     .speaker_names
                     .into_iter()
-                    .filter(|(key, _)| usable_key(key))
+                    .filter(|(key, _)| usable_name_key(key))
                     .take(MAX_ENTRIES)
                     .collect(),
             )
@@ -823,6 +833,7 @@ mod tests {
         let mut names = SpeakerNames::default();
         names.rename("lc:desk", "Desk", "Speakers");
         names.rename("ap:kitchen", "Kitchen left", "Kitchen");
+        names.rename("cc:attic", "Attic", "Living Room speaker");
         let settings = Settings {
             speaker_names: names.saved(),
             ..Settings::default()
@@ -836,6 +847,11 @@ mod tests {
             "kept across a restart"
         );
         assert_eq!(names.shown("ap:kitchen", "Kitchen"), "Kitchen left");
+        assert_eq!(
+            names.shown("cc:attic", "Living Room speaker"),
+            "Attic",
+            "a Google Cast speaker's too"
+        );
         assert_eq!(names.shown("lc:other", "Other"), "Other", "an unknown key");
 
         names.rename("lc:desk", "", "Speakers");
@@ -849,15 +865,19 @@ mod tests {
             !read.speaker_names.contains_key("lc:desk"),
             "cleared, the key goes"
         );
-        assert_eq!(read.speaker_names.len(), 1);
+        assert_eq!(read.speaker_names.len(), 2);
 
         let text = r#"{"version": 2, "speaker_names": {
-            "lc:desk": "  Desk  ", "nonsense": "Name", "ap:": "Name", "lc:blank": "  "
+            "lc:desk": "  Desk  ", "nonsense": "Name", "ap:": "Name", "lc:blank": "  ",
+            "cc:attic": "Attic", "cc:": "Name"
         }}"#;
         let (read, _) = Settings::from_json(text).expect("read");
         assert_eq!(
             read.speaker_names,
-            BTreeMap::from([("lc:desk".to_owned(), "Desk".to_owned())]),
+            BTreeMap::from([
+                ("cc:attic".to_owned(), "Attic".to_owned()),
+                ("lc:desk".to_owned(), "Desk".to_owned()),
+            ]),
             "unusable keys and blank names are skipped"
         );
         let text = r#"{"version": 2, "master_volume": 40, "speaker_names": {

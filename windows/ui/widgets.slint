@@ -1221,8 +1221,6 @@ export component SpeakerRow inherits Rectangle {
             root.box-clicked();
         }
         menu := ContextMenuArea {
-            // An idle Cast speaker's menu would be empty.
-            enabled: !root.item.cast || root.cast-live;
             Menu {
                 MenuItem {
                     title: Strings.rename-speaker;
@@ -1524,8 +1522,6 @@ export component SpeakerRow inherits Rectangle {
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
                                     glyph-color: Tokens.teal-text;
-                                    // A Cast speaker's menu has nothing while it is idle.
-                                    enabled: !root.item.cast || root.cast-live;
                                     clicked => {
                                         // show() takes a point in the menu area, not in this button's layout.
                                         menu.show({
