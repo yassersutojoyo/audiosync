@@ -4,8 +4,8 @@
     python3 -I scripts/core_notices.py --output <file> <target triple>...
 
 The macOS app links one Rust library, audiosync-core (core/), and through it
-AudioSync's own AirPlay and Google Cast senders (airplay/, cast/) with the
-senders' third-party crates. This writes one text file covering every crate compiled into the core
+AudioSync's own AirPlay and Google Cast senders and web remote (airplay/,
+cast/, remote/) with their third-party crates. This writes one text file covering every crate compiled into the core
 for the given targets (scripts/build_core.sh passes both Mac targets): first
 AudioSync's own packages and license, then each crate with its version,
 license expression and repository and the full text of every license or
@@ -66,10 +66,10 @@ def build(notices, targets):
         "Generated from core/Cargo.lock by scripts/core_notices.py.",
         "",
         "The app binary contains AudioSync's audio core (core/), a Rust library,",
-        "with AudioSync's own AirPlay sender (airplay/) and Google Cast sender",
-        "(cast/), all AudioSync's own code ({}), compiled together with the".format(own),
-        "crates below. Each is listed",
-        "with its license; the full license and notice texts follow. The Rust",
+        "with AudioSync's own AirPlay sender (airplay/), Google Cast sender",
+        "(cast/) and web remote (remote/), all AudioSync's own code ({}),".format(own),
+        "compiled together with the crates below. Each is listed with its",
+        "license; the full license and notice texts follow. The Rust",
         "standard library's notices are in the files next to this one.",
         "",
         "Contents",

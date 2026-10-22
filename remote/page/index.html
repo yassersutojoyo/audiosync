@@ -1,0 +1,71 @@
+<!doctype html>
+<!-- Placeholder page for the server's tests and first trials: it pairs and shows the raw state. The real page comes with its own design. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="AudioSync">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>AudioSync</title>
+<style>:root { color-scheme: light dark; }</style>
+</head>
+<body>
+<main>
+<h1>AudioSync remote (placeholder)</h1>
+<form id="pair" hidden>
+<label for="code">Pairing code</label>
+<input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+<button type="submit">Pair</button>
+</form>
+<p id="status" aria-live="polite">Connecting to AudioSync…</p>
+<pre id="state"></pre>
+</main>
+<script>
+"use strict";
+const form = document.getElementById("pair");
+const status = document.getElementById("status");
+const view = document.getElementById("state");
+let events = null;
+
+function showPairing(message) {
+  if (events) { events.close(); events = null; }
+  form.hidden = false;
+  status.textContent = message;
+}
+
+function listen() {
+  form.hidden = true;
+  events = new EventSource("/api/events");
+  events.addEventListener("state", (event) => {
+    status.textContent = "";
+    view.textContent = JSON.stringify(JSON.parse(event.data), null, 2);
+  });
+  events.onerror = () => {
+    events.close();
+    events = null;
+    fetch("/api/state").then((response) => {
+      if (response.status === 401) { showPairing("Enter the code AudioSync shows."); }
+      else { status.textContent = "Can't reach AudioSync. Retrying…"; setTimeout(listen, 2000); }
+    }, () => { status.textContent = "Can't reach AudioSync. Retrying…"; setTimeout(listen, 2000); });
+  };
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const code = document.getElementById("code").value;
+  fetch("/api/pair", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  }).then((response) => response.json().then((body) => {
+    if (response.ok) { listen(); } else { status.textContent = body.message; }
+  }), () => { status.textContent = "Can't reach AudioSync."; });
+});
+
+listen();
+</script>
+</body>
+</html>
