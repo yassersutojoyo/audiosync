@@ -123,7 +123,7 @@ pub const MAX_LOGGED_TEXT: usize = 96;
 pub const MAX_HEX_RUN: usize = 8;
 
 impl FetchHeaders {
-    fn parse(lines: impl Iterator<Item = &str>) -> FetchHeaders {
+    fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> FetchHeaders {
         let mut headers = FetchHeaders::default();
         for line in lines {
             let Some((name, value)) = line.split_once(':') else {
