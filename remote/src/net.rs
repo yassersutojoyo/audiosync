@@ -236,6 +236,8 @@ mod tests {
         assert!(!host_allowed("[kitchen.local]:7655", local, name));
         assert!(!host_allowed("kitchen.local:+7655", local, name));
         assert!(!host_allowed(&format!("{home}:+7655"), local, name));
+        assert!(!host_allowed("kitchen.local:", local, name));
+        assert!(!host_allowed(&format!("{home}:"), local, name));
         assert!(!host_allowed(&at(80), local, name));
         assert!(!host_allowed(
             &format!("{}:7655", v4(192, 168, 1, 6)),
@@ -260,6 +262,7 @@ mod tests {
         assert!(!host_allowed("[fe80::1]", link, None));
         assert!(!host_allowed("fe80::1:7655", link, None));
         assert!(!host_allowed("[fe80::1]:+7655", link, None));
+        assert!(!host_allowed("[fe80::1]:", link, None));
 
         let web = SocketAddr::new(v4(10, 0, 0, 2), 80);
         assert!(host_allowed(&v4(10, 0, 0, 2).to_string(), web, None));
