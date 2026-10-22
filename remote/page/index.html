@@ -183,7 +183,7 @@ footer { display: flex; align-items: center; justify-content: space-between; fle
 
 <section id="remote" hidden>
 <div id="banner" class="banner" hidden>
-<p>Can't reach AudioSync. Retrying…</p>
+<p id="banner-text">Can't reach AudioSync. Retrying…</p>
 <button id="retry" type="button">Retry</button>
 </div>
 <p id="loading" class="state-text muted">Connecting to AudioSync…</p>
@@ -221,6 +221,9 @@ const TEXT = {
   unpairedHere: "This phone is unpaired.",
   unpairConfirm: "Unpair this phone? You'll need a new code from AudioSync to use it again.",
   lost: "Can't reach AudioSync. Retrying…",
+  noUpdates: "AudioSync answers but isn't sending updates. Retrying…",
+  busy: "AudioSync is serving too many connections. Retrying…",
+  waiting: "AudioSync is starting. Retrying…",
   back: "Connected to AudioSync.",
   unreachable: "Can't reach AudioSync.",
   failed: "That didn't work. Try again.",
@@ -251,6 +254,7 @@ const ui = {
   pairError: byId("pair-error"),
   remote: byId("remote"),
   banner: byId("banner"),
+  bannerText: byId("banner-text"),
   retry: byId("retry"),
   loading: byId("loading"),
   controls: byId("controls"),
@@ -269,6 +273,7 @@ let events = null;
 let retryTimer = null;
 let failures = 0;
 let lost = false;
+let streamed = false;
 let snapshot = null;
 let rowCount = 0;
 const rows = new Map();
@@ -322,12 +327,14 @@ function showRemote() {
   ui.controls.hidden = snapshot === null;
 }
 
-function setLost(value) {
-  if (lost === value) { return; }
+function setLost(value, message) {
+  const text = message || TEXT.lost;
+  if (value && (!lost || ui.bannerText.textContent !== text)) { announce(text); }
+  if (!value && lost) { announce(TEXT.back); }
+  if (value) { ui.bannerText.textContent = text; }
   lost = value;
   ui.banner.hidden = !value;
   ui.controls.disabled = value;
-  announce(value ? TEXT.lost : TEXT.back);
 }
 
 function connect() {
@@ -338,6 +345,8 @@ function connect() {
     let next;
     try { next = JSON.parse(event.data); } catch (_) { return; }
     failures = 0;
+    streamed = true;
+    remember(true);
     setLost(false);
     render(next);
   });
@@ -349,21 +358,36 @@ function connect() {
 
 function checkAccess() {
   fetch("/api/state", { cache: "no-store", credentials: "same-origin" }).then((response) => {
-    if (response.status === 401) { unpairedByApp(); } else { retryLater(); }
-  }, retryLater);
+    if (response.status === 401) {
+      unpairedByApp();
+    } else if (response.ok) {
+      retryLater(TEXT.noUpdates);
+    } else {
+      response.json().then((answer) => answer, () => ({})).then((answer) => {
+        if (response.status === 403) {
+          setLost(true, answer.message || TEXT.unreachable);
+        } else if (answer.error === "busy") {
+          retryLater(TEXT.busy);
+        } else if (answer.error === "not_ready") {
+          retryLater(TEXT.waiting);
+        } else {
+          retryLater(TEXT.lost);
+        }
+      });
+    }
+  }, () => retryLater(TEXT.lost));
 }
 
 function unpairedByApp() {
-  const message = wasPaired() ? TEXT.unpaired : "";
+  const message = streamed || wasPaired() ? TEXT.unpaired : "";
   remember(false);
   showPairing(message);
 }
 
-function retryLater() {
-  if (snapshot !== null) { setLost(true); }
+function retryLater(message) {
   const wait = RETRY_STEPS_MS[Math.min(failures, RETRY_STEPS_MS.length - 1)];
   failures += 1;
-  if (failures >= 2) { setLost(true); }
+  if (snapshot !== null || failures >= 2) { setLost(true, message); }
   retryTimer = window.setTimeout(connect, wait);
 }
 
@@ -390,7 +414,7 @@ function post(path, body) {
 // One request at a time per control, at most one every SEND_EVERY_MS, and
 // only the newest value waits: two requests in flight could reach the app in
 // the wrong order and leave the older value applied.
-function sender(send) {
+function sender(send, onFail) {
   let lastSent = 0;
   let timer = null;
   let pending = null;
@@ -410,8 +434,12 @@ function sender(send) {
     sentValue = value;
     lastSent = Date.now();
     inFlight = true;
-    send(value).finally(() => {
+    send(value).then(() => {
       inFlight = false;
+      fire();
+    }, (problem) => {
+      inFlight = false;
+      onFail(problem, pending === null);
       fire();
     });
   };
@@ -427,10 +455,10 @@ function sender(send) {
 
 function rangeControl(input, output, read, write, onFail) {
   let held = false;
-  const send = sender((value) => write(value).catch((problem) => {
+  const send = sender(write, (problem, settled) => {
     if (problem) { onFail(problem.message); }
-    if (!send.busy()) { control.show(read()); }
-  }));
+    if (settled && !held) { control.show(read()); }
+  });
   const control = {
     held: () => held || send.busy(),
     show(value) {
@@ -544,16 +572,16 @@ function makeRow(speaker) {
   row.volumeControl = rangeControl(volume, volumeValue, () => row.speaker.volume,
     (value) => change({ volume: value }), fail);
 
-  row.powerSender = sender((on) => change({ on }).catch((problem) => {
+  row.powerSender = sender((on) => change({ on }), (problem, settled) => {
     if (problem) { fail(problem.message); }
-    if (!row.powerSender.busy()) { power.checked = row.speaker.on; }
-  }));
+    if (settled) { power.checked = row.speaker.on; }
+  });
   power.addEventListener("change", () => row.powerSender.set(power.checked));
 
-  row.delaySender = sender((value) => change({ delay_ms: value }).catch((problem) => {
+  row.delaySender = sender((value) => change({ delay_ms: value }), (problem, settled) => {
     if (problem) { fail(problem.message); }
-    if (!row.delaySender.busy()) { showDelay(row, row.speaker.delay_ms); }
-  }));
+    if (settled) { showDelay(row, row.speaker.delay_ms); }
+  });
 
   const sendDelay = (value) => {
     const min = row.speaker.delay_min_ms;
@@ -615,9 +643,16 @@ function updateRow(row, speaker) {
   if (!row.delaySender.busy() && !editing) { showDelay(row, speaker.delay_ms); }
 }
 
+function showComputer(name) {
+  const shown = (typeof name === "string" && name.trim()) || localName;
+  ui.computer.textContent = shown ? TEXT.computer(shown) : "";
+  ui.computer.hidden = !shown;
+}
+
 function render(next) {
   snapshot = next;
   showRemote();
+  showComputer(next.computer_name);
 
   const playing = next.now_playing;
   if (playing && (playing.title || playing.artist)) {
@@ -720,8 +755,7 @@ document.addEventListener("visibilitychange", () => {
 
 const host = window.location.hostname.replace(/\.$/, "");
 const localName = host.toLowerCase().endsWith(".local") ? host.slice(0, -".local".length) : "";
-ui.computer.textContent = localName ? TEXT.computer(localName) : "";
-ui.computer.hidden = !localName;
+showComputer("");
 
 connect();
 </script>
