@@ -355,7 +355,8 @@ struct UIStrings {
             return "No AirPlay speaker was measured clearly, so the AirPlay delay stays at \(current)."
         case .certain, .spread:
             let source = airPlay.certainRows > 1
-                ? ", the middle value of the \(airPlay.certainRows) AirPlay speakers measured" : ""
+                ? ", the middle value of the \(airPlay.certainRows) AirPlay speakers measured, "
+                    + "spread \(delayValue(ms: airPlay.spreadMs))" : ""
             let line = "AirPlay delay: \(delayValue(ms: airPlay.newMs)) instead of \(current)\(source)."
             guard airPlay.state == .spread else { return line }
             return line + " The AirPlay speakers differ by \(delayValue(ms: airPlay.spreadMs)) among themselves. "

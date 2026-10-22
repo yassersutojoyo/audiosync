@@ -3809,8 +3809,9 @@ do {
     check(planned.map(\.id) == ["mac", "usb", "cast:tv", "native:a", "native:b"]
             && planned[0].offsetMs == nil && planned[1].offsetMs == 150 && planned[1].latencyMs == 2400
             && planned[2].offsetMs == nil && planned[2].latencyMs == 0
-            && planned[3].offsetMs == 1750 && planned[3].latencyMs == 2250,
-          "calibrate all: the reference first, then each speaker with its stored delay and expected arrival (S235)",
+            && planned[3].offsetMs == 1750 && planned[3].latencyMs == 2250 && planned[4].latencyMs == 2250,
+          "calibrate all: the reference first, then each speaker with its stored delay and expected arrival, "
+            + "one for every AirPlay speaker, so a sweep has left them all when its window or play-out ends (S235)",
           "\(planned)")
     check(CalibrateAllFlow.quietSeconds(planned) == 3 && CalibrateAllFlow.settleSeconds(planned[3]) == 3,
           "calibrate all: the music on its way plays out before the first sweep, a Cast speaker's unknown latency included",
@@ -4028,6 +4029,16 @@ do {
             && replanned.count > 2 && replanned[2].offsetMs == nil && replanned[2].latencyMs == 0,
           "calibrate all: after Undo a Cast speaker without a stored offset is searched again, not measured from 0 ms",
           "\(replanned)")
+
+    // Two or more AirPlay rows always show their spread; the plain sentence only over 10 ms (S237).
+    let close = t.calibrateAllAirPlay(.init(state: .certain, oldMs: 1750, newMs: 1960, spreadMs: 6, certainRows: 3))
+    let apart = t.calibrateAllAirPlay(.init(state: .spread, oldMs: 1750, newMs: 1965, spreadMs: 30, certainRows: 2))
+    let single = t.calibrateAllAirPlay(.init(state: .certain, oldMs: 1750, newMs: 1940, spreadMs: 0, certainRows: 1))
+    check(close == "AirPlay delay: 1960 ms instead of 1750 ms, the middle value of the 3 AirPlay speakers measured, spread 6 ms."
+            && apart.contains("the 2 AirPlay speakers measured, spread 30 ms.") && apart.contains("differ by 30 ms")
+            && single == "AirPlay delay: 1940 ms instead of 1750 ms.",
+          "calibrate all: the AirPlay median shows its spread, and only a spread over 10 ms gets the plain sentence",
+          close + " | " + apart + " | " + single)
 
     check(t.calibrateAllProgress(.listening(name: "Desk", sweep: 2)) == "Listening to Desk, sweep 2 of 2…"
             && t.calibrateAllProgress(.listening(name: "MacBook Speakers", sweep: 0)) == "Listening to MacBook Speakers…"
