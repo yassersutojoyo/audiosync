@@ -147,18 +147,18 @@ supply.
 
 ## AudioSync's own Google Cast sender
 
-`cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later), still in
-development. Both apps contain it: the Windows app links it directly, and the
+`cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later). Both apps
+contain it: the Windows app links it directly, and the
 macOS app through its audio core's C interface, which brings the crates below
 into the app binary. It builds on `native-tls` (MIT OR Apache-2.0) for the TLS
-connection to the device, with `tempfile`, `rustix`, `errno`, `bitflags`,
-`fastrand` and `once_cell` (MIT OR Apache-2.0) on every platform; native-tls
-uses the platform's TLS stack: `schannel`
+connection to the device, with `fastrand` (Apache-2.0 OR MIT) on every
+platform and, on macOS, `tempfile`, `errno`, `bitflags` and
+`once_cell` (MIT OR Apache-2.0) and `rustix` (Apache-2.0 WITH LLVM-exception
+OR Apache-2.0 OR MIT); native-tls uses the platform's TLS stack: `schannel`
 (MIT) on Windows, `security-framework`, `security-framework-sys`,
 `core-foundation` and `core-foundation-sys` on macOS, and on Linux the system
 OpenSSL through `openssl` (Apache-2.0), `openssl-sys` (MIT), `openssl-macros`,
-`openssl-probe`, `foreign-types`, `foreign-types-shared` and
-`linux-raw-sys`; `prost` and `prost-derive`
+`openssl-probe`, `foreign-types` and `foreign-types-shared`; `prost` and `prost-derive`
 (Apache-2.0) for the protocol buffer messages, with `bytes` (MIT), `anyhow`,
 `itertools` and `either`; `flacenc` (Apache-2.0) to encode the FLAC stream
 some devices need instead of WAV, with `crc`, `crc-catalog`, `heapless`,

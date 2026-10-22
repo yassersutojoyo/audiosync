@@ -48,11 +48,13 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 ## What it does
 
 - Source: all system audio, one app, or an input device (mic, audio interface).
-- Outputs: AirPlay speakers, Apple TVs, and anything macOS can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
+- Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything macOS can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
 - A delay per local speaker (−2 to +20 s), plus one AirPlay delay.
 - Volume per speaker and master, a 10-band EQ, groups, auto-connect, launch at login, Now Playing for Spotify and Music.
 
-Like Airfoil, but less: no Chromecast or other network speakers. Not made by Rogue Amoeba, no shared code.
+Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
+
+Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. Speaker groups made in the Google Home app can't play. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait up to 3 s. Past that a notice tells you how far ahead AirPlay plays.
 
 ## Install
 
@@ -76,14 +78,14 @@ Like Airfoil, but less: no Chromecast or other network speakers. Not made by Rog
 ## What doesn't work (yet)
 
 - Everything is about two seconds late. Fine for music, bad for video and games.
-- AirPlay 1 only. Speakers that only do AirPlay 2 aren't listed yet.
+- AirPlay 1 only by default. AirPlay 2 is experimental and off: start AudioSync with `AUDIOSYNC_AIRPLAY2=1` to try it. It plays one AirPlay 2 speaker at a time and hasn't been tried on a real AirPlay 2 receiver yet.
 - Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - Now Playing only works with Spotify and Music.
 
 ## Windows
 
-A Windows 11 version (x64 and ARM64) is on the way, with the same Rust engine and its own AirPlay sender. Not released yet. CI builds it, and [windows/README.md](windows/README.md#trying-the-preview-exe) says how to try a build. AirPlay 1 only, it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
+A Windows 11 version (x64 and ARM64) is on the way, with the same Rust engine and its own AirPlay sender. Not released yet. CI builds it, and [windows/README.md](windows/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
 
 ## License and credits
 
