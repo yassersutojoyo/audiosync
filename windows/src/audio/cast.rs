@@ -67,6 +67,29 @@ const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * SESSION_RATE as 
 /// The smallest page size Windows maps memory in.
 const PAGE_BYTES: usize = 4096;
 
+/// The volume step of a device that reports none, 0 to 100.
+const DEFAULT_VOLUME_STEP: f64 = 1.0;
+
+/// What a Cast device shows of the playing track (C53): only what the
+/// track itself has, never a label or the app's icon in place of a missing
+/// field.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CastTrack {
+    /// Title, artist and album; `images` stays empty, the sender fills it.
+    pub metadata: Metadata,
+    /// PNG or JPEG of at most 1280 by 720.
+    pub artwork: Option<Arc<[u8]>>,
+}
+
+/// The step the volume keys move a device by, 0 to 100: the device's own
+/// `stepInterval` (C69), or [`DEFAULT_VOLUME_STEP`] without a usable one.
+pub fn volume_step(volume: Option<&DeviceVolume>) -> f64 {
+    volume
+        .and_then(|volume| volume.step_interval)
+        .filter(|step| step.is_finite() && *step > 0.0 && *step <= 1.0)
+        .map_or(DEFAULT_VOLUME_STEP, |step| step * 100.0)
+}
+
 /// Interleaved stereo frames held back by a delay that may change while it
 /// runs: a change fades out, moves the read point and fades in, so it
 /// never clicks.
@@ -347,13 +370,15 @@ pub trait CastLink: Send {
         &mut self,
         target: CastTarget,
         rate: u32,
-        metadata: Metadata,
+        track: CastTrack,
         reader: AudioReader,
     ) -> Result<AttemptId, StartRefused>;
     fn stop(&mut self);
     /// 0.0 to 1.0.
     fn set_volume(&mut self, level: f64);
     fn set_muted(&mut self, muted: bool);
+    /// Kept for the next `LOAD`; the playing stream is not reloaded (C54).
+    fn set_track(&mut self, track: CastTrack);
     fn resync(&mut self);
     fn set_offset(&mut self, device: DeviceId, offset: Duration);
     fn memory(&self) -> DeviceMemory;
@@ -390,10 +415,12 @@ impl CastLink for HostLink {
         &mut self,
         target: CastTarget,
         rate: u32,
-        metadata: Metadata,
+        track: CastTrack,
         reader: AudioReader,
     ) -> Result<AttemptId, StartRefused> {
-        self.host.start(target, rate, metadata, reader)
+        let artwork = track.artwork.map(|bytes| bytes.to_vec());
+        self.host
+            .start_with_artwork(target, rate, track.metadata, artwork, reader)
     }
 
     fn stop(&mut self) {
@@ -406,6 +433,13 @@ impl CastLink for HostLink {
 
     fn set_muted(&mut self, muted: bool) {
         self.host.set_muted(muted);
+    }
+
+    fn set_track(&mut self, track: CastTrack) {
+        self.host.set_metadata(track.metadata);
+        if let Some(artwork) = track.artwork {
+            self.host.set_artwork(artwork.to_vec());
+        }
     }
 
     fn resync(&mut self) {
@@ -467,6 +501,11 @@ pub struct CastSpeakers {
     /// Each group's members as its latest session listed them (C94).
     members: BTreeMap<DeviceId, Vec<GroupMember>>,
     streaming: bool,
+    /// The playing track; `None` while it is being read, which holds a
+    /// start back so the first `LOAD` names it (C54).
+    track: Option<CastTrack>,
+    /// What the session in progress was given last.
+    sent: Option<CastTrack>,
     log: DebugLog,
     pending: Vec<BackendEvent>,
 }
@@ -484,6 +523,8 @@ impl CastSpeakers {
             records: None,
             members: BTreeMap::new(),
             streaming: false,
+            track: Some(CastTrack::default()),
+            sent: None,
             log,
             pending: Vec::new(),
         }
@@ -563,6 +604,7 @@ impl CastSpeakers {
             volume: (level * 100.0).clamp(0.0, 100.0),
             muted: reported.is_some_and(|volume| volume.muted),
             volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
+            volume_step: volume_step(reported),
             offset_ms: offset_ms(memory, &id),
             status,
         })
@@ -697,7 +739,7 @@ impl CastSpeakers {
         {
             self.stop_session();
         }
-        if self.attempt.is_some() || !self.streaming {
+        if self.attempt.is_some() || !self.streaming || self.track.is_none() {
             return;
         }
         let listed = self.enabled.filter(|&id| {
@@ -725,8 +767,10 @@ impl CastSpeakers {
             return;
         };
         let (writer, reader) = audio_ring(RING_FRAMES);
-        match link.start(target, SESSION_RATE, Metadata::default(), reader) {
+        let track = self.track.clone().unwrap_or_default();
+        match link.start(target, SESSION_RATE, track.clone(), reader) {
             Ok(attempt) => {
+                self.sent = Some(track);
                 if !self.feed.hand(Some(writer)) {
                     self.log
                         .log(|| "Cast: the capture's handoff is full; the new session's feed waits for the next poll".to_owned());
@@ -808,6 +852,41 @@ impl CastSpeakers {
             && let Some(link) = self.link.as_mut()
         {
             link.set_muted(muted);
+        }
+    }
+
+    /// The playing track, or `None` while it is being read. A session in
+    /// progress keeps a new one for its next `LOAD` (C54); a start waits
+    /// for it.
+    pub fn set_track(&mut self, track: Option<CastTrack>) {
+        if self.track == track {
+            return;
+        }
+        let known = self.track.is_none() && track.is_some();
+        self.track = track;
+        if let Some(track) = &self.track
+            && self.attempt.is_some()
+            && self.sent.as_ref() != Some(track)
+        {
+            self.log.log(|| {
+                format!(
+                    "Cast: track kept for the next load: \"{}\" by \"{}\", {}",
+                    track.metadata.title.as_deref().unwrap_or(""),
+                    track.metadata.artist.as_deref().unwrap_or(""),
+                    if track.artwork.is_some() {
+                        "with artwork"
+                    } else {
+                        "no artwork"
+                    }
+                )
+            });
+            if let Some(link) = self.link.as_mut() {
+                link.set_track(track.clone());
+            }
+            self.sent = Some(track.clone());
+        }
+        if known {
+            self.sync();
         }
     }
 
@@ -949,6 +1028,7 @@ impl CastSpeakers {
                 }
                 self.attempt = None;
                 self.records = None;
+                self.sent = None;
                 self.feed.hand(None);
                 self.list.set_in_session(DeviceKey::Id(device), false);
                 self.log
@@ -1109,6 +1189,10 @@ pub mod tests {
         pub stops: usize,
         pub volumes: Vec<f64>,
         pub mutes: Vec<bool>,
+        /// The track each start was given.
+        pub start_tracks: Vec<CastTrack>,
+        /// Tracks given to a session in progress.
+        pub tracks: Vec<CastTrack>,
         pub resyncs: usize,
         pub shutdowns: usize,
         pub memory: DeviceMemory,
@@ -1163,13 +1247,14 @@ pub mod tests {
             &mut self,
             target: CastTarget,
             _rate: u32,
-            _metadata: Metadata,
+            track: CastTrack,
             reader: AudioReader,
         ) -> Result<AttemptId, StartRefused> {
             let mut state = self.state();
             if let Some(refused) = state.refuse.take() {
                 return Err(refused);
             }
+            state.start_tracks.push(track);
             state.started.push(target.id);
             state.groups.push(target.group);
             state.readers.push(reader);
@@ -1187,6 +1272,10 @@ pub mod tests {
 
         fn set_muted(&mut self, muted: bool) {
             self.state().mutes.push(muted);
+        }
+
+        fn set_track(&mut self, track: CastTrack) {
+            self.state().tracks.push(track);
         }
 
         fn resync(&mut self) {
@@ -1666,5 +1755,87 @@ pub mod tests {
         assert_eq!(fake.state().shutdowns, 1);
         assert!(cast.begin_shutdown().is_none());
         assert_eq!(cast.discovery(), CastDiscovery::Off);
+    }
+
+    fn track(title: &str, artwork: Option<&[u8]>) -> CastTrack {
+        CastTrack {
+            metadata: Metadata {
+                title: Some(title.to_owned()),
+                ..Metadata::default()
+            },
+            artwork: artwork.map(Arc::from),
+        }
+    }
+
+    #[test]
+    fn a_start_waits_for_the_track_and_gives_it_to_the_first_load() {
+        let (fake, mut cast) = listed();
+        cast.set_track(None);
+        cast.set_streaming(true);
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        assert!(fake.state().started.is_empty(), "waits while it is read");
+
+        let first = track("First", Some(&[0xff, 0xd8]));
+        cast.set_track(Some(first.clone()));
+        assert_eq!(fake.state().started, [id(KITCHEN)]);
+        assert_eq!(fake.state().start_tracks, std::slice::from_ref(&first));
+        cast.set_track(Some(first.clone()));
+        assert!(fake.state().tracks.is_empty(), "the start already had it");
+    }
+
+    #[test]
+    fn a_new_track_goes_to_the_session_once_and_an_unchanged_one_never() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        assert_eq!(fake.state().start_tracks, [CastTrack::default()]);
+        fake.report(playing(KITCHEN));
+        cast.poll();
+
+        let second = track("Second", None);
+        cast.set_track(Some(second.clone()));
+        cast.set_track(Some(second.clone()));
+        assert_eq!(fake.state().tracks, std::slice::from_ref(&second));
+        assert_eq!(fake.state().started.len(), 1, "no restart for a track");
+
+        // A reading that stops and comes back with the same track sends nothing.
+        cast.set_track(None);
+        cast.set_track(Some(second.clone()));
+        assert_eq!(fake.state().tracks.len(), 1);
+        let third = track("Third", Some(&[0x89, b'P']));
+        cast.set_track(Some(third.clone()));
+        assert_eq!(fake.state().tracks, [second, third]);
+    }
+
+    #[test]
+    fn the_volume_keys_move_by_the_device_step_or_1_without_one() {
+        assert_eq!(volume_step(None), 1.0);
+        let reported = |step| DeviceVolume {
+            step_interval: step,
+            ..DeviceVolume::default()
+        };
+        assert_eq!(volume_step(Some(&reported(None))), 1.0);
+        assert!((volume_step(Some(&reported(Some(0.05)))) - 5.0).abs() < 1e-9);
+        for bad in [0.0, -0.1, 1.5, f64::NAN] {
+            assert_eq!(volume_step(Some(&reported(Some(bad)))), 1.0, "{bad}");
+        }
+
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        let step_of = |cast: &CastSpeakers| {
+            cast.speakers()
+                .into_iter()
+                .find(|info| info.id == KITCHEN)
+                .map(|info| info.volume_step)
+        };
+        assert_eq!(step_of(&cast), Some(1.0));
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(reported(Some(0.02))),
+        });
+        cast.poll();
+        assert!((step_of(&cast).unwrap() - 2.0).abs() < 1e-9);
     }
 }

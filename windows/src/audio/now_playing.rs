@@ -36,7 +36,9 @@ use std::time::{Duration, Instant};
 
 use audiosync_airplay::metadata::TrackInfo as TrackFields;
 use audiosync_airplay::sender::NowPlaying;
+use audiosync_cast::media::Metadata;
 
+use super::cast::CastTrack;
 use crate::debug_log::DebugLog;
 
 /// How often the sessions are read while AirPlay receivers play.
@@ -213,9 +215,7 @@ pub struct Shown {
 /// app. A track's fields go out as its app gave them, blank artist or album
 /// included.
 pub fn decide(track: Option<&Track>, source: &TrackSource, labels: &ReceiverLabels) -> Shown {
-    if let Some(track) = track
-        && (track.session.playing || matches!(source.follow, Follow::App { .. }))
-    {
+    if let Some(track) = track.filter(|track| counts(track, &source.follow)) {
         let session = &track.session;
         return Shown {
             fields: TrackFields {
@@ -245,6 +245,33 @@ pub fn decide(track: Option<&Track>, source: &TrackSource, labels: &ReceiverLabe
             album: labels.album.clone(),
         },
         artwork: Artwork::Icon,
+    }
+}
+
+fn counts(track: &Track, follow: &Follow) -> bool {
+    track.session.playing || matches!(follow, Follow::App { .. })
+}
+
+/// What a Cast device should show for `track`: its own fields and artwork
+/// only, nothing in place of what it lacks (Cast spec C53), and nothing at
+/// all when no track counts.
+pub fn cast_track(track: Option<&Track>, follow: &Follow) -> CastTrack {
+    let Some(track) = track.filter(|track| counts(track, follow)) else {
+        return CastTrack::default();
+    };
+    let field = |text: &str| {
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
+    };
+    let session = &track.session;
+    CastTrack {
+        metadata: Metadata {
+            title: field(&session.title),
+            artist: field(&session.artist),
+            album_name: field(&session.album),
+            images: Vec::new(),
+        },
+        artwork: track.artwork.clone(),
     }
 }
 
@@ -319,6 +346,27 @@ impl TrackInfo {
     /// Sends what happens to `log`.
     pub fn set_debug_log(&mut self, log: DebugLog) {
         self.log = log;
+    }
+
+    /// Whether a reader was set.
+    pub fn reads(&self) -> bool {
+        self.reader.is_some()
+    }
+
+    /// What a Cast device should show, from the reading [`TrackInfo::sync`]
+    /// took last: `None` while nothing is followed, and right after reading
+    /// starts until the first reading, for at most [`READING_WAIT`].
+    pub fn cast_track(&self, now: Instant) -> Option<CastTrack> {
+        let follow = self.following.as_ref()?;
+        let since = self.since.unwrap_or(now);
+        if self.reading.is_none() && now.saturating_duration_since(since) < READING_WAIT {
+            return None;
+        }
+        let track = self
+            .reading
+            .as_ref()
+            .and_then(|reading| reading.track.as_ref());
+        Some(cast_track(track, follow))
     }
 
     /// Words what receivers show while no track counts.
@@ -711,6 +759,47 @@ mod tests {
             fields("Title label", "Whole system label", "Album label")
         );
         assert_eq!(sent.artwork.as_deref(), Some(ICON));
+    }
+
+    #[test]
+    fn a_cast_device_gets_the_track_and_its_cover_once_read() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        assert_eq!(info.cast_track(start), None, "nothing is followed");
+        info.sync(Some(&whole_system()), start);
+        assert_eq!(info.cast_track(start), None, "no reading yet");
+
+        let mut song = track("Spotify.exe", "Song", true, Some(COVER));
+        song.session.album = "  ".to_owned();
+        reader.read(Some(song));
+        info.sync(Some(&whole_system()), start);
+        let shown = info.cast_track(start).expect("read");
+        assert_eq!(shown.metadata.title.as_deref(), Some("Song"));
+        assert_eq!(shown.metadata.artist.as_deref(), Some("Song artist"));
+        assert_eq!(shown.metadata.album_name, None, "a blank field is left out");
+        assert!(shown.metadata.images.is_empty());
+        assert_eq!(shown.artwork.as_deref(), Some(COVER));
+
+        info.sync(None, start);
+        assert_eq!(info.cast_track(start), None, "reading stopped");
+    }
+
+    #[test]
+    fn a_cast_device_gets_no_labels_or_icon_without_a_track() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Paused", false, Some(COVER))));
+        info.sync(Some(&whole_system()), start);
+        assert_eq!(info.cast_track(start), Some(CastTrack::default()));
+
+        let mut other = track_info(&FakeReader::with_icon(ICON));
+        other.sync(Some(&whole_system()), start);
+        let later = start + READING_WAIT;
+        other.sync(Some(&whole_system()), later);
+        assert_eq!(other.cast_track(later), Some(CastTrack::default()));
     }
 
     #[test]

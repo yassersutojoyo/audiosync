@@ -196,13 +196,15 @@ pub struct Speaker {
 
 /// A Google Cast speaker's own state. Its delay is the measured offset the
 /// user sets, since Cast can't be kept in sync automatically.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CastRow {
     pub state: CastState,
     /// The speaker reports itself muted.
     pub muted: bool,
     /// The speaker's volume can't be changed from here.
     pub volume_fixed: bool,
+    /// How far the volume keys move it, 0 to 100 (the device's own step).
+    pub volume_step: f64,
     /// Set for a Cast group, which plays as one speaker.
     pub group: Option<CastGroup>,
 }

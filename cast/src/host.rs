@@ -645,7 +645,14 @@ impl Worker {
                 artwork,
                 reader,
                 selected,
-            } => self.start(attempt, target, format, (metadata, artwork), reader, selected),
+            } => self.start(
+                attempt,
+                target,
+                format,
+                (metadata, artwork),
+                reader,
+                selected,
+            ),
             Command::Stop => self.stop_running(),
             Command::SetVolume(level) => {
                 self.with_session(|session| session.set_volume(level).map_err(CommandError::Volume))

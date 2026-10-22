@@ -592,8 +592,7 @@ fn artwork_given_at_the_start_is_named_by_the_first_load_and_follows_its_track()
         artwork: Some(cover.clone()),
         ..config(&device)
     };
-    let mut session =
-        CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
+    let mut session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
     let first = device.payloads(NS_MEDIA, "LOAD");
     let url = image_url(&first[0]).expect("the cover's URL");
     assert_eq!(served(url), cover);

@@ -333,10 +333,13 @@ fn artwork_reaches_the_first_load_and_every_load_after_set_artwork() {
     assert!(!has_image(&loads[1]), "new metadata drops the cover before");
     assert_eq!(loads[1]["media"]["metadata"]["title"], "Second");
     assert!(has_image(&loads[2]), "{}", loads[2]);
-    assert_eq!(loads[2]["media"]["metadata"], json!({
-        "metadataType": 3,
-        "images": [{"url": loads[2]["media"]["metadata"]["images"][0]["url"]}],
-    }));
+    assert_eq!(
+        loads[2]["media"]["metadata"],
+        json!({
+            "metadataType": 3,
+            "images": [{"url": loads[2]["media"]["metadata"]["images"][0]["url"]}],
+        })
+    );
     assert!(host.shutdown());
     device.join();
 }

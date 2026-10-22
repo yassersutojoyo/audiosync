@@ -1255,6 +1255,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 },
                 muted: speaker.muted,
                 volume_fixed: speaker.volume_fixed,
+                volume_step: speaker.volume_step,
                 group: speaker.group.map(|group| CastGroup {
                     members: group.members,
                 }),
