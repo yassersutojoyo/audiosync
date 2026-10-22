@@ -3,9 +3,9 @@
 AudioSync's own code is licensed under GPL-3.0-or-later (see
 [`LICENSE`](LICENSE)). The app binary contains AudioSync's audio core (`core/`,
 written in Rust and under GPL-3.0-or-later like the rest of AudioSync) with
-AudioSync's own AirPlay sender (`airplay/`, GPL-3.0-or-later) and Google Cast
-sender (`cast/`, GPL-3.0-or-later), and, compiled in with them, parts of the Rust standard
-library and the third-party crates the senders use, see
+AudioSync's own AirPlay sender (`airplay/`), Google Cast sender (`cast/`) and
+web remote (`remote/`), all GPL-3.0-or-later, and, compiled in with them, parts
+of the Rust standard library and the third-party crates they use, see
 [App frameworks and libraries](#app-frameworks-and-libraries) and
 [AudioSync's own Google Cast sender](#audiosyncs-own-google-cast-sender). Every build also
 ships the Poppins font (`Contents/Resources/Fonts/`), see [Fonts](#fonts).
