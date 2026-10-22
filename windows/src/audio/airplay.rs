@@ -1069,6 +1069,7 @@ impl AirPlaySpeakers {
         self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
+        self.airplay1_outcome.clear();
         // A password prompt still waiting (discovery stopped, the sessions
         // didn't) stays, as the speaker joins with it once listed again;
         // one for a pairing goes with the pairing, and the speaker stays off.
@@ -1117,6 +1118,7 @@ impl AirPlaySpeakers {
         self.pairings.clear();
         self.ending.clear();
         self.password_attempts.clear();
+        self.airplay1_outcome.clear();
         // Its prompts go with it, as on the Mac. A speaker left on without
         // its password would stay silent, so it goes off with a notice.
         for (id, ask) in std::mem::take(&mut self.password_asks) {
@@ -2151,7 +2153,7 @@ impl AirPlaySpeakers {
         for id in leaving {
             if let Some(added) = self.added.remove(&id) {
                 added.remove(self.link.as_mut());
-                self.airplay1_outcome.remove(&id);
+                self.forget_outcomes(&id, &added);
                 self.target_missing.remove(&id);
                 if self.gone_targets.remove(&id) {
                     self.targets.remove(&id);
@@ -2557,6 +2559,17 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// Forgets what AirPlay 1 said to the row `id` that left the sender,
+    /// and to its members that didn't join on their own.
+    fn forget_outcomes(&mut self, id: &str, added: &Added) {
+        self.airplay1_outcome.remove(id);
+        for member in added.members.keys() {
+            if !self.added.contains_key(member) {
+                self.airplay1_outcome.remove(member);
+            }
+        }
+    }
+
     /// Keeps the AirPlay 2 credentials a pairing with the speaker `id` gave
     /// (P152); when the file can't be written they last until AudioSync
     /// quits.
@@ -2598,7 +2611,8 @@ impl AirPlaySpeakers {
                     && matches!(added.state, SpeakerState::Retrying { .. })
                     && self.can_join(&id)
                 {
-                    let options = self.options(&id);
+                    let mut options = self.options(&id);
+                    options.volume = added.read.level.unwrap_or(options.volume);
                     let _ = self.link.add_speaker(self.listed[&id].device(), options);
                 }
                 // A speaker that is on stays on whatever discovery says
@@ -2833,7 +2847,7 @@ impl AirPlaySpeakers {
             && let Some(added) = self.added.remove(target)
         {
             added.remove(self.link.as_mut());
-            self.airplay1_outcome.remove(target);
+            self.forget_outcomes(target, &added);
             self.target_missing.remove(target);
             self.queue_password_ask(member, turned_down, false, Some(target));
             return true;
@@ -3983,6 +3997,60 @@ pub mod tests {
         fake.fail(&both, ErrorKind::Refused);
         airplay.poll();
         assert!(!airplay.speakers()[0].airplay2);
+    }
+
+    #[test]
+    fn a_stopped_or_new_sender_tries_airplay1_first_again() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let both = den(true);
+        let id = id_of(&both);
+        fake.appear(&both);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.fail(&both, ErrorKind::Refused);
+        airplay.poll();
+        assert!(airplay.speakers()[0].airplay2);
+
+        fake.stop_running();
+        airplay.poll();
+        fake.run_again();
+        fake.appear(&both);
+        airplay.poll();
+        assert!(
+            !airplay.speakers()[0].airplay2,
+            "the stop forgot the refusal"
+        );
+
+        fake.fail(&both, ErrorKind::Refused);
+        airplay.poll();
+        assert!(airplay.speakers()[0].airplay2);
+        let second = FakeAirPlay::new();
+        second.set_airplay2(true);
+        airplay.replace_link(second.link());
+        second.appear(&both);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].airplay2, "Retry forgot the refusal");
+    }
+
+    #[test]
+    fn a_pair_switched_off_forgets_what_its_members_airplay1_said() {
+        let fake = FakeAirPlay::new();
+        let (mut pair, left, _) = stereo_pair();
+        let both = den(true);
+        let member = id_of(&both);
+        pair.members[1] = member_of(&both);
+        let mut airplay = with_target(&fake, &pair, &[&left, &both]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.fail(&both, ErrorKind::Refused);
+        airplay.poll();
+        assert!(airplay.over_airplay2(&member), "moved to AirPlay 2");
+
+        airplay.set_enabled(PAIR, false).expect("off");
+        assert!(!airplay.over_airplay2(&member), "AirPlay 1 first again");
     }
 
     #[test]
@@ -5346,6 +5414,46 @@ pub mod tests {
             fake.take_calls(),
             [Call::Volume(id.clone(), Volume::Db(-1.0))]
         );
+    }
+
+    #[test]
+    fn a_retrying_speaker_takes_new_records_with_its_own_level_and_delay() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_volume(&id, 80.0);
+        airplay.set_master(50.0);
+        airplay.set_delay(&id, 120.0);
+        settle(&mut airplay, &id);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -3.0);
+        airplay.poll();
+        fake.take_calls();
+
+        fake.state(
+            &kitchen,
+            SpeakerState::Retrying {
+                at: Instant::now() + Duration::from_secs(1),
+            },
+        );
+        let moved = device_at(
+            1,
+            "Kitchen",
+            OPEN_TXT,
+            IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)),
+            7000,
+        );
+        fake.change(&moved);
+        airplay.poll();
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Add {
+                id: id.clone(),
+                volume: Volume::Db(-3.0),
+                delay: Duration::from_millis(120),
+            }],
+            "the level the speaker reported, not the slider's"
+        );
+        assert_eq!(airplay.listed[&id].device(), &moved);
     }
 
     #[test]
