@@ -1217,6 +1217,9 @@ mod tests {
             general: 0,
         };
         let ptp = PtpIo::open(IpAddr::from([127, 0, 0, 1]), ports, notify).expect("PTP I/O");
+        // A thread that sees the stop flag before its first receive ends at
+        // once, wake-up or not, which a loaded test run hits.
+        thread::sleep(POLL_INTERVAL * 4);
         WAKE_FAILS.with(|fails| fails.set(true));
         let mut threads = io.close();
         threads.extend(ptp.close());
