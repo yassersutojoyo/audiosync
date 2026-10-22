@@ -48,6 +48,8 @@ struct AppSettings: Equatable {
         static let webRemotePort = "webRemotePort"
         /// The AirPlay 2 switch (P2), off when missing; read once per launch.
         static let airPlay2 = "airPlay2Enabled"
+        /// Google Cast devices added by address (C18), as `CastManualAddress.text` strings.
+        static let castManualAddresses = "castManualAddresses"
         /// One delay in ms for every local speaker, from before delays were
         /// per speaker: where a speaker without its own delay started (S77).
         /// Read once by the migration (S179), never written.

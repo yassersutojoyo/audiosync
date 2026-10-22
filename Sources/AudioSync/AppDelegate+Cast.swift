@@ -43,7 +43,24 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] Cast: the sender started, but multicast DNS couldn't browse")
             castModel.discovery = .failed
         }
+        if running { addStoredCastAddresses(sender) }
         pushModel()
+    }
+
+    /// The addresses the user added before, given to the sender again: it
+    /// keeps nothing added by hand from one launch to the next.
+    private func addStoredCastAddresses(_ sender: CastSender) {
+        for address in SettingsStore.standard.castManualList.addresses {
+            sender.addDevice(address) { [weak self] id in
+                guard let self, self.castSender === sender else { return }
+                guard let id else {
+                    DebugTrace.log("[AudioSync] Cast: the stored address \(address.text) could not be added")
+                    return
+                }
+                self.castModel.addedManually(id, address: address)
+                self.pushModel()
+            }
+        }
     }
 
     private func castDevicesChanged(_ changes: [CastDeviceChange]) {
@@ -179,6 +196,47 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// The user's Add in the address sheet: `completion` gets true once the
+    /// sender lists the device and the address is stored, false when the
+    /// address doesn't read or its name doesn't resolve.
+    func addCastAddress(_ typed: String, completion: @escaping (Bool) -> Void) {
+        guard let address = CastManualAddress(typed), let sender = castSender else {
+            completion(false)
+            return
+        }
+        sender.addDevice(address) { [weak self] id in
+            guard let self, self.castSender === sender, let id else {
+                DebugTrace.log("[AudioSync] Cast: \(address.text) could not be added")
+                completion(false)
+                return
+            }
+            DebugTrace.log("[AudioSync] Cast: \(address.text) added by address as \(id)")
+            let store = SettingsStore.standard
+            var list = store.castManualList
+            // Two addresses for one device keep only the newer.
+            if let before = self.castModel.addedManually(id, address: address) { list.remove(before) }
+            list.add(address)
+            store.save(list)
+            self.pushModel()
+            completion(true)
+        }
+    }
+
+    /// Remove on a device added by address: it goes off, leaves the list
+    /// and isn't added at the next launch.
+    func removeCastAddress(_ appID: String) {
+        guard let id = CastID.device(appID), castModel.devices[id]?.manual == true else { return }
+        if castModel.enabled == id { setCastEnabled(appID, false) }
+        guard let address = castModel.removeManual(id) else { return }
+        DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
+        let store = SettingsStore.standard
+        var list = store.castManualList
+        list.remove(address)
+        store.save(list)
+        clearNotices([Notice.cast(id)])
+        castFollow()
+    }
+
     // MARK: - Rows and names
 
     func castSnapshot() -> [AppModel.Speaker] {
@@ -192,15 +250,18 @@ extension AppDelegate {
                                     systemName: text.deviceName(device.name),
                                     cast: CastRow(status: castModel.status(of: id), muted: volume?.muted ?? false,
                                                   volumeFixed: volume?.fixed ?? false,
-                                                  group: castModel.groupMembers(of: id, name: castMemberName)))
+                                                  group: castModel.groupMembers(of: id, name: castMemberName),
+                                                  manual: device.manual))
         }
     }
 
     /// A Cast speaker's name as the rows and notices show it: the user's,
-    /// else the one it announces.
+    /// else the one it announces, else the address it was added with.
     func castName(_ id: String) -> String {
-        speakerNames.shown(key: SpeakerKey.make(id: CastID.app(id), airplay: false),
-                           system: text.deviceName(castModel.devices[id]?.name ?? ""))
+        let announced = castModel.devices[id]?.name ?? ""
+        let shown = announced.isEmpty ? castModel.manualAddresses[id]?.text ?? "" : announced
+        return speakerNames.shown(key: SpeakerKey.make(id: CastID.app(id), airplay: false),
+                                  system: text.deviceName(shown))
     }
 
     /// A group member as its row shows it: the listed device's name, the

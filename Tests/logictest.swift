@@ -4792,5 +4792,65 @@ do {
           "web remote: Forget All clears the devices file without a running remote; a missing file is already forgotten")
 }
 
+// MARK: Google Cast speakers added by address (C18): what the sheet reads, and the stored list
+do {
+    let read = { (typed: String) in CastManualAddress(typed).map { "\($0.host)|\($0.port)" } }
+    check(read("192.0.2.5") == "192.0.2.5|8009" && read(" Speaker.Local. ") == "speaker.local|8009"
+            && read("living-room") == "living-room|8009",
+          "cast address: an IPv4 address or a host name alone gets port 8009; a host name is lowercased and trimmed")
+    check(read("192.0.2.5:8010") == "192.0.2.5|8010" && read("speaker.local:9000") == "speaker.local|9000"
+            && CastManualAddress("speaker.local:8009")?.text == "speaker.local"
+            && CastManualAddress("speaker.local:8010")?.text == "speaker.local:8010",
+          "cast address: host:port keeps the port; the text leaves out 8009 only")
+    let refused = ["", "   ", "speaker.local:", "speaker.local:0", "speaker.local:65536", "speaker.local:80a",
+                   "speaker.local:+80", "192.0.2.256", "192.0.2", "192.0.2.05", "1234", "-speaker.local",
+                   "speaker_one.local", "spe aker", "a..b", "::1", "[2001:db8::1]:8009", "192.0.2.5:8009:1"]
+    let accepted = refused.filter { CastManualAddress($0) != nil }
+    check(accepted.isEmpty, "cast address: empty text, a bad port, a bad IPv4 address, a bad host name and IPv6 are refused",
+          "accepted: \(accepted)")
+
+    final class Stored { var values: [String: Any] = [:] }
+    let stored = Stored()
+    let store = SettingsStore(read: { stored.values[$0] }, write: { value, key in stored.values[key] = value })
+    let key = AppSettings.Keys.castManualAddresses
+    var list = store.castManualList
+    let kitchen = CastManualAddress("speaker.local")!, den = CastManualAddress("192.0.2.7:8010")!
+    let firstAdd = list.add(kitchen), secondAdd = list.add(den)
+    let repeated = list.add(CastManualAddress("SPEAKER.local:8009")!)
+    store.save(list)
+    let savedText = stored.values[key] as? [String]
+    let reread = store.castManualList
+    check(key == "castManualAddresses" && firstAdd && secondAdd && !repeated
+            && savedText == ["speaker.local", "192.0.2.7:8010"] && reread.addresses == [kitchen, den],
+          "cast address list: adds keep their order, the same address twice is stored once, and it reads back")
+    stored.values[key] = ["speaker.local", "not valid!", "speaker.local:8009"]
+    check(store.castManualList.addresses == [kitchen], "cast address list: a damaged or repeated stored entry is dropped")
+    var shrinking = reread
+    let removed = shrinking.remove(kitchen), removedAgain = shrinking.remove(kitchen)
+    store.save(shrinking)
+    let afterOne = store.castManualList.addresses
+    shrinking.remove(den)
+    store.save(shrinking)
+    check(removed && !removedAgain && afterOne == [den] && stored.values[key] == nil,
+          "cast address list: Remove drops one address, and the setting goes once none is left")
+
+    let id = "manual:192.0.2.7:8010"
+    var m = CastModel()
+    m.addedManually(id, address: den)
+    m.apply(.appeared(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
+    let replaced = m.addedManually(id, address: CastManualAddress("192.0.2.7:8010")!)
+    let removedAddress = m.removeManual(id)
+    let comesBack = m.apply(.changed(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
+    m.addedManually(id, address: den)
+    let readded = m.apply(.changed(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
+    check(replaced == nil && removedAddress == den && !comesBack && readded && m.devices[id] != nil
+            && m.removeManual("0123456789abcdef0123456789abcdef") == nil,
+          "cast model: a removed manual device stays off the list until it is added again; only a manual one is removed")
+    let t = UIStrings()
+    check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil, manual: true)) == "Added by address"
+            && t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil,
+          "cast row: a device added by address says so under its name")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

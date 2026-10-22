@@ -35,13 +35,17 @@ struct CastDevice: Equatable {
     var group: Bool
     /// Its records went away while a session with it runs.
     var offline: Bool
+    /// Added by address; no browse has found its `id` yet (C18).
+    var manual: Bool
 
-    init(id: String, name: String, model: String = "", group: Bool = false, offline: Bool = false) {
+    init(id: String, name: String, model: String = "", group: Bool = false, offline: Bool = false,
+         manual: Bool = false) {
         self.id = id
         self.name = name
         self.model = model
         self.group = group
         self.offline = offline
+        self.manual = manual
     }
 }
 
@@ -224,7 +228,8 @@ extension CastDeviceChange {
         let device = CastDevice(id: id, name: raw.name.map { String(cString: $0) } ?? "",
                                 model: raw.model.map { String(cString: $0) } ?? "",
                                 group: raw.flags & UInt32(ASC_CAST_FLAG_GROUP) != 0,
-                                offline: raw.flags & UInt32(ASC_CAST_FLAG_OFFLINE) != 0)
+                                offline: raw.flags & UInt32(ASC_CAST_FLAG_OFFLINE) != 0,
+                                manual: raw.flags & UInt32(ASC_CAST_FLAG_MANUAL) != 0)
         switch raw.event {
         case ASC_CAST_APPEARED: self = .appeared(device, offsetMs: offsetMs(id))
         case ASC_CAST_CHANGED: self = .changed(device, offsetMs: offsetMs(id))
@@ -253,6 +258,8 @@ struct CastRow: Equatable {
     var volumeFixed: Bool
     /// A Cast group's members; nil for a single device.
     var group: CastGroupMembers?
+    /// Added by address and not found by a browse yet (C18).
+    var manual = false
     /// A session runs or starts: the volume, Mute and Resync reach the device.
     var live: Bool { status != .idle }
 }
@@ -322,6 +329,11 @@ struct CastModel {
     /// The playing group's members as its session last reported them; nil
     /// until it does, and once the session is over.
     private(set) var members: [CastMember]?
+    /// The address each device added by hand was added with, by ID.
+    private(set) var manualAddresses: [String: CastManualAddress] = [:]
+    /// Devices added by hand that the user removed: the sender can't drop
+    /// one, so the list leaves them out until they are added again.
+    private(set) var removedManual: Set<String> = []
 
     /// The devices listed, by name.
     var rows: [String] {
@@ -339,6 +351,7 @@ struct CastModel {
     mutating func apply(_ change: CastDeviceChange) -> Bool {
         switch change {
         case .appeared(let device, let offset), .changed(let device, let offset):
+            if removedManual.contains(device.id) { return false }
             if let offset { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
@@ -363,6 +376,25 @@ struct CastModel {
     }
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
+
+    /// The sender listed `id` for an address the user added: it shows again
+    /// if it was removed. Returns the address it had before, if another one.
+    @discardableResult
+    mutating func addedManually(_ id: String, address: CastManualAddress) -> CastManualAddress? {
+        removedManual.remove(id)
+        let before = manualAddresses.updateValue(address, forKey: id)
+        return before == address ? nil : before
+    }
+
+    /// The user's Remove on a device added by address, which must be off
+    /// already: it leaves the list. Returns the address it was added with.
+    mutating func removeManual(_ id: String) -> CastManualAddress? {
+        guard devices[id]?.manual == true, enabled != id else { return nil }
+        removedManual.insert(id)
+        devices.removeValue(forKey: id)
+        offsets.removeValue(forKey: id)
+        return manualAddresses.removeValue(forKey: id)
+    }
 
     /// The device that is on while its session plays, a group included: the
     /// one Cast row a calibration run measures.
@@ -633,4 +665,102 @@ enum CastMemoryFile {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(json.utf8).write(to: url, options: .atomic)
     }
+}
+
+/// A Google Cast device the user adds by address when multicast DNS is
+/// blocked (C18): an IPv4 address or a host name, and a port, 8009 when
+/// none is typed. A host name is looked up when the device is added.
+struct CastManualAddress: Hashable {
+    static let defaultPort: UInt16 = 8009
+
+    /// Lowercased, without a trailing dot.
+    let host: String
+    let port: UInt16
+
+    /// What the list stores and a row shows: the host, with `:port` only
+    /// for a port other than 8009.
+    var text: String { port == Self.defaultPort ? host : "\(host):\(port)" }
+    var isIPv4: Bool { Self.isIPv4(host) }
+
+    /// Reads what the user typed; nil unless it is a host name or an IPv4
+    /// address, with an optional port from 1 to 65535.
+    init?(_ typed: String) {
+        var host = Substring(typed.trimmingCharacters(in: .whitespacesAndNewlines))
+        var port = Self.defaultPort
+        if let colon = host.lastIndex(of: ":") {
+            let number = host[host.index(after: colon)...]
+            guard (1...5).contains(number.count), number.allSatisfy(\.isASCIIDigit),
+                  let value = UInt16(number), value > 0 else { return nil }
+            port = value
+            host = host[..<colon]
+        }
+        if host.hasSuffix(".") { host = host.dropLast() }
+        let lowered = host.lowercased()
+        let numeric = lowered.allSatisfy { $0 == "." || $0.isASCIIDigit }
+        guard numeric ? Self.isIPv4(lowered) : Self.isHostName(lowered) else { return nil }
+        self.host = lowered
+        self.port = port
+    }
+
+    /// Four decimal parts from 0 to 255, without leading zeros, which the
+    /// core would not read.
+    static func isIPv4(_ text: String) -> Bool {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts.allSatisfy { part in
+            (1...3).contains(part.count) && part.allSatisfy(\.isASCIIDigit)
+                && (part.count == 1 || part.first != "0") && Int(part).map { $0 <= 255 } == true
+        }
+    }
+
+    /// Labels of letters, digits and hyphens (RFC 1123), 63 characters at
+    /// most and not starting or ending with a hyphen, 253 in all.
+    static func isHostName(_ text: String) -> Bool {
+        guard (1...253).contains(text.count) else { return false }
+        return text.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+            (1...63).contains(label.count) && label.first != "-" && label.last != "-"
+                && label.allSatisfy { $0 == "-" || $0.isASCIIDigit || ("a"..."z").contains($0) }
+        }
+    }
+}
+
+/// The addresses the user added, in the order added, one entry each; the
+/// app adds them to the sender again at every launch.
+struct CastManualList: Equatable {
+    private(set) var addresses: [CastManualAddress] = []
+
+    /// From the stored strings; one that no longer reads, or repeats, is dropped.
+    init(stored: Any?) {
+        for text in stored as? [String] ?? [] {
+            if let address = CastManualAddress(text) { add(address) }
+        }
+    }
+
+    var stored: [String] { addresses.map(\.text) }
+
+    /// False when it is listed already.
+    @discardableResult
+    mutating func add(_ address: CastManualAddress) -> Bool {
+        guard !addresses.contains(address) else { return false }
+        addresses.append(address)
+        return true
+    }
+
+    @discardableResult
+    mutating func remove(_ address: CastManualAddress) -> Bool {
+        guard let index = addresses.firstIndex(of: address) else { return false }
+        addresses.remove(at: index)
+        return true
+    }
+}
+
+extension SettingsStore {
+    var castManualList: CastManualList { CastManualList(stored: read(Keys.castManualAddresses)) }
+
+    func save(_ list: CastManualList) {
+        write(list.addresses.isEmpty ? nil : list.stored, Keys.castManualAddresses)
+    }
+}
+
+private extension Character {
+    var isASCIIDigit: Bool { ("0"..."9").contains(self) }
 }

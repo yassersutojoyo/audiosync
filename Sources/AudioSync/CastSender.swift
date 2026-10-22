@@ -146,6 +146,42 @@ final class CastSender {
         }
     }
 
+    /// Adds a device by address (C18). A host name is looked up first, off
+    /// the queue, since that can take seconds. `completion` gets, on the
+    /// main queue, the ID the sender lists it under, or nil when the name
+    /// has no IPv4 address or the sender isn't running.
+    func addDevice(_ address: CastManualAddress, completion: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let ip = address.isIPv4 ? address.host : CastSender.ipv4Address(of: address.host)
+            guard let self, let ip else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let target = "\(ip):\(address.port)"
+            self.queue.async { [weak self] in
+                let added = self?.handle.map { asc_cast_add_device($0, target) } ?? false
+                DispatchQueue.main.async { completion(added ? "manual:" + target : nil) }
+            }
+        }
+    }
+
+    /// The first IPv4 address `host` resolves to, as text. Blocks.
+    private static func ipv4Address(of host: String) -> String? {
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        hints.ai_socktype = SOCK_STREAM
+        var found: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &found) == 0, let first = found else { return nil }
+        defer { freeaddrinfo(found) }
+        guard let socketAddress = first.pointee.ai_addr else { return nil }
+        var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        let written = socketAddress.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { ipv4 -> Bool in
+            var raw = ipv4.pointee.sin_addr
+            return inet_ntop(AF_INET, &raw, &text, socklen_t(INET_ADDRSTRLEN)) != nil
+        }
+        return written ? text.withUnsafeBufferPointer { $0.baseAddress.map { String(cString: $0) } } : nil
+    }
+
     /// Starts the teardown on the queue and returns at once; the group is
     /// done when the sender is gone. Nothing more reaches the callbacks.
     /// Main queue.
