@@ -16,7 +16,7 @@ use crate::net;
 /// Digits in a pairing code.
 pub const CODE_DIGITS: usize = 6;
 /// Wrong codes one peer may send within [`Limits::window`] before it gets 429.
-/// A peer is an IPv4 address or an IPv6 /64 ([`net::peer_group`]).
+/// A peer is one address ([`net::peer_group`]).
 pub const WRONG_PER_WINDOW: usize = 5;
 /// Wrong codes one peer may send until the code is rotated; after that only
 /// that peer is refused.
@@ -473,27 +473,17 @@ mod tests {
     }
 
     #[test]
-    fn an_ipv6_peer_is_counted_by_its_64() {
+    fn two_ipv6_hosts_in_one_64_are_separate_peers() {
+        // The server admits IPv6 peers only from its own /64, so all of them share it.
         let start = Instant::now();
         let mut pairing = Pairing::new(short(), start).unwrap();
         let code = pairing.current(start).unwrap().to_owned();
         let wrong = wrong_for(&code);
-        let temporary = |last: u16| IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 1, 0, 0, 0, last));
-        for last in 1..=WRONG_PER_WINDOW as u16 {
-            assert_eq!(
-                pairing.attempt(temporary(last), &wrong, start),
-                PairOutcome::Wrong
-            );
-        }
-        assert_eq!(
-            pairing.attempt(temporary(99), &code, start),
-            PairOutcome::Limited
-        );
-        let next_prefix = IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 2, 0, 0, 0, 1));
-        assert_eq!(
-            pairing.attempt(next_prefix, &code, start),
-            PairOutcome::Paired
-        );
+        let host = |last: u16| IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 1, 0, 0, 0, last));
+        send_wrong(&mut pairing, host(1), &wrong, start, WRONG_PER_PEER);
+        let later = start + Duration::from_secs(300);
+        assert_eq!(pairing.attempt(host(1), &code, later), PairOutcome::Blocked);
+        assert_eq!(pairing.attempt(host(2), &code, later), PairOutcome::Paired);
     }
 
     #[test]

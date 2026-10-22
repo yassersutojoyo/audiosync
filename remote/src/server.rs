@@ -94,8 +94,7 @@ pub struct Config {
 }
 
 /// How many connections the server holds; the defaults are the product's,
-/// tests shrink them. A peer is an IPv4 address or an IPv6 /64
-/// ([`net::peer_group`]).
+/// tests shrink them. A peer is one address ([`net::peer_group`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Capacity {
     /// Connections at once.
@@ -1194,24 +1193,15 @@ mod tests {
     }
 
     #[test]
-    fn an_ipv6_host_is_capped_by_its_64_whatever_its_temporary_addresses() {
+    fn two_ipv6_hosts_in_one_64_have_a_connection_cap_each() {
         let capacity = Capacity::default();
-        let mut slots = Vec::new();
-        for last in 1..=MAX_CONNECTIONS_PER_PEER {
-            let from = address(&format!("2001:db8:1:2::{last:x}"));
-            assert_eq!(
-                admission(&slots, net::peer_group(from), capacity),
-                Admission::Open
-            );
-            slots.extend(held(net::peer_group(from), 1, false, false));
-        }
-        let another_temporary = net::peer_group(address("2001:db8:1:2:aaaa::1"));
-        assert_eq!(
-            admission(&slots, another_temporary, capacity),
-            Admission::PeerBusy
-        );
-        let next_door = net::peer_group(address("2001:db8:1:3::1"));
-        assert_eq!(admission(&slots, next_door, capacity), Admission::Open);
+        let laptop = net::peer_group(address("2001:db8:1:2::1"));
+        let mut slots = held(laptop, MAX_CONNECTIONS_PER_PEER, false, false);
+        assert_eq!(admission(&slots, laptop, capacity), Admission::PeerBusy);
+        let phone = net::peer_group(address("2001:db8:1:2::2"));
+        assert_eq!(admission(&slots, phone, capacity), Admission::Open);
+        slots.extend(held(phone, 1, false, true));
+        assert_eq!(admission(&slots, phone, capacity), Admission::Open);
     }
 
     #[test]

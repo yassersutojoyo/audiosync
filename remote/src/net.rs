@@ -29,18 +29,12 @@ pub fn admits_peer(peer: IpAddr, local: IpAddr) -> bool {
     }
 }
 
-/// The peer that per-peer limits count against: an IPv4 address, or for a
-/// unique local or global IPv6 address its /64, where one device can hold
-/// many temporary addresses (RFC 8981). Every device on a link shares
-/// fe80::/64, so a link-local address stays a peer of its own.
+/// The peer that per-peer limits count against: the full address. Not an
+/// IPv6 /64: every IPv6 device let in shares one (see [`admits_peer`]), so
+/// one device would lock out the rest; the global limits cover a device
+/// that rotates temporary addresses (RFC 8981).
 pub fn peer_group(peer: IpAddr) -> IpAddr {
-    match peer.to_canonical() {
-        IpAddr::V6(v6) if !v6.is_loopback() && v6.segments()[0] & 0xffc0 != 0xfe80 => {
-            let [a, b, c, d, ..] = v6.segments();
-            IpAddr::V6(Ipv6Addr::new(a, b, c, d, 0, 0, 0, 0))
-        }
-        other => other,
-    }
+    peer.to_canonical()
 }
 
 /// Global unicast (2000::/3) whose /64 is a real link. Teredo (2001::/32)
@@ -205,17 +199,14 @@ mod tests {
     }
 
     #[test]
-    fn an_ipv6_peer_is_its_64_and_an_ipv4_peer_its_address() {
+    fn every_address_is_a_peer_of_its_own() {
         let phone = v6("2001:db8:1:2:aaaa:bbbb:cccc:dddd");
-        let same_phone_later = v6("2001:db8:1:2:1111:2222:3333:4444");
-        assert_eq!(peer_group(phone), peer_group(same_phone_later));
-        assert_eq!(peer_group(phone), v6("2001:db8:1:2::"));
-        assert_ne!(peer_group(phone), peer_group(v6("2001:db8:1:3::1")));
+        let laptop = v6("2001:db8:1:2:1111:2222:3333:4444");
+        assert_ne!(peer_group(phone), peer_group(laptop));
+        assert_eq!(peer_group(phone), phone);
         let unique_local = IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 7, 1, 2, 3, 4));
-        assert_eq!(
-            peer_group(unique_local),
-            IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 7, 0, 0, 0, 0))
-        );
+        let unique_local_next = IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 7, 1, 2, 3, 5));
+        assert_ne!(peer_group(unique_local), peer_group(unique_local_next));
         assert_ne!(peer_group(v6("fe80::1")), peer_group(v6("fe80::2")));
         assert_eq!(peer_group(v6("::1")), v6("::1"));
         assert_ne!(
