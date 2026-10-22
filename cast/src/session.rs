@@ -346,6 +346,9 @@ impl CastSession {
                 return Err(error.into());
             }
         };
+        if group.is_some() {
+            server.set_group_limit(1);
+        }
         let mut addresses = vec![client.address()];
         addresses.extend(config.addresses.iter().filter(|a| **a != client.address()));
         let load = LoadRequest {
@@ -594,6 +597,7 @@ impl CastSession {
         }
         if self.members.apply(&message) {
             let members = self.members.members().unwrap_or_default().to_vec();
+            self.server.set_group_limit(members.len() + 1);
             self.report(SessionEvent::Members(members));
         }
     }

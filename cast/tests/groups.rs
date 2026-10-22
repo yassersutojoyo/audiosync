@@ -20,7 +20,10 @@ use audiosync_cast::host::{CastHost, CastTarget, DeviceMemory, StartRefused};
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{NS_MEDIA, NS_MULTIZONE, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{CastSession, SessionConfig, SessionEnd, SessionEvent};
-use common::{Behavior, Command, FakeDevice, json_message};
+use audiosync_cast::stream::{
+    Popped, ResponseEnd, Responses, ServerEvent, StreamConfig, StreamServer,
+};
+use common::{Behavior, Command, FakeDevice, http, json_message};
 use serde_json::{Map, Value, json};
 
 const GROUP: &str = "6a1c0e5b9d2f4e7a8b3c1d0e9f8a7b6c";
@@ -565,4 +568,87 @@ fn a_groups_offset_is_its_own() {
     let stored = DeviceMemory::from_json(&memory.to_json());
     assert_eq!(stored.offset(&group), Some(Duration::from_millis(2_400)));
     assert_eq!(stored.offset(&member), Some(Duration::from_millis(1_800)));
+}
+
+// covers: C103
+#[test]
+fn a_group_keeps_one_stream_response_per_address() {
+    let (a, b, c, d) = (v4(1), v4(2), v4(3), v4(4));
+    let block = vec![0u8; 3_840];
+
+    // A single device: any new GET ends the older response (C61).
+    let mut single = Responses::new(96_000);
+    let (first, restart) = single.open(a);
+    assert!(restart);
+    let (_, restart) = single.open(b);
+    assert!(restart, "nothing else was left open");
+    assert_eq!(single.pop(first), Popped::Ended);
+    assert_eq!(single.addresses(), [b]);
+
+    // A group: one per address, the oldest gone beyond the limit.
+    let mut group = Responses::new(96_000);
+    group.set_group_limit(3);
+    let (leader, restart) = group.open(a);
+    assert!(restart);
+    let (member, restart) = group.open(b);
+    assert!(!restart, "the open response keeps its place in the audio");
+    group.push(&block);
+    assert!(matches!(
+        group.pop(leader),
+        Popped::Block { primary: true, .. }
+    ));
+    assert!(matches!(
+        group.pop(member),
+        Popped::Block { primary: false, .. }
+    ));
+    assert_eq!(group.pop(member), Popped::Empty);
+    let (again, _) = group.open(b);
+    assert_eq!(group.pop(member), Popped::Ended, "only its own address");
+    assert_eq!(group.addresses(), [a, b]);
+    group.open(c);
+    group.open(d);
+    assert_eq!(group.pop(leader), Popped::Ended, "at most members plus one");
+    assert_eq!(group.addresses(), [b, c, d]);
+    group.close(again);
+    assert_eq!(group.addresses(), [c, d]);
+
+    // The server answers what the group's records and members allow.
+    let local = IpAddr::from([127, 0, 0, 1]);
+    let (writer, reader) = audio_ring(48_000);
+    let config = StreamConfig {
+        local_ip: local,
+        allowed: vec![v4(9)],
+        format: StreamFormat::wav(48_000).expect("rate"),
+    };
+    let server = StreamServer::start(config, reader).expect("starts");
+    server.set_group_limit(3);
+    let (address, path) = http::split_url(&server.url()).expect("url");
+    let get = || {
+        let request = format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
+        http::request(address, &request).expect("connects")
+    };
+    let mut refused = get();
+    let (head, _) = http::read_response(&mut refused, Duration::ZERO);
+    assert_eq!(http::status(&head), 403);
+    let records = GroupRecords::new(vec![SocketAddr::new(v4(9), 32_187)]);
+    records.set_members(vec![local]);
+    server.set_allowed(records.allowed());
+    let _feed = feed(writer);
+    let mut first = get();
+    let (head, _) = http::read_response(&mut first, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
+    // A second GET from the same address ends the first.
+    let mut second = get();
+    let (head, _) = http::read_response(&mut second, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
+    let until = Instant::now() + Duration::from_secs(2);
+    let mut seen = Vec::new();
+    while Instant::now() < until
+        && !seen.contains(&ServerEvent::ResponseEnded(ResponseEnd::Replaced))
+    {
+        seen.extend(std::iter::from_fn(|| server.poll_event()));
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(seen.contains(&ServerEvent::ResponseEnded(ResponseEnd::Replaced)));
+    server.stop();
 }

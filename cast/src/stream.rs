@@ -1,9 +1,10 @@
 //! The HTTP server the device fetches the stream from (C55 to C61, C64).
 //!
 //! One listener on the local address of the channel, one random path per
-//! session, one stream response at a time. A pump thread takes 20 ms blocks
-//! from the host's ring at real-time pace and queues them for the response;
-//! each connection runs on its own thread.
+//! session, one stream response at a time, or for a group one per source
+//! address (C103). A pump thread takes 20 ms blocks from the host's ring at
+//! real-time pace and queues them for each response; each connection runs
+//! on its own thread.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -29,7 +30,8 @@ const UNDERRUN: Duration = Duration::from_millis(100);
 const ACCEPT_POLL: Duration = Duration::from_millis(20);
 /// The whole request head must arrive within this, however it trickles.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-/// Connections served at once: the stream, its replacement (C61), artwork.
+/// Connections served at once for a single device: the stream, its
+/// replacement (C61), artwork; a group serves more (C103).
 const MAX_CONNECTIONS: usize = 4;
 /// How long a refused connection is kept open to read the rest of its
 /// request, so the close is not a reset that would lose the answer.
@@ -85,7 +87,7 @@ pub enum ServerEvent {
         range: bool,
     },
     /// A request answered with an error status: 403 (C58), 404 (C57), 405,
-    /// or 503 when four connections are open already.
+    /// or 503 when the connections a session serves at once are open already.
     Refused { from: IpAddr, status: u16 },
     /// A stream response ended.
     ResponseEnded(ResponseEnd),
@@ -184,14 +186,143 @@ struct Artwork {
     bytes: Arc<Vec<u8>>,
 }
 
+#[derive(Debug)]
+struct Response {
+    id: u64,
+    from: IpAddr,
+    queue: BlockQueue,
+}
+
+/// What [`Responses::pop`] found for a response.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Popped {
+    /// The next block; `primary` when the response is the oldest open one,
+    /// whose audio the diagnostics count.
+    Block {
+        block: Vec<u8>,
+        primary: bool,
+    },
+    Empty,
+    /// The response was ended by a newer one (C61, C103).
+    Ended,
+}
+
+/// The open stream responses and their queues. A new `GET` ends the older
+/// response it replaces: for a single device every older one (C61); for a
+/// group only the one from the same address, and beyond the group's limit
+/// (one per known member plus one) the oldest (C103).
+#[derive(Debug)]
+pub struct Responses {
+    open: Vec<Response>,
+    next_id: u64,
+    queue_frames: usize,
+    /// `None` for a single device.
+    group_limit: Option<usize>,
+    /// Frames the oldest response's queue dropped, over the session (C64).
+    dropped: u64,
+}
+
+impl Responses {
+    /// Each response queues up to `queue_frames` frames (C64).
+    pub fn new(queue_frames: usize) -> Responses {
+        Responses {
+            open: Vec::new(),
+            next_id: 1,
+            queue_frames,
+            group_limit: None,
+            dropped: 0,
+        }
+    }
+
+    /// Serves a group: one response per address, at most `limit` at once.
+    pub fn set_group_limit(&mut self, limit: usize) {
+        self.group_limit = Some(limit.max(1));
+    }
+
+    /// Opens a response for a `GET` from `from` and returns its id, and
+    /// whether no other response is left open, so the pump starts again at
+    /// the newest audio (C61).
+    pub fn open(&mut self, from: IpAddr) -> (u64, bool) {
+        match self.group_limit {
+            None => self.open.clear(),
+            Some(limit) => {
+                self.open.retain(|response| response.from != from);
+                while self.open.len() >= limit {
+                    self.open.remove(0);
+                }
+            }
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        let restart = self.open.is_empty();
+        self.open.push(Response {
+            id,
+            from,
+            queue: BlockQueue::new(self.queue_frames),
+        });
+        (id, restart)
+    }
+
+    pub fn close(&mut self, id: u64) {
+        self.open.retain(|response| response.id != id);
+    }
+
+    pub fn pop(&mut self, id: u64) -> Popped {
+        let primary = self.open.first().map(|response| response.id) == Some(id);
+        let Some(response) = self.open.iter_mut().find(|response| response.id == id) else {
+            return Popped::Ended;
+        };
+        match response.queue.pop() {
+            Some(block) => Popped::Block { block, primary },
+            None => Popped::Empty,
+        }
+    }
+
+    /// Queues a block for every open response.
+    pub fn push(&mut self, block: &[u8]) {
+        for (index, response) in self.open.iter_mut().enumerate() {
+            let before = response.queue.dropped();
+            response.queue.push(block.to_vec());
+            if index == 0 {
+                self.dropped += response.queue.dropped() - before;
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.open.is_empty()
+    }
+
+    /// The addresses of the open responses, oldest first.
+    pub fn addresses(&self) -> Vec<IpAddr> {
+        self.open.iter().map(|response| response.from).collect()
+    }
+
+    /// Frames waiting for the oldest response.
+    pub fn frames_queued(&self) -> usize {
+        self.open
+            .first()
+            .map_or(0, |response| response.queue.frames())
+    }
+
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    /// Connections served at once: the responses, a replacement and the
+    /// artwork.
+    fn connection_limit(&self) -> usize {
+        self.group_limit
+            .map_or(MAX_CONNECTIONS, |limit| MAX_CONNECTIONS.max(limit + 2))
+    }
+}
+
 /// The state behind the lock that the pump and the responses share.
 struct Live {
-    /// The response allowed to write; a newer `GET` raises it (C61).
-    generation: u64,
-    streaming: bool,
-    /// Set by a new response: the pump starts again at the newest audio.
+    responses: Responses,
+    /// Set by a response that found none open: the pump starts again at the
+    /// newest audio.
     restart: bool,
-    queue: BlockQueue,
 }
 
 /// The stream's format and the path it is served under; the codec can
@@ -295,10 +426,8 @@ impl StreamServer {
             allowed: Mutex::new(config.allowed),
             artwork: Mutex::new(None),
             live: Mutex::new(Live {
-                generation: 0,
-                streaming: false,
+                responses: Responses::new(limit_frames),
                 restart: false,
-                queue: BlockQueue::new(limit_frames),
             }),
             wake: Condvar::new(),
             stopped: AtomicBool::new(false),
@@ -360,6 +489,12 @@ impl StreamServer {
         *lock(&self.shared.allowed) = allowed;
     }
 
+    /// Serves a group: one response per source address, at most `limit`
+    /// at once (C103).
+    pub fn set_group_limit(&self, limit: usize) {
+        lock(&self.shared.live).responses.set_group_limit(limit);
+    }
+
     /// Serves the stream in `codec` from now on, under the same token with
     /// that codec's extension, and returns the new URL (C84). The old URL
     /// gets 404; a response already open runs on until a new `GET`
@@ -400,9 +535,10 @@ impl StreamServer {
         StreamStats {
             fetches: self.shared.fetches.load(Ordering::Relaxed),
             frames_sent: self.shared.frames_sent.load(Ordering::Relaxed),
-            frames_dropped: live.queue.dropped() + self.shared.ring_dropped.load(Ordering::Relaxed),
-            frames_queued: live.queue.frames() as u64,
-            streaming: live.streaming,
+            frames_dropped: live.responses.dropped()
+                + self.shared.ring_dropped.load(Ordering::Relaxed),
+            frames_queued: live.responses.frames_queued() as u64,
+            streaming: !live.responses.is_empty(),
         }
     }
 
@@ -475,9 +611,10 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
                     linger(&mut refused, refuse(stream, "403 Forbidden"));
                     continue;
                 }
+                let limit = lock(&shared.live).responses.connection_limit();
                 let mut connections = lock(&shared.connections);
                 connections.retain(|(_, thread)| !thread.is_finished());
-                if connections.len() >= MAX_CONNECTIONS {
+                if connections.len() >= limit {
                     drop(connections);
                     shared.report(ServerEvent::Refused {
                         from: peer.ip(),
@@ -651,7 +788,7 @@ fn serve(mut stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
             head,
             range: request.range,
         });
-        return serve_stream(stream, head, format, &shared);
+        return serve_stream(stream, from, head, format, &shared);
     }
     let artwork = lock(&shared.artwork)
         .as_ref()
@@ -685,7 +822,13 @@ fn write_chunk(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
     stream.write_all(b"\r\n")
 }
 
-fn serve_stream(mut stream: TcpStream, head: bool, format: StreamFormat, shared: &Shared) {
+fn serve_stream(
+    mut stream: TcpStream,
+    from: IpAddr,
+    head: bool,
+    format: StreamFormat,
+    shared: &Shared,
+) {
     let headers = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
         format.content_type()
@@ -697,21 +840,13 @@ fn serve_stream(mut stream: TcpStream, head: bool, format: StreamFormat, shared:
     shared.fetches.fetch_add(1, Ordering::Relaxed);
     let mine = {
         let mut live = lock(&shared.live);
-        live.generation += 1;
-        live.streaming = true;
-        live.restart = true;
-        live.queue.clear();
-        live.generation
+        let (mine, restart) = live.responses.open(from);
+        live.restart |= restart;
+        mine
     };
     shared.wake.notify_all();
     let end = stream_body(&mut stream, mine, format, shared);
-    {
-        let mut live = lock(&shared.live);
-        if live.generation == mine {
-            live.streaming = false;
-            live.queue.clear();
-        }
-    }
+    lock(&shared.live).responses.close(mine);
     if end != ResponseEnd::ClosedByDevice {
         let _ = stream.write_all(b"0\r\n\r\n");
         let _ = stream.flush();
@@ -732,17 +867,16 @@ fn stream_body(
         return ResponseEnd::ClosedByDevice;
     }
     loop {
-        let block = {
+        let (block, primary) = {
             let mut live = lock(&shared.live);
             loop {
                 if shared.stopped.load(Ordering::SeqCst) {
                     return ResponseEnd::Stopped;
                 }
-                if live.generation != mine {
-                    return ResponseEnd::Replaced;
-                }
-                if let Some(block) = live.queue.pop() {
-                    break block;
+                match live.responses.pop(mine) {
+                    Popped::Ended => return ResponseEnd::Replaced,
+                    Popped::Block { block, primary } => break (block, primary),
+                    Popped::Empty => {}
                 }
                 live = shared
                     .wake
@@ -761,7 +895,9 @@ fn stream_body(
         {
             return ResponseEnd::ClosedByDevice;
         }
-        shared.frames_sent.fetch_add(frames, Ordering::Relaxed);
+        if primary {
+            shared.frames_sent.fetch_add(frames, Ordering::Relaxed);
+        }
     }
 }
 
@@ -785,7 +921,7 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
                 emitted = 0;
                 reader.skip_to_newest(0);
             }
-            live.streaming
+            !live.responses.is_empty()
         };
         if !streaming {
             reader.skip_to_newest(0);
@@ -824,8 +960,8 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
         if !blocks.is_empty() {
             let mut live = lock(&shared.live);
             if !live.restart {
-                for block in blocks {
-                    live.queue.push(block);
+                for block in &blocks {
+                    live.responses.push(block);
                 }
             }
             drop(live);
