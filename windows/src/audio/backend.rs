@@ -346,6 +346,9 @@ pub struct CastInfo {
     pub muted: bool,
     /// The device's volume is locked (`controlType` `fixed`, spec C68).
     pub volume_fixed: bool,
+    /// How far the volume keys move it, 0 to 100: the device's own step
+    /// (spec C69), or 1 when it reports none.
+    pub volume_step: f64,
     /// The user's measured offset in milliseconds, 0 to 20 000: how long
     /// the other outputs wait for this speaker while it is on (spec C77).
     pub offset_ms: f64,
@@ -469,6 +472,12 @@ pub enum BackendEvent {
     /// did, so none is listed; [`AudioBackend::retry_airplay`] starts a new
     /// sender.
     AirPlayStopped,
+    /// Another app holds PTP port 319 or 320, so AirPlay speakers that need
+    /// PTP timing can't play (P158); reported once per sender.
+    AirPlayPtpPortsTaken,
+    /// A session bound the PTP ports after
+    /// [`BackendEvent::AirPlayPtpPortsTaken`]: the ports are free again.
+    AirPlayPtpFree,
     /// Google Cast speakers appeared, changed or went away, or one's state
     /// changed: list them again.
     CastChanged,

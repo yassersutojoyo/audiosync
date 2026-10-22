@@ -88,6 +88,7 @@ extension AppDelegate {
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
         a.setCastEnabled = { [weak self] id, on in self?.setCastEnabled(id, on) }
         a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
+        a.stepCastVolume = { [weak self] id, up in self?.stepCastVolume(id, up: up) }
         a.setCastMuted = { [weak self] id, muted in self?.setCastMuted(id, muted) }
         a.resyncCast = { [weak self] id in self?.resyncCast(id) }
         a.setCastOffset = { [weak self] id, ms in self?.setCastOffset(id, ms) }
@@ -250,6 +251,7 @@ extension AppDelegate {
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
         publish(\.airPlay2, airPlay2)
+        publish(\.airPlay2AtLaunch, airPlay2AtLaunch)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
         followCalibrationContext()
@@ -507,6 +509,9 @@ extension AppDelegate {
             menuItem.state = whenSourceQuits == .system ? .on : .off
         case #selector(toggleAirPlay2(_:)):
             menuItem.state = airPlay2 ? .on : .off
+            let note = text.airPlay2Note(on: airPlay2, onAtLaunch: airPlay2AtLaunch)
+            menuItem.subtitle = note
+            menuItem.toolTip = note
         default:
             break
         }

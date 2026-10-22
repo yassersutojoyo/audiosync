@@ -26,6 +26,18 @@ enum NativeAirPlayID {
     static func playable(_ enabled: Set<String>) -> Set<String> {
         enabled.filter { receiver($0) != nil }
     }
+
+    /// The receiver IDs in AUDIOSYNC_AIRPLAY_PCM's value, read as the core
+    /// reads them: trimmed, empty ones skipped, `aa:bb:cc:dd:ee:ff` as
+    /// `AABBCCDDEEFF`.
+    static func pcmDebugIDs(_ value: String?) -> Set<String> {
+        let ids = (value ?? "").split(separator: ",").map { entry -> String in
+            let id = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hex = id.filter { $0 != ":" }
+            return hex.count == 12 && hex.allSatisfy(\.isHexDigit) ? hex.uppercased() : id
+        }
+        return Set(ids.filter { !$0.isEmpty })
+    }
 }
 
 /// The IDs the sender gives a stereo pair ("pair:<tsid>") or a home theater
@@ -925,5 +937,62 @@ enum NativeAirPlayPairings {
         case .failed:
             return "the pairings file couldn't be moved into its own folder; its Apple TVs pair again"
         }
+    }
+}
+
+/// A speaker's counters as the sender copies them (P144,
+/// `asc_airplay_speaker_counters`): one session's, or a target's summed over
+/// its `sessions` members.
+struct NativeSpeakerCounters: Equatable {
+    var packetsSent: UInt64 = 0
+    var latePackets: UInt64 = 0
+    var resendRequests: UInt64 = 0
+    var packetsResent: UInt64 = 0
+    var timingReplies: UInt64 = 0
+    var foreignDatagrams: UInt64 = 0
+    var sessions: UInt32 = 1
+}
+
+/// The stream's counters (P144, `asc_airplay_stream_counters`).
+struct NativeStreamCounters: Equatable {
+    var rateHz: Double = 0
+    var packetsEncoded: UInt64 = 0
+    var silentFrames: UInt64 = 0
+    var inputFramesDropped: UInt64 = 0
+}
+
+/// The debug log's periodic AirPlay status: the stream's counters and each
+/// added speaker's, with the field names the Windows app's log uses, so the
+/// two logs read alike.
+enum NativeAirPlayStatus {
+    /// How often the line is logged while speakers are added, as on Windows.
+    static let interval: TimeInterval = 5
+
+    struct Speaker: Equatable {
+        let id: String
+        let name: String?
+        let state: NativeSpeakerEvent.State?
+        /// Nil when the sender no longer has the speaker.
+        let counters: NativeSpeakerCounters?
+    }
+
+    static func logLine(latencyMs: Double, stream: NativeStreamCounters?, speakers: [Speaker]) -> String {
+        var text = "[AudioSync] native AirPlay: L = \(latencyMs.isFinite ? Int(max(latencyMs, 0)) : 0) ms"
+        if let stream {
+            text += String(format: ", input rate %.1f Hz", stream.rateHz)
+                + ", \(stream.packetsEncoded) packets encoded, \(stream.silentFrames) silent frames"
+                + ", \(stream.inputFramesDropped) input frames dropped"
+        }
+        for speaker in speakers {
+            let label = speaker.name.map { "\($0) (\(speaker.id))" } ?? speaker.id
+            text += "\n  AirPlay speaker \(label): \(speaker.state?.rawValue ?? "added")"
+            guard let counters = speaker.counters else { continue }
+            if counters.sessions > 1 { text += ", \(counters.sessions) members summed" }
+            text += "; \(counters.packetsSent) packets sent, \(counters.latePackets) late"
+                + ", \(counters.resendRequests) resend requests, \(counters.packetsResent) resent"
+                + ", \(counters.timingReplies) timing replies"
+                + ", \(counters.foreignDatagrams) datagrams from other addresses dropped"
+        }
+        return text
     }
 }

@@ -1,12 +1,13 @@
 import CAudioSyncCore
-import Foundation
+import AppKit
 
 /// The core's Google Cast sender (`asc_cast_*` in
 /// `core/include/audiosync_core.h`). `start` creates it with the device
 /// memory stored last time, installs its audio input in the capture path
 /// (`CastTap`) and starts discovery; the app starts and stops the one
 /// session, sets the device's volume and mute, asks for a Resync, sets
-/// offsets, and gets discovery's changes and the sender's events.
+/// offsets and the track the device shows, and gets discovery's changes and
+/// the sender's events.
 ///
 /// Threads: the C handle lives on `queue`, which creates it, polls it, calls
 /// it and destroys it, never the main thread: every call there returns at
@@ -19,6 +20,9 @@ final class CastSender {
     static let volumeSpacing: TimeInterval = 0.1
     /// How long the quit waits for the destroy: its 3.5 s, with room.
     static let shutdownWait: TimeInterval = 3.7
+    /// A cover's largest side: C53 allows 1280 by 720, so a square one fits at 720.
+    static let artworkSide = 720
+    static let artworkBytes = 256 << 10
 
     /// False once `shutdown` or `discard` ran: what is on its way is dropped (main queue).
     private var active = true
@@ -28,6 +32,8 @@ final class CastSender {
     private let memoryURL: URL?
     /// The feed's hold-back last asked for (main queue).
     private(set) var holdBackMs = 0.0
+    /// What the device was given to show, and when to give it more (main queue).
+    var trackInfo = TrackInfoFeed()
 
     // On the queue only.
     /// The hold-back the sender gets, also when it is created later.
@@ -37,6 +43,9 @@ final class CastSender {
     private var timer: DispatchSourceTimer?
     private var lastVolumeSent: Date?
     private var pendingVolume: Double?
+    /// The track and cover given last, also for a handle created later.
+    private var track: TrackMetadata.Fields?
+    private var artwork: Data?
 
     init(memoryURL: URL?, onChanges: @escaping ([CastDeviceChange]) -> Void,
          onEvents: @escaping ([CastEvent]) -> Void) {
@@ -57,6 +66,7 @@ final class CastSender {
             }
             self.handle = created
             _ = asc_cast_set_hold_back(created, self.queuedHoldBackMs)
+            self.sendTrack()
             if let taken = asc_cast_take_input(created) {
                 self.input = taken
                 CastTap.install(taken)
@@ -107,6 +117,55 @@ final class CastSender {
         pendingVolume = nil
         lastVolumeSent = Date()
         if let handle { _ = asc_cast_set_volume(handle, level) }
+    }
+
+    /// One of the device's own volume steps (C69); a level a slider left
+    /// waiting is dropped, so it can't undo the step.
+    func stepVolume(up: Bool) {
+        queue.async { [weak self] in
+            guard let self, let handle = self.handle else { return }
+            self.pendingVolume = nil
+            _ = asc_cast_step_volume(handle, up)
+        }
+    }
+
+    /// The title, artist and album the device shows from its next load
+    /// (C53, C54). A new track drops the cover, as AirPlay's does, until
+    /// `setArtwork` gives this one's. Main queue.
+    func setTrack(_ fields: TrackMetadata.Fields) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.track = fields
+            self.artwork = nil
+            self.sendTrack()
+        }
+    }
+
+    /// The cover the device shows from its next load, encoded on the queue
+    /// as a JPEG within C53's size. Main queue.
+    func setArtwork(_ image: NSImage) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard let jpeg = TrackMetadata.jpeg(image, maxSide: Self.artworkSide, maxBytes: Self.artworkBytes) else {
+                DispatchQueue.main.async { DebugTrace.log("[AudioSync] Cast: the artwork could not be encoded") }
+                return
+            }
+            self.artwork = jpeg
+            if let handle = self.handle { Self.setArtwork(handle, jpeg) }
+        }
+    }
+
+    private func sendTrack() {
+        guard let handle, let track else { return }
+        _ = asc_cast_set_metadata(handle, track.title, track.artist, track.album)
+        Self.setArtwork(handle, artwork ?? Data())
+    }
+
+    /// Empty data forgets the cover.
+    private static func setArtwork(_ handle: OpaquePointer, _ jpeg: Data) {
+        _ = jpeg.withUnsafeBytes { bytes in
+            asc_cast_set_artwork(handle, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+        }
     }
 
     func setMuted(_ muted: Bool) {

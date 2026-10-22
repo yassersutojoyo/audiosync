@@ -29,6 +29,14 @@ pub fn admits_peer(peer: IpAddr, local: IpAddr) -> bool {
     }
 }
 
+/// The peer that per-peer limits count against: the full address. Not an
+/// IPv6 /64: every IPv6 device let in shares one (see [`admits_peer`]), so
+/// one device would lock out the rest; the global limits cover a device
+/// that rotates temporary addresses (RFC 8981).
+pub fn peer_group(peer: IpAddr) -> IpAddr {
+    peer.to_canonical()
+}
+
 /// Global unicast (2000::/3) whose /64 is a real link. Teredo (2001::/32)
 /// and 6to4 (2002::/16) prefixes are built from a public IPv4 address that
 /// strangers on the internet share.
@@ -191,6 +199,25 @@ mod tests {
     }
 
     #[test]
+    fn every_address_is_a_peer_of_its_own() {
+        let phone = v6("2001:db8:1:2:aaaa:bbbb:cccc:dddd");
+        let laptop = v6("2001:db8:1:2:1111:2222:3333:4444");
+        assert_ne!(peer_group(phone), peer_group(laptop));
+        assert_eq!(peer_group(phone), phone);
+        let unique_local = IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 7, 1, 2, 3, 4));
+        let unique_local_next = IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 7, 1, 2, 3, 5));
+        assert_ne!(peer_group(unique_local), peer_group(unique_local_next));
+        assert_ne!(peer_group(v6("fe80::1")), peer_group(v6("fe80::2")));
+        assert_eq!(peer_group(v6("::1")), v6("::1"));
+        assert_ne!(
+            peer_group(v4(192, 168, 1, 20)),
+            peer_group(v4(192, 168, 1, 21))
+        );
+        let mapped = IpAddr::V6(Ipv4Addr::new(192, 168, 1, 20).to_ipv6_mapped());
+        assert_eq!(peer_group(mapped), v4(192, 168, 1, 20));
+    }
+
+    #[test]
     fn host_must_name_this_server_with_its_port() {
         let home = v4(192, 168, 1, 5);
         let local = SocketAddr::new(home, 7655);
@@ -206,6 +233,11 @@ mod tests {
         ));
         assert!(!host_allowed(&home.to_string(), local, name));
         assert!(!host_allowed(&format!("[{home}]:7655"), local, name));
+        assert!(!host_allowed("[kitchen.local]:7655", local, name));
+        assert!(!host_allowed("kitchen.local:+7655", local, name));
+        assert!(!host_allowed(&format!("{home}:+7655"), local, name));
+        assert!(!host_allowed("kitchen.local:", local, name));
+        assert!(!host_allowed(&format!("{home}:"), local, name));
         assert!(!host_allowed(&at(80), local, name));
         assert!(!host_allowed(
             &format!("{}:7655", v4(192, 168, 1, 6)),
@@ -230,6 +262,7 @@ mod tests {
         assert!(!host_allowed("[fe80::1]", link, None));
         assert!(!host_allowed("fe80::1:7655", link, None));
         assert!(!host_allowed("[fe80::1]:+7655", link, None));
+        assert!(!host_allowed("[fe80::1]:", link, None));
 
         let web = SocketAddr::new(v4(10, 0, 0, 2), 80);
         assert!(host_allowed(&v4(10, 0, 0, 2).to_string(), web, None));

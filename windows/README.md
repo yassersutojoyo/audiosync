@@ -46,11 +46,33 @@ It's a single exe with no installer: put it in a folder of its own, keep the
   choose Exit AudioSync, or use File > Exit in the main window.
 - **Where your stuff is:** your choices (source, speakers with their delays
   and volumes, master volume, groups, auto-connect, the equalizer, where the
-  window was) are saved in `%LOCALAPPDATA%\AudioSync\settings.json`, next to
-  `airplay-pairings.dat`, the Apple TV pairings, encrypted for your Windows
-  account. To start over, quit AudioSync and delete that folder. A launch
-  doesn't start streaming by itself unless an auto-connect speaker is there,
+  window was) are saved in `%LOCALAPPDATA%\AudioSync\settings.json`. Next to
+  it sit `airplay-pairings.dat`, the Apple TV pairings, encrypted for your
+  Windows account; `cast-speakers.json`, each Google Cast speaker's offset;
+  and `remote-devices.json`, the phones paired with Web Remote.
+  To start over, quit AudioSync and delete that folder. A launch doesn't
+  start streaming by itself unless an auto-connect speaker is there,
   and a speaker that's missing keeps its settings for when it's back.
+- **Google Cast:** Cast speakers show up under Connected Speakers next to
+  the AirPlay ones, and one plays at a time. Cast has no shared clock, so you
+  set each one's offset by ear in its row; if it drifts, Resync under its
+  volume restarts it with a short gap. A group made in the Google Home app
+  plays as one speaker.
+- **Web Remote:** File > Web Remote… lets a phone on the same network switch
+  your speakers on and off and set volumes and delays. Turn it on, open the
+  address it shows on the phone (or scan the QR code), add the page to the
+  Home Screen, then open it from there and enter the pairing code. It's plain
+  HTTP, so I'd keep it to your home network. Forget All Remote Devices
+  unpairs every phone.
+- **Calibrate with Microphone:** under a local speaker, this sets its delay
+  for you. It plays a short sweep on the PC's own speakers and then on that
+  one, and listens with the default microphone, so streaming and that speaker
+  need to be on. If Windows blocks the microphone for desktop apps, AudioSync
+  says so and offers the privacy settings.
+- **Calibrate All Speakers:** the button in the Calibration card of the main
+  window does the same for every speaker that's on, one at a time, then lists
+  the results. Apply sets them all, Undo puts them all back, and Measure Again
+  repeats one speaker.
 - **Debug log:** if something acts up, quit AudioSync from the tray, then
   start it from PowerShell in the exe's folder with
   `$env:AUDIOSYNC_DEBUG=1; .\audiosync.exe`. The log goes to
@@ -139,8 +161,10 @@ notice says "AirPlay stopped or couldn't start" with a Retry button that
 starts it again.
 
 Not supported yet: speakers that need another kind of pairing (the Apple
-TV code is the one AudioSync does), and speakers that only play AirPlay 2.
-They're listed with a note saying so, and AudioSync never connects to them.
+TV code is the one AudioSync does). They're listed with a note saying so,
+and AudioSync never connects to them. Speakers that only play AirPlay 2 get
+the same note unless you turn on File > AirPlay 2 (Experimental), then quit
+and reopen AudioSync.
 
 ## On a Mac
 

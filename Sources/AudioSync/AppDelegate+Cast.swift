@@ -177,6 +177,17 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// An arrow key on the slider: the device's own step, or the fallback
+    /// step while it reports none (C69).
+    func stepCastVolume(_ appID: String, up: Bool) {
+        guard let id = CastID.device(appID), let step = castModel.stepVolume(id, up: up) else { return }
+        switch step {
+        case .device(let up): castSender?.stepVolume(up: up)
+        case .level(let level): castSender?.setVolume(level)
+        }
+        pushModel()
+    }
+
     func setCastMuted(_ appID: String, _ muted: Bool) {
         guard let id = CastID.device(appID), castModel.isLive(id) else { return }
         DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) " + (muted ? "muted" : "unmuted") + " by the user")
@@ -261,6 +272,31 @@ extension AppDelegate {
         store.save(list)
         clearNotices([Notice.cast(id)])
         castFollow()
+    }
+
+    // MARK: - Track info
+
+    /// A Cast device is on: it shows the track from its next load (C53, C54),
+    /// so the track goes to the sender from the moment it is switched on.
+    var sendsCastTrackInfo: Bool { castSender != nil && castModel.enabled != nil }
+
+    /// Gives the Cast sender what changed in what the device should show,
+    /// the way `sendTrackInfo` gives AudioSync's AirPlay sender, without
+    /// AudioSync's labels or icon in place of what isn't known (C53).
+    func sendCastTrackInfo(now: Date) {
+        guard let sender = castSender else { return }
+        let step = sender.trackInfo.send(sending: sendsCastTrackInfo, now: now, pollingSince: nowPlaying.startedAt,
+                                         hasReading: nowPlaying.hasReading, icon: nil, shows: castShows)
+        if let fields = step.fields { sender.setTrack(fields) }
+        if let date = step.recheckAt { recheckTrackInfo(at: date) }
+        guard let picture = step.picture else { return }
+        // Encoded on the sender's queue, so it gets an image of its own.
+        sender.setArtwork(picture.copy() as? NSImage ?? picture)
+    }
+
+    private func castShows() -> (info: ReceiverInfo, artwork: NSImage?) {
+        let track = nowPlaying.hasReading ? nowPlaying.track : nil
+        return (ReceiverInfo.decideForCast(track: track, source: audioSource), track?.artwork)
     }
 
     // MARK: - Rows and names

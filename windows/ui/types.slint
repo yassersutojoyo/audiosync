@@ -7,9 +7,13 @@
 export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2 }
 
 // The part of a speaker or group row that has, or is to take, the keyboard
-// focus: its toggle, delay button, volume, sync controls or options. A row
-// rebuilt under the focus takes it back on the same part.
-export enum RowPart { none, toggle, delay, volume, sync, options }
+// focus: its toggle, delay button, volume, sync controls, options or name
+// field. A row rebuilt under the focus takes it back on the same part.
+export enum RowPart { none, toggle, delay, volume, sync, options, name }
+
+// A main-window control outside the notices and the speaker and group rows;
+// one taking the focus applies an open speaker rename.
+export enum MainControl { power, source, transport, master-volume, equalizer, calibration, airplay-delay }
 
 // The kind of output: the icon in a speaker's toggle, and the line under a
 // connected speaker's name.
@@ -55,7 +59,15 @@ export struct CalibrationRowItem {
 
 export struct SpeakerItem {
     id: string,
+    // The name the user gave it, else the one its device reports.
     name: string,
+    // The name its device reports, while renamed; empty otherwise.
+    system-name: string,
+    // The device's own name, always: the name field's placeholder.
+    device-name: string,
+    // Its name is being edited in the row, with `name-text` typed so far.
+    renaming: bool,
+    name-text: string,
     kind: SpeakerKind,
     // Connected speakers show their kind; the PC's own outputs don't.
     show-kind: bool,
@@ -107,6 +119,9 @@ export struct SpeakerItem {
     muted: bool,
     // The Cast speaker's volume can't be changed from here.
     volume-fixed: bool,
+    // How far the arrow keys move the volume: the Cast device's own step,
+    // 1 for every other row.
+    volume-step: float,
     // A Google Cast group, and the note under its name
     // (Strings.cast-group-note); empty for any other row.
     cast-group: bool,
@@ -128,7 +143,7 @@ export struct GroupItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast }
+export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch }
 
 export struct NoticeItem {
     id: int,

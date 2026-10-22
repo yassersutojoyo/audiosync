@@ -94,6 +94,7 @@ use crate::settings::{
     self, KeptAside, SavedEqualizer, SavedGroup, SavedInput, SavedSource, SavedSpeaker, Settings,
     SettingsFile,
 };
+use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressError, CastGroup, CastList, CastRow, CastState, Group, GroupError,
@@ -141,7 +142,7 @@ const NONE_FOUND_POLLS: u32 = 40;
 
 /// The prefix of a Google Cast speaker's UI ID; the core's speaker keys
 /// know only local and AirPlay speakers.
-const CAST_PREFIX: &str = "cc:";
+pub(crate) const CAST_PREFIX: &str = "cc:";
 
 /// The UI's ID of the whole-system source.
 const SYSTEM_KEY: &str = "system";
@@ -265,6 +266,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     cast_probe: fn(&CastAddress) -> bool,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
+    /// The names the user gave speakers (spec S228).
+    custom_names: SpeakerNames,
     groups: Vec<Group>,
     next_group: u64,
     gate: AutoStartGate,
@@ -377,6 +380,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_addresses: Vec::new(),
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
+            custom_names: SpeakerNames::default(),
             groups: Vec::new(),
             next_group: 1,
             gate: AutoStartGate::default(),
@@ -460,6 +464,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             });
         }
         self.auto_connect = saved.auto_connect.clone();
+        self.custom_names = SpeakerNames::from_saved(&saved.speaker_names);
         self.groups = saved
             .groups
             .iter()
@@ -512,6 +517,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             appearance: saved.appearance,
             window: saved.window,
             remote: saved.remote,
+            airplay2_experimental: saved.airplay2_experimental,
         };
         self.saved = saved;
     }
@@ -592,6 +598,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             outputs,
             airplay,
             auto_connect: self.auto_connect.clone(),
+            speaker_names: self.custom_names.saved(),
             groups: self
                 .groups
                 .iter()
@@ -609,6 +616,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             when_source_quits: self.when_source_quits.stored().to_owned(),
             remote: self.view.remote,
             cast_addresses: self.cast_addresses.clone(),
+            airplay2_experimental: self.view.airplay2_experimental,
         }
         .clamped()
     }
@@ -1098,12 +1106,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.enabled_airplay().iter().any(|on| on == id)
     }
 
-    /// The name of an AirPlay speaker as last listed.
+    /// The name an AirPlay speaker shows: the user's, else the one last
+    /// listed.
     fn airplay_name(&self, id: &str) -> String {
-        self.airplay_names
-            .get(id)
-            .cloned()
-            .unwrap_or_else(|| id.to_owned())
+        let system = self.airplay_names.get(id).map_or(id, String::as_str);
+        self.custom_names.shown(&airplay_key(id), system)
     }
 
     fn is_enabled(&self, endpoint_id: &str) -> bool {
@@ -1113,12 +1120,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .any(|id| id == endpoint_id)
     }
 
-    /// The name of an output as last listed.
+    /// The name an output shows: the user's, else the one last listed.
     fn output_name(&self, endpoint_id: &str) -> String {
-        self.names
+        let system = self
+            .names
             .get(endpoint_id)
-            .cloned()
-            .unwrap_or_else(|| endpoint_id.to_owned())
+            .map_or(endpoint_id, String::as_str);
+        self.custom_names.shown(&speaker_key(endpoint_id), system)
     }
 
     fn chosen_name(&self) -> String {
@@ -1214,12 +1222,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The name of a Cast speaker as last listed.
+    /// The name a Cast speaker shows: the user's, else the one last listed.
     fn cast_name(&self, id: &str) -> String {
-        self.cast_names
-            .get(id)
-            .cloned()
-            .unwrap_or_else(|| id.to_owned())
+        let system = self.cast_names.get(id).map_or(id, String::as_str);
+        self.custom_names.shown(&cast_key(id), system)
     }
 
     /// The user switched a Cast speaker on or off. One that can't play
@@ -1256,9 +1262,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// A Google Cast speaker's row.
     fn cast_speaker(&self, speaker: CastInfo) -> Speaker {
+        let id = cast_key(&speaker.id);
         Speaker {
-            id: cast_key(&speaker.id),
-            name: speaker.name,
+            name: self.custom_names.shown(&id, &speaker.name),
+            system_name: speaker.name,
+            id,
             kind: SpeakerKind::Cast,
             enabled: speaker.enabled,
             volume: speaker.volume,
@@ -1278,6 +1286,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 },
                 muted: speaker.muted,
                 volume_fixed: speaker.volume_fixed,
+                volume_step: speaker.volume_step,
                 group: speaker.group.map(|group| CastGroup {
                     members: group.members,
                 }),
@@ -1501,6 +1510,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if self.auto_connect.remove(&from_key) {
             self.auto_connect.insert(to_key.clone());
         }
+        self.custom_names.move_key(&from_key, &to_key);
         for group in &mut self.groups {
             if let Some(place) = group.members.iter().position(|key| *key == from_key) {
                 if group.members.contains(&to_key) {
@@ -2083,6 +2093,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.reconnecting.clear();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
+            BackendEvent::AirPlayPtpFree => {
+                self.notices.clear(&[NoticeSubject::AirPlayPtp]);
+            }
+            BackendEvent::AirPlayPtpPortsTaken => {
+                self.post(
+                    NoticeSubject::AirPlayPtp,
+                    NoticeMessage::AirPlayPtpPortsTaken,
+                );
+            }
             // The next snapshot shows it; no notice, no focus change (S198).
             BackendEvent::DeviceVolumeChanged { .. } => {}
             // Told once while the writes keep failing (the backend reports
@@ -2142,11 +2161,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             return;
         }
+        let shown = |path: &DirectPath| {
+            self.custom_names
+                .shown(&speaker_key(&path.endpoint_id), &path.endpoint_name)
+        };
         let names = |plays_here: bool| -> Vec<String> {
             paths
                 .iter()
                 .filter(|path| path.audiosync_plays_here == plays_here)
-                .map(|path| path.endpoint_name.clone())
+                .map(shown)
                 .collect()
         };
         let message = NoticeMessage::HeardTwice {
@@ -2159,7 +2182,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             default_output: paths
                 .iter()
                 .find(|path| path.reason == DirectReason::DefaultEndpoint)
-                .map(|path| path.endpoint_name.clone()),
+                .map(shown),
         };
         let showing = self.heard_twice.as_ref() == Some(&subject)
             && self.notices.get(&NoticeSubject::DoubleAudio).is_some();
@@ -2243,8 +2266,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let id = airplay_key(&speaker.id);
         Speaker {
             auto_connect: self.auto_connect.contains(&id),
+            name: self.custom_names.shown(&id, &speaker.name),
+            system_name: speaker.name,
             id,
-            name: speaker.name,
             kind: if speaker.airplay2 {
                 SpeakerKind::AirPlay2
             } else {
@@ -2275,9 +2299,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// A pairing's PIN prompt as the UI shows it.
     fn pin_prompt(&self, prompt: AirPlayPinPrompt) -> PinPrompt {
+        let speaker_id = airplay_key(&prompt.id);
         PinPrompt {
-            speaker_id: airplay_key(&prompt.id),
-            name: prompt.name,
+            name: self.custom_names.shown(&speaker_id, &prompt.name),
+            speaker_id,
             phase: match prompt.phase {
                 PairingPhase::Starting => PinPhase::Starting,
                 PairingPhase::WaitingForPin => PinPhase::Ready,
@@ -2291,8 +2316,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let id = speaker_key(&output.id);
         Speaker {
             auto_connect: self.auto_connect.contains(&id),
+            name: self.custom_names.shown(&id, &output.name),
+            system_name: output.name,
             id,
-            name: output.name,
             kind: speaker_kind(output.kind),
             enabled: output.enabled,
             volume: output.volume,
@@ -2365,7 +2391,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .outputs()
             .into_iter()
             .find(|output| output.is_reference)
-            .map(|output| output.name);
+            .map(|output| {
+                self.custom_names
+                    .shown(&speaker_key(&output.id), &output.name)
+            });
         let pin_prompt = self.audio.airplay_pin_prompt();
         let prompted = pin_prompt.as_ref().map(|prompt| prompt.id.as_str());
         AppState {
@@ -2407,14 +2436,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 })
                 .collect(),
             pin_prompt: pin_prompt.map(|prompt| self.pin_prompt(prompt)),
-            password_prompt: self
-                .audio
-                .airplay_password_prompt()
-                .map(|prompt| PasswordPrompt {
-                    speaker_id: airplay_key(&prompt.id),
-                    name: prompt.name,
+            password_prompt: self.audio.airplay_password_prompt().map(|prompt| {
+                let speaker_id = airplay_key(&prompt.id);
+                PasswordPrompt {
+                    name: self.custom_names.shown(&speaker_id, &prompt.name),
+                    speaker_id,
                     wrong: prompt.wrong,
-                }),
+                }
+            }),
             when_source_quits: self.when_source_quits,
             cast_list: self.cast_list(),
             cast_by_address: self.audio.cast_discovery() != CastDiscovery::Off,
@@ -2625,6 +2654,23 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         };
         if let Some(adjustment) = native_airplay_adjustment_ms(ms, sender) {
             self.audio.set_airplay_adjustment(adjustment);
+        }
+    }
+
+    fn rename_speaker(&mut self, id: &str, name: &str) {
+        let system = match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => self.names.get(&endpoint_id).cloned(),
+            Some(SpeakerKey::AirPlay(airplay_id)) => self.airplay_names.get(&airplay_id).cloned(),
+            None => cast_id(id).and_then(|cast| self.cast_names.get(cast).cloned()),
+        };
+        // A speaker never listed has no system name to come back to.
+        let Some(system) = system else {
+            return;
+        };
+        if self.custom_names.rename(id, name, &system) {
+            let shown = self.custom_names.shown(id, &system);
+            self.log
+                .log(|| format!("speaker {id} ({system}) is shown as {shown}"));
         }
     }
 
@@ -4691,6 +4737,23 @@ mod tests {
     }
 
     #[test]
+    fn the_double_audio_notice_names_a_renamed_output_by_its_new_name() {
+        let mut adapter = adapter();
+        let audio = adapter.audio_mut();
+        audio.connect_output_as(TV, "TV", OutputKind::Hdmi);
+        audio.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        audio.play_on(PLAYER_PID, TV);
+        adapter.refresh_devices();
+        adapter.rename_speaker(&key(TV), "Living Room TV");
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(
+            heard_twice(&adapter),
+            [twice(Some("Player"), &["Living Room TV"], &[])]
+        );
+    }
+
+    #[test]
     fn hearing_the_app_twice_raises_one_notice_that_follows_the_routing() {
         let mut adapter = player_on_the_tv();
         assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
@@ -4962,6 +5025,17 @@ mod tests {
         adapter.poll();
         fake.take_calls();
         (adapter, fake, tv)
+    }
+
+    #[test]
+    fn the_pin_prompt_names_a_renamed_apple_tv_by_its_new_name() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.rename_speaker(&id, "Den");
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().pin_prompt.unwrap().name, "Den");
     }
 
     #[test]
@@ -5339,6 +5413,15 @@ mod tests {
     }
 
     #[test]
+    fn the_password_prompt_names_a_renamed_speaker_by_its_new_name() {
+        let (mut adapter, _fake, _, study) = airplay_adapter();
+        adapter.poll();
+        adapter.rename_speaker(&ap(&study), "Office");
+        adapter.set_speaker_enabled(&ap(&study), true);
+        assert_eq!(adapter.snapshot().password_prompt.unwrap().name, "Office");
+    }
+
+    #[test]
     fn a_password_speaker_asks_for_its_password_and_plays_with_it() {
         let (mut adapter, fake, _, study) = airplay_adapter();
         study_asks(&mut adapter, &fake, &study);
@@ -5531,6 +5614,62 @@ mod tests {
         adapter.dismiss_all_notices();
         adapter.poll();
         assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn the_ptp_port_clash_leaves_a_notice_until_ptp_binds() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(
+                audiosync_airplay::error::Warning::PtpUnavailable,
+            ),
+        });
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        // A speaker on AirPlay 1, or one that didn't bind PTP, says nothing
+        // about the ports.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        fake.state(&kitchen, AirPlayState::Connecting);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::PtpOpened,
+        });
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn a_ptp_bind_clears_the_notice_even_if_its_session_never_plays() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(
+                audiosync_airplay::error::Warning::PtpUnavailable,
+            ),
+        });
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
+        // It binds PTP, then fails before playing; the next session binds
+        // with no clash to tell and says nothing about the ports.
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::PtpOpened,
+        });
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        fake.state(&kitchen, AirPlayState::Connecting);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert!(
+            !messages(&adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken),
+            "{:?}",
+            messages(&adapter)
+        );
     }
 
     #[test]
@@ -5872,6 +6011,53 @@ mod tests {
     }
 
     #[test]
+    fn a_renamed_speaker_keeps_its_name_across_a_restart_until_it_is_cleared() {
+        let dir = test_dir("adapter-speaker-rename");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        adapter.rename_speaker(&key(SPEAKERS), "  Desk\nleft ");
+        adapter.rename_speaker("lc:never-listed", "Ghost");
+        let speakers = speaker_of(&adapter, &key(SPEAKERS));
+        assert_eq!(speakers.name, "Desk left");
+        assert_eq!(speakers.system_name, "Speakers");
+        assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).name, "Headphones");
+        adapter.save_settings();
+
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        assert_eq!(speaker_of(&adapter, &key(SPEAKERS)).name, "Desk left");
+        let (saved, _) = SettingsFile::at(path.clone()).load();
+        assert_eq!(
+            saved.speaker_names.len(),
+            1,
+            "a speaker never listed isn't named"
+        );
+
+        adapter.rename_speaker(&key(SPEAKERS), "");
+        assert_eq!(speaker_of(&adapter, &key(SPEAKERS)).name, "Speakers");
+        adapter.save_settings();
+        let (saved, _) = SettingsFile::at(path).load();
+        assert!(saved.speaker_names.is_empty(), "cleared, nothing is kept");
+    }
+
+    #[test]
+    fn a_speaker_gone_mid_rename_still_takes_the_typed_name() {
+        let dir = test_dir("adapter-speaker-rename-gone");
+        let mut adapter = launch(launch_audio(), &dir.join(settings::FILE_NAME));
+        adapter.poll();
+        unplug(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().speaker(&key(HEADPHONES)).is_none());
+        adapter.rename_speaker(&key(HEADPHONES), "Studio cans");
+
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        let headphones = speaker_of(&adapter, &key(HEADPHONES));
+        assert_eq!(headphones.name, "Studio cans");
+        assert_eq!(headphones.system_name, "Headphones");
+    }
+
+    #[test]
     fn the_users_choices_survive_a_restart_without_streaming() {
         let dir = test_dir("adapter-settings-restart");
         let path = dir.join(settings::FILE_NAME);
@@ -5900,6 +6086,7 @@ mod tests {
                 on: true,
                 port: 8123,
             },
+            airplay2_experimental: true,
         });
         assert!(adapter.snapshot().running);
         adapter.poll();
@@ -5928,6 +6115,7 @@ mod tests {
         assert_eq!(state.groups, groups);
         assert_eq!(state.equalizer, equalizer);
         assert!(adapter.view_settings().show_virtual_devices);
+        assert!(adapter.view_settings().airplay2_experimental);
         assert_eq!(
             adapter.view_settings().appearance,
             ui_model::Appearance::Light
@@ -6214,6 +6402,18 @@ mod tests {
         audio.connect_output_as("bluetooth", "Earbuds", OutputKind::Bluetooth);
         audio.connect_output_as("tv", "TV", OutputKind::Hdmi);
         audio
+    }
+
+    #[test]
+    fn the_sync_hint_names_a_renamed_reference_by_its_new_name() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        adapter.poll();
+        adapter.rename_speaker(&key("builtin"), "Desk");
+        assert_eq!(adapter.snapshot().reference_name.as_deref(), Some("Desk"));
     }
 
     #[test]
@@ -7141,6 +7341,20 @@ mod tests {
         assert!(!state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
         assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
         assert!(state.running);
+    }
+
+    #[test]
+    fn a_renamed_cast_speaker_shows_and_is_named_by_its_new_name() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.rename_speaker(&cc(CAST_LIVING), "Den");
+        let row = speaker_of(&adapter, &cc(CAST_LIVING));
+        assert_eq!(row.name, "Den");
+        assert_eq!(row.system_name, "Living Room");
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        assert!(messages(&adapter).contains(&cast_cant_play("Den", UiCastProblem::Busy)));
+        adapter.rename_speaker(&cc(CAST_LIVING), " ");
+        assert_eq!(speaker_of(&adapter, &cc(CAST_LIVING)).name, "Living Room");
     }
 
     #[test]

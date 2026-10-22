@@ -225,7 +225,7 @@ struct MainView: View {
             Toggle(isOn: Binding(get: { model.airPlay2 },
                                  set: { model.actions.setAirPlay2($0) })) {
                 Text(t.airPlay2Toggle)
-                Text(t.airPlay2Note)
+                Text(t.airPlay2Note(on: model.airPlay2, onAtLaunch: model.airPlay2AtLaunch))
             }
             Divider()
             Button(t.guideTitle) { model.actions.openGuide() }
@@ -404,7 +404,9 @@ struct MainView: View {
                     if connected && problem == nil && !speakers.isEmpty, let note = model.networkNote {
                         // Say where AirPlay or the Google Cast search stands, under the rows.
                         Divider()
-                        emptyNote(note, hint: hasAirPlay ? nil : hint, under: speakers)
+                        // The note leaves the network advice to the hint, so show it unless it is above.
+                        emptyNote(note, hint: hasAirPlay && localNetworkHint == .denied ? nil : hint,
+                                  under: speakers)
                     }
                     if connected && model.castCanAdd {
                         Divider()
@@ -635,6 +637,8 @@ struct SpeakerRow: View {
                             .accessibilityLabel(t.volume(of: speaker.name))
                             .accessibilityValue(t.volumeValue(speaker.volume))
                             .hintAndHelp(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : nil)
+                            .modifier(CastVolumeKeys(step: speaker.isCast
+                                ? { up in model.actions.stepCastVolume(speaker.id, up) } : nil))
                             .focused($volumeFocused)
                         Text(t.volumeValue(speaker.volume))
                             .font(.caption.monospacedDigit())
@@ -944,6 +948,31 @@ private struct DraftUnderline: Shape {
         path.move(to: CGPoint(x: rect.minX, y: rect.midY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
         return path
+    }
+}
+
+/// A Cast row's slider: the arrow keys and VoiceOver's adjust move the
+/// device's volume by its own step (C69); other sliders keep their own.
+private struct CastVolumeKeys: ViewModifier {
+    let step: ((_ up: Bool) -> Void)?
+
+    func body(content: Content) -> some View {
+        if let step {
+            content
+                .onKeyPress(keys: [.upArrow, .rightArrow, .downArrow, .leftArrow]) { press in
+                    step(press.key == .upArrow || press.key == .rightArrow)
+                    return .handled
+                }
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: step(true)
+                    case .decrement: step(false)
+                    @unknown default: break
+                    }
+                }
+        } else {
+            content
+        }
     }
 }
 

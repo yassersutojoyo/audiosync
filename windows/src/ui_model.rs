@@ -13,6 +13,8 @@ use audiosync_core::policy::source_quit::WhenSourceQuits;
 #[cfg(any(not(windows), test))]
 use audiosync_core::volume;
 
+#[cfg(any(not(windows), test))]
+use crate::speaker_names;
 use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
 
 pub use crate::audio::backend::CastMembers;
@@ -168,7 +170,10 @@ pub enum AirPlayProblem {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Speaker {
     pub id: String,
+    /// The name the user gave it, else its system name.
     pub name: String,
+    /// The name Windows or AirPlay discovery reports.
+    pub system_name: String,
     pub kind: SpeakerKind,
     /// Chosen by the user; it plays while streaming is on.
     pub enabled: bool,
@@ -197,13 +202,15 @@ pub struct Speaker {
 
 /// A Google Cast speaker's own state. Its delay is the measured offset the
 /// user sets, since Cast can't be kept in sync automatically.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CastRow {
     pub state: CastState,
     /// The speaker reports itself muted.
     pub muted: bool,
     /// The speaker's volume can't be changed from here.
     pub volume_fixed: bool,
+    /// How far the volume keys move it, 0 to 100 (the device's own step).
+    pub volume_step: f64,
     /// Set for a Cast group, which plays as one speaker.
     pub group: Option<CastGroup>,
     /// The user added it by address (spec C18): its row says so, and its
@@ -422,6 +429,9 @@ pub enum NoticeMessage {
     /// couldn't start, so AirPlay speakers aren't listed or playing. The
     /// notice offers Retry ([`Backend::retry_airplay`]).
     AirPlayStopped,
+    /// Another app holds PTP port 319 or 320, so AirPlay speakers that need
+    /// PTP timing can't play. An AirPlay speaker that plays clears it.
+    AirPlayPtpPortsTaken,
     /// The settings file couldn't be written, so changes made now last only
     /// until AudioSync quits. Posted once until a save works again, which
     /// clears it.
@@ -464,6 +474,9 @@ pub enum NoticeMessage {
     /// The Run value is written, but Task Manager or Settings has AudioSync
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
+    /// File > AirPlay 2 (Experimental) was turned on (`on`) or off, which
+    /// applies once AudioSync is quit and opened again.
+    AirPlay2NextLaunch { on: bool },
     /// A Google Cast speaker can't play, so it is off.
     CastCantPlay {
         speaker: String,
@@ -741,6 +754,9 @@ pub trait Backend {
     /// The user entered `ms` in the AirPlay delay field.
     fn set_airplay_delay(&mut self, ms: f64);
     fn set_auto_connect(&mut self, id: &str, on: bool);
+    /// Gives speaker `id` the name `name`; an empty one brings back its
+    /// system name (spec S228).
+    fn rename_speaker(&mut self, id: &str, name: &str);
     /// Turns every present member on, or all of them off when the group is on.
     fn toggle_group(&mut self, id: &str);
     /// Makes a group of the speakers that are on now. The UI names it
@@ -885,6 +901,9 @@ pub struct ViewSettings {
     pub window: Option<WindowFrame>,
     /// File > Web Remote.
     pub remote: crate::remote::RemoteSettings,
+    /// File > AirPlay 2 (Experimental), as saved; the sender reads it at
+    /// launch only.
+    pub airplay2_experimental: bool,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in
@@ -955,6 +974,7 @@ impl MockBackend {
         let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
             id: id.into(),
             name: name.into(),
+            system_name: name.into(),
             kind,
             enabled,
             volume: volume::DEFAULT_LOCAL_POSITION,
@@ -1183,6 +1203,12 @@ impl Backend for MockBackend {
         }
     }
 
+    fn rename_speaker(&mut self, id: &str, name: &str) {
+        if let Some(speaker) = self.speaker_mut(id) {
+            speaker.name = speaker_names::shown_after(name, &speaker.system_name);
+        }
+    }
+
     fn toggle_group(&mut self, id: &str) {
         let Some(group) = self.state.groups.iter().find(|g| g.id == id).cloned() else {
             return;
@@ -1245,6 +1271,7 @@ impl Backend for MockBackend {
             self.state.speakers.push(Speaker {
                 id,
                 name: address.text(),
+                system_name: address.text(),
                 kind: SpeakerKind::Cast,
                 enabled: false,
                 volume: 100.0,
@@ -1258,6 +1285,7 @@ impl Backend for MockBackend {
                     state: CastState::Idle,
                     muted: false,
                     volume_fixed: false,
+                    volume_step: 1.0,
                     group: None,
                     added_by_address: true,
                 }),
@@ -1428,6 +1456,7 @@ mod tests {
         let speaker = |kind, enabled| Speaker {
             id: "local:x".into(),
             name: "X".into(),
+            system_name: "X".into(),
             kind,
             enabled,
             volume: 60.0,
