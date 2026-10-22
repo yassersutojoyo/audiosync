@@ -12,10 +12,17 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A speaker group made in the Google Home app now plays as one Cast speaker, with one volume and one offset. Its row names the speakers in the group once the group reports them. Those speakers keep their own rows, but they're busy while the group plays.
 - AirPlay 2 has a switch now: turn on "AirPlay 2 (Experimental)" in the app menu or the gear menu on the Mac, or in the File menu on Windows. It's off by default, it's saved, and it takes effect the next time AudioSync starts.
 - With AirPlay 2 on, a stereo pair, or an Apple TV with HomePods as its home theater speakers, shows as one row with one switch and one volume. The row says "Stereo pair" or "Home theater group" with the speakers in it, or which one is missing. Like the rest of AirPlay 2, this hasn't been tried on real speakers yet.
+- If a Google Cast speaker doesn't show up, you can add it by its IP address or host name: Add by Address… under Connected Speakers on the Mac, or Speakers > Add by Address… on Windows. AudioSync checks that a speaker answers there and keeps the address for the next launch. The row says "Added by address" until a search finds the speaker, and Remove in its menu forgets it.
+- A Google Cast speaker now shows what's playing, with the title, artist, album and cover. When AudioSync doesn't know the track, the speaker gets none.
+- AirPlay speakers that show a track's progress now get how far into the track you are and how long it is. On the Mac that comes from Spotify and Music, on Windows from any app that reports its track's length. A track without a known length sends none.
+- When you change an AirPlay speaker's volume on the speaker itself, its slider in AudioSync follows, on speakers that report it.
+- With AirPlay 2 on, a notice tells you when another app holds port 319 or 320, which AirPlay 2 speakers that need PTP timing can't play without. It hasn't been tried on a real receiver yet.
+- Web Remote: too many wrong pairing codes from one device block pairing for that device, not for every phone, and a paired phone still gets in while other devices hold connections open.
 
 ### Changed
 
 - AirPlay speakers can now wait up to 20 seconds instead of 3, so a long Cast offset or a large Calibrate All result plays in full instead of being cut short.
+- The arrow keys on a Google Cast speaker's volume slider now move by the step the speaker reports, if it reports one.
 
 ## [0.6.0] - unreleased
 
