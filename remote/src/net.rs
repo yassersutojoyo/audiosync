@@ -251,7 +251,7 @@ mod tests {
             "http://kitchen.local:7655/api/pair",
             "http://user@kitchen.local:7655",
             "http://kitchen.local",
-            "HTTP://kitchen.local:7655x",
+            "HTTP://kitchen.local:7655",
             "",
         ] {
             assert!(!origin_matches(origin, host), "{origin}");
