@@ -776,6 +776,43 @@ struct NativeAirPlayModel {
     }
 }
 
+/// Whether the PTP port notice shows (P158, main queue). The sender reports
+/// the clash once, so the notice follows the rows instead: it stays while a
+/// row is off because it needs PTP timing, and comes back when one goes off
+/// for it. A speaker that plays clears it only when no row is, since a
+/// session on NTP timing binds no PTP port and proves nothing about them.
+struct PtpPortNotice: Equatable {
+    /// The sender reported port 319 or 320 taken.
+    private(set) var portsTaken = false
+    /// A speaker played since that report.
+    private(set) var played = false
+    /// The rows (app IDs) off because they need PTP timing.
+    private(set) var timingOff: Set<String> = []
+
+    var shown: Bool { Self.shown(portsTaken: portsTaken, played: played, timingRows: timingOff.count) }
+
+    /// With no row off for PTP timing, the report alone shows the notice
+    /// until a speaker plays.
+    static func shown(portsTaken: Bool, played: Bool, timingRows: Int) -> Bool {
+        portsTaken && (timingRows > 0 || !played)
+    }
+
+    mutating func reported() { portsTaken = true }
+
+    /// The row `id` went off; `timing`: because it needs PTP timing.
+    mutating func turnedOff(_ id: String, timing: Bool) {
+        if timing { timingOff.insert(id) } else { timingOff.remove(id) }
+    }
+
+    mutating func playing(_ id: String) {
+        timingOff.remove(id)
+        played = true
+    }
+
+    /// The rows the list shows now; one that left takes its reason along.
+    mutating func listed(_ rows: [String]) { timingOff.formIntersection(rows) }
+}
+
 /// When the app starts AudioSync's own sender again after a start failed
 /// or after it stopped, and when the user hears about it (main queue). A
 /// failed start leaves nothing running; the AirPlay reconcile the host runs
