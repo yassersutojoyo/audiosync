@@ -8,6 +8,7 @@
 pub mod airplay2_identity;
 pub mod airplay_pairings;
 pub mod calibrate;
+pub mod calibrate_all;
 pub mod channels;
 pub mod clock;
 pub mod convert;

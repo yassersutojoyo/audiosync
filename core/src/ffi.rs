@@ -16,6 +16,8 @@
 //!   its row, and what the one-click fix writes (S192-S202).
 //! - [`calibrate`]: the microphone calibration's test signal and estimate
 //!   (S232-S234).
+//! - [`calibrate_all`]: Calibrate All Speakers, a run the host drives step
+//!   by step and its results sheet.
 //! - [`airplay`]: AudioSync's own AirPlay sender: discovery, speakers, their
 //!   events and the capture's input.
 //! - [`cast`]: AudioSync's own Google Cast sender: discovery, one device's
@@ -48,6 +50,7 @@ use crate::volume;
 
 pub mod airplay;
 pub mod calibrate;
+pub mod calibrate_all;
 pub mod cast;
 pub mod device_volume;
 pub mod remote;
@@ -58,6 +61,7 @@ pub mod sync;
 
 pub use self::airplay::*;
 pub use self::calibrate::*;
+pub use self::calibrate_all::*;
 pub use self::cast::*;
 pub use self::device_volume::*;
 pub use self::remote::*;
@@ -384,10 +388,11 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 10] = [
+    const SOURCES: [(&str, &str); 11] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/calibrate.rs", include_str!("ffi/calibrate.rs")),
+        ("ffi/calibrate_all.rs", include_str!("ffi/calibrate_all.rs")),
         ("ffi/cast.rs", include_str!("ffi/cast.rs")),
         ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
         ("ffi/remote.rs", include_str!("ffi/remote.rs")),
@@ -1101,6 +1106,84 @@ mod tests {
             (
                 "ASC_CALIBRATION_RECORDING_CHOSEN",
                 CALIBRATION_RECORDING_CHOSEN.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_KIND_LOCAL",
+                CALIBRATION_KIND_LOCAL.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_KIND_CAST",
+                CALIBRATION_KIND_CAST.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_KIND_AIRPLAY",
+                CALIBRATION_KIND_AIRPLAY.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ROW_REFERENCE",
+                CALIBRATION_ROW_REFERENCE.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ROW_NOT_MEASURED",
+                CALIBRATION_ROW_NOT_MEASURED.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ROW_CERTAIN",
+                CALIBRATION_ROW_CERTAIN.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ROW_UNCERTAIN",
+                CALIBRATION_ROW_UNCERTAIN.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ROW_REFUSED",
+                CALIBRATION_ROW_REFUSED.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_AIRPLAY_NONE_CERTAIN",
+                CALIBRATION_AIRPLAY_NONE_CERTAIN.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_AIRPLAY_CERTAIN",
+                CALIBRATION_AIRPLAY_CERTAIN.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_AIRPLAY_SPREAD",
+                CALIBRATION_AIRPLAY_SPREAD.to_string(),
+            ),
+            ("ASC_CALIBRATION_END_NONE", CALIBRATION_END_NONE.to_string()),
+            (
+                "ASC_CALIBRATION_END_CANCELLED",
+                CALIBRATION_END_CANCELLED.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_END_SPEAKERS_CHANGED",
+                CALIBRATION_END_SPEAKERS_CHANGED.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_END_SPEAKER_OFF",
+                CALIBRATION_END_SPEAKER_OFF.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_END_SOURCE_CHANGED",
+                CALIBRATION_END_SOURCE_CHANGED.to_string(),
+            ),
+            ("ASC_CALIBRATION_APPLY_OK", CALIBRATION_APPLY_OK.to_string()),
+            (
+                "ASC_CALIBRATION_APPLY_ENDED",
+                CALIBRATION_APPLY_ENDED.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_APPLY_NOTHING_CERTAIN",
+                CALIBRATION_APPLY_NOTHING_CERTAIN.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_APPLY_TOO_MANY",
+                CALIBRATION_APPLY_TOO_MANY.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_APPLY_INVALID",
+                CALIBRATION_APPLY_INVALID.to_string(),
             ),
             ("ASC_SOURCE_QUIT_KEEP", SOURCE_QUIT_KEEP.to_string()),
             ("ASC_SOURCE_QUIT_STOP", SOURCE_QUIT_STOP.to_string()),

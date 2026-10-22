@@ -80,7 +80,7 @@ pub unsafe extern "C" fn asc_calibration_signal(
     true
 }
 
-fn refusal_code(reason: Refusal) -> u32 {
+pub(super) fn refusal_code(reason: Refusal) -> u32 {
     match reason {
         Refusal::TooShort => CALIBRATION_TOO_SHORT,
         Refusal::TooLong => CALIBRATION_TOO_LONG,
