@@ -7,11 +7,6 @@
 
 # Stereo pairs and home theater groups (spec revision of 2026-10-22, no code yet).
 P171 Targets made of several receivers: stereo-pair stage, not started.
-P172 Group keys in TXT records: stereo-pair stage, not started.
-P173 Stereo pair recognition and leader: stereo-pair stage, not started.
-P174 Home theater group recognition: stereo-pair stage, not started.
-P175 Groups made by other senders reported, not merged: stereo-pair stage, not started.
-P176 Targets reported to the host: stereo-pair stage, not started.
 P177 One session per member, one path, one AirPlay 2 place: stereo-pair stage, not started.
 P178 Same stereo payload to every member: stereo-pair stage, not started.
 P179 One delay and the timing of members: stereo-pair stage, not started.
