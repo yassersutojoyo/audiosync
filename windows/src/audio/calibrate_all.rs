@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use audiosync_core::calibrate::{MAX_RATE, MIN_RATE};
+use audiosync_core::calibrate::{MAX_RATE, MIN_RATE, SIGNAL_SECONDS};
 use audiosync_core::calibrate_all::{
     Class, EndReason, PlanError, RowState, Run, Sheet, Speaker, Step as RunStep, Take,
 };
@@ -265,6 +265,9 @@ pub struct AllRun {
     /// The hold-backs of the local outputs taking part, at the start.
     hold_backs_ms: BTreeMap<String, f64>,
     first_microphone: Option<MicrophoneId>,
+    /// Every speaker on the last sweep's path has played it by then, so
+    /// none of them may be heard again before.
+    clear_ns: u64,
     progress: Progress,
     /// A change seen while the estimate ran, applied once it is back.
     pending_end: Option<EndReason>,
@@ -440,6 +443,7 @@ impl AllRun {
             session,
             hold_backs_ms,
             first_microphone: None,
+            clear_ns: 0,
             progress: Progress::Preparing,
             pending_end: None,
             finished: None,
@@ -534,6 +538,8 @@ impl AllRun {
             } => {
                 if mic.first_frame_ns().is_some() && now_ns >= since_ns + ns(WARM_UP_S) {
                     self.tap.play();
+                    // Until it starts, the latest it may start counts.
+                    self.clear_ns = now_ns + ns(SIGNAL_WAIT_S) + self.played_out_ns(step.row);
                     self.stage = Stage::Playing {
                         step,
                         mic,
@@ -565,6 +571,7 @@ impl AllRun {
                         };
                         return self.fail(rig, Failure::NoMicrophone, now_ns);
                     };
+                    self.clear_ns = played + self.played_out_ns(step.row);
                     let seconds = step.window_frames as f64 / f64::from(self.rate);
                     self.stage = Stage::Recording {
                         step,
@@ -675,6 +682,13 @@ impl AllRun {
 
     fn next_step(&mut self, rig: &mut dyn AllRig, now_ns: u64) {
         match self.run.as_ref().and_then(Run::step) {
+            // A speaker on the last sweep's path that plays it later than
+            // the one measured would play it into this recording.
+            Some(_) if now_ns < self.clear_ns => {
+                self.stage = Stage::Quiet {
+                    until_ns: self.clear_ns,
+                };
+            }
             Some(step) => self.begin(rig, step, now_ns),
             None => self.end(rig, None, None, now_ns),
         }
@@ -789,36 +803,31 @@ impl AllRun {
         }
         self.finished = Some(Finished { sheet, failure });
         let same_session = rig.lineup().session == Some(self.session);
-        let wait = match sweeping {
-            Some(row) if same_session => self.play_out_seconds(row),
-            _ => 0.0,
-        };
         if sweeping.is_some() {
             self.tap.fade_out_signal();
         }
-        if wait > 0.0 {
+        if same_session && now_ns < self.clear_ns {
             self.stage = Stage::Settling {
-                until_ns: now_ns + ns(wait),
+                until_ns: self.clear_ns,
             };
         } else {
             self.give_back(rig);
         }
     }
 
-    /// How long a sweep cut off on row `row`'s speaker takes to play out
-    /// there: through the local hold-backs, or the AirPlay latency. The
-    /// Cast speaker plays alone on its feed, so the others needn't wait.
-    fn play_out_seconds(&self, row: usize) -> f64 {
-        let member = &self.members[row];
-        let ms = match member.class {
-            Class::Local => {
-                self.hold_backs_ms.values().copied().fold(0.0, f64::max)
-                    + LATENCY_ALLOWANCE_S * 1000.0
-            }
-            Class::AirPlay => member.latency_ms,
-            Class::Cast => 0.0,
-        };
-        ms.clamp(0.0, MAX_HOLD_BACK_MS) / 1000.0
+    /// How long after a sweep enters row `row`'s path every speaker on that
+    /// path has played it: the AirPlay speakers share one feed, each after
+    /// its own delay, and the local outputs share the ring.
+    fn played_out_ns(&self, row: usize) -> u64 {
+        let route = self.members[row].route();
+        let latency_ms = self
+            .members
+            .iter()
+            .filter(|member| member.route() == route)
+            .map(|member| member.latency_ms)
+            .fold(0.0, f64::max)
+            .min(MAX_HOLD_BACK_MS);
+        ns(latency_ms / 1000.0 + SIGNAL_SECONDS)
     }
 
     /// Every speaker heard again, the music fading back in and the signal
@@ -948,6 +957,9 @@ pub(crate) mod tests {
         solo: Option<Member>,
         /// Every speaker heard alone, by key, in turn.
         solos: Vec<String>,
+        /// When each solo began, with the speaker heard alone; `None`:
+        /// every speaker heard again.
+        solo_times: Vec<(u64, Option<String>)>,
         /// How long after the sweep entered its path each speaker is heard,
         /// per sweep in turn; the last value repeats.
         heard_after_ms: BTreeMap<String, Vec<f64>>,
@@ -987,6 +999,7 @@ pub(crate) mod tests {
                 tap: Arc::new(CalibrationTap::new()),
                 solo: None,
                 solos: Vec::new(),
+                solo_times: Vec::new(),
                 heard_after_ms: BTreeMap::from([
                     ("local:builtin".to_owned(), vec![2010.0]),
                     ("local:usb".to_owned(), vec![2180.0]),
@@ -1032,6 +1045,8 @@ pub(crate) mod tests {
             if let Some(who) = who {
                 self.solos.push(who.key());
             }
+            self.solo_times
+                .push((self.now.get(), who.map(Member::key)));
             self.solo = who.cloned();
         }
 
@@ -1257,6 +1272,103 @@ pub(crate) mod tests {
         let sheet = finished.sheet.expect("a sheet");
         assert_eq!(sheet.ended(), Some(EndReason::Cancelled));
         assert!(sheet.rows()[1..].iter().all(|r| !r.state.is_certain()));
+        given_back(&rig);
+    }
+
+    /// Two AirPlay speakers on the one AirPlay feed, the patio's 2 s later
+    /// than the kitchen's.
+    fn two_airplay_rig() -> FakeRig {
+        let mut rig = FakeRig::new();
+        rig.lineup.members = vec![
+            member(Class::Local, "builtin", Some(0.0), 2500.0),
+            member(Class::AirPlay, "kitchen", Some(2000.0), 2500.0),
+            member(Class::AirPlay, "patio", Some(2000.0), 4500.0),
+        ];
+        rig.lineup.hold_backs_ms = BTreeMap::from([("builtin".to_owned(), 2000.0)]);
+        rig.heard_after_ms
+            .insert("airplay:patio".to_owned(), vec![4050.0]);
+        rig
+    }
+
+    /// Whether `key`'s speaker is heard at `at_ns`, from the solo history.
+    fn audible(rig: &FakeRig, key: &str, at_ns: u64) -> bool {
+        rig.solo_times
+            .iter()
+            .rev()
+            .find(|(since, _)| *since <= at_ns)
+            .is_none_or(|(_, solo)| solo.as_deref().is_none_or(|solo| solo == key))
+    }
+
+    /// The AirPlay sweeps that entered the feed, by speaker. A new sweep's
+    /// speaker is the one soloed when it starts playing.
+    fn note_airplay_sweep(rig: &FakeRig, sweeps: &mut Vec<(String, u64)>, seen: &mut Vec<u64>) {
+        let Some(played) = rig.tap.played_at_ns() else {
+            return;
+        };
+        if seen.contains(&played) {
+            return;
+        }
+        seen.push(played);
+        if let Some(solo) = rig.solo.as_ref().filter(|m| m.class == Class::AirPlay) {
+            sweeps.push((solo.key(), played));
+        }
+    }
+
+    /// Every AirPlay speaker but the one measured is quiet while it plays
+    /// another's sweep from the feed.
+    fn assert_no_stray_airplay_sweep(rig: &FakeRig, sweeps: &[(String, u64)]) {
+        let signal_ns = ns(calibrate::SIGNAL_SECONDS);
+        for (measured, played) in sweeps {
+            for (other, after_ms) in [("airplay:kitchen", 2050.0), ("airplay:patio", 4050.0)] {
+                if other == measured {
+                    continue;
+                }
+                let from = played + ns(after_ms / 1000.0);
+                let to = from + signal_ns;
+                let changes = rig
+                    .solo_times
+                    .iter()
+                    .map(|(since, _)| *since)
+                    .filter(|since| (from..=to).contains(since));
+                for at in std::iter::once(from).chain(changes) {
+                    assert!(
+                        !audible(rig, other, at),
+                        "{other} plays the sweep of {measured} at {at}: {:?}",
+                        rig.solo_times
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_airplay_speaker_later_than_another_stays_muted_until_their_sweeps_played_out() {
+        let mut rig = two_airplay_rig();
+        let mut run = start(&mut rig);
+        let (mut sweeps, mut seen) = (Vec::new(), Vec::new());
+        let finished = run_to_end(&mut rig, &mut run, |rig, _| {
+            note_airplay_sweep(rig, &mut sweeps, &mut seen);
+        });
+        assert_eq!(finished.failure, None);
+        assert_eq!(sweeps.len(), 4, "two sweeps each: {sweeps:?}");
+        assert_no_stray_airplay_sweep(&rig, &sweeps);
+        let sheet = finished.sheet.expect("a sheet");
+        assert!(sheet.rows()[1..].iter().all(|row| row.state.is_certain()));
+        given_back(&rig);
+
+        // Cut off in the kitchen's window: the patio still plays it later.
+        let mut rig = two_airplay_rig();
+        let mut run = start(&mut rig);
+        let (mut sweeps, mut seen) = (Vec::new(), Vec::new());
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            note_airplay_sweep(rig, &mut sweeps, &mut seen);
+            if !sweeps.is_empty() && run.is_running() {
+                let now = rig.now.get();
+                run.cancel(rig, now);
+            }
+        });
+        assert_eq!(sweeps.len(), 1);
+        assert_no_stray_airplay_sweep(&rig, &sweeps);
         given_back(&rig);
     }
 
