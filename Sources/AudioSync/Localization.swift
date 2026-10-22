@@ -644,7 +644,14 @@ struct UIStrings {
 
     let thisMacSection = "This Mac"
     let connectedSection = "Connected Speakers"
-    let airPlayNoneFound = "No AirPlay speakers found yet. " + UIStrings.networkAdvice
+    /// `hint`: the Local Network hint on screen, which carries the network
+    /// advice in its place.
+    func airPlayNoneFound(hint: LocalNetworkHint = .none) -> String {
+        UIStrings.withNetworkAdvice("No AirPlay speakers found yet.", hint: hint)
+    }
+    private static func withNetworkAdvice(_ text: String, hint: LocalNetworkHint) -> String {
+        hint == .none ? text + " " + networkAdvice : text
+    }
     private static let networkAdvice = "Make sure this Mac is on the same network as your speakers, "
         + "and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
     let thisMacNone = "No built-in output"
@@ -873,22 +880,24 @@ struct UIStrings {
 
     /// What Connected Speakers says about the network speakers it doesn't
     /// list: no AirPlay speaker (`airPlayNone`), then how the Google Cast
-    /// search goes; nil when there is nothing to say.
-    func networkSpeakersNote(airPlayNone: Bool, cast: CastListState) -> String? {
+    /// search goes; nil when there is nothing to say. `hint`: the Local
+    /// Network hint on screen next to it.
+    func networkSpeakersNote(airPlayNone: Bool, cast: CastListState, hint: LocalNetworkHint = .none) -> String? {
         switch (airPlayNone, cast) {
-        case (true, .noneFound): return "No AirPlay or Google Cast speakers found yet. " + UIStrings.networkAdvice
-        case (true, .quiet): return airPlayNoneFound
-        case (true, _): return airPlayNoneFound + " " + (castList(cast) ?? "")
-        case (false, _): return castList(cast)
+        case (true, .noneFound):
+            return UIStrings.withNetworkAdvice("No AirPlay or Google Cast speakers found yet.", hint: hint)
+        case (true, .quiet): return airPlayNoneFound(hint: hint)
+        case (true, _): return airPlayNoneFound(hint: hint) + " " + (castList(cast, hint: hint) ?? "")
+        case (false, _): return castList(cast, hint: hint)
         }
     }
     /// The Google Cast search while it lists no speaker; nil when quiet.
-    func castList(_ state: CastListState) -> String? {
+    func castList(_ state: CastListState, hint: LocalNetworkHint = .none) -> String? {
         switch state {
         case .quiet: return nil
         case .searching: return "Looking for Google Cast speakers…"
         case .noneFound:
-            return "No Google Cast speakers found yet. " + UIStrings.networkAdvice
+            return UIStrings.withNetworkAdvice("No Google Cast speakers found yet.", hint: hint)
         case .failed: return "AudioSync can't look for Google Cast speakers right now. Restart AudioSync to try again."
         }
     }
@@ -1116,9 +1125,9 @@ struct UIStrings {
         On the phone, open the address it shows or scan its QR code, and add
         the page to the Home Screen first. Then open it from there and enter
         the pairing code: on some phones, a pairing made in the browser
-        doesn't carry over to the Home Screen. The remote uses plain HTTP, so
-        keep it to your home network. 'Forget All Remote Devices' unpairs
-        every phone, also while the remote is off.
+        doesn't carry over to the Home Screen. The page uses plain HTTP, so
+        use the web remote only on your home network. 'Forget All Remote
+        Devices' unpairs every phone, also while the remote is off.
 
         Tips
         - Tune with just two speakers at first: one AirPlay and one local.

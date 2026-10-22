@@ -298,12 +298,16 @@ final class AppModel: ObservableObject {
 
     /// What Connected Speakers says about the network speakers it doesn't
     /// list: no AirPlay speaker found, and how the Google Cast search goes;
-    /// nil when there is nothing to say.
+    /// nil when there is nothing to say. The Local Network hint, when it
+    /// shows, gives the network advice once for both.
     var networkNote: String? {
-        text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList)
+        text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList,
+                                 hint: shownLocalNetworkHint)
     }
     /// Connected Speakers with no speaker at all.
-    var networkEmptyText: String { networkNote ?? text.airPlayNoneFound }
+    var networkEmptyText: String { networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint) }
+    /// The AirPlay problem takes the hint's place in both views.
+    private var shownLocalNetworkHint: LocalNetworkHint { airPlayProblem == nil ? localNetworkHint : .none }
 
     /// Why AirPlay can't work right now, shown in place of its speakers; nil
     /// while the sender runs or is starting.

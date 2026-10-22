@@ -395,7 +395,9 @@ struct MainView: View {
                     if connected && problem == nil && !speakers.isEmpty, let note = model.networkNote {
                         // Say where AirPlay or the Google Cast search stands, under the rows.
                         Divider()
-                        emptyNote(note, hint: hasAirPlay ? nil : hint, under: speakers)
+                        // The note leaves the network advice to the hint, so show it unless it is above.
+                        emptyNote(note, hint: hasAirPlay && localNetworkHint == .denied ? nil : hint,
+                                  under: speakers)
                     }
                 }
             }
