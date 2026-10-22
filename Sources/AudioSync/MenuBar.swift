@@ -76,6 +76,8 @@ final class AppModel: ObservableObject {
         var setCastEnabled: (String, Bool) -> Void = { _, _ in }
         /// The device's own volume, slider position 0 to 100.
         var setCastVolume: (String, Double) -> Void = { _, _ in }
+        /// An arrow key on the device's slider: up or down one step.
+        var stepCastVolume: (String, Bool) -> Void = { _, _ in }
         var setCastMuted: (String, Bool) -> Void = { _, _ in }
         var resyncCast: (String) -> Void = { _ in }
         /// The offset the user set by ear, 0 to 20 000 ms.

@@ -622,6 +622,8 @@ struct SpeakerRow: View {
                             .accessibilityLabel(t.volume(of: speaker.name))
                             .accessibilityValue(t.volumeValue(speaker.volume))
                             .hintAndHelp(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : nil)
+                            .modifier(CastVolumeKeys(step: speaker.isCast
+                                ? { up in model.actions.stepCastVolume(speaker.id, up) } : nil))
                             .focused($volumeFocused)
                         Text(t.volumeValue(speaker.volume))
                             .font(.caption.monospacedDigit())
@@ -930,6 +932,31 @@ private struct DraftUnderline: Shape {
         path.move(to: CGPoint(x: rect.minX, y: rect.midY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
         return path
+    }
+}
+
+/// A Cast row's slider: the arrow keys and VoiceOver's adjust move the
+/// device's volume by its own step (C69); other sliders keep their own.
+private struct CastVolumeKeys: ViewModifier {
+    let step: ((_ up: Bool) -> Void)?
+
+    func body(content: Content) -> some View {
+        if let step {
+            content
+                .onKeyPress(keys: [.upArrow, .rightArrow, .downArrow, .leftArrow]) { press in
+                    step(press.key == .upArrow || press.key == .rightArrow)
+                    return .handled
+                }
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: step(true)
+                    case .decrement: step(false)
+                    @unknown default: break
+                    }
+                }
+        } else {
+            content
+        }
     }
 }
 

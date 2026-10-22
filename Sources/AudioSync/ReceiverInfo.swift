@@ -51,6 +51,12 @@ struct ReceiverInfo: Equatable {
         return ReceiverInfo(fields: fields, artwork: .neutral)
     }
 
+    /// What a Cast device shows: the track as `decide` takes it, else blank
+    /// fields, which the sender leaves out instead of AudioSync's labels (C53).
+    static func decideForCast(track: NowPlayingMonitor.Track?, source: AudioSource) -> ReceiverInfo {
+        decide(track: track, source: source, sourceName: nil, untitled: .init(title: "", artist: "", album: ""))
+    }
+
     /// How long receivers wait for a player's own artwork that is on its way.
     /// Then AudioSync's icon takes its place.
     static let artworkWait: TimeInterval = 5

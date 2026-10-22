@@ -4560,6 +4560,110 @@ do {
           "cast group: the measured offset is stored under the group's id, the members' stay as they were")
 }
 
+// MARK: Google Cast track info and volume steps (C53, C54, C69)
+do {
+    let tv = "00112233445566778899aabbccddeeff"
+    var m = CastModel()
+    m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+    check(m.stepVolume(tv, up: true) == nil, "cast step: an arrow key does nothing while no session runs")
+    _ = m.turnOn(tv)
+    m.startSent(tv)
+    _ = m.started(tv, attempt: 9, refusal: ASC_CAST_REFUSED_NONE)
+    _ = m.apply(.started(attempt: 9))
+    _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.4, muted: false, fixed: false)))
+    check(m.stepVolume(tv, up: true) == .level(0.4 + CastModel.fallbackVolumeStep)
+            && approx(m.volume(of: tv), 45, 1e-9),
+          "cast step: a device that reports no step moves by the fallback step, shown at once")
+    _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.45, muted: false, fixed: false)))
+    var downLevel: Double?
+    if case .level(let level)? = m.stepVolume(tv, up: false) { downLevel = level }
+    check(downLevel.map { approx($0, 0.4, 1e-9) } == true, "cast step: the fallback step goes down too")
+    _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
+    check(m.stepVolume(tv, up: true) == .device(up: true) && approx(m.volume(of: tv), 42, 1e-9),
+          "cast step: once the device reports its step, the key sends a step and the slider shows the level it should reach")
+    check(m.stepVolume(tv, up: true) == .device(up: true) && approx(m.volume(of: tv), 44, 1e-9),
+          "cast step: a second step before the device answers goes on from the level shown")
+    _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.43, muted: false, fixed: false, step: 0.02)))
+    check(approx(m.volume(of: tv), 43, 1e-9), "cast step: the device's volume event replaces the level the step should reach")
+    check(m.stepVolume(tv, up: false) == .device(up: false) && approx(m.volume(of: tv), 41, 1e-9),
+          "cast step: down by the device's step")
+    _ = m.apply(.volume(attempt: 9, CastVolume(level: 1, muted: false, fixed: true, step: 0.02)))
+    check(m.stepVolume(tv, up: true) == nil, "cast step: a fixed volume takes no step")
+    var top = CastModel()
+    top.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+    _ = top.turnOn(tv)
+    top.startSent(tv)
+    _ = top.started(tv, attempt: 1, refusal: ASC_CAST_REFUSED_NONE)
+    _ = top.apply(.volume(attempt: 1, CastVolume(level: 0.98, muted: false, fixed: false)))
+    check(top.stepVolume(tv, up: true) == .level(1), "cast step: the fallback step stops at full volume")
+
+    var raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_VOLUME
+    raw.attempt = 9
+    raw.level = 0.5
+    raw.step = 0.05
+    check(CastEvent(raw) == .volume(attempt: 9, CastVolume(level: 0.5, muted: false, fixed: false, step: 0.05)),
+          "cast step: a volume event copies the device's step")
+
+    // The Cast sender has a track info feed of its own: a device switched on
+    // while AirPlay receivers already show the track still gets all of it.
+    let song = TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record")
+    let next = TrackMetadata.Fields(title: "Next", artist: "Band", album: "Record")
+    let cover = NSImage(size: NSSize(width: 1, height: 1)), icon = NSImage(size: NSSize(width: 1, height: 1))
+    let now = Date(timeIntervalSinceReferenceDate: 0)
+    func shows(_ fields: TrackMetadata.Fields) -> () -> (info: ReceiverInfo, artwork: NSImage?) {
+        { (ReceiverInfo(fields: fields, artwork: .track), cover) }
+    }
+    var airPlay = TrackInfoFeed()
+    _ = airPlay.modelUpdated(sending: true)
+    _ = airPlay.send(sending: true, now: now, pollingSince: nil, hasReading: true, icon: icon, shows: shows(song))
+    let sender = CastSender(memoryURL: nil, onChanges: { _ in }, onEvents: { _ in })
+    check(!sender.trackInfo.modelUpdated(sending: false) && sender.trackInfo.sent == nil,
+          "cast track info: nothing goes out while no Cast device is on")
+    check(sender.trackInfo.modelUpdated(sending: true), "cast track info: switching a device on sends everything")
+    let first = sender.trackInfo.send(sending: true, now: now, pollingSince: nil, hasReading: true, icon: icon,
+                                      shows: shows(song))
+    check(first.fields == song && first.picture === cover,
+          "cast track info: the device gets the track and cover AirPlay already had")
+    check(sender.trackInfo.send(sending: true, now: now + 1, pollingSince: nil, hasReading: true, icon: icon,
+                                shows: shows(song)).fields == nil,
+          "cast track info: the same track again gives the sender nothing")
+    check(sender.trackInfo.send(sending: true, now: now + 2, pollingSince: nil, hasReading: true, icon: icon,
+                                shows: shows(next)).fields == next,
+          "cast track info: a track change goes to the sender, kept for the next load")
+    sender.discard()
+
+    // With no track known, Cast gets none of AudioSync's labels or its icon:
+    // blank fields, which the sender leaves out (C53), and no cover.
+    let blank = ReceiverInfo.decideForCast(track: nil, source: .system)
+    check(blank == ReceiverInfo(fields: .init(title: "", artist: "", album: ""), artwork: .neutral),
+          "cast track info: with no track known, the fields are blank, not AudioSync's labels")
+    var castFeed = TrackInfoFeed()
+    _ = castFeed.modelUpdated(sending: true)
+    let untitled = castFeed.send(sending: true, now: now, pollingSince: nil, hasReading: true, icon: nil,
+                                 shows: { (blank, nil) })
+    check(untitled.fields == blank.fields && untitled.picture == nil,
+          "cast track info: with no track known, the device gets blank fields and no cover")
+
+    // A large cover fits C53: at most 1280 by 720, within the byte cap.
+    let side = 2000
+    let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    for i in 0..<40 {
+        context.setFillColor(CGColor(red: CGFloat(i % 7) / 7, green: CGFloat(i % 5) / 5, blue: CGFloat(i % 3) / 3,
+                                     alpha: 1))
+        context.fill(CGRect(x: i * 50, y: 0, width: 50, height: side - i * 37))
+    }
+    let jpeg = TrackMetadata.jpeg(context.makeImage()!, maxSide: CastSender.artworkSide,
+                                  maxBytes: CastSender.artworkBytes)
+    let decoded = jpeg.flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }
+        .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+    check(decoded.map { $0.width <= 1280 && $0.height <= 720 } == true
+            && (jpeg?.count ?? .max) <= CastSender.artworkBytes,
+          "cast track info: a large cover is scaled to fit 1280 by 720 and the byte cap")
+}
+
 // MARK: AirPlay, Google Cast and local outputs at one latency: the hold-backs, the AirPlay cap and the notice (C77)
 do {
     let t = UIStrings()
