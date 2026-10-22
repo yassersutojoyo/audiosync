@@ -219,6 +219,46 @@ mod tests {
     }
 
     #[test]
+    fn a_blank_local_name_or_a_lookalike_host_never_matches() {
+        let local = SocketAddr::new(v4(192, 168, 1, 5), 7655);
+        for blank in ["", ".local"] {
+            assert!(
+                !host_allowed(".local:7655", local, Some(blank)),
+                "{blank:?}"
+            );
+            assert!(!host_allowed("local:7655", local, Some(blank)), "{blank:?}");
+        }
+        let name = Some("kitchen");
+        for lookalike in [
+            "kitchen.local.evil.example:7655",
+            "evil.kitchen.local:7655",
+            "kitchen:7655",
+            "user@kitchen.local:7655",
+            "kitchen.local:7655:7655",
+            "kitchen.local:99999",
+            "kitchen.local:",
+        ] {
+            assert!(!host_allowed(lookalike, local, name), "{lookalike}");
+        }
+    }
+
+    #[test]
+    fn an_origin_with_a_path_or_credentials_is_not_the_pages() {
+        let host = "kitchen.local:7655";
+        assert!(origin_matches(" http://kitchen.local:7655 ", host));
+        for origin in [
+            "http://kitchen.local:7655/",
+            "http://kitchen.local:7655/api/pair",
+            "http://user@kitchen.local:7655",
+            "http://kitchen.local",
+            "HTTP://kitchen.local:7655",
+            "",
+        ] {
+            assert!(!origin_matches(origin, host), "{origin}");
+        }
+    }
+
+    #[test]
     fn origin_must_be_the_pages_own() {
         let host = format!("{}:7655", v4(192, 168, 1, 5));
         assert!(origin_matches(&format!("http://{host}"), &host));
