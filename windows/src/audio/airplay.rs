@@ -701,6 +701,9 @@ pub struct AirPlaySpeakers {
     /// Added to every speaker's d_s while a Google Cast speaker plays later
     /// than L (C77), in ms.
     hold_back_ms: f64,
+    /// While Calibrate All plays a speaker's sweep, the one speaker heard;
+    /// the others are muted.
+    calibration_solo: Option<String>,
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
@@ -751,6 +754,7 @@ impl AirPlaySpeakers {
             master,
             latency,
             hold_back_ms: 0.0,
+            calibration_solo: None,
             stopped: false,
             store_unsaved: false,
             store_change: None,
@@ -1387,7 +1391,7 @@ impl AirPlaySpeakers {
             return;
         }
         self.entry(id).volume = position;
-        let volume = airplay_volume(position, self.master);
+        let volume = self.volume_of(id);
         self.log.log(|| {
             format!(
                 "AirPlay speaker {} volume: {position} ({})",
@@ -1403,8 +1407,38 @@ impl AirPlaySpeakers {
     /// Sets the master position, which scales every speaker, live.
     pub fn set_master(&mut self, master: f64) {
         self.master = master;
+        self.send_volumes();
+    }
+
+    /// Only speaker `id` is heard, `None`: every speaker is, at its volume
+    /// again. Calibrate All measures one AirPlay speaker at a time.
+    pub fn set_calibration_solo(&mut self, id: Option<&str>) {
+        if self.calibration_solo.as_deref() == id {
+            return;
+        }
+        self.calibration_solo = id.map(str::to_owned);
+        self.log.log(|| match id {
+            Some(id) => format!(
+                "calibration: only AirPlay speaker {} is heard",
+                self.label(id)
+            ),
+            None => "calibration: every AirPlay speaker is heard again".to_owned(),
+        });
+        self.send_volumes();
+    }
+
+    /// The volume speaker `id` gets now: muted while a calibration lets
+    /// another speaker alone be heard.
+    fn volume_of(&self, id: &str) -> Volume {
+        match self.calibration_solo.as_deref() {
+            Some(solo) if solo != id => Volume::Muted,
+            _ => airplay_volume(self.settings(id).volume, self.master),
+        }
+    }
+
+    fn send_volumes(&mut self) {
         for (id, added) in &self.added {
-            let volume = airplay_volume(self.settings(id).volume, master);
+            let volume = self.volume_of(id);
             self.link.set_volume(&added.key, volume);
         }
     }
@@ -1503,8 +1537,7 @@ impl AirPlaySpeakers {
 
     /// The options a speaker joins with.
     fn options(&self, id: &str) -> SpeakerOptions {
-        let settings = self.settings(id);
-        let mut options = SpeakerOptions::new(airplay_volume(settings.volume, self.master));
+        let mut options = SpeakerOptions::new(self.volume_of(id));
         options.delay = self.sent_delay(id);
         options.credentials = self.store.get(id).cloned();
         options.homekit_credentials = self.store.homekit(id).cloned();
@@ -3684,6 +3717,38 @@ pub mod tests {
             ]
         );
         assert_eq!(airplay.speakers()[0].delay_ms, 3000.0);
+    }
+
+    #[test]
+    fn a_calibration_solo_mutes_the_other_speakers_until_it_ends() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let study = device(2, "Study", OPEN_TXT);
+        let (k, s) = (id_of(&kitchen), id_of(&study));
+        fake.appear(&kitchen);
+        fake.appear(&study);
+        airplay.poll();
+        airplay.set_enabled(&k, true).unwrap();
+        airplay.set_enabled(&s, true).unwrap();
+        airplay.set_streaming(true);
+        airplay.set_volume(&s, 50.0);
+        fake.take_calls();
+        airplay.set_calibration_solo(Some(&k));
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::Volume(s.clone(), Volume::Muted)));
+        assert!(!calls.contains(&Call::Volume(k.clone(), Volume::Muted)));
+        // The user's slider moves while muted: kept, still muted.
+        airplay.set_volume(&s, 100.0);
+        assert_eq!(fake.take_calls(), [Call::Volume(s.clone(), Volume::Muted)]);
+        airplay.set_calibration_solo(None);
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::Volume(s.clone(), airplay_volume(100.0, 100.0))));
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(call, Call::Volume(_, Volume::Muted)))
+        );
     }
 
     #[test]

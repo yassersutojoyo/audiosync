@@ -408,6 +408,7 @@ mod tests {
             when_source_quits: Default::default(),
             cast_list: crate::ui_model::CastList::Quiet,
             calibration: Default::default(),
+            calibrate_all: Default::default(),
         }
     }
 
