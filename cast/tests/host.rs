@@ -17,7 +17,7 @@ use audiosync_cast::host::{
 };
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::NS_MEDIA;
-use audiosync_cast::session::{SessionEnd, SessionError};
+use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use common::{Behavior, FakeDevice, OnLaunch, OnLoad};
 use serde_json::{Value, json};
 
@@ -534,4 +534,55 @@ fn every_attempt_ends_exactly_once_even_when_stopped_or_shut_down_while_starting
     );
     silent.join();
     working.join();
+}
+
+// Partly C80 and C81: recovery and its connect retries reach the host while
+// the device is still unreachable, not when the retries end.
+#[test]
+fn recovery_and_its_retries_reach_the_host_while_the_device_is_unreachable() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    // Powered off: the channel drops and nothing listens any more.
+    device.join();
+    let mut events = wait_for(&host, Duration::from_secs(10), |event| {
+        matches!(
+            event,
+            HostEvent::Session {
+                event: SessionEvent::Recovering(_),
+                ..
+            }
+        )
+    });
+    events.extend(wait_for(&host, Duration::from_secs(10), |event| {
+        matches!(
+            event,
+            HostEvent::Session {
+                event: SessionEvent::ConnectFailed { .. },
+                ..
+            }
+        )
+    }));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, HostEvent::Ended { .. })),
+        "{events:?}"
+    );
+    host.stop();
+    let events = wait_for(&host, Duration::from_secs(3), ended(A));
+    assert!(
+        matches!(
+            events.last(),
+            Some(HostEvent::Ended {
+                end: SessionEnd::Deselected,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+    assert!(host.shutdown());
 }

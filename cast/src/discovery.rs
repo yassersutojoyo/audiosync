@@ -326,11 +326,17 @@ impl DeviceList {
         self.entries.iter_mut().find(|entry| entry.key == key)
     }
 
-    /// Adds a device by address, keyed by that address (C18).
+    /// Adds a device by address, keyed by that address (C18). An address a
+    /// listed device already has names that device, which stays one row
+    /// (C16).
     pub fn add_manual(&mut self, address: SocketAddr) -> ListEvent {
         let key = DeviceKey::Manual(address);
-        if self.get(key).is_some() {
-            return ListEvent::Updated(key);
+        if let Some(entry) = self
+            .entries
+            .iter()
+            .find(|entry| entry.key == key || entry.addresses.contains(&address))
+        {
+            return ListEvent::Updated(entry.key);
         }
         self.entries.push(Entry {
             key,

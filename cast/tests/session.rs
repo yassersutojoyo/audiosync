@@ -4,6 +4,9 @@
 mod common;
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, TcpListener};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_cast::channel::Event;
@@ -138,6 +141,60 @@ fn connect_failures_say_their_cause_and_retries_back_off() {
     assert_eq!(waits, [1, 2, 4, 8, 16, 30, 30, 30]);
     backoff.reset();
     assert_eq!(backoff.next_wait(), Duration::from_secs(1));
+}
+
+/// Clears `selected` after `delay` from another thread.
+fn deselect_after(delay: Duration) -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
+    let selected = Arc::new(AtomicBool::new(true));
+    let flag = Arc::clone(&selected);
+    let clearing = thread::spawn(move || {
+        thread::sleep(delay);
+        flag.store(false, Ordering::SeqCst);
+    });
+    (selected, clearing)
+}
+
+// Partly C80 and C88: a deselect ends a connect at once, whatever step it
+// waits on, so a quit never waits out the timeouts of every address.
+#[test]
+fn a_deselect_ends_a_connect_while_it_waits() {
+    let silent = FakeDevice::start(Behavior {
+        answer_status: false,
+        ..Behavior::default()
+    });
+    let (selected, clearing) = deselect_after(Duration::from_millis(1_000));
+    let started = Instant::now();
+    let error = CastClient::connect_while(&[silent.address], RequestIds::starting_at(1), &selected)
+        .expect_err("deselected");
+    assert!(
+        matches!(error, ConnectError::Ended(EndReason::Stopped)),
+        "{error}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(2_500),
+        "{:?}",
+        started.elapsed()
+    );
+    let _ = clearing.join();
+
+    // A documentation address (RFC 5737) that no device answers: the TCP
+    // connect waits up to its timeout, or fails at once without a route.
+    let nowhere = SocketAddr::new(IpAddr::from([192, 0, 2, 1]), 8009);
+    let (selected, clearing) = deselect_after(Duration::from_millis(300));
+    let started = Instant::now();
+    let result = CastClient::connect_while(
+        &[nowhere, silent.address],
+        RequestIds::starting_at(1),
+        &selected,
+    );
+    assert!(result.is_err());
+    assert!(
+        started.elapsed() < Duration::from_millis(1_500),
+        "{:?}",
+        started.elapsed()
+    );
+    let _ = clearing.join();
+    silent.join();
 }
 
 #[test]

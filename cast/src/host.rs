@@ -41,7 +41,9 @@ use crate::client::QUIT_BUDGET;
 use crate::discovery::DeviceId;
 use crate::group::GroupRecords;
 use crate::media::{IdleReason, MediaError, Metadata};
-use crate::session::{CastSession, SessionConfig, SessionEnd, SessionError, SessionEvent};
+use crate::session::{
+    CastSession, EventSink, SessionConfig, SessionEnd, SessionError, SessionEvent,
+};
 
 /// How long the worker drives a session between two looks at the command
 /// queue.
@@ -527,6 +529,9 @@ struct Worker {
     outbox: SyncSender<HostEvent>,
     /// Events that must not be dropped, waiting for room in the outbox.
     held: VecDeque<HostEvent>,
+    /// Whether `held` is empty, for the session's recovery sink, which must
+    /// not overtake held events.
+    in_order: Arc<AtomicBool>,
     shared: Arc<Shared>,
     running: Option<Running>,
 }
@@ -537,6 +542,7 @@ impl Worker {
             inbox,
             outbox,
             held: VecDeque::new(),
+            in_order: Arc::new(AtomicBool::new(true)),
             shared,
             running: None,
         }
@@ -571,14 +577,15 @@ impl Worker {
                 Ok(()) => {}
                 Err(TrySendError::Full(event)) => {
                     self.held.push_front(event);
-                    return;
+                    break;
                 }
                 Err(TrySendError::Disconnected(_)) => {
                     self.held.clear();
-                    return;
+                    break;
                 }
             }
         }
+        self.in_order.store(self.held.is_empty(), Ordering::SeqCst);
     }
 
     fn quitting(&self) -> bool {
@@ -745,6 +752,7 @@ impl Worker {
         );
         match result {
             Ok(mut session) => {
+                session.set_recovery_sink(self.recovery_sink(attempt, device));
                 let format = session.format();
                 if lock(&self.shared.memory).remember_format(device, format.codec()) {
                     self.emit(HostEvent::MemoryChanged);
@@ -791,6 +799,27 @@ impl Worker {
                 self.ended(attempt, device, SessionEnd::Failed(error));
             }
         }
+    }
+
+    /// Sends a recovering session's events straight to the host (C80,
+    /// C81); the worker sits in the session's retries until they end.
+    fn recovery_sink(&self, attempt: AttemptId, device: DeviceId) -> EventSink {
+        let outbox = self.outbox.clone();
+        let in_order = Arc::clone(&self.in_order);
+        Box::new(move |event| {
+            if !in_order.load(Ordering::SeqCst) {
+                return Err(event);
+            }
+            let sent = outbox.try_send(HostEvent::Session {
+                attempt,
+                device,
+                event,
+            });
+            match sent {
+                Err(TrySendError::Full(HostEvent::Session { event, .. })) => Err(event),
+                _ => Ok(()),
+            }
+        })
     }
 
     fn drive(&mut self) {
