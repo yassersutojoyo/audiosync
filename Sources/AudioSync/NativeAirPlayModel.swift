@@ -408,9 +408,12 @@ struct NativeAirPlayModel {
     }
 
     /// The rows (app IDs) missing from `known` whose receiver is listed as
-    /// able to play: the ones auto-connect may switch on.
-    func joinable(_ rows: [String], after known: Set<String>) -> [String] {
-        rows.filter { id in
+    /// able to play: the ones auto-connect may switch on. None for rows a
+    /// stop rebuilt (`stopped`), as auto-connect would restart streaming
+    /// from inside the stop.
+    func joinable(_ rows: [String], after known: Set<String>, stopped: Bool) -> [String] {
+        guard !stopped else { return [] }
+        return rows.filter { id in
             guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id) else { return false }
             return receivers[receiver]?.availability == .available
         }
