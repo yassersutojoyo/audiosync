@@ -226,12 +226,12 @@ extension AppDelegate {
                                       hasReading: nowPlaying.hasReading, icon: NSApp.applicationIconImage,
                                       shows: receiverShows)
         sendCastTrackInfo(now: now)
-        if let fields = step.fields { nativeAirPlay?.setTrack(fields) }
         if let date = step.recheckAt { recheckTrackInfo(at: date) }
-        guard let picture = step.picture else { return }
         // Encoded on the sender's queue, so it gets an image of its own.
-        let own = picture.copy() as? NSImage ?? picture
-        nativeAirPlay?.setArtwork(own)
+        let own = step.picture.map { $0.copy() as? NSImage ?? $0 }
+        guard step.fields != nil || own != nil || step.sendsPosition else { return }
+        nativeAirPlay?.setTrackInfo(fields: step.fields, artwork: own, sendsPosition: step.sendsPosition,
+                                    position: step.position)
     }
 
     /// What receivers should show now, and the track's artwork.

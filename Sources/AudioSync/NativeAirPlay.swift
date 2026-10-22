@@ -136,29 +136,34 @@ final class NativeAirPlay {
         }
     }
 
-    /// The track's title, artist and album for the receivers that show it,
-    /// sent with the artwork set last, which a new track drops
-    /// (`NativeNowPlaying`, P123 to P127). Main queue.
-    func setTrack(_ fields: TrackMetadata.Fields) {
+    /// What changed for the receivers that show it (P123 to P127), in one
+    /// send: the track's title, artist and album, which drop the artwork set
+    /// last (`NativeNowPlaying`); its artwork, scaled and encoded as a small
+    /// JPEG on the queue (`TrackMetadata.jpeg`); and, when `sendsPosition`,
+    /// its position, nil for none, which a new track drops in the core.
+    /// Main queue.
+    func setTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?,
+                      sendsPosition: Bool, position: NowPlayingMonitor.Position?) {
         queue.async { [weak self] in
             guard let self else { return }
-            self.nowPlaying.setTrack(fields)
-            self.sendNowPlaying()
-        }
-    }
-
-    /// The artwork for the receivers that show it, scaled and encoded as a
-    /// small JPEG on the queue (`TrackMetadata.jpeg`), and sent with the
-    /// track set last. Main queue.
-    func setArtwork(_ image: NSImage) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            guard let jpeg = TrackMetadata.jpeg(image) else {
-                DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
-                return
+            var changed = false
+            if let fields {
+                self.nowPlaying.setTrack(fields)
+                changed = true
             }
-            self.nowPlaying.setArtwork(jpeg)
-            self.sendNowPlaying()
+            if let artwork {
+                if let jpeg = TrackMetadata.jpeg(artwork) {
+                    self.nowPlaying.setArtwork(jpeg)
+                    changed = true
+                } else {
+                    DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
+                }
+            }
+            if changed { self.sendNowPlaying() }
+            // The core can't take progress before its track, so a new track goes out twice.
+            guard sendsPosition, let handle = self.handle else { return }
+            let elapsed = position?.elapsed(at: ProcessInfo.processInfo.systemUptime) ?? 0
+            _ = asc_airplay_set_progress(handle, elapsed * 1000, (position?.length ?? 0) * 1000)
         }
     }
 

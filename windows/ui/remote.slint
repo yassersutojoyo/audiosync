@@ -57,6 +57,8 @@ export component RemoteWindow inherits Window {
     // Forget All Remote Devices couldn't save the empty list.
     in property <bool> forget-failed;
     in property <bool> port-invalid;
+    // A network this PC is connected to has Windows' Public profile.
+    in property <bool> public-network;
 
     callback remote-toggled(bool);
     callback new-code-requested();
@@ -177,6 +179,13 @@ export component RemoteWindow inherits Window {
 
                     if root.listening: VerticalLayout {
                         spacing: 14px;
+
+                        if root.public-network: Text {
+                            text: Strings.remote-public-network;
+                            color: Tokens.error-text;
+                            wrap: word-wrap;
+                            min-height: self.preferred-height;
+                        }
 
                         VerticalLayout {
                             spacing: 8px;

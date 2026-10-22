@@ -296,6 +296,9 @@ const STARTUP_APPS_PAGE: &str = "ms-settings:startupapps";
 /// and as far from the backend's.
 const AIRPLAY2_NOTICE_ID: u64 = launch_at_login::NOTICE_ID - 1;
 
+/// The web remote's Public network notice's id, next to those.
+const REMOTE_PUBLIC_NOTICE_ID: u64 = AIRPLAY2_NOTICE_ID - 1;
+
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
 const NATIVE_WINDOW_TRIES: u8 = 100;
@@ -834,6 +837,7 @@ impl App {
         state
             .notices
             .extend(self.ui.borrow().airplay2_notice.clone());
+        state.notices.extend(self.remote_public_notice());
         state
     }
 
@@ -876,7 +880,7 @@ impl App {
     fn dismiss_notice(&self, id: u64) {
         let airplay2 =
             id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
-        if airplay2 || self.login.borrow_mut().dismiss(id) {
+        if airplay2 || self.login.borrow_mut().dismiss(id) || self.dismiss_remote_notice(id) {
             self.refresh();
         } else {
             self.update(|b| b.dismiss_notice(id));
@@ -886,6 +890,7 @@ impl App {
     fn dismiss_all_notices(&self) {
         self.login.borrow_mut().dismiss_notice();
         self.ui.borrow_mut().airplay2_notice = None;
+        self.dismiss_remote_notice(REMOTE_PUBLIC_NOTICE_ID);
         self.update(|b| b.dismiss_all_notices());
     }
 
@@ -3694,6 +3699,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::AirPlay2NextLaunch { on: false } => {
             strings.get_notice_airplay2_off_next_launch()
         }
+        NoticeMessage::RemoteOnPublicNetwork => strings.get_remote_public_network(),
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -3765,6 +3771,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::LaunchAtLoginNotRemoved => (NoticeKind::LaunchAtLoginNotRemoved, ""),
         NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
         NoticeMessage::AirPlay2NextLaunch { .. } => (NoticeKind::Airplay2NextLaunch, ""),
+        NoticeMessage::RemoteOnPublicNetwork => (NoticeKind::RemotePublicNetwork, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -6326,6 +6333,7 @@ mod tests {
             NoticeMessage::LaunchAtLoginOffInSettings,
             NoticeMessage::AirPlay2NextLaunch { on: true },
             NoticeMessage::AirPlay2NextLaunch { on: false },
+            NoticeMessage::RemoteOnPublicNetwork,
         ];
         for message in messages {
             let label = dismiss_label(message.clone());

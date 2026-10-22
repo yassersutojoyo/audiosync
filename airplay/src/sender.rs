@@ -237,7 +237,9 @@ pub struct NowPlaying {
     pub track: Option<TrackInfo>,
     /// A JPEG of at most 512 KiB (P125).
     pub artwork: Option<Vec<u8>>,
-    /// Only when the host knows the track's start and length (P126).
+    /// Only when the host knows the track's start and length (P126), and
+    /// only while the track plays: a speaker that starts later gets it
+    /// carried on by the time since it was set.
     pub progress: Option<Progress>,
 }
 

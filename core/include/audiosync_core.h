@@ -1394,6 +1394,18 @@ bool asc_airplay_set_now_playing(AscAirPlay *airplay, const char *title, const c
                                  const char *album, const uint8_t *artwork, size_t artwork_len);
 
 /*
+ * Sets how far into the track the audio arriving now is, and how long the
+ * track is, in ms, for the receivers that show progress. It goes out with
+ * the track and artwork set last (asc_airplay_set_now_playing), now and to
+ * every speaker that starts or restarts later. A length that isn't positive
+ * and finite sends none; so does another track, until this is called again,
+ * while the same track set again keeps it. An elapsed time outside 0 to the
+ * length is taken as its nearest end. Returns false, changing nothing, for a
+ * NULL or dead handle.
+ */
+bool asc_airplay_set_progress(AscAirPlay *airplay, double elapsed_ms, double length_ms);
+
+/*
  * Opens the pairing store kept in the file at `path` (UTF-8), meant for
  * once, before discovery starts: an Apple TV it holds credentials for is
  * listed as available and verifies with them; one it doesn't is listed as
