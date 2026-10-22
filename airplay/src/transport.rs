@@ -723,8 +723,12 @@ fn read_loop(
         let mut buf = vec![0u8; READ_BYTES];
         loop {
             match stream.read(&mut buf) {
+                // Our own close shuts the connection down too: that end is
+                // not the receiver's and reaches the driver as nothing.
                 Ok(0) => {
-                    notify(IoEvent::RtspClosed { session, attempt });
+                    if !stop.load(Ordering::Acquire) {
+                        notify(IoEvent::RtspClosed { session, attempt });
+                    }
                     break;
                 }
                 Ok(len) => {
@@ -750,7 +754,9 @@ fn read_loop(
                     }
                 }
                 Err(_) => {
-                    notify(IoEvent::RtspClosed { session, attempt });
+                    if !stop.load(Ordering::Acquire) {
+                        notify(IoEvent::RtspClosed { session, attempt });
+                    }
                     break;
                 }
             }
