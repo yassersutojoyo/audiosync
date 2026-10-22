@@ -459,7 +459,9 @@ fn keyboard_shortcuts_are_declared() {
 /// short name for the dismiss button, and the note that discovery has found
 /// no speaker yet (alone, or with Google Cast's in one sentence), which
 /// shows only while it runs. The note and row state for a speaker waiting
-/// for the one AirPlay 2 slot show only behind the hidden AirPlay 2 switch.
+/// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
+/// File menu item says it is experimental, as do the notice that turning
+/// the item on or off applies at the next launch and its short name.
 /// The calibration results' AirPlay lines show only when an AirPlay
 /// speaker took part, so the sender ran.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
@@ -494,6 +496,10 @@ fn no_text_promises_airplay() {
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
+                || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
+                || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
+                || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
+                || line.contains("return @tr(\"AirPlay 2 after restart\");")
                 || line.contains(
                     "network-none-found: @tr(\"No AirPlay or Google Cast speakers found yet.",
                 )

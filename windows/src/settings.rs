@@ -300,6 +300,8 @@ pub struct Settings {
     pub when_source_quits: String,
     /// File > Web Remote: whether it is on, and its port.
     pub remote: RemoteSettings,
+    /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
+    pub airplay2_experimental: bool,
 }
 
 impl Default for Settings {
@@ -320,6 +322,7 @@ impl Default for Settings {
             airplay_adjustment_ms: 0.0,
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
             remote: RemoteSettings::default(),
+            airplay2_experimental: false,
         }
     }
 }
@@ -455,6 +458,7 @@ impl Settings {
                 .stored()
                 .to_owned(),
             remote: self.remote.clamped(),
+            airplay2_experimental: self.airplay2_experimental,
         }
     }
 
@@ -818,6 +822,16 @@ mod tests {
         let (low, found) = read(r#"{"version": 2, "remote": {"on": true, "port": 80}}"#);
         assert_eq!(low.remote.port, audiosync_remote::DEFAULT_PORT);
         assert!(matches!(found, Loaded::Read { adjusted: true, .. }));
+    }
+
+    #[test]
+    fn airplay2_is_off_in_a_file_that_does_not_name_it() {
+        let read = |json: &str| Settings::from_json(json).expect("read").0;
+        assert!(!Settings::default().airplay2_experimental);
+        assert!(!read(r#"{"version": 2}"#).airplay2_experimental);
+        let on = read(r#"{"version": 2, "airplay2_experimental": true}"#);
+        assert!(on.airplay2_experimental);
+        assert!(read(&on.to_json()).airplay2_experimental);
     }
 
     #[test]

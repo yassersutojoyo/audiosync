@@ -585,6 +585,8 @@ export component MainWindow inherits Window {
     in property <bool> switch-source-on-quit;
     // File > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
+    // File > AirPlay 2 (Experimental): as saved; it applies at the next launch.
+    in property <bool> airplay2-experimental;
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
     // shows (the applied value, or what is being typed).
     in property <bool> airplay-delay-shown;
@@ -668,6 +670,7 @@ export component MainWindow inherits Window {
     callback appearance-chosen(Appearance);
     callback switch-source-on-quit-toggled(bool);
     callback launch-at-login-toggled(bool);
+    callback airplay2-experimental-toggled(bool);
     // File > Web Remote…
     callback remote-requested();
     callback notice-dismissed(int);
@@ -780,6 +783,15 @@ export component MainWindow inherits Window {
                 title: Strings.menu-remote;
                 activated => {
                     root.remote-requested();
+                }
+            }
+
+            MenuItem {
+                title: Strings.airplay2-experimental;
+                checkable: true;
+                checked: root.airplay2-experimental;
+                activated => {
+                    root.airplay2-experimental-toggled(!root.airplay2-experimental);
                 }
             }
 

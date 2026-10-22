@@ -461,6 +461,9 @@ pub enum NoticeMessage {
     /// The Run value is written, but Task Manager or Settings has AudioSync
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
+    /// File > AirPlay 2 (Experimental) was turned on (`on`) or off, which
+    /// applies once AudioSync is quit and opened again.
+    AirPlay2NextLaunch { on: bool },
     /// A Google Cast speaker can't play, so it is off.
     CastCantPlay {
         speaker: String,
@@ -862,6 +865,9 @@ pub struct ViewSettings {
     pub window: Option<WindowFrame>,
     /// File > Web Remote.
     pub remote: crate::remote::RemoteSettings,
+    /// File > AirPlay 2 (Experimental), as saved; the sender reads it at
+    /// launch only.
+    pub airplay2_experimental: bool,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in
