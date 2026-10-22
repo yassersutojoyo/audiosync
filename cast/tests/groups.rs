@@ -665,3 +665,38 @@ fn a_group_keeps_one_stream_response_per_address() {
     assert_eq!(http::status(&head), 200);
     server.stop();
 }
+
+#[test]
+fn an_address_the_group_dropped_gets_403() {
+    // The session puts the leader it connected to on the static list, and a
+    // handover moves the records before any recover runs (C97).
+    let local = IpAddr::from([127, 0, 0, 1]);
+    let (writer, reader) = audio_ring(48_000);
+    let config = StreamConfig {
+        local_ip: local,
+        allowed: vec![local],
+        format: StreamFormat::wav(48_000).expect("rate"),
+    };
+    let server = StreamServer::start(config, reader).expect("starts");
+    server.set_group_limit(1);
+    let records = GroupRecords::new(vec![SocketAddr::new(local, 32_187)]);
+    server.follow_group(records.clone());
+    let (address, path) = http::split_url(&server.url()).expect("url");
+    let get = || {
+        let request = format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
+        http::request(address, &request).expect("connects")
+    };
+    let _feed = feed(writer);
+    let mut leader = get();
+    let (head, _) = http::read_response(&mut leader, Duration::from_millis(200));
+    assert_eq!(http::status(&head), 200);
+    records.set_group(vec![SocketAddr::new(v4(10), 32_187)]);
+    let mut dropped = get();
+    let (head, _) = http::read_response(&mut dropped, Duration::ZERO);
+    assert_eq!(
+        http::status(&head),
+        403,
+        "the old leader is not the group's now"
+    );
+    server.stop();
+}
