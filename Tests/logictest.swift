@@ -4848,8 +4848,9 @@ do {
           "cast model: a removed manual device stays off the list until it is added again; only a manual one is removed")
     let t = UIStrings()
     check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil, manual: true)) == "Added by address"
-            && t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil,
-          "cast row: a device added by address says so under its name")
+            && t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil
+            && t.helpText.contains("click\nAdd by Address… under"),
+          "cast row: a device added by address says so under its name, and the Guide names the action")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
