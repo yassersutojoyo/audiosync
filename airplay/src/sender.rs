@@ -127,14 +127,22 @@ pub fn airplay2_switch(value: Option<&str>) -> bool {
 pub const AIRPLAY_PCM_ENV: &str = "AUDIOSYNC_AIRPLAY_PCM";
 
 /// The speaker IDs in [`AIRPLAY_PCM_ENV`]'s value, trimmed, empty ones
-/// skipped.
+/// skipped. A device ID written with colons or in lowercase
+/// (`aa:bb:cc:dd:ee:ff`) becomes the form speaker IDs use, `AABBCCDDEEFF`.
 pub fn pcm_debug_devices(value: Option<&str>) -> std::collections::BTreeSet<String> {
     value
         .unwrap_or_default()
         .split(',')
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .map(str::to_owned)
+        .map(|id| {
+            let hex: String = id.chars().filter(|c| *c != ':').collect();
+            if hex.len() == 12 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                hex.to_ascii_uppercase()
+            } else {
+                id.to_owned()
+            }
+        })
         .collect()
 }
 

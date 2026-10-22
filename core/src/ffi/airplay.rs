@@ -1742,6 +1742,13 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 let position = volume.clamp(0.0, 100.0);
                 let mut options = SpeakerOptions::new(speaker_volume(position, airplay.master));
                 options.delay = airplay.hold_back;
+                // The sender gives every member the target's PCM choice.
+                options.pcm = pcm_debug_allows(
+                    id,
+                    std::env::var(audiosync_airplay::sender::AIRPLAY_PCM_ENV)
+                        .ok()
+                        .as_deref(),
+                );
                 let target_id = target.id.clone();
                 let members = target
                     .members
@@ -2691,6 +2698,11 @@ mod tests {
         assert!(!pcm_debug_allows("study", Some("den, kitchen")));
         assert!(!pcm_debug_allows("kitchen", Some("")));
         assert!(!pcm_debug_allows("kitchen", None));
+        assert!(pcm_debug_allows(
+            "A1B2C3D4E5F6",
+            Some("raop:A1B2C3D4E5F6@Kitchen, a1:b2:c3:d4:e5:f6")
+        ));
+        assert!(!pcm_debug_allows("A1B2C3D4E5F7", Some("a1:b2:c3:d4:e5:f6")));
     }
 
     #[test]

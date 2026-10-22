@@ -1225,6 +1225,11 @@ do {
 
 // MARK: Native AirPlay sender — its IDs, rows, speaker plan, events and sync rule
 do {
+    check(NativeAirPlayID.pcmDebugIDs(nil).isEmpty && NativeAirPlayID.pcmDebugIDs(" , ").isEmpty,
+          "native airplay: no AUDIOSYNC_AIRPLAY_PCM names no receiver")
+    check(NativeAirPlayID.pcmDebugIDs("a1:b2:c3:d4:e5:f6, raop:0011223344AA@Den ,,0011223344aa")
+            == ["A1B2C3D4E5F6", "raop:0011223344AA@Den", "0011223344AA"],
+          "native airplay: AUDIOSYNC_AIRPLAY_PCM IDs are trimmed and device IDs take the 12-hex form")
     let tv = NativeReceiver(id: "02005E005302", name: "Den TV", model: "AppleTV3,2", availability: .needsPin,
                             reason: nil, hints: ["raop", "apple-tv", "pairing", "pin-pairing"])
     check(NativeReceiverChange.appeared(tv).logLine

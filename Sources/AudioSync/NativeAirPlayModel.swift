@@ -26,6 +26,18 @@ enum NativeAirPlayID {
     static func playable(_ enabled: Set<String>) -> Set<String> {
         enabled.filter { receiver($0) != nil }
     }
+
+    /// The receiver IDs in AUDIOSYNC_AIRPLAY_PCM's value, read as the core
+    /// reads them: trimmed, empty ones skipped, `aa:bb:cc:dd:ee:ff` as
+    /// `AABBCCDDEEFF`.
+    static func pcmDebugIDs(_ value: String?) -> Set<String> {
+        let ids = (value ?? "").split(separator: ",").map { entry -> String in
+            let id = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hex = id.filter { $0 != ":" }
+            return hex.count == 12 && hex.allSatisfy(\.isHexDigit) ? hex.uppercased() : id
+        }
+        return Set(ids.filter { !$0.isEmpty })
+    }
 }
 
 /// Something the native sender reported about a speaker, or about the stream
