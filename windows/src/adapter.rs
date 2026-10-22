@@ -3115,6 +3115,7 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::OneAirPlay2Speaker => P::OneAirPlay2Speaker,
         AirPlayProblem::PlaysThroughSpeakers => P::PlaysThroughSpeakers,
         AirPlayProblem::AppleTvPlays => P::AppleTvPlays,
+        AirPlayProblem::PlaysInGroup => P::PlaysInGroup,
         AirPlayProblem::Unsupported => P::Unsupported,
     }
 }

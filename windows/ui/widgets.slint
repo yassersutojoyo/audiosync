@@ -1143,8 +1143,7 @@ export component SpeakerRow inherits Rectangle {
     // ("Waiting for device", "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.availability == Availability.unsupported);
     property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
-    // A stereo pair or home theater group says what it is first.
-    property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", Strings.speaker-caption(root.item.group-note, root.note));
+    property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     border-radius: Fluent.radius-control;
     background: root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
@@ -1264,6 +1263,14 @@ export component SpeakerRow inherits Rectangle {
                                         font-size: Tokens.font-size-caption;
                                         color: Tokens.teal-text;
                                     }
+                                }
+
+                                // A stereo pair or home theater group names its members
+                                // on a line of its own, above the note.
+                                if root.item.group-note != "": QuietText {
+                                    text: root.item.group-note;
+                                    wrap: no-wrap;
+                                    overflow: elide;
                                 }
 
                                 // An AirPlay speaker's note can be long; it ends in "…"

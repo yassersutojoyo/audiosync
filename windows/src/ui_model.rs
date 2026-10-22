@@ -157,6 +157,8 @@ pub enum AirPlayProblem {
     PlaysThroughSpeakers,
     /// A home theater group whose Apple TV plays by itself, so it is off.
     AppleTvPlays,
+    /// A member of a pair or group that plays as part of it, so it is off.
+    PlaysInGroup,
     /// AudioSync can't play to it.
     Unsupported,
 }

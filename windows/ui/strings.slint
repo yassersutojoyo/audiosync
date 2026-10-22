@@ -447,7 +447,10 @@ export global Strings {
             return @tr("{} plays through its home theater speakers, and AudioSync already plays to them, so it's off. Turn the group off to play to the Apple TV itself.", speaker);
         }
         if problem == AirPlayProblem.apple-tv-plays {
-            return @tr("AudioSync already plays to the Apple TV of {}, so the group is off. Turn the Apple TV off to play to the group.", speaker);
+            return @tr("AudioSync already plays to {}'s Apple TV, so the group is off. Turn the Apple TV off to play to the group.", speaker);
+        }
+        if problem == AirPlayProblem.plays-in-group {
+            return @tr("{} plays as part of its stereo pair or home theater group, so it stays off by itself. Turn the group off to play to it alone.", speaker);
         }
         return @tr("AudioSync can't play to {}, so it's off.", speaker);
     }
