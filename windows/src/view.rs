@@ -3925,6 +3925,100 @@ mod tests {
     }
 
     #[test]
+    fn the_calibrate_all_card_names_each_step_and_says_how_the_airplay_speakers_differ() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.calibrate_all.phase = AllPhase::Running(AllProgress::Measuring {
+            name: "Den".into(),
+            reference: false,
+            take: 2,
+            searching: false,
+        });
+        let card = calibrate_all_card(&strings, &state);
+        assert!(card.running);
+        assert!(card.status.contains("Den") && card.status.contains('2'));
+        state.calibrate_all.phase = AllPhase::Running(AllProgress::Measuring {
+            name: "Den".into(),
+            reference: false,
+            take: 1,
+            searching: true,
+        });
+        let card = calibrate_all_card(&strings, &state);
+        assert!(card.status.starts_with("Searching"), "{}", card.status);
+
+        let clear = Measurement {
+            new_ms: 2040.0,
+            uncertainty_ms: 1.2,
+            difference_ms: 40.0,
+            clamped: false,
+        };
+        let row = |name: &str, class, state| SheetRow {
+            name: name.into(),
+            class,
+            old_ms: Some(2000.0),
+            state,
+            can_measure_again: true,
+        };
+        state.calibrate_all.phase = AllPhase::Idle;
+        state.calibrate_all.sheet = Some(SheetState {
+            rows: vec![
+                row("Speakers", Class::Local, SheetRowState::Reference),
+                row("Kitchen", Class::AirPlay, SheetRowState::Certain(clear)),
+                row(
+                    "Bedroom",
+                    Class::AirPlay,
+                    SheetRowState::Uncertain(Measurement {
+                        uncertainty_ms: 14.0,
+                        ..clear
+                    }),
+                ),
+            ],
+            airplay: Some(AirPlayShared {
+                old_ms: Some(2000.0),
+                new_ms: Some(2040.0),
+                spread_ms: 23.0,
+                certain_rows: 2,
+                state: SharedState::Spread,
+            }),
+            ended: None,
+            failure: None,
+            again_ended: None,
+            can_apply: true,
+            applied: false,
+            can_undo: false,
+            undone: false,
+        });
+        let card = calibrate_all_card(&strings, &state);
+        assert!(card.results_shown && card.can_apply);
+        assert!(
+            card.rows[1].detail.contains("2040"),
+            "{}",
+            card.rows[1].detail
+        );
+        assert!(card.rows[2].detail.contains("Measure Again"));
+        assert!(card.airplay.contains("23 ms"), "{}", card.airplay);
+        assert_eq!(card.said, strings.invoke_calibrate_all_finished(1, 2));
+
+        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
+        sheet.ended = Some(EndReason::SpeakerTurnedOff);
+        sheet.can_apply = false;
+        sheet.failure = None;
+        let card = calibrate_all_card(&strings, &state);
+        assert!(!card.can_apply);
+        assert_eq!(
+            card.said,
+            strings.invoke_calibrate_all_stopped(strings.get_calibrate_all_ended_off())
+        );
+
+        state.calibrate_all.sheet = None;
+        state.calibrate_all.phase = AllPhase::Failed(Failure::MicrophoneDenied);
+        let card = calibrate_all_card(&strings, &state);
+        assert!(card.privacy && !card.results_shown);
+        assert!(card.said.contains("Privacy"), "{}", card.said);
+    }
+
+    #[test]
     fn a_calibrations_ending_is_announced_once() {
         let mut announced = None;
         let mut calibration = ui_model::CalibrationState {

@@ -872,7 +872,7 @@ fn plan_failure(error: PlanError) -> Failure {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -1088,6 +1088,29 @@ mod tests {
             run.tick(rig, now);
         }
         panic!("the run never ended: {:?}", run.progress());
+    }
+
+    /// The results of a run over local speakers `(id, stored offset, heard
+    /// after ms)`, the first the reference.
+    pub(crate) fn local_sheet(speakers: &[(&str, f64, f64)]) -> (Sheet, Vec<Member>, u32) {
+        let mut rig = FakeRig::new();
+        rig.lineup.reference = Some(speakers[0].0.to_owned());
+        rig.lineup.members = speakers
+            .iter()
+            .map(|&(id, offset, _)| member(Class::Local, id, Some(offset), 2500.0 + offset))
+            .collect();
+        rig.lineup.hold_backs_ms = speakers
+            .iter()
+            .map(|&(id, offset, _)| (id.to_owned(), 2000.0 + offset))
+            .collect();
+        rig.heard_after_ms = speakers
+            .iter()
+            .map(|&(id, _, after)| (format!("local:{id}"), vec![after]))
+            .collect();
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |_, _| {});
+        let sheet = finished.sheet.expect("a sheet");
+        (sheet, run.members().to_vec(), run.rate())
     }
 
     fn start(rig: &mut FakeRig) -> AllRun {

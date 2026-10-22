@@ -849,9 +849,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let Some(kept) = self.calibrate_all.sheet.as_ref() else {
             return false;
         };
-        // A speaker that isn't listed can't be compared: its row stays.
+        // A speaker that isn't listed can't be compared: its row stays. A
+        // stored delay is a whole number, so half a millisecond is the same.
         let holds = |now: Option<f64>, then: Option<f64>| {
-            now.is_none_or(|now| (now - then.unwrap_or(0.0)).abs() < 0.5)
+            now.is_none_or(|now| (now - then.unwrap_or(0.0)).abs() <= 0.5)
         };
         if let Some(applied) = &kept.applied {
             let held = applied.changes.iter().all(|change| {
@@ -5819,6 +5820,126 @@ mod tests {
             adapter.snapshot().calibration.phase,
             calibration::Phase::Idle
         );
+    }
+
+    #[test]
+    fn calibrate_all_applies_every_clear_row_at_once_and_one_undo_puts_them_back() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        for id in ["builtin", "bluetooth", "tv"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        adapter.set_speaker_delay(&key("tv"), -20.0);
+        let (sheet, members, rate) = crate::audio::calibrate_all::tests::local_sheet(&[
+            ("builtin", 0.0, 2010.0),
+            ("bluetooth", 80.0, 2190.0),
+            ("tv", -20.0, 1950.0),
+        ]);
+        let measured: Vec<(String, f64)> = sheet
+            .rows()
+            .iter()
+            .filter_map(|row| match row.state {
+                RowState::Certain(m) => {
+                    let id = row.id.strip_prefix("local:").expect("a local row");
+                    Some((key(id), m.new_ms.round()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(measured.len(), 2, "both speakers were measured clearly");
+        adapter.calibrate_all.sheet = Some(KeptSheet {
+            sheet,
+            members,
+            rate,
+            failure: None,
+            again_ended: None,
+            applied: None,
+            undone: false,
+        });
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
+        assert!(shown.can_apply && !shown.can_undo);
+
+        adapter.apply_calibrate_all();
+        for (id, ms) in &measured {
+            assert_eq!(speaker_of(&adapter, id).delay_ms, Some(*ms));
+        }
+        // The stored delays are what Apply wrote, so the results and Undo stay.
+        adapter.poll();
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
+        assert!(shown.applied && shown.can_undo && !shown.can_apply);
+
+        adapter.undo_calibrate_all();
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+        assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, Some(-20.0));
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
+        assert!(shown.undone && !shown.can_undo && !shown.can_apply);
+    }
+
+    #[test]
+    fn calibrate_all_results_go_once_a_measured_delay_changes_before_apply() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        for id in ["builtin", "bluetooth"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        let (sheet, members, rate) = crate::audio::calibrate_all::tests::local_sheet(&[
+            ("builtin", 0.0, 2010.0),
+            ("bluetooth", 80.0, 2190.0),
+        ]);
+        adapter.calibrate_all.sheet = Some(KeptSheet {
+            sheet,
+            members,
+            rate,
+            failure: None,
+            again_ended: None,
+            applied: None,
+            undone: false,
+        });
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        adapter.set_speaker_delay(&key("bluetooth"), 95.0);
+        adapter.poll();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "Apply would undo the new delay");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(95.0));
+    }
+
+    #[test]
+    fn calibrate_all_says_why_it_cant_start() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        assert_eq!(
+            adapter.snapshot().calibrate_all.blocked,
+            Some(Failure::NotPlaying)
+        );
+        turn_on(&mut adapter, "builtin");
+        assert_eq!(
+            adapter.snapshot().calibrate_all.blocked,
+            Some(Failure::NothingToMeasure)
+        );
+        turn_on(&mut adapter, "bluetooth");
+        assert_eq!(adapter.snapshot().calibrate_all.blocked, None);
+        // The mock has no microphone: refused before the music fades.
+        adapter.start_calibrate_all();
+        let state = adapter.snapshot();
+        assert_eq!(
+            state.calibrate_all.phase,
+            AllPhase::Failed(Failure::NoMicrophone)
+        );
+        assert!(!state.calibration.busy);
     }
 
     fn reference_audio() -> MockBackend {
