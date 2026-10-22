@@ -180,7 +180,7 @@ fn a_host_that_never_polls_keeps_a_bounded_event_queue() {
     device.join();
 }
 
-// covers: C3
+// The refusal stays until the group stage (CAST_SPEC C3, C89 to C103) lands.
 #[test]
 fn a_group_is_never_driven() {
     let group = CastDevice {
