@@ -182,7 +182,7 @@ extension AppDelegate {
     }
 }
 
-// MARK: - Track info on AirPlay receivers
+// MARK: - Track info on AirPlay receivers and Cast devices
 
 extension AppDelegate {
     /// Streaming with an AirPlay speaker on: receivers with a screen show the
@@ -193,12 +193,14 @@ extension AppDelegate {
     }
 
     /// With every model update: Now Playing polls the players while the window
-    /// shows it, while a paired phone may show it or while AirPlay receivers show the track, and receivers get
-    /// everything once sending starts. The sender keeps what was set and
-    /// sends it to every speaker that starts.
+    /// shows it, while a paired phone may show it or while AirPlay receivers or
+    /// a Cast device show the track, and they get everything once sending
+    /// starts. The senders keep what was set and send it to every speaker
+    /// that starts.
     func syncTrackInfo() {
         let sending = sendsTrackInfo
-        let polling = nowPlayingOnScreen || sending || webRemote?.showsNowPlaying == true
+        let casting = sendsCastTrackInfo
+        let polling = nowPlayingOnScreen || sending || casting || webRemote?.showsNowPlaying == true
         if polling != nowPlaying.isRunning {
             if polling {
                 updateNowPlayingTarget()
@@ -207,7 +209,9 @@ extension AppDelegate {
                 nowPlaying.stopWatching()
             }
         }
-        if trackInfoFeed.modelUpdated(sending: sending) { sendTrackInfo() }
+        let airPlayStarts = trackInfoFeed.modelUpdated(sending: sending)
+        let castStarts = castSender?.trackInfo.modelUpdated(sending: casting) ?? false
+        if airPlayStarts || castStarts { sendTrackInfo() }
     }
 
     /// A new sender knows nothing of what plays: send everything again.
@@ -215,20 +219,13 @@ extension AppDelegate {
         if trackInfoFeed.senderStarted(sending: sendsTrackInfo) { sendTrackInfo() }
     }
 
-    /// Sends the sender what changed in what its receivers should show.
+    /// Sends the senders what changed in what their receivers should show.
     func sendTrackInfo() {
-        let step = trackInfoFeed.send(sending: sendsTrackInfo, now: Date(), pollingSince: nowPlaying.startedAt,
-                                      hasReading: nowPlaying.hasReading, icon: NSApp.applicationIconImage) {
-            let track = nowPlaying.hasReading ? nowPlaying.track : nil
-            // The source's name as the source picker shows it; none while the
-            // picker doesn't list the source (an input device that was unplugged).
-            let sourceName = appModel.sources.first { $0.id == audioSource.defaultsValue }?.name
-            let untitled = TrackMetadata.Fields(title: text.receiverUntitled, artist: text.receiverUnnamedSource,
-                                                album: text.receiverAlbum)
-            let info = ReceiverInfo.decide(track: track, source: audioSource, sourceName: sourceName,
-                                           untitled: untitled)
-            return (info, track?.artwork)
-        }
+        let now = Date()
+        let step = trackInfoFeed.send(sending: sendsTrackInfo, now: now, pollingSince: nowPlaying.startedAt,
+                                      hasReading: nowPlaying.hasReading, icon: NSApp.applicationIconImage,
+                                      shows: receiverShows)
+        sendCastTrackInfo(now: now, shows: receiverShows)
         if let fields = step.fields { nativeAirPlay?.setTrack(fields) }
         if let date = step.recheckAt { recheckTrackInfo(at: date) }
         guard let picture = step.picture else { return }
@@ -237,11 +234,25 @@ extension AppDelegate {
         nativeAirPlay?.setArtwork(own)
     }
 
+    /// What receivers should show now, and the track's artwork.
+    private func receiverShows() -> (info: ReceiverInfo, artwork: NSImage?) {
+        let track = nowPlaying.hasReading ? nowPlaying.track : nil
+        // The source's name as the source picker shows it; none while the
+        // picker doesn't list the source (an input device that was unplugged).
+        let sourceName = appModel.sources.first { $0.id == audioSource.defaultsValue }?.name
+        let untitled = TrackMetadata.Fields(title: text.receiverUntitled, artist: text.receiverUnnamedSource,
+                                            album: text.receiverAlbum)
+        let info = ReceiverInfo.decide(track: track, source: audioSource, sourceName: sourceName,
+                                       untitled: untitled)
+        return (info, track?.artwork)
+    }
+
     /// Runs `sendTrackInfo` again at `date`, when a wait ends.
-    private func recheckTrackInfo(at date: Date) {
+    func recheckTrackInfo(at date: Date) {
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, date.timeIntervalSinceNow) + 0.05) { [weak self] in
             guard let self else { return }
             self.trackInfoFeed.recheckFired(at: date)
+            self.castSender?.trackInfo.recheckFired(at: date)
             self.sendTrackInfo()
         }
     }

@@ -137,6 +137,16 @@ struct CastVolume: Equatable {
     var muted: Bool
     /// The device's volume can't be changed from here.
     var fixed: Bool
+    /// The device's own volume step, 0 to 1; 0 while it reports none (C69).
+    var step = 0.0
+}
+
+/// How the arrow keys move a Cast device's volume.
+enum CastVolumeStep: Equatable {
+    /// One of the device's own steps, sent as a step (C69).
+    case device(up: Bool)
+    /// This level, 0 to 1, sent as it is: the device reports no step.
+    case level(Double)
 }
 
 /// What the sender reported, copied out of the core's event.
@@ -188,7 +198,8 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_RECOVERED: self = .recovered(attempt: a)
         case ASC_CAST_EVENT_RELOADED: self = .reloaded(attempt: a)
         case ASC_CAST_EVENT_VOLUME:
-            self = .volume(attempt: a, CastVolume(level: raw.level, muted: raw.muted, fixed: raw.volume_fixed))
+            self = .volume(attempt: a, CastVolume(level: raw.level, muted: raw.muted, fixed: raw.volume_fixed,
+                                                  step: raw.step))
         case ASC_CAST_EVENT_COMMAND_FAILED: self = .commandFailed(attempt: a, error: error)
         case ASC_CAST_EVENT_ENDED:
             let end: CastEnd
@@ -491,6 +502,24 @@ struct CastModel {
         let level = min(1, max(0, position / 100))
         requested = (id, level)
         return level
+    }
+
+    /// The step a device that reports none moves by, as a level.
+    static let fallbackVolumeStep = 0.05
+
+    /// An arrow key on the device's slider: one of its own steps once its
+    /// status gave one, and the slider then shows the level the device
+    /// reports; else the fallback step from the level shown. Nil when no
+    /// session runs for it or its volume is fixed.
+    mutating func stepVolume(_ id: String, up: Bool) -> CastVolumeStep? {
+        guard isLive(id), volumes[id]?.fixed != true else { return nil }
+        if let step = volumes[id]?.step, step > 0 {
+            if requested?.id == id { requested = nil }
+            return .device(up: up)
+        }
+        let level = min(1, max(0, volume(of: id) / 100 + (up ? Self.fallbackVolumeStep : -Self.fallbackVolumeStep)))
+        requested = (id, level)
+        return .level(level)
     }
 
     /// The user's offset for `id`, as the field takes it; nil when unchanged

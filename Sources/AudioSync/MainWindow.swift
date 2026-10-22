@@ -617,6 +617,8 @@ struct SpeakerRow: View {
                             .accessibilityLabel(t.volume(of: speaker.name))
                             .accessibilityValue(t.volumeValue(speaker.volume))
                             .hintAndHelp(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : nil)
+                            .modifier(CastVolumeKeys(step: speaker.isCast
+                                ? { up in model.actions.stepCastVolume(speaker.id, up) } : nil))
                             .focused($volumeFocused)
                         Text(t.volumeValue(speaker.volume))
                             .font(.caption.monospacedDigit())
@@ -930,6 +932,31 @@ private struct DraftUnderline: Shape {
 /// keystroke before its binding can turn it down, so a blocked character
 /// flashed in and out; a formatter here blocks it before it shows. AppKit's
 /// focus ring is off: `DelayFieldRing` draws the one ring the field shows.
+/// A Cast row's slider: the arrow keys and VoiceOver's adjust move the
+/// device's volume by its own step (C69); other sliders keep their own.
+private struct CastVolumeKeys: ViewModifier {
+    let step: ((_ up: Bool) -> Void)?
+
+    func body(content: Content) -> some View {
+        if let step {
+            content
+                .onKeyPress(keys: [.upArrow, .rightArrow, .downArrow, .leftArrow]) { press in
+                    step(press.key == .upArrow || press.key == .rightArrow)
+                    return .handled
+                }
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: step(true)
+                    case .decrement: step(false)
+                    @unknown default: break
+                    }
+                }
+        } else {
+            content
+        }
+    }
+}
+
 private struct DelayTextField: NSViewRepresentable {
     /// The row's key in `delayPanels`, for the main window's click monitor.
     let rowID: String
