@@ -658,6 +658,10 @@ pub struct AirPlaySpeakers {
     names: BTreeMap<String, String>,
     /// The credentials of the paired Apple TVs.
     store: PairingStore,
+    /// The key of every speaker the sender paired on AirPlay 2, by speaker
+    /// ID: Forget Pairing drops the sender's copy of a speaker no longer
+    /// listed or added through it.
+    homekit_keys: BTreeMap<String, DeviceKey>,
     /// The pairings running, by speaker ID.
     pairings: BTreeMap<String, PairingRun>,
     /// The speakers whose cancelled pairing hasn't reported its end yet.
@@ -732,6 +736,7 @@ impl AirPlaySpeakers {
             added: BTreeMap::new(),
             names: BTreeMap::new(),
             store,
+            homekit_keys: BTreeMap::new(),
             pairings: BTreeMap::new(),
             ending: BTreeSet::new(),
             next_shown_order: 0,
@@ -804,6 +809,7 @@ impl AirPlaySpeakers {
         self.link = link;
         self.listed.clear();
         self.added.clear();
+        self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
         // A password prompt still waiting (discovery stopped, the sessions
@@ -847,6 +853,7 @@ impl AirPlaySpeakers {
             && self.password_asks.is_empty());
         self.listed.clear();
         self.added.clear();
+        self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
         self.password_attempts.clear();
@@ -1210,7 +1217,9 @@ impl AirPlaySpeakers {
             .listed
             .get(id)
             .map(|listed| listed.device().key.clone())
-            .or_else(|| self.added.get(id).map(|added| added.key.clone()));
+            .or_else(|| self.added.get(id).map(|added| added.key.clone()))
+            .or_else(|| self.homekit_keys.get(id).cloned());
+        self.homekit_keys.remove(id);
         if let Some(key) = key {
             self.link.forget_homekit(&key);
         }
@@ -1590,6 +1599,15 @@ impl AirPlaySpeakers {
                 }
                 SenderEvent::Speaker { key, event } => {
                     let id = speaker_id(&key);
+                    match event {
+                        SpeakerEvent::HomeKitPaired(_) => {
+                            self.homekit_keys.insert(id.clone(), key);
+                        }
+                        SpeakerEvent::HomeKitRejected => {
+                            self.homekit_keys.remove(&id);
+                        }
+                        _ => {}
+                    }
                     changed |= self.speaker_event(&id, event, &mut events);
                 }
                 SenderEvent::Timeline {
@@ -1608,6 +1626,9 @@ impl AirPlaySpeakers {
                 }
                 SenderEvent::Pairing { key, event } => {
                     let id = speaker_id(&key);
+                    if matches!(event, PairingEvent::HomeKitPaired(_)) {
+                        self.homekit_keys.insert(id.clone(), key);
+                    }
                     changed |= self.pairing_event(&id, event, &mut events);
                 }
                 // The receivers it listed were reported gone just before;
