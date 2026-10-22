@@ -2260,19 +2260,19 @@ do {
 // MARK: Track progress for receivers that show it — a jump is news, running on isn't (P126)
 do {
     typealias Position = NowPlayingMonitor.Position
-    let start = Date(timeIntervalSinceReferenceDate: 0)
-    let at30 = Position(elapsed: 30, length: 200, readAt: start, playing: true)
-    check(at30.elapsed(at: start + 10) == 40 && at30.elapsed(at: start + 500) == 200,
+    let start = Date(timeIntervalSinceReferenceDate: 0), uptime: TimeInterval = 1000   // readings use systemUptime
+    let at30 = Position(elapsed: 30, length: 200, readAt: uptime, playing: true)
+    check(at30.elapsed(at: uptime + 10) == 40 && at30.elapsed(at: uptime + 500) == 200,
           "progress: a playing track runs on from its reading, up to its length")
-    let paused = Position(elapsed: 30, length: 200, readAt: start, playing: false)
-    check(paused.elapsed(at: start + 10) == 30, "progress: a paused track stays where it was read")
-    check(!Position.jumped(from: at30, to: Position(elapsed: 32.5, length: 200, readAt: start + 2, playing: true))
+    let paused = Position(elapsed: 30, length: 200, readAt: uptime, playing: false)
+    check(paused.elapsed(at: uptime + 10) == 30, "progress: a paused track stays where it was read")
+    check(!Position.jumped(from: at30, to: Position(elapsed: 32.5, length: 200, readAt: uptime + 2, playing: true))
             && !Position.jumped(from: nil, to: nil),
           "progress: a reading where the track ran on to is no news")
-    check(Position.jumped(from: at30, to: Position(elapsed: 90, length: 200, readAt: start + 2, playing: true))
-            && Position.jumped(from: at30, to: Position(elapsed: 5, length: 200, readAt: start + 2, playing: true)),
+    check(Position.jumped(from: at30, to: Position(elapsed: 90, length: 200, readAt: uptime + 2, playing: true))
+            && Position.jumped(from: at30, to: Position(elapsed: 5, length: 200, readAt: uptime + 2, playing: true)),
           "progress: a seek forward or back is news")
-    check(Position.jumped(from: at30, to: Position(elapsed: 32, length: 180, readAt: start + 2, playing: true))
+    check(Position.jumped(from: at30, to: Position(elapsed: 32, length: 180, readAt: uptime + 2, playing: true))
             && Position.jumped(from: at30, to: nil) && Position.jumped(from: nil, to: at30),
           "progress: another length, or a position coming or going, is news")
 

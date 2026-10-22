@@ -36,16 +36,18 @@ final class NowPlayingMonitor {
     struct Position: Equatable {
         let elapsed: TimeInterval
         let length: TimeInterval
-        let readAt: Date
+        /// `ProcessInfo.systemUptime`, so a clock step can't move the track.
+        let readAt: TimeInterval
         let playing: Bool
 
         /// A seek, or a player clock this far off the Mac's, counts as a jump;
         /// less is the scripts' own timing.
         static let jumpTolerance: TimeInterval = 2
 
-        func elapsed(at date: Date) -> TimeInterval {
+        /// Where the track is at `uptime` (`ProcessInfo.systemUptime`).
+        func elapsed(at uptime: TimeInterval) -> TimeInterval {
             guard playing else { return elapsed }
-            return min(length, elapsed + max(0, date.timeIntervalSince(readAt)))
+            return min(length, elapsed + max(0, uptime - readAt))
         }
 
         /// Whether `new` is somewhere `old` doesn't run on to: a seek, another
@@ -188,11 +190,8 @@ final class NowPlayingMonitor {
     private func query(_ bundleID: String) -> Track? {
         // Fields joined by a separator that never appears in metadata.
         let sep = "\u{1F}"
-        // Both give the position in seconds; Spotify's duration is in ms and
-        // Music's in seconds. Whole ms keep the text free of a locale's
-        // decimal separator. Rounding happens outside the tell block, so the
-        // player never gets a scripting addition command; a stream without a
-        // duration leaves both out.
+        // Spotify's duration is in ms, Music's in seconds. Whole ms avoid the locale's decimal
+        // separator; rounding outside the tell block keeps scripting additions away from the player.
         let durationToMs = bundleID == Self.spotify ? 1 : 1000
         let script = """
             with timeout of 2 seconds
@@ -201,7 +200,7 @@ final class NowPlayingMonitor {
                     set s to player state as string
                     if s is "stopped" then return s
                     set t to current track
-                    set trackText to s &"\(sep)" & (name of t) & "\(sep)" & (artist of t) & "\(sep)" & (album of t)
+                    set trackText to s & "\(sep)" & (name of t) & "\(sep)" & (artist of t) & "\(sep)" & (album of t)
                     set p to missing value
                     set d to missing value
                     try
@@ -217,7 +216,7 @@ final class NowPlayingMonitor {
             end timeout
             """
         guard let result = run(target: bundleID, script)?.stringValue else { return nil }
-        let readAt = Date()
+        let readAt = ProcessInfo.processInfo.systemUptime
         let parts = result.components(separatedBy: sep)
         guard parts.count >= 4, !parts[1].isEmpty else { return nil }
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
