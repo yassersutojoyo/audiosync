@@ -2216,6 +2216,7 @@ do {
             && fresh.enabledAirPlay.isEmpty && fresh.enabledLocal.isEmpty && fresh.groups.isEmpty
             && !fresh.showVirtualDevices && fresh.appearance == .system && fresh.whenSourceQuits == .stop,
           "settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms)")
+    check(!fresh.airPlay2, "settings: AirPlay 2 is off when nothing is stored (P2)")
 
     var wanted = AppSettings()
     wanted.source = .input(uid: "usb-mic")
@@ -2230,6 +2231,7 @@ do {
     wanted.showVirtualDevices = true
     wanted.appearance = .dark
     wanted.whenSourceQuits = .system
+    wanted.airPlay2 = true
     store.save(source: wanted.source)
     store.save(ids: wanted.enabledAirPlay, forKey: Keys.enabledAirPlay)
     store.save(ids: wanted.enabledLocal, forKey: Keys.enabledLocal)
@@ -2242,7 +2244,21 @@ do {
     store.save(showVirtualDevices: wanted.showVirtualDevices)
     store.save(appearance: wanted.appearance)
     store.save(whenSourceQuits: wanted.whenSourceQuits)
+    store.save(airPlay2: wanted.airPlay2)
     check(store.load() == wanted, "settings: every saved setting comes back unchanged")
+    check(stored.values[Keys.airPlay2] as? Bool == true, "settings: the AirPlay 2 switch is stored as a Bool")
+    store.save(airPlay2: false)
+    check(!store.load().airPlay2, "settings: AirPlay 2 switched off again reads back off")
+    stored.values[Keys.airPlay2] = "yes"
+    check(!store.load().airPlay2, "settings: an AirPlay 2 value that isn't a Bool reads as off")
+    store.save(airPlay2: true)
+
+    check(!AppSettings.airPlay2On(setting: false, environment: [:])
+            && !AppSettings.airPlay2On(setting: false, environment: ["AUDIOSYNC_AIRPLAY2": "0"]),
+          "settings: AirPlay 2 stays off with the switch off and no AUDIOSYNC_AIRPLAY2=1 (P170)")
+    check(AppSettings.airPlay2On(setting: true, environment: [:])
+            && AppSettings.airPlay2On(setting: false, environment: ["AUDIOSYNC_AIRPLAY2": "1"]),
+          "settings: the switch or AUDIOSYNC_AIRPLAY2=1 turns AirPlay 2 on")
     check(stored.values[Keys.enabledAirPlay] as? [String] == ["airplay-1", "airplay-2"],
           "settings: a set of speakers is stored as a sorted list")
     store.save(source: .system)
@@ -2297,6 +2313,7 @@ do {
         (Keys.localOffsets, "localOffsetMsByUID"),
         (Keys.airPlayDelay, "airPlayDelayMs"), (Keys.nativeAirPlayAdjustment, "nativeAirPlayAdjustmentMs"),
         (Keys.localDelaysMigrated, "localDelayModelMigrated"), (Keys.speakerNames, "speakerNamesByKey"),
+        (Keys.airPlay2, "airPlay2Enabled"),
     ]
     let renamed = pinned.filter { $0.0 != $0.1 }.map(\.1)
     check(renamed.isEmpty, "settings: every UserDefaults key keeps the name existing installs use",

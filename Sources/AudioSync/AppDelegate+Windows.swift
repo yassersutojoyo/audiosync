@@ -119,6 +119,10 @@ extension AppDelegate {
             self?.whenSourceQuits = on ? .system : .stop
             self?.pushModel()
         }
+        a.setAirPlay2 = { [weak self] on in
+            self?.airPlay2 = on
+            self?.pushModel()
+        }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
         a.transport = { [weak self] command in self?.nowPlaying.send(command) }
         a.quit = { NSApp.terminate(nil) }
@@ -239,6 +243,7 @@ extension AppDelegate {
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
+        publish(\.airPlay2, airPlay2)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
         followCalibrationContext()
@@ -465,6 +470,12 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// Saved now; the sender reads it at the next launch (`airPlay2AtLaunch`).
+    @objc func toggleAirPlay2(_ sender: Any?) {
+        airPlay2.toggle()
+        pushModel()
+    }
+
     /// One of the Appearance submenu's items; each carries its choice's raw value.
     @objc func chooseAppearance(_ sender: Any?) {
         guard let raw = (sender as? NSMenuItem)?.representedObject as? String,
@@ -487,6 +498,8 @@ extension AppDelegate {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         case #selector(toggleSwitchWhenSourceQuits(_:)):
             menuItem.state = whenSourceQuits == .system ? .on : .off
+        case #selector(toggleAirPlay2(_:)):
+            menuItem.state = airPlay2 ? .on : .off
         default:
             break
         }

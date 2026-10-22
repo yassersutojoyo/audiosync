@@ -1479,19 +1479,40 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
     create_with(live_browser)
 }
 
+/// [`asc_airplay_create`] with the app's AirPlay 2 setting: AirPlay 2 is on
+/// when `airplay2` is or when the environment variable turns it on (P2);
+/// off, the sender makes no AirPlay 2 traffic (P170).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_airplay_create_with_airplay2(airplay2: bool) -> *mut AscAirPlay {
+    create_configured(live_browser, airplay2)
+}
+
 /// [`asc_airplay_create`] with the browser [`asc_airplay_start_discovery`]
 /// opens: live multicast DNS for the app, one a test supplies otherwise.
 pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
+    create_configured(open_browser, false)
+}
+
+/// The sender's configuration for the app's AirPlay 2 setting and the
+/// environment variable's value; either one turns AirPlay 2 on.
+fn sender_config(setting: bool, environment: Option<&str>) -> SenderConfig {
+    SenderConfig {
+        airplay2: setting || airplay2_switch(environment),
+        ..SenderConfig::default()
+    }
+}
+
+fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut AscAirPlay {
     note_panic_locations();
     let panics_before = PANICS.load(Ordering::SeqCst);
     let created = panic::catch_unwind(|| {
         injected_panic();
-        // The hidden AirPlay 2 switch (spec P2): an environment variable, so
-        // it flips without a rebuild and no control shows it.
-        let config = SenderConfig {
-            airplay2: airplay2_switch(std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref()),
-            ..SenderConfig::default()
-        };
+        // The environment variable still works without the app's setting,
+        // for CI and debug runs.
+        let config = sender_config(
+            airplay2_setting,
+            std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
+        );
         let airplay2 = config.airplay2;
         match Sender::start(config) {
             Ok((sender, input)) => Box::into_raw(Box::new(AscAirPlay {
@@ -2839,6 +2860,19 @@ mod tests {
             "airplay:Living Room"
         );
         assert_eq!(c_string("a\0b").to_str(), Ok("a\u{FFFD}b"));
+    }
+
+    #[test]
+    fn airplay2_stays_off_without_the_setting_or_the_environment_variable() {
+        assert!(!sender_config(false, None).airplay2);
+        assert!(!sender_config(false, Some("0")).airplay2);
+    }
+
+    #[test]
+    fn the_setting_or_the_environment_variable_turns_airplay2_on() {
+        assert!(sender_config(true, None).airplay2);
+        assert!(sender_config(false, Some("1")).airplay2);
+        assert!(sender_config(true, Some("1")).airplay2);
     }
 
     #[test]

@@ -21,6 +21,10 @@ enum MainMenu {
         app.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
         app.addItem(item(t.launchAtLogin, #selector(AppDelegate.toggleLaunchAtLogin(_:))))
         app.addItem(item(t.switchToSystemWhenSourceQuits, #selector(AppDelegate.toggleSwitchWhenSourceQuits(_:))))
+        let airPlay2 = item(t.airPlay2Toggle, #selector(AppDelegate.toggleAirPlay2(_:)))
+        airPlay2.subtitle = t.airPlay2Note
+        airPlay2.toolTip = t.airPlay2Note
+        app.addItem(airPlay2)
         app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services

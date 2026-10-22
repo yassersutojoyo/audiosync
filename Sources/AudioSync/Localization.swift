@@ -508,6 +508,12 @@ struct UIStrings {
     /// Under the name of a speaker waiting for the AirPlay 2 slot.
     let waitingForAirPlay2 = "Waiting for the other AirPlay 2 speaker"
 
+    /// The AirPlay 2 switch in the gear menu and the AudioSync menu, off at
+    /// first; the sender reads it at launch.
+    let airPlay2Toggle = "AirPlay 2 (Experimental)"
+    /// Its subtitle in the AudioSync menu, its tooltip and VoiceOver hint.
+    let airPlay2Note = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+
     // MARK: AirPlay pairing prompt
 
     func pairTitle(name: String) -> String { "Pair with \(name)" }
@@ -1059,6 +1065,9 @@ struct UIStrings {
         AirPlay
         AudioSync sends to AirPlay speakers itself. If its AirPlay sender stops
         after an internal error, Connected Speakers says so, with a Retry button.
+        'AirPlay 2 (Experimental)', in the gear menu or the AudioSync menu, lets
+        AudioSync play to AirPlay 2 speakers, stereo pairs and home theater
+        groups. It's off at first; turn it on, then quit and reopen AudioSync.
 
         Google Cast
         Local and AirPlay speakers play in step: once their delays are set,

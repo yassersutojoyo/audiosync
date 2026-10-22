@@ -39,9 +39,12 @@ extension AppDelegate {
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
-        native.start(master: masterVolume) { [weak self] started in
+        let airPlay2On = AppSettings.airPlay2On(setting: airPlay2AtLaunch,
+                                                environment: ProcessInfo.processInfo.environment)
+        native.start(master: masterVolume, airPlay2: airPlay2AtLaunch) { [weak self] started in
             DebugTrace.log("[AudioSync] native AirPlay: "
-                + (started ? "the sender and its discovery started" : "the sender or its discovery could not start"))
+                + (started ? "the sender and its discovery started" : "the sender or its discovery could not start")
+                + (airPlay2On ? ", AirPlay 2 on" : ", AirPlay 2 off"))
             self?.nativeStartFinished(native, started: started)
         }
     }
