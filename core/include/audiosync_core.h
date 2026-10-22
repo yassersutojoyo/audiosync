@@ -1315,8 +1315,10 @@ bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
  * Asks every speaker added for its own volume, which someone may have changed
  * on the speaker itself; a stereo pair or home theater group asks its leader.
  * Only playing sessions answer. A level that moves a slider comes as
- * ASC_AIRPLAY_EVENT_VOLUME and is never sent back to the speaker; a level read
- * before the host last set the volume, or within 1 s of it, is dropped.
+ * ASC_AIRPLAY_EVENT_VOLUME, already the speaker's level in the sender, so a
+ * reconnect or a member that starts late plays at it and the host doesn't
+ * set it again; a level read before the host last set the volume, or within
+ * 1 s of it, is dropped.
  * Speakers that leave volume to the sender, and ones that turned a read down
  * once, aren't asked.
  */

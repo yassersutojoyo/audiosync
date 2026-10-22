@@ -215,7 +215,8 @@ pub const AIRPLAY_EVENT_PAIRED: i32 = 9;
 /// A person changed the speaker's volume on the speaker itself
 /// ([`asc_airplay_read_volumes`], P122, P180): [`AscAirPlayEvent::volume`]
 /// is the slider position that plays at that level with the master as it
-/// is, and the sender already counts it as the speaker's position.
+/// is. The sender already took it as the speaker's position and level, so
+/// a reconnect or a target member that starts late plays at it too.
 pub const AIRPLAY_EVENT_VOLUME: i32 = 10;
 /// Something about a speaker's session the host may show; the session goes
 /// on. [`AscAirPlayEvent::warning`] says what, the detail says more, for a
@@ -881,8 +882,9 @@ impl AscAirPlay {
     }
 
     /// A volume read answered `db`: a level other than the one sent, read
-    /// after the host last set it, becomes the speaker's slider position
-    /// and goes to the host, which shows it without sending it back.
+    /// after the host last set it, becomes the speaker's slider position,
+    /// the sender's level for it, and goes to the host, which shows it
+    /// without sending it back.
     fn volume_reported(&mut self, id: &str, db: f64) {
         let Some(owner) = self.reporting_for(id) else {
             return;
@@ -906,6 +908,10 @@ impl AscAirPlay {
             return;
         }
         added.position = position;
+        // The sender keeps the level too, for a reconnect or a target
+        // member that starts late (P119, P180); its next read is within
+        // the tolerance, so this isn't reported back.
+        added.set_volume(&self.sender, speaker_volume(position, master));
         self.queue_event(Pending::Volume(owner, position));
     }
 
@@ -2058,9 +2064,10 @@ pub unsafe extern "C" fn asc_airplay_set_volume(
 /// Asks every speaker added for its own volume (P122), which a person may
 /// have changed on the speaker itself; a stereo pair or home theater group
 /// asks its leader (P180). Only playing sessions answer. A level that moves
-/// a slider comes as [`AIRPLAY_EVENT_VOLUME`], never sent back to the
-/// speaker; a level read before the host last set the volume, or within
-/// 1 s of it, is dropped. Speakers that leave volume to the sender (`sv`,
+/// a slider comes as [`AIRPLAY_EVENT_VOLUME`], already the speaker's level
+/// in the sender, so a reconnect or a member that starts late plays at it
+/// and the host doesn't set it again; a level read before the host last set
+/// the volume, or within 1 s of it, is dropped. Speakers that leave volume to the sender (`sv`,
 /// P121), and ones that turned a read down once, aren't asked.
 ///
 /// # Safety
@@ -3196,6 +3203,7 @@ mod tests {
         port: u16,
         requests: Requests,
         stop: Arc<AtomicBool>,
+        hang_up: Arc<AtomicBool>,
         thread: Option<JoinHandle<()>>,
     }
 
@@ -3223,19 +3231,33 @@ mod tests {
             );
             let requests = Requests::default();
             let stop = Arc::new(AtomicBool::new(false));
+            let hang_up = Arc::new(AtomicBool::new(false));
             let thread = {
-                let (requests, stop) = (requests.clone(), stop.clone());
+                let (requests, stop, hang_up) = (requests.clone(), stop.clone(), hang_up.clone());
                 std::thread::spawn(move || {
                     let _udp = udp;
-                    serve(&listener, &transport, &requests, &stop, unauthorized);
+                    serve(
+                        &listener,
+                        &transport,
+                        &requests,
+                        (&stop, &hang_up),
+                        unauthorized,
+                    );
                 })
             };
             Loopback {
                 port,
                 requests,
                 stop,
+                hang_up,
                 thread: Some(thread),
             }
+        }
+
+        /// Closes every open connection once, as a receiver that dropped
+        /// the session; new ones are answered as before.
+        fn hang_up(&self) {
+            self.hang_up.store(true, Ordering::Relaxed);
         }
 
         fn methods(&self) -> Vec<Method> {
@@ -3266,11 +3288,14 @@ mod tests {
         listener: &TcpListener,
         transport: &str,
         requests: &Requests,
-        stop: &AtomicBool,
+        (stop, hang_up): (&AtomicBool, &AtomicBool),
         unauthorized: bool,
     ) {
         let mut connections: Vec<(TcpStream, Parser, bool)> = Vec::new();
         while !stop.load(Ordering::Relaxed) {
+            if hang_up.swap(false, Ordering::Relaxed) {
+                connections.clear();
+            }
             if let Ok((stream, _)) = listener.accept() {
                 stream.set_nonblocking(true).expect("non-blocking");
                 connections.push((stream, Parser::new(), true));
@@ -4381,6 +4406,50 @@ mod tests {
         unsafe { asc_airplay_read_volumes(handle) };
         report_volume(handle, &key, -6.0);
         assert!(inside(handle).events.is_empty());
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn a_speaker_reconnects_at_the_volume_changed_on_it() {
+        let receiver = Loopback::start();
+        let id = "02005E005364";
+        let mut handle = listing(vec![loopback_record(id, "Shelf", receiver.port)]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0)) };
+        let volumes = || -> Vec<String> {
+            receiver
+                .bodies(Method::SetParameter)
+                .into_iter()
+                .filter(|body| body.starts_with("volume:"))
+                .collect()
+        };
+        let first = "volume: -15.000000\r\n".to_owned();
+        let reported = "volume: -6.000000\r\n".to_owned();
+        assert!(wait_for(|| volumes().contains(&first)), "{:?}", volumes());
+        let key = {
+            let added = inside(handle).added.get_mut(id).expect("added");
+            added.volume_set_at = None;
+            added.reading = true;
+            added.key.clone()
+        };
+        // Turned up to −6 dB on the speaker: slider 80 with the master at 100.
+        report_volume(handle, &key, -6.0);
+        assert_eq!(inside(handle).added[id].position, 80.0);
+        assert!(
+            wait_for(|| volumes().contains(&reported)),
+            "{:?}",
+            volumes()
+        );
+        let before = volumes().len();
+        receiver.hang_up();
+        assert!(
+            wait_for(|| volumes().len() > before),
+            "no reconnect: {:?}",
+            volumes()
+        );
+        assert_eq!(volumes()[before], reported, "{:?}", volumes());
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

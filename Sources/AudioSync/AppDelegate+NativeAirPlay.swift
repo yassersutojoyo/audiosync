@@ -110,7 +110,9 @@ extension AppDelegate {
         switch outcome {
         case .playingChanged(let id, let playing):
             if playing {
-                clearNotices([SpeakerKey.make(id: id, airplay: true)])   // playing: whatever went wrong is over
+                // Playing: whatever went wrong is over. Each session binds
+                // PTP anew, so the port clash may be over too.
+                clearNotices([SpeakerKey.make(id: id, airplay: true), Notice.airplayPtp])
                 // It plays with credentials an earlier pairing stored: a
                 // pairing still under way for it is no longer needed.
                 if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.cancelPairing(receiver) }
