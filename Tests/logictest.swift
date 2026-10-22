@@ -4419,6 +4419,13 @@ do {
             && t.networkSpeakersNote(airPlayNone: true, cast: .noneFound, hint: .denied)
                 == "No AirPlay or Google Cast speakers found yet.",
           "network notes leave the Local Network advice to the hint while it shows")
+    check(LocalNetworkHint.denied.shown(airPlayProblem: true) == .none
+            && LocalNetworkHint.possible.shown(airPlayProblem: true) == .none
+            && LocalNetworkHint.denied.shown(airPlayProblem: false) == .denied
+            && t.networkSpeakersNote(airPlayNone: false, cast: .noneFound,
+                                     hint: LocalNetworkHint.denied.shown(airPlayProblem: true))?.contains("Local Network") == true
+            && t.localNetworkHint.contains("same network"),
+          "an AirPlay problem hides the Local Network hint, so the notes keep the advice")
     check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil
             && t.castNote(CastRow(status: .connecting, muted: false, volumeFixed: false, group: nil)) == "Connecting…"
             && t.castNote(CastRow(status: .playing, muted: true, volumeFixed: false, group: nil)) == "Muted on the speaker"

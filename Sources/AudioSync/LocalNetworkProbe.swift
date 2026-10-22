@@ -43,6 +43,9 @@ enum LocalNetworkHint: Equatable {
         }
     }
 
+    /// The hint as the views show it: an AirPlay problem takes its place.
+    func shown(airPlayProblem: Bool) -> LocalNetworkHint { airPlayProblem ? .none : self }
+
     /// When the soft hint would show if nothing changes, while that is still
     /// ahead of `now`: no event says the time has passed, so the host
     /// reconciles then (`AppLifecycle.nextDueReconcile`), and `decide` shows

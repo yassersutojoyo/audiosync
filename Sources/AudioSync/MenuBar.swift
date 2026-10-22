@@ -306,8 +306,7 @@ final class AppModel: ObservableObject {
     }
     /// Connected Speakers with no speaker at all.
     var networkEmptyText: String { networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint) }
-    /// The AirPlay problem takes the hint's place in both views.
-    private var shownLocalNetworkHint: LocalNetworkHint { airPlayProblem == nil ? localNetworkHint : .none }
+    private var shownLocalNetworkHint: LocalNetworkHint { localNetworkHint.shown(airPlayProblem: airPlayProblem != nil) }
 
     /// Why AirPlay can't work right now, shown in place of its speakers; nil
     /// while the sender runs or is starting.

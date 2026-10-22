@@ -782,7 +782,7 @@ struct UIStrings {
     let openSettingsHint = "Opens System Settings at the right privacy setting"
     /// AirPlay has found nothing for a while and AudioSync can't tell whether
     /// Local Network access is the reason.
-    let localNetworkHint = "If you expect AirPlay speakers, check that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
+    let localNetworkHint = "If you expect AirPlay speakers, make sure this Mac is on the same network as them, and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
     /// The menu bar panel's one-line version of `localNetworkHint`.
     let localNetworkHintShort = "Speakers missing? Check Local Network access."
     /// macOS denies AudioSync Local Network access.
