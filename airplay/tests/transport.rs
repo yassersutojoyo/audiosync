@@ -1088,9 +1088,9 @@ fn rtp_header_of_received_audio_carries_the_marker_first() {
 
 // Timing requests that fill origin and receive, keep the sequence field at
 // 0x0007 and put junk in bytes 4 to 7, every 5 ms while audio streams: each
-// reply copies transmit and the sequence field and nothing else,
-// leaves the sender within 100 ms of its request's arrival, and nine round
-// trips in ten through the test's own thread stay under 100 ms (P90, P91).
+// reply copies transmit and the sequence field and nothing else, stamps
+// transmit under 100 ms after receive, comes back under 100 ms in nine round
+// trips of ten and never later than the receiver's 300 ms drop line (P90, P91).
 // covers: P90, P91
 #[test]
 fn timing_replies_read_only_seq_and_transmit_and_leave_within_100_ms_under_load() {
@@ -1133,15 +1133,19 @@ fn timing_replies_read_only_seq_and_transmit_and_leave_within_100_ms_under_load(
         }
         assert!(
             slowest_hold < Duration::from_millis(100),
-            "slowest receive-to-transmit on the sender {slowest_hold:?}"
+            "receive-to-transmit stamps {slowest_hold:?} apart"
         );
         // The worst round trip also counts the test thread's own scheduling on a busy runner.
         round_trips.sort();
         let p90 = round_trips[round_trips.len() * 9 / 10];
+        let slowest = round_trips[round_trips.len() - 1];
         assert!(
             p90 < Duration::from_millis(100),
-            "90th percentile round trip {p90:?}, slowest {:?}",
-            round_trips.last()
+            "90th percentile round trip {p90:?}, slowest {slowest:?}"
+        );
+        assert!(
+            slowest < Duration::from_millis(300),
+            "slowest round trip {slowest:?}"
         );
     }
     sender.shutdown();
