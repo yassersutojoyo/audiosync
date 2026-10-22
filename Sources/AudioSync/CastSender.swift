@@ -206,6 +206,16 @@ final class CastSender {
         return ms >= 0 ? ms : nil
     }
 
+    private func members(_ handle: OpaquePointer) -> [CastMember] {
+        (0..<asc_cast_member_count(handle)).compactMap { index in
+            var raw = AscCastMember()
+            guard asc_cast_member(handle, index, &raw) else { return nil }
+            // Copied right away: the strings last only until the next call.
+            return CastMember(id: raw.id.map { String(cString: $0) } ?? "",
+                              name: raw.name.map { String(cString: $0) } ?? "")
+        }
+    }
+
     private func poll() {
         guard let handle else { return }
         var changes: [CastDeviceChange] = []
@@ -218,7 +228,7 @@ final class CastSender {
         var events: [CastEvent] = []
         var rawEvent = AscCastEvent()
         while asc_cast_next_event(handle, &rawEvent) {
-            guard let event = CastEvent(rawEvent) else { continue }
+            guard let event = CastEvent(rawEvent, members: { self.members(handle) }) else { continue }
             if event == .memoryChanged { saveMemory() }
             events.append(event)
         }

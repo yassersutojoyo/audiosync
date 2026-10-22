@@ -65,7 +65,7 @@ extension RemoteRow {
         var volume: Double
         var isAirPlay = false
         /// A Google Cast speaker: its session state.
-        var cast: (live: Bool, group: Bool, volumeFixed: Bool)? = nil
+        var cast: (live: Bool, volumeFixed: Bool)? = nil
         /// The row's delay field value; nil where the window has none.
         var offsetMs: Double?
         var airPlayDelayMs: Double = 0
@@ -84,10 +84,9 @@ extension RemoteRow {
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }
         else if f.cast != nil { delay = f.offsetMs.map(RemoteDelay.cast) ?? .fixed }
         else { delay = f.offsetMs.map(RemoteDelay.offset) ?? .fixed }
-        let castGroup = f.cast?.group == true
         let castVolume = f.cast.map { $0.live && !$0.volumeFixed } ?? true
         self.init(id: f.id, name: f.name, kind: f.kind, on: f.on, volume: f.volume, delay: delay,
-                  available: !castGroup && !codeBlocked,
+                  available: !codeBlocked,
                   notice: f.note ?? (codeBlocked ? text.remoteTurnOnInApp : nil),
                   volumeAdjustable: f.on && castVolume,
                   isCast: f.cast != nil)

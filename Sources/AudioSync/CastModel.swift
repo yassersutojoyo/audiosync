@@ -7,10 +7,11 @@ import Foundation
 // drives it; `CastSender` talks to the core and `AppDelegate+Cast` wires the
 // two together.
 //
-// One device plays at a time (CAST_SPEC C2) and a Cast group is listed but
-// never driven (C3). Cast has no shared clock, so a device is kept in step
-// only by the offset the user sets by ear (C74 to C77): while one is on,
-// local outputs wait that long for it. Every event of a session carries the
+// One device plays at a time (CAST_SPEC C2); a Cast group is one of them,
+// with one volume and one offset under its own ID (C89 to C102). Cast has
+// no shared clock, so a device is kept in step only by the offset the user
+// sets by ear (C74 to C77): while one is on, local outputs wait that long
+// for it. Every event of a session carries the
 // attempt number `asc_cast_start` returned; one of an attempt that is no
 // longer current is dropped, so a late end never turns off a speaker the
 // user turned on again.
@@ -30,7 +31,7 @@ struct CastDevice: Equatable {
     let id: String
     var name: String
     var model: String
-    /// A Cast group: listed, never played to.
+    /// A Cast group, played as one speaker.
     var group: Bool
     /// Its records went away while a session with it runs.
     var offline: Bool
@@ -51,6 +52,23 @@ enum CastDeviceChange: Equatable {
     case gone(id: String)
 }
 
+/// One member of the playing group, as its session reports it (C94, C95).
+struct CastMember: Equatable {
+    /// The listed device it is, or "" when none matches.
+    var id: String
+    /// The name the group gives it, or "".
+    var name: String
+}
+
+/// What a Cast group's row says about its members.
+enum CastGroupMembers: Equatable {
+    /// Off, or its session hasn't played yet.
+    case notReported
+    /// It plays and reported no member list (C94).
+    case unknown
+    case known([String])
+}
+
 /// Where the session of the device that is on stands.
 enum CastStatus: Equatable {
     case idle, connecting, playing, reconnecting
@@ -66,11 +84,10 @@ enum CastProblem: Equatable {
     case blocked
     case takenOver
     case connectionLost
-    case group
 }
 
 enum CastError: Equatable {
-    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, group
+    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork
     case other(Int32)
 
     init?(_ code: Int32) {
@@ -85,7 +102,6 @@ enum CastError: Equatable {
         case ASC_CAST_ERROR_VOLUME_FIXED: self = .volumeFixed
         case ASC_CAST_ERROR_VOLUME: self = .volume
         case ASC_CAST_ERROR_ARTWORK: self = .artwork
-        case ASC_CAST_ERROR_GROUP: self = .group
         default: self = .other(code)
         }
     }
@@ -106,7 +122,6 @@ enum CastEnd: Equatable {
         switch self {
         case .stopped, .deselected: return nil
         case .takenOver: return .takenOver
-        case .failed(.group): return .group
         case .failed(.connect): return .notResponding
         case .failed(.launch), .failed(.media): return .refused
         case .failed(.noFetch): return .blocked
@@ -138,6 +153,10 @@ enum CastEvent: Equatable {
     /// Diagnostics, format fallbacks, rebuffering and the stream's own log:
     /// for the debug log only.
     case note(attempt: UInt64, String)
+    /// The playing group's member list changed; empty while none is known.
+    case members(attempt: UInt64, [CastMember])
+    /// A line about a Cast group for the debug log.
+    case groupLog(String)
     case memoryChanged
     case discoveryStopped
     /// The sender stopped working; `detail` names where it panicked, or "".
@@ -147,16 +166,17 @@ enum CastEvent: Equatable {
         switch self {
         case .started(let a), .playing(let a), .connectFailed(let a, _, _), .recovering(let a),
              .recovered(let a), .reloaded(let a), .volume(let a, _), .commandFailed(let a, _),
-             .ended(let a, _), .note(let a, _):
+             .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
-        case .memoryChanged, .discoveryStopped, .failed:
+        case .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil
         }
     }
 
     /// Copies `raw` right away: its strings last only until the next
-    /// `asc_cast_next_event`. Nil for a kind this build doesn't know.
-    init?(_ raw: AscCastEvent) {
+    /// `asc_cast_next_event`; `members` reads the playing group's list for a
+    /// members event. Nil for a kind this build doesn't know.
+    init?(_ raw: AscCastEvent, members: () -> [CastMember] = { [] }) {
         let a = raw.attempt
         let detail = raw.detail.map { String(cString: $0) } ?? ""
         let error = CastError(raw.error)
@@ -185,6 +205,8 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_DIAGNOSTICS:
             self = .note(attempt: a, String(format: "drift %.0f ms, queued %.0f ms", raw.drift_ms, raw.queued_ms))
         case ASC_CAST_EVENT_STREAM: self = .note(attempt: a, "stream: " + detail)
+        case ASC_CAST_EVENT_MEMBERS: self = .members(attempt: a, members())
+        case ASC_CAST_EVENT_GROUP_LOG: self = .groupLog(detail)
         case ASC_CAST_EVENT_MEMORY_CHANGED: self = .memoryChanged
         case ASC_CAST_EVENT_DISCOVERY_STOPPED: self = .discoveryStopped
         case ASC_CAST_EVENT_FAILED: self = .failed(detail: detail)
@@ -217,7 +239,6 @@ enum CastRefusal {
     static func problem(_ code: Int32) -> CastProblem {
         switch code {
         case ASC_CAST_REFUSED_BUSY: return .busy
-        case ASC_CAST_REFUSED_GROUP: return .group
         default: return .notResponding
         }
     }
@@ -230,8 +251,8 @@ struct CastRow: Equatable {
     var muted: Bool
     /// The device's volume can't be changed from here.
     var volumeFixed: Bool
-    /// A Cast group, which AudioSync can't play to.
-    var group: Bool
+    /// A Cast group's members; nil for a single device.
+    var group: CastGroupMembers?
     /// A session runs or starts: the volume, Mute and Resync reach the device.
     var live: Bool { status != .idle }
 }
@@ -298,6 +319,9 @@ struct CastModel {
     /// The offset the device memory holds, per device, in ms. 0 ms counts as
     /// none: the sender can't forget an offset, so Undo leaves 0 ms behind.
     private(set) var offsets: [String: Double] = [:]
+    /// The playing group's members as its session last reported them; nil
+    /// until it does, and once the session is over.
+    private(set) var members: [CastMember]?
 
     /// The devices listed, by name.
     var rows: [String] {
@@ -340,10 +364,17 @@ struct CastModel {
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
 
-    /// The user turns `id` on: refused while another device is on, and for a group.
+    /// The device that is on while its session plays, a group included: the
+    /// one Cast row a calibration run measures.
+    var playingDevice: String? {
+        guard let id = enabled, status(of: id) == .playing else { return nil }
+        return id
+    }
+
+    /// The user turns `id` on, a group like any device: refused while
+    /// another one is on, a member of the group that is on included (C2, C99).
     mutating func turnOn(_ id: String) -> CastProblem? {
         if let other = enabled, other != id { return .busy }
-        if devices[id]?.group == true { return .group }
         enabled = id
         return nil
     }
@@ -362,7 +393,7 @@ struct CastModel {
     func plan(streaming: Bool) -> CastPlan {
         if let attempt, enabled != attempt.device || !streaming { return .stop }
         guard attempt == nil, starting == nil, streaming, let id = enabled,
-              let device = devices[id], !device.offline, !device.group else { return .none }
+              let device = devices[id], !device.offline else { return .none }
         return .start(id)
     }
 
@@ -371,6 +402,18 @@ struct CastModel {
     mutating func stopSent() {
         attempt = nil
         requested = nil
+        members = nil
+    }
+
+    /// What a group's row says about its members, each named by `name`; nil
+    /// for a single device. A list arrives before the stream plays (C94), so
+    /// one that is still missing once it plays is unknown.
+    func groupMembers(of id: String, name: (CastMember) -> String) -> CastGroupMembers? {
+        guard devices[id]?.group == true else { return nil }
+        guard attempt?.device == id else { return .notReported }
+        let names = (members ?? []).map(name).filter { !$0.isEmpty }
+        if !names.isEmpty { return .known(names) }
+        return attempt?.status == .playing ? .unknown : .notReported
     }
 
     /// `asc_cast_start`'s answer for `id`: its attempt number, 0 when it
@@ -390,6 +433,7 @@ struct CastModel {
     mutating func apply(_ event: CastEvent) -> CastOutcome? {
         switch event {
         case .memoryChanged: return .memoryChanged
+        case .groupLog: return nil
         case .discoveryStopped:
             discovery = .failed
             devices = devices.filter { $0.key == attempt?.device }
@@ -401,6 +445,7 @@ struct CastModel {
             attempt = nil
             starting = nil
             enabled = nil
+            members = nil
             return .senderFailed(wasOn: wasOn)
         default: break
         }
@@ -418,12 +463,17 @@ struct CastModel {
             guard volumes[id] != volume else { return nil }
             volumes[id] = volume
             return .changed
+        case .members(_, let list):
+            guard devices[id]?.group == true, members != list else { return nil }
+            members = list
+            return .changed
         case .ended(_, let end):
             attempt = nil
             requested = nil
+            members = nil
             if enabled == id { enabled = nil }
             return .turnedOff(id, problem: end.problem)
-        case .commandFailed, .note, .memoryChanged, .discoveryStopped, .failed:
+        case .commandFailed, .note, .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil
         }
     }

@@ -119,7 +119,7 @@ extension AppDelegate {
     // MARK: - What the user does
 
     /// The user's click on a Cast speaker (app ID). A second one while one
-    /// is on, or a group, stays off with a notice.
+    /// is on stays off with a notice.
     func setCastEnabled(_ appID: String, _ on: Bool) {
         guard let id = CastID.device(appID) else { return }
         if on {
@@ -188,10 +188,11 @@ extension AppDelegate {
             return AppModel.Speaker(id: CastID.app(id), name: castName(id), tag: .cast,
                                     enabled: castModel.enabled == id,
                                     volume: castModel.volume(of: id),
-                                    offsetMs: device.group ? nil : castModel.offset(of: id),
+                                    offsetMs: castModel.offset(of: id),
                                     systemName: text.deviceName(device.name),
                                     cast: CastRow(status: castModel.status(of: id), muted: volume?.muted ?? false,
-                                                  volumeFixed: volume?.fixed ?? false, group: device.group))
+                                                  volumeFixed: volume?.fixed ?? false,
+                                                  group: castModel.groupMembers(of: id, name: castMemberName)))
         }
     }
 
@@ -200,6 +201,13 @@ extension AppDelegate {
     func castName(_ id: String) -> String {
         speakerNames.shown(key: SpeakerKey.make(id: CastID.app(id), airplay: false),
                            system: text.deviceName(castModel.devices[id]?.name ?? ""))
+    }
+
+    /// A group member as its row shows it: the listed device's name, the
+    /// user's when renamed, else the name the group gives it (C95).
+    private func castMemberName(_ member: CastMember) -> String {
+        if !member.id.isEmpty, castModel.devices[member.id] != nil { return castName(member.id) }
+        return member.name
     }
 
     private func castLabel(_ id: String) -> String {
@@ -233,6 +241,11 @@ extension AppDelegate {
         case .commandFailed(let a, let error): return "attempt \(a): a request failed (\(String(describing: error)))"
         case .ended(let a, let end): return "attempt \(a) ended: \(end)"
         case .note(let a, let line): return "attempt \(a): \(line)"
+        case .members(let a, let list):
+            return "attempt \(a): group members "
+                + (list.isEmpty ? "unknown" : list.map { "\($0.name) (\($0.id.isEmpty ? "not listed" : $0.id))" }
+                    .joined(separator: ", "))
+        case .groupLog(let line): return "group: " + line
         case .memoryChanged: return nil
         case .discoveryStopped: return "discovery's mDNS daemon ended"
         case .failed(let detail): return "the sender stopped working" + (detail.isEmpty ? "" : " (\(detail))")

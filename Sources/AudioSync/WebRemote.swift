@@ -234,7 +234,7 @@ final class WebRemote {
             RemoteRow(RemoteRow.Facts(
                 id: s.id, name: s.name, kind: t.speakerTag(s.tag, airPlay2: s.airPlay2), on: s.enabled,
                 volume: s.volume, isAirPlay: s.isAirPlay,
-                cast: s.cast.map { (live: $0.live, group: $0.group, volumeFixed: $0.volumeFixed) },
+                cast: s.cast.map { (live: $0.live, volumeFixed: $0.volumeFixed) },
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
                 needsCode: s.availability == .needsCode, paired: s.paired,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2)), text: t)
