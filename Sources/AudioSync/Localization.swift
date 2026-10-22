@@ -1065,7 +1065,7 @@ struct UIStrings {
         AirPlay
         AudioSync sends to AirPlay speakers itself. If its AirPlay sender stops
         after an internal error, Connected Speakers says so, with a Retry button.
-        'AirPlay 2 (Experimental)', in the gear menu or the AudioSync menu, lets
+        '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, lets
         AudioSync play to AirPlay 2 speakers, stereo pairs and home theater
         groups. It's off at first; turn it on, then quit and reopen AudioSync.
 

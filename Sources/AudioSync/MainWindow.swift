@@ -218,10 +218,11 @@ struct MainView: View {
                    isOn: Binding(get: { model.switchWhenSourceQuits },
                                  set: { model.actions.setSwitchWhenSourceQuits($0) }))
             Button(t.webRemoteMenu) { model.actions.openWebRemote() }
-            Toggle(t.airPlay2Toggle, isOn: Binding(get: { model.airPlay2 },
-                                                   set: { model.actions.setAirPlay2($0) }))
-                .help(t.airPlay2Note)
-                .accessibilityHint(t.airPlay2Note)
+            Toggle(isOn: Binding(get: { model.airPlay2 },
+                                 set: { model.actions.setAirPlay2($0) })) {
+                Text(t.airPlay2Toggle)
+                Text(t.airPlay2Note)
+            }
             Divider()
             Button(t.guideTitle) { model.actions.openGuide() }
         } label: {
