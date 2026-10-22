@@ -267,6 +267,10 @@ struct NativeAirPlayPlan: Equatable {
     var release: [String] = []
 
     var isEmpty: Bool { add.isEmpty && remove.isEmpty && turnOff.isEmpty && release.isEmpty }
+
+    /// Applying it changes the rows by itself: a target or lapsed receiver
+    /// shows only while in the sender, and its later Stopped event is passed over.
+    var changesRows: Bool { !remove.isEmpty }
 }
 
 /// What the app does about a speaker event (`NativeAirPlayModel.apply`).

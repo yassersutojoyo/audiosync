@@ -337,6 +337,10 @@ extension AppDelegate {
             native.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
         }
+        if plan.changesRows {
+            airplayOrder = native.model.rows(enabled: enabledAirPlay)
+            airplayEmptySince = airplayOrder.isEmpty ? (airplayEmptySince ?? Date()) : nil
+        }
         for id in plan.add {
             let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume
             native.add(id, volume: volume)
