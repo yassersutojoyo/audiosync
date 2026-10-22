@@ -289,6 +289,58 @@ fn a_whole_session_sends_no_clock_and_nothing_for_group_delay() {
     device.join();
 }
 
+fn png(side: u32) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    png.extend_from_slice(&side.to_be_bytes());
+    png.extend_from_slice(&side.to_be_bytes());
+    png.extend_from_slice(&[8, 2, 0, 0, 0]);
+    png
+}
+
+fn has_image(load: &Value) -> bool {
+    load["media"]["metadata"]["images"][0]["url"].is_string()
+}
+
+// covers: C53
+#[test]
+fn artwork_reaches_the_first_load_and_every_load_after_set_artwork() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    let metadata = Metadata {
+        title: Some("First".to_owned()),
+        ..Metadata::default()
+    };
+    host.start_with_artwork(target(A, &device), 48_000, metadata, Some(png(600)), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+
+    host.set_metadata(Metadata {
+        title: Some("Second".to_owned()),
+        ..Metadata::default()
+    });
+    host.resync();
+    assert!(device.wait_for_count("LOAD", 2, Duration::from_secs(10)));
+    host.set_metadata(Metadata::default());
+    host.set_artwork(png(300));
+    host.resync();
+    assert!(device.wait_for_count("LOAD", 3, Duration::from_secs(10)));
+    host.stop();
+    wait_for(&host, Duration::from_secs(15), ended(A));
+
+    let loads = device.payloads(NS_MEDIA, "LOAD");
+    assert!(has_image(&loads[0]), "{}", loads[0]);
+    assert!(!has_image(&loads[1]), "new metadata drops the cover before");
+    assert_eq!(loads[1]["media"]["metadata"]["title"], "Second");
+    assert!(has_image(&loads[2]), "{}", loads[2]);
+    assert_eq!(loads[2]["media"]["metadata"], json!({
+        "metadataType": 3,
+        "images": [{"url": loads[2]["media"]["metadata"]["images"][0]["url"]}],
+    }));
+    assert!(host.shutdown());
+    device.join();
+}
+
 // covers: C84
 #[test]
 fn the_format_that_worked_is_tried_first_next_time() {

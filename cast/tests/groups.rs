@@ -106,6 +106,7 @@ fn start_group(leader: &FakeDevice) -> (CastSession, GroupRecords, Feed) {
         addresses: vec![SocketAddr::new(v4(99), 1)],
         format: StreamFormat::wav(48_000).expect("rate"),
         metadata: Metadata::default(),
+        artwork: None,
         group: Some(records.clone()),
     };
     let (writer, reader) = audio_ring(48_000);
