@@ -79,14 +79,14 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 ## What doesn't work (yet)
 
 - Everything is about two seconds late. Fine for music, bad for video and games.
-- AirPlay 1 only by default. AirPlay 2 is experimental and off: start AudioSync with `AUDIOSYNC_AIRPLAY2=1` to try it. It plays one AirPlay 2 speaker at a time and hasn't been tried on a real AirPlay 2 receiver yet.
+- AirPlay 1 only by default. AirPlay 2 is experimental and off: to try it, turn on AirPlay 2 (Experimental) in the gear menu or the AudioSync menu, then quit and reopen AudioSync. It plays one AirPlay 2 speaker at a time and hasn't been tried on a real AirPlay 2 receiver yet.
 - Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - Now Playing only works with Spotify and Music.
 
 ## Windows
 
-A Windows 11 version (x64 and ARM64) is on the way, with the same Rust engine and its own AirPlay sender. Not released yet. CI builds it, and [windows/README.md](windows/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
+A Windows 11 version (x64 and ARM64) is on the way, with the same Rust engine and its own AirPlay sender. Not released yet. CI builds it, and [windows/README.md](windows/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
 
 ## License and credits
 
