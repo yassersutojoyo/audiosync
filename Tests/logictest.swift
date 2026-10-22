@@ -4035,10 +4035,21 @@ do {
     check(castMemory.offsets["tv"] == nil && reannounced.count > 2 && reannounced[2].offsetMs == nil,
           "calibrate all: the 0 ms the sender keeps after Undo doesn't come back when the device re-announces",
           "\(castMemory.offsets)")
-    _ = castMemory.setOffset("tv", ms: 0)
-    castMemory.apply(.changed(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
-    check(castMemory.offsets["tv"] == 0 && !castMemory.cleared.contains("tv"),
-          "calibrate all: an offset the user sets after Undo is kept again, 0 ms included", "\(castMemory.offsets)")
+    var castAfterRestart = CastModel()
+    castAfterRestart.apply(.appeared(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castAfterRestart.offsets["tv"], waitMs: 0)
+    let afterRestart = (try? CalibrateAllFlow.plan(again).get()) ?? []
+    check(castAfterRestart.offsets["tv"] == nil && castAfterRestart.offset(of: "tv") == 0
+            && afterRestart.count > 2 && afterRestart[2].offsetMs == nil,
+          "calibrate all: after Undo and a restart, the 0 ms the sender reports is no stored offset",
+          "\(afterRestart)")
+    _ = castMemory.setOffset("tv", ms: 300)
+    castMemory.apply(.changed(CastDevice(id: "tv", name: "TV"), offsetMs: 300))
+    check(castMemory.offsets["tv"] == 300 && castMemory.setOffset("tv", ms: 0) == 0
+            && castMemory.offsets["tv"] == nil && castMemory.offset(of: "tv") == 0
+            && castMemory.setOffset("tv", ms: 0) == nil,
+          "calibrate all: an offset the user sets after Undo is kept again, and 0 ms reads 0 ms but counts as none",
+          "\(castMemory.offsets)")
 
     // Two or more AirPlay rows always show their spread; the plain sentence only over 10 ms (S237).
     let close = t.calibrateAllAirPlay(.init(state: .certain, oldMs: 1750, newMs: 1960, spreadMs: 6, certainRows: 3))
