@@ -1061,6 +1061,35 @@ mod tests {
                 AIRPLAY_EVENT_PAIRING_FAILED.to_string(),
             ),
             ("ASC_AIRPLAY_EVENT_PAIRED", AIRPLAY_EVENT_PAIRED.to_string()),
+            ("ASC_AIRPLAY_EVENT_VOLUME", AIRPLAY_EVENT_VOLUME.to_string()),
+            (
+                "ASC_AIRPLAY_EVENT_WARNING",
+                AIRPLAY_EVENT_WARNING.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_JACK_DISCONNECTED",
+                AIRPLAY_WARNING_JACK_DISCONNECTED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_AUTH_SETUP_FAILED",
+                AIRPLAY_WARNING_AUTH_SETUP_FAILED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_REQUEST_FAILED",
+                AIRPLAY_WARNING_REQUEST_FAILED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID",
+                AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN",
+                AIRPLAY_WARNING_PTP_PORTS_TAKEN.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY",
+                AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY.to_string(),
+            ),
             (
                 "ASC_AIRPLAY_PAIRINGS_FAILED",
                 AIRPLAY_PAIRINGS_FAILED.to_string(),

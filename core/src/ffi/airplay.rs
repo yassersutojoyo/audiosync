@@ -3438,6 +3438,8 @@ mod tests {
                 receiver_latency_frames: -1,
                 restarted: false,
                 detail: String::new(),
+                volume: 0.0,
+                warning: 0,
             }
         );
         // SAFETY: a live handle, used by this thread only.
@@ -3843,6 +3845,8 @@ mod tests {
             receiver_latency_frames: -1,
             restarted: false,
             detail: String::new(),
+            volume: 0.0,
+            warning: 0,
         }
     }
 
@@ -5141,6 +5145,8 @@ mod tests {
                 receiver_latency_frames: raw.receiver_latency_frames,
                 restarted: raw.restarted,
                 detail: text(raw.detail),
+                volume: raw.volume,
+                warning: raw.warning,
             });
         }
     }
