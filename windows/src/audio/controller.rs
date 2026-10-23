@@ -5399,6 +5399,24 @@ mod tests {
     }
 
     #[test]
+    fn the_master_reaches_the_cast_speaker_as_its_device_volume() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let (mut backend, _fake, _kitchen) = local_delay_with_airplay();
+        backend.set_master_volume(50.0);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.set_cast_volume(KITCHEN, 80.0);
+        assert_eq!(cast.state().volumes, [0.4]);
+        backend.set_master_volume(0.0);
+        assert_eq!(cast.state().volumes, [0.4, 0.0]);
+        assert!(cast.state().mutes.is_empty());
+    }
+
+    #[test]
     fn calibrate_all_waits_for_the_cast_feeds_hold_back_and_a_guess_by_format() {
         use audiosync_cast::audio::{Codec, StreamFormat};
         use audiosync_cast::discovery::DeviceId;

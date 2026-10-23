@@ -4948,6 +4948,68 @@ do {
           "cast group: the measured offset is stored under the group's id, the members' stay as they were")
 }
 
+// MARK: Google Cast and the master volume (C104)
+do {
+    let tv = "00112233445566778899aabbccddeeff"
+    func reported(_ level: Double, fixed: Bool = false) -> CastVolume {
+        CastVolume(level: level, muted: false, fixed: fixed)
+    }
+    func near(_ level: Double?, _ expected: Double) -> Bool { level.map { approx($0, expected, 1e-9) } == true }
+    func session(master: Double, attempt: UInt64) -> CastModel {
+        var m = CastModel()
+        m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+        check(m.setMaster(master) == nil, "cast master: nothing is sent while no session runs")
+        _ = m.turnOn(tv)
+        m.startSent(tv)
+        _ = m.started(tv, attempt: attempt, refusal: ASC_CAST_REFUSED_NONE)
+        return m
+    }
+
+    var m = session(master: 50, attempt: 1)
+    check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
+          "cast master: master 50 with the speaker at 80 sends level 0.4 and the slider shows 80")
+    check(m.setMaster(0) == 0 && approx(m.volume(of: tv), 80, 1e-9),
+          "cast master: master 0 sends level 0, the speaker keeps 80")
+    _ = m.apply(.volume(attempt: 1, reported(0)))
+    check(approx(m.volume(of: tv), 80, 1e-9), "cast master: the device answering level 0 leaves the speaker at 80")
+    check(near(m.setMaster(50), 0.4), "cast master: a master change resends master × speaker")
+    _ = m.apply(.volume(attempt: 1, reported(0.4)))
+    check(m.apply(.volume(attempt: 1, reported(0.2))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
+          "cast master: level 0.2 set elsewhere at master 50 moves the speaker to 40, nothing sent back")
+    _ = m.setMaster(0)
+    _ = m.apply(.volume(attempt: 1, reported(0)))
+    check(m.apply(.volume(attempt: 1, reported(0.3))) != .setVolume(0) && approx(m.volume(of: tv), 40, 1e-9),
+          "cast master: at master 0 a level set elsewhere leaves the speaker's level and isn't fought")
+    check(m.stepVolume(tv, up: true) == .level(0), "cast master: a step at master 0 sends level 0")
+
+    var off = session(master: 0, attempt: 2)
+    check(off.apply(.volume(attempt: 2, reported(0.7))) == .setVolume(0) && approx(off.volume(of: tv), 70, 1e-9),
+          "cast master: a speaker turned on at master 0 is sent level 0 at its first status")
+    _ = off.apply(.volume(attempt: 2, reported(0)))
+    check(off.apply(.volume(attempt: 2, reported(0.5))) != .setVolume(0),
+          "cast master: only the first status of a session is answered")
+
+    var loud = session(master: 50, attempt: 3)
+    check(loud.apply(.volume(attempt: 3, reported(0.8))) == .setVolume(0.5) && approx(loud.volume(of: tv), 100, 1e-9),
+          "cast master: a device louder than the master allows comes down once at the start")
+    _ = loud.apply(.volume(attempt: 3, reported(0.5, fixed: true)))
+    check(loud.setMaster(20) == nil, "cast master: a fixed volume gets nothing (C68)")
+
+    var group = CastModel()
+    group.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
+    _ = group.setMaster(50)
+    _ = group.turnOn("group1")
+    group.startSent("group1")
+    _ = group.started("group1", attempt: 4, refusal: ASC_CAST_REFUSED_NONE)
+    check(near(group.setVolume("group1", position: 80), 0.4) && near(group.setMaster(100), 0.8),
+          "cast master: a group follows the master like a device")
+
+    check(approx(asc_cast_device_level(0.5, 0.8), 0.4, 1e-12) && asc_cast_device_level(0, 0.8) == 0
+            && approx(asc_cast_own_level(0.2, 0.5, 0.9), 0.4, 1e-12) && asc_cast_own_level(0.2, 0, 0.7) == 0.7
+            && asc_cast_level_answers(0.4, 0.404) && !asc_cast_level_answers(0.4, 0.41),
+          "cast master: the core's arithmetic")
+}
+
 // MARK: Google Cast track info and volume steps (C53, C54, C69)
 do {
     let tv = "00112233445566778899aabbccddeeff"

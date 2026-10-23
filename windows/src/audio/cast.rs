@@ -2430,4 +2430,128 @@ pub mod tests {
         cast.poll();
         assert_eq!(step_of(&cast), Some(2.0));
     }
+
+    fn reported(device: &str, level: f64, control_type: ControlType) -> HostEvent {
+        HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(device),
+            event: SessionEvent::Volume(DeviceVolume {
+                level,
+                control_type,
+                ..DeviceVolume::default()
+            }),
+        }
+    }
+
+    fn shown(cast: &CastSpeakers, device: &str) -> f64 {
+        cast.speakers()
+            .into_iter()
+            .find(|info| info.id == device)
+            .map(|info| info.volume)
+            .expect("listed")
+    }
+
+    fn report(fake: &FakeCast, cast: &mut CastSpeakers, level: f64) {
+        fake.report(reported(KITCHEN, level, ControlType::Attenuation));
+        cast.poll();
+    }
+
+    fn sent(fake: &FakeCast) -> Vec<f64> {
+        fake.state().volumes.clone()
+    }
+
+    #[test]
+    fn the_master_scales_the_level_sent_and_a_master_change_resends_it() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 80.0);
+        assert_eq!(sent(&fake), [0.4]);
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+
+        cast.set_master(0.0);
+        assert_eq!(sent(&fake), [0.4, 0.0], "master 0 sends level 0");
+        assert!(fake.state().mutes.is_empty(), "never the muted flag");
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+
+        report(&fake, &mut cast, 0.0);
+        cast.set_master(100.0);
+        assert_eq!(sent(&fake), [0.4, 0.0, 0.8]);
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+    }
+
+    #[test]
+    fn a_level_from_elsewhere_moves_the_slider_by_the_master() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.2);
+        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
+        assert!(sent(&fake).is_empty(), "nothing sent back");
+
+        cast.set_master(0.0);
+        assert_eq!(sent(&fake), [0.0]);
+        report(&fake, &mut cast, 0.0);
+        report(&fake, &mut cast, 0.3);
+        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9, "master 0 leaves it");
+        assert_eq!(sent(&fake), [0.0], "a change from elsewhere isn't fought");
+    }
+
+    #[test]
+    fn a_session_starts_no_louder_than_the_master_allows() {
+        let (fake, mut cast) = listed();
+        cast.set_master(0.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.7);
+        assert_eq!(sent(&fake), [0.0], "turned on at master 0");
+        assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9);
+        report(&fake, &mut cast, 0.0);
+        report(&fake, &mut cast, 0.5);
+        assert_eq!(sent(&fake), [0.0], "only the first status is answered");
+
+        cast.set_enabled(KITCHEN, false).unwrap();
+        cast.set_master(50.0);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.8,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert_eq!(sent(&fake), [0.0, 0.5], "louder than the master: down once");
+        assert_eq!(shown(&cast, KITCHEN), 100.0);
+    }
+
+    #[test]
+    fn a_group_follows_the_master_and_a_fixed_volume_gets_nothing() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        cast.set_volume(ATTIC, 80.0);
+        assert_eq!(sent(&fake), [0.4]);
+        cast.set_master(100.0);
+        assert_eq!(sent(&fake), [0.4, 0.8]);
+
+        cast.set_enabled(ATTIC, false).unwrap();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.6,
+                control_type: ControlType::Fixed,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        cast.set_master(20.0);
+        assert_eq!(sent(&fake), [0.4, 0.8], "a fixed volume sends nothing (C68)");
+    }
 }
