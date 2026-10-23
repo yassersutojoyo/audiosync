@@ -647,6 +647,20 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | layout: no speakers, empty lists | S152 |
 | eq: every preset has 10 bands | S33 |
 | eq: one preset per id, in menu order | S33 |
+| eq: the app names every preset the core has | S33 |
+| eq: Reset reads Flat, zeroes the preamp and keeps the switch | S33 |
+| eq curves: a saved curve keeps its trimmed name | S242 |
+| eq curves: the gains match the saved curve | S242 |
+| eq curves: picking a curve keeps the preamp and turns the equalizer on | S33, S242 |
+| eq curves: a preset matches before a saved curve with its gains | S242 |
+| eq curves: saving under a taken name, ignoring case, replaces that curve | S242 |
+| eq curves: an empty name saves nothing | S242 |
+| eq curves: a rename to another curve's name is refused | S242 |
+| eq curves: a name is cut to 40 characters | S242 |
+| eq curves: a full list refuses a new name but replaces a taken one | S242 |
+| eq curves: stored curves are read leniently and cleaned | S242 |
+| eq curves: saved curves come back unchanged | S242 |
+| eq curves: the picker names the shown curve, or Custom when none matches | S242 |
 | notices: start empty | S153 |
 | notices: newest first, both kept | S153 |
 | notices: same subject replaces the old one and moves to the top | S153 |

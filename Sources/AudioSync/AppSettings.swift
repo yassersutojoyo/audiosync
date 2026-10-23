@@ -47,6 +47,8 @@ struct AppSettings: Equatable {
         static let whenSourceQuits = "whenSourceQuits"
         /// `Equalizer.Settings` as JSON (S24, `StoredEqualizer`).
         static let equalizer = "equalizerSettings"
+        /// The saved equalizer curves (S242, `StoredCurves`).
+        static let equalizerCurves = "equalizerCurves"
         static let webRemote = "webRemoteEnabled"
         static let webRemotePort = "webRemotePort"
         /// The AirPlay 2 switch (P2), off when missing; read once per launch.
