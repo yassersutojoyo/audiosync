@@ -42,4 +42,7 @@ pub mod state;
 pub mod text;
 
 pub use server::{Capacity, Config, DEFAULT_PORT, RemoteError, RemoteServer, ServerEvent, Timing};
-pub use state::{Command, NowPlaying, Speaker, SpeakerChange, State, StateError};
+pub use state::{
+    Command, NowPlaying, Preset, Speaker, SpeakerChange, State, StateError, Zone, ZoneChange,
+    ZoneCounts,
+};

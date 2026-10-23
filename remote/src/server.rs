@@ -20,7 +20,7 @@ use crate::auth::{
 use crate::http::{self, Request, Response};
 use crate::net;
 use crate::page::{self, PageError};
-use crate::state::{self, BodyError, Command, RangeError, State, StateError};
+use crate::state::{self, BodyError, Command, RangeError, State, StateError, ZoneProblem};
 use crate::text::{self, ApiError};
 
 /// The port the remote listens on unless the user picks another. Unassigned
@@ -472,6 +472,14 @@ impl Shared {
             paired.store(true, Ordering::SeqCst);
         }
         listed
+    }
+
+    /// The last published snapshot says a microphone run is in progress.
+    fn calibrating(&self) -> bool {
+        lock(&self.published)
+            .current
+            .as_ref()
+            .is_some_and(|state| state.calibrating)
     }
 
     fn paired(&self, request: &Request) -> Option<String> {
@@ -959,6 +967,18 @@ enum ApiRoute {
     Master,
     Unpair,
     Speaker(Option<String>),
+    Zone(Option<String>),
+    Preset(Option<String>),
+}
+
+impl ApiRoute {
+    /// A change to the speakers or the volumes, which waits out a microphone run (S258).
+    fn writes(&self) -> bool {
+        matches!(
+            self,
+            ApiRoute::Master | ApiRoute::Speaker(_) | ApiRoute::Zone(_) | ApiRoute::Preset(_)
+        )
+    }
 }
 
 fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) -> Answer {
@@ -998,10 +1018,17 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         "/api/events" => ApiRoute::Events,
         "/api/master" => ApiRoute::Master,
         "/api/unpair" => ApiRoute::Unpair,
-        _ => match path.strip_prefix("/api/speakers/") {
-            Some(id) => ApiRoute::Speaker(percent_decode(id)),
-            None => return error(text::not_found()),
-        },
+        _ => {
+            if let Some(id) = path.strip_prefix("/api/speakers/") {
+                ApiRoute::Speaker(percent_decode(id))
+            } else if let Some(id) = path.strip_prefix("/api/zones/") {
+                ApiRoute::Zone(percent_decode(id))
+            } else if let Some(id) = path.strip_prefix("/api/presets/") {
+                ApiRoute::Preset(percent_decode(id))
+            } else {
+                return error(text::not_found());
+            }
+        }
     };
     let (method, allow) = match api {
         ApiRoute::State | ApiRoute::Events => ("GET", "GET"),
@@ -1013,6 +1040,9 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
     let Some(token) = shared.paired(request) else {
         return error(text::not_paired());
     };
+    if api.writes() && shared.calibrating() {
+        return error(text::calibrating());
+    }
     match api {
         ApiRoute::State => match lock(&shared.published).history.back() {
             Some((_, json)) => Response::json(200, json.to_string()).into(),
@@ -1022,6 +1052,8 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         ApiRoute::Master => master(request, shared),
         ApiRoute::Unpair => unpair(&token, from, shared),
         ApiRoute::Speaker(id) => speaker(request, id, shared),
+        ApiRoute::Zone(id) => zone(request, id, shared),
+        ApiRoute::Preset(id) => preset(request, id, shared),
     }
 }
 
@@ -1161,6 +1193,47 @@ fn speaker(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
     match checked {
         Ok(()) => accepted(&Command::Speaker { id, change }, shared),
         Err(problem) => error(problem),
+    }
+}
+
+fn zone(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
+    let change = match state::zone_change_from_body(&request.body) {
+        Ok(change) => change,
+        Err(problem) => return body_error(problem),
+    };
+    let Some(id) = id else {
+        return error(text::unknown_zone());
+    };
+    let checked = match lock(&shared.published)
+        .current
+        .as_ref()
+        .and_then(|state| state.zone(&id))
+    {
+        None => Err(text::unknown_zone()),
+        Some(zone) => zone.check(&change).map_err(|problem| match problem {
+            ZoneProblem::Unavailable => text::zone_unavailable(),
+            ZoneProblem::Range(range) => range_error(range),
+        }),
+    };
+    match checked {
+        Ok(()) => accepted(&Command::Zone { id, change }, shared),
+        Err(problem) => error(problem),
+    }
+}
+
+fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
+    if let Err(problem) = state::preset_recall_from_body(&request.body) {
+        return body_error(problem);
+    }
+    let known = id.as_deref().is_some_and(|id| {
+        lock(&shared.published)
+            .current
+            .as_ref()
+            .is_some_and(|state| state.preset(id).is_some())
+    });
+    match id {
+        Some(id) if known => accepted(&Command::Preset { id }, shared),
+        _ => error(text::unknown_preset()),
     }
 }
 

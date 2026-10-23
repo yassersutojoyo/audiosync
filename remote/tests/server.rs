@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_remote::page::{self, hash_source};
 use audiosync_remote::{
-    Capacity, Command, Config, RemoteServer, ServerEvent, SpeakerChange, State, Timing,
+    Capacity, Command, Config, RemoteServer, ServerEvent, SpeakerChange, State, Timing, ZoneChange,
 };
 use serde_json::{Value, json};
 
@@ -1306,4 +1306,339 @@ fn a_foreign_host_is_refused_first_even_with_a_matching_origin_and_a_token() {
     // Header names are case-insensitive (RFC 9110 §5.1).
     let lower = format!("GET / HTTP/1.1\r\nhost: 127.0.0.1:{port}\r\n\r\n");
     assert_eq!(exchange(port, lower.as_bytes()).status, 200);
+}
+
+fn zoned(calibrating: bool) -> State {
+    let json = SAMPLE.replacen(
+        "\"speakers\": [",
+        &format!(
+            r#""calibrating": {calibrating},
+    "zones": [
+        {{"id": "zone 1", "name": "Downstairs", "volume": 80, "members": ["kitchen", "living room"],
+         "counts": {{"on": 2, "total": 2, "waiting": 0}}}},
+        {{"id": "attic", "name": "Attic", "volume": 100, "members": [],
+         "counts": {{"on": 0, "total": 0, "waiting": 0}}}}
+    ],
+    "presets": [
+        {{"id": "preset:1", "name": "Evening", "current": true}},
+        {{"id": "party time", "name": "Party", "current": false}}
+    ],
+    "speakers": ["#
+        ),
+        1,
+    );
+    State::from_json(&json).unwrap()
+}
+
+fn zone_command(id: &str, toggle: bool, volume: Option<f64>) -> Command {
+    Command::Zone {
+        id: id.to_owned(),
+        change: ZoneChange { toggle, volume },
+    }
+}
+
+// covers: S256, S257
+#[test]
+fn zone_toggle_and_volume_routes_are_accepted() {
+    let remote = start("zone-routes");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    remote.server.publish(zoned(false));
+    let state = get(&remote, "/api/state", token).json();
+    assert_eq!(
+        state["zones"][0]["members"],
+        json!(["kitchen", "living room"])
+    );
+    assert_eq!(state["zones"][1]["counts"]["total"], 0);
+    assert_eq!(state["calibrating"], false);
+
+    for body in [
+        "{\"toggle\": true}",
+        "{\"volume\": 0}",
+        "{\"toggle\": true, \"volume\": 100}",
+    ] {
+        let reply = post(&remote, "/api/zones/zone%201", token, body);
+        assert_eq!(reply.status, 202, "{body}: {}", reply.body);
+        assert_eq!(reply.json(), json!({"accepted": true}));
+    }
+    let reply = post(&remote, "/api/zones/attic", token, "{\"volume\": 40}");
+    assert_eq!(
+        reply.status, 202,
+        "an empty zone still takes a volume: {}",
+        reply.body
+    );
+    assert_eq!(
+        *remote.received.lock().unwrap(),
+        [
+            zone_command("zone 1", true, None),
+            zone_command("zone 1", false, Some(0.0)),
+            zone_command("zone 1", true, Some(100.0)),
+            zone_command("attic", false, Some(40.0)),
+        ]
+    );
+    for method in ["GET", "PUT", "DELETE"] {
+        for path in ["/api/zones/attic", "/api/presets/preset:1"] {
+            let reply = send(&remote, method, path, token, "{\"toggle\": true}");
+            assert_eq!(reply.status, 405, "{method} {path}");
+            assert_eq!(reply.header("allow"), Some("POST"));
+        }
+    }
+    assert_eq!(remote.received.lock().unwrap().len(), 4);
+}
+
+// covers: S256, S257
+#[test]
+fn preset_recall_route_is_accepted() {
+    let remote = start("preset-routes");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    remote.server.publish(zoned(false));
+    let state = get(&remote, "/api/state", token).json();
+    assert_eq!(
+        state["presets"],
+        json!([
+            {"id": "preset:1", "name": "Evening", "current": true},
+            {"id": "party time", "name": "Party", "current": false}
+        ])
+    );
+    let reply = post(
+        &remote,
+        "/api/presets/party%20time",
+        token,
+        "{\"recall\": true}",
+    );
+    assert_eq!(reply.status, 202, "{}", reply.body);
+    let reply = post(
+        &remote,
+        "/api/presets/preset%3A1",
+        token,
+        "{\"recall\": true}",
+    );
+    assert_eq!(
+        reply.status, 202,
+        "the current one recalls too: {}",
+        reply.body
+    );
+    assert_eq!(
+        *remote.received.lock().unwrap(),
+        [
+            Command::Preset {
+                id: "party time".to_owned()
+            },
+            Command::Preset {
+                id: "preset:1".to_owned()
+            },
+        ]
+    );
+}
+
+// covers: S257
+#[test]
+fn unknown_zone_and_unknown_preset_answer_404() {
+    let remote = start("zone-unknown");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    let early = post(&remote, "/api/zones/attic", token, "{\"toggle\": true}");
+    assert_eq!(
+        (early.status, early.error().as_str()),
+        (404, "unknown_zone")
+    );
+    remote.server.publish(zoned(false));
+    for (path, body, error) in [
+        ("/api/zones/cellar", "{\"toggle\": true}", "unknown_zone"),
+        ("/api/zones/", "{\"toggle\": true}", "unknown_zone"),
+        ("/api/zones/zone%2", "{\"volume\": 5}", "unknown_zone"),
+        ("/api/zones/kitchen", "{\"toggle\": true}", "unknown_zone"),
+        (
+            "/api/presets/preset:9",
+            "{\"recall\": true}",
+            "unknown_preset",
+        ),
+        ("/api/presets/", "{\"recall\": true}", "unknown_preset"),
+        ("/api/presets/%FF", "{\"recall\": true}", "unknown_preset"),
+    ] {
+        let reply = post(&remote, path, token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (404, error),
+            "{path}"
+        );
+        assert_eq!(reply.header("cache-control"), Some("no-store"));
+    }
+    // A zone or preset the app no longer publishes is gone for the page too.
+    remote.server.publish(sample());
+    let reply = post(
+        &remote,
+        "/api/presets/preset:1",
+        token,
+        "{\"recall\": true}",
+    );
+    assert_eq!(reply.error(), "unknown_preset");
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
+// covers: S257
+#[test]
+fn a_zone_with_no_present_member_answers_409() {
+    let remote = start("zone-unavailable");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    remote.server.publish(zoned(false));
+    let reply = post(&remote, "/api/zones/attic", token, "{\"toggle\": true}");
+    assert_eq!(
+        (reply.status, reply.error().as_str()),
+        (409, "zone_unavailable")
+    );
+    let reply = post(
+        &remote,
+        "/api/zones/attic",
+        token,
+        "{\"toggle\": true, \"volume\": 10}",
+    );
+    assert_eq!(reply.status, 409, "the volume goes with the refused toggle");
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
+// covers: S257
+#[test]
+fn bad_bodies_answer_400_and_out_of_range_422() {
+    let remote = start("zone-bodies");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    remote.server.publish(zoned(false));
+    for (path, body, status, error) in [
+        ("/api/zones/attic", "{\"toggle\": ", 400, "bad_json"),
+        ("/api/zones/attic", "[true]", 400, "bad_json"),
+        ("/api/zones/attic", "{\"toggle\": 1}", 400, "bad_json"),
+        ("/api/zones/attic", "{\"volume\": \"5\"}", 400, "bad_json"),
+        ("/api/zones/attic", "{}", 400, "nothing_to_change"),
+        (
+            "/api/zones/attic",
+            "{\"toggle\": false}",
+            400,
+            "nothing_to_change",
+        ),
+        ("/api/zones/cellar", "{}", 400, "nothing_to_change"),
+        (
+            "/api/zones/attic",
+            "{\"volume\": 100.5}",
+            422,
+            "out_of_range",
+        ),
+        (
+            "/api/zones/zone%201",
+            "{\"volume\": -1}",
+            422,
+            "out_of_range",
+        ),
+        (
+            "/api/presets/preset:1",
+            "{\"recall\": \"yes\"}",
+            400,
+            "bad_json",
+        ),
+        ("/api/presets/preset:1", "not json", 400, "bad_json"),
+        (
+            "/api/presets/preset:1",
+            "{\"recall\": false}",
+            400,
+            "nothing_to_change",
+        ),
+        ("/api/presets/preset:1", "{}", 400, "nothing_to_change"),
+    ] {
+        let reply = post(&remote, path, token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (status, error),
+            "{path} {body}"
+        );
+    }
+    let range = post(&remote, "/api/zones/attic", token, "{\"volume\": 101}");
+    assert_eq!(range.json()["message"], "Volume must be from 0 to 100.");
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
+// covers: S257
+#[test]
+fn a_body_over_4_kib_answers_413() {
+    use audiosync_remote::http::MAX_BODY;
+
+    let remote = start("zone-body-limit");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    remote.server.publish(zoned(true));
+    let pad = |body: &str, length: usize| format!("{body}{}", " ".repeat(length - body.len()));
+    for path in ["/api/zones/attic", "/api/presets/preset:1"] {
+        let reply = post(&remote, path, token, &pad("{\"volume\": 5}", MAX_BODY + 1));
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (413, "too_large"),
+            "the limit comes before the calibrating answer: {path}"
+        );
+    }
+    remote.server.publish(zoned(false));
+    let at = pad("{\"volume\": 5}", MAX_BODY);
+    let reply = post(&remote, "/api/zones/attic", token, &at);
+    assert_eq!(reply.status, 202, "{}", reply.body);
+}
+
+// covers: S256, S258
+#[test]
+fn every_write_answers_409_while_calibrating() {
+    let remote = start("calibrating");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    remote.server.publish(zoned(true));
+    assert_eq!(
+        get(&remote, "/api/state", token).json()["calibrating"],
+        true
+    );
+    for (path, body) in [
+        ("/api/master", "{\"volume\": 5}"),
+        ("/api/speakers/kitchen", "{\"on\": false}"),
+        ("/api/speakers/den", "{\"on\": true}"),
+        ("/api/speakers/attic", "{}"),
+        ("/api/zones/zone%201", "{\"toggle\": true}"),
+        ("/api/zones/attic", "{\"toggle\": true}"),
+        ("/api/zones/cellar", "not json"),
+        ("/api/presets/preset:1", "{\"recall\": true}"),
+        ("/api/presets/gone", "{\"recall\": 7}"),
+        ("/api/master", "{\"volume\": 500}"),
+    ] {
+        let reply = post(&remote, path, token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (409, "calibrating"),
+            "{path} {body}"
+        );
+        assert_eq!(
+            reply.json()["message"],
+            "AudioSync is calibrating. Try again when it's done."
+        );
+    }
+    let unpaired = post(&remote, "/api/master", None, "{\"volume\": 5}");
+    assert_eq!(
+        unpaired.status, 401,
+        "only a paired phone learns of the run"
+    );
+    let wrong_method = send(&remote, "GET", "/api/zones/attic", token, "");
+    assert_eq!(wrong_method.status, 405);
+    assert!(remote.received.lock().unwrap().is_empty());
+
+    remote.server.publish(zoned(false));
+    let reply = post(&remote, "/api/master", token, "{\"volume\": 5}");
+    assert_eq!(reply.status, 202, "{}", reply.body);
+}
+
+// covers: S258
+#[test]
+fn pairing_and_unpair_stay_open_while_calibrating() {
+    let remote = start("calibrating-pairing");
+    remote.server.publish(zoned(true));
+    let token = pair(&remote);
+    let state = get(&remote, "/api/state", Some(&token));
+    assert_eq!(state.status, 200, "reading the state stays open");
+    let reply = post(&remote, "/api/unpair", Some(&token), "{}");
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(remote.server.device_count(), 0);
 }

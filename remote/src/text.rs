@@ -87,6 +87,22 @@ pub fn unknown_speaker() -> ApiError {
     )
 }
 
+pub fn unknown_zone() -> ApiError {
+    ApiError::new(
+        404,
+        "unknown_zone",
+        "AudioSync doesn't have this zone anymore.",
+    )
+}
+
+pub fn unknown_preset() -> ApiError {
+    ApiError::new(
+        404,
+        "unknown_preset",
+        "AudioSync doesn't have this preset anymore.",
+    )
+}
+
 pub fn method_not_allowed() -> ApiError {
     ApiError::new(
         405,
@@ -100,6 +116,22 @@ pub fn speaker_unavailable() -> ApiError {
         409,
         "speaker_unavailable",
         "This speaker isn't available right now.",
+    )
+}
+
+pub fn zone_unavailable() -> ApiError {
+    ApiError::new(
+        409,
+        "zone_unavailable",
+        "None of this zone's speakers is available right now.",
+    )
+}
+
+pub fn calibrating() -> ApiError {
+    ApiError::new(
+        409,
+        "calibrating",
+        "AudioSync is calibrating. Try again when it's done.",
     )
 }
 
