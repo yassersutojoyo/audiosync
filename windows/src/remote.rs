@@ -587,6 +587,71 @@ mod tests {
         assert_eq!(delay("pc", 10), Err(Refusal::OutOfRange));
     }
 
+    fn with_apple_tv(availability: Availability) -> AppState {
+        let mut state = state();
+        let mut tv = speaker("tv", SpeakerKind::AirPlay, None);
+        tv.availability = availability;
+        state.speakers.push(tv);
+        state.airplay_delay_ms = Some(1750.0);
+        state
+    }
+
+    #[test]
+    fn a_speaker_that_asks_for_a_code_is_turned_on_at_the_pc_not_from_the_page() {
+        let state = with_apple_tv(Availability::NeedsCode);
+        let on = SpeakerChange {
+            on: Some(true),
+            ..Default::default()
+        };
+        let tv = |state: &AppState| {
+            snapshot(state, not_virtual, None, "pc", &Text)
+                .speakers
+                .into_iter()
+                .find(|s| s.id == "tv")
+                .unwrap()
+        };
+        assert!(!tv(&state).available, "the prompt would open at the PC");
+        assert_eq!(
+            actions(&speaker_command("tv", on.clone()), &state, not_virtual),
+            Err(Refusal::Unavailable)
+        );
+        let mut paired = state.clone();
+        paired.speakers.last_mut().unwrap().paired = true;
+        assert!(
+            tv(&paired).available,
+            "paired, it turns on without a prompt"
+        );
+        let mut playing = state.clone();
+        playing.speakers.last_mut().unwrap().enabled = true;
+        assert!(tv(&playing).available, "on, it can be turned off");
+    }
+
+    #[test]
+    fn an_airplay_speaker_carries_the_shared_airplay_delay_and_sets_it() {
+        let state = with_apple_tv(Availability::Open);
+        let snapshot = snapshot(&state, not_virtual, None, "pc", &Text);
+        let tv = snapshot.speakers.iter().find(|s| s.id == "tv").unwrap();
+        assert_eq!(
+            (tv.delay_ms, tv.delay_min_ms, tv.delay_max_ms),
+            (1750, 0, 20_000)
+        );
+        let change = |ms| SpeakerChange {
+            delay_ms: Some(ms),
+            ..Default::default()
+        };
+        let delay = |ms| actions(&speaker_command("tv", change(ms)), &state, not_virtual);
+        assert_eq!(delay(2100).map(|actions| actions.len()), Ok(1));
+        assert_eq!(delay(-1), Err(Refusal::OutOfRange));
+        assert_eq!(delay(20_001), Err(Refusal::OutOfRange));
+        let mut no_sender = state.clone();
+        no_sender.airplay_delay_ms = None;
+        assert_eq!(
+            actions(&speaker_command("tv", change(10)), &no_sender, not_virtual),
+            Err(Refusal::OutOfRange),
+            "no AirPlay sender, no delay field"
+        );
+    }
+
     #[test]
     fn an_unknown_hidden_or_unavailable_speaker_is_refused() {
         let state = state();
