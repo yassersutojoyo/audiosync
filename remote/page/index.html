@@ -167,6 +167,7 @@ input[role=switch]:checked::before { background: var(--knob); transform: transla
 .setup ol { margin: 8px 0; padding-left: 1.5em; }
 .setup li + li { margin-top: 4px; }
 footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+footer .error { flex-basis: 100%; margin-top: 0; }
 @media (prefers-reduced-motion: reduce) {
   input[role=switch], input[role=switch]::before { transition: none; }
 }
@@ -219,7 +220,8 @@ footer { display: flex; align-items: center; justify-content: space-between; fle
 <div id="speakers"></div>
 <footer>
 <p id="computer" class="muted"></p>
-<button id="unpair" type="button">Unpair this phone</button>
+<button id="unpair" type="button" aria-describedby="unpair-error">Unpair this phone</button>
+<p id="unpair-error" class="error" hidden></p>
 </footer>
 </fieldset>
 </section>
@@ -295,6 +297,7 @@ const ui = {
   speakers: byId("speakers"),
   computer: byId("computer"),
   unpair: byId("unpair"),
+  unpairError: byId("unpair-error"),
 };
 
 let events = null;
@@ -302,6 +305,7 @@ let retryTimer = null;
 let failures = 0;
 let lost = false;
 let streamed = false;
+let focusAfterPair = false;
 let snapshot = null;
 let rowCount = 0;
 const rows = new Map();
@@ -368,6 +372,7 @@ function showPairing(message) {
   stopStream();
   snapshot = null;
   lost = false;
+  focusAfterPair = false;
   ui.banner.hidden = true;
   ui.controls.disabled = false;
   ui.remote.hidden = true;
@@ -387,6 +392,7 @@ function showRemote() {
 
 function clearErrors() {
   showError(ui.masterError, "");
+  showError(ui.unpairError, "");
   for (const row of rows.values()) { showError(row.error, ""); }
 }
 
@@ -416,8 +422,16 @@ function connect() {
     failures = 0;
     streamed = true;
     remember(true);
+    // Retry and the pairing form hide now, which would drop focus to the page top.
+    const focused = document.activeElement;
+    const stranded = focusAfterPair || ui.banner.contains(focused) || ui.pair.contains(focused);
+    focusAfterPair = false;
     setLost(false);
     render(next);
+    const now = document.activeElement;
+    if (stranded && (!now || now === document.body || ui.banner.contains(now) || ui.pair.contains(now))) {
+      ui.master.focus();
+    }
   });
   events.onerror = () => {
     stopStream();
@@ -632,7 +646,7 @@ function makeRow(speaker) {
   error.hidden = true;
   root.append(head, body, notice, error);
 
-  const row = { id: speaker.id, root, name, kind, power, body, volume, less, delay, more, notice, error, speaker };
+  const row = { id: speaker.id, root, name, kind, power, body, volume, delayLine, less, delay, more, notice, error, speaker };
 
   const fail = (message) => {
     showError(row.error, message);
@@ -711,9 +725,13 @@ function updateRow(row, speaker) {
   row.root.classList.toggle("off-line", !speaker.available);
   // Hiding the focused control drops focus to the page top; keep it on this speaker.
   const focused = document.activeElement;
-  if (!speaker.available && (row.body.contains(focused) || row.power.parentElement.contains(focused))) {
+  // The reference output and a Cast group have no delay of their own to change.
+  const fixedDelay = speaker.delay_min_ms === speaker.delay_max_ms;
+  if ((!speaker.available && (row.body.contains(focused) || row.power.parentElement.contains(focused)))
+    || (fixedDelay && row.delayLine.contains(focused))) {
     row.name.focus();
   }
+  row.delayLine.hidden = fixedDelay;
   row.body.hidden = !speaker.available;
   row.power.parentElement.hidden = !speaker.available;
   row.less.setAttribute("aria-label", `${TEXT.lessDelay}, ${speaker.name}`);
@@ -810,6 +828,7 @@ ui.pair.addEventListener("submit", (event) => {
       ui.code.value = "";
       announce(TEXT.paired);
       failures = 0;
+      focusAfterPair = true;
       connect();
       return null;
     }
@@ -828,12 +847,16 @@ ui.retry.addEventListener("click", connect);
 
 ui.unpair.addEventListener("click", () => {
   if (!window.confirm(TEXT.unpairConfirm)) { return; }
+  showError(ui.unpairError, "");
   post("/api/unpair", {}).then(() => {
     remember(false);
     showPairing("");
     announce(TEXT.unpairedHere);
   }, (problem) => {
-    if (problem) { announce(problem.message); }
+    if (problem) {
+      showError(ui.unpairError, problem.message);
+      announce(problem.message);
+    }
   });
 });
 
