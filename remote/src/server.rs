@@ -360,6 +360,8 @@ enum Admission {
     Open,
     /// Let in only to show a paired device's token (see [`Capacity::reserved`]).
     Reserved,
+    /// Let in as [`Admission::Reserved`] once the held connection at this index is closed.
+    Replace(usize),
     Busy,
     PeerBusy,
 }
@@ -740,7 +742,7 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
     };
     let refused = match admitted {
         Admission::Open | Admission::Reserved => None,
-        Admission::Busy => Some(ServerEvent::Busy { from }),
+        Admission::Busy | Admission::Replace(_) => Some(ServerEvent::Busy { from }),
         Admission::PeerBusy => Some(ServerEvent::PeerBusy { from }),
     };
     if let Some(event) = refused {
@@ -1239,6 +1241,32 @@ mod tests {
             })
             .collect();
         assert_eq!(admission(&full, paired_phone, capacity), Admission::Busy);
+    }
+
+    #[test]
+    fn a_host_with_many_addresses_cannot_hold_every_reserved_slot() {
+        let capacity = Capacity::default();
+        let mut slots: Vec<Slot> = (1..=3)
+            .flat_map(|host| held(home(0, host), MAX_CONNECTIONS_PER_PEER, false, false))
+            .collect();
+        let shared = slots.len();
+        // Link-local addresses are peers of their own, so one host can bring many.
+        for host in 1..=RESERVED_FOR_PAIRED / RESERVED_PER_PEER {
+            let peer = net::peer_group(address(&format!("fe80::{host}")));
+            for _ in 0..RESERVED_PER_PEER {
+                assert_eq!(admission(&slots, peer, capacity), Admission::Reserved);
+                slots.extend(held(peer, 1, true, false));
+            }
+        }
+        assert_eq!(slots.len(), MAX_CONNECTIONS);
+        let phone = home(0, 9);
+        assert_eq!(
+            admission(&slots, phone, capacity),
+            Admission::Replace(shared)
+        );
+        // A peer already waiting in its share of reserved slots gets no more.
+        let last = slots[MAX_CONNECTIONS - 1].peer;
+        assert_eq!(admission(&slots, last, capacity), Admission::Busy);
     }
 
     #[test]

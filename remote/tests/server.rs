@@ -937,6 +937,63 @@ fn reserved_slots_let_in_only_a_paired_device() {
 }
 
 #[test]
+fn a_full_server_makes_room_by_closing_the_oldest_reserved_waiter() {
+    let config = config("reserved-evict", Timing::default());
+    // Paired on a first server, so no pairing connection is still held by the second.
+    let first = start_with(config.clone());
+    let token = pair(&first);
+    first.server.stop();
+    let remote = start_with(Config {
+        capacity: Capacity {
+            connections: 2,
+            per_peer: 3,
+            reserved: 1,
+            reserved_per_peer: 2,
+        },
+        ..config
+    });
+    remote.server.publish(sample());
+    // Accepted in order: the first takes the shared slot, the second the reserved one.
+    let _shared = idle_connection(&remote);
+    let mut waiter = idle_connection(&remote);
+    let reply = get(&remote, "/api/state", Some(&token));
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    let started = Instant::now();
+    assert_eq!(read_all(&mut waiter), "");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the waiter stayed"
+    );
+}
+
+#[test]
+fn a_busy_answer_arrives_after_a_request_the_server_never_read() {
+    let remote = start("busy-linger");
+    let _idle: Vec<TcpStream> = (0..8).map(|_| idle_connection(&remote)).collect();
+    let raw = format!(
+        "GET /api/state HTTP/1.1\r\nHost: {}\r\nX-Padding: {}\r\n\r\n",
+        host(&remote),
+        "a".repeat(4096)
+    );
+    for round in 0..10 {
+        let mut ninth = idle_connection(&remote);
+        ninth.write_all(raw.as_bytes()).unwrap();
+        ninth
+            .set_read_timeout(Some(Duration::from_secs(20)))
+            .unwrap();
+        let mut answer = Vec::new();
+        // A reset instead of a close can cost a browser the answer.
+        let ended = ninth.read_to_end(&mut answer);
+        let answer = String::from_utf8_lossy(&answer);
+        assert!(ended.is_ok(), "round {round}: {ended:?} after {answer:?}");
+        assert!(
+            answer.starts_with("HTTP/1.1 503 "),
+            "round {round}: {answer:?}"
+        );
+    }
+}
+
+#[test]
 fn a_request_that_takes_too_long_is_closed_unanswered() {
     let timing = Timing {
         request: Duration::from_millis(300),
