@@ -109,6 +109,17 @@ fn count(device: &FakeDevice, namespace: &str, kind: &str) -> usize {
     device.payloads(namespace, kind).len()
 }
 
+/// The 16-bit samples in the first fetch's body after its WAV header chunk.
+fn fetched_samples(device: &FakeDevice) -> Vec<i16> {
+    let body = device.fetches()[0].body.clone();
+    http::chunks(&body)
+        .iter()
+        .skip(1)
+        .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
+        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+        .collect()
+}
+
 fn diagnostics(events: &[SessionEvent]) -> Option<Diagnostics> {
     events.iter().rev().find_map(|event| match event {
         SessionEvent::Diagnostics(diagnostics) => Some(diagnostics.clone()),
@@ -633,15 +644,15 @@ fn device_volume_changes_never_touch_the_samples() {
         |event| matches!(event, SessionEvent::Volume(volume) if (volume.level - 0.2).abs() < 1e-9),
     );
     assert!(!seen.is_empty());
-    session.run_for(Duration::from_millis(500));
+    // A slow runner can stream less than a second in a fixed wait, so wait for the samples.
+    let settled = Instant::now() + Duration::from_millis(500);
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut samples = fetched_samples(&device);
+    while Instant::now() < until && (Instant::now() < settled || samples.len() <= 48_000) {
+        session.run_for(Duration::from_millis(50));
+        samples = fetched_samples(&device);
+    }
     assert_eq!(count(&device, NS_RECEIVER, "SET_VOLUME"), 1, "no echo");
-    let body = device.fetches()[0].body.clone();
-    let chunks = http::chunks(&body);
-    let samples: Vec<i16> = chunks[1..]
-        .iter()
-        .flat_map(|chunk| chunk.as_chunks::<2>().0.iter())
-        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
-        .collect();
     assert!(samples.len() > 48_000, "{} samples", samples.len());
     assert!(
         samples.iter().all(|sample| *sample == 9 || *sample == 0),
