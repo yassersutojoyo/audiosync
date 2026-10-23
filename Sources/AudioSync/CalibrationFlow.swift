@@ -126,17 +126,17 @@ enum CalibrationFlow {
     /// Why an output sits out of calibration, nil when it takes part.
     /// `terminal` is its first output stream's `kAudioStreamPropertyTerminalType`,
     /// `dataSource` its output `kAudioDevicePropertyDataSource`, `name` the
-    /// name macOS gives it. Core Audio has no documented kind for a Bluetooth
-    /// output, so only there does the name decide, after the terminal.
+    /// name macOS gives it. Over Bluetooth only the name decides: macOS reports
+    /// Bluetooth speakers with the headphones terminal too, and has no documented kind.
     static func leftOut(transport: UInt32, terminal: UInt32?, dataSource: UInt32?,
                         name: String) -> CalibrationLeftOut? {
         if transport == kAudioDeviceTransportTypeVirtual { return .virtual }
-        if dataSource == headphoneJackSource { return .headphones }
-        if let terminal, headphoneTerminals.contains(terminal) { return .headphones }
         if transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE {
             let lowered = name.lowercased()
-            if headphoneWords.contains(where: { lowered.contains($0) }) { return .headphones }
+            return headphoneWords.contains(where: { lowered.contains($0) }) ? .headphones : nil
         }
+        if dataSource == headphoneJackSource { return .headphones }
+        if let terminal, headphoneTerminals.contains(terminal) { return .headphones }
         return nil
     }
 

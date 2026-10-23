@@ -5175,8 +5175,9 @@ do {
     check(!topic.isEmpty && named.allSatisfy(topic.contains),
           "guide: a Calibration topic before Speaker Notes names Calibrate All Speakers, Include Anyway and the rest",
           named.filter { !topic.contains($0) }.joined(separator: ", "))
-    check(topic.contains("Headphones") && topic.contains("virtual outputs"),
-          "guide: the Calibration topic says headphones and virtual outputs are left out")
+    check(topic.contains("Headphones") && topic.contains("virtual outputs")
+            && topic.contains("Bluetooth speakers take part"),
+          "guide: the Calibration topic says headphones and virtual outputs are left out and Bluetooth speakers stay in")
 }
 
 // MARK: Web remote: the snapshot the page gets, and what a phone's change does
