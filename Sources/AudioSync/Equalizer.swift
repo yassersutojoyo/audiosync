@@ -74,7 +74,7 @@ enum Equalizer {
         return saved.firstIndex { $0.gains == gains }.map(CurveMatch.saved)
     }
 
-    /// A typed name as a curve keeps it: trimmed and cut to 40 characters;
+    /// A typed name as a curve keeps it: trimmed and cut to 40 Unicode scalars;
     /// nil when nothing is left.
     static func curveName(_ typed: String) -> String? {
         let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)

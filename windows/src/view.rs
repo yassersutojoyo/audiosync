@@ -2865,6 +2865,7 @@ impl App {
             dialog.set_heading(strings.get_new_group_title());
             dialog.set_message(strings.get_new_group_message());
             dialog.set_placeholder(strings.get_new_group_placeholder());
+            dialog.set_field_label(strings.get_new_group_field_label());
             dialog.set_name(SharedString::new());
             dialog.set_show_field(true);
             dialog.set_confirm_label(strings.get_create());
@@ -2883,6 +2884,7 @@ impl App {
         dialog.set_heading(strings.get_rename_group_title());
         dialog.set_message(strings.invoke_rename_group_message(group.name.as_str().into()));
         dialog.set_placeholder(SharedString::new());
+        dialog.set_field_label(strings.get_new_group_field_label());
         dialog.set_name(group.name.as_str().into());
         dialog.set_show_field(true);
         dialog.set_confirm_label(strings.get_rename());
@@ -6757,8 +6759,20 @@ mod tests {
 
         eq_window.invoke_rename_curve();
         assert_eq!(app.group_dialog.get_name(), "Desk");
+        assert_eq!(app.group_dialog.get_field_label(), "Curve name");
         app.group_dialog.invoke_confirmed("Office".into());
         assert_eq!(app.snapshot().equalizer_curves[0].name, "Office");
+
+        // The curve dialogs share the group name dialog.
+        app.ask_new_group();
+        assert_eq!(app.group_dialog.get_field_label(), "Group name");
+        app.group_dialog.invoke_cancelled();
+        eq_window.invoke_save_curve();
+        app.group_dialog.invoke_cancelled();
+        let group = app.snapshot().groups[0].id.clone();
+        app.ask_rename(&group);
+        assert_eq!(app.group_dialog.get_field_label(), "Group name");
+        app.group_dialog.invoke_cancelled();
 
         eq_window.invoke_delete_curve();
         assert!(app.snapshot().equalizer_curves.is_empty());

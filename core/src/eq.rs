@@ -189,7 +189,7 @@ pub fn preset(id: &str) -> Option<&'static Preset> {
 /// Most curves the user can save (S242).
 pub const MAX_USER_CURVES: usize = 50;
 
-/// Longest name of a saved curve, in characters (S242).
+/// Longest name of a saved curve, in Unicode scalars (S242).
 pub const MAX_CURVE_NAME_CHARS: usize = 40;
 
 /// A curve the user saved under a name: ten band gains, no preamp (S242).
