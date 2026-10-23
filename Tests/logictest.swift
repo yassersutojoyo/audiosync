@@ -4715,10 +4715,16 @@ do {
             && !CalibrateAllFlow.undoHolds(appliedUndo, now: cleared)
             && !CalibrateAllFlow.undoHolds(appliedUndo, now: nudged),
           "calibrate all: a delay changed by hand after Apply drops Undo")
-    let adjustment = AirPlayDelay(adjustmentMs: 215)
-    check(adjustment.latencyMs(senderMs: 1750) != adjustment.latencyMs(senderMs: 2000)
-            && CalibrateAllFlow.undoHolds(appliedUndo, now: appliedUndo.afterApply),
-          "calibrate all: a new AirPlay sender latency alone keeps Undo, since the adjustment didn't move")
+    var written = AirPlayDelay(), senderMoved = AirPlayDelay(), sameField = AirPlayDelay()
+    let entered = written.enter(1965, senderMs: 1750) && senderMoved.enter(2215, senderMs: 2000)
+        && sameField.enter(1965, senderMs: 2000)
+    var airPlayUndo = undo
+    airPlayUndo.afterApply = [.airPlay(written)]
+    check(entered && senderMoved.latencyMs(senderMs: 2000) != written.latencyMs(senderMs: 1750)
+            && CalibrateAllFlow.undoHolds(airPlayUndo, now: [.airPlay(senderMoved)])
+            && !CalibrateAllFlow.undoHolds(airPlayUndo, now: [.airPlay(sameField)]),
+          "calibrate all: a new AirPlay sender latency alone keeps Undo; the same field value typed at it drops Undo",
+          "\(written) \(senderMoved) \(sameField)")
     var castMemory = CastModel()
     _ = castMemory.setOffset("tv", ms: 900)
     for case .cast(let id, .none) in restores where id == "cast:tv" { _ = castMemory.clearOffset("tv") }
