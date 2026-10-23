@@ -81,8 +81,23 @@ pub enum MicKind {
 
 /// The [`MicKind`] of an output from its form factor and the enumerator of
 /// its device. A property that couldn't be read leaves the output in.
-pub fn mic_kind(_form_factor: Option<u32>, _enumerator: Option<&str>) -> MicKind {
-    MicKind::Speaker
+///
+/// The `ROOT` enumerator marks a device on no hardware bus, which is how
+/// virtual cables and meeting apps install their outputs; it decides first,
+/// since such a device reports whatever form factor it likes. Then the form
+/// factor: headphones, a headset or a handset play into the ears, whatever
+/// bus they are on, while a Bluetooth or USB speaker says `Speakers`. The
+/// name isn't used: the user can change it and Windows translates it.
+pub fn mic_kind(form_factor: Option<u32>, enumerator: Option<&str>) -> MicKind {
+    if enumerator.is_some_and(|bus| bus.eq_ignore_ascii_case("ROOT")) {
+        return MicKind::Virtual;
+    }
+    match form_factor {
+        Some(form_factor::HEADPHONES | form_factor::HEADSET | form_factor::HANDSET) => {
+            MicKind::Headphones
+        }
+        _ => MicKind::Speaker,
+    }
 }
 
 /// `EndpointFormFactor` values, as Windows documents them.

@@ -8,7 +8,7 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, GroupItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { Appearance, CalibrationRowItem, CastList, GroupItem, LeftOutItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -279,8 +279,9 @@ component EqualizerCard inherits Rectangle {
 }
 
 // Calibrate All Speakers (spec S235 to S240): the button, which cancels a
-// run under way, what the run does, and the results with Measure Again on
-// each row, Apply, Undo and Close.
+// run under way, what the run does, the outputs left out by kind with
+// Include Anyway, and the results with Measure Again on each row, Apply,
+// Undo and Close.
 component CalibrationCard inherits Card {
     in property <bool> running;
     in property <bool> can-start;
@@ -290,6 +291,7 @@ component CalibrationCard inherits Card {
     in property <bool> privacy;
     in property <bool> results-shown;
     in property <[CalibrationRowItem]> rows;
+    in property <[LeftOutItem]> left-out;
     // The AirPlay delay's line, empty without AirPlay speakers.
     in property <string> airplay;
     // How the run or the last action on its results ended.
@@ -300,6 +302,8 @@ component CalibrationCard inherits Card {
     callback cancel();
     callback privacy-requested();
     callback measure-again(int);
+    // Include Anyway (true) or Leave Out (false) on a left-out row.
+    callback include(int, bool);
     callback apply();
     callback undo();
     callback focus-changed(bool);
@@ -366,6 +370,45 @@ component CalibrationCard inherits Card {
         // The button's description says it already.
         QuietText {
             text: root.status;
+        }
+
+        if root.left-out.length > 0: VerticalLayout {
+            spacing: 6px;
+            accessible-role: groupbox;
+            accessible-label: Strings.calibrate-all-left-out-title;
+
+            for item[index] in root.left-out: VerticalLayout {
+                spacing: 2px;
+
+                Text {
+                    text: item.name;
+                    font-size: Tokens.font-size-body;
+                    font-weight: 600;
+                    color: item.included ? Tokens.text : Tokens.secondary-text;
+                    wrap: word-wrap;
+                }
+
+                SecondaryText {
+                    text: item.reason;
+                }
+
+                HorizontalLayout {
+                    alignment: LayoutAlignment.start;
+
+                    Button {
+                        changed has-focus => {
+                            root.focus-changed(self.has-focus);
+                        }
+                        text: item.included ? Strings.leave-out : Strings.include-anyway;
+                        enabled: !root.running;
+                        accessible-label: item.included ? Strings.leave-out-label(item.name) : Strings.include-anyway-label(item.name);
+                        accessible-description: item.reason + " " + Strings.include-anyway-help;
+                        clicked => {
+                            root.include(index, !item.included);
+                        }
+                    }
+                }
+            }
         }
 
         if root.results-shown: VerticalLayout {
@@ -654,6 +697,7 @@ export component MainWindow inherits Window {
     in property <bool> calibrate-all-privacy;
     in property <bool> calibrate-all-results-shown;
     in property <[CalibrationRowItem]> calibrate-all-rows;
+    in property <[LeftOutItem]> calibrate-all-left-out;
     in property <string> calibrate-all-airplay;
     in property <string> calibrate-all-outcome;
     in property <bool> calibrate-all-can-apply;
@@ -705,6 +749,7 @@ export component MainWindow inherits Window {
     callback calibrate-all-requested();
     callback cancel-calibrate-all-requested();
     callback calibrate-all-again-requested(int);
+    callback calibrate-all-include-requested(int, bool);
     callback calibrate-all-apply-requested();
     callback calibrate-all-undo-requested();
     callback calibrate-all-close-requested();
@@ -1165,6 +1210,7 @@ export component MainWindow inherits Window {
                         privacy: root.calibrate-all-privacy;
                         results-shown: root.calibrate-all-results-shown;
                         rows: root.calibrate-all-rows;
+                        left-out: root.calibrate-all-left-out;
                         airplay: root.calibrate-all-airplay;
                         outcome: root.calibrate-all-outcome;
                         can-apply: root.calibrate-all-can-apply;
@@ -1180,6 +1226,9 @@ export component MainWindow inherits Window {
                         }
                         measure-again(row) => {
                             root.calibrate-all-again-requested(row);
+                        }
+                        include(row, included) => {
+                            root.calibrate-all-include-requested(row, included);
                         }
                         focus-changed(has) => {
                             root.control-focus-changed(MainControl.calibration, has);

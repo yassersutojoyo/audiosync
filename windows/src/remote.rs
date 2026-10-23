@@ -374,6 +374,7 @@ mod tests {
             waiting: None,
             cast: None,
             group: None,
+            mic_left_out: None,
         }
     }
 

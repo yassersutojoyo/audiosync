@@ -19,6 +19,7 @@ use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
 
 pub use crate::audio::backend::CastMembers;
 use crate::audio::calibration::{Failure, Phase};
+pub use crate::audio::outputs::MicKind;
 
 pub use crate::settings::Appearance;
 
@@ -198,6 +199,8 @@ pub struct Speaker {
     pub cast: Option<CastRow>,
     /// A stereo pair or home theater group: what kind, and its members.
     pub group: Option<crate::audio::backend::AirPlayGroup>,
+    /// A local output microphone calibration leaves out by its kind.
+    pub mic_left_out: Option<MicKind>,
 }
 
 /// A Google Cast speaker's own state. Its delay is the measured offset the
@@ -575,6 +578,19 @@ pub struct CalibrateAllState {
     pub sheet: Option<SheetState>,
     /// Counts each ending, Apply and Undo, so Narrator hears each once.
     pub endings: u64,
+    /// The outputs that are on but left out by their kind.
+    pub left_out: Vec<LeftOutRow>,
+}
+
+/// An output that is on, which Calibrate All leaves out by its kind unless
+/// the user chose Include Anyway.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeftOutRow {
+    /// Its endpoint ID.
+    pub id: String,
+    pub name: String,
+    pub kind: MicKind,
+    pub included: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -798,6 +814,10 @@ pub trait Backend {
     /// Measure Again on the results' row `row`.
     fn measure_again(&mut self, _row: usize) {}
 
+    /// Include Anyway (`true`) or Leave Out on the Calibrate All card's
+    /// row of output `id`, an endpoint ID.
+    fn include_in_calibration(&mut self, _id: &str, _included: bool) {}
+
     /// Apply on the results: the certain rows' delays, as one change.
     fn apply_calibrate_all(&mut self) {}
 
@@ -973,6 +993,7 @@ impl MockBackend {
             waiting: None,
             cast: None,
             group: None,
+            mic_left_out: None,
         };
         let mut speakers = vec![
             // The reference: no delay of its own.
@@ -1407,6 +1428,7 @@ mod tests {
             waiting: None,
             cast: None,
             group: None,
+            mic_left_out: None,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));

@@ -115,8 +115,23 @@ impl Lineup {
 
     /// The lineup a run measures, and the outputs left out by kind in their
     /// order. One whose ID is in `included` stays in, flagged as included.
-    pub fn plan(&self, _included: &BTreeSet<String>) -> (Lineup, Vec<LeftOut>) {
-        (self.clone(), Vec::new())
+    pub fn plan(&self, included: &BTreeSet<String>) -> (Lineup, Vec<LeftOut>) {
+        let mut planned = self.clone();
+        let mut left_out = Vec::new();
+        planned.members.retain(|member| {
+            let kind = self.kind_of(member);
+            if kind == MicKind::Speaker {
+                return true;
+            }
+            let included = included.contains(&member.id);
+            left_out.push(LeftOut {
+                id: member.id.clone(),
+                kind,
+                included,
+            });
+            included
+        });
+        (planned, left_out)
     }
 }
 

@@ -48,6 +48,15 @@ export enum PinPhase { starting, ready, checking }
 // or the hint under its volume slider (low, muted, or both).
 export enum DeviceVolumeHint { none, low, muted, muted-low }
 
+// An output that is on but left out of Calibrate All by its kind.
+export struct LeftOutItem {
+    name: string,
+    // Why it is left out, or that it is included anyway.
+    reason: string,
+    // Include Anyway was chosen: the button reads Leave Out.
+    included: bool,
+}
+
 // A row of the Calibrate All Speakers results.
 export struct CalibrationRowItem {
     name: string,
@@ -102,6 +111,9 @@ export struct SpeakerItem {
     // The last calibration found the microphone blocked: Open Privacy
     // Settings goes next to the button.
     calibration-privacy: bool,
+    // Why microphone calibration leaves it out (headphones, a virtual
+    // output), shown instead of Calibrate with Microphone; empty otherwise.
+    calibration-left-out: string,
     auto-connect: bool,
     availability: Availability,
     // An Apple TV AudioSync keeps pairing credentials for: its menu offers
