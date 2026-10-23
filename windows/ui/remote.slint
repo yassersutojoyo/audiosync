@@ -206,7 +206,7 @@ export component RemoteWindow inherits Window {
                             }
 
                             if root.ip-address != "": AddressLine {
-                                label: Strings.remote-ip-label;
+                                label: root.local-address != "" ? Strings.remote-ip-label : Strings.remote-address-label;
                                 value: root.ip-address;
                             }
 
@@ -278,6 +278,11 @@ export component RemoteWindow inherits Window {
                                         root.new-code-requested();
                                     }
                                 }
+                            }
+
+                            if !root.locked: SecondaryText {
+                                text: Strings.remote-code-note;
+                                min-height: self.preferred-height;
                             }
                         }
 

@@ -463,6 +463,8 @@ fn keyboard_shortcuts_are_declared() {
 /// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
+/// The row note and notice for a speaker that plays only AirPlay 2 name
+/// that item, and show only for a receiver the sender found.
 /// The calibration results' AirPlay lines show only when an AirPlay
 /// speaker took part, so the sender ran.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
@@ -481,6 +483,9 @@ fn no_text_promises_airplay() {
                 || line.contains("couldn't read your AirPlay pairings when it started,")
                 || line.contains("not supported yet")
                 || line.contains("doesn't support yet")
+                || line.contains("return @tr(\"{} plays only AirPlay 2, so it's off.")
+                || line.contains("return @tr(\"AirPlay 2 is off\");")
+                || line.contains("return @tr(\"AirPlay 2 is off until AudioSync reopens\");")
                 || line.contains("property <string> airplay-delay-")
                 || line
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")

@@ -149,10 +149,16 @@ struct WebRemoteView: View {
                     Text(t.webRemoteNoAddress).foregroundStyle(Brand.errorText)
                 }
                 ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
-                    Text(url)
-                        .font(index == 0 ? .body.monospaced() : .callout.monospaced())
-                        .foregroundStyle(index == 0 ? Color.primary : Brand.secondaryText)
-                        .textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(index == 0 ? t.webRemoteAddressLabel : t.webRemoteIPLabel)
+                            .font(.caption)
+                            .foregroundStyle(Brand.secondaryText)
+                        Text(url)
+                            .font(index == 0 ? .body.monospaced() : .callout.monospaced())
+                            .foregroundStyle(index == 0 ? Color.primary : Brand.secondaryText)
+                            .textSelection(.enabled)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
                 Text(t.webRemoteSteps)
                     .font(.callout)
@@ -194,6 +200,9 @@ struct WebRemoteView: View {
 
     private func devicesSection(_ t: UIStrings) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            Text(t.webRemoteDevicesTitle)
+                .font(.subheadline.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             HStack {
                 Text(t.webRemoteDevices(settings.deviceCount))
                 Spacer()

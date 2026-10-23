@@ -44,7 +44,7 @@ use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, StartRefused,
 };
-use audiosync_cast::media::Metadata;
+use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{ControlType, DeviceVolume};
 use audiosync_core::fade::Fade;
@@ -1204,6 +1204,7 @@ fn problem_of(end: &SessionEnd) -> Option<CastProblem> {
         SessionEnd::Stopped | SessionEnd::Deselected => None,
         SessionEnd::TakenOver => Some(CastProblem::TakenOver),
         SessionEnd::Failed(SessionError::Connect(_)) => Some(CastProblem::NotResponding),
+        SessionEnd::Failed(SessionError::Media(MediaError::NoFetch)) => Some(CastProblem::Blocked),
         SessionEnd::Failed(SessionError::Launch(_) | SessionError::Media(_)) => {
             Some(CastProblem::Refused)
         }
@@ -1391,6 +1392,14 @@ pub mod tests {
             .find(|speaker| speaker.id == id)
             .expect("listed")
             .status
+    }
+
+    #[test]
+    fn a_stream_the_speaker_couldnt_fetch_reads_as_blocked() {
+        let blocked = SessionEnd::Failed(SessionError::Media(MediaError::NoFetch));
+        assert_eq!(problem_of(&blocked), Some(CastProblem::Blocked));
+        let refused = SessionEnd::Failed(SessionError::Media(MediaError::LoadCancelled));
+        assert_eq!(problem_of(&refused), Some(CastProblem::Refused));
     }
 
     #[test]

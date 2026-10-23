@@ -311,6 +311,8 @@ pub enum CastProblem {
     NotResponding,
     /// It wouldn't start the player, or turned the stream down.
     Refused,
+    /// It couldn't fetch the stream from this PC, as when a firewall blocks it.
+    Blocked,
     /// Another app or device started playing on it.
     TakenOver,
     /// The connection was lost and couldn't be brought back.

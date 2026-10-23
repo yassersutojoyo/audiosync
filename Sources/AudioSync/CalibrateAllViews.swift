@@ -77,8 +77,8 @@ struct CalibrateAllSheetView: View {
                 Text(t.calibrateAllLine(line))
                     .foregroundStyle(isProblem(line) ? Brand.errorText : Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if let sheet = status.sheet, sheet.ended == nil, !sheet.hasCertainRow, !status.isRunning {
-                Text(t.calibrateAllNothingCertain)
+            } else if let finished = finishedLine(status, t: t) {
+                Text(finished)
                     .foregroundStyle(Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -92,6 +92,11 @@ struct CalibrateAllSheetView: View {
         }
         .onChange(of: status.line) { _, now in
             if let now { AccessibilityNotification.Announcement(t.calibrateAllLine(now)).post() }
+        }
+        .onChange(of: status.isRunning) { _, running in
+            if !running, let finished = finishedLine(status, t: t) {
+                AccessibilityNotification.Announcement(finished).post()
+            }
         }
     }
 
@@ -160,6 +165,8 @@ struct CalibrateAllSheetView: View {
                 if status.line == .applied {
                     Button(t.calibrateAllUndo) { model.actions.undoCalibrateAll() }
                         .accessibilityLabel(t.calibrateAllUndoLabel)
+                        .help(t.calibrateAllUndoHelp)
+                        .accessibilityHint(t.calibrateAllUndoHelp)
                 }
                 let applied = status.sheet?.applied == true
                 Button(applied ? t.calibrateAllDone : t.calibrateAllClose) { model.actions.closeCalibrateAll() }
@@ -172,9 +179,21 @@ struct CalibrateAllSheetView: View {
                     Button(t.calibrateAllApply) { model.actions.applyCalibrateAll() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(!sheet.canApply)
+                        .help(t.calibrateAllApplyHelp)
+                        .accessibilityHint(t.calibrateAllApplyHelp)
                 }
             }
         }
+    }
+
+    /// Under a finished run's rows while no other line shows: how many
+    /// speakers were measured clearly, or that there is nothing to apply.
+    private func finishedLine(_ status: CalibrateAllStatus, t: UIStrings) -> String? {
+        guard status.line == nil, !status.isRunning, let sheet = status.sheet, sheet.ended == nil, !sheet.applied
+        else { return nil }
+        guard sheet.hasCertainRow else { return t.calibrateAllNothingCertain }
+        let measured = sheet.rows.filter { $0.result != .reference }
+        return t.calibrateAllFinished(clear: measured.filter(\.isCertain).count, total: measured.count)
     }
 
     private func current(_ row: CalibrateAllSheet.Row, t: UIStrings) -> String {

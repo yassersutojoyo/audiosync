@@ -85,6 +85,8 @@ enum NativeSpeakerEvent: Equatable {
         case unsupported
         case timingUnavailable = "timing unavailable"
         case oneAirPlay2 = "one AirPlay 2 speaker at a time"
+        /// The receiver plays only AirPlay 2, and this launch runs without it.
+        case airPlay2Only = "AirPlay 2 only"
         /// An Apple TV whose home theater group plays, or a group whose
         /// Apple TV plays by itself (P177).
         case playsThroughSpeakers = "plays through its speakers"
@@ -108,6 +110,7 @@ enum NativeSpeakerEvent: Equatable {
             // A speaker waiting for the AirPlay 2 slot never goes off; a
             // pairing that ends with it can't play, as with `unsupported`.
             case .incompatible, .unsupported, .oneAirPlay2: return .cantPlay
+            case .airPlay2Only: return .needsAirPlay2
             case .timingUnavailable: return .timingUnavailable
             case .playsThroughSpeakers: return .playsThroughSpeakers
             }
@@ -198,6 +201,8 @@ enum NativeTurnOff: Equatable {
     case unreachable
     /// This sender can't play to it.
     case cantPlay
+    /// It plays only AirPlay 2, which the AirPlay 2 switch turns on at the next launch.
+    case needsAirPlay2
     /// It turned NTP timing down, and PTP timing isn't available.
     case timingUnavailable
     /// An Apple TV and its home theater group never play at once (P177).
@@ -670,6 +675,7 @@ struct NativeAirPlayModel {
             switch problem {
             case .notResponding, .connectionLost: reason = .unreachable
             case .unsupported, .incompatible: reason = .cantPlay
+            case .airPlay2Only: reason = .needsAirPlay2
             default: reason = .pairingFailed
             }
             return .turnOff(NativeAirPlayID.app(id), reason)

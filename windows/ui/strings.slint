@@ -123,8 +123,8 @@ export global Strings {
     // off) while a network speaker is on: apps have nowhere to play.
     // File > AirPlay 2 (Experimental) was turned on or off; the AirPlay
     // sender keeps the mode it started with until the next launch.
-    out property <string> notice-airplay2-on-next-launch: @tr("Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
-    out property <string> notice-airplay2-off-next-launch: @tr("AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
+    out property <string> notice-airplay2-on-next-launch: @tr("AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
+    out property <string> notice-airplay2-off-next-launch: @tr("AirPlay 2 (Experimental) is off. AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
     out property <string> notice-no-sound-output: @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
@@ -225,7 +225,7 @@ export global Strings {
     out property <string> menu-remote: @tr("Web Remote…");
     out property <string> remote-title: @tr("Web Remote");
     out property <string> remote-switch: @tr("Web Remote");
-    out property <string> remote-intro: @tr("Control your speakers from a phone on the same network as this PC. Open the address below on the phone and add it to the Home Screen first, then open it from there and enter the code.");
+    out property <string> remote-intro: @tr("Control your speakers from a phone on the same network as this PC. Open the address below on the phone or scan the QR code, add the page to the Home Screen, then open it from there and enter the pairing code.");
     out property <string> remote-address-title: @tr("Address");
     out property <string> remote-address-label: @tr("On the phone, open");
     out property <string> remote-ip-label: @tr("If that doesn't open, use");
@@ -238,6 +238,7 @@ export global Strings {
     public pure function remote-code-label(digits: string) -> string {
         return @tr("Pairing code {}", digits);
     }
+    out property <string> remote-code-note: @tr("Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.");
     out property <string> remote-no-code: @tr("This code has expired. Select New Code to pair another phone.");
     out property <string> remote-new-code: @tr("New Code");
     out property <string> remote-locked: @tr("Pairing is locked after too many wrong codes. Select New Code to unlock it.");
@@ -267,7 +268,7 @@ export global Strings {
     out property <string> remote-use-port: @tr("Use Port");
     out property <string> remote-port-invalid: @tr("Enter a port from 1024 to 65535.");
     out property <string> remote-failed: @tr("The web remote couldn't start. Turn it off and on again.");
-    out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices. Select Forget All Remote Devices again.");
+    out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices, so they are paired again after AudioSync restarts. Select Forget All Remote Devices again.");
     // A check item in File: on, the captured app quitting moves streaming to
     // the whole system; off, streaming stops. "Source app", since "the app"
     // in AudioSync's own File menu can read as AudioSync itself.
@@ -459,7 +460,7 @@ export global Strings {
             return @tr("{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.", speaker);
         }
         if problem == AirPlayProblem.airplay2-not-yet {
-            return @tr("{} plays only AirPlay 2, which AudioSync for Windows doesn't support yet, so it's off.", speaker);
+            return @tr("{} plays only AirPlay 2, so it's off. Turn on File > AirPlay 2 (Experimental), then quit and reopen AudioSync.", speaker);
         }
         if problem == AirPlayProblem.timing-unavailable {
             return @tr("{} needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.", speaker);
@@ -500,6 +501,9 @@ export global Strings {
         }
         if problem == CastProblem.taken-over {
             return @tr("Another app started casting to {}, so it's off in AudioSync.", speaker);
+        }
+        if problem == CastProblem.blocked {
+            return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall on Private networks, or on Public networks if this network is set to Public, then turn it on again.", speaker);
         }
         return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
     }
@@ -625,7 +629,7 @@ export global Strings {
     out property <string> help-airplay-title: @tr("AirPlay");
     out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows \"Asks for a code\". When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead.\n\nA speaker protected by a password shows \"Asks for a code\" too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\n'AirPlay 2 (Experimental)', in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync. With it on, a stereo pair or home theater group shows as one row, and its note names the speakers in it.");
     out property <string> help-remote-title: @tr("Web Remote");
-    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off and set their volume and delay and the master volume. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen first, then open it from there and enter the code: on some phones, a pairing made in the browser doesn't carry over to the Home Screen. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. On a network Windows calls Public, the window and a notice say so. Forget All Remote Devices unpairs every phone. If another app already uses the port, the window says so and lets you pick another one.");
+    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off and set their volume and delay and the master volume, and it shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen first, then open it from there and enter the code: on some phones, a pairing made in the browser doesn't carry over to the Home Screen. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. On a network Windows calls Public, the window and a notice say so. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-notices-title: @tr("Notices");
     out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in quick settings. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on File > Switch to All System Audio When the Source App Quits: AudioSync then moves to All System Audio, and stays there when the app opens again.");
 
@@ -790,7 +794,10 @@ export global Strings {
             return @tr("Pairing not supported yet");
         }
         if a == Availability.airplay2-not-yet {
-            return @tr("AirPlay 2 not supported yet");
+            return @tr("AirPlay 2 is off");
+        }
+        if a == Availability.airplay2-next-launch {
+            return @tr("AirPlay 2 is off until AudioSync reopens");
         }
         if a == Availability.unsupported {
             return @tr("Not supported");
@@ -835,6 +842,8 @@ export global Strings {
     // Under a Google Cast speaker's volume while it connects or plays.
     out property <string> cast-mute: @tr("Mute");
     out property <string> cast-unmute: @tr("Unmute");
+    out property <string> cast-mute-help: @tr("Mutes the speaker itself");
+    out property <string> cast-unmute-help: @tr("Unmutes the speaker itself");
     out property <string> cast-resync: @tr("Resync");
     out property <string> cast-resync-help: @tr("Restarts the stream, with a short gap, so this speaker plays at its delay again");
 
@@ -843,6 +852,9 @@ export global Strings {
     public pure function cast-button-label(text: string, name: string) -> string {
         return @tr("{0}, {1}", text, name);
     }
+
+    // Under a Google Cast speaker's volume when the device locks it.
+    out property <string> cast-volume-fixed: @tr("This speaker's volume can't be changed from AudioSync.");
 
     // Beside a Google Cast speaker's delay, in place of the sync hint.
     out property <string> cast-sync-hint: @tr("AudioSync can't sync Google Cast speakers automatically, so it keeps the others only roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the other speakers wait longer. Heard it early? Lower it. AudioSync keeps it for this speaker; check it again when you start it.");
@@ -919,6 +931,9 @@ export global Strings {
     // names joined by list-and; `missing` is empty when no name is known.
     public pure function group-note(group: SpeakerGroup, members: string, missing: string, incomplete: bool) -> string {
         if group == SpeakerGroup.stereo-pair {
+            if !incomplete && members == "" {
+                return @tr("Stereo pair");
+            }
             if !incomplete {
                 return @tr("Stereo pair: {}", members);
             }
@@ -928,6 +943,9 @@ export global Strings {
             return @tr("Stereo pair, a speaker is missing");
         }
         if group == SpeakerGroup.home-theater {
+            if !incomplete && members == "" {
+                return @tr("Home theater group");
+            }
             if !incomplete {
                 return @tr("Home theater group: {}", members);
             }
@@ -1065,7 +1083,7 @@ export global Strings {
     // S232), under its sync controls.
     out property <string> calibrate-with-microphone: @tr("Calibrate with Microphone");
     out property <string> calibration-cancel: @tr("Cancel");
-    out property <string> calibration-preparing: @tr("Pausing the music…");
+    out property <string> calibration-preparing: @tr("Fading the music out…");
     out property <string> calibration-listening-chosen: @tr("Listening to this speaker…");
     out property <string> calibration-estimating: @tr("Working out the delay…");
     out property <string> calibration-cancelled: @tr("Calibration cancelled. The delay wasn't changed.");
@@ -1154,6 +1172,8 @@ export global Strings {
     // A delay never stored: "Was none."
     out property <string> calibrate-all-none: @tr("none");
     out property <string> calibrate-all-airplay-waits: @tr("AirPlay isn't playing, so the AirPlay delay can't be set now. Apply and Undo work again once it plays.");
+    out property <string> calibrate-all-busy: @tr("Another calibration is still running.");
+    out property <string> calibrate-all-nothing-certain: @tr("No speaker was measured clearly, so there is nothing to apply.");
     out property <string> calibrate-all-estimating: @tr("Working out the delays…");
     out property <string> calibrate-all-applied: @tr("New delays applied.");
     out property <string> calibrate-all-undone: @tr("The delays are back to what they were.");
@@ -1177,6 +1197,14 @@ export global Strings {
         return @tr("Turn on streaming and at least one speaker besides {} first.", reference);
     }
 
+    // Measure Again was refused: the reference or that row's speaker doesn't play.
+    public pure function calibrate-all-cannot-again(reference: string, name: string) -> string {
+        if reference == "" {
+            return @tr("Turn on streaming, the PC's own speakers and {} to measure it again.", name);
+        }
+        return @tr("Turn on streaming, {} and {} to measure it again.", reference, name);
+    }
+
     public pure function calibrate-all-nothing(reference: string) -> string {
         if reference == "" {
             return @tr("Only the PC's own speakers are on. Turn on another speaker to calibrate it.");
@@ -1192,7 +1220,7 @@ export global Strings {
     // A Cast speaker without a stored delay: its first recording is the
     // longest one, since nothing says when it plays.
     public pure function calibrate-all-searching(name: string) -> string {
-        return @tr("Searching for {}. Without a stored delay this takes longer…", name);
+        return @tr("Listening to {}, sweep 1 of 2. AudioSync doesn't know this speaker's delay yet, so this can take up to a minute.", name);
     }
 
     public pure function calibrate-all-ms(ms: int) -> string {
@@ -1204,15 +1232,15 @@ export global Strings {
     }
 
     public pure function calibrate-all-clamped(old: string, new: string, uncertainty: int) -> string {
-        return @tr("Was {}. New: {} ± {} ms, the end of the range, so it stays a little out of sync.", old, new, uncertainty);
+        return @tr("Was {}. New: {} ± {} ms, the end of the range, so this speaker stays a little out of sync.", old, new, uncertainty);
     }
 
     public pure function calibrate-all-uncertain(old: string, new: string, uncertainty: int) -> string {
-        return @tr("Was {}. Measured {} ± {} ms, too uncertain to apply. Try Measure Again.", old, new, uncertainty);
+        return @tr("Was {}. Measured {} ± {} ms. The two sweeps differ too much, so the delay stays. Select Measure Again.", old, new, uncertainty);
     }
 
     public pure function calibrate-all-refused(reason: string) -> string {
-        return @tr("Not measured. {}", reason);
+        return @tr("{} The delay stays.", reason);
     }
 
     // Old is a delay ("2000 ms") or calibrate-all-none.
@@ -1233,7 +1261,7 @@ export global Strings {
     }
 
     public pure function calibrate-all-finished(clear: int, total: int) -> string {
-        return @tr("Calibration finished. {} of {} speakers measured clearly.", clear, total);
+        return @tr("Calibration finished. {} of {} measured clearly.", clear, total);
     }
 
     // A run that ended early: why, then that nothing changed.

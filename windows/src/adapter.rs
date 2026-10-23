@@ -943,6 +943,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         CalibrateAllState {
             phase,
             blocked: self.calibrate_all_blocked(),
+            other_running: self.calibration_run.is_some(),
             sheet: all.sheet.as_ref().map(|kept| self.sheet_state(kept, busy)),
             endings: all.endings,
         }
@@ -2943,6 +2944,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
             return;
         }
+        let name = self
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .and_then(|kept| kept.members.get(row))
+            .map(|member| self.member_name(member));
         let Some(kept) = self.calibrate_all.sheet.as_mut() else {
             return;
         };
@@ -2962,7 +2969,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.calibrate_all.run = Some(run);
             }
             Err(failure) => {
-                self.calibrate_all.phase = AllPhase::Failed(failure);
+                self.calibrate_all.phase = match (failure, name) {
+                    (Failure::NotPlaying, Some(name)) => AllPhase::CannotMeasureAgain(name),
+                    (failure, _) => AllPhase::Failed(failure),
+                };
                 self.calibrate_all.endings += 1;
             }
         }
@@ -3135,6 +3145,7 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
         CastProblem::Busy => P::Busy,
         CastProblem::NotResponding => P::NotResponding,
         CastProblem::Refused => P::Refused,
+        CastProblem::Blocked => P::Blocked,
         CastProblem::TakenOver => P::TakenOver,
         CastProblem::ConnectionLost => P::ConnectionLost,
     }
