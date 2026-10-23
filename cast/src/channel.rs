@@ -87,6 +87,9 @@ pub enum PlaybackEnd {
     Error(Option<IdleReason>),
     /// `IDLE` with `FINISHED`: the device saw the stream end.
     Finished,
+    /// The media `GET_STATUS` after a reconnect got an empty list or no
+    /// answer in time: the media ended while the channel was down (C81).
+    Gone,
 }
 
 /// Why an inbound message was dropped.
@@ -365,6 +368,10 @@ impl Channel {
         if self.is_loading() {
             return Err(MediaError::LoadPending);
         }
+        // An answer to the GET_STATUS of a resume says nothing about this
+        // load.
+        self.pending
+            .retain(|pending| pending.request != Request::MediaStatus);
         self.media = Some(Media {
             media_session_id: None,
             content_id: request.url.clone(),
@@ -625,6 +632,9 @@ impl Channel {
                         .push_back(Event::LoadFailed(MediaError::Timeout));
                 }
                 Request::MediaStop => self.stop_app(now),
+                Request::MediaStatus if self.media.is_some() => {
+                    self.playback_ended(PlaybackEnd::Gone)
+                }
                 Request::MediaStatus => {}
             }
         }
@@ -676,6 +686,9 @@ impl Channel {
         let Some(media) = self.media.as_mut() else {
             return;
         };
+        if answered == Some(Request::MediaStatus) && statuses.is_empty() {
+            return self.playback_ended(PlaybackEnd::Gone);
+        }
         if answered == Some(Request::Load) {
             // A reply without a media session leaves it to the first status
             // that names one.

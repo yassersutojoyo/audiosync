@@ -18,7 +18,9 @@ use audiosync_cast::session::{
     CastSession, Diagnostics, SessionConfig, SessionEnd, SessionError, SessionEvent,
     connect_retrying,
 };
-use common::{Behavior, Command, FakeDevice, OnLoad, http, json_message, media_status};
+use common::{
+    Behavior, Command, FakeDevice, OnLoad, OnMediaStatus, http, json_message, media_status,
+};
 use serde_json::{Value, json};
 
 struct Feed {
@@ -654,6 +656,36 @@ fn a_stop_during_the_reload_after_finished_ends_as_deselected() {
     );
     assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2);
     device.join();
+}
+
+// covers: C81
+#[test]
+fn a_resumed_app_without_its_media_reloads_once() {
+    // The device's fetch died during the outage: the media GET_STATUS after
+    // the reconnect lists nothing, or gets no answer at all.
+    for on_media_status in [OnMediaStatus::Empty, OnMediaStatus::Ignore] {
+        let device = FakeDevice::start(Behavior {
+            on_media_status: on_media_status.clone(),
+            ..Behavior::default()
+        });
+        let (mut session, _feed) = start(&device);
+        device.send(Command::DropConnection);
+        let seen = run_until(&mut session, Duration::from_secs(15), |event| {
+            matches!(event, SessionEvent::Reloaded | SessionEvent::Ended(_))
+        });
+        assert!(
+            seen.iter()
+                .any(|event| matches!(event, SessionEvent::Reloaded)),
+            "{on_media_status:?}: {seen:?}"
+        );
+        assert_eq!(count(&device, NS_MEDIA, "GET_STATUS"), 1);
+        assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2, "{on_media_status:?}");
+        assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
+        session.run_for(Duration::from_millis(500));
+        assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2, "one reload only");
+        session.stop();
+        device.join();
+    }
 }
 
 /// The header of a PNG of `width` by `height` pixels: all the stream server
