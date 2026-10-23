@@ -120,6 +120,25 @@ fn the_focus_ring_reaches_3_to_1() {
     }
 }
 
+/// The level meter's fill stands out from its track (3:1 for graphics),
+/// and it is never a focusable control.
+#[test]
+fn the_level_meter_reaches_3_to_1_and_takes_no_focus() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let value = ratio("tealText", "separator", appearance);
+        assert!(
+            value >= MIN_GRAPHIC_CONTRAST,
+            "meter fill on its track ({appearance:?}): {value:.2}:1"
+        );
+    }
+    let body = component_body(include_str!("../ui/widgets.slint"), "LevelMeter");
+    assert!(body.contains("background: Tokens.separator;"));
+    assert!(body.contains("background: Tokens.teal-text;"));
+    for focusable in ["FocusScope", "TouchArea", "forward-focus"] {
+        assert!(!body.contains(focusable), "the meter has a {focusable}");
+    }
+}
+
 /// The interface sources, for the checks below.
 const UI_FILES: &[(&str, &str)] = &[
     ("main.slint", include_str!("../ui/main.slint")),
@@ -464,7 +483,8 @@ fn keyboard_shortcuts_are_declared() {
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
 /// The row note and notice for a speaker that plays only AirPlay 2 name
-/// that item, and show only for a receiver the sender found.
+/// that item, and show only for a receiver the sender found; so does the
+/// note on a zone's stereo pair or home theater that needs it.
 /// The calibration results' AirPlay lines show only when an AirPlay
 /// speaker took part, so the sender ran.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
@@ -501,11 +521,11 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"AirPlay delay: was {}. New: {} ms")
                 || line.contains("return @tr(\"The AirPlay speakers differ by {} ms.")
                 || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
-                || line.contains("calibrate-all-airplay-waits: @tr(\"AirPlay isn't playing,")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
                 || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
+                || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
                 || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
                 || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
                 || line.contains("return @tr(\"AirPlay 2 after restart\");")
@@ -533,7 +553,7 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
         "the empty Connected Speakers list uses the plain note"
     );
     assert!(
@@ -684,6 +704,8 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
         "guide-mute-outputs",
         "guide-shared-outputs",
         "guide-keep-app-unmuted",
+        "guide-route-all-except",
+        "guide-keep-all-except-unmuted",
         "guide-open",
         "list-and",
     ] {
@@ -989,7 +1011,8 @@ fn the_flyout_row_shows_the_glyph_and_the_hint_in_its_description() {
 }
 
 /// A tray flyout row shows its speaker's note under the name (a waiting
-/// speaker's reason, for one), as a main window row does. The source is read
+/// speaker's reason, for one, after a zone's count), as a main window row
+/// does. The source is read
 /// line by line: Windows CI checks it out with CRLF line endings.
 #[test]
 fn a_flyout_row_shows_the_speakers_note() {
@@ -997,11 +1020,14 @@ fn a_flyout_row_shows_the_speakers_note() {
     let lines: Vec<&str> = row.lines().map(str::trim).collect();
     let note = lines
         .iter()
-        .position(|line| *line == "if Strings.row-note(root.state) != \"\": QuietText {")
+        .position(|line| {
+            *line
+                == "if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != \"\": QuietText {"
+        })
         .expect("FlyoutRow shows a QuietText while its state has a note");
     assert_eq!(
         lines.get(note + 1).copied(),
-        Some("text: Strings.row-note(root.state);"),
+        Some("text: Strings.speaker-caption(root.caption, Strings.row-note(root.state));"),
         "the QuietText shows the note"
     );
 }

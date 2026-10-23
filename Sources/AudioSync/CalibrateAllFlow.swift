@@ -194,6 +194,8 @@ struct CalibrateAllStatus: Equatable {
     var includedAnyway: Set<String> = []
     /// The zone the sheet measures, for Calibrate Zone (S255).
     var zone: CalibrateZoneSheet?
+    /// Undo is offered: Apply ran and no value it wrote changed since.
+    var canUndo = false
 
     var isRunning: Bool { progress != nil }
 }
@@ -217,6 +219,8 @@ enum CalibrateAllLine: Equatable {
 struct CalibrateAllUndo {
     var writes: [CalibrateAllWrite]
     var previousAirPlay: AirPlayDelay
+    /// The stored values right after Apply, one per write; Undo lasts while they hold.
+    var afterApply: [CalibrateAllRestore] = []
 }
 
 /// The zone Calibrate Zone measures, as the sheet names it (S255).
@@ -539,6 +543,24 @@ enum CalibrateAllFlow {
     /// so Apply's new values build on them. `current` reads a speaker's.
     static func unchanged(_ speakers: [CalibrateAllSpeaker], current: (CalibrateAllSpeaker) -> Double?) -> Bool {
         speakers.dropFirst().allSatisfy { current($0) == $0.offsetMs }
+    }
+
+    /// Whether Undo still only reverts Apply: every value Apply wrote is
+    /// still stored, `now` read in the order of `undo.afterApply` (S238).
+    static func undoHolds(_ undo: CalibrateAllUndo, now: [CalibrateAllRestore]) -> Bool {
+        // Stored delays are whole numbers, so half a millisecond is the same value; AirPlay compares
+        // the adjustment A, so a new sender latency alone keeps Undo.
+        func same(_ then: CalibrateAllRestore, _ now: CalibrateAllRestore) -> Bool {
+            switch (then, now) {
+            case (.local(let a, let x), .local(let b, let y)), (.cast(let a, let x), .cast(let b, let y)):
+                a == b && abs((x ?? 0) - (y ?? 0)) <= 0.5
+            case (.airPlay(let x), .airPlay(let y)):
+                abs(x.adjustmentMs - y.adjustmentMs) <= 0.5
+            default:
+                false
+            }
+        }
+        return undo.afterApply.count == now.count && zip(undo.afterApply, now).allSatisfy(same)
     }
 }
 

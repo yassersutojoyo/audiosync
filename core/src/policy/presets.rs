@@ -525,8 +525,11 @@ pub fn presets_from_groups(groups: &[SavedGroup<'_>], saved: &Saved<'_>) -> Vec<
     groups
         .iter()
         .filter(|group| {
-            kept.get(group.id)
-                .is_none_or(|zone| group.members.iter().any(|key| !zone.members.contains(key)))
+            let zone = kept.get(group.id);
+            group
+                .members
+                .iter()
+                .any(|key| zone.is_none_or(|zone| !zone.members.contains(key)))
         })
         .map(|group| {
             let members: Vec<PresetMember> = group
