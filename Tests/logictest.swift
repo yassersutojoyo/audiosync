@@ -5050,6 +5050,22 @@ do {
           "guide: the illustrations carry no text and differ between light and dark")
 }
 
+// MARK: Guide topics: Calibration has its own topic, with the actions it names
+do {
+    let t = UIStrings()
+    let lines = t.helpText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let start = lines.firstIndex(of: "Calibration")
+    let end = lines.firstIndex(of: "Speaker Notes")
+    let topic = start.flatMap { s in end.map { e in s < e ? lines[s..<e].joined(separator: "\n") : "" } } ?? ""
+    let named = [t.calibrateWithMicrophone, t.calibrateAll, t.includeAnyway, t.measureAgain,
+                 t.calibrateAllApply, t.calibrateAllUndo]
+    check(!topic.isEmpty && named.allSatisfy(topic.contains),
+          "guide: a Calibration topic before Speaker Notes names Calibrate All Speakers, Include Anyway and the rest",
+          named.filter { !topic.contains($0) }.joined(separator: ", "))
+    check(topic.contains("Headphones") && topic.contains("virtual outputs"),
+          "guide: the Calibration topic says headphones and virtual outputs are left out")
+}
+
 // MARK: Web remote: the snapshot the page gets, and what a phone's change does
 do {
     let t = UIStrings()
