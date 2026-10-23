@@ -83,6 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     typealias Keys = AppSettings.Keys
     private let store: SettingsStore
 
+    /// The mode the several-apps menu shows while no mix is the source.
+    var rememberedMixMode: AppMixMode = .only
+
     var audioSource: AudioSource {
         didSet { if audioSource != oldValue { store.save(source: audioSource) } }
     }

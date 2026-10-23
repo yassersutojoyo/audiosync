@@ -14,6 +14,8 @@ import Synchronization
 ///   process out, or its delayed local copies would be captured again (S10).
 /// - An app source's tap covers the app and every process it is responsible
 ///   for, and is built again whenever that set changes (S11, `AppTapFollow`).
+///   A mix of apps does the same over all of them in one tap; an "all except"
+///   mix taps the whole system without those processes and AudioSync's own.
 /// - An input device is read directly, its first two channels as L and R (S13,
 ///   S14, `CaptureChannels`).
 ///
@@ -138,7 +140,9 @@ final class SourceCapture {
     private func startSource(_ source: AudioSource) throws {
         switch source {
         case .system: try startSystem()
-        case .app(let bundleID): try startApp(bundleID)
+        case .app(let bundleID): try startApps([bundleID])
+        case .mix(.only, let bundleIDs): try startApps(bundleIDs)
+        case .mix(.allExcept, let bundleIDs): try startExcluding(bundleIDs)
         case .input(let uid): try startInput(uid)
         }
     }
@@ -171,24 +175,52 @@ final class SourceCapture {
         DebugTrace.log("[AudioSync] capture: whole system at \(sampleRate) Hz")
     }
 
-    /// One app and the processes it is responsible for (S11). The process list
-    /// is watched from the start, so a process the app starts while the tap is
-    /// being built is picked up too.
-    private func startApp(_ bundleID: String) throws {
-        let pids = Self.runningPIDs(of: bundleID)
-        guard !pids.isEmpty else { throw CaptureError.appNotRunning(bundleID) }
+    /// One or more apps and the processes each is responsible for (S11), in
+    /// one tap. An app that isn't running is skipped; only none of them
+    /// running fails. The process list is watched from the start, so a process
+    /// an app starts while the tap is being built is picked up too.
+    private func startApps(_ bundleIDs: [String]) throws {
+        let label = bundleIDs.joined(separator: ", ")
+        let pids = bundleIDs.flatMap(Self.runningPIDs(of:))
+        guard !pids.isEmpty else { throw CaptureError.appNotRunning(bundleIDs.first ?? "") }
         watchAppProcesses()
         let found = Self.audioProcesses(of: pids)
         guard !found.isEmpty else {
             // Running without an audio process yet (a browser starts its audio
             // helper once a page plays): nothing to tap until one appears.
             parts?.prepare(captureRate: sampleRate)
-            DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process yet; waiting for one")
+            DebugTrace.log("[AudioSync] capture: \(label) has no audio process yet; waiting for one")
             return
         }
         tapped = found
-        try openTap(CATapDescription(stereoMixdownOfProcesses: found))
-        DebugTrace.log("[AudioSync] capture: \(bundleID) (\(found.count) audio processes) at \(sampleRate) Hz")
+        try openTap(Self.describe(found, excluding: false))
+        DebugTrace.log("[AudioSync] capture: \(label) (\(found.count) audio processes) at \(sampleRate) Hz")
+    }
+
+    /// Every process except AudioSync's own and the listed apps' (S10, S11).
+    /// The list follows those apps' audio processes as they come and go.
+    private func startExcluding(_ bundleIDs: [String]) throws {
+        guard let own = AudioProcesses.processObject(for: getpid()) else { throw CaptureError.ownProcessUnknown }
+        watchAppProcesses()
+        let excluded = Set(Self.audioProcesses(of: bundleIDs.flatMap(Self.runningPIDs(of:)))).union([own]).sorted()
+        tapped = excluded
+        try openTap(Self.describe(excluded, excluding: true))
+        DebugTrace.log("[AudioSync] capture: everything except \(bundleIDs.joined(separator: ", ")) "
+                + "(\(excluded.count - 1) audio processes left out) at \(sampleRate) Hz")
+    }
+
+    /// The tap description for `processes`: their mixdown, or with
+    /// `excluding` every process but them.
+    private static func describe(_ processes: [AudioObjectID], excluding: Bool) -> CATapDescription {
+        excluding
+            ? CATapDescription(stereoGlobalTapButExcludeProcesses: processes)
+            : CATapDescription(stereoMixdownOfProcesses: processes)
+    }
+
+    /// Whether the session's tap is an "all except" tap.
+    private var tapExcludes: Bool {
+        if case .mix(.allExcept, _)? = source { return true }
+        return false
     }
 
     /// An input device, read directly (S13, S14).
@@ -247,7 +279,7 @@ final class SourceCapture {
     /// running tap or Core Audio refuses the change.
     private func updateTap(to processes: [AudioObjectID]) -> Bool {
         guard let tap else { return false }
-        let description = CATapDescription(stereoMixdownOfProcesses: processes)
+        let description = Self.describe(processes, excluding: tapExcludes)
         TapObjects.configure(description)
         description.uuid = tap.uuid   // the same tap, which the aggregate device names by its UID
         let status = HAL.setTapDescription(of: tap.tap, to: description)
@@ -282,12 +314,24 @@ final class SourceCapture {
         DispatchQueue.main.async { body() }
     }
 
-    /// The app's audio processes changed: follow them (S11).
+    /// The apps' audio processes changed: follow them (S11).
     private func followApp() {
-        guard case .app(let bundleID)? = source else { return }
-        let pids = Self.runningPIDs(of: bundleID)
+        guard let source else { return }
+        let excluding = tapExcludes
+        let apps: [String]
+        if case .mix(_, let ids) = source { apps = ids } else { apps = source.capturedApps }
+        guard !apps.isEmpty else { return }
+        let bundleID = apps.joined(separator: ", ")
+        let pids = apps.flatMap(Self.runningPIDs(of:))
         let found = Self.audioProcesses(of: pids)
-        switch AppTapFollow.decide(tapped: tapped, found: found, appRunning: !pids.isEmpty) {
+        let decision: AppTapFollow
+        if excluding {
+            guard let own = AudioProcesses.processObject(for: getpid()) else { return }
+            decision = AppTapFollow.decideExcluding(tapped: tapped, found: found, own: own)
+        } else {
+            decision = AppTapFollow.decide(tapped: tapped, found: found, appRunning: !pids.isEmpty)
+        }
+        switch decision {
         case .keep:
             return
         case .wait:
@@ -298,7 +342,7 @@ final class SourceCapture {
             closeCapture()
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) is gone")
-            interrupt(.sourceLost(.appNotRunning(bundleID)))
+            interrupt(.sourceLost(.appNotRunning(apps[0])))
         case .retap(let processes):
             retap(bundleID, to: processes)
         }
@@ -312,7 +356,7 @@ final class SourceCapture {
             outcome = try AppRetap.run(
                 updateInPlace: { updateTap(to: processes) },
                 makeTap: { () throws -> TapObjects in
-                    try TapObjects(CATapDescription(stereoMixdownOfProcesses: processes))
+                    try TapObjects(Self.describe(processes, excluding: tapExcludes))
                 },
                 rateFits: { !CaptureRate.needsRestart(current: sampleRate, reported: Self.rate(of: $0)) },
                 discard: { retire($0) },

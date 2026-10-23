@@ -74,8 +74,9 @@ use super::backend::{
 };
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
-    CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType, decide_capture, display_name,
-    input_sources, running_app, source_list,
+    Activation, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType,
+    decide_apps_capture, decide_capture, decide_except_capture, display_name, input_sources,
+    running_app, source_list,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -103,6 +104,10 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(5);
 /// How often a running session checks whether the source is heard twice
 /// ([`routing`](super::routing)).
 const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
+
+/// How often a session of several apps looks for apps whose audio sessions
+/// came or went: each app is its own loopback in the running mix.
+const MIX_FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
 
 /// A capture lost because Windows audio restarted, or its device went away
 /// ([`BackendError::DeviceGone`]), starts again at this poll after the one
@@ -160,6 +165,18 @@ pub trait CaptureHandle {
     /// The format Windows delivers the capture in, for the debug log, when
     /// known.
     fn setup(&self) -> Option<CaptureAttempt>;
+
+    /// Moves a running mix onto the apps of `target` without stopping it.
+    /// False when this capture can't: it is then started again.
+    fn retarget(&mut self, _target: &CaptureTarget) -> bool {
+        false
+    }
+
+    /// Whether a mix has a stream for each of its apps; true for any other
+    /// capture, and while it can't be told.
+    fn holds_all(&self) -> bool {
+        true
+    }
 }
 
 /// A running output. Dropping it stops the output at once and waits for its
@@ -443,6 +460,9 @@ pub struct Controller<D: Driver> {
     /// Whether a quit of the captured app stops the session or moves it to
     /// the whole system (spec S227).
     quit_watch: SourceQuitWatch,
+    /// When a session of several apps last looked for apps that started or
+    /// ended their audio ([`MIX_FOLLOW_INTERVAL`]).
+    mix_checked: Option<Instant>,
     /// The microphone calibration's way into every capture.
     calibration_tap: Arc<CalibrationTap>,
     /// The one local output a calibration lets be heard.
@@ -483,6 +503,7 @@ impl<D: Driver> Controller<D> {
             restart_wait: None,
             restart_tries_left: 0,
             quit_watch: SourceQuitWatch::default(),
+            mix_checked: None,
             device_volumes: device_volume::Followed::default(),
             busy: BTreeMap::new(),
             unplayable: BTreeSet::new(),
@@ -738,10 +759,12 @@ impl<D: Driver> Controller<D> {
             return Some(source.clone());
         }
         let source = match &id {
-            SourceId::WholeSystem => TrackSource {
-                follow: Follow::AnyApp,
-                name: None,
-            },
+            SourceId::WholeSystem | SourceId::Apps { .. } | SourceId::AppsExcept { .. } => {
+                TrackSource {
+                    follow: Follow::AnyApp,
+                    name: None,
+                }
+            }
             SourceId::App { root_pid } => {
                 let Ok(processes) = self.driver.processes() else {
                     return Some(TrackSource {
@@ -1423,11 +1446,7 @@ impl<D: Driver> Controller<D> {
         if !self.last_session_fading() {
             return self.start_session(source);
         }
-        let processes = match source {
-            SourceId::WholeSystem | SourceId::Input { .. } => ProcessTable::default(),
-            SourceId::App { .. } => self.driver.processes()?,
-        };
-        decide_capture(source, self.driver.own_pid(), &processes)?;
+        self.capture_target(source)?;
         self.log
             .log(|| "the capture starts once the last session's outputs have faded out".to_owned());
         self.next_start = Some(source.clone());
@@ -1596,8 +1615,11 @@ impl<D: Driver> Controller<D> {
     /// capture itself reports that its app ended, so the source's own
     /// process ID names the app that quit.
     fn decide_quit(&mut self, source: &SourceId, streaming: Streaming) -> SourceQuitAction {
-        let SourceId::App { root_pid } = source else {
-            return SourceQuitAction::Keep;
+        // A mix's capture reports a quit once all of its apps quit.
+        let root_pid = match source {
+            SourceId::App { root_pid } => root_pid,
+            SourceId::Apps { root_pids, .. } if !root_pids.is_empty() => &root_pids[0],
+            _ => return SourceQuitAction::Keep,
         };
         let app = root_pid.to_string();
         let source = AudioSource::App {
@@ -1629,13 +1651,43 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// What capturing `source` opens, from the running processes where it
+    /// names apps, and for "all except" from the apps with audio sessions.
+    fn capture_target(&mut self, source: &SourceId) -> Result<CaptureTarget, BackendError> {
+        let own_pid = self.driver.own_pid();
+        match source {
+            SourceId::WholeSystem | SourceId::Input { .. } => {
+                decide_capture(source, own_pid, &ProcessTable::default())
+            }
+            SourceId::App { .. } => {
+                let processes = self.driver.processes()?;
+                decide_capture(source, own_pid, &processes)
+            }
+            SourceId::Apps {
+                root_pids,
+                executables,
+            } => {
+                let processes = self.driver.processes()?;
+                // Without the sessions, the chosen top processes still play.
+                let sessions = self.driver.session_pids().unwrap_or_default();
+                decide_apps_capture(&processes, &sessions, own_pid, root_pids, executables)
+            }
+            SourceId::AppsExcept { executables } => {
+                let processes = self.driver.processes()?;
+                let sessions = self.driver.session_pids()?;
+                Ok(decide_except_capture(
+                    &processes,
+                    &sessions,
+                    own_pid,
+                    executables,
+                ))
+            }
+        }
+    }
+
     /// Starts a session capturing `source` now, after the running one ended.
     fn start_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
-        let processes = match source {
-            SourceId::WholeSystem | SourceId::Input { .. } => ProcessTable::default(),
-            SourceId::App { .. } => self.driver.processes()?,
-        };
-        let target = decide_capture(source, self.driver.own_pid(), &processes)?;
+        let target = self.capture_target(source)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         // The capture equalizes at the session rate, after any resampling
@@ -1695,6 +1747,65 @@ impl<D: Driver> Controller<D> {
         self.retime();
         self.airplay_streaming(true);
         Ok(())
+    }
+
+    /// For a session of several apps, every [`MIX_FOLLOW_INTERVAL`]: when
+    /// the apps to capture changed (one started or ended its audio, or a
+    /// chosen app started again), the running mix takes them in or leaves
+    /// them out, and the ring and the outputs go on. Only a capture that
+    /// can't follow starts again.
+    fn follow_mix_apps(&mut self, now: Instant) {
+        let Some(session) = &self.session else {
+            self.mix_checked = None;
+            return;
+        };
+        if !matches!(
+            session.source,
+            SourceId::Apps { .. } | SourceId::AppsExcept { .. }
+        ) || self
+            .mix_checked
+            .is_some_and(|last| now.saturating_duration_since(last) < MIX_FOLLOW_INTERVAL)
+        {
+            return;
+        }
+        self.mix_checked = Some(now);
+        let (source, running) = (session.source.clone(), session.target.clone());
+        let Ok(target) = self.capture_target(&source) else {
+            return;
+        };
+        if same_mix(&target, &running) {
+            // An app whose loopback failed to open, or failed while it runs,
+            // is tried again.
+            if let Some(session) = self.session.as_mut()
+                && !session.capture.holds_all()
+            {
+                session.capture.retarget(&target);
+            }
+            return;
+        }
+        self.log.log(|| {
+            format!(
+                "the apps of {} changed: capturing {} now",
+                describe_source(&source),
+                describe_capture(&target, None)
+            )
+        });
+        if let Some(session) = self.session.as_mut()
+            && session.capture.retarget(&target)
+        {
+            session.target = target;
+            return;
+        }
+        self.end_session();
+        if let Err(error) = self.begin_session(&source) {
+            self.log
+                .log(|| format!("the capture couldn't start again: {error}"));
+            self.airplay_streaming(false);
+            self.release_busy();
+            self.pending.push(BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(error),
+            });
+        }
     }
 
     /// Checks whether the source is heard twice, at the first poll of a
@@ -2411,6 +2522,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     lost = true;
                     None
                 }
+                // "All except" outlives its apps: the mix follows the apps left.
+                CaptureState::SourceQuit
+                    if matches!(session.source, SourceId::AppsExcept { .. }) =>
+                {
+                    self.mix_checked = None;
+                    None
+                }
                 CaptureState::SourceQuit => Some(StopReason::SourceQuit),
                 CaptureState::Failed(error) => Some(StopReason::CaptureFailed(error)),
             },
@@ -2501,6 +2619,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.read_device_volume_changes();
         let now = Instant::now();
         self.check_routing_if_due(now);
+        self.follow_mix_apps(now);
         self.log_status_if_due(now);
         let events = std::mem::take(&mut self.pending);
         // A device volume that changed is logged when its decision changes
@@ -2688,11 +2807,35 @@ fn describe_volume(volume: Option<EndpointVolume>) -> String {
     }
 }
 
+/// Whether two captures take in the same process trees, in any order.
+fn same_mix(a: &CaptureTarget, b: &CaptureTarget) -> bool {
+    let trees = |target: &CaptureTarget| -> Vec<Activation> {
+        let mut trees = match target {
+            CaptureTarget::Loopback(activation) => vec![*activation],
+            CaptureTarget::Mix(activations) => activations.clone(),
+            CaptureTarget::Input { .. } => Vec::new(),
+        };
+        trees.sort_by_key(|activation| activation.target_pid);
+        trees
+    };
+    trees(a) == trees(b)
+}
+
 /// A source as the log names it.
 fn describe_source(source: &SourceId) -> String {
     match source {
         SourceId::WholeSystem => "the whole system".to_owned(),
         SourceId::App { root_pid } => format!("the app of process {root_pid}"),
+        SourceId::Apps {
+            root_pids,
+            executables,
+        } => format!(
+            "the apps of processes {root_pids:?} and others running {}",
+            executables.join(", ")
+        ),
+        SourceId::AppsExcept { executables } => {
+            format!("All apps except {}", executables.join(", "))
+        }
         SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
     }
 }
@@ -2708,6 +2851,10 @@ fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> St
                 }
                 LoopbackMode::IncludeTree => format!("process {pid} and its children"),
             }
+        }
+        CaptureTarget::Mix(activations) => {
+            let pids: Vec<u32> = activations.iter().map(|a| a.target_pid).collect();
+            format!("processes {pids:?} and their children, mixed")
         }
         CaptureTarget::Input { endpoint_id } => format!("input device {endpoint_id}"),
     };
@@ -3085,6 +3232,103 @@ mod tests {
             })]
         );
         assert_eq!(backend.running_source(), Some(source));
+    }
+
+    fn included(pids: &[u32]) -> CaptureTarget {
+        CaptureTarget::Mix(
+            pids.iter()
+                .map(|&target_pid| Activation {
+                    mode: LoopbackMode::IncludeTree,
+                    target_pid,
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn an_all_except_mix_takes_in_an_app_that_starts_playing_without_a_new_session() {
+        let mut backend = backend();
+        let source = SourceId::AppsExcept {
+            executables: vec!["PLAYER.exe".to_owned()],
+        };
+        backend.start(&source).unwrap();
+        assert_eq!(backend.driver().captures_started(), [included(&[])]);
+        let outputs = playing(&backend);
+        backend.add_app(3000, "video.exe");
+        let events = backend.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Stopped { .. })),
+            "{events:?}"
+        );
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the capture, the ring and the outputs go on"
+        );
+        assert_eq!(backend.driver().capture_target(), Some(included(&[3000])));
+        assert_eq!(playing(&backend), outputs);
+        assert_eq!(backend.running_source(), Some(source));
+    }
+
+    #[test]
+    fn a_mix_tries_again_an_app_whose_stream_it_lost() {
+        let mut backend = backend();
+        let source = SourceId::AppsExcept {
+            executables: vec!["PLAYER.exe".to_owned()],
+        };
+        backend.start(&source).unwrap();
+        backend.add_app(3000, "video.exe");
+        backend.poll();
+        assert_eq!(backend.driver().capture_retargets(), 1);
+        backend.driver().lose_mix_stream();
+        backend.mix_checked = None;
+        backend.poll();
+        assert_eq!(backend.driver().capture_retargets(), 2, "asked again");
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        backend.mix_checked = None;
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_retargets(),
+            2,
+            "a mix that holds every app is left alone"
+        );
+    }
+
+    #[test]
+    fn an_only_these_mix_takes_in_a_second_instance_of_its_app() {
+        let mut backend = backend();
+        let source = SourceId::Apps {
+            root_pids: vec![PLAYER_PID],
+            executables: vec!["player.exe".to_owned()],
+        };
+        backend.start(&source).unwrap();
+        assert_eq!(
+            backend.driver().captures_started(),
+            [included(&[PLAYER_PID])]
+        );
+        backend.add_app(PLAYER_PID + 1, "player.exe");
+        backend.add_app(3000, "video.exe");
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert_eq!(
+            backend.driver().capture_target(),
+            Some(included(&[PLAYER_PID, PLAYER_PID + 1]))
+        );
+        // Once every app of it quits, the source quit.
+        backend.quit_app(PLAYER_PID);
+        backend.quit_app(PLAYER_PID + 1);
+        let events = backend.poll();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BackendEvent::Stopped {
+                    reason: StopReason::SourceQuit
+                }
+            )),
+            "{events:?}"
+        );
     }
 
     #[test]

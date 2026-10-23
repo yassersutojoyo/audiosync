@@ -181,6 +181,8 @@ extension AppDelegate {
         switch audioSource {
         case .system: return track
         case .app(let bundleID): return track.bundleID == bundleID ? track : nil
+        case .mix(.only, let ids): return ids.contains(track.bundleID) ? track : nil
+        case .mix(.allExcept, let ids): return ids.contains(track.bundleID) ? nil : track
         case .input: return nil
         }
     }

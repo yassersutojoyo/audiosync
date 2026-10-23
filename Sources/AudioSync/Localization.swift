@@ -479,6 +479,16 @@ struct UIStrings {
     let sourceLabel = "Audio Source"
     let sourceSystem = "All System Audio"
     let sourceInputsHeader = "Input Devices"
+    let sourceSeveralApps = "Several Apps"
+    let sourceMixOnly = "Only the Checked Apps"
+    let sourceMixAllExcept = "All Apps Except the Checked Ones"
+    let sourceMixEmpty = "No other apps are running."
+    /// The picker's name for a mix source, from its apps' names; the Windows
+    /// app words "all except" the same way.
+    func sourceMixName(_ mode: AppMixMode, _ names: [String]) -> String {
+        let list = names.joined(separator: ", ")
+        return mode == .only ? list : "All Apps Except \(list)"
+    }
     let microphoneDenied = """
         AudioSync is not allowed to use input devices.
         Open System Settings → Privacy & Security → Microphone and turn on AudioSync.

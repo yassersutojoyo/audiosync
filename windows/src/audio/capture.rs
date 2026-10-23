@@ -62,6 +62,10 @@ pub struct Activation {
 pub enum CaptureTarget {
     /// A process loopback capture.
     Loopback(Activation),
+    /// Process loopback captures of several apps, each including one tree,
+    /// mixed into one stream; the set can change while it runs, and may be
+    /// empty (silence in real time).
+    Mix(Vec<Activation>),
     /// The capture endpoint of an input device, by endpoint ID.
     Input {
         /// The endpoint ID.
@@ -70,7 +74,9 @@ pub enum CaptureTarget {
 }
 
 /// The capture for `source`: an input device's own endpoint, or the process
-/// loopback capture [`decide_activation`] decides on.
+/// loopback capture [`decide_activation`] decides on. Several apps are
+/// decided from their top processes only; [`decide_apps_capture`] adds the
+/// instances that have an audio session.
 pub fn decide_capture(
     source: &SourceId,
     own_pid: u32,
@@ -80,8 +86,120 @@ pub fn decide_capture(
         SourceId::Input { endpoint_id } => Ok(CaptureTarget::Input {
             endpoint_id: endpoint_id.clone(),
         }),
+        SourceId::Apps { root_pids, .. } => decide_mix(root_pids, own_pid, processes),
         _ => decide_activation(source, own_pid, processes).map(CaptureTarget::Loopback),
     }
+}
+
+/// The most loopbacks one mix reads: one capture thread waits on them all,
+/// and Windows waits on at most 64 handles, one of them the stop event.
+pub const MAX_MIX_APPS: usize = 63;
+
+/// The loopbacks for several apps: each tree [`decide_activation`] accepts,
+/// once, the first [`MAX_MIX_APPS`]. A tree it refuses (one that quit, or
+/// holds or is held by AudioSync) is skipped, so AudioSync never captures
+/// itself; only none left fails, with the first tree's error.
+fn decide_mix(
+    root_pids: &[u32],
+    own_pid: u32,
+    processes: &ProcessTable,
+) -> Result<CaptureTarget, BackendError> {
+    let accepted = mix_trees(root_pids, own_pid, processes);
+    if accepted.is_empty() {
+        let first_error = root_pids.iter().find_map(|&root_pid| {
+            decide_activation(&SourceId::App { root_pid }, own_pid, processes).err()
+        });
+        return Err(first_error.unwrap_or(BackendError::SourceGone));
+    }
+    Ok(CaptureTarget::Mix(accepted))
+}
+
+/// The trees of `root_pids` that [`decide_activation`] accepts, each once,
+/// at most [`MAX_MIX_APPS`].
+fn mix_trees(root_pids: &[u32], own_pid: u32, processes: &ProcessTable) -> Vec<Activation> {
+    let mut accepted: Vec<Activation> = Vec::new();
+    for &root_pid in root_pids {
+        if let Ok(activation) = decide_activation(&SourceId::App { root_pid }, own_pid, processes)
+            && !accepted.contains(&activation)
+            && accepted.len() < MAX_MIX_APPS
+        {
+            accepted.push(activation);
+        }
+    }
+    accepted
+}
+
+/// The capture for an "only these" mix as it plays: its top processes
+/// `root_pids` that still run, and every app with an audio session running
+/// one of `executables` (an instance started later, or a second one). Fails
+/// as [`decide_capture`] does when none of them runs.
+pub fn decide_apps_capture(
+    processes: &ProcessTable,
+    session_pids: &[u32],
+    own_pid: u32,
+    root_pids: &[u32],
+    executables: &[String],
+) -> Result<CaptureTarget, BackendError> {
+    let mut roots = root_pids.to_vec();
+    roots.extend(session_apps(
+        processes,
+        session_pids,
+        own_pid,
+        |executable| {
+            executables
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(executable))
+        },
+    ));
+    decide_mix(&roots, own_pid, processes)
+}
+
+/// The capture for an "all except" source: the loopbacks of
+/// [`apps_except`], mixed. With no other app to capture it is a mix of
+/// none, which writes silence until one joins.
+pub fn decide_except_capture(
+    processes: &ProcessTable,
+    session_pids: &[u32],
+    own_pid: u32,
+    excluded: &[String],
+) -> CaptureTarget {
+    let roots = apps_except(processes, session_pids, own_pid, excluded);
+    CaptureTarget::Mix(mix_trees(&roots, own_pid, processes))
+}
+
+/// The apps an "all except" source mixes: one top process per app owning one
+/// of the audio sessions `session_pids`, as [`source_list`] offers them,
+/// except those running one of `excluded` (executable file names, compared
+/// without case). Windows' loopback can leave out only one process tree, so
+/// "all except" captures each other app with an audio session instead.
+pub fn apps_except(
+    processes: &ProcessTable,
+    session_pids: &[u32],
+    own_pid: u32,
+    excluded: &[String],
+) -> Vec<u32> {
+    session_apps(processes, session_pids, own_pid, |executable| {
+        !excluded
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(executable))
+    })
+}
+
+/// The top processes of the apps [`source_list`] offers whose executable
+/// `keep` accepts.
+fn session_apps(
+    processes: &ProcessTable,
+    session_pids: &[u32],
+    own_pid: u32,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<u32> {
+    source_list(processes, session_pids, own_pid)
+        .into_iter()
+        .filter_map(|source| match source.id {
+            SourceId::App { root_pid } if keep(&source.executable) => Some(root_pid),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The process loopback capture for `source`, with AudioSync running as
@@ -110,7 +228,10 @@ pub fn decide_activation(
             });
         }
         SourceId::App { root_pid } => *root_pid,
-        SourceId::Input { .. } => return Err(BackendError::NotAnApp),
+        // Several apps take several loopbacks: `decide_capture` decides each.
+        SourceId::Apps { .. } | SourceId::AppsExcept { .. } | SourceId::Input { .. } => {
+            return Err(BackendError::NotAnApp);
+        }
     };
     if root_pid == IDLE_PID || root_pid == SYSTEM_PID {
         return Err(BackendError::NotAnApp);
@@ -366,7 +487,7 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
 ];
 
 /// Frames converted per step; bounds the converter's buffers.
-const CONVERT_CHUNK: usize = 1024;
+pub(crate) const CONVERT_CHUNK: usize = 1024;
 
 /// The network senders' feeds a capture is lent: each gets the same
 /// equalized audio as the ring. The calibration's tap rides along: it fades
@@ -611,7 +732,7 @@ const IDLE_AFTER_HNS: u64 = 250_000;
 /// In a gap, silence is written up to this long before now, 10 ms, so a
 /// packet that starts the audio again rarely finds its first frames filled
 /// already.
-const IDLE_LAG_HNS: u64 = 100_000;
+pub(crate) const IDLE_LAG_HNS: u64 = 100_000;
 
 /// The most silence one gap writes, 21 s: more than the longest delay (S77),
 /// so after a longer stall (a PC that slept) every reader finds silence.
@@ -652,6 +773,18 @@ impl GapFill {
             anchor: None,
             written: 0,
             filled: false,
+        }
+    }
+
+    /// A tracker for a capture at `rate` that started at `now`: silence is
+    /// written from then on while no packet comes, so a stream of a mix
+    /// that never delivers keeps pace instead of holding the mix back.
+    pub fn started(rate: u32, now: u64) -> GapFill {
+        GapFill {
+            rate,
+            anchor: Some(now),
+            written: 0,
+            filled: true,
         }
     }
 
@@ -752,7 +885,7 @@ impl GapFill {
 }
 
 /// Decodes little-endian samples into floats in -1.0..=1.0.
-fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
+pub(crate) fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
     match sample {
         SampleType::F32 => {
             for (value, raw) in out.iter_mut().zip(bytes.as_chunks::<4>().0) {
@@ -1120,6 +1253,118 @@ mod tests {
     fn sessions_of_processes_that_quit_are_skipped() {
         let sources = source_list(&desktop(), &[9999, 0], OWN_PID);
         assert_eq!(sources.len(), 1);
+    }
+
+    fn mix_table() -> ProcessTable {
+        ProcessTable::new([
+            entry(10, 1, None, "player.exe"),
+            entry(11, 10, None, "player-helper.exe"),
+            entry(20, 1, None, "browser.exe"),
+            entry(30, 1, None, "game.exe"),
+            entry(99, 1, None, "audiosync.exe"),
+        ])
+    }
+
+    fn include(target_pid: u32) -> Activation {
+        Activation {
+            mode: LoopbackMode::IncludeTree,
+            target_pid,
+        }
+    }
+
+    #[test]
+    fn several_apps_are_one_loopback_each_and_audiosync_or_a_quit_app_is_skipped() {
+        let table = mix_table();
+        let mix = |root_pids: Vec<u32>| {
+            decide_capture(
+                &SourceId::Apps {
+                    root_pids,
+                    executables: Vec::new(),
+                },
+                99,
+                &table,
+            )
+        };
+        assert_eq!(
+            mix(vec![10, 20, 10]),
+            Ok(CaptureTarget::Mix(vec![include(10), include(20)]))
+        );
+        assert_eq!(
+            mix(vec![10, 99, 555]),
+            Ok(CaptureTarget::Mix(vec![include(10)])),
+            "AudioSync and an app that quit are left out; one app left is still a mix, which others can join"
+        );
+        assert_eq!(mix(vec![555]), Err(BackendError::SourceGone));
+        assert_eq!(mix(vec![99]), Err(BackendError::OwnProcess));
+        let many: Vec<u32> = (1000..1100).collect();
+        let table = ProcessTable::new(
+            many.iter()
+                .map(|&pid| entry(pid, 1, None, "app.exe"))
+                .chain([entry(99, 1, None, "audiosync.exe")]),
+        );
+        let Ok(CaptureTarget::Mix(activations)) = decide_capture(
+            &SourceId::Apps {
+                root_pids: many,
+                executables: Vec::new(),
+            },
+            99,
+            &table,
+        ) else {
+            panic!("a mix");
+        };
+        assert_eq!(activations.len(), MAX_MIX_APPS);
+    }
+
+    #[test]
+    fn an_only_these_mix_takes_in_later_instances_of_its_apps_with_a_session() {
+        let table = ProcessTable::new([
+            entry(10, 1, None, "player.exe"),
+            entry(12, 1, None, "Player.exe"),
+            entry(20, 1, None, "browser.exe"),
+            entry(99, 1, None, "audiosync.exe"),
+        ]);
+        let chosen = ["player.exe".to_owned()];
+        assert_eq!(
+            decide_apps_capture(&table, &[12, 20, 99], 99, &[10], &chosen),
+            Ok(CaptureTarget::Mix(vec![include(10), include(12)])),
+            "a second player with a session joins; the browser isn't chosen"
+        );
+        assert_eq!(
+            decide_apps_capture(&table, &[12], 99, &[555], &chosen),
+            Ok(CaptureTarget::Mix(vec![include(12)])),
+            "the first instance quit, a later one carries on"
+        );
+        assert_eq!(
+            decide_apps_capture(&table, &[20], 99, &[555], &chosen),
+            Err(BackendError::SourceGone)
+        );
+    }
+
+    #[test]
+    fn all_except_mixes_every_other_app_with_a_session_and_never_audiosync() {
+        let table = mix_table();
+        let sessions = [10, 20, 30, 99];
+        let excluded = ["BROWSER.exe".to_owned()];
+        assert_eq!(apps_except(&table, &sessions, 99, &excluded), vec![30, 10]);
+        assert_eq!(
+            decide_except_capture(&table, &sessions, 99, &excluded),
+            CaptureTarget::Mix(vec![include(30), include(10)])
+        );
+        assert_eq!(
+            decide_except_capture(&table, &[20], 99, &excluded),
+            CaptureTarget::Mix(Vec::new()),
+            "with no other app it is a mix of none, which writes silence"
+        );
+        assert_eq!(
+            decide_activation(
+                &SourceId::AppsExcept {
+                    executables: Vec::new()
+                },
+                99,
+                &table
+            ),
+            Err(BackendError::NotAnApp)
+        );
     }
 
     #[test]

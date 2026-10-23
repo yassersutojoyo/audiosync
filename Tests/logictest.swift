@@ -53,6 +53,66 @@ check(AudioSource.app(bundleID: "com.spotify.client").defaultsValue == "com.spot
       "source: an app is stored as its plain bundle ID, as earlier versions stored it")
 check(AudioSource.system.bundleID == nil, "source: the whole system has no bundle ID")
 
+// MARK: Several apps as one source
+do {
+    let music = "com.apple.Music", safari = "com.apple.Safari", own = "com.example.audiosync"
+    let both = AudioSource.mixed(.only, bundleIDs: [music, safari])
+    let except = AudioSource.mixed(.allExcept, bundleIDs: [music])
+    check(both == .mix(.only, bundleIDs: [music, safari]) && both.defaultsValue == "apps:com.apple.Music,com.apple.Safari"
+            && AudioSource(defaultsValue: both.defaultsValue) == both,
+          "mix: several apps are stored under an apps: tag and read back", both.defaultsValue)
+    check(except.defaultsValue == "except:com.apple.Music" && AudioSource(defaultsValue: except.defaultsValue) == except,
+          "mix: all except is stored under an except: tag and read back", except.defaultsValue)
+    check(AudioSource(defaultsValue: music) == .app(bundleID: music) && AudioSource.app(bundleID: music).defaultsValue == music,
+          "mix: an old single-app value still loads as that app, and saves unchanged")
+    check(AudioSource.mixed(.only, bundleIDs: [music, own, music, " ", "a,b", "x:y"], ownBundleID: own) == .app(bundleID: music),
+          "mix: one app left after dropping AudioSync, repeats, blanks and unstorable IDs is a plain app source")
+    check(AudioSource.mixed(.only, bundleIDs: []) == .system && AudioSource.mixed(.allExcept, bundleIDs: [own], ownBundleID: own) == .system
+            && AudioSource(defaultsValue: "apps:") == .system && AudioSource(defaultsValue: "except:,") == .system,
+          "mix: no app left is the whole system, so AudioSync never names itself in a stored mix")
+    check(both.bundleID == nil && both.capturedApps == [music, safari] && except.capturedApps.isEmpty,
+          "mix: a mix has no single bundle ID; only an only-mix captures its apps")
+
+    check(SourceMix.toggle(safari, in: .app(bundleID: music), mode: .only) == both
+            && SourceMix.toggle(safari, in: both, mode: .only) == .app(bundleID: music)
+            && SourceMix.toggle(music, in: .app(bundleID: music), mode: .only) == .system,
+          "mix: checking an app adds it to the mix, unchecking takes it out")
+    check(SourceMix.toggle(music, in: .system, mode: .allExcept) == except
+            && SourceMix.toggle(music, in: .app(bundleID: safari), mode: .allExcept) == except
+            && SourceMix.toggle(own, in: .system, mode: .allExcept, ownBundleID: own) == .system,
+          "mix: in all-except mode a check starts a new exclusion list; AudioSync can't be checked")
+    check(SourceMix.setMode(.allExcept, from: .only, of: both) == .mix(.allExcept, bundleIDs: [music, safari])
+            && SourceMix.setMode(.only, from: .allExcept, of: except) == .app(bundleID: music),
+          "mix: switching the mode keeps the checked apps")
+    check(SourceMix.mode(of: .system, remembered: .allExcept) == .allExcept && SourceMix.mode(of: .app(bundleID: music), remembered: .allExcept) == .only
+            && SourceMix.mode(of: except, remembered: .only) == .allExcept && SourceMix.checked(.app(bundleID: music), mode: .allExcept).isEmpty,
+          "mix: the menu shows the mix's own mode, else the one last shown")
+
+    func judged(_ source: AudioSource, _ quit: String?, running: Set<String>) -> AudioSource {
+        SourceQuit.judged(source, quitBundleID: quit, isRunning: { running.contains($0) })
+    }
+    check(judged(both, music, running: [safari]) == .system && judged(both, music, running: []) == .app(bundleID: music)
+            && judged(both, "com.other", running: []) == .system && judged(except, music, running: []) == .system,
+          "mix: a mix ends only with its last app; all except outlives every app")
+    check(SourceQuit.decide(setting: .stop, source: both, quitBundleID: music, streaming: .running, isRunning: { $0 == safari }) == .keep
+            && SourceQuit.decide(setting: .stop, source: both, quitBundleID: music, streaming: .running, isRunning: { _ in false }) == .stop
+            && SourceQuit.decide(setting: .system, source: both, quitBundleID: safari, streaming: .running, isRunning: { _ in false })
+                == .switchToSystem,
+          "mix: an app of a mix quitting keeps streaming while another runs, and acts as set once none does")
+
+    check(AppTapFollow.decideExcluding(tapped: [3], found: [], own: 3) == .keep
+            && AppTapFollow.decideExcluding(tapped: [3], found: [9, 5], own: 3) == .retap([3, 5, 9])
+            && AppTapFollow.decideExcluding(tapped: [3, 5, 9], found: [9], own: 3) == .retap([3, 9]),
+          "mix: an all-except tap follows the excluded apps' processes and always leaves AudioSync out")
+
+    let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: music, name: "Music")], inputs: [],
+                                     chosen: both, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") })
+    check(entries.map(\.id) == ["", both.defaultsValue, music] && entries[1].name == "Music + Safari",
+          "mix: the picker lists the chosen mix under the whole system, named by its apps", "\(entries)")
+    let offered = SourceList.mixApps([(bundleID: music, name: "Music")], checked: [safari], chosenAppName: { _ in "Safari" })
+    check(offered.map(\.id) == [music, safari], "mix: a checked app that isn't running stays in the menu to be unchecked")
+}
+
 // MARK: Source apps — display names and the picker's app list
 check(SourceApps.displayName(running: "Music", installed: "Apple Music", bundleID: "com.apple.Music") == "Music",
       "source apps: a running app's name comes first")
