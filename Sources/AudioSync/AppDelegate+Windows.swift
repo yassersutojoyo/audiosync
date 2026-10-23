@@ -120,6 +120,8 @@ extension AppDelegate {
         a.newGroup = { [weak self] in self?.promptNewGroup() }
         a.setAutoConnect = { [weak self] key, on in self?.setAutoConnect(key, on) }
         a.renameSpeaker = { [weak self] key, system, typed in self?.renameSpeaker(key, system: system, to: typed) }
+        a.hideSpeaker = { [weak self] key, name, kind in self?.hideSpeaker(key, name: name, kind: kind) }
+        a.unhideSpeaker = { [weak self] key in self?.unhideSpeaker(key) }
         a.setLaunchAtLogin = { [weak self] on in self?.setLaunchAtLogin(on) }
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
         a.setSwitchWhenSourceQuits = { [weak self] on in
@@ -231,9 +233,15 @@ extension AppDelegate {
         publish(\.running, engine.isRunning)
         publish(\.sourceID, audioSource.defaultsValue)
         publish(\.master, masterVolume)
-        publish(\.airplay, airplaySnapshot())
-        publish(\.local, localSnapshot())
-        publish(\.cast, castSnapshot())
+        // Hidden speakers leave the rows here, so every list built from them loses them.
+        let hiddenKey = { (s: AppModel.Speaker) in HiddenSpeakers.key(id: s.id, tag: s.tag) }
+        let airplay = hiddenSpeakers.partition(airplaySnapshot(), key: hiddenKey)
+        let local = hiddenSpeakers.partition(localSnapshot(), key: hiddenKey)
+        let cast = hiddenSpeakers.partition(castSnapshot(), key: hiddenKey)
+        publish(\.airplay, airplay.shown)
+        publish(\.local, local.shown)
+        publish(\.cast, cast.shown)
+        publish(\.hidden, hiddenSnapshot(local: local.hidden, network: airplay.hidden + cast.hidden))
         publish(\.castList, castModel.listState(now: Date()))
         publish(\.castCanAdd, castSender != nil && castModel.discovery != .off)
         appModel.speakersListed(Set(appModel.airplay.map(\.id) + appModel.local.map(\.id) + appModel.cast.map(\.id)))
@@ -329,7 +337,8 @@ extension AppDelegate {
                                                                      offsets: localOffsetMs),
                                     autoConnect: autoConnect.contains(SpeakerKey.make(id: uid, airplay: false)),
                                     systemName: text.deviceName(device.name),
-                                    calibrationLeftOut: calibrationLeftOut(uid))
+                                    calibrationLeftOut: calibrationLeftOut(uid),
+                                    isReference: uid == localReference)
         }
     }
 

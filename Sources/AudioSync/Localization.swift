@@ -847,6 +847,26 @@ struct UIStrings {
     }
     /// What VoiceOver adds after a renamed speaker's label.
     func renamedSpeaker(system: String) -> String { "device name \(system)" }
+    /// Last in a speaker's ⋯ menu and right-click menu; never on the reference.
+    let hideSpeaker = "Hide Speaker"
+    let hideSpeakerHelp = "Turns the speaker off and takes it out of the speaker lists. Hidden Speakers brings it back."
+    /// The menu bar panel's list when every speaker in it is hidden: the panel has no gear menu.
+    let panelAllHidden = "Every speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again."
+    let panelConnectedHidden = "Every connected speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again."
+    /// What VoiceOver says after Hide Speaker and after choosing a hidden speaker.
+    func speakerHidden(_ name: String) -> String { "\(name) hidden" }
+    func speakerShown(_ name: String) -> String { "\(name) shown" }
+    /// The submenu in the gear menu and the Speakers menu.
+    let hiddenSpeakers = "Hidden Speakers"
+    let noHiddenSpeakers = "No hidden speakers"
+    func hiddenSpeakerEntry(name: String, kind: String) -> String {
+        kind.isEmpty ? name : "\(name) (\(kind))"
+    }
+    func hiddenSpeakerEntryAbsent(name: String, kind: String) -> String {
+        kind.isEmpty ? "\(name) (not found)" : "\(name) (\(kind), not found)"
+    }
+    /// A section whose every speaker is hidden.
+    let allSpeakersHidden = "Every speaker here is hidden. Choose Hidden Speakers in the gear menu to show one again."
     /// A new group's name when none was typed.
     func numberedGroup(_ n: Int) -> String { "Group \(n)" }
     let create = "Create"
@@ -1192,6 +1212,10 @@ struct UIStrings {
         - Rename: double-click a speaker's name, or choose 'Rename…' from its
           ⋯ button, type a name and press Return. Leave it empty to go back to
           the device's own name, which its tooltip keeps showing.
+        - Hide: to keep a speaker you never use out of the lists, choose 'Hide
+          Speaker' from its ⋯ button. A speaker that is on turns off first.
+          'Hidden Speakers' in the gear menu lists what you hid; choose one to
+          show it again, off, with its volume and delay as you left them.
         - Equalizer: click 'Equalizer' in the window for 10 bands, a preamp and
           presets. It shapes the sound on every speaker at once.
         - Now Playing: while Spotify or Music is open with a track, the window

@@ -130,10 +130,12 @@ struct MainView: View {
                         // This Mac first: few, stable rows that don't shift as
                         // other speakers come and go. Then groups, then every
                         // connected speaker (AirPlay and local) by name.
-                        speakerSection(t.thisMacSection, speakers: layout.thisMac, empty: t.thisMacNone)
+                        speakerSection(t.thisMacSection, speakers: layout.thisMac,
+                                       empty: model.hidden.inThisMac ? t.allSpeakersHidden : t.thisMacNone)
                         if !model.groups.isEmpty { groupsSection(t) }
                         speakerSection(t.connectedSection, speakers: layout.connected,
-                                       empty: model.networkEmptyText, connected: true,
+                                       empty: model.hidden.inConnected ? t.allSpeakersHidden : model.networkEmptyText,
+                                       connected: true,
                                        problem: model.airPlayProblem,
                                        localNetworkHint: model.localNetworkHint)
                     }
@@ -551,6 +553,8 @@ struct SpeakerRow: View {
     @FocusState private var delayFocused: Bool
     /// The name field while the speaker is being renamed.
     @FocusState private var nameFocused: Bool
+    /// The switch, which takes the focus when a neighbouring row is hidden.
+    @FocusState private var switchFocused: Bool
 
     var body: some View {
         let t = model.text
@@ -566,6 +570,7 @@ struct SpeakerRow: View {
                 .accessibilityHint(t.rowHint(state, note: note ?? t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
                 .help(t.help(state))
+                .focused($switchFocused)
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 6) {
@@ -674,6 +679,12 @@ struct SpeakerRow: View {
                 delayFocused = true
             }
         }
+        .onChange(of: model.focusSwitch, initial: true) { _, id in
+            if id == speaker.id {
+                switchFocused = true
+                model.focusSwitch = nil
+            }
+        }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
@@ -726,6 +737,11 @@ struct SpeakerRow: View {
                 Button(t.forgetPairing) { model.actions.forgetAirPlayPairing(speaker.id) }
                     .help(t.forgetPairingHelp)
             }
+        }
+        if !speaker.isReference {
+            Divider()
+            Button(t.hideSpeaker) { model.hide(speaker) }
+                .help(t.hideSpeakerHelp)
         }
     }
 
@@ -1111,6 +1127,18 @@ private enum GearMenu {
         menu.autoenablesItems = false
         menu.addItem(item(t.newGroup) { model.actions.newGroup() })
         menu.addItem(item(t.refreshDevices) { model.actions.refreshDevices() })
+        let hidden = NSMenu(title: t.hiddenSpeakers)
+        hidden.autoenablesItems = false
+        if model.hidden.menu.isEmpty {
+            let none = NSMenuItem(title: t.noHiddenSpeakers, action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            hidden.addItem(none)
+        } else {
+            for entry in model.hidden.menu {
+                hidden.addItem(item(entry.title) { model.unhide(entry) })
+            }
+        }
+        menu.addItem(withTitle: t.hiddenSpeakers, action: nil, keyEquivalent: "").submenu = hidden
         menu.addItem(item(t.showVirtualDevices, on: model.showVirtualDevices) {
             model.actions.setShowVirtualDevices(!model.showVirtualDevices)
         })

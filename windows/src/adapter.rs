@@ -92,15 +92,16 @@ use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, KeptAside, SavedEqualizer, SavedGroup, SavedInput, SavedSource, SavedSpeaker, Settings,
-    SettingsFile,
+    self, KeptAside, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedSource,
+    SavedSpeaker, Settings, SettingsFile,
 };
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressError, CastGroup, CastList, CastRow, CastState, Group, GroupError,
-    LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState,
-    Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
+    HiddenSpeaker, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt,
+    SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting,
+    clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -270,6 +271,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     cast_probe: fn(&CastAddress) -> bool,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
+    /// The speakers hidden with Hide Speaker, in the order they were hidden.
+    hidden: Vec<SavedHidden>,
     /// The names the user gave speakers (spec S228).
     custom_names: SpeakerNames,
     groups: Vec<Group>,
@@ -384,6 +387,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_addresses: Vec::new(),
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
+            hidden: Vec::new(),
             custom_names: SpeakerNames::default(),
             groups: Vec::new(),
             next_group: 1,
@@ -436,6 +440,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// speakers do once the first listing finds them.
     fn restore(&mut self, saved: Settings) {
         self.audio.set_master_volume(saved.master_volume);
+        // A hidden speaker is never switched on, not even by the saved on-state.
+        self.hidden = saved.hidden_speakers.clone();
         self.when_source_quits = WhenSourceQuits::from_stored(Some(&saved.when_source_quits));
         self.audio.set_when_source_quits(self.when_source_quits);
         if !self.delays_to_migrate {
@@ -449,7 +455,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.audio.set_output_delay(id, speaker.delay_ms);
             }
             self.audio.set_output_volume(id, speaker.volume);
-            if speaker.enabled {
+            if speaker.enabled && !self.is_hidden(&speaker_key(id)) {
                 // Nothing streams yet, so this only marks it on.
                 let _ = self.audio.set_output_enabled(id, true);
             }
@@ -457,7 +463,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for (id, speaker) in &saved.airplay {
             self.audio.set_airplay_volume(id, speaker.volume);
             self.audio.set_airplay_delay(id, speaker.delay_ms);
-            if speaker.enabled && self.audio.set_airplay_enabled(id, true).is_err() {
+            if speaker.enabled
+                && !self.is_hidden(&airplay_key(id))
+                && self.audio.set_airplay_enabled(id, true).is_err()
+            {
                 self.airplay_unrestored.insert(id.clone());
             }
         }
@@ -603,6 +612,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay,
             auto_connect: self.auto_connect.clone(),
             speaker_names: self.custom_names.saved(),
+            hidden_speakers: self.hidden.clone(),
             groups: self
                 .groups
                 .iter()
@@ -1441,12 +1451,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Whether the user set anything for output `endpoint_id`: settings, an
-    /// auto-connect mark or a group.
+    /// auto-connect mark, a group or Hide Speaker.
     fn has_choices(&self, endpoint_id: &str) -> bool {
         let key = speaker_key(endpoint_id);
         self.audio.has_output_settings(endpoint_id)
             || self.auto_connect.contains(&key)
             || self.groups.iter().any(|group| group.members.contains(&key))
+            || self.is_hidden(&key)
     }
 
     /// Hands what the user set for an output that is gone to one that
@@ -1521,6 +1532,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.auto_connect.insert(to_key.clone());
         }
         self.custom_names.move_key(&from_key, &to_key);
+        if let Some(entry) = self.hidden.iter_mut().find(|entry| entry.key == from_key) {
+            entry.key = to_key.clone();
+        }
         for group in &mut self.groups {
             if let Some(place) = group.members.iter().position(|key| *key == from_key) {
                 if group.members.contains(&to_key) {
@@ -1556,7 +1570,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.airplay_listed = listed;
         let hits: Vec<String> = appeared
             .into_iter()
-            .filter(|id| self.auto_connect.contains(&airplay_key(id)))
+            .filter(|id| {
+                let key = airplay_key(id);
+                self.auto_connect.contains(&key) && !self.is_hidden(&key)
+            })
             .collect();
         if hits.is_empty() {
             return;
@@ -1577,13 +1594,50 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// Whether speaker `key` is hidden with Hide Speaker.
+    fn is_hidden(&self, key: &str) -> bool {
+        self.hidden.iter().any(|entry| entry.key == key)
+    }
+
+    /// `speakers` without the hidden ones, and the Hidden Speakers entries:
+    /// a listed one by its name now, sorted by name, case-insensitively,
+    /// then by ID.
+    fn without_hidden(&self, speakers: Vec<Speaker>) -> (Vec<Speaker>, Vec<HiddenSpeaker>) {
+        let (hidden_rows, listed): (Vec<Speaker>, Vec<Speaker>) = speakers
+            .into_iter()
+            .partition(|speaker| self.is_hidden(&speaker.id));
+        let mut hidden: Vec<HiddenSpeaker> = self
+            .hidden
+            .iter()
+            .map(|entry| {
+                let row = hidden_rows.iter().find(|row| row.id == entry.key);
+                HiddenSpeaker {
+                    id: entry.key.clone(),
+                    name: row.map_or_else(|| entry.name.clone(), |row| row.name.clone()),
+                    kind_text: entry.kind.clone(),
+                    present: row.map(|row| row.kind),
+                }
+            })
+            .collect();
+        hidden.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        (listed, hidden)
+    }
+
     /// Switches on the auto-connect speakers among `appeared`, then starts
     /// streaming once for all of them, unless the user switched streaming off
     /// or an automatic start failed (S120).
     fn auto_connect(&mut self, appeared: &[String]) {
         let hits: Vec<&String> = appeared
             .iter()
-            .filter(|id| self.auto_connect.contains(&speaker_key(id)))
+            .filter(|id| {
+                let key = speaker_key(id);
+                self.auto_connect.contains(&key) && !self.is_hidden(&key)
+            })
             .collect();
         if hits.is_empty() {
             return;
@@ -2410,17 +2464,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             });
         let pin_prompt = self.audio.airplay_pin_prompt();
         let prompted = pin_prompt.as_ref().map(|prompt| prompt.id.as_str());
-        AppState {
-            reference_name,
-            airplay_delay_ms: self.airplay_delay_ms(),
-            airplay_none_found: self.airplay_none_found(),
-            airplay_searching: self.airplay_searching(),
-            running: self.running(),
-            sources: self.source_rows(),
-            source_id: self.chosen.key(),
-            master_volume: self.audio.master_volume(),
-            speakers: self
-                .audio
+        let (speakers, hidden) = self.without_hidden(
+            self.audio
                 .outputs()
                 .into_iter()
                 .map(|output| self.speaker(output))
@@ -2437,6 +2482,18 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                         .map(|speaker| self.cast_speaker(speaker)),
                 )
                 .collect(),
+        );
+        AppState {
+            reference_name,
+            airplay_delay_ms: self.airplay_delay_ms(),
+            airplay_none_found: self.airplay_none_found(),
+            airplay_searching: self.airplay_searching(),
+            running: self.running(),
+            sources: self.source_rows(),
+            source_id: self.chosen.key(),
+            master_volume: self.audio.master_volume(),
+            speakers,
+            hidden,
             groups: self.groups.clone(),
             equalizer: self.equalizer,
             notices: self
@@ -2694,6 +2751,70 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             let shown = self.custom_names.shown(id, &system);
             self.log
                 .log(|| format!("speaker {id} ({system}) is shown as {shown}"));
+        }
+    }
+
+    fn hide_speaker(&mut self, id: &str, kind: &str) {
+        let state = self.snapshot();
+        let Some(speaker) = state.speaker(id) else {
+            return;
+        };
+        let reference = self
+            .audio
+            .outputs()
+            .into_iter()
+            .any(|output| output.is_reference && speaker_key(&output.id) == id);
+        if reference {
+            return;
+        }
+        let was_on = speaker.enabled;
+        let name = speaker.name.clone();
+        if state
+            .pin_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.speaker_id == id)
+        {
+            self.cancel_pairing(id);
+        }
+        if state
+            .password_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.speaker_id == id)
+        {
+            self.cancel_password(id);
+        }
+        if self
+            .snapshot()
+            .speaker(id)
+            .is_some_and(|speaker| speaker.enabled)
+        {
+            self.set_speaker_enabled(id, false);
+        }
+        // Its row is gone, and so is what it said.
+        let subject = match SpeakerKey::parse(id) {
+            Some(SpeakerKey::Local(endpoint_id)) => Some(speaker_subject(&endpoint_id)),
+            Some(SpeakerKey::AirPlay(airplay_id)) => Some(airplay_subject(&airplay_id)),
+            None => cast_id(id).map(|cast| NoticeSubject::Cast(cast.to_owned())),
+        };
+        if let Some(subject) = subject {
+            self.notices.clear(&[subject]);
+        }
+        self.hidden.push(SavedHidden {
+            key: id.to_owned(),
+            name,
+            kind: kind.to_owned(),
+        });
+        self.log.log(|| {
+            let state = if was_on { "on" } else { "off" };
+            format!("speaker {id} hidden; it was {state}")
+        });
+    }
+
+    fn unhide_speaker(&mut self, id: &str) {
+        let before = self.hidden.len();
+        self.hidden.retain(|entry| entry.key != id);
+        if self.hidden.len() < before {
+            self.log.log(|| format!("speaker {id} shown again"));
         }
     }
 
@@ -6128,6 +6249,228 @@ mod tests {
         adapter.save_settings();
         let (saved, _) = SettingsFile::at(path).load();
         assert!(saved.speaker_names.is_empty(), "cleared, nothing is kept");
+    }
+
+    fn hidden_entry(adapter: &AudioAdapter<MockBackend>, id: &str) -> HiddenSpeaker {
+        adapter
+            .snapshot()
+            .hidden
+            .into_iter()
+            .find(|hidden| hidden.id == id)
+            .expect("in Hidden Speakers")
+    }
+
+    #[test]
+    fn hiding_a_speaker_that_is_on_turns_it_off_and_lists_it_nowhere() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_delay(&key(SPEAKERS), 150.0);
+        let kind = speaker_of(&adapter, &key(SPEAKERS)).kind;
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+
+        adapter.hide_speaker(&key(SPEAKERS), "Speakers kind");
+        let state = adapter.snapshot();
+        assert!(state.speaker(&key(SPEAKERS)).is_none());
+        assert!(playing(&adapter).is_empty(), "turned off first");
+        assert!(!state.running);
+        assert!(adapter.audio.enabled_outputs().is_empty());
+        let entry = hidden_entry(&adapter, &key(SPEAKERS));
+        assert_eq!(entry.name, "Speakers");
+        assert_eq!(entry.kind_text, "Speakers kind");
+        assert_eq!(entry.present, Some(kind));
+        assert!(state.hidden_in(kind.is_this_pc()));
+        let on = audiosync_remote::Command::Speaker {
+            id: key(SPEAKERS),
+            change: audiosync_remote::SpeakerChange {
+                on: Some(true),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            crate::remote::actions(&on, &state, |_| true),
+            Err(crate::remote::Refusal::UnknownSpeaker),
+            "the Web Remote can't reach it"
+        );
+
+        adapter.hide_speaker(&key(SPEAKERS), "Speakers kind");
+        assert_eq!(adapter.snapshot().hidden.len(), 1, "hiding twice keeps one");
+
+        adapter.unhide_speaker(&key(SPEAKERS));
+        let row = speaker_of(&adapter, &key(SPEAKERS));
+        assert!(!row.enabled, "back off");
+        assert_eq!(row.delay_ms, Some(150.0), "its delay was kept");
+        assert!(adapter.snapshot().hidden.is_empty());
+    }
+
+    #[test]
+    fn a_hidden_usb_speaker_moved_to_another_port_stays_hidden() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        adapter.hide_speaker(&key(DAC_PORT_1), "USB");
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert!(adapter.snapshot().speaker(&key(DAC_PORT_2)).is_none());
+        let hidden = adapter.snapshot().hidden;
+        assert_eq!(hidden.len(), 1, "no stale entry: {hidden:?}");
+        assert_eq!(hidden[0].id, key(DAC_PORT_2));
+        assert!(hidden[0].present.is_some());
+    }
+
+    #[test]
+    fn the_reference_output_cant_be_hidden() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        adapter.poll();
+        let reference = adapter
+            .audio
+            .outputs()
+            .into_iter()
+            .find(|output| output.is_reference)
+            .expect("a reference");
+        adapter.hide_speaker(&key(&reference.id), "Speakers");
+        assert!(adapter.snapshot().speaker(&key(&reference.id)).is_some());
+        assert!(adapter.snapshot().hidden.is_empty());
+    }
+
+    #[test]
+    fn a_group_switches_only_its_members_that_arent_hidden() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_group("Desk").unwrap();
+        adapter.hide_speaker(&key(HEADPHONES), "Headphones");
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        let group = adapter.snapshot().groups[0].id.clone();
+
+        adapter.toggle_group(&group);
+        assert_eq!(adapter.audio.enabled_outputs(), [SPEAKERS]);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    #[test]
+    fn a_hidden_auto_connect_speaker_isnt_turned_on_when_it_appears() {
+        let mut adapter = adapter();
+        adapter.set_auto_connect(&key(HEADPHONES), true);
+        adapter.hide_speaker(&key(HEADPHONES), "Headphones");
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        adapter.poll();
+        assert_eq!(hidden_entry(&adapter, &key(HEADPHONES)).present, None);
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&key(HEADPHONES)).is_none());
+        assert!(hidden_entry(&adapter, &key(HEADPHONES)).present.is_some());
+        assert!(!adapter.snapshot().running);
+        assert!(adapter.audio.enabled_outputs().is_empty());
+
+        adapter.unhide_speaker(&key(HEADPHONES));
+        let row = speaker_of(&adapter, &key(HEADPHONES));
+        assert!(!row.enabled);
+        assert!(row.auto_connect, "its mark was kept");
+    }
+
+    #[test]
+    fn a_hidden_airplay_speaker_stays_hidden_when_it_appears_again() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_auto_connect(&ap(&kitchen), true);
+        fake.take_calls();
+
+        adapter.hide_speaker(&ap(&kitchen), "AirPlay");
+        assert!(!adapter.is_airplay_enabled(&id_of(&kitchen)));
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        fake.gone(&kitchen);
+        adapter.poll();
+        let entry = hidden_entry(&adapter, &ap(&kitchen));
+        assert_eq!((entry.name.as_str(), entry.present), ("Kitchen", None));
+        fake.take_calls();
+
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        assert_eq!(
+            hidden_entry(&adapter, &ap(&kitchen)).present,
+            Some(SpeakerKind::AirPlay)
+        );
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Add { .. })),
+            "auto-connect skips it"
+        );
+        assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
+    fn a_hidden_cast_speaker_stays_hidden_when_it_announces_again() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.hide_speaker(&cc(CAST_KITCHEN), "Google Cast");
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_none());
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_none());
+        assert!(adapter.snapshot().speaker(&cc(CAST_LIVING)).is_some());
+        let entry = hidden_entry(&adapter, &cc(CAST_KITCHEN));
+        assert_eq!(entry.present, Some(SpeakerKind::Cast));
+        assert_eq!(entry.kind_text, "Google Cast");
+    }
+
+    #[test]
+    fn hidden_speakers_survive_a_restart_with_what_was_set_for_them() {
+        let dir = test_dir("adapter-hidden-speakers");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.set_speaker_delay(&key(HEADPHONES), 120.0);
+        adapter.hide_speaker(&key(HEADPHONES), "Headphones kind");
+        adapter.save_settings();
+        let (saved, _) = SettingsFile::at(path.clone()).load();
+        assert_eq!(
+            saved.hidden_speakers,
+            [SavedHidden {
+                key: key(HEADPHONES),
+                name: "Headphones".into(),
+                kind: "Headphones kind".into(),
+            }]
+        );
+
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&key(HEADPHONES)).is_none());
+        assert!(adapter.audio.enabled_outputs().is_empty());
+        adapter.unhide_speaker(&key(HEADPHONES));
+        let row = speaker_of(&adapter, &key(HEADPHONES));
+        assert!(!row.enabled);
+        assert_eq!(row.delay_ms, Some(120.0));
+        adapter.save_settings();
+        let (saved, _) = SettingsFile::at(path).load();
+        assert!(saved.hidden_speakers.is_empty());
+    }
+
+    #[test]
+    fn a_speaker_saved_on_and_hidden_isnt_turned_on_at_a_launch() {
+        let dir = test_dir("adapter-hidden-saved-on");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.save_settings();
+        let (mut saved, _) = SettingsFile::at(path.clone()).load();
+        saved.hidden_speakers.push(SavedHidden {
+            key: key(SPEAKERS),
+            name: "Speakers".into(),
+            kind: String::new(),
+        });
+        SettingsFile::at(path.clone()).save(&saved).unwrap();
+
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        assert!(adapter.audio.enabled_outputs().is_empty());
+        assert!(!adapter.snapshot().running);
     }
 
     #[test]

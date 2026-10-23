@@ -5663,5 +5663,85 @@ do {
           "cast address: a name that doesn't resolve or an address where nothing answers is not found, with its own text")
 }
 
+// MARK: Hidden speakers — out of every list by key, settings kept, back off when shown
+do {
+    let t = UIStrings()
+    check(HiddenSpeakers.key(id: "BuiltInSpeakerDevice", tag: .builtIn) == "lc:BuiltInSpeakerDevice"
+          && HiddenSpeakers.key(id: "native:AA11BB22CC33", tag: .airplay) == "ap:native:AA11BB22CC33"
+          && HiddenSpeakers.key(id: "cast:nest-1", tag: .cast) == "cast:nest-1"
+          && HiddenSpeakers.key(id: "teams-uid", tag: .virtual) == "lc:teams-uid",
+          "hidden speakers: the key is the speaker key, and a Cast speaker's app ID")
+
+    typealias Row = (id: String, name: String, tag: SpeakerTag, on: Bool)
+    let rows: [Row] = [("BuiltIn", "MacBook Speakers", .builtIn, true), ("teams", "Microsoft Teams Audio", .virtual, true),
+                       ("native:AA11BB22CC33", "Kitchen", .airplay, false), ("cast:nest-1", "Nest", .cast, false)]
+    let rowKey = { (r: Row) in HiddenSpeakers.key(id: r.id, tag: r.tag) }
+    var hidden = HiddenSpeakers()
+    check(hidden.hide(key: "lc:teams", name: "Microsoft Teams Audio", kind: "Virtual")
+          && !hidden.hide(key: "lc:teams", name: "Renamed", kind: "Virtual")
+          && hidden.entries.map(\.name) == ["Microsoft Teams Audio"],
+          "hidden speakers: hiding twice keeps one entry with its first name")
+    let split = hidden.partition(rows, key: rowKey)
+    check(split.shown.map(\.id) == ["BuiltIn", "native:AA11BB22CC33", "cast:nest-1"] && split.hidden.map(\.id) == ["teams"],
+          "hidden speakers: a hidden speaker leaves the rows, the others keep their order")
+
+    // The Web Remote plans its commands against the rows the window lists.
+    let remoteRows = split.shown.map {
+        RemoteRow(RemoteRow.Facts(id: $0.id, name: $0.name, kind: t.speakerTag($0.tag), on: $0.on, volume: 50), text: t)
+    }
+    let snapshot = RemoteSnapshot(computerName: "Mac", master: 100, nowPlaying: nil, rows: remoteRows)
+    let command = RemoteCommand(json: "{\"type\":\"speaker\",\"id\":\"teams\",\"on\":true}")
+    check(!snapshot.json.contains("Microsoft Teams Audio")
+          && command.map { RemoteAction.plan($0, rows: remoteRows) } == [],
+          "hidden speakers: the remote snapshot loses a hidden speaker, and a command naming it changes nothing")
+
+    // Rediscovery: the same key comes back in a new list and stays hidden.
+    hidden.hide(key: "cast:nest-1", name: "Nest", kind: "Google Cast")
+    hidden.hide(key: "ap:native:AA11BB22CC33", name: "Kitchen", kind: "AirPlay")
+    let again: [Row] = [("cast:nest-1", "Nest Audio", .cast, false), ("native:AA11BB22CC33", "Kitchen", .airplay, false)]
+    check(hidden.partition(again, key: rowKey).shown.isEmpty,
+          "hidden speakers: a Cast or AirPlay speaker that re-announces, even under a new name, stays hidden")
+
+    let group = GroupSummary.summarize(members: ["lc:BuiltIn", "lc:teams"],
+                                       isAvailable: { !hidden.contains($0) }, isEnabled: { _ in true })
+    check(group.available == 1 && group.allOn, "hidden speakers: a group counts a hidden member as not present")
+    check(hidden.autoConnecting(["lc:teams", "lc:usb", "lc:other"], marked: ["lc:teams", "lc:usb"]) == ["lc:usb"],
+          "hidden speakers: auto-connect skips a hidden speaker marked for it")
+
+    let menu = hidden.menu(present: ["lc:teams": (name: "Teams", kind: "Virtual")], text: t)
+    check(menu.map(\.title) == ["Kitchen (AirPlay, not found)", "Nest (Google Cast, not found)", "Teams (Virtual)"]
+          && HiddenSpeakers().menu(present: [:], text: t).isEmpty,
+          "hidden speakers: the menu is sorted by shown name, uses the current name when present, says not found otherwise",
+          menu.map(\.title).joined(separator: " | "))
+
+    // Shown again: back in the rows; nothing else was touched, so its saved values stay.
+    var store: [String: Any] = [AppSettings.Keys.localOffsets: ["teams": 120.0]]
+    let settings = SettingsStore(read: { store[$0] }, write: { value, key in store[key] = value })
+    settings.save(hiddenSpeakers: hidden)
+    let loaded = settings.load()
+    check(loaded.hiddenSpeakers == hidden && loaded.localOffsets["teams"] == 120,
+          "hidden speakers: the hidden set survives a settings round trip, with the offset kept")
+    check(hidden.show("lc:teams")?.name == "Microsoft Teams Audio" && hidden.show("lc:teams") == nil
+          && hidden.partition(rows, key: rowKey).shown.contains { $0.id == "teams" },
+          "hidden speakers: showing a speaker brings its row back")
+    hidden.show("cast:nest-1")
+    hidden.show("ap:native:AA11BB22CC33")
+    settings.save(hiddenSpeakers: hidden)
+    check(store[AppSettings.Keys.hiddenSpeakers] == nil, "hidden speakers: the setting goes once nothing is hidden")
+
+    let lenient = HiddenSpeakers(stored: [["key": "lc:a", "name": "A", "kind": "USB"], ["name": "no key"], "junk",
+                                          ["key": "lc:b"], ["key": "lc:a", "name": "again"]] as [Any])
+    check(lenient.entries == [.init(key: "lc:a", name: "A", kind: "USB"), .init(key: "lc:b", name: "", kind: "")]
+          && HiddenSpeakers(stored: "nonsense").isEmpty,
+          "hidden speakers: a malformed stored entry is skipped")
+
+    var moved = HiddenSpeakers()
+    moved.hide(key: "ap:123456789", name: "Den", kind: "AirPlay")
+    moved.hide(key: "lc:usb", name: "Desk", kind: "USB")
+    moved.migrate(airPlay: ["123456789": "native:00075BCD15"])
+    check(moved.contains("ap:native:00075BCD15") && !moved.contains("ap:123456789") && moved.contains("lc:usb"),
+          "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
