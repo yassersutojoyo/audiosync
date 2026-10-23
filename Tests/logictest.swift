@@ -3001,12 +3001,12 @@ do {
                 == nothingText,
           "presets: with no member present nothing changes and only the notice posts", "\(noneHere)")
 
-    let phoneFailure = LocalOutputSync.report([LocalOutputSync.Failure(uid: "bt", deviceName: "Headphones")],
-                                              enabled: ["bt"], origin: PresetRecallSource.phone.origin)
+    let appFailure = LocalOutputSync.report([LocalOutputSync.Failure(uid: "bt", deviceName: "Headphones")],
+                                            enabled: ["bt"], origin: PresetRecallSource.app.origin)
     check(PresetRecallSource.phone.origin == .remote && !PresetRecallSource.phone.beginsAttempts
-            && PresetRecallSource.app.origin == .user && PresetRecallSource.app.beginsAttempts
-            && phoneFailure?.alertNames == nil && phoneFailure?.notices.count == 1,
-          "presets: a recall from the phone shows no alert")
+            && PresetRecallSource.app.origin == .remote && PresetRecallSource.app.beginsAttempts
+            && appFailure?.alertNames == nil && appFailure?.notices.count == 1,
+          "presets: a recall from the app or the phone shows no alert")
 
     var boosted = louder
     boosted.gains[3] = 3

@@ -309,8 +309,9 @@ enum PresetRecallSource: Equatable {
     /// The web remote.
     case phone
 
-    /// A recall from the phone starts streaming as `.remote`: no alert.
-    var origin: StartOrigin { self == .phone ? .remote : .user }
+    /// Every recall starts streaming as `.remote`, the origin that raises no
+    /// alert, so a member that fails to start is a notice from either path (S266).
+    var origin: StartOrigin { .remote }
     /// Only a recall made in the app begins AirPlay pairing attempts; from
     /// the phone a code request becomes a notice, as for auto-connect.
     var beginsAttempts: Bool { self == .app }
