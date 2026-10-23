@@ -10,6 +10,8 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use native_tls::{HandshakeError, Protocol, TlsConnector, TlsStream};
@@ -27,11 +29,39 @@ use crate::status::{AppSession, ReceiverStatus};
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// The longest a read waits before timers run again.
 const READ_SLICE: Duration = Duration::from_millis(50);
+/// How often a TLS handshake waiting on the device looks again.
+const HANDSHAKE_POLL: Duration = Duration::from_millis(5);
 /// Events kept for a host that doesn't poll: beyond this, the oldest
 /// status and drop reports go first; launch results and the end are kept.
 pub const MAX_EVENTS: usize = 64;
 /// The longest teardown at host quit (C88).
 pub const QUIT_BUDGET: Duration = Duration::from_secs(3);
+
+/// A TCP connect that stops waiting once `selected` is cleared. The
+/// connect itself can't be cut short, so it runs on a thread of its own,
+/// which finishes within [`CONNECT_TIMEOUT`] and drops what it got.
+fn tcp_connect(address: SocketAddr, selected: &AtomicBool) -> Result<TcpStream, ConnectError> {
+    let (sender, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("cast-connect".to_owned())
+        .spawn(move || {
+            let _ = sender.send(TcpStream::connect_timeout(&address, CONNECT_TIMEOUT));
+        })
+        .map_err(|error| ConnectError::Tcp { address, error })?;
+    loop {
+        match receiver.recv_timeout(READ_SLICE) {
+            Ok(result) => return result.map_err(|error| ConnectError::Tcp { address, error }),
+            Err(RecvTimeoutError::Timeout) if !selected.load(Ordering::SeqCst) => {
+                return Err(ConnectError::Ended(EndReason::Stopped));
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                let error = io::Error::other("the connect thread ended");
+                return Err(ConnectError::Tcp { address, error });
+            }
+        }
+    }
+}
 
 /// The SHA-256 of a device's DER certificate (C21).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -180,13 +210,27 @@ impl CastClient {
     /// Tries each address in turn (IPv4 first, C16) and returns once the
     /// first `RECEIVER_STATUS` arrived (C33).
     pub fn connect(addresses: &[SocketAddr], ids: RequestIds) -> Result<CastClient, ConnectError> {
+        CastClient::connect_while(addresses, ids, &AtomicBool::new(true))
+    }
+
+    /// [`CastClient::connect`] that gives up within a read slice once
+    /// `selected` is cleared, with [`EndReason::Stopped`], so a quit never
+    /// waits out the timeouts of every address (C88).
+    pub fn connect_while(
+        addresses: &[SocketAddr],
+        ids: RequestIds,
+        selected: &AtomicBool,
+    ) -> Result<CastClient, ConnectError> {
         let mut ordered = addresses.to_vec();
         ordered.sort_by_key(SocketAddr::is_ipv6);
         // The first error is the one reported: it belongs to the preferred
         // address, usually IPv4.
         let mut first = None;
         for address in ordered {
-            match CastClient::connect_one(address, ids.clone()) {
+            if !selected.load(Ordering::SeqCst) {
+                return Err(ConnectError::Ended(EndReason::Stopped));
+            }
+            match CastClient::connect_one(address, ids.clone(), selected) {
                 Ok(client) => return Ok(client),
                 Err(error) => {
                     first.get_or_insert(error);
@@ -196,24 +240,48 @@ impl CastClient {
         Err(first.unwrap_or(ConnectError::NoAddress))
     }
 
-    fn connect_one(address: SocketAddr, ids: RequestIds) -> Result<CastClient, ConnectError> {
-        let tcp = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-            .map_err(|error| ConnectError::Tcp { address, error })?;
+    fn connect_one(
+        address: SocketAddr,
+        ids: RequestIds,
+        selected: &AtomicBool,
+    ) -> Result<CastClient, ConnectError> {
+        let tcp = tcp_connect(address, selected)?;
+        if !selected.load(Ordering::SeqCst) {
+            return Err(ConnectError::Ended(EndReason::Stopped));
+        }
         let tcp_error = |error| ConnectError::Tcp { address, error };
         tcp.set_nodelay(true).map_err(tcp_error)?;
-        tcp.set_read_timeout(Some(CONNECT_TIMEOUT))
-            .map_err(tcp_error)?;
         tcp.set_write_timeout(Some(CONNECT_TIMEOUT))
             .map_err(tcp_error)?;
         let local_address = tcp.local_addr().map_err(tcp_error)?;
         let tls_error = |message: String| ConnectError::Tls { address, message };
         let connector = tls_connector().map_err(|error| tls_error(error.to_string()))?;
-        let stream = connector
-            .connect(&address.ip().to_string(), PeekedTcp(tcp))
-            .map_err(|error| match error {
-                HandshakeError::Failure(error) => tls_error(error.to_string()),
-                HandshakeError::WouldBlock(_) => tls_error("the handshake timed out".to_owned()),
-            })?;
+        // Non-blocking, so a device that stalls the handshake can't keep a
+        // deselect waiting longer than one poll step (C88).
+        tcp.set_nonblocking(true).map_err(tcp_error)?;
+        let deadline = Instant::now() + CONNECT_TIMEOUT;
+        let mut handshake = connector.connect(&address.ip().to_string(), PeekedTcp(tcp));
+        let stream = loop {
+            match handshake {
+                Ok(stream) => break stream,
+                Err(HandshakeError::Failure(error)) => return Err(tls_error(error.to_string())),
+                Err(HandshakeError::WouldBlock(pending)) => {
+                    if !selected.load(Ordering::SeqCst) {
+                        return Err(ConnectError::Ended(EndReason::Stopped));
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(tls_error("the handshake timed out".to_owned()));
+                    }
+                    thread::sleep(HANDSHAKE_POLL);
+                    handshake = pending.handshake();
+                }
+            }
+        };
+        stream
+            .get_ref()
+            .0
+            .set_nonblocking(false)
+            .map_err(tcp_error)?;
         let fingerprint = stream
             .peer_certificate()
             .ok()
@@ -248,6 +316,9 @@ impl CastClient {
                     EndReason::NoStatus => ConnectError::NoStatus,
                     other => ConnectError::Ended(other),
                 });
+            }
+            if !selected.load(Ordering::SeqCst) {
+                return Err(ConnectError::Ended(EndReason::Stopped));
             }
         }
     }
