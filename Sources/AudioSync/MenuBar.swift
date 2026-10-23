@@ -81,14 +81,14 @@ final class AppModel: ObservableObject {
         var setPower: (Bool) -> Void = { _ in }
         var selectSource: (String) -> Void = { _ in }
         var setMaster: (Double) -> Void = { _ in }
-        var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
+        var setAirPlayEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
         var forgetAirPlayPairing: (String) -> Void = { _ in }
-        var setLocalEnabled: (String, Bool) -> Void = { _, _ in }
+        var setLocalEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
         var setAirPlayDelay: (Double) -> Void = { _ in }
-        var setCastEnabled: (String, Bool) -> Void = { _, _ in }
+        var setCastEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         /// The device's own volume, slider position 0 to 100.
         var setCastVolume: (String, Double) -> Void = { _, _ in }
         /// An arrow key on the device's slider: up or down one step.
@@ -298,12 +298,13 @@ final class AppModel: ObservableObject {
                            in: deviceVolumes)
     }
 
-    /// A click on a speaker's switch, whatever kind it is.
-    func setEnabled(_ speaker: Speaker, _ on: Bool) {
+    /// A click on a speaker's switch, whatever kind it is; the web remote's
+    /// switches pass `.remote`.
+    func setEnabled(_ speaker: Speaker, _ on: Bool, origin: StartOrigin = .user) {
         switch speaker.tag {
-        case .airplay: actions.setAirPlayEnabled(speaker.id, on)
-        case .cast: actions.setCastEnabled(speaker.id, on)
-        default: actions.setLocalEnabled(speaker.id, on)
+        case .airplay: actions.setAirPlayEnabled(speaker.id, on, origin)
+        case .cast: actions.setCastEnabled(speaker.id, on, origin)
+        default: actions.setLocalEnabled(speaker.id, on, origin)
         }
     }
 
@@ -807,7 +808,7 @@ struct MenuBarView: View {
                     CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                                text: t, height: rowHeight, renamedFrom: speaker.renamedFrom,
                                deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
-                        model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn)
+                        model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn, .user)
                     }
                 }
             }

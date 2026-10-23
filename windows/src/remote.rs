@@ -954,7 +954,7 @@ mod tests {
 
     // covers: S258
     #[test]
-    fn the_host_refuses_every_command_that_arrives_during_a_microphone_run() {
+    fn the_host_refuses_a_command_that_arrives_during_a_run() {
         let mut state = zoned();
         state.calibration.busy = true;
         assert!(snapshot(&state, not_virtual, None, "Desk PC", &Text).calibrating);

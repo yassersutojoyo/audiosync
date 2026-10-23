@@ -5688,6 +5688,80 @@ do {
     let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
     check(offFirst && masterClamped, "web remote: a speaker turned off takes no volume; the master volume is clamped")
 
+    // covers: S256, S253
+    let zoneRows = [
+        RemoteRow(Facts(id: "usb", name: "Desk", kind: "USB", on: true, volume: 40, key: "lc:usb"), text: t),
+        RemoteRow(Facts(id: "hp", name: "Kitchen", kind: "AirPlay 2", on: true, volume: 30, isAirPlay: true,
+                        key: "ap:hp", waiting: true), text: t),
+        RemoteRow(Facts(id: "bt", name: "Den", kind: "Bluetooth", on: false, volume: 50, key: "lc:bt"), text: t),
+    ]
+    let storedZones = [
+        SpeakerZone(id: "z1", name: "Downstairs", members: ["ap:hp", "lc:hidden", "lc:usb", "lc:bt"], volume: 70),
+        SpeakerZone(id: "z2", name: "Studio", members: ["lc:hidden"], volume: 100),
+    ]
+    let zoneList = storedZones.map { RemoteZoneRow($0, listed: zoneRows) }
+    let presetList = [RemotePresetRow(id: "p1", name: "Evening", current: true),
+                      RemotePresetRow(id: "p2", name: "Party", current: false)]
+    let zoned = RemoteSnapshot(computerName: "Mac", master: 100, nowPlaying: nil, rows: zoneRows,
+                               zones: zoneList, presets: presetList)
+    let zonedObject = (try? JSONSerialization.jsonObject(with: Data(zoned.json.utf8))) as? [String: Any]
+    let zoneObjects = zonedObject?["zones"] as? [[String: Any]] ?? []
+    let presetObjects = zonedObject?["presets"] as? [[String: Any]] ?? []
+    check(zoneObjects.first?["members"] as? [String] == ["hp", "usb", "bt"]
+            && zoneObjects.first?["counts"] as? [String: Int] == ["on": 2, "total": 3, "waiting": 1]
+            && zoneObjects.first?["volume"] as? Double == 70
+            && zoneObjects.last?["counts"] as? [String: Int] == ["on": 0, "total": 0, "waiting": 0],
+          "web remote: a zone lists its listed members in zone order with on, total and waiting; a hidden one doesn't count",
+          "\(zoneObjects)")
+    check(presetObjects.map { $0["id"] as? String ?? "" } == ["p1", "p2"]
+            && presetObjects.map { $0["current"] as? Bool ?? false } == [true, false]
+            && zonedObject?["calibrating"] as? Bool == false,
+          "web remote: the presets go out in order with the current one marked, and no run means not calibrating")
+    var zonedRemote = asc_remote_start("{\"port\": 0, \"listen\": [\"127.0.0.1\"]}", noCommand, nil, &error)
+    check(zonedRemote != nil && asc_remote_publish(zonedRemote, zoned.json),
+          "web remote: the core accepts a snapshot with zones and presets", "start error \(error)")
+    asc_remote_stop(&zonedRemote)
+
+    // covers: S257
+    func zonePlan(_ json: String, calibrating: Bool = false) -> [RemoteAction] {
+        RemoteCommand(json: json).map {
+            RemoteAction.plan($0, rows: zoneRows, zones: zoneList, presets: presetList, calibrating: calibrating)
+        } ?? []
+    }
+    let zoneCommand = "{\"type\":\"zone\",\"id\":\"z1\",\"toggle\":true,\"volume\":30}"
+    let presetCommand = "{\"type\":\"preset\",\"id\":\"p2\",\"recall\":true}"
+    check(RemoteCommand(json: zoneCommand) == .zone(id: "z1", toggle: true, volume: 30)
+            && RemoteCommand(json: presetCommand) == .preset(id: "p2")
+            && RemoteCommand(json: "{\"type\":\"preset\",\"id\":\"p2\",\"recall\":false}") == nil
+            && RemoteCommand(json: "{\"type\":\"zone\",\"id\":\"z1\",\"toggle\":1}") == nil,
+          "web remote: zone and preset commands read as the core sends them; anything else is dropped")
+    check(zonePlan(zoneCommand) == [.setZoneVolume(id: "z1", position: 30), .toggleZone(id: "z1")]
+            && zonePlan(presetCommand) == [.recallPreset(id: "p2")],
+          "web remote: a zone command sets the zone's volume, then flips it; a preset command recalls it")
+    let noMember = zonePlan("{\"type\":\"zone\",\"id\":\"z2\",\"toggle\":true}").isEmpty
+    let unknownZone = zonePlan("{\"type\":\"zone\",\"id\":\"z9\",\"volume\":10}").isEmpty
+    let unknownPreset = zonePlan("{\"type\":\"preset\",\"id\":\"p9\",\"recall\":true}").isEmpty
+    check(noMember && unknownZone && unknownPreset,
+          "web remote: a zone with no listed member doesn't flip; an unknown zone or preset changes nothing")
+
+    // covers: S258
+    let duringRun = [zoneCommand, presetCommand, "{\"type\":\"master\",\"volume\":20}",
+                     "{\"type\":\"speaker\",\"id\":\"usb\",\"on\":false}"]
+    check(duringRun.allSatisfy { zonePlan($0, calibrating: true).isEmpty },
+          "web remote: the Mac refuses every command that arrives during a microphone run")
+    var settling = CalibrateAllStatus()
+    settling.holdsOutputs = true
+    let measuringOne = CalibrationStatus(uid: "usb", phase: .running(.measuring(.reference)))
+    check(!RemoteSnapshot.calibrating(CalibrationStatus(), CalibrateAllStatus())
+            && RemoteSnapshot.calibrating(measuringOne, CalibrateAllStatus())
+            && RemoteSnapshot.calibrating(CalibrationStatus(), settling),
+          "web remote: one speaker's calibration and Calibrate All, also while a cut-off sweep plays out, count as calibrating")
+
+    // covers: S120
+    let fromPhone = LocalOutputSync.report([.init(uid: "usb", deviceName: "USB DAC")], enabled: ["usb"], origin: .remote)
+    check(fromPhone?.alertNames == nil && fromPhone?.notices.map(\.uid) == ["usb"] && fromPhone?.enabled == [],
+          "remote: a start from the phone shows no alert, only a notice for the failed speaker")
+
     check(RemotePort.parse(" 8080 ") == 8080 && RemotePort.parse("80") == nil && RemotePort.parse("70000") == nil
             && RemotePort.parse("abc") == nil && RemotePort.stored(1e30) == nil && RemotePort.stored(7655.5) == nil,
           "web remote: a port from 1024 to 65535 is taken")

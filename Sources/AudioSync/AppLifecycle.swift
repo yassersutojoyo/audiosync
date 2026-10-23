@@ -10,6 +10,9 @@ enum StartOrigin: Equatable {
     /// AudioSync on its own: auto-connect, or a restart after the capture
     /// format changed.
     case automatic
+    /// A phone through the web remote: it counts as the user's act, but
+    /// nobody may be at the Mac, so a failure only posts a notice.
+    case remote
 }
 
 /// The decisions behind the app's launch, when the speakers are reconciled, a

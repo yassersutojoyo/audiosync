@@ -32,6 +32,8 @@ extension AppDelegate {
         let saved = AppSettings.load(SettingsStore.standard.read)
         let remote = WebRemote(model: appModel, store: .standard, enabled: saved.webRemote, port: saved.webRemotePort)
         remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
+        // Zones and presets reach the phone once the window lists them: it offers nothing the Mac lacks.
+        remote.host.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
         webRemote = remote
         webRemoteWindow = WebRemoteWindowController(remote: remote, text: text)
         menuBar = MenuBarController(model: appModel)
@@ -71,10 +73,10 @@ extension AppDelegate {
         a.setPower = { [weak self] on in self?.setStreaming(on) }
         a.selectSource = { [weak self] id in self?.setSource(AudioSource(defaultsValue: id)) }
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
-        a.setAirPlayEnabled = { [weak self] id, on in self?.setNativeAirPlayEnabled(id, on) }
+        a.setAirPlayEnabled = { [weak self] id, on, origin in self?.setNativeAirPlayEnabled(id, on, origin: origin) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
         a.forgetAirPlayPairing = { [weak self] id in self?.forgetNativePairing(id) }
-        a.setLocalEnabled = { [weak self] uid, on in self?.setLocalEnabled(uid, on) }
+        a.setLocalEnabled = { [weak self] uid, on, origin in self?.setLocalEnabled(uid, on, origin: origin) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
         a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
@@ -87,7 +89,7 @@ extension AppDelegate {
         a.undoCalibrateAll = { [weak self] in self?.undoCalibrateAll() }
         a.closeCalibrateAll = { [weak self] in self?.closeCalibrateAll() }
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
-        a.setCastEnabled = { [weak self] id, on in self?.setCastEnabled(id, on) }
+        a.setCastEnabled = { [weak self] id, on, origin in self?.setCastEnabled(id, on, origin: origin) }
         a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
         a.stepCastVolume = { [weak self] id, up in self?.stepCastVolume(id, up: up) }
         a.setCastMuted = { [weak self] id, muted in self?.setCastMuted(id, muted) }
