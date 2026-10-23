@@ -405,6 +405,7 @@ mod tests {
                 den,
                 speaker("loop", SpeakerKind::Virtual, Some(0.0)),
             ],
+            hidden: Vec::new(),
             groups: Vec::new(),
             equalizer: Default::default(),
             notices: Vec::new(),

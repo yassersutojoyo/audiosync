@@ -203,6 +203,19 @@ pub struct Speaker {
     pub mic_left_out: Option<MicKind>,
 }
 
+/// A speaker hidden with Hide Speaker, as Speakers > Hidden Speakers lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HiddenSpeaker {
+    /// The ID its row had, its speaker key.
+    pub id: String,
+    /// Its name now while it is listed, else the name it had when hidden.
+    pub name: String,
+    /// The kind its row showed when it was hidden, for while it isn't listed.
+    pub kind_text: String,
+    /// Its kind while it is listed; `None` while it isn't.
+    pub present: Option<SpeakerKind>,
+}
+
 /// A Google Cast speaker's own state. Its delay is the measured offset the
 /// user sets, since Cast can't be kept in sync automatically.
 #[derive(Clone, Debug, PartialEq)]
@@ -540,7 +553,10 @@ pub struct AppState {
     pub source_id: String,
     /// 0 to 100.
     pub master_volume: f64,
+    /// The speakers listed; a hidden one never is.
     pub speakers: Vec<Speaker>,
+    /// The hidden speakers, by name (case-insensitively), then by ID.
+    pub hidden: Vec<HiddenSpeaker>,
     pub groups: Vec<Group>,
     pub equalizer: EqSettings,
     /// Newest first.
@@ -707,6 +723,17 @@ impl AppState {
         }
     }
 
+    /// Whether a hidden speaker that is present belongs under This PC
+    /// (`this_pc`) or Connected Speakers: that section's empty text then
+    /// says its speakers are hidden.
+    pub fn hidden_in(&self, this_pc: bool) -> bool {
+        self.hidden.iter().any(|hidden| {
+            hidden
+                .present
+                .is_some_and(|kind| kind.is_this_pc() == this_pc)
+        })
+    }
+
     /// Speakers switched on right now.
     pub fn active_speakers(&self) -> usize {
         self.speakers.iter().filter(|s| s.enabled).count()
@@ -783,6 +810,13 @@ pub trait Backend {
     /// Gives speaker `id` the name `name`; an empty one brings back its
     /// system name (spec S228).
     fn rename_speaker(&mut self, id: &str, name: &str);
+    /// Hide Speaker on speaker `id`'s row: a speaker that is on goes off
+    /// first, as its own switch turns it off, then it leaves every list.
+    /// What was set for it stays. `kind` is the kind its row shows, kept so
+    /// Hidden Speakers can name it while it isn't listed.
+    fn hide_speaker(&mut self, _id: &str, _kind: &str) {}
+    /// A Hidden Speakers entry: speaker `id` is listed again, off.
+    fn unhide_speaker(&mut self, _id: &str) {}
     /// Turns every present member on, or all of them off when the group is on.
     fn toggle_group(&mut self, id: &str);
     /// Makes a group of the speakers that are on now. The UI names it
@@ -1085,6 +1119,7 @@ impl MockBackend {
             source_id: "system".into(),
             master_volume: volume::DEFAULT_MASTER_POSITION,
             speakers,
+            hidden: Vec::new(),
             groups: vec![Group {
                 id: "group:1".into(),
                 name: "Downstairs".into(),
