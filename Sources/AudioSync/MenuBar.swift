@@ -37,6 +37,9 @@ final class AppModel: ObservableObject {
         var paired = false
         /// A stereo pair or home theater group: its kind and members (P176).
         var airPlayTarget: AirPlayTargetRow? = nil
+        /// Why a local speaker sits out of microphone calibration: headphones
+        /// or a virtual output; nil when it takes part, and for other speakers.
+        var calibrationLeftOut: CalibrationLeftOut? = nil
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
@@ -120,6 +123,8 @@ final class AppModel: ObservableObject {
         var calibrateAll: () -> Void = {}
         var cancelCalibrateAll: () -> Void = {}
         var measureAgain: (Int) -> Void = { _ in }
+        /// Include Anyway (true) or Leave Out (false) on an output that sits out.
+        var includeInCalibrateAll: (String, Bool) -> Void = { _, _ in }
         var applyCalibrateAll: () -> Void = {}
         var undoCalibrateAll: () -> Void = {}
         var closeCalibrateAll: () -> Void = {}

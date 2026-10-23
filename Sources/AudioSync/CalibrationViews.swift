@@ -10,8 +10,21 @@ struct CalibrationControl: View {
     let name: String
     /// The speaker's switch is on.
     let speakerOn: Bool
+    /// Headphones or a virtual output: the reason replaces the button.
+    var leftOut: CalibrationLeftOut? = nil
 
     var body: some View {
+        if let leftOut, !model.calibration.phase(of: id).isRunning {
+            Text(model.text.calibrationLeftOut(leftOut))
+                .font(.caption)
+                .foregroundStyle(Brand.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            control
+        }
+    }
+
+    @ViewBuilder private var control: some View {
         let t = model.text
         let phase = model.calibration.phase(of: id)
         let running = phase.isRunning

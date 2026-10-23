@@ -4226,18 +4226,18 @@ do {
     let builtIn = kAudioDeviceTransportTypeBuiltIn
     check(CalibrationFlow.leftOut(transport: kAudioDeviceTransportTypeVirtual, terminal: nil, dataSource: nil,
                                   name: "Microsoft Teams Audio") == .virtual
-            && CalibrationFlow.leftOut(transport: builtIn, terminal: kAudioStreamTerminalTypeSpeaker,
+            && CalibrationFlow.leftOut(transport: builtIn, terminal: UInt32(kAudioStreamTerminalTypeSpeaker),
                                        dataSource: hdpn, name: "Built-in Output") == .headphones
-            && CalibrationFlow.leftOut(transport: builtIn, terminal: kAudioStreamTerminalTypeSpeaker,
+            && CalibrationFlow.leftOut(transport: builtIn, terminal: UInt32(kAudioStreamTerminalTypeSpeaker),
                                        dataSource: ispk, name: "Built-in Output") == nil
-            && CalibrationFlow.leftOut(transport: builtIn, terminal: kAudioStreamTerminalTypeHeadphones,
+            && CalibrationFlow.leftOut(transport: builtIn, terminal: UInt32(kAudioStreamTerminalTypeHeadphones),
                                        dataSource: nil, name: "External Headphones") == .headphones
             && CalibrationFlow.leftOut(transport: usb, terminal: 0x0302, dataSource: nil, name: "USB Audio") == .headphones
             && CalibrationFlow.leftOut(transport: usb, terminal: 0x0402, dataSource: nil, name: "USB Audio") == .headphones
             && CalibrationFlow.leftOut(transport: usb, terminal: 0x0301, dataSource: nil, name: "USB Audio") == nil
             && CalibrationFlow.leftOut(transport: usb, terminal: nil, dataSource: nil, name: "Desk Headphones") == nil
-            && CalibrationFlow.leftOut(transport: bt, terminal: kAudioStreamTerminalTypeHeadphones, dataSource: nil,
-                                       name: "WH-1000XM5") == .headphones
+            && CalibrationFlow.leftOut(transport: bt, terminal: UInt32(kAudioStreamTerminalTypeHeadphones),
+                                       dataSource: nil, name: "WH-1000XM5") == .headphones
             && CalibrationFlow.leftOut(transport: bt, terminal: nil, dataSource: nil,
                                        name: "Yasser's AirPods Pro") == .headphones
             && CalibrationFlow.leftOut(transport: kAudioDeviceTransportTypeBluetoothLE, terminal: 0, dataSource: nil,

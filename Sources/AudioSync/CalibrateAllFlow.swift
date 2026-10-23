@@ -45,6 +45,10 @@ enum CalibrateAllBlocker: Error, Equatable {
     case notPlaying
     /// Only the built-in speakers play.
     case noOtherSpeaker
+    /// Every other speaker that plays sits out: headphones or virtual outputs.
+    case onlyLeftOut
+    /// The built-in output plays to the headphone jack, so its speakers are silent.
+    case referenceHeadphones
     /// A single-speaker calibration holds the outputs.
     case busy
 }
@@ -81,6 +85,15 @@ enum CalibrateAllProgress: Equatable {
     case listening(name: String, sweep: Int)
     /// A Cast speaker without a stored offset: the longest window.
     case searching(name: String)
+}
+
+/// A local output that plays but sits out of a run, and whether the user
+/// included it anyway for the runs of this sheet.
+struct CalibrateAllLeftOut: Equatable, Identifiable {
+    let id: String
+    let name: String
+    let reason: CalibrationLeftOut
+    var included: Bool
 }
 
 /// What a run depends on; once it moves, the run stops (S240).
@@ -170,6 +183,10 @@ struct CalibrateAllStatus: Equatable {
     var line: CalibrateAllLine?
     /// A run holds the outputs, running or letting a cut-off sweep play out.
     var holdsOutputs = false
+    /// Outputs that play but sit out, in the window's order.
+    var leftOut: [CalibrateAllLeftOut] = []
+    /// Outputs the user included anyway; kept until the sheet closes.
+    var includedAnyway: Set<String> = []
 
     var isRunning: Bool { progress != nil }
 }
@@ -228,9 +245,19 @@ enum CalibrateAllFlow {
         var airPlayDelayMs: Double
         /// How much longer than L the AirPlay sender holds its speakers back.
         var airPlayHoldBackMs: Double
-        /// Local outputs with no hardware behind them (BlackHole, Teams
-        /// Audio), which no microphone can hear: they are left out of a run.
-        var softwareOutputs: Set<String> = []
+        /// Local outputs that sit out (`CalibrationFlow.leftOut`), by UID.
+        var leftOut: [String: CalibrationLeftOut] = [:]
+        /// Of those, the ones the user included anyway.
+        var includedAnyway: Set<String> = []
+    }
+
+    /// The local outputs other than the reference that play but sit out.
+    static func leftOut(_ inputs: Inputs) -> [CalibrateAllLeftOut] {
+        inputs.localOutputs.compactMap { output in
+            guard output.id != inputs.reference, let reason = inputs.leftOut[output.id] else { return nil }
+            return CalibrateAllLeftOut(id: output.id, name: output.name, reason: reason,
+                                       included: inputs.includedAnyway.contains(output.id))
+        }
     }
 
     /// The speakers of a run, the reference first, then the other local
@@ -245,8 +272,10 @@ enum CalibrateAllFlow {
             return CalibrateAllSpeaker(id: id, name: name, kind: .local, offsetMs: offset,
                                        latencyMs: holdBack + latencyAllowanceMs)
         }
+        if inputs.leftOut[reference] == .headphones { return .failure(.referenceHeadphones) }
+        let sittingOut = Set(leftOut(inputs).filter { !$0.included }.map(\.id))
         var speakers = [local(reference, first.name, offset: nil)]
-        for output in inputs.localOutputs where output.id != reference && !inputs.softwareOutputs.contains(output.id) {
+        for output in inputs.localOutputs where output.id != reference && !sittingOut.contains(output.id) {
             speakers.append(local(output.id, output.name, offset: inputs.localOffsets[output.id]))
         }
         if let cast = inputs.cast {
@@ -260,7 +289,8 @@ enum CalibrateAllFlow {
             speakers.append(CalibrateAllSpeaker(id: speaker.id, name: speaker.name, kind: .airPlay,
                                                 offsetMs: inputs.airPlayDelayMs, latencyMs: airPlayLatency))
         }
-        return speakers.count > 1 ? .success(speakers) : .failure(.noOtherSpeaker)
+        if speakers.count > 1 { return .success(speakers) }
+        return .failure(sittingOut.isEmpty ? .noOtherSpeaker : .onlyLeftOut)
     }
 
     /// How long a speaker's music or sweep, once sent, may still play.

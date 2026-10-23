@@ -27,7 +27,8 @@ struct CalibrateAllButton: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(blocker != nil)
+            // With only headphones or virtual outputs on, the sheet still opens to include one anyway.
+            .disabled(blocker != nil && blocker != .onlyLeftOut)
             .help(blocker.map(t.calibrateAllUnavailable) ?? t.calibrateAllHint)
             .accessibilityLabel(t.calibrateAll)
             .accessibilityHint(blocker.map(t.calibrateAllUnavailable) ?? t.calibrateAllHint)
@@ -72,6 +73,12 @@ struct CalibrateAllSheetView: View {
             }
             if let sheet = status.sheet {
                 results(sheet, status: status, t: t)
+            }
+            leftOutRows(status, t: t)
+            if status.sheet == nil, !status.isRunning, status.line == nil, let blocker = status.blocker {
+                Text(t.calibrateAllUnavailable(blocker))
+                    .foregroundStyle(Brand.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let line = status.line {
                 Text(t.calibrateAllLine(line))
@@ -150,6 +157,51 @@ struct CalibrateAllSheetView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// The outputs that play but sit out, with why. Before a run, and after
+    /// one that stopped early, each can be included anyway for the next run.
+    @ViewBuilder
+    private func leftOutRows(_ status: CalibrateAllStatus, t: UIStrings) -> some View {
+        let choosing = canStartRun(status)
+        let rows = choosing ? status.leftOut : status.leftOut.filter { !$0.included }
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(rows) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(row.name)
+                                .lineLimit(2)
+                                .foregroundStyle(row.included ? Color.primary : Brand.secondaryText)
+                            Text(row.included ? t.calibrateAllLeftOutIncluded : t.calibrationLeftOut(row.reason))
+                                .font(.caption)
+                                .foregroundStyle(Brand.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityElement(children: .combine)
+                        Spacer()
+                        if choosing {
+                            if row.included {
+                                Button(t.leaveOut) { model.actions.includeInCalibrateAll(row.id, false) }
+                                    .controlSize(.small)
+                                    .accessibilityLabel(t.leaveOutLabel(of: row.name))
+                            } else {
+                                Button(t.includeAnyway) { model.actions.includeInCalibrateAll(row.id, true) }
+                                    .controlSize(.small)
+                                    .help(t.includeAnywayHelp)
+                                    .accessibilityLabel(t.includeAnywayLabel(of: row.name))
+                                    .accessibilityHint(t.includeAnywayHelp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// No run holds the outputs and no finished sheet waits for Apply.
+    private func canStartRun(_ status: CalibrateAllStatus) -> Bool {
+        !status.isRunning && !status.holdsOutputs && (status.sheet == nil || status.sheet?.ended != nil)
     }
 
     private func buttons(_ status: CalibrateAllStatus, t: UIStrings) -> some View {

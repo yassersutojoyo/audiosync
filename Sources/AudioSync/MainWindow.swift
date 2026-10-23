@@ -663,7 +663,8 @@ struct SpeakerRow: View {
                 .transition(.opacity)
                 // A Cast speaker's timing isn't known to the microphone sweep's model.
                 if !speaker.isCast {
-                    CalibrationControl(model: model, id: speaker.id, name: speaker.name, speakerOn: speaker.enabled)
+                    CalibrationControl(model: model, id: speaker.id, name: speaker.name, speakerOn: speaker.enabled,
+                                       leftOut: speaker.calibrationLeftOut)
                         .padding(.leading, 44)
                         .transition(.opacity)
                 }

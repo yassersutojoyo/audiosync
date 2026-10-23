@@ -1,4 +1,5 @@
 import CAudioSyncCore
+import CoreAudio
 import Foundation
 
 // The decisions of a microphone calibration (S232-S234) that need no audio
@@ -112,7 +113,43 @@ struct CalibrationStatus: Equatable {
     }
 }
 
+/// Why a local output sits out of microphone calibration, which measures
+/// external speakers only: the microphone hears neither headphones nor a
+/// device with no hardware behind it.
+enum CalibrationLeftOut: Equatable {
+    case headphones, virtual
+}
+
 enum CalibrationFlow {
+    /// Why an output sits out of calibration, nil when it takes part.
+    /// `terminal` is its first output stream's `kAudioStreamPropertyTerminalType`,
+    /// `dataSource` its output `kAudioDevicePropertyDataSource`, `name` the
+    /// name macOS gives it. Core Audio has no documented kind for a Bluetooth
+    /// output, so only there does the name decide, after the terminal.
+    static func leftOut(transport: UInt32, terminal: UInt32?, dataSource: UInt32?,
+                        name: String) -> CalibrationLeftOut? {
+        if transport == kAudioDeviceTransportTypeVirtual { return .virtual }
+        if dataSource == headphoneJackSource { return .headphones }
+        if let terminal, headphoneTerminals.contains(terminal) { return .headphones }
+        if transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE {
+            let lowered = name.lowercased()
+            if headphoneWords.contains(where: { lowered.contains($0) }) { return .headphones }
+        }
+        return nil
+    }
+
+    /// 'hdpn', the headphones output port subtype of IOKit's IOAudioTypes.h.
+    private static let headphoneJackSource: UInt32 = 0x6864_706E
+
+    /// Core Audio's headphones terminal, and the USB Audio terminal types
+    /// headphones (0x0302), head-mounted display audio (0x0303) and headset
+    /// (0x0402), which USB devices report as they are.
+    private static let headphoneTerminals: Set<UInt32> = [
+        UInt32(kAudioStreamTerminalTypeHeadphones), 0x0302, 0x0303, 0x0402,
+    ]
+
+    private static let headphoneWords = ["airpods", "headphone", "headset", "earbud", "earphone", "buds"]
+
     /// What the estimate's answer does to the chosen speaker's offset.
     enum Outcome: Equatable {
         case commit(offsetMs: Double, clamped: Bool)

@@ -82,6 +82,7 @@ extension AppDelegate {
         a.calibrateAll = { [weak self] in self?.startCalibrateAll() }
         a.cancelCalibrateAll = { [weak self] in self?.cancelCalibrateAll() }
         a.measureAgain = { [weak self] row in self?.measureAgain(row) }
+        a.includeInCalibrateAll = { [weak self] id, on in self?.includeInCalibrateAll(id, on) }
         a.applyCalibrateAll = { [weak self] in self?.applyCalibrateAll() }
         a.undoCalibrateAll = { [weak self] in self?.undoCalibrateAll() }
         a.closeCalibrateAll = { [weak self] in self?.closeCalibrateAll() }
@@ -321,7 +322,8 @@ extension AppDelegate {
                                     offsetMs: LocalDelay.shownOffset(uid, reference: localReference,
                                                                      offsets: localOffsetMs),
                                     autoConnect: autoConnect.contains(SpeakerKey.make(id: uid, airplay: false)),
-                                    systemName: text.deviceName(device.name))
+                                    systemName: text.deviceName(device.name),
+                                    calibrationLeftOut: calibrationLeftOut(uid))
         }
     }
 

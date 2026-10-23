@@ -20,10 +20,10 @@ struct AudioDevices: Sendable {
         let name: String, uid: String
         /// `kAudioDeviceTransportType…`; 0 when the device doesn't say.
         let transport: UInt32
-        /// The terminal type (`kAudioStreamTerminalType…`) of a built-in
+        /// The terminal type (`kAudioStreamTerminalType…`) of an output
         /// device's first output stream, which tells the built-in speakers
-        /// from the headphone jack (S173); nil when it couldn't be read and
-        /// for every other device.
+        /// from the headphone jack (S173) and headphones from speakers for
+        /// calibration; nil when it couldn't be read and for input devices.
         var outputTerminal: UInt32? = nil
     }
 
@@ -50,10 +50,13 @@ struct AudioDevices: Sendable {
     /// replaces. Hardware transports and unknown ones are always shown.
     static func isVirtual(transport: UInt32) -> Bool { hiddenTransports.contains(transport) }
 
-    /// A device with no hardware of its own (BlackHole, Teams Audio). Unlike
-    /// `isVirtual` this leaves out aggregates and macOS's AirPlay output,
-    /// which do play through speakers.
-    static func isSoftwareOnly(transport: UInt32) -> Bool { transport == kAudioDeviceTransportTypeVirtual }
+    /// The output data source device `id` plays to now
+    /// (`kAudioDevicePropertyDataSource`), such as the built-in output's
+    /// speakers or headphone jack; nil when it has none. Read when needed:
+    /// plugging into the jack changes it without changing the device list.
+    static func outputDataSource(of id: AudioDeviceID) -> UInt32? {
+        HALProperty.uint32(of: id, kAudioDevicePropertyDataSource, kAudioObjectPropertyScopeOutput)
+    }
 
     private static let hiddenTransports: Set<UInt32> = [
         kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate,
@@ -120,9 +123,7 @@ struct AudioDevices: Sendable {
                                 composition: composition,
                                 uid: HALProperty.string(of: id, kAudioDevicePropertyDeviceUID),
                                 name: HALProperty.string(of: id, kAudioObjectPropertyName))
-        // Only a built-in output's terminal matters: it tells the built-in
-        // speakers, the reference, from the headphone jack (S173).
-        if scope == kAudioObjectPropertyScopeOutput, transport == kAudioDeviceTransportTypeBuiltIn {
+        if scope == kAudioObjectPropertyScopeOutput {
             device?.outputTerminal = HALProperty.firstStreamTerminal(of: id, in: scope)
         }
         return device
@@ -139,8 +140,9 @@ private enum HALProperty {
         AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
     }
 
-    static func uint32(of object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
-        var prop = address(selector)
+    static func uint32(of object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                       _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> UInt32? {
+        var prop = address(selector, scope)
         var value: UInt32 = 0
         var dataSize = UInt32(MemoryLayout<UInt32>.size)
         guard AudioObjectGetPropertyData(object, &prop, 0, nil, &dataSize, &value) == noErr else { return nil }
