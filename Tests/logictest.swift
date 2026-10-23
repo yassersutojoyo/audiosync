@@ -4802,6 +4802,25 @@ do {
                       "calibrate all: Measure Again runs the reference and that row, and replaces that row alone",
                       "\(againSteps), \(sheet.read(ended: nil).rows[1].result)")
             }
+            // covers: S255
+            let zoneSpeakers = [speaker("mac", .local, nil), speaker("usb", .local, 150), speaker("attic", .local, 40)]
+            if let zoneRun = CalibrateAllRunHandle(rate: 48_000, speakers: zoneSpeakers, off: [false, false, true]) {
+                let zoneSteps = play(zoneRun, arrivals: { row, _ in row == 0 ? 4_800 : 9_600 })
+                let zoneSheet = zoneRun.finish()
+                    .map { CalibrateAllSheetHandle($0, speakers: zoneSpeakers, rate: 48_000, microphone: nil) }
+                let listed = zoneSheet?.read(ended: nil).rows ?? []
+                let onNow = CalibrateAllSpeaker(id: "attic", name: "attic", kind: .local, offsetMs: 60, latencyMs: 100)
+                let again = zoneSheet?.measureAgainOff(2, now: onNow)
+                let againSteps = again.map { play($0, arrivals: { row, _ in row == 0 ? 4_800 : 7_200 }) } ?? []
+                let replaced = again?.finish().map { zoneSheet?.replace($0) ?? false } ?? false
+                let after = zoneSheet?.read(ended: nil).rows ?? []
+                check(zoneSteps == ["0.0", "1.1", "1.2"] && listed.count == 3 && listed[2].off
+                        && listed[2].result == .notMeasured && zoneSheet?.measureAgain(2) == nil
+                        && againSteps == ["0.0", "2.1", "2.2"] && replaced
+                        && after.count == 3 && !after[2].off && after[2].oldMs == 60 && after[2].measured,
+                      "calibrate zone: a member that is off is listed and never swept, and Measure Again measures it "
+                        + "from its values once it is on (S255)", "\(zoneSteps), \(againSteps), \(after.map(\.result))")
+            }
             if let sheet, let cut = sheet.measureAgain(2) {
                 let before = sheet.read(ended: nil)
                 cut.cancel(.speakerOff)
@@ -4908,6 +4927,79 @@ do {
             && t.calibrateAllProgress(.listening(name: "MacBook Speakers", sweep: 0)) == "Listening to MacBook Speakers…"
             && t.calibrateAllProgress(.searching(name: "TV")).contains("up to a minute"),
           "calibrate all: the progress line names the speaker and the sweep, and says when a Cast speaker is searched")
+}
+
+// MARK: Calibrate Zone: the zone's plan, the speakers silenced outside it and the AirPlay line (S255)
+do {
+    let inputs = CalibrateAllFlow.Inputs(
+        streaming: true, reference: "mac",
+        localOutputs: [(id: "usb", name: "Desk"), (id: "mac", name: "MacBook Speakers")],
+        localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
+        cast: (id: "cast:tv", name: "TV", offsetMs: 500, waitMs: 0, format: ASC_CAST_FORMAT_WAV),
+        airPlay: [(id: "native:a", name: "Kitchen"), (id: "native:b", name: "Bedroom")],
+        airPlayDelayMs: 1750, airPlayHoldBackMs: 0)
+    let attic = CalibrateAllSpeaker(id: "attic", name: "Attic", kind: .local, offsetMs: 40, latencyMs: 0)
+    let scope = CalibrateZoneScope(id: "z1", name: "Upstairs",
+                                   members: ["ap:native:b", "lc:usb", "lc:attic", "lc:hidden", "lc:usb"],
+                                   present: ["ap:native:b", "lc:usb", "lc:attic"], off: [attic])
+    let plan = try? CalibrateAllFlow.zonePlan(inputs, zone: scope).get()
+    // covers: S255
+    check(plan?.speakers.map(\.id) == ["mac", "native:b", "usb", "attic"] && plan?.off == [false, false, false, true]
+            && plan?.taking == ["mac", "native:b", "usb"] && plan?.silenced.map(\.id) == ["cast:tv", "native:a"],
+          "calibrate zone: the reference, then the zone's present members in zone order, one that is off listed, "
+            + "and every other speaker that plays silenced (S255)", "\(String(describing: plan))")
+
+    var onlyOff = scope
+    onlyOff.members = ["lc:attic"]
+    var hiddenOnly = scope
+    hiddenOnly.members = ["lc:hidden"]
+    var noReference = inputs
+    noReference.reference = nil
+    // covers: S255
+    check(CalibrateAllFlow.zonePlan(inputs, zone: onlyOff) == .failure(.noOtherSpeaker)
+            && CalibrateAllFlow.zonePlan(inputs, zone: hiddenOnly) == .failure(.noOtherSpeaker)
+            && CalibrateAllFlow.zonePlan(noReference, zone: scope) == .failure(.noReference),
+          "calibrate zone: a zone with only the reference measurable is refused as nothing to measure (S255)")
+
+    // covers: S255
+    let silenced = plan?.silenced ?? []
+    let usb = plan?.speakers[2]
+    let far = CalibrateAllSpeaker(id: "hdmi", name: "TV speakers", kind: .local, offsetMs: 0, latencyMs: 5000)
+    check(usb.map { CalibrateAllFlow.settleSeconds($0, silenced: silenced) } == usb.map { CalibrateAllFlow.settleSeconds($0) }
+            && usb.map { CalibrateAllFlow.settleSeconds($0, silenced: silenced + [far]) } == 5.75
+            && CalibrateAllFlow.quietSeconds((plan?.speakers ?? []) + silenced) >= CalibrateAllFlow.playOutSeconds(silenced[0]),
+          "calibrate zone: the run waits until the speakers silenced on a sweep's path have played it out (S255)")
+
+    let zones = [SpeakerZone(id: "z1", name: "Upstairs", members: ["ap:native:b", "lc:usb"], volume: 100),
+                 SpeakerZone(id: "z2", name: "Kitchen", members: ["ap:native:a"], volume: 100),
+                 SpeakerZone(id: "z3", name: "Desk", members: ["lc:desk"], volume: 100),
+                 SpeakerZone(id: "z4", name: "Garden", members: ["ap:native:g"], volume: 100)]
+    let moves = CalibrateAllFlow.airPlayMoves(zones: zones, measured: "z1",
+                                              listed: ["ap:native:g", "ap:native:a", "ap:native:b"])
+    let porch = CalibrateAllFlow.airPlayMoves(zones: zones, measured: "z2", listed: ["ap:native:a", "ap:native:p"])
+    // covers: S255, S237
+    check(moves == CalibrateZoneAirPlayMoves(zones: ["Kitchen", "Garden"], noZone: false)
+            && porch == CalibrateZoneAirPlayMoves(zones: [], noZone: true),
+          "calibrate zone: the AirPlay line names, in zone order, each other zone with a listed AirPlay speaker, "
+            + "and speakers in no zone (S255)", "\(moves) | \(porch)")
+
+    var started = CalibrateAllContext(source: "system", session: 3, streaming: true, switchedOn: ["mac", "usb"],
+                                      playing: ["mac", "usb"], delays: [:])
+    started.zoneMembers = ["lc:usb", "lc:attic"]
+    var lost = started
+    lost.zoneMembers = ["lc:usb"]
+    var deleted = started
+    deleted.zoneMembers = nil
+    var grown = started
+    grown.zoneMembers = ["lc:usb", "lc:attic", "lc:desk"]
+    var whole = started
+    whole.zoneMembers = nil
+    let ends = [started, lost, deleted, grown].map { CalibrateAllFlow.end(start: started, now: $0, taking: ["mac", "usb"]) }
+    // covers: S240, S255
+    check(ends == [nil, .speakersChanged, .speakersChanged, nil]
+            && CalibrateAllFlow.end(start: whole, now: whole, taking: ["mac", "usb"]) == nil,
+          "calibrate zone: the measured zone losing a member or being deleted stops the run as a changed list (S240)",
+          "\(ends)")
 }
 
 // MARK: Google Cast speakers: one session, matched by attempt (CastModel)
