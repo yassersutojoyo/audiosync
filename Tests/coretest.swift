@@ -29,6 +29,36 @@ func sessionChecks() {
     check(parts.makeRenderer(captureRate: 48000) != nil, "session: a renderer can be made on the session's ring")
 }
 
+/// A calibration on a source that plays nothing (CalibrationTap.swift): the
+/// capture delivers no block, so only the fill can carry the test signal.
+func calibrationFillChecks() {
+    guard let parts = EngineParts.make() else {
+        check(false, "calibration fill: the core's parts can be made")
+        return
+    }
+    parts.prepare(captureRate: 48000)
+    let signal = UnsafeMutablePointer<Float>.allocate(capacity: 4800)
+    signal.initialize(repeating: 0.1, count: 4800)
+    CalibrationTap.install(signal, frames: 4800)
+    CalibrationTap.engage()
+    CalibrationTap.play()
+    let fill = CalibrationFill(parts: parts, captureRate: 48000)
+    fill.start()
+    let deadline = Date().addingTimeInterval(2)
+    while CalibrationTap.playedAtTicks == nil && Date() < deadline { usleep(5000) }
+    let played = CalibrationTap.playedAtTicks
+    let written = parts.ring.framesWritten
+    fill.stop()
+    let afterStop = parts.ring.framesWritten
+    usleep(20_000)
+    check(played != nil && written >= 1920,
+          "calibration fill: with no captured block the test signal still enters the ring", "\(written) frames")
+    check(parts.ring.framesWritten == afterStop, "calibration fill: nothing is written once stop returns")
+    CalibrationTap.disengage()
+    CalibrationTap.uninstall()
+    signal.deallocate()
+}
+
 /// A local output's reader the way OutputRenderer drives it: the delay set in
 /// ms, every block read at that target (S3, S46, S49, S56, S158, S159).
 func readerChecks() {
@@ -164,6 +194,7 @@ func volumeChecks() {
 }
 
 sessionChecks()
+calibrationFillChecks()
 readerChecks()
 equalizerChecks()
 volumeChecks()

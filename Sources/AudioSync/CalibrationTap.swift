@@ -1,4 +1,5 @@
 import Darwin
+import Foundation
 import Synchronization
 
 /// The capture's way to play the calibration signal (S232, S233) through the
@@ -16,8 +17,9 @@ import Synchronization
 /// or Cast sender instead (`setTarget`); the other paths get silence then.
 ///
 /// The capture thread calls `isActive`, `fadeMusic` and `addSignal` from
-/// `EngineParts.deliver`; everything else runs on the main thread. One
-/// calibration at a time.
+/// `EngineParts.deliver`, and the fill thread (`CalibrationFill`) from
+/// `EngineParts.fill`, never both at once (`BlockGate`); everything else runs
+/// on the main thread. One calibration at a time.
 enum CalibrationTap {
     /// 20 ms at 48 kHz; a fixed count keeps the fade's state one number that
     /// only the capture thread writes.
@@ -76,9 +78,10 @@ enum CalibrationTap {
     }
 
     /// Adds the signal's next frames into `block`, both channels, when one is
-    /// asked for. Real-time safe: atomics, `mach_absolute_time` and sums.
+    /// asked for; `ticks` is the host time kept when the block carries the
+    /// signal's first frame. Real-time safe: atomics and sums.
     @inline(__always)
-    static func addSignal(_ block: UnsafeMutablePointer<Float>, frames: Int) {
+    static func addSignal(_ block: UnsafeMutablePointer<Float>, frames: Int, at ticks: UInt64) {
         _ = users.wrappingAdd(1, ordering: .sequentiallyConsistent)
         defer { _ = users.wrappingSubtract(1, ordering: .sequentiallyConsistent) }
         let at = position.load(ordering: .sequentiallyConsistent)
@@ -86,7 +89,7 @@ enum CalibrationTap {
         let total = signalFrames.load(ordering: .sequentiallyConsistent)
         let samples = raw.assumingMemoryBound(to: Float.self)
         let count = max(0, min(frames, total - at))
-        if at == 0 { startTicks.store(mach_absolute_time(), ordering: .sequentiallyConsistent) }
+        if at == 0 { startTicks.store(max(ticks, 1), ordering: .sequentiallyConsistent) }
         let fading = stopping.load(ordering: .sequentiallyConsistent)
         var l = signalLevel.load(ordering: .relaxed)
         for i in 0..<count {
@@ -151,5 +154,123 @@ enum CalibrationTap {
         while users.load(ordering: .sequentiallyConsistent) != 0 { usleep(50) }
         position.store(-1, ordering: .sequentiallyConsistent)
         signalFrames.store(0, ordering: .sequentiallyConsistent)
+    }
+}
+
+/// How much silence the calibration's fill writes (`CalibrationFill`), from
+/// the host clock and the time of the capture's latest block. While the
+/// capture delivers, nothing; once it has given nothing for `idle(captureFrames:)`, the
+/// ring is kept in real time from that moment on, the gap included.
+struct CalibrationFillPace {
+    /// 40 ms: more than a tap's block (1024 frames at 44.1 kHz last 23 ms)
+    /// and inside the readers' 50 ms dead band (S50).
+    static let idleNs: UInt64 = 40_000_000
+
+    /// How long the capture must give nothing to count as quiet: `idleNs`,
+    /// or two of its callback periods when its buffers are longer, as an
+    /// input device's can be when another app raised them (4096 frames).
+    func idle(captureFrames: Int) -> UInt64 {
+        let periods = (2 * Double(max(0, captureFrames)) * 1e9 / rate).rounded(.up)
+        return max(Self.idleNs, UInt64(min(periods, 1e12)))
+    }
+    /// The most one step writes; a fill held up longer drops the rest.
+    static let mostSeconds = 1.0
+
+    let rate: Double
+    /// When the first frame of this stretch of fill is due; nil while the capture delivers.
+    private var anchorNs: UInt64?
+    /// Frames written from `anchorNs` on, so many small steps never add up rounding.
+    private var written: Int64 = 0
+
+    init(rate: Double) { self.rate = rate.isFinite && rate > 0 ? rate : 48_000 }
+
+    /// The frames to write at `nowNs` and when the first of them is due.
+    /// `lastCaptureNs` is 0 before the capture's first block; `captureFrames`
+    /// is the frame count of its latest callback, 0 before the first.
+    mutating func step(nowNs: UInt64, lastCaptureNs: UInt64, captureFrames: Int = 0) -> (frames: Int, firstNs: UInt64) {
+        let quiet = idle(captureFrames: captureFrames)
+        if lastCaptureNs != 0, lastCaptureNs >= nowNs || nowNs - lastCaptureNs < quiet {
+            anchorNs = nil
+            return (0, 0)
+        }
+        guard nowNs >= quiet else { return (0, 0) }
+        let anchor: UInt64
+        if let anchorNs {
+            anchor = anchorNs
+        } else {
+            anchor = nowNs - quiet
+            anchorNs = anchor
+            written = 0
+        }
+        let due = Int64((Double(nowNs - anchor) * rate / 1e9).rounded(.down))
+        let most = Int64(rate * Self.mostSeconds)
+        if due - written > most { written = due - most }
+        let frames = max(0, due - written)
+        let firstNs = anchor + UInt64((Double(written) * 1e9 / rate).rounded())
+        written += frames
+        return (Int(frames), firstNs)
+    }
+}
+
+/// Writes silence through a session's parts while a calibration runs and the
+/// capture delivers nothing, so the test signal has blocks to ride on: a
+/// process tap delivers no block while its source plays nothing. Its thread
+/// wakes every 2 ms and never allocates, locks or logs. Main thread: `init`,
+/// `start`, `stop`.
+final class CalibrationFill {
+    static let chunkFrames = 512
+
+    private let parts: EngineParts
+    private let clock = HostClock.shared
+    private let block: UnsafeMutablePointer<Float>
+    /// The fill thread's own.
+    private var pace: CalibrationFillPace
+    private let running = Atomic<Bool>(true)
+    private let finished = Atomic<Bool>(false)
+    private var started = false
+
+    init(parts: EngineParts, captureRate: Double) {
+        self.parts = parts
+        pace = CalibrationFillPace(rate: captureRate)
+        block = .allocate(capacity: 2 * Self.chunkFrames)
+        block.initialize(repeating: 0, count: 2 * Self.chunkFrames)
+    }
+
+    deinit { block.deallocate() }
+
+    func start() {
+        guard !started else { return }
+        started = true
+        let thread = Thread { self.run() }
+        thread.qualityOfService = .userInteractive
+        thread.start()
+    }
+
+    /// Returns once the thread has written its last block, so nothing it
+    /// writes can meet a later session's capture. Waits about 2 ms at most.
+    func stop() {
+        running.store(false, ordering: .releasing)
+        guard started else { return }
+        while !finished.load(ordering: .acquiring) { usleep(200) }
+    }
+
+    // MARK: Fill thread
+
+    private func run() {
+        while running.load(ordering: .acquiring) {
+            let last = parts.gate.lastCaptureTicks.load(ordering: .acquiring)
+            let step = pace.step(nowNs: clock.nowNs(), lastCaptureNs: clock.nanoseconds(ticks: last),
+                                 captureFrames: parts.gate.lastCallbackFrames.load(ordering: .relaxed))
+            var done = 0
+            while done < step.frames {
+                let count = min(step.frames - done, Self.chunkFrames)
+                block.update(repeating: 0, count: 2 * count)
+                let dueNs = step.firstNs + UInt64((Double(done) * 1e9 / pace.rate).rounded())
+                parts.fill(block, frames: count, ticks: clock.ticks(nanoseconds: dueNs))
+                done += count
+            }
+            usleep(2000)
+        }
+        finished.store(true, ordering: .releasing)
     }
 }

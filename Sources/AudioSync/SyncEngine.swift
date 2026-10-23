@@ -55,6 +55,8 @@ final class StreamEngine {
     private let capture = SourceCapture()
     /// The running session's parts; nil while stopped or stopping.
     private var parts: EngineParts?
+    /// Writes silence while a calibration runs and the capture gives nothing.
+    private var calibrationFill: CalibrationFill?
     /// The renderers of the running local outputs, by device UID.
     private var renderers: [String: OutputRenderer] = [:]
     /// The latest equalizer settings, for the running session and the next ones.
@@ -97,6 +99,19 @@ final class StreamEngine {
     func updateEqualizer(_ settings: Equalizer.Settings) {
         equalizerSettings = settings
         parts?.equalizer.update(settings)
+    }
+
+    /// A calibration's signal rides on captured blocks, and a tap whose source
+    /// plays nothing delivers none, so while one runs (`on`) the session's
+    /// ring is kept moving with silence whenever the capture is quiet. A stop
+    /// ends it before it returns; without a session it does nothing.
+    func holdCalibrationTime(_ on: Bool) {
+        calibrationFill?.stop()
+        calibrationFill = nil
+        guard on, isRunning, let parts else { return }
+        let fill = CalibrationFill(parts: parts, captureRate: capture.sampleRate)
+        fill.start()
+        calibrationFill = fill
     }
 
     // MARK: - Session
@@ -142,6 +157,7 @@ final class StreamEngine {
             if let completion { retirement.afterSessionStop(completion) }
             return
         }
+        holdCalibrationTime(false)
         isRunning = false
         self.parts = nil
         let leaving = renderers.keys.sorted().compactMap { uid in renderers[uid].map { (uid: uid, renderer: $0) } }

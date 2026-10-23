@@ -222,8 +222,8 @@ struct UIStrings {
         case .unsupportedRate:
             return "The audio source runs at a sample rate calibration can't use."
         case .sourceSilent:
-            return "The audio source isn't sending audio, so the test sound couldn't play. "
-                + "Play something, or choose \(sourceSystem) as the source, and try again."
+            return "The test sound couldn't start because streaming stalled. "
+                + "Turn streaming off and on, and try again."
         case .interrupted:
             return "Streaming, the speakers or their delays changed during the measurement."
         case .tooShort:

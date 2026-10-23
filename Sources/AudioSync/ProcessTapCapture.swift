@@ -462,6 +462,7 @@ private extension SourceCapture {
                 silentCallbacks.wrappingAdd(1, ordering: .relaxed)
                 return
             }
+            parts.gate.lastCallbackFrames.store(channels.frames, ordering: .relaxed)
             channels.forEachBlock(in: stereoBlock) { block, count in
                 if !self.heard.load(ordering: .relaxed), CaptureChannels.hasSound(block, frames: count) {
                     self.heard.store(true, ordering: .relaxed)

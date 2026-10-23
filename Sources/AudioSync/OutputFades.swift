@@ -36,6 +36,12 @@ struct HostClock {
         (ticks / denom) &* numer &+ (ticks % denom) &* numer / denom
     }
 
+    /// Nanoseconds back to host ticks, rounded down. Safe on an audio thread.
+    @inline(__always)
+    func ticks(nanoseconds ns: UInt64) -> UInt64 {
+        (ns / numer) &* denom &+ (ns % numer) &* denom / numer
+    }
+
     /// The host clock now. Safe on an audio thread.
     @inline(__always)
     func nowNs() -> UInt64 { nanoseconds(ticks: mach_absolute_time()) }

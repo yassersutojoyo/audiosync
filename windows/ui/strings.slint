@@ -1108,7 +1108,7 @@ export global Strings {
     out property <string> calibration-microphone-denied: @tr("Windows is blocking microphone access for desktop apps. Turn on \"Let desktop apps access your microphone\" in Settings > Privacy & security > Microphone, and try again.");
     out property <string> calibration-no-microphone: @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
     out property <string> calibration-unsupported-rate: @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.");
-    out property <string> calibration-source-silent: @tr("The audio source isn't sending audio, so the test sound couldn't play. Play something, or choose All System Audio as the source, and try again.");
+    out property <string> calibration-source-silent: @tr("The test sound couldn't start because streaming stalled. Turn streaming off and on, and try again.");
     out property <string> calibration-interrupted: @tr("Streaming, the speakers or their delays changed during the measurement.");
     out property <string> calibration-microphone-changed: @tr("The microphone changed between the two measurements. Keep one microphone as the default input, and try again.");
     out property <string> calibration-microphone-skipped: @tr("The microphone dropped audio during the measurement, so its timing can't be trusted. Try again.");

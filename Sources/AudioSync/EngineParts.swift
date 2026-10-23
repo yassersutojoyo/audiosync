@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // One session's audio parts, all on the Rust core (CoreEngine.swift): the
 // equalizer and the delay ring. The capture IOProc (`deliver`) and the render
@@ -19,6 +20,7 @@ protocol SyncRule {
 struct EngineParts {
     let equalizer: CoreEqualizer
     let ring: CoreDelayRing
+    let gate = BlockGate()
 
     /// 24 s at 192 kHz, the highest capture rate the ring is sized for (S36):
     /// the 20 s maximum delay plus headroom, whatever the session's rate.
@@ -38,6 +40,7 @@ struct EngineParts {
     /// senders (when they run) convert from.
     func prepare(captureRate: Double) {
         equalizer.setSampleRate(captureRate)
+        gate.prepare(captureRate: captureRate)
         NativeAirPlayTap.prepare(captureRate: captureRate)
         CastTap.prepare(captureRate: captureRate)
     }
@@ -47,9 +50,33 @@ struct EngineParts {
     /// run (`NativeAirPlayTap`, `CastTap`), the same samples for all (S7). During a
     /// microphone calibration (`CalibrationTap`) the music fades to silence
     /// on every path and the test signal goes into the one path it targets.
-    /// Real-time safe.
+    /// A block that meets the calibration's fill writing is dropped: the fill
+    /// writes only after the capture gave nothing for a while, while the
+    /// music is faded out. Real-time safe.
     @inline(__always)
     func deliver(_ block: UnsafeMutablePointer<Float>, frames: Int) {
+        let now = mach_absolute_time()
+        gate.lastCaptureTicks.store(now, ordering: .releasing)
+        guard gate.enter() else { return }
+        // The block's first frame, as the fill stamps its own, so a run whose two
+        // recordings start on different writers lines up.
+        write(block, frames: frames, ticks: now &- gate.ticks(frames: frames))
+        gate.leave()
+    }
+
+    /// The calibration's fill thread (`CalibrationFill`): a block of silence
+    /// written like a captured one, its first frame due at host time `ticks`.
+    /// False when the capture holds the gate. Real-time safe.
+    @discardableResult
+    func fill(_ block: UnsafeMutablePointer<Float>, frames: Int, ticks: UInt64) -> Bool {
+        guard gate.enter() else { return false }
+        write(block, frames: frames, ticks: ticks)
+        gate.leave()
+        return true
+    }
+
+    @inline(__always)
+    private func write(_ block: UnsafeMutablePointer<Float>, frames: Int, ticks: UInt64) {
         equalizer.process(block, frames: frames)
         if CalibrationTap.isActive {
             CalibrationTap.fadeMusic(block, frames: frames)
@@ -57,7 +84,7 @@ struct EngineParts {
             if target != .local { ring.write(interleaved: block, frames: frames) }
             if target != .airPlay { NativeAirPlayTap.write(block, frames: frames) }
             if target != .cast { CastTap.write(block, frames: frames) }
-            CalibrationTap.addSignal(block, frames: frames)
+            CalibrationTap.addSignal(block, frames: frames, at: ticks)
             switch target {
             case .local: ring.write(interleaved: block, frames: frames)
             case .airPlay: NativeAirPlayTap.write(block, frames: frames)
@@ -77,4 +104,40 @@ struct EngineParts {
         guard CoreRate.hz(captureRate) != nil else { return nil }
         return OutputRenderer(ring: ring)
     }
+}
+
+/// Keeps a session's two possible writers apart: the capture IOProc and,
+/// during a calibration, the fill that writes silence while the capture
+/// delivers nothing. The ring, the equalizer and the senders' inputs take
+/// one writer at a time. Never waits: a writer that finds it taken skips.
+final class BlockGate {
+    /// Host ticks of the capture's latest block; 0 before the first.
+    let lastCaptureTicks = Atomic<UInt64>(0)
+    /// Frames in the capture's latest callback; 0 before the first.
+    let lastCallbackFrames = Atomic<Int>(0)
+    /// Host ticks per frame at the capture rate, as a `Double`'s bits; 0 until `prepare`.
+    private let ticksPerFrame = Atomic<UInt64>(0)
+    private let busy = Atomic<Bool>(false)
+
+    /// Control thread, while capture is stopped.
+    func prepare(captureRate: Double) {
+        let perFrame = captureRate.isFinite && captureRate > 0
+            ? Double(HostClock.shared.ticks(nanoseconds: 1_000_000_000)) / captureRate : 0
+        ticksPerFrame.store(perFrame.bitPattern, ordering: .releasing)
+    }
+
+    /// How many host ticks `frames` frames last at the capture rate.
+    @inline(__always)
+    func ticks(frames: Int) -> UInt64 {
+        let perFrame = Double(bitPattern: ticksPerFrame.load(ordering: .acquiring))
+        return UInt64(max(0, Double(frames) * perFrame))
+    }
+
+    @inline(__always)
+    func enter() -> Bool {
+        busy.compareExchange(expected: false, desired: true, ordering: .acquiring).exchanged
+    }
+
+    @inline(__always)
+    func leave() { busy.store(false, ordering: .releasing) }
 }
