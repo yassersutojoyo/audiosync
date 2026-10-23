@@ -2588,9 +2588,18 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {
-                self.audio
-                    .set_output_delay(&endpoint_id, clamp_delay_ms(ms));
-                self.calibration = self.calibration.offset_changed(&endpoint_id);
+                let ms = clamp_delay_ms(ms);
+                // A step at the range's end sets the offset it already has,
+                // which mustn't take the calibration's line away.
+                let changed = !self
+                    .audio
+                    .outputs()
+                    .iter()
+                    .any(|output| output.id == endpoint_id && output.delay_ms == ms);
+                self.audio.set_output_delay(&endpoint_id, ms);
+                if changed {
+                    self.calibration = self.calibration.offset_changed(&endpoint_id);
+                }
             }
             Some(SpeakerKey::AirPlay(airplay_id)) => {
                 self.audio
@@ -6230,6 +6239,26 @@ mod tests {
             adapter.snapshot().calibration.phase,
             calibration::Phase::Idle
         );
+    }
+
+    #[test]
+    fn a_delay_step_past_the_maximum_keeps_the_calibrations_line() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        let earbuds = key("bluetooth");
+        adapter.set_speaker_delay(&earbuds, 20_000.0);
+        adapter.start_calibration(&earbuds);
+        let line = adapter.snapshot().calibration.phase;
+        assert_ne!(line, calibration::Phase::Idle);
+        // The window's + step asks for 20 010 ms, the web remote's for the
+        // 20 000 ms it already has; neither changes the offset.
+        adapter.set_speaker_delay(&earbuds, 20_010.0);
+        adapter.set_speaker_delay(&earbuds, 20_000.0);
+        assert_eq!(adapter.snapshot().calibration.phase, line);
+        assert_eq!(speaker_of(&adapter, &earbuds).delay_ms, Some(20_000.0));
     }
 
     #[test]

@@ -173,8 +173,9 @@ pub enum Refusal {
 }
 
 /// The actions `command` takes on `state`, among the speakers the window
-/// lists (`shown`); none when a part of it can't be applied. Unchanged values
-/// take none, so a repeated switch doesn't restart a stream.
+/// lists (`shown`); none when a part of it can't be applied. A switch already
+/// in the asked state takes none, so a repeat doesn't restart a stream; a
+/// volume or delay acts even when unchanged.
 pub fn actions(
     command: &Command,
     state: &AppState,
