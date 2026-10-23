@@ -2925,6 +2925,129 @@ do {
     check(gone.action == .nothing && gone.steps == [.absent],
           "zones: a zone with no member listed does nothing on a click")
 
+    // Presets in the windows, the menus and the panel (S259 to S269).
+    let presetText = UIStrings()
+    let presetFlat = [Double](repeating: 0, count: Equalizer.frequencies.count)
+    let livingZone = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb:out", "lc:tv"], volume: 60)
+    let evening = PresetScene(on: [.init(key: "lc:usb:out", volume: 40), .init(key: "lc:tv", volume: 70)],
+                              zones: [livingZone], master: 80, gains: presetFlat)
+    let silent = PresetScene(on: [], zones: [livingZone], master: 80, gains: presetFlat)
+    func presetRows(_ names: [String]) -> [PresetRow] { names.map { PresetRow(id: "id-" + $0, name: $0) } }
+    func numbered(_ n: Int) -> String { presetText.numberedPreset(n) }
+
+    let eleven = PresetMenu.entries(presetRows((1...11).map { "P\($0)" }), text: presetText)
+    let presetKeys = eleven.compactMap { entry -> String? in
+        if case .preset(_, _, let key, _) = entry { return key } else { return nil }
+    }
+    check(presetKeys == ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", ""]
+            && Array(eleven.suffix(2)) == [.separator, .save(presetText.savePreset)],
+          "presets: Control-Command-1 to 9 go to the first nine in list order", "\(presetKeys)")
+
+    check(PresetEdit.saving("Evening", scene: silent, id: "p9", to: [], numbered: numbered) == nil,
+          "presets: a save with no speaker on saves nothing")
+
+    let firstSaved = PresetEdit.saving("Evening", scene: evening, id: "p1", to: [], numbered: numbered) ?? []
+    let saved = PresetEdit.saving("", scene: evening, id: "p2", to: firstSaved, numbered: numbered) ?? []
+    check(saved.map(\.id) == ["p1", "p2"] && saved.map(\.name) == ["Evening", presetText.numberedPreset(2)]
+            && saved.first == firstSaved.first && saved.last?.zones == [SpeakerPreset.ZoneVolume(id: "z1", volume: 60)],
+          "presets: a save appends, so the other shortcuts keep their keys", "\(saved.map(\.name))")
+
+    var louder = evening
+    louder.master = 50
+    let updated = PresetEdit.updating("p1", scene: louder, in: saved) ?? []
+    check(updated.map(\.id) == ["p1", "p2"] && updated.first?.name == "Evening" && updated.first?.master == 50
+            && updated.last == saved.last && PresetEdit.updating("p1", scene: silent, in: saved) == nil,
+          "presets: update keeps the ID, name and place")
+
+    let presetRowsNow = PresetCore.rows(updated, louder)
+    check(presetRowsNow.map(\.current) == [true, false] && !PresetEdit.canUpdate(presetRowsNow[0])
+            && PresetEdit.canUpdate(presetRowsNow[1]),
+          "presets: update is offered only while the preset isn't current", "\(presetRowsNow)")
+
+    let third = PresetEdit.saving("Party", scene: evening, id: "p3", to: updated, numbered: numbered) ?? []
+    let afterDelete = PresetEdit.deleting("p1", from: third)
+    let movedKeys = PresetMenu.entries(PresetCore.rows(afterDelete, louder), text: presetText)
+        .compactMap { entry -> String? in
+            if case .preset(let id, _, let key, _) = entry { return id + "=" + key } else { return nil }
+        }
+    check(movedKeys == ["p2=1", "p3=2"] && afterDelete.first == updated.last,
+          "presets: delete moves the later shortcuts up and changes nothing that plays", "\(movedKeys)")
+
+    let leftOff = [PresetNotice.LeftOff(name: "Kitchen", reason: .notFound),
+                   PresetNotice.LeftOff(name: "Den", reason: .hidden),
+                   PresetNotice.LeftOff(name: "Left", reason: .inTarget, target: "Living Room TV"),
+                   PresetNotice.LeftOff(name: "Hub", reason: .needsAirPlay2),
+                   PresetNotice.LeftOff(name: "Nest", reason: .busy)]
+    let leftOffText = "“Evening” is on. Stayed off: Kitchen (\(presetText.zoneMemberNotFound)), Den (Hidden), "
+        + "Left (\(presetText.zoneMemberInTarget("Living Room TV"))), Hub (\(presetText.needsAirPlay2)), "
+        + "Nest (In use by another app)"
+    check(PresetNotice.message(preset: "Evening", leftOff: leftOff, nothingChanged: false, text: presetText)
+            == leftOffText,
+          "presets: the left-off notice names each member with its reason")
+
+    let fullRecall = PresetRecall.plan([.init(kind: .local, found: true), .init(kind: .local, found: true, on: true)],
+                                       others: [true], streaming: true)
+    check(fullRecall.action == .apply && fullRecall.steps == [.on, .on] && fullRecall.switchOff == [true]
+            && !fullRecall.leavesOff
+            && PresetNotice.message(preset: "Evening", leftOff: [], nothingChanged: false, text: presetText) == nil,
+          "presets: a full recall clears the notice", "\(fullRecall)")
+
+    let noneHere = PresetRecall.plan([.init(kind: .local, found: false), .init(kind: .cast, found: true, busy: true)],
+                                     others: [true], streaming: true)
+    let nothingText = "Nothing changed: no speaker in “Evening” can play now. Kitchen (\(presetText.zoneMemberNotFound))"
+    check(noneHere.action == .nothing && noneHere.steps == [.leftOff(.notFound), .leftOff(.busy)]
+            && noneHere.switchOff == [false] && noneHere.setVolume == [false, false]
+            && PresetNotice.message(preset: "Evening", leftOff: [leftOff[0]], nothingChanged: true, text: presetText)
+                == nothingText,
+          "presets: with no member present nothing changes and only the notice posts", "\(noneHere)")
+
+    let phoneFailure = LocalOutputSync.report([LocalOutputSync.Failure(uid: "bt", deviceName: "Headphones")],
+                                              enabled: ["bt"], origin: PresetRecallSource.phone.origin)
+    check(PresetRecallSource.phone.origin == .remote && !PresetRecallSource.phone.beginsAttempts
+            && PresetRecallSource.app.origin == .user && PresetRecallSource.app.beginsAttempts
+            && phoneFailure?.alertNames == nil && phoneFailure?.notices.count == 1,
+          "presets: a recall from the phone shows no alert")
+
+    var boosted = louder
+    boosted.gains[3] = 3
+    check(PresetCore.current(updated, louder) == "p1" && PresetCore.current(updated, boosted) == nil
+            && PresetPanel.label(PresetCore.rows(updated, boosted)) == nil,
+          "presets: the current mark follows a band change")
+
+    check(PresetMenu.entries([], text: presetText) == [.empty("No Presets"), .separator, .save("Save as Preset…")]
+            && !PresetPanel.showsRow([]) && PresetPanel.showsRow(presetRows(["A"])),
+          "presets: no presets, the submenu holds No Presets and the panel row is hidden")
+
+    let presetTexts: [(String, String)] = [
+        (presetText.presets, "Presets"),
+        (presetText.savePreset, "Save as Preset…"),
+        (presetText.savePresetTitle, "Save Preset"),
+        (presetText.savePresetMessage, "The speakers that are on, their volumes, the zone volumes, the master volume "
+            + "and the curve are saved. Delays and the preamp are not."),
+        (presetText.savePresetNeedsSpeakers, "Turn on the speakers you want in the preset first, then save it."),
+        (presetText.presetFieldLabel, "Preset name"),
+        (presetText.presetPlaceholder, "Evening, Party…"),
+        (presetText.numberedPreset(3), "Preset 3"),
+        (presetText.renamePreset, "Rename…"),
+        (presetText.renamePresetTitle, "Rename Preset"),
+        (presetText.updatePreset, "Update to Current Settings"),
+        (presetText.deletePreset, "Delete"),
+        (presetText.noPresets, "No Presets"),
+        (presetText.presetsEmpty, "No presets yet. Turn on the speakers you want, set the volumes and the curve, "
+            + "then save them as a preset."),
+        (presetText.choosePreset, "Choose a Preset"),
+        (presetText.presetCurrent, "Current"),
+        (presetText.presetRecallHint, "Recalls this preset"),
+        (presetText.presetSaved("Evening"), "Evening saved"),
+        (presetText.presetUpdated("Evening"), "Evening updated"),
+        (presetText.presetDeleted("Evening"), "Evening deleted"),
+        (presetText.presetLeftOffTitle, "Some speakers stayed off"),
+        (presetText.presetHidden, "Hidden"),
+        (presetText.presetBusy, "In use by another app"),
+    ]
+    let wrongTexts = presetTexts.filter { $0.0 != $0.1 }.map(\.0)
+    check(wrongTexts.isEmpty, "presets: the preset texts", "\(wrongTexts)")
+
     var tuned = Equalizer.Settings()
     tuned.enabled = true; tuned.preamp = -3; tuned.gains[0] = 6
     check(StoredEqualizer.decode(StoredEqualizer.encode(tuned)) == tuned,
