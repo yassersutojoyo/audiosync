@@ -76,6 +76,12 @@ export global Strings {
     out property <string> edit-paste: @tr("Paste");
     out property <string> edit-select-all: @tr("Select all");
     out property <string> source-label: @tr("Audio Source");
+    // The level meter under the source while an input device is captured,
+    // for Narrator: its name and how full the bar is, in percent.
+    out property <string> input-level: @tr("Input level");
+    public pure function input-level-value(level: float) -> string {
+        return @tr("{}%", round(level * 100));
+    }
     out property <string> equalizer: @tr("Equalizer");
     // The Now Playing card: its name for Narrator, and its buttons.
     out property <string> now-playing: @tr("Now Playing");

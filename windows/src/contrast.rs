@@ -120,6 +120,25 @@ fn the_focus_ring_reaches_3_to_1() {
     }
 }
 
+/// The level meter's fill stands out from its track (3:1 for graphics),
+/// and it is never a focusable control.
+#[test]
+fn the_level_meter_reaches_3_to_1_and_takes_no_focus() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let value = ratio("tealText", "separator", appearance);
+        assert!(
+            value >= MIN_GRAPHIC_CONTRAST,
+            "meter fill on its track ({appearance:?}): {value:.2}:1"
+        );
+    }
+    let body = component_body(include_str!("../ui/widgets.slint"), "LevelMeter");
+    assert!(body.contains("background: Tokens.separator;"));
+    assert!(body.contains("background: Tokens.teal-text;"));
+    for focusable in ["FocusScope", "TouchArea", "forward-focus"] {
+        assert!(!body.contains(focusable), "the meter has a {focusable}");
+    }
+}
+
 /// The interface sources, for the checks below.
 const UI_FILES: &[(&str, &str)] = &[
     ("main.slint", include_str!("../ui/main.slint")),

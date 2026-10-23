@@ -20,6 +20,7 @@ use audiosync_core::calibrate_all::{
     AirPlayShared, Class, EndReason, Measurement, RowState as SheetRowState, SharedState,
 };
 use audiosync_core::eq::{self, EqSettings};
+use audiosync_core::meter;
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
@@ -603,6 +604,10 @@ pub struct App {
     poll_timer: Timer,
     /// Moves a microphone calibration on while one holds the outputs.
     calibration_timer: Timer,
+    /// Moves the input level meter while an input device is captured.
+    meter_timer: Timer,
+    /// The meter's length as last shown, 0 to 1.
+    meter_level: Cell<f32>,
     /// Launch at Sign-In and its notice, which the windows own: the
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
@@ -796,6 +801,8 @@ impl App {
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
             calibration_timer: Timer::default(),
+            meter_timer: Timer::default(),
+            meter_level: Cell::new(0.0),
             login: RefCell::new(LaunchAtLogin::new(
                 launch_at_login::system_store(),
                 std::env::current_exe().ok(),
@@ -820,7 +827,10 @@ impl App {
         let weak = Rc::downgrade(&app);
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
-                with_app(&weak, App::poll)
+                with_app(&weak, |app| {
+                    app.poll();
+                    app.follow_input_level(&weak);
+                })
             });
         let weak = Rc::downgrade(&app);
         app.login_timer
@@ -941,6 +951,41 @@ impl App {
         if !self.snapshot().calibration.busy {
             self.calibration_timer.stop();
         }
+    }
+
+    /// Starts the input level meter once an input device is captured; it
+    /// stops itself when the capture ends or the source changes.
+    fn follow_input_level(&self, weak: &Weak<App>) {
+        if self.meter_timer.running() || !self.tick_input_level() {
+            return;
+        }
+        let weak = weak.clone();
+        self.meter_timer.start(
+            TimerMode::Repeated,
+            Duration::from_millis(u64::from(meter::METER_POLL_MS)),
+            move || {
+                with_app(&weak, |app| {
+                    app.tick_input_level();
+                })
+            },
+        );
+    }
+
+    /// Moves the meter to the peak captured since the last tick, or hides
+    /// it while no input device is captured. Returns whether it shows.
+    fn tick_input_level(&self) -> bool {
+        let Some(peak) = self.backend.borrow_mut().input_peak() else {
+            self.meter_timer.stop();
+            self.meter_level.set(0.0);
+            self.main.set_input_level(0.0);
+            self.main.set_input_meter_shown(false);
+            return false;
+        };
+        let level = meter::meter_level(self.meter_level.get(), peak);
+        self.meter_level.set(level);
+        self.main.set_input_level(level);
+        self.main.set_input_meter_shown(true);
+        true
     }
 
     /// Lets the backend take in what happened on its own, and shows it.

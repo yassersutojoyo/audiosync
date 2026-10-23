@@ -1941,6 +1941,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .or_else(|| self.next_start.clone())
     }
 
+    fn input_peak(&mut self) -> Option<f32> {
+        self.session
+            .as_ref()
+            .filter(|session| matches!(session.source, SourceId::Input { .. }))
+            .map(|session| session.ring.take_peak())
+    }
+
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError> {
         self.log.log(|| {
             let state = if enabled { "on" } else { "off" };
@@ -4174,6 +4181,28 @@ mod tests {
         assert_eq!(backend.driver().capture_attempts(), 1 + 5);
         assert_eq!(backend.running_source(), None);
         assert!(playing(&backend).is_empty());
+    }
+
+    #[test]
+    fn the_level_meter_reads_the_peak_only_while_an_input_device_is_captured() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        assert_eq!(backend.input_peak(), None, "stopped");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.feed_capture_level(480, 0.5);
+        assert_eq!(backend.input_peak(), None, "not an input device");
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        let written = backend.feed_capture_level(480, 0.5);
+        let loudest = written.iter().copied().map(f32::abs).fold(0.0, f32::max);
+        assert!(loudest > 0.0);
+        assert_eq!(backend.input_peak(), Some(loudest));
+        assert_eq!(backend.input_peak(), Some(0.0), "taken once");
+        backend.stop();
+        assert_eq!(backend.input_peak(), None);
     }
 
     #[test]

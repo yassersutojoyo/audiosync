@@ -9,7 +9,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, GroupItem, HiddenItem, LeftOutItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LevelMeter, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -676,6 +676,9 @@ export component MainWindow inherits Window {
     in property <string> status;
     in property <[string]> sources;
     in property <int> source-index;
+    // The level meter under the source, while an input device is captured.
+    in property <bool> input-meter-shown;
+    in property <float> input-level;
     in property <float> master-volume;
     in property <bool> equalizer-on;
     // The Now Playing card, while a media session counts for the source.
@@ -1211,6 +1214,11 @@ export component MainWindow inherits Window {
                                     root.source-selected(self.current-index);
                                     self.current-index = root.source-index;
                                 }
+                            }
+
+                            if root.input-meter-shown: LevelMeter {
+                                level: root.input-level;
+                                label: Strings.input-level;
                             }
                         }
                     }

@@ -944,6 +944,14 @@ pub trait Backend {
         false
     }
 
+    /// While an input device is captured, the largest sample magnitude
+    /// since the last call (1 is full scale), for the level meter; `None`
+    /// for any other source and while stopped. The UI calls it every
+    /// `METER_POLL_MS` while the meter shows.
+    fn input_peak(&mut self) -> Option<f32> {
+        None
+    }
+
     /// The windows' own settings as last saved: what the UI shows them with
     /// at launch.
     fn view_settings(&self) -> ViewSettings {

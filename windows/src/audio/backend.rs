@@ -655,6 +655,13 @@ pub trait AudioBackend {
     /// The source being captured, or `None` when stopped.
     fn running_source(&self) -> Option<SourceId>;
 
+    /// While an input device is captured, the largest sample magnitude
+    /// captured since the last call (1 is full scale), for the level meter;
+    /// `None` for any other source and while stopped.
+    fn input_peak(&mut self) -> Option<f32> {
+        None
+    }
+
     /// Turns an output on or off. While playing, an output turned on starts
     /// at once if it is connected; if it can't start, it is turned off again
     /// and the error returned.

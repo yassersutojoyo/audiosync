@@ -541,6 +541,31 @@ export component VolumeSlider inherits HorizontalLayout {
     }
 }
 
+// The input level meter: a bar that only reads out, never takes the focus.
+// The fill against its track measures above 3:1 in both themes (contrast.rs).
+export component LevelMeter inherits Rectangle {
+    // 0 to 1.
+    in property <float> level;
+    in property <string> label;
+
+    height: 4px;
+    border-radius: self.height / 2;
+    background: Tokens.separator;
+    accessible-role: progress-indicator;
+    accessible-label: root.label;
+    accessible-value: Strings.input-level-value(root.level);
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 100;
+
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.level, 0, 1);
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: Tokens.teal-text;
+    }
+}
+
 // A one-line text box instead of the style's LineEdit, whose selection in the
 // brand teal measures 4.21:1 and takes no other colors.
 export component TextField inherits Rectangle {

@@ -3078,6 +3078,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
+    fn input_peak(&mut self) -> Option<f32> {
+        self.audio.input_peak()
+    }
+
     /// Also writes the settings file when anything changed since the last
     /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {
