@@ -80,6 +80,8 @@ final class AppModel: ObservableObject {
     struct Actions {
         var setPower: (Bool) -> Void = { _ in }
         var selectSource: (String) -> Void = { _ in }
+        var toggleMixApp: (String) -> Void = { _ in }
+        var setMixMode: (AppMixMode) -> Void = { _ in }
         var setMaster: (Double) -> Void = { _ in }
         var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
@@ -152,6 +154,11 @@ final class AppModel: ObservableObject {
     @Published var running = false
     @Published var sourceID = ""
     @Published var sources: [Source] = []
+    /// The several-apps menu: the apps it offers, the mode it shows and the
+    /// apps checked in that mode.
+    @Published var mixApps: [Source] = []
+    @Published var mixMode: AppMixMode = .only
+    @Published var mixChecked: [String] = []
     @Published var master: Double = 100
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
@@ -1100,6 +1107,24 @@ struct SourcePicker: View {
                     Text(source.name)
                 }
                 if source.id.isEmpty { Divider() }
+            }
+            Divider()
+            Menu(t.sourceSeveralApps) {
+                Picker(t.sourceSeveralApps, selection: Binding(get: { model.mixMode },
+                                                               set: { model.actions.setMixMode($0) })) {
+                    Text(t.sourceMixOnly).tag(AppMixMode.only)
+                    Text(t.sourceMixAllExcept).tag(AppMixMode.allExcept)
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+                Divider()
+                ForEach(model.mixApps) { app in
+                    Toggle(isOn: Binding(get: { model.mixChecked.contains(app.id) },
+                                         set: { _ in model.actions.toggleMixApp(app.id) })) {
+                        if let icon = app.icon { Image(nsImage: icon) }
+                        Text(app.name)
+                    }
+                }
             }
         } label: {
             HStack(spacing: 8) {
