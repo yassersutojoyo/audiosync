@@ -224,6 +224,10 @@ struct UIStrings {
                 + "Privacy & Security → Microphone."
         case .noMicrophone:
             return "AudioSync couldn't record from the microphone. Check the input in System Settings → Sound."
+        case .handsFreeMicrophone:
+            return "The default input is a Bluetooth headset's hands-free microphone, and recording from it "
+                + "would switch the headset to call mode. Choose another input in System Settings → Sound, "
+                + "and try again."
         case .unsupportedRate:
             return "The audio source runs at a sample rate calibration can't use."
         case .sourceSilent:
@@ -638,6 +642,8 @@ struct UIStrings {
         case .inputDisconnected, .inputNotFound:
             return "The input device was disconnected, so streaming has stopped. "
                 + "Plug it in again, or pick another source."
+        case .inputHandsFree:
+            return inputHandsFree
         case .appNotRunning(let bundleID):
             return sourceTerminated(name: SourceApps.name(for: bundleID))
         case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted:
@@ -701,6 +707,9 @@ struct UIStrings {
     let engineSetupFailed = "AudioSync couldn't set up its audio engine, so streaming can't start. "
         + "Quit AudioSync and open it again. If it keeps happening, restart your Mac."
 
+    private let inputHandsFree = "The selected input is a Bluetooth headset's hands-free microphone, "
+        + "which AudioSync doesn't record from. Pick another source."
+
     private let captureFailed = "AudioSync couldn't capture audio from the selected source. "
         + "Turn streaming off and on again, or pick another source. If it keeps happening, restart your Mac."
 
@@ -715,6 +724,8 @@ struct UIStrings {
             return captureFailed
         case .inputNotFound, .inputDisconnected:
             return "The selected input device is not connected. Plug it in, or pick another source."
+        case .inputHandsFree:
+            return inputHandsFree
         }
     }
 
@@ -1342,7 +1353,8 @@ struct UIStrings {
         - Then tune each other local speaker against the built-in speakers: if it
           plays first, raise its delay; if it plays late, lower it.
         - Bluetooth speakers and headphones add their own lag; they usually need
-          about −150 to −300 ms.
+          about −150 to −300 ms. A Bluetooth headset's hands-free microphone
+          carries call audio, so it isn't offered as a source.
         - Add multiple local speakers one by one and tune each separately.
 
         Volume

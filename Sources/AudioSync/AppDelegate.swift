@@ -228,6 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Set by `runQuitSteps`, so Quit and an exit signal never run them twice.
     private var quitStepsRan = false
     private var deviceRescanPending = false
+    /// The source picker's input lines last written to the debug log (`pushSources`).
+    var loggedInputs: [String] = []
 
     override init() {
         store = .standard

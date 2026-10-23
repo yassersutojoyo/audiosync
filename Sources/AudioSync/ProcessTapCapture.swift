@@ -37,6 +37,10 @@ final class SourceCapture {
         case ioProcNotStarted(OSStatus)
         /// No input device has this UID, or it has no input channel.
         case inputNotFound(String)
+        /// The input device with this UID is a Bluetooth hands-free input
+        /// (`AudioDevices.isHandsFreeInput`), which the picker doesn't list
+        /// either: a source saved before it was left out.
+        case inputHandsFree(String)
         /// The input device went away while it was captured.
         case inputDisconnected
 
@@ -50,6 +54,7 @@ final class SourceCapture {
             case .aggregateDeviceFailed(let status): return "aggregate device failed (\(Self.describe(status)))"
             case .ioProcNotStarted(let status): return "capture IOProc failed (\(Self.describe(status)))"
             case .inputNotFound(let uid): return "input device not found (\(uid))"
+            case .inputHandsFree(let uid): return "input device is a Bluetooth hands-free input (\(uid))"
             case .inputDisconnected: return "input device disconnected"
             }
         }
@@ -190,6 +195,7 @@ final class SourceCapture {
     private func startInput(_ uid: String) throws {
         guard let parts, let sink else { return }
         guard let device = HAL.device(uid: uid) else { throw CaptureError.inputNotFound(uid) }
+        if AudioDevices.isHandsFreeInput(device) { throw CaptureError.inputHandsFree(uid) }
         switch CaptureInputFormat.check(try HAL.inputStreamFormats(of: device)) {
         case .usable: break
         case .noChannels: throw CaptureError.inputNotFound(uid)
