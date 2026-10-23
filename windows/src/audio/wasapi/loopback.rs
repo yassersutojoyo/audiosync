@@ -27,7 +27,9 @@ use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
 use crate::audio::capture::Feeds;
-use windows::Win32::Foundation::{E_ACCESSDENIED, E_FAIL, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{
+    E_ACCESSDENIED, E_FAIL, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -53,12 +55,14 @@ use super::com::{
 };
 use super::devices::enumerator;
 use super::processes::ProcessWatch;
+use crate::audio::SESSION_RATE;
 use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
     Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, CaptureTarget, GapFill,
-    LoopbackMode, StreamFormat,
+    LoopbackMode, MAX_MIX_APPS, SampleType, StreamFormat,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
+use crate::audio::mix::{LaneInput, StreamMixer, as_bytes};
 use crate::audio::outputs::HNS_PER_MS;
 
 /// The buffer a capture stream asks for, 100 ms: room for the capture thread
@@ -87,8 +91,9 @@ pub struct LoopbackCapture {
     #[cfg(test)]
     captured: Arc<AtomicU64>,
     thread: Worker,
-    /// The captured app, to notice when it quits.
-    source: Option<ProcessWatch>,
+    /// The captured apps, to notice when they quit; empty when one can't be
+    /// watched or the capture isn't of apps.
+    sources: Vec<ProcessWatch>,
     /// How Windows accepted to deliver the capture.
     setup: CaptureAttempt,
     /// What the log calls the capture when it fails.
@@ -101,7 +106,7 @@ pub struct LoopbackCapture {
 impl CaptureHandle for LoopbackCapture {
     fn state(&self) -> CaptureState {
         // An app that quit comes first: its stream may fail because of it.
-        if self.source.as_ref().is_some_and(ProcessWatch::has_exited) {
+        if !self.sources.is_empty() && self.sources.iter().all(ProcessWatch::has_exited) {
             return CaptureState::SourceQuit;
         }
         if self.ended.load(Ordering::Acquire) {
@@ -145,15 +150,18 @@ pub(super) fn start(
     feeds: Feeds,
 ) -> Result<LoopbackCapture, BackendError> {
     let input = matches!(target, CaptureTarget::Input { .. });
-    let (source, call) = match &target {
+    let (sources, call) = match &target {
         CaptureTarget::Loopback(activation) => (
             match activation.mode {
-                LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?,
-                LoopbackMode::ExcludeTree => None,
+                LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?
+                    .into_iter()
+                    .collect(),
+                LoopbackMode::ExcludeTree => Vec::new(),
             },
             "process loopback capture",
         ),
-        CaptureTarget::Input { .. } => (None, "input device capture"),
+        CaptureTarget::Mix(activations) => (watch_all(activations), "process loopback capture"),
+        CaptureTarget::Input { .. } => (Vec::new(), "input device capture"),
     };
     let stop = Arc::new(Event::manual_reset()?);
     let failure = Arc::new(AtomicI32::new(0));
@@ -177,11 +185,26 @@ pub(super) fn start(
         #[cfg(test)]
         captured,
         thread,
-        source,
+        sources,
         setup,
         call,
         input,
     })
+}
+
+/// Watches for the apps of a mix: all of them, or none when one of them
+/// can't be watched (its exit would go unnoticed, so "all quit" can't be
+/// told). An app that already quit is left out of the watch.
+fn watch_all(activations: &[Activation]) -> Vec<ProcessWatch> {
+    let mut watches = Vec::with_capacity(activations.len());
+    for activation in activations {
+        match ProcessWatch::open(activation.target_pid) {
+            Ok(Some(watch)) => watches.push(watch),
+            Err(_) => {}
+            Ok(None) => return Vec::new(),
+        }
+    }
+    watches
 }
 
 /// The capture thread. The AirPlay feed goes back to its slot when the
@@ -205,6 +228,19 @@ fn run(
         Ok(apartment) => apartment,
         Err(error) => return ready.fail(error),
     };
+    if let CaptureTarget::Mix(activations) = target {
+        return run_mix(
+            activations,
+            writer,
+            equalizer,
+            feeds,
+            stop,
+            failure,
+            ended,
+            captured,
+            ready,
+        );
+    }
     let stream = match open_stream(target) {
         Ok(stream) => stream,
         Err(error) => return ready.fail(error),
@@ -260,6 +296,8 @@ fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
                 activate(*activation)?,
                 AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
             ),
+            // `run_mix` opens each of a mix's loopbacks on its own.
+            CaptureTarget::Mix(_) => return Err(BackendError::NotAnApp),
             CaptureTarget::Input { endpoint_id } => (
                 activate_input(endpoint_id)?,
                 AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -487,7 +525,6 @@ fn capture_loop(
 ) -> Result<(), HRESULT> {
     let handles = [stop.raw(), stream.event.raw()];
     let packet_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
-    let block = stream.format.block_align();
     let mut gaps = GapFill::new(stream.format.rate);
     let mut frequency = 0_i64;
     // SAFETY: writes one integer.
@@ -501,70 +538,271 @@ fn capture_loop(
         if wait != packet_ready && wait != WAIT_TIMEOUT {
             return Err(E_FAIL);
         }
-        let mut packets = 0;
-        loop {
-            // SAFETY: calls on the capture client this thread owns.
-            let packet = unsafe { stream.capture.GetNextPacketSize() }.map_err(|e| e.code())?;
-            if packet == 0 {
-                break;
-            }
-            let mut data = ptr::null_mut();
-            let mut frames = 0u32;
-            let mut flags = 0u32;
-            let mut position = 0u64;
-            // SAFETY: as above, with writable out parameters.
-            unsafe {
-                stream.capture.GetBuffer(
-                    &mut data,
-                    &mut frames,
-                    &mut flags,
-                    None,
-                    Some(&mut position),
-                )
-            }
-            .map_err(|e| e.code())?;
-            if frames == 0 {
-                break;
-            }
-            packets += 1;
-            captured.fetch_add(u64::from(frames), Ordering::Relaxed);
-            let count = frames as usize;
-            // A packet without a position counts as captured just now.
-            let start = if position != 0 {
-                position
-            } else {
-                let length = count as u64 * 10_000_000 / u64::from(stream.format.rate);
-                now_hns(frequency).saturating_sub(length)
-            };
-            let discontinuity = flags & (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32) != 0;
-            let (fill, skip) = gaps.packet(start, count, discontinuity);
-            if fill > 0 {
-                converter.push(&[], fill, true);
-            }
-            let skip = skip.min(count);
-            let silent = data.is_null() || flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
-            let bytes: &[u8] = if silent {
-                &[]
-            } else {
-                // SAFETY: GetBuffer handed out `frames` frames in the
-                // initialized format, readable until ReleaseBuffer.
-                unsafe { slice::from_raw_parts(data, count * block) }
-            };
-            if skip < count {
-                let rest = if silent {
-                    bytes
-                } else {
-                    &bytes[skip * block..]
-                };
-                converter.push(rest, count - skip, silent);
-            }
-            // SAFETY: releases the packet read above.
-            unsafe { stream.capture.ReleaseBuffer(frames) }.map_err(|e| e.code())?;
-        }
+        let packets = drain(
+            stream,
+            &mut gaps,
+            frequency,
+            captured,
+            &mut |data, frames, silent| {
+                converter.push(data, frames, silent);
+            },
+        )?;
         if packets == 0 {
             let fill = gaps.idle(now_hns(frequency));
             if fill > 0 {
                 converter.push(&[], fill, true);
+            }
+        }
+    }
+}
+
+/// Reads every packet `stream` holds and hands each to `deliver` as its
+/// bytes, frames and whether it is silent, with the silence [`GapFill`]
+/// puts before it. Returns the packets read, or the HRESULT of the first
+/// failing call. Never allocates, locks or logs.
+fn drain(
+    stream: &CaptureStream,
+    gaps: &mut GapFill,
+    frequency: i64,
+    captured: &AtomicU64,
+    deliver: &mut impl FnMut(&[u8], usize, bool),
+) -> Result<usize, HRESULT> {
+    let block = stream.format.block_align();
+    let mut packets = 0;
+    loop {
+        // SAFETY: calls on the capture client this thread owns.
+        let packet = unsafe { stream.capture.GetNextPacketSize() }.map_err(|e| e.code())?;
+        if packet == 0 {
+            return Ok(packets);
+        }
+        let mut data = ptr::null_mut();
+        let mut frames = 0u32;
+        let mut flags = 0u32;
+        let mut position = 0u64;
+        // SAFETY: as above, with writable out parameters.
+        unsafe {
+            stream.capture.GetBuffer(
+                &mut data,
+                &mut frames,
+                &mut flags,
+                None,
+                Some(&mut position),
+            )
+        }
+        .map_err(|e| e.code())?;
+        if frames == 0 {
+            return Ok(packets);
+        }
+        packets += 1;
+        captured.fetch_add(u64::from(frames), Ordering::Relaxed);
+        let count = frames as usize;
+        // A packet without a position counts as captured just now.
+        let start = if position != 0 {
+            position
+        } else {
+            let length = count as u64 * 10_000_000 / u64::from(stream.format.rate);
+            now_hns(frequency).saturating_sub(length)
+        };
+        let discontinuity = flags & (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32) != 0;
+        let (fill, skip) = gaps.packet(start, count, discontinuity);
+        if fill > 0 {
+            deliver(&[], fill, true);
+        }
+        let skip = skip.min(count);
+        let silent = data.is_null() || flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
+        let bytes: &[u8] = if silent {
+            &[]
+        } else {
+            // SAFETY: GetBuffer handed out `frames` frames in the
+            // initialized format, readable until ReleaseBuffer.
+            unsafe { slice::from_raw_parts(data, count * block) }
+        };
+        if skip < count {
+            let rest = if silent {
+                bytes
+            } else {
+                &bytes[skip * block..]
+            };
+            deliver(rest, count - skip, silent);
+        }
+        // SAFETY: releases the packet read above.
+        unsafe { stream.capture.ReleaseBuffer(frames) }.map_err(|e| e.code())?;
+    }
+}
+
+/// The format a mix hands the converter: what [`StreamMixer`] produces.
+const MIX_FORMAT: StreamFormat = StreamFormat {
+    sample: SampleType::F32,
+    rate: SESSION_RATE,
+    channels: 2,
+};
+
+/// The capture thread of a mix: opens and starts every loopback of
+/// `activations`, then mixes them ([`mix_loop`]). A mix of none writes
+/// silence in real time ([`silence_loop`]), so an "all except" source whose
+/// other apps have no audio session still runs. Reports the first stream's
+/// setup.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "everything the thread owns or shares, passed once at its start"
+)]
+fn run_mix(
+    activations: &[Activation],
+    writer: RingWriter,
+    equalizer: EqProcessor,
+    feeds: Feeds,
+    stop: &Event,
+    failure: &AtomicI32,
+    ended: &AtomicBool,
+    captured: &AtomicU64,
+    ready: Ready<CaptureAttempt>,
+) {
+    let activations = &activations[..activations.len().min(MAX_MIX_APPS)];
+    let mut streams = Vec::with_capacity(activations.len());
+    let mut lanes = Vec::with_capacity(activations.len());
+    for &activation in activations {
+        let stream = match open_stream(&CaptureTarget::Loopback(activation)) {
+            Ok(stream) => stream,
+            Err(error) => return ready.fail(error),
+        };
+        match LaneInput::new(stream.format) {
+            Ok(lane) => lanes.push(lane),
+            Err(error) => return ready.fail(error),
+        }
+        streams.push(stream);
+    }
+    let mut converter = match CaptureConverter::new(MIX_FORMAT, writer, equalizer, feeds) {
+        Ok(converter) => converter,
+        Err(error) => return ready.fail(error),
+    };
+    let mut mixer = StreamMixer::new(streams.len());
+    let _task = ProAudioTask::join();
+    let stop_all = |streams: &[CaptureStream]| {
+        for stream in streams {
+            // SAFETY: stops a stream started below; stopping one that isn't
+            // started only fails.
+            let _ = unsafe { stream.client.Stop() };
+        }
+    };
+    for stream in &streams {
+        // SAFETY: starts a stream initialized above.
+        if let Err(error) = unsafe { stream.client.Start() } {
+            stop_all(&streams);
+            return ready.fail(system_error("IAudioClient::Start", &error));
+        }
+    }
+    let setup = streams.first().map_or(
+        CaptureAttempt {
+            format: MIX_FORMAT,
+            autoconvert: false,
+        },
+        |stream| CaptureAttempt {
+            format: stream.format,
+            autoconvert: stream.autoconvert,
+        },
+    );
+    if !ready.ok(setup) {
+        return stop_all(&streams);
+    }
+    let result = if streams.is_empty() {
+        silence_loop(&mut converter, stop)
+    } else {
+        mix_loop(
+            &streams,
+            &mut lanes,
+            &mut mixer,
+            &mut converter,
+            stop,
+            captured,
+        )
+    };
+    stop_all(&streams);
+    if let Err(code) = result {
+        failure.store(code.0, Ordering::Relaxed);
+        ended.store(true, Ordering::Release);
+    }
+}
+
+/// Writes silence in real time until `stop` is set: a mix with no stream.
+fn silence_loop(converter: &mut CaptureConverter, stop: &Event) -> Result<(), HRESULT> {
+    let mut frequency = 0_i64;
+    // SAFETY: writes one integer.
+    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
+    let began = now_hns(frequency);
+    let mut written = 0_u64;
+    loop {
+        // SAFETY: the handle lives as long as this loop.
+        let wait = unsafe { WaitForSingleObject(stop.raw(), WAIT_MS) };
+        if wait == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        if wait != WAIT_TIMEOUT {
+            return Err(E_FAIL);
+        }
+        let elapsed = now_hns(frequency).saturating_sub(began);
+        let due = (u128::from(elapsed) * u128::from(SESSION_RATE) / 10_000_000) as u64;
+        let frames = due.saturating_sub(written);
+        if frames > 0 {
+            written += frames;
+            converter.push(&[], frames as usize, true);
+        }
+    }
+}
+
+/// Captures every stream of a mix until `stop` is set (`Ok`) or a call
+/// fails (its HRESULT), as [`capture_loop`] does for one: every wake reads
+/// each stream's packets, and its gap silence, into its lane, and the mixer
+/// hands on what all lanes reach. Never allocates, locks or logs.
+fn mix_loop(
+    streams: &[CaptureStream],
+    lanes: &mut [LaneInput],
+    mixer: &mut StreamMixer,
+    converter: &mut CaptureConverter,
+    stop: &Event,
+    captured: &AtomicU64,
+) -> Result<(), HRESULT> {
+    let count = streams.len().min(MAX_MIX_APPS).min(lanes.len());
+    let mut handles = [HANDLE::default(); MAX_MIX_APPS + 1];
+    handles[0] = stop.raw();
+    for (slot, stream) in handles[1..].iter_mut().zip(streams) {
+        *slot = stream.event.raw();
+    }
+    let handles = &handles[..=count];
+    let mut gaps = [const { None }; MAX_MIX_APPS];
+    for (slot, stream) in gaps.iter_mut().zip(streams) {
+        *slot = Some(GapFill::new(stream.format.rate));
+    }
+    let mut frequency = 0_i64;
+    // SAFETY: writes one integer.
+    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
+    let mut sink = |stereo: &[f32], frames: usize| converter.push(as_bytes(stereo), frames, false);
+    loop {
+        // SAFETY: every handle lives as long as this loop.
+        let wait = unsafe { WaitForMultipleObjects(handles, false, WAIT_MS) };
+        if wait == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        let packet_ready = (1..=count as u32).contains(&wait.0.wrapping_sub(WAIT_OBJECT_0.0));
+        if wait != WAIT_TIMEOUT && !packet_ready {
+            return Err(E_FAIL);
+        }
+        let now = now_hns(frequency);
+        for (index, (stream, lane)) in streams.iter().zip(lanes.iter_mut()).take(count).enumerate()
+        {
+            let Some(gaps) = gaps[index].as_mut() else {
+                continue;
+            };
+            let mut deliver = |data: &[u8], frames: usize, silent: bool| {
+                lane.convert(data, frames, silent, &mut |stereo: &[f32]| {
+                    mixer.push(index, stereo, &mut sink);
+                });
+            };
+            let packets = drain(stream, gaps, frequency, captured, &mut deliver)?;
+            if packets == 0 {
+                let fill = gaps.idle(now);
+                if fill > 0 {
+                    deliver(&[], fill, true);
+                }
             }
         }
     }
@@ -674,7 +912,7 @@ mod tests {
             ended: Arc::new(AtomicBool::new(false)),
             captured: Arc::new(AtomicU64::new(0)),
             thread,
-            source: None,
+            sources: Vec::new(),
             setup: CAPTURE_ATTEMPTS[0],
             call: "process loopback capture",
             input: false,

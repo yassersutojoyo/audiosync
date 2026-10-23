@@ -48,7 +48,7 @@ impl Lane {
 
     /// Appends whole frames from `stereo`; the caller keeps them within room.
     fn append(&mut self, stereo: &[f32]) {
-        for frame in stereo.chunks_exact(2) {
+        for frame in stereo.as_chunks::<2>().0 {
             let at = (self.start + self.len) % LANE_FRAMES * 2;
             self.samples[at..at + 2].copy_from_slice(frame);
             self.len += 1;
@@ -57,7 +57,7 @@ impl Lane {
 
     /// Adds the first `frames` waiting frames into `out` and drops them.
     fn take_into(&mut self, out: &mut [f32], frames: usize) {
-        for frame in out.chunks_exact_mut(2).take(frames) {
+        for frame in out.as_chunks_mut::<2>().0.iter_mut().take(frames) {
             let at = self.start * 2;
             frame[0] += self.samples[at];
             frame[1] += self.samples[at + 1];
@@ -171,7 +171,13 @@ impl LaneInput {
     /// Converts a packet of `frames` frames in the lane's format (silence
     /// when `silent`, whatever `data` holds) and hands the stereo frames to
     /// `out` piece by piece.
-    pub fn convert(&mut self, data: &[u8], frames: usize, silent: bool, out: &mut impl FnMut(&[f32])) {
+    pub fn convert(
+        &mut self,
+        data: &[u8],
+        frames: usize,
+        silent: bool,
+        out: &mut impl FnMut(&[f32]),
+    ) {
         let block = self.format.block_align();
         let frames = if silent {
             frames
@@ -187,15 +193,19 @@ impl LaneInput {
             } else {
                 let bytes = &data[done * block..(done + n) * block];
                 decode(self.format.sample, bytes, &mut self.decoded[..n * channels]);
-                input_to_stereo(&self.decoded[..n * channels], channels, &mut self.stereo[..n * 2]);
+                input_to_stereo(
+                    &self.decoded[..n * channels],
+                    channels,
+                    &mut self.stereo[..n * 2],
+                );
             }
             match self.resampler.as_mut() {
                 None => out(&self.stereo[..n * 2]),
                 Some(resampler) => {
                     let mut consumed = 0;
                     while consumed < n {
-                        let (used, produced) =
-                            resampler.process(&self.stereo[consumed * 2..n * 2], &mut self.resampled);
+                        let (used, produced) = resampler
+                            .process(&self.stereo[consumed * 2..n * 2], &mut self.resampled);
                         out(&self.resampled[..produced * 2]);
                         consumed += used;
                         if used == 0 && produced == 0 {
@@ -214,7 +224,12 @@ impl LaneInput {
 pub fn as_bytes(samples: &[f32]) -> &[u8] {
     // SAFETY: any f32 is four initialized bytes, u8 needs no alignment, and
     // the slice covers exactly the floats' memory for the same lifetime.
-    unsafe { std::slice::from_raw_parts(samples.as_ptr().cast::<u8>(), std::mem::size_of_val(samples)) }
+    unsafe {
+        std::slice::from_raw_parts(
+            samples.as_ptr().cast::<u8>(),
+            std::mem::size_of_val(samples),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -286,7 +301,10 @@ mod tests {
         }
         // The mix follows the faster clock to within the lag bound: never
         // more frames than it, and never more than the bound behind it.
-        assert!(mixed <= fast && fast - mixed <= MAX_LAG_FRAMES, "{mixed} of {fast}");
+        assert!(
+            mixed <= fast && fast - mixed <= MAX_LAG_FRAMES,
+            "{mixed} of {fast}"
+        );
     }
 
     #[test]
@@ -300,7 +318,9 @@ mod tests {
         let packet = vec![0u8; 441 * 4];
         let mut frames = 0;
         for _ in 0..100 {
-            input.convert(&packet, 441, false, &mut |stereo: &[f32]| frames += stereo.len() / 2);
+            input.convert(&packet, 441, false, &mut |stereo: &[f32]| {
+                frames += stereo.len() / 2
+            });
         }
         // One second at 44.1 kHz comes out as about one second at 48 kHz.
         assert!((47_900..=48_000).contains(&frames), "{frames}");

@@ -30,6 +30,20 @@ pub enum SourceId {
         /// The process ID of the app's top process.
         root_pid: u32,
     },
+    /// Several apps mixed: each top process in `root_pids` and every
+    /// process it started, each tree in its own loopback. A tree that no
+    /// longer runs is skipped.
+    Apps {
+        /// The process IDs of the apps' top processes.
+        root_pids: Vec<u32>,
+    },
+    /// Every app with an audio session except those running one of
+    /// `executables` (file names, such as `spotify.exe`), and never
+    /// AudioSync: each in its own loopback, as [`SourceId::Apps`].
+    AppsExcept {
+        /// The executable file names left out.
+        executables: Vec<String>,
+    },
     /// An input device (a microphone or line in): an active capture
     /// endpoint, by its endpoint ID.
     Input {
