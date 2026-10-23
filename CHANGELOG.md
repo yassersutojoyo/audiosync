@@ -22,6 +22,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Web Remote: too many wrong pairing codes from one device block pairing for that device until the code is renewed, not for every phone, and a paired phone still gets in while other devices hold connections open, also when one device holds them from many addresses.
 - The Web Remote window shows the setup as three numbered steps under the QR code, worded for iPhone or Android, and the page shows the same steps until you open it from the Home Screen. On iPhone a pairing made in Safari doesn't carry over to the Home Screen, so the Home Screen comes before the code.
 - On the Mac, the AirPlay 2 (Experimental) switch has a note under it in the app menu and the gear menu that says what it does and that it takes effect once you quit and reopen AudioSync.
+- Hide Speaker in a speaker's menu takes a speaker you never use out of the main window, the menu bar panel or notification area flyout, Calibrate All and the Web Remote, on the Mac and on Windows. It's turned off first and keeps its volume, delay and name. Hidden Speakers in the gear menu and the Speakers menu on the Mac, or the Speakers menu on Windows, brings it back. The reference output can't be hidden.
 
 ### Changed
 
@@ -41,6 +42,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Web Remote: quick taps on the page, such as on the delay - and + buttons, no longer zoom it in on iPhone, and tapping a text field doesn't zoom either. Pinch to zoom still works.
 - If a Google Cast speaker's volume turns fixed while you drag its slider, the last drag value no longer gets sent to it.
 - With AirPlay 2 on, AudioSync ignores timing packets from devices it isn't playing to, so a flood of them from another computer can't hold up the audio.
+- If a Google Cast speaker's Resync fails, AudioSync reconnects and reloads once, and ends the session with the reason if that fails too. Before, the row could stay on Playing over silence.
+- A delay set on a Google Cast speaker added by address stays once a search finds that speaker under its own name, on the Mac and on Windows.
+- Quitting no longer waits on a Cast device that stopped reading.
+- On the Mac, the menu bar panel keeps its text readable over any window behind it, light or dark.
+- On the Mac, the Calibrate All list scrolls when you have many speakers, so Apply and Close stay on screen.
+- On the Mac, a local speaker that can't start because the source's sample rate is higher than AudioSync can hold now says so, instead of blaming another app or the format.
 
 ### Windows (preview, not released yet)
 
@@ -49,6 +56,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A Now Playing card in the main window follows what Windows reports as playing, with the track, artist and artwork, and Previous Track, play or pause and Next Track buttons.
 - View > Appearance shows AudioSync's windows in Light or Dark, or follows Windows with Match System. Ctrl+W closes the window you're in, and Ctrl+Q exits AudioSync from any of its windows.
 - The Guide now covers input devices, track info on AirPlay receivers, Launch at Sign-In, AirPlay passwords, and what happens when the source app quits.
+- While the Web Remote is on and the PC is connected to a network that Windows marks as Public, the Web Remote window and a notice say anyone on that network can open the pairing page.
 
 ## [0.6.0] - unreleased
 
