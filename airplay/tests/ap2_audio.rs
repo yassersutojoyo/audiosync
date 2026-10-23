@@ -28,7 +28,7 @@ use audiosync_airplay::stream::{Ap2Audio, PacketKind, SpeakerConfig, StreamEvent
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2, dict, int, open_packet, plist, read_dict, stream_key};
-use common::net::{Events, HostAudio, host_frame_of, serial, wait_until};
+use common::net::{Events, HostAudio, free_ptp_ports, host_frame_of, serial, wait_until};
 use common::rig::{Rig, decode, speaker};
 
 const LONG: Duration = Duration::from_secs(15);
@@ -531,15 +531,6 @@ fn ptp_time_announce() {
     }
 }
 
-fn free_ports() -> PtpPorts {
-    let a = UdpSocket::bind("0.0.0.0:0").expect("a socket");
-    let b = UdpSocket::bind("0.0.0.0:0").expect("a socket");
-    PtpPorts {
-        event: a.local_addr().expect("address").port(),
-        general: b.local_addr().expect("address").port(),
-    }
-}
-
 type Datagram = (Instant, SocketAddr, Vec<u8>);
 
 /// A loopback socket of the fake receiver, read on its own thread from the
@@ -742,7 +733,7 @@ fn ap2_audio_reaches_the_receiver() {
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(FakeAp2::new()));
     let clock = SenderClock::new(Instant::now());
-    let (sender, _host) = start(clock, free_ports(), udp.ptp_ports());
+    let (sender, _host) = start(clock, free_ptp_ports(), udp.ptp_ports());
     let mut events = Events::default();
     let speaker = device(&server, 61, "0x0,0x10040");
     let key = speaker.key.clone();
@@ -849,7 +840,7 @@ fn ap2_ptp_session() {
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(ptp_fake()));
     let origin = Instant::now();
-    let local = free_ports();
+    let local = free_ptp_ports();
     let (sender, _host) = start(SenderClock::new(origin), local, udp.ptp_ports());
     let mut events = Events::default();
     let speaker = device(&server, 62, PTP_FEATURES);
@@ -962,7 +953,7 @@ fn ap2_ntp_lets_the_ptp_ports_go() {
     let mut fake = ptp_fake();
     fake.status_once.clear();
     let server = Ap2Server::start(udp.fake(fake));
-    let local = free_ports();
+    let local = free_ptp_ports();
     let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
     let mut events = Events::default();
     let speaker = device(&server, 64, PTP_FEATURES);
@@ -997,7 +988,7 @@ fn ap2_ptp_unavailable() {
     let mut fake = ptp_fake();
     fake.status.insert("SETUP session".to_owned(), 501);
     let server = Ap2Server::start(udp.fake(fake));
-    let local = free_ports();
+    let local = free_ptp_ports();
     // Another PTP stack holds the event port.
     let _holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
     let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
@@ -1057,7 +1048,7 @@ fn ap2_ptp_clash_is_told_again_after_ptp_bound() {
     let mut fake = ptp_fake();
     fake.status.insert("SETUP session".to_owned(), 501);
     let server = Ap2Server::start(udp.fake(fake));
-    let local = free_ports();
+    let local = free_ptp_ports();
     let holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
     let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
     let mut events = Events::default();

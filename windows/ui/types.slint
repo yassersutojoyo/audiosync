@@ -68,6 +68,16 @@ export struct CalibrationRowItem {
     can-measure-again: bool,
 }
 
+// An entry of Speakers > Hidden Speakers.
+export struct HiddenItem {
+    id: string,
+    name: string,
+    // The kind its row shows (Strings.speaker-kind); empty when unknown.
+    kind: string,
+    // Listed now, only hidden; else it reads "not found".
+    present: bool,
+}
+
 export struct SpeakerItem {
     id: string,
     // The name the user gave it, else the one its device reports.
@@ -143,6 +153,8 @@ export struct SpeakerItem {
     // A Google Cast speaker the user added by address: its note says so,
     // and its menu has Remove.
     cast-added-by-address: bool,
+    // Its menu ends with Hide Speaker: every row but the reference output's.
+    hideable: bool,
     // A stereo pair or home theater group: what it is and its members, or
     // which member is missing (Strings.group-note); empty for any other row.
     group-note: string,

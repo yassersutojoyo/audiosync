@@ -130,6 +130,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var speakerNames: SpeakerNames {
         didSet { if speakerNames != oldValue { store.save(speakerNames: speakerNames) } }
     }
+    var hiddenSpeakers: HiddenSpeakers {
+        didSet { if hiddenSpeakers != oldValue { store.save(hiddenSpeakers: hiddenSpeakers) } }
+    }
     var showVirtualDevices: Bool {
         didSet { if showVirtualDevices != oldValue { store.save(showVirtualDevices: showVirtualDevices) } }
     }
@@ -230,8 +233,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         store = .standard
         let saved = store.load()
         audioSource = saved.source
-        enabledAirPlay = saved.enabledAirPlay
-        enabledLocal = saved.enabledLocal
+        // A hidden speaker is never switched on, not even by the saved on-state.
+        enabledAirPlay = saved.enabledAirPlay.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: true)) }
+        enabledLocal = saved.enabledLocal.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: false)) }
+        hiddenSpeakers = saved.hiddenSpeakers
         masterVolume = saved.master
         localVolume = saved.localVolumes
         localOffsetMs = saved.localOffsets
@@ -247,6 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         airPlay2 = saved.airPlay2
         airPlay2AtLaunch = saved.airPlay2
         super.init()
+        _ = castModel.setMaster(saved.master)
     }
 
     /// The one-time migration of the absolute delays to offsets (S179), with

@@ -7,8 +7,9 @@ extension AppDelegate {
 
     // MARK: - Groups, auto-connect, login item
 
+    /// A hidden speaker counts as not present, so no group switches it.
     func isAvailable(_ key: String) -> Bool {
-        guard let (id, airplay) = SpeakerKey.parse(key) else { return false }
+        guard !hiddenSpeakers.contains(key), let (id, airplay) = SpeakerKey.parse(key) else { return false }
         return airplay ? airplayOrder.contains(id) : localDevices[id] != nil && localOrder.contains(id)
     }
 
@@ -111,7 +112,7 @@ extension AppDelegate {
     /// switch them on, then start streaming once for all of them. Speakers still
     /// on from the last session only need the stream started.
     func autoConnect(_ keys: [String]) {
-        let hits = keys.filter { autoConnect.contains($0) }
+        let hits = hiddenSpeakers.autoConnecting(keys, marked: autoConnect)
         guard !hits.isEmpty else { return }
         DebugTrace.log("[AudioSync] auto-connect \(hits)")
         for key in hits where !isEnabled(key) {

@@ -257,7 +257,11 @@ final class WebRemote {
             DebugTrace.log("[AudioSync] web remote: a command didn't read")
             return
         }
-        let actions = RemoteAction.plan(command, rows: rows())
+        let listed = rows()
+        if case .speaker(let id, _, _, _) = command, !listed.contains(where: { $0.id == id }) {
+            DebugTrace.log("[AudioSync] web remote: ignored a command for \(id), which isn't listed (hidden or gone)")
+        }
+        let actions = RemoteAction.plan(command, rows: listed)
         DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
         actions.forEach(apply)
         schedulePublish()

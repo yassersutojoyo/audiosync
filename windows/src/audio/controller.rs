@@ -612,6 +612,7 @@ impl<D: Driver> Controller<D> {
     /// Plays to Google Cast speakers through `link`, fed by the capture.
     pub fn set_cast(&mut self, link: Box<dyn CastLink>) {
         let mut cast = CastSpeakers::new(link, self.log.clone());
+        cast.set_master(self.policy.master());
         cast.set_streaming(self.session.is_some());
         self.cast = Some(cast);
         self.sync_cast_rule();
@@ -2052,6 +2053,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 && master != before
             {
                 airplay.set_master(master);
+            }
+            if let Some(cast) = self.cast.as_mut() {
+                cast.set_master(master);
             }
             let after = self.policy.master();
             if after != before {
@@ -5396,6 +5400,24 @@ mod tests {
         backend.set_cast_offset(KITCHEN, 1000.0);
         assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
         assert_eq!(fake.take_calls(), [Call::Delay(id, Duration::ZERO)]);
+    }
+
+    #[test]
+    fn the_master_reaches_the_cast_speaker_as_its_device_volume() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let (mut backend, _fake, _kitchen) = local_delay_with_airplay();
+        backend.set_master_volume(50.0);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.set_cast_volume(KITCHEN, 80.0);
+        assert_eq!(cast.state().volumes, [0.4]);
+        backend.set_master_volume(0.0);
+        assert_eq!(cast.state().volumes, [0.4, 0.0]);
+        assert!(cast.state().mutes.is_empty());
     }
 
     #[test]

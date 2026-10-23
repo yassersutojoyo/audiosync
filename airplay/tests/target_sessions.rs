@@ -34,8 +34,8 @@ use audiosync_airplay::volume::Volume;
 use common::ap2::{Ap2Server, FakeAp2, dict, int, plist, read_dict, read_value, request_key};
 use common::hap::Answer;
 use common::net::{
-    Behavior, Events, HostAudio, Log, NetReceiver, host_frame_of, play_times, serial, step_error,
-    wait_until,
+    Behavior, Events, HostAudio, Log, NetReceiver, free_ptp_ports, host_frame_of, play_times,
+    serial, step_error, wait_until,
 };
 
 const LONG: Duration = Duration::from_secs(15);
@@ -652,15 +652,6 @@ fn ptp_fake() -> FakeAp2 {
     fake
 }
 
-fn free_ports() -> PtpPorts {
-    let a = UdpSocket::bind("0.0.0.0:0").expect("a socket");
-    let b = UdpSocket::bind("0.0.0.0:0").expect("a socket");
-    PtpPorts {
-        event: a.local_addr().expect("address").port(),
-        general: b.local_addr().expect("address").port(),
-    }
-}
-
 // covers: P179
 #[test]
 fn under_ptp_every_member_is_served_and_named_to_the_others_in_setpeers() {
@@ -669,8 +660,8 @@ fn under_ptp_every_member_is_served_and_named_to_the_others_in_setpeers() {
     let second = Ap2Server::start(ptp_fake());
     let config = SenderConfig {
         airplay2: true,
-        ptp_ports: free_ports(),
-        ptp_receiver_ports: free_ports(),
+        ptp_ports: free_ptp_ports(),
+        ptp_receiver_ports: free_ptp_ports(),
         ..SenderConfig::default()
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");
@@ -785,7 +776,7 @@ impl PtpListener {
 fn ptp_sender(listener: &PtpListener) -> (Sender, HostAudio) {
     let config = SenderConfig {
         airplay2: true,
-        ptp_ports: free_ports(),
+        ptp_ports: free_ptp_ports(),
         ptp_receiver_ports: listener.ports(),
         ..SenderConfig::default()
     };

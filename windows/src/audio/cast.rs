@@ -52,7 +52,9 @@ use audiosync_cast::host::{
 };
 use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
-use audiosync_cast::status::{ControlType, DeviceVolume};
+use audiosync_cast::status::{
+    ControlType, DeviceVolume, answers_level, device_level, own_level, start_own_level,
+};
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 
@@ -78,6 +80,10 @@ const PAGE_BYTES: usize = 4096;
 
 /// The volume step of a device that reports none, 0 to 100.
 const DEFAULT_VOLUME_STEP: f64 = 1.0;
+
+/// The unanswered levels kept to recognize their answers: a slider drag
+/// sends one every 100 ms at most (C70).
+const MAX_UNANSWERED: usize = 16;
 
 /// What a Cast device shows of the playing track (C53): only what the
 /// track itself has, never a label or the app's icon in place of a missing
@@ -515,6 +521,8 @@ struct Attempt {
     status: CastStatus,
     /// The format the device plays, once the session reports it.
     codec: Option<Codec>,
+    /// Whether the session reported the device's volume yet (C104).
+    heard_volume: bool,
 }
 
 /// The Cast side of the backend.
@@ -526,8 +534,16 @@ pub struct CastSpeakers {
     enabled: Option<DeviceId>,
     /// Each device's volume as its latest status reports it.
     volumes: BTreeMap<DeviceId, DeviceVolume>,
-    /// A level the user set that no status has answered yet, 0.0 to 1.0.
+    /// An own level the user set that no status has answered yet, 0.0 to
+    /// 1.0.
     requested: Option<(DeviceId, f64)>,
+    /// Each device's own level, 0.0 to 1.0, which the master scales (C104).
+    levels: BTreeMap<DeviceId, f64>,
+    /// The master, 0.0 to 1.0.
+    master: f64,
+    /// The levels sent in this session that no status has answered yet,
+    /// oldest first.
+    unanswered: Vec<f64>,
     attempt: Option<Attempt>,
     /// How long the feed waits for L, in ms (C77).
     hold_back_ms: f64,
@@ -558,6 +574,9 @@ impl CastSpeakers {
             enabled: None,
             volumes: BTreeMap::new(),
             requested: None,
+            levels: BTreeMap::new(),
+            master: 1.0,
+            unanswered: Vec::new(),
             attempt: None,
             hold_back_ms: 0.0,
             records: None,
@@ -726,12 +745,11 @@ impl CastSpeakers {
         else {
             return;
         };
+        // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
         let memory = self.memory();
-        if let (Some(offset), None, Some(link)) = (
-            memory.offset(&manual),
-            memory.offset(&id),
-            self.link.as_mut(),
-        ) {
+        let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
+        if let (Some(offset), None, Some(link)) = (stored(&manual), stored(&id), self.link.as_mut())
+        {
             link.set_offset(id, offset);
             self.pending.push(BackendEvent::CastMemoryChanged);
         }
@@ -857,10 +875,9 @@ impl CastSpeakers {
         memory: &DeviceMemory,
     ) -> CastInfo {
         let reported = self.volumes.get(&id);
-        let level = match self.requested {
-            Some((device, level)) if device == id => level,
-            _ => reported.map_or(1.0, |volume| volume.level),
-        };
+        let level = self
+            .own_of(id)
+            .unwrap_or_else(|| reported.map_or(1.0, |volume| volume.level));
         let session = self.attempt.filter(|attempt| attempt.device == id);
         let status = session.map_or(CastStatus::Idle, |attempt| attempt.status);
         CastInfo {
@@ -1081,6 +1098,7 @@ impl CastSpeakers {
                     device: id,
                     status: CastStatus::Connecting,
                     codec: None,
+                    heard_volume: false,
                 });
                 if records.is_some() {
                     self.members.remove(&id);
@@ -1111,6 +1129,7 @@ impl CastSpeakers {
         };
         self.records = None;
         self.requested = None;
+        self.unanswered.clear();
         if let Some(link) = self.link.as_mut() {
             link.stop();
         }
@@ -1135,8 +1154,8 @@ impl CastSpeakers {
         self.pending.push(BackendEvent::CastChanged);
     }
 
-    /// The device's volume, 0 to 100, sent as it is (C69); shown until the
-    /// device's next status answers it.
+    /// The device's own level, 0 to 100, sent times the master (C69,
+    /// C104); shown until the device's next status answers it.
     pub fn set_volume(&mut self, id: &str, position: f64) {
         let Some(device) = self.playing_device(id) else {
             return;
@@ -1144,10 +1163,112 @@ impl CastSpeakers {
         if !position.is_finite() {
             return;
         }
-        let level = (position / 100.0).clamp(0.0, 1.0);
-        self.requested = Some((device, level));
+        let own = (position / 100.0).clamp(0.0, 1.0);
+        self.requested = Some((device, own));
+        self.send_level(device, own);
+    }
+
+    /// The master position, 0 to 100 (C104): a change reaches the device in
+    /// a session at once.
+    pub fn set_master(&mut self, position: f64) {
+        if !position.is_finite() {
+            return;
+        }
+        let master = (position / 100.0).clamp(0.0, 1.0);
+        if master == self.master {
+            return;
+        }
+        self.master = master;
+        if let Some(attempt) = self.attempt
+            && let Some(own) = self.own_of(attempt.device)
+        {
+            self.send_level(attempt.device, own);
+        }
+    }
+
+    /// The own level the slider shows: one the user set that no status
+    /// answered yet, else the one kept.
+    fn own_of(&self, device: DeviceId) -> Option<f64> {
+        match self.requested {
+            Some((requested, own)) if requested == device => Some(own),
+            _ => self.levels.get(&device).copied(),
+        }
+    }
+
+    /// Sends master × `own`, unless the device's volume is fixed (C68).
+    fn send_level(&mut self, device: DeviceId, own: f64) {
+        let reported = self.volumes.get(&device);
+        if reported.is_some_and(|volume| volume.control_type == ControlType::Fixed) {
+            return;
+        }
+        let level = device_level(self.master, own);
+        if reported.is_some_and(|volume| answers_level(level, volume.level)) {
+            // The device reports only changes, so this level gets no answer,
+            // and the latest level sent replaces whatever was still in flight.
+            self.unanswered.clear();
+            self.levels.insert(device, own);
+            if self
+                .requested
+                .is_some_and(|(requested, _)| requested == device)
+            {
+                self.requested = None;
+            }
+        } else {
+            if self.unanswered.len() == MAX_UNANSWERED {
+                self.unanswered.remove(0);
+            }
+            self.unanswered.push(level);
+        }
         if let Some(link) = self.link.as_mut() {
             link.set_volume(level);
+        }
+    }
+
+    /// A status's volume (C70, C104, C105): the answer to a level sent keeps
+    /// the own level and any other level moves it by the master, except the
+    /// session's first, which is set to master × own level instead.
+    fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume) {
+        let shown = self.own_of(device);
+        let level = volume.level;
+        let first = self
+            .attempt
+            .as_mut()
+            .is_some_and(|attempt| !std::mem::replace(&mut attempt.heard_volume, true));
+        let answered = self
+            .unanswered
+            .iter()
+            .rposition(|&sent| answers_level(sent, level));
+        if let Some(index) = answered {
+            self.unanswered.drain(..=index);
+        }
+        let own = match (first, answered) {
+            (true, _) => start_own_level(self.master, shown, level),
+            (false, Some(_)) => shown.unwrap_or_else(|| own_level(level, self.master, level)),
+            (false, None) => own_level(level, self.master, shown.unwrap_or(level)),
+        };
+        if self
+            .requested
+            .is_some_and(|(requested, _)| requested == device)
+            && (answered.is_none() || self.unanswered.is_empty())
+        {
+            self.requested = None;
+        }
+        self.levels.insert(device, own);
+        if self.volumes.get(&device) != Some(&volume) {
+            self.volumes.insert(device, volume);
+            self.pending.push(BackendEvent::CastChanged);
+        } else if self.own_of(device) != shown {
+            self.pending.push(BackendEvent::CastChanged);
+        }
+        let allowed = device_level(self.master, own);
+        if first && !answers_level(allowed, level) {
+            self.log.log(|| {
+                format!(
+                    "Cast: {} reports level {level:.2} at the start, set to {allowed:.2}",
+                    self.name(device)
+                )
+            });
+            self.send_level(device, own);
         }
     }
 
@@ -1346,6 +1467,7 @@ impl CastSpeakers {
                 self.records = None;
                 self.sent = None;
                 self.requested = None;
+                self.unanswered.clear();
                 self.feed.hand(None);
                 let key = self.key_of(device);
                 self.list.set_in_session(key, false);
@@ -1387,18 +1509,7 @@ impl CastSpeakers {
                     self.set_status(CastStatus::Reconnecting);
                 }
             }
-            SessionEvent::Volume(volume) => {
-                if self
-                    .requested
-                    .is_some_and(|(requested, _)| requested == device)
-                {
-                    self.requested = None;
-                }
-                if self.volumes.get(&device) != Some(&volume) {
-                    self.volumes.insert(device, volume);
-                    self.pending.push(BackendEvent::CastChanged);
-                }
-            }
+            SessionEvent::Volume(volume) => self.volume_reported(device, volume),
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
                     .log(|| format!("Cast diagnostics: {diagnostics:?}"));
@@ -2304,6 +2415,39 @@ pub mod tests {
         assert_eq!(fake.state().stops, 1);
     }
 
+    // covers: C18, C77
+    #[test]
+    fn a_browse_moves_the_offset_over_a_zero_but_not_over_an_offset_the_id_has() {
+        const LIVING: &str = "fedcba9876543210fedcba9876543210";
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        for (text, id, own) in [("192.0.2.31", KITCHEN, 0.0), ("192.0.2.32", LIVING, 100.0)] {
+            cast.add_address(address(text));
+            assert!(cast.set_offset(&address(text).device_id().to_string(), 400.0));
+            assert!(cast.set_offset(id, own));
+        }
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 31),
+        );
+        fake.announce_at(LIVING, "Living", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 32));
+        cast.poll();
+        let offset = |id: &str| {
+            cast.speakers()
+                .into_iter()
+                .find(|speaker| speaker.id == id)
+                .map(|speaker| speaker.offset_ms)
+        };
+        assert_eq!(
+            offset(KITCHEN),
+            Some(400.0),
+            "0 ms, left by an Undo, counts as none"
+        );
+        assert_eq!(offset(LIVING), Some(100.0), "the ID's own offset stays");
+    }
+
     // covers: C18
     #[test]
     fn a_host_name_is_listed_at_once_and_plays_once_looked_up() {
@@ -2429,5 +2573,183 @@ pub mod tests {
         });
         cast.poll();
         assert_eq!(step_of(&cast), Some(2.0));
+    }
+
+    fn reported(device: &str, level: f64, control_type: ControlType) -> HostEvent {
+        HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(device),
+            event: SessionEvent::Volume(DeviceVolume {
+                level,
+                control_type,
+                ..DeviceVolume::default()
+            }),
+        }
+    }
+
+    fn shown(cast: &CastSpeakers, device: &str) -> f64 {
+        cast.speakers()
+            .into_iter()
+            .find(|info| info.id == device)
+            .map(|info| info.volume)
+            .expect("listed")
+    }
+
+    fn report(fake: &FakeCast, cast: &mut CastSpeakers, level: f64) {
+        fake.report(reported(KITCHEN, level, ControlType::Attenuation));
+        cast.poll();
+    }
+
+    fn sent(fake: &FakeCast) -> Vec<f64> {
+        fake.state().volumes.clone()
+    }
+
+    #[test]
+    fn the_master_scales_the_level_sent_and_a_master_change_resends_it() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 80.0);
+        assert_eq!(sent(&fake), [0.4]);
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+
+        cast.set_master(0.0);
+        assert_eq!(sent(&fake), [0.4, 0.0], "master 0 sends level 0");
+        assert!(fake.state().mutes.is_empty(), "never the muted flag");
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+
+        report(&fake, &mut cast, 0.0);
+        cast.set_master(100.0);
+        assert_eq!(sent(&fake), [0.4, 0.0, 0.8]);
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+    }
+
+    #[test]
+    fn a_level_from_elsewhere_moves_the_slider_by_the_master() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.2);
+        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
+        assert!(sent(&fake).is_empty(), "nothing sent back");
+
+        cast.set_master(0.0);
+        assert_eq!(sent(&fake), [0.0]);
+        report(&fake, &mut cast, 0.0);
+        report(&fake, &mut cast, 0.3);
+        assert!(
+            (shown(&cast, KITCHEN) - 40.0).abs() < 1e-9,
+            "master 0 leaves it"
+        );
+        assert_eq!(sent(&fake), [0.0], "a change from elsewhere isn't fought");
+    }
+
+    #[test]
+    fn a_session_starts_no_louder_than_the_master_allows() {
+        let (fake, mut cast) = listed();
+        cast.set_master(0.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.7);
+        assert_eq!(sent(&fake), [0.0], "turned on at master 0");
+        assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9);
+        report(&fake, &mut cast, 0.0);
+        report(&fake, &mut cast, 0.5);
+        assert_eq!(sent(&fake), [0.0], "only the first status is answered");
+
+        cast.set_enabled(KITCHEN, false).unwrap();
+        cast.set_master(50.0);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.8,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert_eq!(sent(&fake), [0.0, 0.35], "louder than master × own: set");
+        assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9, "not read back");
+    }
+
+    #[test]
+    fn a_level_the_device_already_has_is_not_waited_for() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        cast.set_volume(KITCHEN, 0.0);
+        report(&fake, &mut cast, 0.0);
+        for master in [60.0, 50.0, 40.0] {
+            cast.set_master(master);
+        }
+        report(&fake, &mut cast, 0.3);
+        report(&fake, &mut cast, 0.0);
+        assert_eq!(shown(&cast, KITCHEN), 0.0, "the buttons' 0 is read back");
+        cast.set_master(100.0);
+        assert_eq!(
+            sent(&fake).last(),
+            Some(&0.0),
+            "a muted speaker stays silent"
+        );
+    }
+
+    #[test]
+    fn a_session_starts_at_master_times_the_own_level_even_when_the_device_is_quieter() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        cast.set_volume(KITCHEN, 80.0);
+        report(&fake, &mut cast, 0.8);
+        assert_eq!(sent(&fake), [0.8]);
+
+        cast.set_enabled(KITCHEN, false).unwrap();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.1,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert_eq!(sent(&fake), [0.8, 0.8], "quieter than master × own: set");
+        assert_eq!(shown(&cast, KITCHEN), 80.0, "not read back");
+    }
+
+    #[test]
+    fn a_group_follows_the_master_and_a_fixed_volume_gets_nothing() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        cast.set_volume(ATTIC, 80.0);
+        assert_eq!(sent(&fake), [0.4]);
+        cast.set_master(100.0);
+        assert_eq!(sent(&fake), [0.4, 0.8]);
+
+        cast.set_enabled(ATTIC, false).unwrap();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.6,
+                control_type: ControlType::Fixed,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        cast.set_master(20.0);
+        assert_eq!(
+            sent(&fake),
+            [0.4, 0.8],
+            "a fixed volume sends nothing (C68)"
+        );
     }
 }

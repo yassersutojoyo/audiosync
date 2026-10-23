@@ -105,6 +105,8 @@ extension AppDelegate {
         switch outcome {
         case .changed, .memoryChanged:
             break
+        case .setVolume(let level):
+            castSender?.setVolume(level)
         case .playing(let id):
             clearNotices([Notice.cast(id)])
         case .turnedOff(let id, let problem):
@@ -170,7 +172,8 @@ extension AppDelegate {
         castFollow()
     }
 
-    /// The device's own volume (slider position 0 to 100), apart from the master.
+    /// The device's own level (slider position 0 to 100); the device gets it
+    /// times the master (C104).
     func setCastVolume(_ appID: String, _ position: Double) {
         guard let id = CastID.device(appID), let level = castModel.setVolume(id, position: position) else { return }
         castSender?.setVolume(level)

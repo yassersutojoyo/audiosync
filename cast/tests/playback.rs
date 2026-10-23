@@ -568,6 +568,94 @@ fn diagnostics_count_drift_and_resync_is_only_the_users() {
     device.join();
 }
 
+// covers: C83
+#[test]
+fn a_failed_resync_reloads_once_then_ends_with_its_reason() {
+    // The Resync's LOAD fails and the recovery's reload plays.
+    let device = FakeDevice::start(Behavior {
+        load_script: vec![OnLoad::Play, OnLoad::Error("LOAD_FAILED", json!({}))],
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    assert!(session.resync().is_err());
+    let seen = run_until(&mut session, Duration::from_secs(15), |event| {
+        matches!(
+            event,
+            SessionEvent::Recovered { .. } | SessionEvent::Ended(_)
+        )
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: false })),
+        "{seen:?}"
+    );
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 3);
+    session.stop();
+    device.join();
+
+    // The reload fails too: the session ends with a reason, after one try.
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::Error("LOAD_FAILED", json!({"detailedErrorCode": 104})),
+        load_script: vec![OnLoad::Play],
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    assert!(session.resync().is_err());
+    let seen = run_until(&mut session, Duration::from_secs(15), |event| {
+        matches!(event, SessionEvent::Ended(_))
+    });
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(SessionEnd::Failed(SessionError::Media(
+                MediaError::LoadFailed {
+                    detailed_error_code: Some(104)
+                }
+            )))
+        )),
+        "{seen:?}"
+    );
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 3, "one recovery only");
+    device.join();
+}
+
+// covers: C86
+#[test]
+fn a_stop_during_the_reload_after_finished_ends_as_deselected() {
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::NeverPlay,
+        load_script: vec![OnLoad::Play],
+        ..Behavior::default()
+    });
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let selected = Arc::new(AtomicBool::new(true));
+    let mut session = CastSession::start(config(&device), reader, Arc::clone(&selected), |_, _| {})
+        .expect("plays");
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "IDLE",
+        Some("FINISHED"),
+    )));
+    let user = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(500));
+        selected.store(false, Ordering::SeqCst);
+    });
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Ended(_))
+    });
+    user.join().expect("user");
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Ended(SessionEnd::Deselected))),
+        "{seen:?}"
+    );
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2);
+    device.join();
+}
+
 /// The header of a PNG of `width` by `height` pixels: all the stream server
 /// reads of it.
 fn png(width: u32, height: u32) -> Vec<u8> {
@@ -644,24 +732,29 @@ fn device_volume_changes_never_touch_the_samples() {
         |event| matches!(event, SessionEvent::Volume(volume) if (volume.level - 0.2).abs() < 1e-9),
     );
     assert!(!seen.is_empty());
-    // A slow runner can stream less than a second in a fixed wait, so wait for the samples.
+    // A starved feed thread falls behind real time and the stream fills in silence (C52),
+    // so wait for a second of samples that ends in captured audio, not for a fixed time.
+    let tail_is_audio = |samples: &[i16]| {
+        samples.len() > 48_000 && samples[samples.len() - 100..].iter().all(|s| *s == 9)
+    };
     let settled = Instant::now() + Duration::from_millis(500);
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + Duration::from_secs(10);
     let mut samples = fetched_samples(&device);
-    while Instant::now() < until && (Instant::now() < settled || samples.len() <= 48_000) {
+    while Instant::now() < settled || !tail_is_audio(&samples) {
+        assert!(
+            Instant::now() < until,
+            "no captured audio at the end of the stream in 10 s: {} samples, {} silent, last 8 {:?}",
+            samples.len(),
+            samples.iter().filter(|s| **s == 0).count(),
+            &samples[samples.len().saturating_sub(8)..],
+        );
         session.run_for(Duration::from_millis(50));
         samples = fetched_samples(&device);
     }
     assert_eq!(count(&device, NS_RECEIVER, "SET_VOLUME"), 1, "no echo");
-    assert!(samples.len() > 48_000, "{} samples", samples.len());
     assert!(
         samples.iter().all(|sample| *sample == 9 || *sample == 0),
         "samples as captured, or the silence of a gap"
-    );
-    assert!(
-        samples[samples.len() - 100..]
-            .iter()
-            .all(|sample| *sample == 9)
     );
     session.stop();
     device.join();
