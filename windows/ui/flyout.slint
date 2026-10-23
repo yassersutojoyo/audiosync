@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { DeviceVolumeHint, NoticeItem, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // zone that is on but can't play right now under it (a zone's count first) ("Waiting for device",
@@ -85,6 +85,9 @@ export component TrayFlyout inherits Window {
     in property <string> status;
     in property <[string]> sources;
     in property <int> source-index;
+    // The chosen input device's channel pairs; none up to two channels.
+    in property <[string]> input-pairs;
+    in property <int> input-pair-index;
     in property <float> master-volume;
     in property <[SpeakerItem]> speakers;
     in property <[ZoneItem]> zones;
@@ -92,6 +95,7 @@ export component TrayFlyout inherits Window {
     in property <bool> airplay-none-found;
     // Every speaker present is hidden.
     in property <bool> all-hidden;
+    in property <bool> connected-all-hidden;
     // AirPlay discovery runs and has found no speaker yet, short of 20 s.
     in property <bool> airplay-searching;
     // The newest notice only (or none); `notice-count` counts them all.
@@ -102,6 +106,7 @@ export component TrayFlyout inherits Window {
     in property <string> notice-announcement;
     callback power-toggled(bool);
     callback source-selected(int);
+    callback input-pair-selected(int);
     callback master-volume-changed(float);
     callback speaker-toggled(string);
     callback zone-toggled(string);
@@ -265,6 +270,22 @@ export component TrayFlyout inherits Window {
                 }
             }
 
+            if root.input-pairs.length > 0: VerticalLayout {
+                spacing: 4px;
+
+                SecondaryText {
+                    text: Strings.input-channels-label;
+                }
+
+                PairPicker {
+                    model: root.input-pairs;
+                    chosen: root.input-pair-index;
+                    picked(index) => {
+                        root.input-pair-selected(index);
+                    }
+                }
+            }
+
             VolumeSlider {
                 volume: root.master-volume;
                 label: Strings.master-volume;
@@ -343,6 +364,10 @@ export component TrayFlyout inherits Window {
                         }
                     }
                 }
+            }
+
+            if root.connected-all-hidden && root.zones.length == 0: SecondaryText {
+                text: Strings.flyout-connected-hidden;
             }
 
             Divider { }

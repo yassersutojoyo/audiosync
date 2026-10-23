@@ -35,22 +35,72 @@ enum SourceList {
     /// in Core Audio's order. The chosen app stays listed while it isn't
     /// running (its name comes from `chosenAppName`), so the picker still
     /// says what will be captured; a chosen input device that is unplugged
-    /// is not listed. Devices without a UID can't be chosen and are skipped.
+    /// is not listed. Devices without a UID can't be chosen and are skipped,
+    /// and a Bluetooth headset's hands-free input
+    /// (`AudioDevices.isHandsFreeInput`) is left out, chosen or not.
     static func entries(systemName: String,
                         apps: [(bundleID: String, name: String)],
-                        inputs: [(uid: String, name: String)],
+                        inputs: [Input],
                         chosen: AudioSource,
-                        chosenAppName: (String) -> String) -> [Entry] {
+                        chosenAppName: (String) -> String,
+                        mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") }) -> [Entry] {
+        var mixEntry: [Entry] = []
+        if case .mix(let mode, let ids) = chosen {
+            let names = ids.map { id in apps.first { $0.bundleID == id }?.name ?? chosenAppName(id) }
+            mixEntry = [Entry(id: chosen.defaultsValue, name: mixName(mode, names), isInput: false)]
+        }
         var appEntries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
         if case .app(let bundleID) = chosen, !appEntries.contains(where: { $0.id == bundleID }) {
             appEntries.append(Entry(id: bundleID, name: chosenAppName(bundleID), isInput: false))
             appEntries.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
-        let inputEntries = inputs.filter { !$0.uid.isEmpty }.map {
+        let inputEntries = inputs.filter { leftOut($0) == nil }.map {
             Entry(id: AudioSource.input(uid: $0.uid).defaultsValue, name: $0.name, isInput: true)
         }
         return [Entry(id: AudioSource.system.defaultsValue, name: systemName, isInput: false)]
-            + appEntries + inputEntries
+            + mixEntry + appEntries + inputEntries
+    }
+
+    /// The apps the several-apps menu offers: the running apps, plus the
+    /// checked ones that aren't running, so each can still be unchecked. By
+    /// name, as the picker sorts.
+    static func mixApps(_ apps: [(bundleID: String, name: String)], checked: [String],
+                        chosenAppName: (String) -> String) -> [Entry] {
+        var entries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
+        for id in checked where !entries.contains(where: { $0.id == id }) {
+            entries.append(Entry(id: id, name: chosenAppName(id), isInput: false))
+        }
+        return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// An input device as Core Audio lists it; `transport` is
+    /// `kAudioDeviceTransportType…`, 0 when the device doesn't say, and
+    /// `inputSubTransports` an aggregate's (`AudioDevices.Device`).
+    struct Input {
+        let uid, name: String
+        let transport: UInt32
+        var inputSubTransports: [UInt32] = []
+    }
+
+    /// Why the picker leaves an input out, for the debug log; nil when it lists it.
+    static func leftOut(_ input: Input) -> String? {
+        if input.uid.isEmpty { return "no UID" }
+        if AudioDevices.isHandsFreeInput(transport: input.transport, inputSubTransports: input.inputSubTransports) {
+            return "a Bluetooth hands-free input, which would switch the headset to call mode"
+        }
+        return nil
+    }
+
+    /// One debug-log line per input device: its transport and whether the
+    /// picker lists it.
+    static func logLines(_ inputs: [Input]) -> [String] {
+        inputs.map { input in
+            let verdict = leftOut(input).map { "left out: \($0)" } ?? "listed"
+            let subs = input.inputSubTransports.isEmpty ? ""
+                : " (sub-device inputs \(input.inputSubTransports.map(AudioDevices.transportCode).joined(separator: ", ")))"
+            return "[AudioSync] source picker: input \"\(input.name)\" (\(input.uid)), "
+                + "transport \(AudioDevices.transportCode(input.transport))\(subs): \(verdict)"
+        }
     }
 }
 
@@ -96,18 +146,6 @@ struct PromptWithdrawal {
     private mutating func step(frontmost: Bool) -> Step {
         pending = !frontmost
         return frontmost ? .close : .wait
-    }
-}
-
-/// How a speaker group shows in the window and the panel.
-enum GroupSummary {
-    /// `available`: members present right now. `allOn`: at least one member
-    /// is present and every present one is switched on (absent members don't
-    /// count, as a click on the group leaves them alone).
-    static func summarize(members: [String], isAvailable: (String) -> Bool,
-                          isEnabled: (String) -> Bool) -> (available: Int, allOn: Bool) {
-        let present = members.filter(isAvailable)
-        return (present.count, !present.isEmpty && present.allSatisfy(isEnabled))
     }
 }
 

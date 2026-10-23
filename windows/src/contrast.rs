@@ -120,6 +120,25 @@ fn the_focus_ring_reaches_3_to_1() {
     }
 }
 
+/// The level meter's fill stands out from its track (3:1 for graphics),
+/// and it is never a focusable control.
+#[test]
+fn the_level_meter_reaches_3_to_1_and_takes_no_focus() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let value = ratio("tealText", "separator", appearance);
+        assert!(
+            value >= MIN_GRAPHIC_CONTRAST,
+            "meter fill on its track ({appearance:?}): {value:.2}:1"
+        );
+    }
+    let body = component_body(include_str!("../ui/widgets.slint"), "LevelMeter");
+    assert!(body.contains("background: Tokens.separator;"));
+    assert!(body.contains("background: Tokens.teal-text;"));
+    for focusable in ["FocusScope", "TouchArea", "forward-focus"] {
+        assert!(!body.contains(focusable), "the meter has a {focusable}");
+    }
+}
+
 /// The interface sources, for the checks below.
 const UI_FILES: &[(&str, &str)] = &[
     ("main.slint", include_str!("../ui/main.slint")),
@@ -502,7 +521,6 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"AirPlay delay: was {}. New: {} ms")
                 || line.contains("return @tr(\"The AirPlay speakers differ by {} ms.")
                 || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
-                || line.contains("calibrate-all-airplay-waits: @tr(\"AirPlay isn't playing,")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
@@ -686,6 +704,8 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
         "guide-mute-outputs",
         "guide-shared-outputs",
         "guide-keep-app-unmuted",
+        "guide-route-all-except",
+        "guide-keep-all-except-unmuted",
         "guide-open",
         "list-and",
     ] {

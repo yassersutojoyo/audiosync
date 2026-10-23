@@ -8,7 +8,7 @@
 //! [`MockBackend`] stands in with example data, for work on the UI. Nothing
 //! here makes a sound or opens an audio device.
 
-use audiosync_core::eq::{self, EqSettings};
+use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::zones::{Zone, Zones};
@@ -44,6 +44,17 @@ pub enum SourceKind {
     App,
     /// An input device (line in, microphone).
     Input,
+    /// Every app except those named; the UI words it around the names.
+    AppsExcept,
+}
+
+/// An app the several-apps list offers, by executable file name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MixApp {
+    pub id: String,
+    pub name: String,
+    /// Checked in the mode the list shows.
+    pub checked: bool,
 }
 
 /// Something AudioSync can capture.
@@ -52,6 +63,9 @@ pub struct Source {
     pub id: String,
     pub name: String,
     pub kind: SourceKind,
+    /// An input device's channels, which offer pairs above two; 0 for
+    /// anything else and for a device that doesn't say.
+    pub channels: u16,
 }
 
 /// The kind of output a speaker is, shown as a small icon and read by Narrator.
@@ -423,6 +437,17 @@ pub struct Notice {
     pub time: String,
 }
 
+/// A source other than the whole system, as a notice names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceName {
+    /// An app or an input device, by the name shown for it.
+    Named(String),
+    /// Several apps, by name; the UI joins the list.
+    Apps(Vec<String>),
+    /// Every app except the listed ones; the UI words it around the list.
+    AllAppsExcept(Vec<String>),
+}
+
 /// What a notice says. The UI words it (the notice texts in
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -511,14 +536,14 @@ pub enum NoticeMessage {
     /// itself once an output is back or no AirPlay speaker is on.
     NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
-    /// is heard twice. `source` is the app's name, or `None` for the whole
+    /// is heard twice. `source` names the app, or is `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
     /// user may mute; `shared` the ones AudioSync plays to as well, where
     /// only sending the source elsewhere helps. `default_output` is the one
     /// of them that counts because it is Windows' default output (the whole
     /// system only); any other plays the source because an app plays there.
     HeardTwice {
-        source: Option<String>,
+        source: Option<SourceName>,
         mute: Vec<String>,
         shared: Vec<String>,
         default_output: Option<String>,
@@ -591,6 +616,13 @@ pub struct AppState {
     pub running: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
+    /// The channel pair saved for the chosen input device, as an index (1
+    /// for channels 3-4); 0 for 1-2 and for any other source.
+    pub input_pair: u16,
+    /// The several-apps list: the apps to check.
+    pub mix_apps: Vec<MixApp>,
+    /// The list shows "every app except the checked ones", not "only them".
+    pub mix_all_except: bool,
     /// 0 to 100.
     pub master_volume: f64,
     /// The speakers listed; a hidden one never is.
@@ -602,6 +634,8 @@ pub struct AppState {
     /// The zone members that aren't listed and aren't hidden.
     pub absent: Vec<AbsentMember>,
     pub equalizer: EqSettings,
+    /// The equalizer curves the user saved, in the picker's order (spec S270).
+    pub equalizer_curves: Vec<UserCurve>,
     /// Newest first.
     pub notices: Vec<Notice>,
     /// The PIN prompt to show, while a pairing asks for a PIN.
@@ -701,9 +735,6 @@ pub struct SheetState {
     /// The last Measure Again ended early, so its row stayed.
     pub again_ended: Option<EndReason>,
     pub can_apply: bool,
-    /// Apply or Undo would set the AirPlay delay while AirPlay doesn't
-    /// play, so it can't be worked out: both wait.
-    pub airplay_waits: bool,
     pub applied: bool,
     /// Undo restores what Apply replaced, in one step.
     pub can_undo: bool,
@@ -873,6 +904,15 @@ impl AppState {
         self.speakers.is_empty() && self.hidden.iter().any(|hidden| hidden.present.is_some())
     }
 
+    /// Whether the tray flyout lists only the PC's own speakers because
+    /// every connected speaker present is hidden and there is no zone.
+    pub fn connected_all_hidden(&self) -> bool {
+        self.zones.is_empty()
+            && !self.speakers.is_empty()
+            && self.speakers.iter().all(|s| s.kind.is_this_pc())
+            && self.hidden_in(false)
+    }
+
     /// Speakers switched on right now.
     pub fn active_speakers(&self) -> usize {
         self.speakers.iter().filter(|s| s.enabled).count()
@@ -953,6 +993,13 @@ pub trait Backend {
     fn snapshot(&self) -> AppState;
     fn set_running(&mut self, on: bool);
     fn select_source(&mut self, id: &str);
+    /// Plays channel pair `pair` (1 for channels 3-4) of the chosen input
+    /// device, and keeps it for that device.
+    fn select_input_pair(&mut self, pair: u16);
+    /// Checks or unchecks an app of the several-apps list, by executable.
+    fn toggle_mix_app(&mut self, executable: &str);
+    /// Switches the several-apps list to "all except" (true) or "only" (false).
+    fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
@@ -1024,6 +1071,9 @@ pub trait Backend {
     /// member `speaker_id` plays as part of takes its place in the zone.
     fn use_target_instead(&mut self, speaker_id: &str);
     fn set_equalizer(&mut self, settings: EqSettings);
+    /// Replaces the saved equalizer curves; the backend keeps them as the
+    /// core cleans a stored list (spec S270).
+    fn set_equalizer_curves(&mut self, curves: Vec<UserCurve>);
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
@@ -1094,6 +1144,14 @@ pub trait Backend {
     /// snapshot may have changed. The UI calls it about twice a second.
     fn poll(&mut self) -> bool {
         false
+    }
+
+    /// While an input device is captured, the largest sample magnitude
+    /// since the last call (1 is full scale), for the level meter; `None`
+    /// for any other source and while stopped. The UI calls it every
+    /// `METER_POLL_MS` while the meter shows.
+    fn input_peak(&mut self) -> Option<f32> {
+        None
     }
 
     /// The windows' own settings as last saved: what the UI shows them with
@@ -1245,6 +1303,7 @@ impl MockBackend {
             id: id.into(),
             name: name.into(),
             kind,
+            channels: 0,
         };
         let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
             id: id.into(),
@@ -1326,15 +1385,33 @@ impl MockBackend {
                 source("system", "All System Audio", SourceKind::System),
                 source("app:player", "Music Player", SourceKind::App),
                 source("app:browser", "Web Browser", SourceKind::App),
-                source("input:line", "Line In", SourceKind::Input),
+                Source {
+                    channels: 5,
+                    ..source("input:line", "Line In", SourceKind::Input)
+                },
             ],
             source_id: "system".into(),
+            input_pair: 0,
+            mix_apps: vec![
+                MixApp {
+                    id: "player.exe".into(),
+                    name: "Music Player".into(),
+                    checked: false,
+                },
+                MixApp {
+                    id: "browser.exe".into(),
+                    name: "Web Browser".into(),
+                    checked: false,
+                },
+            ],
+            mix_all_except: false,
             master_volume: volume::DEFAULT_MASTER_POSITION,
             speakers,
             hidden: Vec::new(),
             zones: Vec::new(),
             absent: Vec::new(),
             equalizer: EqSettings::default(),
+            equalizer_curves: Vec::new(),
             notices: Vec::new(),
             pin_prompt: None,
             password_prompt: None,
@@ -1566,7 +1643,47 @@ impl Backend for MockBackend {
     fn select_source(&mut self, id: &str) {
         if self.state.sources.iter().any(|s| s.id == id) {
             self.state.source_id = id.into();
+            self.state.input_pair = 0;
         }
+    }
+
+    fn select_input_pair(&mut self, pair: u16) {
+        let chosen = self
+            .state
+            .sources
+            .iter()
+            .find(|source| source.id == self.state.source_id);
+        if chosen.is_some_and(|source| source.kind == SourceKind::Input) {
+            self.state.input_pair = pair;
+        }
+    }
+
+    fn toggle_mix_app(&mut self, executable: &str) {
+        if let Some(app) = self
+            .state
+            .mix_apps
+            .iter_mut()
+            .find(|app| app.id == executable)
+        {
+            app.checked = !app.checked;
+        }
+        let checked: Vec<&str> = self
+            .state
+            .mix_apps
+            .iter()
+            .filter(|app| app.checked)
+            .map(|app| app.id.as_str())
+            .collect();
+        // Two apps make a mix, as the real backend's source key shows it.
+        self.state.source_id = if checked.len() > 1 {
+            format!("mix:only:{}", checked.join(","))
+        } else {
+            "system".into()
+        };
+    }
+
+    fn set_mix_all_except(&mut self, on: bool) {
+        self.state.mix_all_except = on;
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -1786,6 +1903,10 @@ impl Backend for MockBackend {
         self.state.equalizer = settings.quantized();
     }
 
+    fn set_equalizer_curves(&mut self, curves: Vec<UserCurve>) {
+        self.state.equalizer_curves = eq::sanitized_curves(curves);
+    }
+
     fn dismiss_notice(&mut self, id: u64) {
         self.state.notices.retain(|n| n.id != id);
     }
@@ -1815,11 +1936,30 @@ impl Backend for MockBackend {
     }
 }
 
-/// The preset whose gains these settings have, if any (else the UI says "Custom").
-pub fn matching_preset_index(settings: &EqSettings) -> Option<usize> {
-    eq::PRESETS
-        .iter()
-        .position(|preset| preset.gains_db == settings.gains_db)
+/// The curve the equalizer picker shows: the first preset, then the first
+/// saved curve, with the current gains (spec S270).
+pub fn shown_curve(state: &AppState) -> Option<CurveMatch> {
+    eq::matching_curve(&state.equalizer.gains_db, &state.equalizer_curves)
+}
+
+/// `curve`'s entry in the picker, presets first; -1 for none ("Custom").
+pub fn picker_index(curve: Option<CurveMatch>) -> i32 {
+    let index = match curve {
+        Some(CurveMatch::Preset(index)) => index,
+        Some(CurveMatch::User(index)) => eq::PRESETS.len() + index,
+        None => return -1,
+    };
+    i32::try_from(index).unwrap_or(-1)
+}
+
+/// The picker's entry `index` as a curve, presets first.
+pub fn picked_curve(index: i32, saved: usize) -> Option<CurveMatch> {
+    let index = usize::try_from(index).ok()?;
+    match index.checked_sub(eq::PRESETS.len()) {
+        None => Some(CurveMatch::Preset(index)),
+        Some(user) if user < saved => Some(CurveMatch::User(user)),
+        Some(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -1876,6 +2016,34 @@ mod tests {
         // Hidden or minimized: what was kept stays.
         let kept = Some(frame(100, 1000.0, true));
         assert_eq!(frame_to_keep(MainWindowShows::Not, kept), kept);
+    }
+
+    #[test]
+    fn the_flyout_says_so_when_only_connected_speakers_are_hidden() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:1", "Zone 1", &[]);
+        let connected: Vec<String> = backend
+            .snapshot()
+            .speakers
+            .iter()
+            .filter(|s| !s.kind.is_this_pc())
+            .map(|s| s.id.clone())
+            .collect();
+        for id in &connected {
+            backend.hide_speaker(id, "AirPlay");
+        }
+        let state = backend.snapshot();
+        assert!(!state.connected_all_hidden(), "a zone is still listed");
+        backend.delete_zone("zone:1");
+        let state = backend.snapshot();
+        assert!(state.connected_all_hidden());
+        assert!(!state.all_hidden(), "the PC's own speakers are listed");
+
+        backend.unhide_speaker(&connected[0]);
+        assert!(!backend.snapshot().connected_all_hidden());
+        let mut only_this_pc = MockBackend::new();
+        only_this_pc.hide_speaker("local:headphones", "Headphones");
+        assert!(!only_this_pc.snapshot().connected_all_hidden());
     }
 
     #[test]
@@ -2170,11 +2338,47 @@ mod tests {
     #[test]
     fn the_equalizer_is_quantized_and_matches_presets() {
         let mut backend = MockBackend::new();
+        assert_eq!(
+            shown_curve(&backend.snapshot()),
+            Some(CurveMatch::Preset(0))
+        );
         let mut settings = EqSettings::default();
         settings.gains_db[0] = 3.3;
         backend.set_equalizer(settings);
         assert_eq!(backend.snapshot().equalizer.gains_db[0], 3.5);
-        assert_eq!(matching_preset_index(&EqSettings::default()), Some(0));
-        assert_eq!(matching_preset_index(&backend.snapshot().equalizer), None);
+        assert_eq!(shown_curve(&backend.snapshot()), None);
+        assert_eq!(picker_index(None), -1, "Custom is not an entry");
+    }
+
+    #[test]
+    fn the_picker_lists_the_presets_then_the_saved_curves() {
+        let mut backend = MockBackend::new();
+        let mut gains = [0.0; eq::BAND_COUNT];
+        gains[3] = 2.5;
+        backend.set_equalizer_curves(vec![
+            UserCurve {
+                name: "Desk".into(),
+                gains_db: gains,
+            },
+            UserCurve {
+                name: "desk".into(),
+                gains_db: [1.0; eq::BAND_COUNT],
+            },
+        ]);
+        let state = backend.snapshot();
+        assert_eq!(state.equalizer_curves.len(), 1, "a name is kept once");
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: -4.0,
+            gains_db: gains,
+        });
+        let shown = shown_curve(&backend.snapshot());
+        assert_eq!(shown, Some(CurveMatch::User(0)), "the preamp never counts");
+        let index = picker_index(shown);
+        assert_eq!(index, i32::try_from(eq::PRESETS.len()).unwrap());
+        assert_eq!(picked_curve(index, 1), shown);
+        assert_eq!(picked_curve(0, 1), Some(CurveMatch::Preset(0)));
+        assert_eq!(picked_curve(index + 1, 1), None);
+        assert_eq!(picked_curve(-1, 1), None);
     }
 }

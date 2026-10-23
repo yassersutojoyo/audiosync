@@ -41,6 +41,24 @@ pub enum SourceId {
         /// The process ID of the app's top process.
         root_pid: u32,
     },
+    /// Several apps mixed: each top process in `root_pids` and every
+    /// process it started, each tree in its own loopback. A tree that no
+    /// longer runs is skipped, and an app with an audio session running one
+    /// of `executables` joins while the source plays.
+    Apps {
+        /// The process IDs of the apps' top processes.
+        root_pids: Vec<u32>,
+        /// The apps' executable file names, to find instances that start
+        /// later.
+        executables: Vec<String>,
+    },
+    /// Every app with an audio session except those running one of
+    /// `executables` (file names, such as `spotify.exe`), and never
+    /// AudioSync: each in its own loopback, as [`SourceId::Apps`].
+    AppsExcept {
+        /// The executable file names left out.
+        executables: Vec<String>,
+    },
     /// An input device (a microphone or line in): an active capture
     /// endpoint, by its endpoint ID.
     Input {
@@ -63,6 +81,10 @@ pub struct SourceInfo {
     /// remember a choice by it. Empty for the whole system and for an input
     /// device.
     pub executable: String,
+    /// An input device's channels in the format Windows runs it at, which
+    /// decide the channel pairs it offers; 0 for other sources and when
+    /// Windows doesn't say.
+    pub channels: u16,
 }
 
 /// What kind of device an output is, as Windows describes its endpoint.
@@ -674,6 +696,13 @@ pub trait AudioBackend {
     /// The source being captured, or `None` when stopped.
     fn running_source(&self) -> Option<SourceId>;
 
+    /// While an input device is captured, the largest sample magnitude
+    /// captured since the last call (1 is full scale), for the level meter;
+    /// `None` for any other source and while stopped.
+    fn input_peak(&mut self) -> Option<f32> {
+        None
+    }
+
     /// Turns an output on or off. While playing, an output turned on starts
     /// at once if it is connected; if it can't start, it is turned off again
     /// and the error returned.
@@ -804,6 +833,10 @@ pub trait AudioBackend {
     /// while there is no sender.
     fn airplay_sender_latency_ms(&self) -> Option<f64>;
 
+    /// The L_s the AirPlay delay field's value is turned into A against,
+    /// also while there is no sender (spec S178).
+    fn airplay_adjustment_base_ms(&self) -> f64;
+
     /// The user's AirPlay delay adjustment A in milliseconds: L = L_s + A
     /// while an AirPlay speaker is chosen (spec S178).
     fn airplay_adjustment(&self) -> f64;
@@ -873,6 +906,11 @@ pub trait AudioBackend {
 
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
+
+    /// The channel pair input device `endpoint_id` plays from its next
+    /// start (`InputPair::index`, 0 for channels 1-2). A running capture
+    /// keeps its pair until started again.
+    fn set_input_pair(&mut self, endpoint_id: &str, pair: u16);
 
     /// What a microphone calibration depends on: the session, the outputs
     /// that play, the reference and their hold-backs.

@@ -14,6 +14,7 @@ export component ZoneNameDialog inherits Dialog {
     in property <string> message;
     in property <string> placeholder;
     in property <string> confirm-label;
+    in property <string> field-label: Strings.new-zone-field-label;
     in-out property <string> name;
     // False for a message without a name field.
     in property <bool> show-field: true;
@@ -65,7 +66,7 @@ export component ZoneNameDialog inherits Dialog {
                 property <int> focus-request: root.focus-request;
                 text <=> root.name;
                 placeholder-text: root.placeholder;
-                accessible-label: Strings.new-zone-field-label;
+                accessible-label: root.field-label;
                 changed caret-in-view => {
                     root.name-caret-in-view = self.caret-in-view;
                 }
