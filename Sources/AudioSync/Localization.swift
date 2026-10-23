@@ -51,6 +51,8 @@ struct UIStrings {
     }
     let masterVolumeTitle = "Master Volume"
     let moreOptions = "Options"
+    /// VoiceOver hint of the gear, a plain button that opens an AppKit menu.
+    let moreOptionsHint = "Opens a menu of options"
     let dismissNotice = "Dismiss Notice"
     let dismissAllNotices = "Dismiss All"
     let previousTrack = "Previous Track"
