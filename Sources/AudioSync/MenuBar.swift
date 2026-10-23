@@ -1092,6 +1092,12 @@ struct SourcePicker: View {
     @ObservedObject var model: AppModel
     var large = false
 
+    /// Whether the chosen source is a mix, which checks the Several Apps menu.
+    private var isMix: Bool {
+        if case .mix = AudioSource(defaultsValue: model.sourceID) { return true }
+        return false
+    }
+
     var body: some View {
         let t = model.text
         Menu {
@@ -1109,7 +1115,7 @@ struct SourcePicker: View {
                 if source.id.isEmpty { Divider() }
             }
             Divider()
-            Menu(t.sourceSeveralApps) {
+            Menu {
                 Picker(t.sourceSeveralApps, selection: Binding(get: { model.mixMode },
                                                                set: { model.actions.setMixMode($0) })) {
                     Text(t.sourceMixOnly).tag(AppMixMode.only)
@@ -1118,6 +1124,9 @@ struct SourcePicker: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
                 Divider()
+                if model.mixApps.isEmpty {
+                    Text(t.sourceMixEmpty)
+                }
                 ForEach(model.mixApps) { app in
                     Toggle(isOn: Binding(get: { model.mixChecked.contains(app.id) },
                                          set: { _ in model.actions.toggleMixApp(app.id) })) {
@@ -1125,6 +1134,9 @@ struct SourcePicker: View {
                         Text(app.name)
                     }
                 }
+            } label: {
+                if isMix { Image(systemName: "checkmark") }
+                Text(t.sourceSeveralApps)
             }
         } label: {
             HStack(spacing: 8) {

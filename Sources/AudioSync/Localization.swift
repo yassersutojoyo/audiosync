@@ -478,10 +478,12 @@ struct UIStrings {
     let sourceSeveralApps = "Several Apps"
     let sourceMixOnly = "Only the Checked Apps"
     let sourceMixAllExcept = "All Apps Except the Checked Ones"
-    /// The picker's name for a mix source, from its apps' names.
+    let sourceMixEmpty = "No other apps are running."
+    /// The picker's name for a mix source, from its apps' names; the Windows
+    /// app words "all except" the same way.
     func sourceMixName(_ mode: AppMixMode, _ names: [String]) -> String {
         let list = names.joined(separator: ", ")
-        return mode == .only ? list : "All Except \(list)"
+        return mode == .only ? list : "All Apps Except \(list)"
     }
     let microphoneDenied = """
         AudioSync is not allowed to use input devices.
