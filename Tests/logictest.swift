@@ -1337,9 +1337,25 @@ do {
     check(int16Stereo == [-1, 0.5, 32_767 / 32_768, -1 / 32_768],
           "channel pairs: a 16-bit input's pair 3-4 is converted to float", "\(int16Stereo)")
 
-    let storedPairs: [String: Any] = ["a": 1, "b": 2.0, "c": 0, "d": -1, "e": 1.5, "f": "x", "g": Double.nan]
-    check(AppSettings.channelPairs(storedPairs) == ["a": 1, "b": 2] && AppSettings.channelPairs("x").isEmpty,
-          "channel pairs: only whole stored pairs above 1-2 are read back")
+    let started = [format(flags: float32), format(flags: signed, bits: 16)]
+    check(!CaptureInputFormat.needsRestart(started: started, now: started)
+            && !CaptureInputFormat.needsRestart(started: started, now: nil),
+          "input format: the same formats, or none readable, keep the capture running")
+    check(CaptureInputFormat.needsRestart(started: started, now: [format(flags: float32), format(flags: signed, bits: 24)])
+            && CaptureInputFormat.needsRestart(started: started,
+                                               now: [format(flags: float32), format(flags: signed, bits: 16, channels: 4)])
+            && CaptureInputFormat.needsRestart(started: started, now: [format(flags: float32)]),
+          "input format: a new bit depth, channel count or stream list restarts the capture")
+    var otherRate = started
+    otherRate[0].mSampleRate = 44_100
+    check(!CaptureInputFormat.needsRestart(started: started, now: otherRate),
+          "input format: a rate change is left to the rate listener")
+
+    let storedPairs: [String: Any] = ["a": 1, "b": 2.0, "c": 0, "d": -1, "e": 1.5, "f": "x", "g": Double.nan,
+                                      "h": 511, "i": 512]
+    check(AppSettings.channelPairs(storedPairs) == ["a": 1, "b": 2, "h": 511] && AppSettings.channelPairs("x").isEmpty
+            && InputChannelPair.maxStored == 511,
+          "channel pairs: only whole stored pairs from 1 to 511 are read back, as on Windows")
     final class PairStore { var values: [String: Any] = [:] }
     let pairStore = PairStore()
     let pairSettings = SettingsStore(read: { pairStore.values[$0] }, write: { value, key in pairStore.values[key] = value })

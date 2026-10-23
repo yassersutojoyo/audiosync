@@ -64,8 +64,8 @@ struct CaptureChannels {
             }
         }
 
-        /// The sample at `p` as float, integer full scale giving -1 and just
-        /// under 1. Real-time safe.
+        /// The sample at `p` as float: integer minimum gives -1, maximum just
+        /// under 1, or exactly 1 for 32-bit, as Float rounds Int32.max up. Real-time safe.
         @inline(__always)
         func value(at p: UnsafeRawPointer) -> Float {
             switch self {
@@ -123,18 +123,18 @@ struct CaptureChannels {
         let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
         var l: Side?
         var r: Side?
-        var first = 0
+        var offset = 0
         for buffer in buffers {
             let channels = Int(buffer.mNumberChannels)
             guard channels > 0 else { continue }
-            if l == nil, layout.left >= first, layout.left < first + channels {
-                l = Side(buffer, channel: layout.left - first, sample: layout.leftSample)
+            if l == nil, layout.left >= offset, layout.left < offset + channels {
+                l = Side(buffer, channel: layout.left - offset, sample: layout.leftSample)
             }
-            if r == nil, layout.right >= first, layout.right < first + channels {
-                r = Side(buffer, channel: layout.right - first, sample: layout.rightSample)
+            if r == nil, layout.right >= offset, layout.right < offset + channels {
+                r = Side(buffer, channel: layout.right - offset, sample: layout.rightSample)
             }
             if l != nil, r != nil { break }
-            first += channels
+            offset += channels
         }
         guard let first = l, first.base != nil, let second = r ?? l, second.base != nil else {
             frames = 0; left = nil; right = nil
@@ -338,11 +338,11 @@ enum CaptureInputFormat: Equatable {
         let total = channelCount(streams)
         if total == 0 { return .noChannels }
         func sample(of channel: Int) -> CaptureChannels.Sample? {
-            var first = 0
+            var offset = 0
             for format in streams {
                 let channels = Int(format.mChannelsPerFrame)
-                if channel >= first, channel < first + channels { return CaptureChannels.Sample.of(format) }
-                first += channels
+                if channel >= offset, channel < offset + channels { return CaptureChannels.Sample.of(format) }
+                offset += channels
             }
             return nil
         }
@@ -358,6 +358,20 @@ enum CaptureInputFormat: Equatable {
     /// The input channels of all `streams` together.
     static func channelCount(_ streams: [AudioStreamBasicDescription]) -> Int {
         streams.reduce(0) { $0 + Int($1.mChannelsPerFrame) }
+    }
+
+    /// Whether a capture whose IOProc layout came from `started` must start
+    /// again now that its streams report `now`: a stream added or gone, or a
+    /// new sample type or channel count. The rate has its own listener, and
+    /// formats that can't be read leave it to the disconnect listeners.
+    static func needsRestart(started: [AudioStreamBasicDescription], now: [AudioStreamBasicDescription]?) -> Bool {
+        guard let now else { return false }
+        guard now.count == started.count else { return true }
+        return zip(started, now).contains { old, new in
+            old.mFormatID != new.mFormatID || old.mFormatFlags != new.mFormatFlags
+                || old.mBytesPerFrame != new.mBytesPerFrame || old.mChannelsPerFrame != new.mChannelsPerFrame
+                || old.mBitsPerChannel != new.mBitsPerChannel
+        }
     }
 }
 
@@ -375,6 +389,10 @@ struct InputChannelPair: Equatable {
     /// Channels 1 and 2. A one-channel device has no second channel, so the
     /// IOProc plays its only one on both sides.
     static let first = InputChannelPair(index: 0, left: 0, right: 1)
+
+    /// The largest pair index kept in settings, a device with 1024 channels;
+    /// the Windows app keeps the same.
+    static let maxStored = 511
 
     /// The pairs to choose from on a device with `channels` input channels;
     /// none up to two channels, where there is nothing to choose.

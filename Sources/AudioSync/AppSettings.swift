@@ -208,7 +208,7 @@ struct AppSettings: Equatable {
         guard let dict = value as? [String: Any] else { return [:] }
         var out: [String: Int] = [:]
         for (uid, raw) in dict {
-            guard let n = number(raw), n.rounded() == n, n >= 1, n <= 1024 else { continue }
+            guard let n = number(raw), n.rounded() == n, n >= 1, n <= Double(InputChannelPair.maxStored) else { continue }
             out[uid] = Int(n)
         }
         return out

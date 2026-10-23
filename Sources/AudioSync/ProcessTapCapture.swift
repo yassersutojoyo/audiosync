@@ -219,7 +219,7 @@ final class SourceCapture {
         parts.prepare(captureRate: sampleRate)
         do { try link.begin() } catch { link.close(); throw error }
         io = link
-        watchInput(device, uid: uid)
+        watchInput(device, uid: uid, formats: streams)
         DebugTrace.log("[AudioSync] capture: input device \(uid) at \(sampleRate) Hz, "
                        + "\(CaptureChannels.describe(layout, of: channels))")
     }
@@ -386,7 +386,7 @@ final class SourceCapture {
         }
     }
 
-    private func watchInput(_ device: AudioObjectID, uid: String) {
+    private func watchInput(_ device: AudioObjectID, uid: String, formats: [AudioStreamBasicDescription]) {
         let mark = sessionMark
         let gone = { [weak self] in
             guard let self, self.isCurrent(mark) else { return }
@@ -407,6 +407,19 @@ final class SourceCapture {
             guard CaptureRate.needsRestart(current: self.sampleRate, reported: rate) else { return }
             DebugTrace.log("[AudioSync] capture rate changed: \(self.sampleRate) → \(rate) Hz")
             self.interrupt(.formatChanged)
+        }
+        // The IOProc's layout was read from these formats; a new bit depth or channel count would be misread.
+        let layoutChanged = { [weak self] in
+            guard let self, self.isCurrent(mark) else { return }
+            let now = try? HAL.inputStreamFormats(of: device)
+            guard CaptureInputFormat.needsRestart(started: formats, now: now) else { return }
+            DebugTrace.log("[AudioSync] capture: input device \(uid) changed its stream format")
+            self.interrupt(.formatChanged)
+        }
+        sessionListeners.add(device, kAudioDevicePropertyStreamConfiguration, scope: kAudioObjectPropertyScopeInput,
+                             layoutChanged)
+        for stream in (try? HAL.inputStreams(of: device)) ?? [] {
+            sessionListeners.add(stream, kAudioStreamPropertyVirtualFormat, layoutChanged)
         }
     }
 
@@ -604,8 +617,9 @@ private extension SourceCapture {
         /// Adds a listener for one property of `object`. A listener Core Audio
         /// refuses is logged and left out; capture runs on without it.
         mutating func add(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                          scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
                           _ handler: @escaping () -> Void) {
-            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope,
                                                      mElement: kAudioObjectPropertyElementMain)
             // Kept as the block object itself, so the removal names the same block.
             let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
@@ -686,8 +700,8 @@ private extension SourceCapture {
             return device
         }
 
-        /// The formats the device's input streams deliver to an IOProc, in stream order.
-        static func inputStreamFormats(of device: AudioObjectID) throws -> [AudioStreamBasicDescription] {
+        /// The device's input streams, in stream order.
+        static func inputStreams(of device: AudioObjectID) throws -> [AudioStreamID] {
             var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
                                                      mScope: kAudioObjectPropertyScopeInput,
                                                      mElement: kAudioObjectPropertyElementMain)
@@ -698,7 +712,12 @@ private extension SourceCapture {
             if streams.isEmpty { return [] }
             status = AudioObjectGetPropertyData(device, &address, 0, nil, &listBytes, &streams)
             guard status == noErr else { throw CaptureError.formatUnusable(status) }
-            return try streams.prefix(Int(listBytes) / MemoryLayout<AudioStreamID>.size).map { stream in
+            return Array(streams.prefix(Int(listBytes) / MemoryLayout<AudioStreamID>.size))
+        }
+
+        /// The formats the device's input streams deliver to an IOProc, in stream order.
+        static func inputStreamFormats(of device: AudioObjectID) throws -> [AudioStreamBasicDescription] {
+            return try inputStreams(of: device).map { stream in
                 var format = AudioStreamBasicDescription()
                 let status = read(stream, kAudioStreamPropertyVirtualFormat, into: &format)
                 guard status == noErr else { throw CaptureError.formatUnusable(status) }

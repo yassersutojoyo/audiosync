@@ -1217,14 +1217,22 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            if root.input-pairs.length > 0: PairPicker {
-                                model: root.input-pairs;
-                                chosen: root.input-pair-index;
-                                changed has-focus => {
-                                    root.control-focus-changed(MainControl.input-pair, self.has-focus);
+                            if root.input-pairs.length > 0: VerticalLayout {
+                                spacing: 4px;
+
+                                SecondaryText {
+                                    text: Strings.input-channels-label;
                                 }
-                                picked(index) => {
-                                    root.input-pair-selected(index);
+
+                                PairPicker {
+                                    model: root.input-pairs;
+                                    chosen: root.input-pair-index;
+                                    changed has-focus => {
+                                        root.control-focus-changed(MainControl.input-pair, self.has-focus);
+                                    }
+                                    picked(index) => {
+                                        root.input-pair-selected(index);
+                                    }
                                 }
                             }
                         }

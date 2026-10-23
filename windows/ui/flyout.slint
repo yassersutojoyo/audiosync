@@ -264,11 +264,19 @@ export component TrayFlyout inherits Window {
                 }
             }
 
-            if root.input-pairs.length > 0: PairPicker {
-                model: root.input-pairs;
-                chosen: root.input-pair-index;
-                picked(index) => {
-                    root.input-pair-selected(index);
+            if root.input-pairs.length > 0: VerticalLayout {
+                spacing: 4px;
+
+                SecondaryText {
+                    text: Strings.input-channels-label;
+                }
+
+                PairPicker {
+                    model: root.input-pairs;
+                    chosen: root.input-pair-index;
+                    picked(index) => {
+                        root.input-pair-selected(index);
+                    }
                 }
             }
 
