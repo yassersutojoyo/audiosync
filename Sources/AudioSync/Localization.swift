@@ -167,8 +167,9 @@ struct UIStrings {
 
     let calibrateWithMicrophone = "Calibrate with Microphone"
     func calibrateLabel(of name: String) -> String { "Calibrate \(name) with the microphone" }
-    let calibrationHint = "Put the microphone where you listen. AudioSync pauses the music, plays a short, "
-        + "quiet sweep on the built-in speakers and then on this speaker, and sets this speaker's delay from the difference."
+    let calibrationHint = "Put the microphone where you listen. AudioSync fades the music out, plays a short, "
+        + "quiet sweep on the built-in speakers and then on this speaker, sets this speaker's delay from the "
+        + "difference and fades the music back in."
     let calibrationCancel = "Cancel"
     func calibrationCancelLabel(of name: String) -> String { "Cancel calibrating \(name)" }
     let openMicrophoneSettings = "Open Microphone Settings"
