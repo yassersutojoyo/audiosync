@@ -5510,9 +5510,10 @@ mod tests {
         let app = app_over(MockBackend::new());
         draw_frames();
         let window = app.main.window();
-        // The desk's name.
-        click(window, 420.0, 625.0);
-        click(window, 420.0, 625.0);
+        // Just inside the start of the desk's name, which stays put whatever
+        // the system font's widths.
+        click(window, 380.0, 625.0);
+        click(window, 380.0, 625.0);
         assert!(
             row_of(&app, "local:desk").renaming,
             "the double-click renames"
@@ -5527,7 +5528,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_cancelled("local:desk".into());
         draw_frames();
-        click(window, 420.0, 625.0);
+        click(window, 380.0, 625.0);
         assert!(
             app.ui.borrow().sync_open.is_empty(),
             "one click waits for a second"

@@ -531,22 +531,48 @@ pub mod tests {
         Credentials::new(client, [fill; 32]).expect("valid credentials")
     }
 
-    /// A stand-in for DPAPI off Windows: flips every bit, and refuses data
-    /// that doesn't start with its tag.
-    struct Flip;
+    /// A stand-in for DPAPI off Windows: XORs each byte with a mask that
+    /// changes with its place, and refuses data that doesn't start with its
+    /// tag. A mask that stays the same would turn one speaker's secret into
+    /// another's (0x5A into 0xA5), and the test that no secret is on disk
+    /// as is would fail.
+    struct Scramble;
 
-    impl Seal for Flip {
+    fn mask(index: usize) -> u8 {
+        (index as u8).wrapping_mul(37) ^ 0x5C
+    }
+
+    impl Seal for Scramble {
         fn seal(&self, plain: &[u8]) -> io::Result<Vec<u8>> {
-            let mut sealed = b"FLIP".to_vec();
-            sealed.extend(plain.iter().map(|byte| !byte));
+            let mut sealed = b"SCRM".to_vec();
+            sealed.extend(plain.iter().enumerate().map(|(i, byte)| byte ^ mask(i)));
             Ok(sealed)
         }
 
         fn open(&self, sealed: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
             let body = sealed
-                .strip_prefix(b"FLIP")
+                .strip_prefix(b"SCRM")
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not sealed"))?;
-            Ok(Zeroizing::new(body.iter().map(|byte| !byte).collect()))
+            Ok(Zeroizing::new(
+                body.iter()
+                    .enumerate()
+                    .map(|(i, byte)| byte ^ mask(i))
+                    .collect(),
+            ))
+        }
+    }
+
+    #[test]
+    fn the_stand_in_sealer_leaves_no_run_of_one_byte() {
+        for fill in [0x00, 0x5A, 0xA5, 0xFF] {
+            let sealed = Scramble.seal(&[fill; 32]).unwrap();
+            assert!(
+                !sealed
+                    .windows(8)
+                    .any(|w| w.iter().all(|byte| *byte == w[0])),
+                "{fill:#04x}"
+            );
+            assert_eq!(*Scramble.open(&sealed).unwrap(), [fill; 32]);
         }
     }
 
@@ -555,7 +581,7 @@ pub mod tests {
         if cfg!(windows) {
             crate::os::sealer()
         } else {
-            Sealer::new(&Flip)
+            Sealer::new(&Scramble)
         }
     }
 
