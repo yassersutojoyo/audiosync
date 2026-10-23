@@ -127,6 +127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var zones: [SpeakerZone] {
         didSet { if zones != oldValue { store.save(zones: zones) } }
     }
+    /// The speaker presets (S251): stored and migrated from the groups, not shown yet.
+    var presets: [SpeakerPreset] {
+        didSet { if presets != oldValue { store.save(presets: presets) } }
+    }
     /// Speaker keys switched on as soon as they appear.
     var autoConnect: Set<String> {
         didSet { if autoConnect != oldValue { store.save(ids: autoConnect, forKey: Keys.autoConnect) } }
@@ -249,6 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         airplayVolume = saved.airplayVolumes
         groups = saved.groups
         zones = saved.zones
+        presets = saved.presets
         autoConnect = saved.autoConnect
         speakerNames = saved.speakerNames.castKeysMoved()
         showVirtualDevices = saved.showVirtualDevices

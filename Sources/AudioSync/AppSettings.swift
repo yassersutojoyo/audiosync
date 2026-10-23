@@ -38,6 +38,11 @@ struct AppSettings: Equatable {
         static let zones = "speakerZones"
         /// True once the groups were moved to `zones` (S248); written last.
         static let zonesMigrated = "speakerZonesMigrated"
+        /// `[SpeakerPreset]` as JSON (S251).
+        static let presets = "speakerPresets"
+        /// True once the groups that lost a member to the zones became
+        /// presets (S254); written last.
+        static let presetsMigrated = "speakerPresetsMigrated"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
         static let autoConnect = "autoConnectSpeakers"
         /// The names the user gave speakers, by speaker key (`SpeakerNames`).
@@ -107,6 +112,7 @@ struct AppSettings: Equatable {
     var airplayVolumes: [String: Double] = [:]
     var groups: [SpeakerGroup] = []
     var zones: [SpeakerZone] = []
+    var presets: [SpeakerPreset] = []
     var autoConnect: Set<String> = []
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
@@ -153,6 +159,7 @@ struct AppSettings: Equatable {
         s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
         s.groups = decodeGroups(read(Keys.groups) as? Data)
         s.zones = decodeZones(read(Keys.zones) as? Data)
+        s.presets = decodePresets(read(Keys.presets) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
@@ -216,6 +223,13 @@ struct AppSettings: Equatable {
         guard let data, let list = try? JSONDecoder().decode([SpeakerZone].self, from: data) else { return [] }
         return SpeakerZone.normalized(list)
     }
+
+    /// The stored presets as S251 keeps them; none when the data is missing
+    /// or can't be read.
+    static func decodePresets(_ data: Data?) -> [SpeakerPreset] {
+        guard let data, let list = try? JSONDecoder().decode([SpeakerPreset].self, from: data) else { return [] }
+        return SpeakerPreset.normalized(list)
+    }
 }
 
 /// Where the settings are read and written: UserDefaults in the app, a plain
@@ -233,12 +247,40 @@ struct SettingsStore {
                       write: { UserDefaults.standard.set($0, forKey: $1) })
     }
 
-    /// Brings older forms up to date (`migrate`, `migrateZones`), then reads
-    /// every setting.
+    /// Brings older forms up to date (`migrate`, `migrateZones`,
+    /// `migratePresets`), then reads every setting.
     func load() -> AppSettings {
         migrate()
         migrateZones()
+        migratePresets()
         return AppSettings.load(read)
+    }
+
+    /// The one-time move of the groups that lost a member to the zones to
+    /// presets (S254), after `migrateZones`: without the mark, the presets
+    /// become `PresetMigration`'s, then the mark is written. A run cut short
+    /// before the mark runs again to the same presets; once marked, nothing
+    /// changes.
+    func migratePresets() {
+        guard read(Keys.presetsMigrated) as? Bool != true else { return }
+        let local = AppSettings.levels(read(Keys.localVolumes), AppSettings.volume)
+        let airplay = AppSettings.levels(read(Keys.airplayVolumes), AppSettings.volume)
+        let volume: (String) -> Double? = { key in
+            guard let (id, kind) = SpeakerKey.parseAny(key) else { return nil }
+            switch kind {
+            case .local: return local[id]
+            case .airplay: return airplay[id]
+            case .cast: return nil
+            }
+        }
+        let presets = PresetMigration.presets(
+            from: AppSettings.decodeGroups(read(Keys.groups) as? Data),
+            zones: AppSettings.decodeZones(read(Keys.zones) as? Data),
+            volume: volume,
+            master: read(Keys.master).flatMap(AppSettings.number).map(AppSettings.volume) ?? AppSettings.defaultMaster,
+            gains: StoredEqualizer.decode(read(Keys.equalizer) as? Data).gains)
+        save(presets: presets)
+        write(true, Keys.presetsMigrated)
     }
 
     /// The one-time move of the groups to zones (S248): without the mark, the
@@ -279,6 +321,11 @@ struct SettingsStore {
     func save(zones: [SpeakerZone]) {
         guard let data = try? JSONEncoder().encode(zones) else { return }
         write(data, Keys.zones)
+    }
+
+    func save(presets: [SpeakerPreset]) {
+        guard let data = try? JSONEncoder().encode(presets) else { return }
+        write(data, Keys.presets)
     }
 
     /// Removed once no speaker has a name of the user's.

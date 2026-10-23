@@ -622,6 +622,14 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | zones: zones round-trip through the user defaults, an empty one included | S245, S248 |
 | zones: stored zones keep a speaker in its first zone, one zone per ID, volumes within 0…100 | S245 |
 | zones: unreadable zones read as none and never migrate again | S248 |
+| speaker IDs: a bundled-engine ID kept only in a preset moves too | S204, S254 |
+| speaker IDs: speaker ID migration renames preset members, and a preset already holding the new key keeps it | S204, S254 |
+| presets: an overlapping group becomes a preset with its full members | S248, S254 |
+| presets: the migrated mark is written last | S254 |
+| presets: a migration cut short before its mark runs again to the same presets | S254 |
+| presets: migrating presets twice changes nothing: once marked, a launch writes nothing | S254 |
+| presets: presets round-trip through the user defaults, a fixed Cast volume included | S251 |
+| presets: stored presets keep one Cast key, one preset per ID, levels within range | S251 |
 | group name: trimmed | S150 |
 | group name: blank or whitespace-only is no name | S150 |
 | group name: a typed name is kept | S150 |
