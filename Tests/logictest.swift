@@ -5514,10 +5514,20 @@ do {
     _ = offsetKept.setOffset(manualID, ms: 240)
     offsetKept.apply(.gone(id: manualID))
     offsetKept.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: 100, former: manualID))
+    var ownSet = CastModel()
+    _ = ownSet.setOffset(manualID, ms: 240)
+    _ = ownSet.setOffset(realID, ms: 100)
+    ownSet.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: 100, former: manualID))
+    var ownCleared = CastModel()
+    _ = ownCleared.setOffset(manualID, ms: 240)
+    _ = ownCleared.setOffset(realID, ms: 50)
+    let cleared = ownCleared.clearOffset(realID)
+    ownCleared.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: 240, former: manualID))
     check(offsetMoves.offset(of: realID) == 240 && offsetMoves.offsets[manualID] == nil
-            && offsetKept.offset(of: realID) == 100,
-          "cast model: a speaker added by address that a browse finds keeps its offset under its id, unless the "
-            + "sender reports one the id already had")
+            && offsetKept.offset(of: realID) == 100 && ownSet.offset(of: realID) == 100
+            && cleared && ownCleared.offset(of: realID) == 240,
+          "cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender "
+            + "does: over none or a cleared one, never over one the id already had")
 
     var stopped = CastModel()
     stopped.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))

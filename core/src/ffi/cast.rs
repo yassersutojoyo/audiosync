@@ -718,11 +718,12 @@ impl AscCast {
                     }
                 }
                 // Before CAST_APPEARED, which the host answers by reading the ID's offset.
+                // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
                 let memory = self.host.memory();
-                if let (Some(offset), None) = (
-                    memory.offset(&memory_id(DeviceKey::Manual(from))),
-                    memory.offset(&id),
-                ) {
+                let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
+                if let (Some(offset), None) =
+                    (stored(&memory_id(DeviceKey::Manual(from))), stored(&id))
+                {
                     self.host.set_offset(id, offset);
                     self.events
                         .push_back(Pending::new(CAST_EVENT_MEMORY_CHANGED));
@@ -2409,9 +2410,11 @@ mod tests {
     #[test]
     fn a_browse_that_identifies_a_device_added_by_address_keeps_its_offset() {
         const LIVING: &str = "fedcba9876543210fedcba9876543210";
+        const PORCH: &str = "00112233445566778899aabbccddeeff";
         let handle = create();
         let kitchen_manual = add(handle, "192.0.2.5:8009");
         let living_manual = add(handle, "192.0.2.6:8009");
+        let porch_manual = add(handle, "192.0.2.7:8009");
         let offset = |id: &str| {
             let id = CString::new(id).unwrap();
             // SAFETY: a live handle, used by this thread only.
@@ -2425,6 +2428,8 @@ mod tests {
         set(&kitchen_manual, 240.0);
         set(&living_manual, 300.0);
         set(LIVING, 100.0);
+        set(&porch_manual, 240.0);
+        set(PORCH, 0.0);
         devices(handle);
         waiting(handle);
         browse(
@@ -2442,6 +2447,12 @@ mod tests {
                     DEVICE_PORT,
                     Ipv4Addr::new(192, 0, 2, 6),
                 )),
+                BrowseEvent::Resolved(record(
+                    PORCH,
+                    "Porch",
+                    DEVICE_PORT,
+                    Ipv4Addr::new(192, 0, 2, 7),
+                )),
             ],
             false,
         );
@@ -2453,6 +2464,11 @@ mod tests {
         );
         assert_eq!(offset(KITCHEN), 240.0, "moved to the ID");
         assert_eq!(offset(LIVING), 100.0, "the ID's own offset stays");
+        assert_eq!(
+            offset(PORCH),
+            240.0,
+            "0 ms, left by an Undo, counts as none"
+        );
         assert!(
             waiting(handle)
                 .iter()
