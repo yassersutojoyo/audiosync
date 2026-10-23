@@ -44,12 +44,18 @@ struct CalibrateAllButton: View {
     }
 }
 
+/// The measured height of the sheet's scrolling rows; nil until the first layout.
+final class CalibrateAllListHeight: ObservableObject {
+    @Published var height: CGFloat?
+}
+
 /// The Calibrate All Speakers sheet: the run's progress with Cancel, then
 /// every speaker's current and new delay, the shared AirPlay delay, Apply,
 /// Undo and Measure Again (S238, S239).
 struct CalibrateAllSheetView: View {
     @ObservedObject var model: AppModel
-    @State private var listHeight: CGFloat = 0
+    /// An object rather than @State: the Command Line Tools can't expand @State.
+    @StateObject private var list = CalibrateAllListHeight()
 
     /// Keeps Apply and Close on a 13-inch screen with a dozen or more rows.
     private static let maxListHeight: CGFloat = 420
@@ -85,10 +91,10 @@ struct CalibrateAllSheetView: View {
                         leftOutRows(status, t: t)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { list.height = $0 }
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                .frame(height: min(listHeight, Self.maxListHeight))
+                .frame(height: list.height.map { min($0, Self.maxListHeight) })
             }
             if status.sheet == nil, !status.isRunning, status.line == nil, let blocker = status.blocker {
                 Text(t.calibrateAllSheetBlocker(blocker))
