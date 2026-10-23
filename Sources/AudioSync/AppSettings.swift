@@ -37,6 +37,9 @@ struct AppSettings: Equatable {
         static let autoConnect = "autoConnectSpeakers"
         /// The names the user gave speakers, by speaker key (`SpeakerNames`).
         static let speakerNames = "speakerNamesByKey"
+        /// The speakers hidden with Hide Speaker (`HiddenSpeakers.stored`):
+        /// an array of key, name and kind.
+        static let hiddenSpeakers = "hiddenSpeakers"
         static let showVirtualDevices = "showVirtualOutputDevices"
         /// `AppAppearance.defaultsValue` (S155).
         static let appearance = "appearance"
@@ -100,6 +103,7 @@ struct AppSettings: Equatable {
     var groups: [SpeakerGroup] = []
     var autoConnect: Set<String> = []
     var speakerNames = SpeakerNames()
+    var hiddenSpeakers = HiddenSpeakers()
     var showVirtualDevices = false
     var appearance = AppAppearance.system
     var whenSourceQuits = WhenSourceQuits.stop
@@ -131,6 +135,7 @@ struct AppSettings: Equatable {
         s.enabledLocal = ids(read(Keys.enabledLocal))
         s.autoConnect = ids(read(Keys.autoConnect))
         s.speakerNames = SpeakerNames(stored: read(Keys.speakerNames))
+        s.hiddenSpeakers = HiddenSpeakers(stored: read(Keys.hiddenSpeakers))
         s.master = read(Keys.master).flatMap(number).map(volume) ?? defaultMaster
         s.localVolumes = levels(read(Keys.localVolumes), volume)
         s.localDelays = levels(read(Keys.localDelays), delay)
@@ -248,6 +253,11 @@ struct SettingsStore {
     /// Removed once no speaker has a name of the user's.
     func save(speakerNames: SpeakerNames) {
         write(speakerNames.custom.isEmpty ? nil : speakerNames.custom, Keys.speakerNames)
+    }
+
+    /// Removed once nothing is hidden.
+    func save(hiddenSpeakers: HiddenSpeakers) {
+        write(hiddenSpeakers.isEmpty ? nil : hiddenSpeakers.stored, Keys.hiddenSpeakers)
     }
 
     func save(showVirtualDevices: Bool) { write(showVirtualDevices, Keys.showVirtualDevices) }

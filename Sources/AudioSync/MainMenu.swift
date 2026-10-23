@@ -53,6 +53,9 @@ enum MainMenu {
         speakers.addItem(.separator())
         speakers.addItem(item(t.newGroup, #selector(AppDelegate.newGroup(_:)), "n"))
         speakers.addItem(item(t.refreshDevices, #selector(AppDelegate.refreshDevices(_:)), "r"))
+        let hidden = NSMenu(title: t.hiddenSpeakers)
+        hidden.delegate = HiddenSpeakersMenu.shared   // filled each time it opens
+        speakers.addItem(withTitle: t.hiddenSpeakers, action: nil, keyEquivalent: "").submenu = hidden
 
         let window = submenu(of: main, title: t.menuWindow)
         window.addItem(item(t.menuMinimize, #selector(NSWindow.performMiniaturize(_:)), "m"))
