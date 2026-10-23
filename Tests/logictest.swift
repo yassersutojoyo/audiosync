@@ -5798,5 +5798,19 @@ do {
           "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
 }
 
+// MARK: Microphone permission request (MicrophoneRequestGate.swift)
+do {
+    var gate = MicrophoneRequestGate()
+    let first = gate.begin(origin: .user)
+    let second = gate.begin(origin: .automatic)
+    check(first && !second, "microphone: a start behind an open prompt sends no second request")
+    check(gate.answer() == .automatic && gate.answer() == nil,
+          "microphone: the one answer runs exactly one start, with the latest origin")
+    check(gate.begin(origin: .user) && gate.answer() == .user,
+          "microphone: after the answer, a new start may ask again")
+    var unasked = MicrophoneRequestGate()
+    check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
