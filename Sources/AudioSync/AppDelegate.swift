@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// The zones (S245): stored and migrated from the groups, not shown yet.
     var zones: [SpeakerZone] {
-        didSet { if zones != oldValue { store.save(zones: zones) } }
+        didSet { if zones != oldValue { store.save(zones: zones); applyZoneVolumes() } }
     }
     /// Speaker keys switched on as soon as they appear.
     var autoConnect: Set<String> {
@@ -260,6 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
         _ = castModel.setMaster(saved.master)
+        _ = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast))
     }
 
     /// The one-time migration of the absolute delays to offsets (S179), with

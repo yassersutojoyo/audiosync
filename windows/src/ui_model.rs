@@ -931,8 +931,8 @@ pub trait Backend {
     fn move_to_zone(&mut self, speaker_id: &str, zone_id: &str);
     /// Takes speaker `speaker_id` out of its zone.
     fn remove_from_zone(&mut self, speaker_id: &str);
-    /// Keeps zone `id`'s volume slider position, 0 to 100; the speakers'
-    /// own volumes don't follow it yet.
+    /// Sets zone `id`'s volume, 0 to 100, which scales each member's own
+    /// volume (spec S249).
     fn set_zone_volume(&mut self, id: &str, volume: f64);
     /// Use … Instead in a zone's menu: the stereo pair or home theater that
     /// member `speaker_id` plays as part of takes its place in the zone.

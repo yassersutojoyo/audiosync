@@ -381,4 +381,8 @@ struct CoreGainCurve {
     func outputGain(localPosition: Double, masterPosition: Double) -> Double {
         asc_output_gain(localPosition, masterPosition)
     }
+    /// A local output's gain through its zone, 100 in no zone (S71, S249).
+    func outputGain(localPosition: Double, zonePosition: Double, masterPosition: Double) -> Double {
+        asc_zone_output_gain(localPosition, zonePosition, masterPosition)
+    }
 }

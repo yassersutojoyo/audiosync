@@ -49,6 +49,9 @@ final class NativeAirPlay {
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
     private var queuedHoldBackMs = 0.0
+    /// The zone position of every receiver in a zone, which the sender gets,
+    /// also when it is created later (queue only, S249).
+    private var zoneVolumes: [String: Double] = [:]
     /// The receivers added to the sender, in the order they were added, and
     /// the uptime of the last status line (queue only; `logStatusIfDue`).
     private var addedIDs: [String] = []
@@ -138,6 +141,20 @@ final class NativeAirPlay {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
             asc_airplay_set_master(handle, master)
+        }
+    }
+
+    /// The zone position (0 to 100) of every receiver in a zone, live; the
+    /// rest are in no zone (S249). Main queue.
+    func setZones(_ zones: [String: Double]) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let old = self.zoneVolumes
+            self.zoneVolumes = zones
+            guard let handle = self.handle else { return }
+            for id in Set(old.keys).union(zones.keys) where old[id] != zones[id] {
+                _ = asc_airplay_set_zone_volume(handle, id, zones[id] ?? SpeakerZone.noZoneVolume)
+            }
         }
     }
 
@@ -313,6 +330,7 @@ final class NativeAirPlay {
             }
         }
         asc_airplay_set_master(created, master)
+        for (id, zone) in zoneVolumes { _ = asc_airplay_set_zone_volume(created, id, zone) }
         _ = asc_airplay_set_hold_back(created, queuedHoldBackMs)
         if let taken = asc_airplay_take_input(created) {
             input = taken

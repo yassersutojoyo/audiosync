@@ -1,11 +1,12 @@
 //! Volume curve, host-side volume rules, gain application and input channel
 //! mapping (spec sections 2, 6 and 7).
 
+use audiosync_cast::status::{NO_ZONE_LEVEL, device_level, own_level, start_own_level};
 use audiosync_core::channels::input_to_stereo;
 use audiosync_core::volume::{
-    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, GainStage, SharedGain, apply_gain,
-    clamp_position, gain_for_position, gain_to_db, migrate_legacy_percent, output_gain,
-    position_for_gain, sanitize_position,
+    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, GainStage, NO_ZONE_POSITION, SharedGain,
+    apply_gain, clamp_position, gain_for_position, gain_to_db, migrate_legacy_percent, output_gain,
+    own_position_for_level, position_for_gain, sanitize_position, stage_level, zoned_output_gain,
 };
 use proptest::prelude::*;
 
@@ -64,6 +65,101 @@ fn a_local_output_plays_at_its_gain_times_the_master_gain() {
     );
     assert_eq!(output_gain(50.0, 50.0), 0.125 * 0.125);
     assert_eq!(output_gain(100.0, 0.0), 0.0);
+}
+
+// covers: S71, S249
+#[test]
+fn the_local_gain_is_own_times_zone_times_master() {
+    assert_eq!(zoned_output_gain(50.0, 50.0, 100.0), 0.125 * 0.125);
+    assert_eq!(zoned_output_gain(100.0, 50.0, 50.0), 0.125 * 0.125);
+    assert_eq!(zoned_output_gain(60.0, 0.0, 100.0), 0.0, "zone 0 is silent");
+    assert_eq!(zoned_output_gain(100.0, 150.0, 100.0), 1.0, "clamped");
+    let half = zoned_output_gain(DEFAULT_LOCAL_POSITION, 50.0, DEFAULT_MASTER_POSITION);
+    assert!(
+        (gain_to_db(half) - (gain_to_db(output_gain(60.0, 100.0)) - 18.06)).abs() < 0.005,
+        "a zone at 50 takes about 18 dB more"
+    );
+}
+
+/// The stages as they were before zones: local `g(own) × g(master)`;
+/// AirPlay `(own / 100)(master / 100)` and its read-back `level ÷ master`;
+/// Cast `master × own` and `level ÷ master`.
+fn before_zones_airplay(own: f64, master: f64) -> f64 {
+    (own / 100.0).clamp(0.0, 1.0) * (master / 100.0).clamp(0.0, 1.0)
+}
+
+// covers: S71, S249, S250
+#[test]
+fn without_zones_every_gain_and_level_is_bit_identical() {
+    let positions = [0.0, 1.0, 13.0, 37.5, 50.0, 60.0, 61.0, 99.0, 100.0];
+    for &own in &positions {
+        for &master in &positions {
+            assert_eq!(
+                zoned_output_gain(own, NO_ZONE_POSITION, master).to_bits(),
+                output_gain(own, master).to_bits(),
+                "local {own} at master {master}"
+            );
+            assert_eq!(
+                stage_level(own, NO_ZONE_POSITION, master).to_bits(),
+                before_zones_airplay(own, master).to_bits(),
+                "AirPlay {own} at master {master}"
+            );
+            let (own_level_kept, master_level) = (own / 100.0, master / 100.0);
+            assert_eq!(
+                device_level(master_level, NO_ZONE_LEVEL, own_level_kept).to_bits(),
+                (master_level * own_level_kept).to_bits(),
+                "Cast {own} at master {master}"
+            );
+            for level in [0.0, 0.123, 0.4, 0.777, 1.0] {
+                let before = (master > 0.0).then(|| {
+                    (level / (master / 100.0) * 100.0_f64)
+                        .clamp(0.0, 100.0)
+                        .round()
+                });
+                assert_eq!(
+                    own_position_for_level(level, NO_ZONE_POSITION, master).map(f64::to_bits),
+                    before.map(f64::to_bits),
+                    "AirPlay read-back {level} at master {master}"
+                );
+                let before = if master > 0.0 {
+                    (level / master_level).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                assert_eq!(
+                    own_level(level, master_level, NO_ZONE_LEVEL, 0.5).to_bits(),
+                    before.to_bits(),
+                    "Cast read-back {level} at master {master}"
+                );
+                assert_eq!(
+                    start_own_level(master_level, NO_ZONE_LEVEL, None, level).to_bits(),
+                    if master > 0.0 { before } else { level }.to_bits(),
+                    "Cast first status {level} at master {master}"
+                );
+            }
+        }
+    }
+}
+
+// covers: S250
+#[test]
+fn a_read_back_through_the_zone_divides_by_zone_times_master() {
+    assert_eq!(own_position_for_level(0.4, 50.0, 100.0), Some(80.0));
+    assert_eq!(own_position_for_level(0.2, 50.0, 50.0), Some(80.0));
+    assert_eq!(
+        own_position_for_level(0.9, 50.0, 100.0),
+        Some(100.0),
+        "clamped"
+    );
+    assert_eq!(
+        own_position_for_level(0.333, 100.0, 100.0),
+        Some(33.0),
+        "a whole step"
+    );
+    assert_eq!(own_position_for_level(0.4, 0.0, 100.0), None, "zone 0");
+    assert_eq!(own_position_for_level(0.4, 50.0, 0.0), None, "master 0");
+    assert_eq!(own_position_for_level(f64::NAN, 50.0, 100.0), None);
+    assert_eq!(own_position_for_level(0.4, f64::NAN, 100.0), None);
 }
 
 // covers: S70, S76
