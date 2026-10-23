@@ -828,9 +828,10 @@ struct UIStrings {
     /// The name field's VoiceOver label; the field's placeholder is the
     /// system name, which an empty field brings back.
     func speakerNameField(system: String) -> String { "Name for \(system)" }
-    /// The tooltip on a speaker's name.
-    func speakerNameHelp(system: String, renamed: Bool) -> String {
-        renamed ? "Device name: \(system). Double-click to rename." : "Double-click to rename."
+    /// The tooltip on a speaker's name: the full name, which the row may
+    /// truncate, then how to rename it.
+    func speakerNameHelp(name: String, system: String, renamed: Bool) -> String {
+        renamed ? "\(name)\nDevice name: \(system). Double-click to rename." : "\(name)\nDouble-click to rename."
     }
     /// What VoiceOver adds after a renamed speaker's label.
     func renamedSpeaker(system: String) -> String { "device name \(system)" }
