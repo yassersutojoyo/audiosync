@@ -592,7 +592,7 @@ struct SpeakerRow: View {
                             Text(speaker.name)
                                 .font(.body.weight(state == .playing ? .semibold : .regular))
                                 .lineLimit(1)
-                                .help(t.speakerNameHelp(system: speaker.systemName, renamed: speaker.isRenamed))
+                                .help(t.speakerNameHelp(name: speaker.name, system: speaker.systemName, renamed: speaker.isRenamed))
                                 // A double-click renames; a single click works like the
                                 // rest of the row, once it can't be a double-click.
                                 .gesture(TapGesture(count: 2).onEnded { model.startRename(speaker) }

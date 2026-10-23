@@ -29,6 +29,8 @@ export global Strings {
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no group.
     out property <string> no-speakers: @tr("No speakers found");
+    // The flyout's empty speaker list while AirPlay discovery runs.
+    out property <string> looking-for-speakers: @tr("Looking for speakers…");
     // Connected Speakers when its only outputs are virtual ones, hidden.
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
@@ -931,12 +933,13 @@ export global Strings {
     // What the name field says about its keys.
     out property <string> speaker-name-field-hint: @tr("Press Enter to apply or Escape to cancel. Leave it empty for the device's own name.");
 
-    // The tooltip on a speaker's name; `system` is empty unless renamed.
-    public pure function speaker-name-tooltip(system: string) -> string {
+    // The tooltip on a speaker's name: the full name, which the row may
+    // elide, then how to rename it. `system` is empty unless renamed.
+    public pure function speaker-name-tooltip(name: string, system: string) -> string {
         if system != "" {
-            return @tr("Device name: {}. Double-click to rename.", system);
+            return @tr("{}\nDevice name: {}. Double-click to rename.", name, system);
         }
-        return @tr("Double-click to rename.");
+        return @tr("{}\nDouble-click to rename.", name);
     }
 
     // What a stereo pair or home theater group row says after its kind:
