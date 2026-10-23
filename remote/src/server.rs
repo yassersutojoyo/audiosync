@@ -946,6 +946,7 @@ enum ApiRoute {
     Master,
     Unpair,
     Speaker(Option<String>),
+    Source,
 }
 
 fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) -> Answer {
@@ -985,6 +986,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         "/api/events" => ApiRoute::Events,
         "/api/master" => ApiRoute::Master,
         "/api/unpair" => ApiRoute::Unpair,
+        "/api/source" => ApiRoute::Source,
         _ => match path.strip_prefix("/api/speakers/") {
             Some(id) => ApiRoute::Speaker(percent_decode(id)),
             None => return error(text::not_found()),
@@ -1009,6 +1011,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         ApiRoute::Master => master(request, shared),
         ApiRoute::Unpair => unpair(&token, from, shared),
         ApiRoute::Speaker(id) => speaker(request, id, shared),
+        ApiRoute::Source => source(request, shared),
     }
 }
 
@@ -1147,6 +1150,28 @@ fn speaker(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
     };
     match checked {
         Ok(()) => accepted(&Command::Speaker { id, change }, shared),
+        Err(problem) => error(problem),
+    }
+}
+
+/// `POST /api/source` `{id}`: a pick in the app's source picker. The app
+/// checks it again when it applies it.
+fn source(request: &Request, shared: &Shared) -> Answer {
+    let id = match state::source_id_from_body(&request.body) {
+        Ok(id) => id,
+        Err(problem) => return body_error(problem),
+    };
+    let checked = match lock(&shared.published)
+        .current
+        .as_ref()
+        .and_then(|state| state.source(&id))
+    {
+        None => Err(text::unknown_source()),
+        Some(source) if !source.available => Err(text::source_unavailable()),
+        Some(_) => Ok(()),
+    };
+    match checked {
+        Ok(()) => accepted(&Command::Source { id }, shared),
         Err(problem) => error(problem),
     }
 }

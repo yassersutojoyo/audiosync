@@ -462,6 +462,7 @@ fn every_api_route_needs_a_paired_token() {
             ("POST", "/api/speakers/kitchen"),
             ("POST", "/api/master"),
             ("POST", "/api/unpair"),
+            ("POST", "/api/source"),
         ] {
             let reply = match method {
                 "GET" => get(&remote, path, token),
@@ -906,6 +907,63 @@ fn an_unreadable_body_length_gets_a_json_400_and_pairs_nothing() {
     assert_eq!((reply.status, reply.error().as_str()), (400, "bad_json"));
 }
 
+fn with_sources() -> State {
+    let sources = r#""sources": [
+        {"id": "system", "name": "All System Audio", "kind": "system", "available": true, "notice": null},
+        {"id": "app:music", "name": "Music", "kind": "app", "available": true, "notice": null},
+        {"id": "input:usb", "name": "USB Mic", "kind": "input", "available": false,
+         "notice": "Allow microphone access"}
+    ], "source_id": "system", "speakers""#;
+    State::from_json(&SAMPLE.replacen("\"speakers\"", sources, 1)).unwrap()
+}
+
+#[test]
+fn a_source_pick_reaches_the_app_and_a_refused_one_says_why() {
+    let remote = start("source");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    let early = post(&remote, "/api/source", token, "{\"id\": \"system\"}");
+    assert_eq!(
+        (early.status, early.error().as_str()),
+        (404, "unknown_source")
+    );
+
+    remote.server.publish(with_sources());
+    let state = get(&remote, "/api/state", token).json();
+    assert_eq!(state["source_id"], "system");
+    assert_eq!(state["sources"][1]["name"], "Music");
+    assert_eq!(state["sources"][2]["kind"], "input");
+    assert_eq!(state["sources"][2]["available"], false);
+
+    let reply = post(&remote, "/api/source", token, "{\"id\": \"app:music\"}");
+    assert_eq!(reply.status, 202, "{}", reply.body);
+    assert_eq!(
+        *remote.received.lock().unwrap(),
+        [Command::Source {
+            id: "app:music".to_owned()
+        }]
+    );
+    remote.received.lock().unwrap().clear();
+
+    for (body, status, error) in [
+        ("{\"id\": \"input:usb\"}", 409, "source_unavailable"),
+        ("{\"id\": \"app:gone\"}", 404, "unknown_source"),
+        ("{\"id\": \"\"}", 404, "unknown_source"),
+        ("{\"id\": 3}", 400, "bad_json"),
+        ("{\"id\": ", 400, "bad_json"),
+        ("{}", 400, "nothing_to_change"),
+    ] {
+        let reply = post(&remote, "/api/source", token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (status, error),
+            "{body}"
+        );
+        assert!(!reply.json()["message"].as_str().unwrap().is_empty());
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
 #[test]
 fn a_speaker_change_needs_a_published_speaker_and_an_id() {
     let remote = start("no-snapshot");
@@ -1149,6 +1207,7 @@ fn every_route_answers_a_wrong_method_with_405_and_its_allow() {
         ("GET", "/api/speakers/kitchen", "POST"),
         ("PATCH", "/api/speakers/kitchen", "POST"),
         ("PUT", "/api/master", "POST"),
+        ("GET", "/api/source", "POST"),
         ("DELETE", "/", "GET"),
         ("PUT", "/manifest.webmanifest", "GET"),
         ("POST", "/icon-180.png", "GET"),
