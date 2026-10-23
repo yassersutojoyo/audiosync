@@ -1236,6 +1236,7 @@ mod tests {
             ("ASC_STREAMING_OFF", STREAMING_OFF.to_string()),
             ("ASC_STREAMING_RUNNING", STREAMING_RUNNING.to_string()),
             ("ASC_STREAMING_REBUILDING", STREAMING_REBUILDING.to_string()),
+            ("ASC_METER_POLL_MS", crate::meter::METER_POLL_MS.to_string()),
             ("ASC_LEAD_SOURCE_SYSTEM", LEAD_SOURCE_SYSTEM.to_string()),
             ("ASC_LEAD_SOURCE_APP", LEAD_SOURCE_APP.to_string()),
             ("ASC_LEAD_SOURCE_INPUT", LEAD_SOURCE_INPUT.to_string()),

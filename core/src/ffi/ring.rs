@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use super::{host_slice, host_slice_mut, stereo_samples};
 use crate::clock;
+use crate::meter;
 use crate::reader::{Correction, ReadReport, Reader, ReaderControl, ReaderCounters};
 use crate::ring::{self, MIN_MARGIN_FRAMES, Ring, RingWriter};
 
@@ -295,6 +296,13 @@ pub unsafe extern "C" fn asc_ring_frames_written(ring: *const AscRing) -> u64 {
 pub unsafe extern "C" fn asc_ring_take_peak(ring: *const AscRing) -> f32 {
     // SAFETY: by the caller's contract the handle is null or live.
     unsafe { ring_of(ring) }.map_or(0.0, |ring| ring.take_peak())
+}
+
+/// [`meter::meter_level`]: the level meter's length, 0 to 1, after a poll
+/// that took `peak` while it showed `previous`.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_meter_level(previous: f32, peak: f32) -> f32 {
+    meter::meter_level(previous, peak)
 }
 
 /// Takes the ring's only writer; null while another one exists (S35).

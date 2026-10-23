@@ -456,6 +456,17 @@ uint64_t asc_ring_frames_written(const AscRing *ring);
  */
 float asc_ring_take_peak(const AscRing *ring);
 
+/* How often the UI polls asc_ring_take_peak for the input level meter, in ms. */
+#define ASC_METER_POLL_MS 100
+
+/*
+ * The input level meter's length, 0 to 1, after a poll that took `peak` while
+ * it showed `previous`: the peak on a dB scale from -60 to 0 dBFS, or the
+ * previous length less 0.15 when that is longer. Non-finite values count as
+ * silence. Pure function for the UI thread.
+ */
+float asc_meter_level(float previous, float peak);
+
 /* Takes the ring's only writer; NULL while another writer exists. */
 AscRingWriter *asc_ring_writer_create(AscRing *ring);
 
