@@ -89,13 +89,15 @@ enum GroupName {
 /// so running the migration again changes nothing.
 enum SpeakerIDMigration {
     /// What is saved by AirPlay speaker ID: the speakers switched on, their
-    /// volumes, the groups, the auto-connect list and the zones (S248).
+    /// volumes, the groups, the auto-connect list, the zones (S248) and the
+    /// presets (S254).
     struct Saved: Equatable {
         var enabledAirPlay: Set<String>
         var airplayVolumes: [String: Double]
         var groups: [SpeakerGroup]
         var autoConnect: Set<String>
         var zones: [SpeakerZone] = []
+        var presets: [SpeakerPreset] = []
     }
 
     /// The largest device ID: six bytes.
@@ -129,6 +131,7 @@ enum SpeakerIDMigration {
         guard !byDevice.isEmpty else { return [:] }
         var ids = saved.enabledAirPlay.union(saved.airplayVolumes.keys)
         let keys = saved.autoConnect.union(saved.groups.flatMap(\.members)).union(saved.zones.flatMap(\.members))
+            .union(saved.presets.flatMap { $0.members.map(\.key) })
         for key in keys {
             if let (id, airplay) = SpeakerKey.parse(key), airplay { ids.insert(id) }
         }
@@ -183,6 +186,13 @@ enum SpeakerIDMigration {
                 if taken.insert(key).inserted { copy.members.append(key) }
             }
             return copy
+        }
+        // A preset already holding the new key keeps it, as a group does (S254).
+        out.presets = saved.presets.map { preset in
+            renames.keys.sorted().reduce(preset) { preset, old in
+                preset.renamingKey(SpeakerKey.make(id: old, airplay: true),
+                                   to: SpeakerKey.make(id: renames[old] ?? old, airplay: true))
+            }
         }
         return out
     }

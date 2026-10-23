@@ -314,6 +314,21 @@ extern "C" {
 #define ASC_ZONE_STEP_CAST_ONE_AT_A_TIME 7 /* a Cast member left off: another Cast member plays */
 #define ASC_ZONE_STEP_CAST_BUSY 8          /* a Cast member left off: it can't start now */
 
+/* What asc_preset_recall_plan answers for the recall. */
+#define ASC_PRESET_RECALL_NOTHING 0 /* no stored member can go on: nothing changes, post the notice */
+#define ASC_PRESET_RECALL_APPLY 1   /* carry the plan out; streaming is on */
+#define ASC_PRESET_RECALL_START 2   /* carry the plan out, and start streaming */
+
+/* What asc_preset_recall_plan writes for each stored member. */
+#define ASC_PRESET_STEP_ON 0             /* switched on, or stays on */
+#define ASC_PRESET_STEP_WAITING 1        /* switched on, waiting for the other AirPlay 2 speaker */
+#define ASC_PRESET_STEP_NOT_FOUND 2      /* left off: no speaker with its key is listed */
+#define ASC_PRESET_STEP_HIDDEN 3         /* left off: hidden */
+#define ASC_PRESET_STEP_NEEDS_AIRPLAY2 4 /* left off: a pair or theater target while AirPlay 2 is off */
+#define ASC_PRESET_STEP_IN_TARGET 5      /* left off: plays as part of a target */
+#define ASC_PRESET_STEP_BUSY 6           /* left off: a Cast speaker that can't start now */
+#define ASC_PRESET_STEP_IGNORED 7        /* a Cast key after the first: left alone, not in the notice */
+
 /* The port the web remote listens on unless its configuration names another (unassigned at IANA). */
 #define ASC_REMOTE_DEFAULT_PORT 7655
 
@@ -1036,6 +1051,75 @@ uint32_t asc_zone_click_plan(const AscZoneMember *members, size_t count, bool st
  * for the control thread.
  */
 void asc_zone_migration_keeps(const char *const *keys, size_t count, bool *keep);
+
+/* ---- Speaker presets ------------------------------------------------------ */
+
+/* One stored member as the host sees it at recall, matched by its key. */
+typedef struct AscPresetMember {
+    uint32_t kind;       /* an ASC_ZONE_MEMBER_ code; an unknown one is not found */
+    bool found;          /* a speaker with its key is listed now, hidden or not */
+    bool hidden;         /* hidden with Hide Speaker */
+    bool on;             /* switched on */
+    bool busy;           /* a Cast speaker the host can't start now */
+    bool needs_airplay2; /* a pair or theater target while the AirPlay 2 switch is off */
+    bool in_target;      /* plays as part of a stereo pair or home theater target now */
+    bool fixed_volume;   /* a Cast speaker whose volume can't be changed from here */
+    bool has_volume;     /* the preset stores an own volume for it */
+} AscPresetMember;
+
+/* A speaker outside the preset at recall. */
+typedef struct AscPresetOther {
+    bool on;        /* switched on */
+    bool reference; /* the reference output, which a recall leaves alone */
+} AscPresetOther;
+
+/* One stored member as the current-preset check sees it; NaN is no volume. */
+typedef struct AscPresetMemberNow {
+    bool on;              /* the speaker is on now */
+    double stored_volume; /* the preset's own volume for it */
+    double volume;        /* its own volume now */
+} AscPresetMemberNow;
+
+/* One stored zone volume as the current-preset check sees it. */
+typedef struct AscPresetZoneNow {
+    double stored; /* the preset's volume for the zone */
+    double volume; /* the zone's volume now; NaN once the zone is deleted */
+} AscPresetZoneNow;
+
+/*
+ * Which stored member keys a preset keeps (S251): `keep[i]` becomes false
+ * for a key that isn't a speaker key with an ID, one earlier in the list, a
+ * Cast key after the first, and a NULL or non-UTF-8 one, else true. Does
+ * nothing for a NULL array. Pure function for the control thread.
+ */
+void asc_preset_member_keeps(const char *const *keys, size_t count, bool *keep);
+
+/*
+ * A preset's levels as stored (S251), in place: member volumes clamped to
+ * 0...100 (NaN, no volume, stays; infinity becomes NaN), zone volumes as a
+ * zone's, the master clamped (100 when it isn't a number), and the ten
+ * gains in `gains_db` on the controls' 0.5 dB steps within +-12 dB (S23).
+ * A NULL array is skipped. Pure function for the control thread.
+ */
+void asc_preset_levels(double *volumes, size_t count, double *zone_volumes, size_t zone_count, double *master, double *gains_db);
+
+/*
+ * The plan of a preset recall (S252), a full scene: an ASC_PRESET_RECALL_
+ * code, with one ASC_PRESET_STEP_ code and one set-volume flag per stored
+ * member in `steps` and `set_volume`, in preset order, and one flag per
+ * speaker outside the preset in `switch_off`. NULL arrays with a count
+ * above 0 answer ASC_PRESET_RECALL_NOTHING and write nothing. Pure function
+ * for the control thread.
+ */
+uint32_t asc_preset_recall_plan(const AscPresetMember *members, size_t count, const AscPresetOther *others, size_t other_count, bool streaming, uint32_t *steps, bool *set_volume, bool *switch_off);
+
+/*
+ * Whether the host plays a preset exactly (S253): `on_now` speakers are on,
+ * the reference output left out; the gains are ten each. False for a NULL
+ * array with a count above 0, or NULL gains. Pure function for the control
+ * thread.
+ */
+bool asc_preset_matches(const AscPresetMemberNow *members, size_t count, size_t on_now, const AscPresetZoneNow *zones, size_t zone_count, double stored_master, const double *stored_gains_db, double master, const double *gains_db);
 
 /* ---- Microphone calibration ---------------------------------------------- */
 

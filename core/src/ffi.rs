@@ -20,6 +20,8 @@
 //!   by step and its results sheet.
 //! - [`zones`]: a zone click's plan and the migration of groups to zones
 //!   (S246-S248).
+//! - [`presets`]: what a speaker preset keeps, a recall's plan and the
+//!   current-preset check (S251-S253).
 //! - [`airplay`]: AudioSync's own AirPlay sender: discovery, speakers, their
 //!   events and the capture's input.
 //! - [`cast`]: AudioSync's own Google Cast sender: discovery, one device's
@@ -55,6 +57,7 @@ pub mod calibrate;
 pub mod calibrate_all;
 pub mod cast;
 pub mod device_volume;
+pub mod presets;
 pub mod remote;
 pub mod render;
 pub mod ring;
@@ -67,6 +70,7 @@ pub use self::calibrate::*;
 pub use self::calibrate_all::*;
 pub use self::cast::*;
 pub use self::device_volume::*;
+pub use self::presets::*;
 pub use self::remote::*;
 pub use self::render::*;
 pub use self::ring::*;
@@ -403,13 +407,14 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 12] = [
+    const SOURCES: [(&str, &str); 13] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/calibrate.rs", include_str!("ffi/calibrate.rs")),
         ("ffi/calibrate_all.rs", include_str!("ffi/calibrate_all.rs")),
         ("ffi/cast.rs", include_str!("ffi/cast.rs")),
         ("ffi/device_volume.rs", include_str!("ffi/device_volume.rs")),
+        ("ffi/presets.rs", include_str!("ffi/presets.rs")),
         ("ffi/remote.rs", include_str!("ffi/remote.rs")),
         ("ffi/render.rs", include_str!("ffi/render.rs")),
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
@@ -1278,6 +1283,29 @@ mod tests {
                 ZONE_STEP_CAST_ONE_AT_A_TIME.to_string(),
             ),
             ("ASC_ZONE_STEP_CAST_BUSY", ZONE_STEP_CAST_BUSY.to_string()),
+            (
+                "ASC_PRESET_RECALL_NOTHING",
+                PRESET_RECALL_NOTHING.to_string(),
+            ),
+            ("ASC_PRESET_RECALL_APPLY", PRESET_RECALL_APPLY.to_string()),
+            ("ASC_PRESET_RECALL_START", PRESET_RECALL_START.to_string()),
+            ("ASC_PRESET_STEP_ON", PRESET_STEP_ON.to_string()),
+            ("ASC_PRESET_STEP_WAITING", PRESET_STEP_WAITING.to_string()),
+            (
+                "ASC_PRESET_STEP_NOT_FOUND",
+                PRESET_STEP_NOT_FOUND.to_string(),
+            ),
+            ("ASC_PRESET_STEP_HIDDEN", PRESET_STEP_HIDDEN.to_string()),
+            (
+                "ASC_PRESET_STEP_NEEDS_AIRPLAY2",
+                PRESET_STEP_NEEDS_AIRPLAY2.to_string(),
+            ),
+            (
+                "ASC_PRESET_STEP_IN_TARGET",
+                PRESET_STEP_IN_TARGET.to_string(),
+            ),
+            ("ASC_PRESET_STEP_BUSY", PRESET_STEP_BUSY.to_string()),
+            ("ASC_PRESET_STEP_IGNORED", PRESET_STEP_IGNORED.to_string()),
             ("ASC_CAST_RATE", CAST_RATE.to_string()),
             ("ASC_CAST_APPEARED", CAST_APPEARED.to_string()),
             ("ASC_CAST_CHANGED", CAST_CHANGED.to_string()),

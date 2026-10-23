@@ -177,15 +177,12 @@ pub unsafe extern "C" fn asc_zone_migration_keeps(
     let texts: Vec<Option<String>> = keys
         .iter()
         .map(|&key| {
-            (!key.is_null())
-                .then(|| {
-                    // SAFETY: non-null, and by the caller's contract NUL-terminated.
-                    unsafe { CStr::from_ptr(key) }
-                        .to_str()
-                        .ok()
-                        .map(str::to_owned)
-                })
-                .flatten()
+            if key.is_null() {
+                return None;
+            }
+            // SAFETY: non-null, and by the caller's contract NUL-terminated.
+            let text = unsafe { CStr::from_ptr(key) };
+            text.to_str().ok().map(str::to_owned)
         })
         .collect();
     let members: Vec<String> = texts.iter().flatten().cloned().collect();

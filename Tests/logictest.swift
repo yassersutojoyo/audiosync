@@ -237,6 +237,18 @@ do {
             SpeakerZone(id: "z3", name: "Office", members: ["ap:\(denNew)"], volume: 100)],
           "speaker IDs: zone members are renamed in place, and a zone already holding the new key keeps it",
           "\(movedZones)")
+    let flat = [Double](repeating: 0, count: 10)
+    let preset = SpeakerPreset(id: "p1", name: "Evening",
+                               members: [.init(key: "ap:\(tvOld)", volume: 35), .init(key: "lc:usb:out", volume: 50),
+                                         .init(key: "ap:\(denOld)", volume: 80), .init(key: "ap:\(denNew)", volume: 55)],
+                               zones: [], master: 100, gains: flat)
+    let presetted = Migration.Saved(enabledAirPlay: [], airplayVolumes: [:], groups: [], autoConnect: [], presets: [preset])
+    check(Migration.renames(presetted, receivers: receivers) == [tvOld: tvNew, denOld: denNew],
+          "speaker IDs: a bundled-engine ID kept only in a preset moves too")
+    check(Migration.migrate(presetted, receivers: receivers).presets.first?.members
+            == [.init(key: "ap:\(tvNew)", volume: 35), .init(key: "lc:usb:out", volume: 50), .init(key: "ap:\(denNew)", volume: 55)],
+          "speaker IDs: speaker ID migration renames preset members, and a preset already holding the new key keeps it",
+          "\(Migration.migrate(presetted, receivers: receivers).presets)")
 }
 
 // MARK: Zones — the groups become zones once (Zones.swift, AppSettings.swift, S245, S248)
@@ -295,6 +307,63 @@ do {
     stored.values[Keys.zones] = Data("not json".utf8)
     check(store.load().zones.isEmpty && stored.values[Keys.zonesMigrated] as? Bool == true,
           "zones: unreadable zones read as none and never migrate again")
+}
+
+// MARK: Presets — overlapping groups become presets once (Presets.swift, AppSettings.swift, S251, S254)
+do {
+    typealias Keys = AppSettings.Keys
+    final class Stored { var values: [String: Any] = [:]; var order: [String] = [] }
+    let stored = Stored()
+    let store = SettingsStore(read: { stored.values[$0] },
+                              write: { value, key in stored.values[key] = value; stored.order.append(key) })
+    let flat = [Double](repeating: 0, count: 10)
+    store.save(groups: [
+        SpeakerGroup(id: "g1", name: "Living Room", members: ["lc:BuiltInSpeakerDevice", "ap:native:AABBCCDDEE01"]),
+        SpeakerGroup(id: "g2", name: "Group 2", members: ["ap:native:AABBCCDDEE01", "cc:Chromecast-1"]),
+        SpeakerGroup(id: "g3", name: "Den", members: ["lc:BuiltInSpeakerDevice"]),
+    ])
+    stored.values[Keys.localVolumes] = ["BuiltInSpeakerDevice": 30.0]
+    stored.values[Keys.airplayVolumes] = ["native:AABBCCDDEE01": 60.0]
+    stored.values[Keys.master] = 80.0
+    let expected = [
+        SpeakerPreset(id: "g2", name: "Group 2",
+                      members: [.init(key: "ap:native:AABBCCDDEE01", volume: 60), .init(key: "cc:Chromecast-1", volume: nil)],
+                      zones: [.init(id: "g1", volume: 100), .init(id: "g2", volume: 100)], master: 80, gains: flat),
+        SpeakerPreset(id: "g3", name: "Den", members: [.init(key: "lc:BuiltInSpeakerDevice", volume: 30)],
+                      zones: [.init(id: "g1", volume: 100)], master: 80, gains: flat),
+    ]
+    stored.order = []
+    let first = store.load()
+    check(first.presets == expected && first.groups.count == 3,
+          "presets: an overlapping group becomes a preset with its full members", "\(first.presets)")
+    check(stored.order.last == Keys.presetsMigrated && stored.values[Keys.presetsMigrated] as? Bool == true,
+          "presets: the migrated mark is written last", "\(stored.order)")
+    stored.values[Keys.presetsMigrated] = nil
+    stored.values[Keys.presets] = nil
+    check(store.load().presets == expected, "presets: a migration cut short before its mark runs again to the same presets")
+    stored.values[Keys.master] = 20.0
+    stored.order = []
+    check(store.load().presets == expected && stored.order.isEmpty,
+          "presets: migrating presets twice changes nothing: once marked, a launch writes nothing")
+
+    let edited = [SpeakerPreset(id: "p1", name: "Evening",
+                                members: [.init(key: "lc:usb:out", volume: 35.5), .init(key: "cc:Group-7", volume: nil)],
+                                zones: [.init(id: "z1", volume: 40)], master: 70, gains: [3, -2.5, 0, 0, 0, 0, 0, 0, 1, 12])]
+    store.save(presets: edited)
+    check(store.load().presets == edited, "presets: presets round-trip through the user defaults, a fixed Cast volume included")
+    let messy = [SpeakerPreset(id: "p1", name: "A",
+                               members: [.init(key: "lc:a", volume: 140), .init(key: "lc:a", volume: 10), .init(key: "cc:x", volume: nil),
+                                         .init(key: "cc:y", volume: 20), .init(key: "zz:b", volume: 5)],
+                               zones: [.init(id: "z1", volume: -3), .init(id: "z1", volume: 50)], master: 130,
+                               gains: [0.3, 20, -20, 0, 0, 0, 0, 0, 0, 0]),
+                 SpeakerPreset(id: "p1", name: "A again", members: [], zones: [], master: 50, gains: flat),
+                 SpeakerPreset(id: "p2", name: "Short", members: [], zones: [], master: 50, gains: [0, 0])]
+    store.save(presets: messy)
+    check(store.load().presets == [SpeakerPreset(id: "p1", name: "A",
+                                                 members: [.init(key: "lc:a", volume: 100), .init(key: "cc:x", volume: nil)],
+                                                 zones: [.init(id: "z1", volume: 0)], master: 100,
+                                                 gains: [0.5, 12, -12, 0, 0, 0, 0, 0, 0, 0])],
+          "presets: stored presets keep one Cast key, one preset per ID, levels within range", "\(store.load().presets)")
 }
 
 // MARK: Output devices — virtual ones hidden unless asked for or chosen
@@ -2936,6 +3005,7 @@ do {
         (Keys.localDelaysMigrated, "localDelayModelMigrated"), (Keys.speakerNames, "speakerNamesByKey"),
         (Keys.airPlay2, "airPlay2Enabled"), (Keys.zones, "speakerZones"),
         (Keys.zonesMigrated, "speakerZonesMigrated"), (Keys.zonesNoticeDue, "speakerZonesNoticeDue"),
+        (Keys.presets, "speakerPresets"), (Keys.presetsMigrated, "speakerPresetsMigrated"),
     ]
     let renamed = pinned.filter { $0.0 != $0.1 }.map(\.1)
     check(renamed.isEmpty, "settings: every UserDefaults key keeps the name existing installs use",
