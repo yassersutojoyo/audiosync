@@ -4,6 +4,33 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+
+- Zones, on the Mac and on Windows. They replace speaker groups. A zone is a set of speakers with its own volume, and a speaker is in one zone at a time. Click a zone's name to switch its speakers on or off together. A zone turns on at most one Google Cast speaker and never switches off a Cast speaker outside it. Move a speaker with Move to Zone in its menu; a zone you empty stays until you delete it.
+- A speaker in a zone plays at its own volume times the zone's volume times the master, on local speakers, AirPlay and Google Cast. A zone volume change reaches its playing speakers right away. When a speaker changes its own volume, say from its buttons, AudioSync moves that speaker's slider and leaves the zone and the master alone. A speaker in no zone plays exactly as before.
+- Calibrate Zone… in a zone's menu runs Calibrate All Speakers over that zone's speakers only, on the Mac and on Windows. A speaker in the zone that's off is listed as Off and never turned on for it, and speakers outside the zone are muted in what AudioSync sends them for the run, without touching their volume, and keep their delays.
+- Speaker presets, on the Mac and on Windows. A preset saves which speakers are on, each one's volume, the zone volumes, the master and the equalizer curve. Recalling it is a full scene: the saved speakers go on, every other speaker goes off, and the volumes and curve are set. Delays, zones, the preamp and the equalizer switch stay as they are. A saved speaker that can't play, because it isn't found, is hidden or is busy in another app, is named in one notice. A preset counts as current only while everything still matches it exactly.
+- Presets live in a Presets card in the main window, in a row under the source in the menu bar panel or the notification area flyout, and under Window > Presets on the Mac or View > Presets on Windows, where the first nine have Control-Command-1 to 9 (Ctrl+1 to Ctrl+9 on Windows).
+- A source can now be several apps at once, on the Mac and on Windows. On the Mac, Several Apps in the source menu plays Only the Checked Apps or All Apps Except the Checked Ones, and it shows a checkmark while such a mix plays. On Windows, Several apps under the source menu has the same two choices. An app that isn't running is skipped, and AudioSync itself is never part of the mix. On Windows, all apps except the checked ones leaves out Windows system sounds, such as notification chimes; the Mac takes them in.
+- An input device with more than two channels, such as an audio interface, gets an Input Channels menu under the source, on the Mac and on Windows. Pick Channels 1-2, Channels 3-4 and so on, or the last channel alone when the count is odd, which plays on both sides. The choice is kept per device, and a pair the device no longer has plays 1-2. On Windows, Channels 1-2 keeps Windows' own stereo mix of the device, as before.
+- An input level meter under the source while a microphone or line in is captured, on the Mac and on Windows. VoiceOver and Narrator read it as Input level, in steps of 10%.
+- Web Remote: the page has an Audio source menu with the app's sources, grouped under Apps and Input devices, several apps included, so the phone can switch the source too, on the Mac and on Windows.
+- Web Remote: the page shows your zones and presets. The phone can switch a zone on or off, set its volume and recall a preset. A speaker that asks for a PIN or password stays off with a notice to pair it on the computer first, and the rest plays. While AudioSync calibrates, the page says so and only Unpair works.
+- Saved equalizer curves, on the Mac and on Windows. Save the ten bands under a name and the curve shows up in the picker after the presets, up to 50 of them. Rename and Delete act on the saved curve the picker shows, and saving under a name you already used replaces that curve. The preamp is yours: picking a preset or a saved curve leaves it alone.
+
+### Changed
+
+- Your groups become zones once, at the first launch, with their names and speakers, at full volume. A speaker that was in more than one group stays in the first zone only, and such a group also becomes a preset with all its speakers and volumes, so nothing is lost. On the Mac the old groups are kept, so an older build still has them; an older Windows build can't read the new settings file and starts from defaults.
+- With a microphone or line in as the source, local speakers no longer wait for AirPlay and Google Cast speakers, so they play with less delay, on the Mac and on Windows. AirPlay and Cast speakers still play at their usual delay, so with those on too, the local speakers play ahead of them.
+- On the Mac, an input device that sends 16-, 24- or 32-bit integer samples can be a source now. Before, only float input was read. AudioSync reads the device as it is and never changes its format.
+- On the Mac, a Bluetooth headset's hands-free microphone is no longer offered as a source, as on Windows: recording from it switches the headset to call mode and interrupts its stereo sound. A source saved before says the selected input is a hands-free microphone and asks you to pick another one.
+- On the Mac, Calibrate with Microphone and Calibrate All Speakers won't record from a Bluetooth headset's hands-free microphone. If that's the default input, they say so and point to System Settings > Sound.
+- The equalizer's preset menu is now a Curve picker, presets first and your saved curves after them, on the Mac and on Windows. When the bands match no curve it reads Custom. On Windows, Custom is no longer an entry in the list, just what the picker shows.
+- Equalizer Reset sets the preamp back to 0 dB too, so the picker reads Flat afterwards. The equalizer stays on or off as it was.
+- The Equalizer card shows the curve's name while the equalizer is on, instead of just On.
+- Undo after Calibrate All Speakers goes away once you change a delay it set, now on the Mac too, so it never overwrites your own change. A new AirPlay latency on its own keeps Undo, on both apps.
+- Web Remote: wrong pairing codes sent while no code is valid no longer lock pairing, and a paired phone that hasn't been used for 90 days is forgotten and has to pair again.
+
 ## [0.7.0] - 2026-10-24
 
 ### Added

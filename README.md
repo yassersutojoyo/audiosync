@@ -33,6 +33,19 @@ AirPlay speakers play about two seconds late. Local speakers don't. Play the sam
 
 AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, early alpha.
 
+## Coming in 0.8
+
+On `main` now or on the way, in both the Mac and the Windows app:
+
+- Zones instead of groups: a zone has its own volume, one click turns its speakers on or off, and Calibrate Zone measures just that zone. Your groups turn into zones by themselves.
+- Presets: save which speakers are on with their volumes and EQ curve, and recall it all in one click or with a shortcut.
+- Several apps as one source, or every app except the ones you check.
+- Audio interfaces with more than two inputs: pick which channel pair plays, under Input Channels.
+- A mic or line in plays on local speakers with less delay, and a level meter under the source shows it's coming in. AirPlay and Cast speakers keep their usual delay, so they trail behind.
+- Save your own EQ curves next to the presets.
+- The Web Remote can switch the source, zones and presets too.
+- On the Mac, a Bluetooth headset's call microphone isn't offered as a source anymore, since using it drops the headset to call quality.
+
 ## What's new in 0.7
 
 In the Mac app, and in the Windows build that's still in preview:
@@ -62,7 +75,7 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
-- Source: all system audio, one app, or an input device (mic, audio interface).
+- Source: all system audio, one app, several apps (or all but a few), or an input device (mic, audio interface).
 - Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything macOS can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
 - A delay per local speaker (−2 to +20 s), plus one AirPlay delay.
 - Volume per speaker and master, a 10-band EQ, groups, auto-connect, launch at login, Now Playing for Spotify and Music.
