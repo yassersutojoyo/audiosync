@@ -3321,6 +3321,28 @@ do {
           "delay panels: a click into another field applies the typing once, as the focus moves", "delays: \(delays)")
 }
 
+// MARK: Field editor — the click monitor finds the delay field being typed in (FieldEditor)
+// Final and without NSTextViewDelegate, as the main window's delay field is.
+final class EditedDelayField: NSTextField {
+    var rowID = ""
+}
+MainActor.assumeIsolated {
+    let field = EditedDelayField(frame: .zero)
+    field.rowID = "dock"
+    let editor = NSTextView(frame: .zero)
+    editor.isFieldEditor = true
+    // AppKit sets the delegate this way when the field starts editing.
+    editor.perform(Selector(("setDelegate:")), with: field)
+    check(FieldEditor.field(EditedDelayField.self, editedBy: editor)?.rowID == "dock",
+          "delay panels: the click monitor finds the delay field the field editor types for, so a click on its own step keeps the typing")
+    let otherField = NSTextField(frame: .zero)
+    let other = NSTextView(frame: .zero)
+    other.perform(Selector(("setDelegate:")), with: otherField)
+    check(FieldEditor.field(EditedDelayField.self, editedBy: NSTextView(frame: .zero)) == nil
+            && FieldEditor.field(EditedDelayField.self, editedBy: other) == nil,
+          "delay panels: an editor typing for no field, or for another kind of field, has no delay field")
+}
+
 // MARK: Delay value — a row's delay value follows every applied delay while its panel stays open (DelayBadge)
 do {
     let t = UIStrings()

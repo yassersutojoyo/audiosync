@@ -54,7 +54,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         guard event.window === window else { return }
         model.delayFocusLeftByClick = nil
         guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return }
-        let field = editor.delegate as? DelayTextField.Field
+        let field = FieldEditor.field(DelayTextField.Field.self, editedBy: editor)
         let point = event.locationInWindow
         var onField = false
         var hit = window.contentView?.superview?.hitTest(point)
