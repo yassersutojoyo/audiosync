@@ -1384,6 +1384,21 @@ impl Default for MockBackend {
 }
 
 impl MockBackend {
+    /// [`capture_preset`] with the example's members kept: their IDs are no
+    /// speaker keys, so the core's clean-up would drop them all.
+    fn capture_preset(&self, id: &str, name: &str) -> Result<Preset, PresetError> {
+        let state = self.snapshot();
+        let mut preset = capture_preset(id, name, &state).ok_or(PresetError::NoSpeakerOn)?;
+        preset.members = speakers_on_now(&state)
+            .into_iter()
+            .map(|speaker| policy_presets::PresetMember {
+                key: speaker.key,
+                volume: speaker.volume,
+            })
+            .collect();
+        Ok(preset)
+    }
+
     pub fn new() -> Self {
         let source = |id: &str, name: &str, kind| Source {
             id: id.into(),
@@ -1938,7 +1953,7 @@ impl Backend for MockBackend {
 
     fn save_preset(&mut self, name: &str) -> Result<(), PresetError> {
         let id = new_preset_id(&self.presets);
-        let preset = capture_preset(&id, name, &self.snapshot()).ok_or(PresetError::NoSpeakerOn)?;
+        let preset = self.capture_preset(&id, name)?;
         self.presets.push(preset);
         Ok(())
     }
@@ -1962,8 +1977,7 @@ impl Backend for MockBackend {
             return Ok(());
         };
         let name = self.presets[index].name.clone();
-        self.presets[index] =
-            capture_preset(id, &name, &self.snapshot()).ok_or(PresetError::NoSpeakerOn)?;
+        self.presets[index] = self.capture_preset(id, &name)?;
         Ok(())
     }
 

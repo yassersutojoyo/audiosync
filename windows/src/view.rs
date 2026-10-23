@@ -4462,7 +4462,9 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
                         .to_string()
                 })
                 .collect();
-            let list = joined(strings, &members);
+            // Commas only, as on the Mac: each item already ends in its reason.
+            let list: SharedString =
+                join_names(&members, |head, last| format!("{head}, {last}")).into();
             if *nothing_changed {
                 strings.invoke_preset_nothing_changed(preset.as_str().into(), list)
             } else {
@@ -7944,6 +7946,269 @@ mod tests {
             enabled(&app, "airplay:bedroom"),
             bedroom,
             "the rebuilt row has the focus back"
+        );
+    }
+
+    fn preset_rows(app: &App) -> Vec<(String, bool)> {
+        app.main
+            .get_presets()
+            .iter()
+            .map(|row| (row.name.to_string(), row.current))
+            .collect()
+    }
+
+    fn preset_ids(app: &App) -> Vec<String> {
+        app.snapshot().presets.into_iter().map(|p| p.id).collect()
+    }
+
+    fn ctrl(window: &slint::Window, key: &str) {
+        window.dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Control.into(),
+        });
+        press(window, key);
+        window.dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Control.into(),
+        });
+    }
+
+    // covers: S259, S260, S263, S264
+    #[test]
+    fn the_presets_card_and_the_flyout_list_the_presets_and_mark_the_current_one() {
+        let app = app_over(MockBackend::new());
+        assert!(
+            preset_rows(&app).is_empty(),
+            "the card shows its empty line"
+        );
+        assert_eq!(app.flyout.get_presets().row_count(), 0, "no flyout row");
+
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        app.save_preset("  ");
+        assert_eq!(
+            preset_rows(&app),
+            [("Evening".into(), false), ("Preset 2".into(), true)],
+            "list order, a blank name numbered, what plays now marked"
+        );
+        assert_eq!(app.flyout.get_presets().row_count(), 2);
+        assert_eq!(app.flyout.get_current_preset(), "Preset 2");
+
+        app.update(|b| b.set_master_volume(31.0));
+        assert!(preset_rows(&app).iter().all(|(_, current)| !current));
+        assert_eq!(
+            app.flyout.get_current_preset(),
+            "",
+            "the flyout says Choose a Preset"
+        );
+    }
+
+    // covers: S261, S266
+    #[test]
+    fn ctrl_and_a_digit_recalls_the_preset_in_that_place_in_every_window() {
+        let app = app_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        app.save_preset("Party");
+        app.update(|b| b.set_master_volume(55.0));
+
+        app.equalizer.show().expect("the equalizer shows headless");
+        draw_frames();
+        ctrl(app.equalizer.window(), "1");
+        assert_eq!(preset_rows(&app)[0], ("Evening".into(), true));
+        assert!(!app.main.window().is_visible(), "a recall opens nothing");
+        assert!(!app.zone_dialog.window().is_visible());
+
+        ctrl(app.equalizer.window(), "2");
+        assert_eq!(preset_rows(&app)[1], ("Party".into(), true));
+        app.update(|b| b.set_master_volume(55.0));
+        ctrl(app.equalizer.window(), "3");
+        assert!(
+            preset_rows(&app).iter().all(|(_, current)| !current),
+            "an empty place does nothing"
+        );
+        assert_eq!(app.snapshot().master_volume, 55.0);
+
+        app.help.invoke_preset_shortcut(1);
+        assert_eq!(preset_rows(&app)[0], ("Evening".into(), true));
+        app.remote_window.invoke_preset_shortcut(2);
+        assert_eq!(preset_rows(&app)[1], ("Party".into(), true));
+    }
+
+    // covers: S260, S266
+    #[test]
+    fn a_recall_from_the_flyout_opens_nothing_and_leaves_the_flyout_as_it_is() {
+        let app = app_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        let id = preset_ids(&app)[0].clone();
+
+        app.flyout.invoke_preset_recall_requested(id.into());
+        assert_eq!(app.flyout.get_current_preset(), "Evening");
+        assert!(!app.main.window().is_visible());
+        assert!(!app.zone_dialog.window().is_visible());
+        assert_eq!(app.flyout.get_presets().row_count(), 1);
+    }
+
+    // covers: S261, S262, S269
+    #[test]
+    fn save_rename_update_and_delete_ask_nothing_and_say_what_they_did() {
+        let app = main_window_over(MockBackend::new());
+        app.ask_save_preset();
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SavePreset);
+        assert_eq!(app.zone_dialog.get_heading(), "Save Preset");
+        assert_eq!(app.zone_dialog.get_field_label(), "Preset name");
+        assert_eq!(app.zone_dialog.get_placeholder(), "Evening, Party…");
+        app.confirm_dialog("Evening");
+        assert_eq!(preset_rows(&app), [("Evening".into(), true)]);
+        assert_eq!(app.main.get_notice_announcement(), "Evening saved");
+
+        let id = preset_ids(&app)[0].clone();
+        app.ask_rename_preset(&id);
+        assert_eq!(app.zone_dialog.get_heading(), "Rename Preset");
+        assert_eq!(app.zone_dialog.get_name(), "Evening");
+        app.confirm_dialog("   ");
+        assert_eq!(preset_rows(&app)[0].0, "Evening", "a blank name keeps it");
+        app.ask_rename_preset(&id);
+        app.confirm_dialog("Late");
+        assert_eq!(preset_rows(&app)[0].0, "Late");
+
+        app.save_preset("Party");
+        app.update(|b| b.set_master_volume(30.0));
+        app.update_preset(&id);
+        assert!(
+            !app.zone_dialog.window().is_visible(),
+            "Update asks nothing"
+        );
+        assert_eq!(preset_ids(&app)[0], id, "it keeps its ID and place");
+        assert_eq!(preset_rows(&app)[0], ("Late".into(), true));
+        assert_eq!(app.main.get_notice_announcement(), "Late updated");
+
+        app.delete_preset(&id);
+        assert!(
+            !app.zone_dialog.window().is_visible(),
+            "Delete asks nothing"
+        );
+        assert_eq!(preset_rows(&app), [("Party".into(), false)]);
+        assert_eq!(app.main.get_notice_announcement(), "Late deleted");
+    }
+
+    // covers: S262
+    #[test]
+    fn save_as_preset_with_no_speaker_on_says_what_to_do_first() {
+        let app = main_window_over(MockBackend::new());
+        for speaker in app.snapshot().speakers {
+            app.update(|b| b.set_speaker_enabled(&speaker.id, false));
+        }
+        app.ask_save_preset();
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
+        assert_eq!(
+            app.zone_dialog.get_message(),
+            "Turn on the speakers you want in the preset first, then save it."
+        );
+        assert!(preset_rows(&app).is_empty());
+    }
+
+    // covers: S267
+    #[test]
+    fn after_a_delete_the_focus_goes_to_the_next_row_then_to_save_as_preset() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.save_preset("Party");
+        draw_frames();
+        let ids = preset_ids(&app);
+        let window = app.main.window();
+
+        app.delete_preset(&ids[0]);
+        draw_frames();
+        assert_eq!(app.main.get_focus_preset_id(), "", "the row took it");
+        press(window, Key::F2);
+        assert_eq!(
+            *app.dialog_purpose.borrow(),
+            DialogPurpose::RenamePreset(ids[1].clone()),
+            "F2 on the focused row, the next one, renames it"
+        );
+        app.zone_dialog.hide().unwrap();
+
+        app.delete_preset(&ids[1]);
+        draw_frames();
+        press(window, " ");
+        assert_eq!(
+            *app.dialog_purpose.borrow(),
+            DialogPurpose::SavePreset,
+            "with no row left, Save as Preset… has the focus"
+        );
+    }
+
+    // covers: S265
+    #[test]
+    fn a_recall_that_leaves_a_hidden_speaker_off_says_so_in_one_notice() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        app.save_preset("Evening");
+        app.update(|b| b.hide_speaker("local:desk", "USB"));
+        let id = preset_ids(&app)[0].clone();
+
+        app.recall_preset(&id);
+        let notices = app.snapshot().notices;
+        assert_eq!(notices.len(), 1);
+        let text = notice_text(&app.strings(), &notices[0].message);
+        assert_eq!(
+            text, "“Evening” is on. Stayed off: Desk Speaker (Hidden).",
+            "a hidden speaker stays hidden"
+        );
+        assert_eq!(
+            notice_title(&app.strings(), &notices[0].message),
+            "some speakers stayed off"
+        );
+
+        app.update(|b| b.rename_preset(&id, "Late"));
+        let notices = app.snapshot().notices;
+        assert_eq!(notices.len(), 1, "renamed in place");
+        assert!(notice_text(&app.strings(), &notices[0].message).starts_with("“Late” is on."));
+
+        app.update(|b| b.unhide_speaker("local:desk"));
+        app.recall_preset(&id);
+        assert!(app.snapshot().notices.is_empty(), "a full recall clears it");
+    }
+
+    // covers: S265
+    #[test]
+    fn a_recall_with_no_speaker_left_changes_nothing_and_says_so() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        app.update(|b| b.set_speaker_enabled("airplay:kitchen", false));
+        app.save_preset("Desk");
+        app.update(|b| b.hide_speaker("local:desk", "USB"));
+        app.update(|b| b.set_master_volume(40.0));
+
+        app.recall_preset(&preset_ids(&app)[0]);
+        let notices = app.snapshot().notices;
+        assert_eq!(
+            notice_text(&app.strings(), &notices[0].message),
+            "Nothing changed: no speaker in “Desk” can play now. Desk Speaker (Hidden)."
+        );
+        assert_eq!(app.snapshot().master_volume, 40.0);
+    }
+
+    // covers: S269
+    #[test]
+    fn the_preset_texts_come_from_strings() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(strings.get_presets(), "Presets");
+        assert_eq!(strings.get_save_preset(), "Save as Preset…");
+        assert_eq!(strings.get_no_presets(), "No Presets");
+        assert_eq!(strings.get_choose_preset(), "Choose a Preset");
+        assert_eq!(strings.get_preset_current(), "Current");
+        assert_eq!(strings.get_preset_recall_hint(), "Recalls this preset");
+        assert_eq!(strings.get_update_preset(), "Update to Current Settings");
+        assert_eq!(strings.get_rename_preset(), "Rename…");
+        assert_eq!(strings.get_delete_preset(), "Delete");
+        assert_eq!(strings.invoke_numbered_preset(3), "Preset 3");
+        assert_eq!(strings.get_preset_busy(), "In use by another app");
+        assert_eq!(
+            strings.get_presets_empty(),
+            "No presets yet. Turn on the speakers you want, set the volumes and the curve, \
+             then save them as a preset."
         );
     }
 

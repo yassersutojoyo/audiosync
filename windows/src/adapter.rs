@@ -8748,6 +8748,130 @@ mod tests {
         assert_eq!(adapter.current_preset(), None, "a switch breaks it");
     }
 
+    fn preset_notices(adapter: &AudioAdapter<MockBackend>) -> Vec<NoticeMessage> {
+        messages(adapter)
+            .into_iter()
+            .filter(|message| matches!(message, NoticeMessage::PresetLeftOff { .. }))
+            .collect()
+    }
+
+    fn left_off_notice(preset: &str, left_off: &[(&str, PresetLeftOff)]) -> NoticeMessage {
+        NoticeMessage::PresetLeftOff {
+            preset: preset.to_owned(),
+            left_off: left_off
+                .iter()
+                .map(|(name, reason)| ((*name).to_owned(), reason.clone()))
+                .collect(),
+            nothing_changed: false,
+        }
+    }
+
+    /// Built-in, Speakers and Headphones, with the example zone over
+    /// Speakers and `presets`.
+    fn preset_adapter(presets: Vec<SavedPreset>) -> AudioAdapter<MockBackend> {
+        let mut audio = MockBackend::empty();
+        audio.connect_output_as("builtin", "Built-in", OutputKind::BuiltIn);
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_output(HEADPHONES, "Headphones");
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS)])],
+            speaker_presets: presets,
+            ..Settings::default()
+        });
+        adapter.poll();
+        turn_on(&mut adapter, "builtin");
+        adapter
+    }
+
+    // covers: S265
+    #[test]
+    fn the_preset_notice_follows_its_preset_and_goes_once_it_plays_in_full() {
+        let mut adapter = preset_adapter(vec![saved_preset(&[
+            (key(HEADPHONES), Some(40.0)),
+            (key("late"), None),
+        ])]);
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("late", PresetLeftOff::NotFound)]
+            )]
+        );
+
+        Backend::rename_preset(&mut adapter, "preset:1", "Night");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Night",
+                &[("late", PresetLeftOff::NotFound)]
+            )],
+            "the notice follows the new name in place"
+        );
+
+        adapter.audio.connect_output("late", "Late");
+        adapter.poll();
+        turn_on(&mut adapter, "late");
+        adapter.poll();
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+        assert!(
+            preset_notices(&adapter).is_empty(),
+            "the preset plays in full, so the notice goes"
+        );
+    }
+
+    // covers: S262, S265
+    #[test]
+    fn deleting_the_preset_takes_its_notice_down_and_a_full_recall_clears_it() {
+        let mut full = saved_preset(&[(key(SPEAKERS), None)]);
+        full.id = "preset:2".to_owned();
+        full.name = "Day".to_owned();
+        let mut adapter = preset_adapter(vec![
+            saved_preset(&[(key(HEADPHONES), None), (key("gone"), None)]),
+            full,
+        ]);
+        adapter.recall_preset("preset:1");
+        assert_eq!(preset_notices(&adapter).len(), 1);
+        adapter.recall_preset("preset:2");
+        assert!(
+            preset_notices(&adapter).is_empty(),
+            "a full recall clears it"
+        );
+
+        adapter.recall_preset("preset:1");
+        assert_eq!(preset_notices(&adapter).len(), 1);
+        Backend::delete_preset(&mut adapter, "preset:2");
+        assert_eq!(preset_notices(&adapter).len(), 1, "another preset's delete");
+        Backend::delete_preset(&mut adapter, "preset:1");
+        assert!(preset_notices(&adapter).is_empty());
+    }
+
+    // covers: S251, S262
+    #[test]
+    fn save_and_update_capture_what_plays_and_need_a_speaker_on() {
+        let mut adapter = preset_adapter(Vec::new());
+        assert_eq!(
+            Backend::save_preset(&mut adapter, "Evening"),
+            Err(PresetError::NoSpeakerOn),
+            "the reference output alone is no preset"
+        );
+        turn_on(&mut adapter, HEADPHONES);
+        Backend::save_preset(&mut adapter, "Evening").expect("saved");
+        let state = adapter.snapshot();
+        assert_eq!(state.presets.len(), 1);
+        assert_eq!(state.current_preset.as_deref(), Some("preset:1"));
+        assert_eq!(adapter.presets[0].members.len(), 1, "Headphones only");
+
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(adapter.current_preset(), None);
+        Backend::update_preset(&mut adapter, "preset:1").expect("updated");
+        assert_eq!(adapter.presets[0].id, "preset:1");
+        assert_eq!(adapter.presets[0].name, "Evening");
+        assert_eq!(adapter.presets[0].members.len(), 2);
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
     #[test]
     fn a_renamed_cast_speaker_shows_and_is_named_by_its_new_name() {
         let (mut adapter, _fake) = cast_adapter();

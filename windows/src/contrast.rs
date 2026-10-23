@@ -1028,3 +1028,53 @@ fn selected_text_in_a_text_box_reaches_4_5_to_1() {
     assert!(field.contains("selection-foreground-color: Tokens.surface;"));
     assert!(CONTRAST_PAIRS.contains(&("surface", "tealText")));
 }
+
+/// The preset controls (spec S267, S268): token colors only, a focus ring,
+/// Narrator's label, value and hint on each row, F2 for Rename, and the
+/// Menu key and Shift+F10 through the row's context menu area.
+#[test]
+fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
+    let main = include_str!("../ui/main.slint");
+    let flyout = include_str!("../ui/flyout.slint");
+    let parts = [
+        component_body(main, "PresetRow"),
+        component_body(main, "PresetsCard"),
+        component_body(flyout, "PresetPicker"),
+    ];
+    for part in parts {
+        for line in part.lines().map(str::trim) {
+            if line.starts_with("color:") || line.starts_with("background:") {
+                assert!(
+                    !line.contains('#') && !line.contains("rgb"),
+                    "a token, not a literal: {line}"
+                );
+            }
+        }
+    }
+    let [row, card, picker] = parts;
+    for needle in [
+        "accessible-role: button;",
+        "accessible-label: root.item.name;",
+        "accessible-value: root.item.current ? Strings.preset-current : \"\";",
+        "accessible-description: Strings.preset-recall-hint;",
+        "if event.text == Key.F2 {",
+        "menu := ContextMenuArea {",
+        "border-color: Tokens.focus;",
+        "label: Strings.speaker-options(root.item.name);",
+        "color: Tokens.teal-text;",
+    ] {
+        assert!(row.contains(needle), "PresetRow has {needle}");
+    }
+    assert!(card.contains("accessible-role: groupbox;"));
+    assert!(card.contains("text: Strings.presets-empty;"));
+    assert!(card.contains("text: Strings.save-preset;"));
+    for needle in [
+        "accessible-role: button;",
+        "accessible-label: Strings.presets;",
+        "border-color: Tokens.focus;",
+        "if event.text == \" \" || event.text == Key.Return {",
+    ] {
+        assert!(picker.contains(needle), "PresetPicker has {needle}");
+    }
+    assert!(flyout.contains("if root.presets.length > 0: PresetPicker {"));
+}
