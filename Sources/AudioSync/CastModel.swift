@@ -423,6 +423,8 @@ struct CastModel {
         }
         if let volume = volumes.removeValue(forKey: old) { volumes[new] = volume }
         if let wanted = requested, wanted.id == old { requested = (new, wanted.level) }
+        // offsetsWritten stays: the sender keeps an offset the ID already had, and the appeared read says which.
+        if offsets[new] == nil, let offset = offsets.removeValue(forKey: old) { offsets[new] = offset }
     }
 
     /// The sender listed `id` for an address the user added: it shows again

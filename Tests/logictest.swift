@@ -5504,6 +5504,21 @@ do {
           "cast model: a playing speaker added by address that a browse finds stays on and playing under its id, "
             + "and Off still stops it")
 
+    var offsetMoves = CastModel()
+    offsetMoves.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = offsetMoves.setOffset(manualID, ms: 240)
+    offsetMoves.apply(.gone(id: manualID))
+    if let browsed { offsetMoves.apply(browsed) }
+    var offsetKept = CastModel()
+    offsetKept.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = offsetKept.setOffset(manualID, ms: 240)
+    offsetKept.apply(.gone(id: manualID))
+    offsetKept.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: 100, former: manualID))
+    check(offsetMoves.offset(of: realID) == 240 && offsetMoves.offsets[manualID] == nil
+            && offsetKept.offset(of: realID) == 100,
+          "cast model: a speaker added by address that a browse finds keeps its offset under its id, unless the "
+            + "sender reports one the id already had")
+
     var stopped = CastModel()
     stopped.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
     stopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
