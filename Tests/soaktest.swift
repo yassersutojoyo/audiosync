@@ -683,9 +683,10 @@ for o in outputDetails {
 }
 if !renderers.isEmpty {
     text += lagWindows.filling > 0
-        ? String(format: "Lag error counts the %d windows ending from %.0f s on (delay plus one interval); "
-                    + "%d windows ending sooner were skipped as filling\n",
-                 lagWindows.counted.count, lagWindows.countsFrom, lagWindows.filling)
+        ? String(format: "Lag error counts the %d windows ending from %.0f s on (delay plus one interval); ",
+                 lagWindows.counted.count, lagWindows.countsFrom)
+            + (lagWindows.filling == 1 ? "1 window ending sooner was" : "\(lagWindows.filling) windows ending sooner were")
+            + " skipped as filling\n"
         : lagWindows.countsFrom == 0
         ? "Lag error counts all \(lagWindows.counted.count) windows: the run ended before the delay plus one interval\n"
         : "Lag error counts all \(lagWindows.counted.count) windows; none was skipped as filling\n"
