@@ -167,6 +167,8 @@ extension AppDelegate {
     func noteLocalDeviceList(_ devices: [AudioDevices.Device]) {
         localListed = devices.map(\.uid).filter { !$0.isEmpty }
         localReference = LocalDelay.reference(in: devices)
+        dataSourceWatch.onChange = { [weak self] in self?.pushModel() }
+        dataSourceWatch.follow(devices)
     }
 
     /// Whole-system source: follow whichever player is playing. App source: that

@@ -12,16 +12,21 @@ extension AppDelegate {
     /// sheet says why it can't.
     func startCalibrateAll() {
         guard calibrateAllRun == nil, calibrationRun == nil, !appModel.calibration.holdsOutputs else { return }
+        logCalibrationKinds(calibrateAllInputs().localOutputs.map(\.id))
         if !appModel.calibrateAll.shown {
             calibrateAllSheet = nil
             calibrateAllUndo = nil
             appModel.calibrateAll = CalibrateAllStatus(shown: true, blocker: appModel.calibrateAll.blocker)
+            followCalibrateAll()
+            // The sheet lists the outputs that sit out before any run, so one can be included anyway first.
+            if !appModel.calibrateAll.leftOut.isEmpty { return }
         }
         let speakers: [CalibrateAllSpeaker]
         switch calibrateAllPlan() {
         case .success(let planned): speakers = planned
-        case .failure(let blocker):
-            return calibrateAllFailed(blocker == .noReference ? .noReference : .notPlaying)
+        case .failure(.noReference): return calibrateAllFailed(.noReference)
+        case .failure(.notPlaying), .failure(.noOtherSpeaker): return calibrateAllFailed(.notPlaying)
+        case .failure: return followCalibrateAll()
         }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
@@ -207,21 +212,62 @@ extension AppDelegate {
 
     /// From `pushModel`: whether the button may start a run.
     func followCalibrateAll() {
+        let inputs = calibrateAllInputs()
         let blocker: CalibrateAllBlocker?
         if calibrationRun != nil || appModel.calibration.holdsOutputs {
             blocker = .busy
-        } else if case .failure(let reason) = calibrateAllPlan() {
+        } else if case .failure(let reason) = CalibrateAllFlow.plan(inputs) {
             blocker = reason
         } else {
             blocker = nil
         }
         if appModel.calibrateAll.blocker != blocker { appModel.calibrateAll.blocker = blocker }
+        let leftOut = CalibrateAllFlow.leftOut(inputs)
+        if appModel.calibrateAll.leftOut != leftOut { appModel.calibrateAll.leftOut = leftOut }
+    }
+
+    /// "Include Anyway" or "Leave Out" on an output that sits out, for the
+    /// runs of this sheet: the choice goes when the sheet closes.
+    func includeInCalibrateAll(_ id: String, _ included: Bool) {
+        guard appModel.calibrateAll.shown, !calibrateAllRunning, !appModel.calibrateAll.holdsOutputs else { return }
+        if included {
+            appModel.calibrateAll.includedAnyway.insert(id)
+        } else {
+            appModel.calibrateAll.includedAnyway.remove(id)
+        }
+        followCalibrateAll()
     }
 
     // MARK: What a run reads from the app
 
+    /// Why local output `uid` sits out of microphone calibration, nil when it
+    /// takes part or isn't listed.
+    func calibrationLeftOut(_ uid: String) -> CalibrationLeftOut? {
+        guard let device = localDevices[uid] else { return nil }
+        return CalibrationFlow.leftOut(transport: device.transport, terminal: device.outputTerminal,
+                                       dataSource: AudioDevices.outputDataSource(of: device.id), name: device.name)
+    }
+
+    /// What macOS reports for each output a calibration would use, so the
+    /// debug log shows why one sat out or took part.
+    func logCalibrationKinds(_ uids: [String]) {
+        guard DebugTrace.enabled else { return }
+        let hex = { (value: UInt32?) in value.map { String(format: "0x%08X", $0) } ?? "none" }
+        for uid in uids {
+            guard let device = localDevices[uid] else { continue }
+            let source = AudioDevices.outputDataSource(of: device.id)
+            let reason = calibrationLeftOut(uid).map { "left out as \($0)" } ?? "takes part"
+            DebugTrace.log("[AudioSync] calibration output \(device.name): transport \(hex(device.transport)), "
+                + "terminal \(hex(device.outputTerminal)), data source \(hex(source)), \(reason)")
+        }
+    }
+
     /// The speakers a run would measure now, or why it can't start.
     func calibrateAllPlan() -> Result<[CalibrateAllSpeaker], CalibrateAllBlocker> {
+        CalibrateAllFlow.plan(calibrateAllInputs())
+    }
+
+    func calibrateAllInputs() -> CalibrateAllFlow.Inputs {
         let playing = calibratePlayingIDs()
         let airPlayL = airPlayChosenAndListed ? airPlayLatencyMs : nil
         var cast: (id: String, name: String, offsetMs: Double?, waitMs: Double, format: Int32)?
@@ -231,14 +277,18 @@ extension AppDelegate {
                     format: castModel.playingFormat)
         }
         let wanted = NetworkHoldBack.airPlayMs(airPlay: airPlayL, cast: castModel.anchorMs)
-        let inputs = CalibrateAllFlow.Inputs(
-            streaming: engine.isRunning, reference: localReference,
-            localOutputs: appModel.local.filter { $0.enabled && playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
+        let localOutputs = appModel.local.filter { $0.enabled && playing.contains($0.id) }
+            .map { (id: $0.id, name: $0.name) }
+        var leftOut: [String: CalibrationLeftOut] = [:]
+        for output in localOutputs {
+            if let reason = calibrationLeftOut(output.id) { leftOut[output.id] = reason }
+        }
+        return CalibrateAllFlow.Inputs(
+            streaming: engine.isRunning, reference: localReference, localOutputs: localOutputs,
             localOffsets: localOffsetMs, holdBacks: localHoldBacks, cast: cast,
             airPlay: appModel.airplay.filter { playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
             airPlayDelayMs: airPlayLatencyMs, airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),
-            softwareOutputs: Set(localDevices.filter { AudioDevices.isSoftwareOnly(transport: $0.value.transport) }.keys))
-        return CalibrateAllFlow.plan(inputs)
+            leftOut: leftOut, includedAnyway: appModel.calibrateAll.includedAnyway)
     }
 
     /// Every speaker playing now: local outputs running, AirPlay speakers the

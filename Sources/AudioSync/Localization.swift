@@ -214,6 +214,8 @@ struct UIStrings {
             return "Calibration measures against the Mac's built-in speakers, and they aren't listed."
         case .notPlaying:
             return "Turn on streaming, this speaker and the built-in speakers first."
+        case .referenceHeadphones:
+            return calibrateAllUnavailable(.referenceHeadphones)
         case .microphoneDenied:
             return "AudioSync isn't allowed to use the microphone. Turn it on in System Settings → "
                 + "Privacy & Security → Microphone."
@@ -257,8 +259,9 @@ struct UIStrings {
 
     let calibrateAll = "Calibrate All Speakers"
     let calibrateAllHint = "Put the microphone where you listen. AudioSync fades the music out, plays a short sweep "
-        + "on the built-in speakers and then on every other speaker that is on, one at a time, twice each, "
-        + "and fades the music back in. Nothing changes until you click Apply."
+        + "on the built-in speakers and then on each other speaker that is on, one at a time, twice each, "
+        + "and fades the music back in. Headphones and virtual outputs are left out. "
+        + "Nothing changes until you click Apply."
     let calibrateAllIntro = "Put the microphone where you listen and keep the room quiet. "
         + "Nothing changes until you click Apply."
 
@@ -268,9 +271,41 @@ struct UIStrings {
         case .noReference: "Calibration measures against the Mac's built-in speakers, and they aren't listed."
         case .notPlaying: "Turn on streaming and the built-in speakers first."
         case .noOtherSpeaker: "Only the built-in speakers are on. Turn on another speaker to calibrate it."
+        case .onlyLeftOut: "The other speakers that are on are headphones or virtual outputs, which the "
+            + "microphone can't hear. Turn on another speaker, or choose Include Anyway for one in \(calibrateAll)."
+        case .referenceHeadphones: "Headphones are plugged into the Mac, so its built-in speakers are silent. "
+            + "Unplug them to calibrate."
         case .busy: "Another calibration is still running."
         }
     }
+
+    /// The blocker as the sheet says it, where Include Anyway is right below.
+    func calibrateAllSheetBlocker(_ blocker: CalibrateAllBlocker) -> String {
+        guard blocker == .onlyLeftOut else { return calibrateAllUnavailable(blocker) }
+        return "The other speakers that are on are headphones or virtual outputs, which the microphone can't "
+            + "hear. Turn on another speaker, or choose Include Anyway below."
+    }
+
+    /// Why an output sits out of microphone calibration, under its row.
+    func calibrationLeftOut(_ reason: CalibrationLeftOut) -> String {
+        switch reason {
+        case .headphones: "Left out of microphone calibration: the microphone can't hear headphones."
+        case .virtual: "Left out of microphone calibration: a virtual output has nothing for the microphone to hear."
+        }
+    }
+
+    let calibrateAllLeftOutIncluded = "Included anyway: measured in this run."
+    let includeAnyway = "Include Anyway"
+    func includeAnywayLabel(of name: String) -> String { "Include \(name) anyway" }
+    func includeAnywayHelp(_ reason: CalibrationLeftOut) -> String {
+        switch reason {
+        case .headphones: "For a speaker that reports itself as headphones. It counts until you close this window."
+        case .virtual: "For a virtual output that passes the sound on to a speaker. "
+            + "It counts until you close this window."
+        }
+    }
+    let leaveOut = "Leave Out"
+    func leaveOutLabel(of name: String) -> String { "Leave \(name) out" }
 
     func calibrateAllProgress(_ progress: CalibrateAllProgress) -> String {
         switch progress {
@@ -1116,9 +1151,11 @@ struct UIStrings {
           Every other local speaker has a delay relative to them, which always
           applies: click the time next to it to adjust it. Once that control is
           open, '\(calibrateWithMicrophone)' under it can measure the delay
-          instead. '\(calibrateAll)' in the left column measures every
+          instead. '\(calibrateAll)' in the left column measures each
           speaker that is on, AirPlay and Google Cast too, and shows the new
-          delays before you apply them. A positive value holds the speaker back; a negative one is
+          delays before you apply them. Headphones and virtual outputs are
+          left out, since the microphone can't hear them; their delay stays
+          yours to set. A positive value holds the speaker back; a negative one is
           for a speaker that sounds late, such as Bluetooth. While an AirPlay
           speaker is on, every local speaker also waits the 'AirPlay delay'
           under Connected Speakers for it.
