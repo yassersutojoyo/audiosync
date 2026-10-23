@@ -666,3 +666,65 @@ fn device_volume_changes_never_touch_the_samples() {
     session.stop();
     device.join();
 }
+
+// covers: C25, C81
+#[test]
+fn an_oversized_frame_from_the_device_is_a_fault_the_session_recovers_from() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::SendRaw(70_000u32.to_be_bytes().to_vec()));
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: false })),
+        "{seen:?}"
+    );
+    assert_eq!(device.connection_count(), 2, "the channel was closed");
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1);
+    assert!(!session.is_ended());
+    session.stop();
+    device.join();
+}
+
+// covers: C82
+#[test]
+fn a_close_from_the_running_app_reconnects_its_virtual_connection_and_plays_on() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::Send(json_message(
+        "transport-1",
+        "sender-0",
+        NS_CONNECTION,
+        json!({"type": "CLOSE"}),
+    )));
+    let app_connects = |device: &FakeDevice| {
+        device
+            .received()
+            .into_iter()
+            .filter(|(destination, ns, payload)| {
+                destination == "transport-1" && ns == NS_CONNECTION && payload["type"] == "CONNECT"
+            })
+            .count()
+    };
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until && app_connects(&device) < 2 {
+        session.run_for(Duration::from_millis(50));
+    }
+    assert_eq!(app_connects(&device), 2, "the app's CONNECT once more");
+    session.run_for(Duration::from_millis(500));
+    let seen: Vec<SessionEvent> = std::iter::from_fn(|| session.poll_event()).collect();
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Ended(_) | SessionEvent::Recovering(_))),
+        "{seen:?}"
+    );
+    assert_eq!(device.connection_count(), 1, "the same channel");
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1);
+    session.stop();
+    device.join();
+}
