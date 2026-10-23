@@ -1392,6 +1392,8 @@ impl App {
         self.main.set_this_pc_all_hidden(state.hidden_in(true));
         self.main.set_connected_all_hidden(state.hidden_in(false));
         self.flyout.set_all_hidden(state.all_hidden());
+        self.flyout
+            .set_connected_all_hidden(state.connected_all_hidden());
         self.main
             .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
         let listed = |s: &&ui_model::Speaker| lists(s);
@@ -3555,9 +3557,6 @@ fn sheet_outcome(strings: &Strings<'_>, reference: &str, sheet: &SheetState) -> 
     if let Some(reason) = sheet.ended {
         return strings.invoke_calibrate_all_stopped(ended_text(strings, reason));
     }
-    if sheet.airplay_waits {
-        return strings.get_calibrate_all_airplay_waits();
-    }
     if sheet.undone {
         return strings.get_calibrate_all_undone();
     }
@@ -4577,7 +4576,6 @@ mod tests {
             failure: None,
             again_ended: None,
             can_apply: true,
-            airplay_waits: false,
             applied: false,
             can_undo: false,
             undone: false,
@@ -4605,15 +4603,6 @@ mod tests {
         let card = calibrate_all_card(&strings, &state);
         assert!(card.airplay.contains("4 ms apart"), "{}", card.airplay);
         assert!(!card.airplay.contains("differ by"));
-        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
-        sheet.airplay_waits = true;
-        sheet.can_apply = false;
-        let card = calibrate_all_card(&strings, &state);
-        assert_eq!(card.outcome, strings.get_calibrate_all_airplay_waits());
-        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
-        sheet.airplay_waits = false;
-        sheet.can_apply = true;
-        let card = calibrate_all_card(&strings, &state);
         assert_eq!(card.said, strings.invoke_calibrate_all_finished(1, 2));
 
         let sheet = state.calibrate_all.sheet.as_mut().unwrap();
@@ -4679,7 +4668,6 @@ mod tests {
             failure: None,
             again_ended: None,
             can_apply: false,
-            airplay_waits: false,
             applied: false,
             can_undo: false,
             undone: false,

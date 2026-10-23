@@ -208,6 +208,8 @@ export global Strings {
     out property <string> all-speakers-hidden: @tr("Every speaker here is hidden. Choose Hidden Speakers in the Speakers menu to show one again.");
     // The tray flyout's list when every speaker is hidden: it has no Speakers menu.
     out property <string> flyout-all-hidden: @tr("Every speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again.");
+    // The same list when only the PC's own speakers are left in it.
+    out property <string> flyout-connected-hidden: @tr("Every connected speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again.");
 
     // Add by Address…: a Google Cast speaker that discovery can't find.
     out property <string> cast-add-address: @tr("Add by Address…");
@@ -1233,7 +1235,6 @@ export global Strings {
     out property <string> calibrate-all-not-measured: @tr("Not measured.");
     // A delay never stored: "Was none."
     out property <string> calibrate-all-none: @tr("none");
-    out property <string> calibrate-all-airplay-waits: @tr("AirPlay isn't playing, so the AirPlay delay can't be set now. Apply and Undo work again once it plays.");
     out property <string> calibrate-all-busy: @tr("Another calibration is still running.");
     out property <string> calibrate-all-nothing-certain: @tr("No speaker was measured clearly, so there is nothing to apply.");
     out property <string> calibrate-all-estimating: @tr("Working out the delays…");
