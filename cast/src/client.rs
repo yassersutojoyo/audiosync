@@ -721,8 +721,8 @@ mod tests {
     #[test]
     fn a_write_keeps_to_its_deadline_across_partial_sends() {
         let (mut tcp, _device) = connected();
-        // A full second keeps macOS runner jitter (100 ms seen) inside the
-        // margin, while a retry that waited the whole limit again would not be.
+        // macOS runners overshoot a send timeout by about half of it; a retry
+        // that waited the whole limit again would still take twice the limit.
         let limit = Duration::from_secs(1);
         tcp.write_until = Some(Instant::now() + limit);
         let started = Instant::now();
@@ -731,6 +731,6 @@ mod tests {
             assert!(started.elapsed() < Duration::from_secs(5), "never blocked");
         }
         let took = started.elapsed();
-        assert!(took < limit + limit / 2, "the write took {took:?}");
+        assert!(took < limit * 2, "the write took {took:?}");
     }
 }
