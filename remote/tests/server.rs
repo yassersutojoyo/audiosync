@@ -785,6 +785,8 @@ fn the_event_stream_delivers_each_revision_once_and_heartbeats() {
         !late.read_for(Duration::from_secs(2)),
         "the stream stays open"
     );
+    assert!(!events.data.contains("event: replaced"));
+    assert!(!late.data.contains("event: replaced"));
 }
 
 #[test]
@@ -802,6 +804,12 @@ fn a_device_keeps_two_event_streams_and_a_third_ends_the_oldest() {
     assert!(
         !streams[0].read_for(Duration::from_secs(2)),
         "the oldest stays open"
+    );
+    // A page that knows it was replaced stops reconnecting, which would end the next stream.
+    assert!(
+        streams[0].data.ends_with("event: replaced\ndata: {}\n\n"),
+        "{:?}",
+        streams[0].data
     );
     let mut state = sample();
     state.master_volume = 5.0;

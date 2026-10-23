@@ -250,6 +250,7 @@ const TEXT = {
   unpairConfirm: "Unpair this phone? You'll need a new code from AudioSync to use it again.",
   lost: "Can't reach AudioSync. Retrying…",
   noUpdates: "AudioSync answers but isn't sending updates. Retrying…",
+  replaced: "This remote is open in another tab or window. Choose Retry to use it here.",
   busy: "AudioSync is serving too many connections. Retrying…",
   waiting: "AudioSync is starting. Retrying…",
   back: "Connected to AudioSync.",
@@ -315,6 +316,7 @@ let retryTimer = null;
 let failures = 0;
 let lost = false;
 let streamed = false;
+let streamReplaced = false;
 let focusAfterPair = false;
 let snapshot = null;
 let rowCount = 0;
@@ -425,6 +427,7 @@ function setLost(value, message) {
 
 function connect() {
   stopStream();
+  streamReplaced = false;
   showRemote();
   events = new EventSource("/api/events");
   events.addEventListener("state", (event) => {
@@ -443,6 +446,12 @@ function connect() {
     if (stranded && (!now || now === document.body || ui.banner.contains(now) || ui.pair.contains(now))) {
       ui.master.focus();
     }
+  });
+  // Sent when a newer page of this device took the stream; reconnecting would take it back.
+  events.addEventListener("replaced", () => {
+    stopStream();
+    streamReplaced = true;
+    setLost(true, TEXT.replaced);
   });
   events.onerror = () => {
     stopStream();
@@ -884,7 +893,7 @@ ui.unpair.addEventListener("click", () => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && ui.pair.hidden && events === null) {
+  if (document.visibilityState === "visible" && ui.pair.hidden && events === null && !streamReplaced) {
     failures = 0;
     connect();
   }

@@ -174,6 +174,31 @@ mod tests {
     }
 
     #[test]
+    fn a_replaced_stream_waits_for_retry_instead_of_reconnecting() {
+        let script = only_element(PAGE, "script").unwrap();
+        let start = script
+            .find("events.addEventListener(\"replaced\"")
+            .expect("a replaced handler");
+        let handler = &script[start..start + script[start..].find("});").unwrap()];
+        assert!(handler.contains("stopStream();"));
+        assert!(handler.contains("setLost(true, TEXT.replaced);"));
+        for retry in ["retryLater", "setTimeout", "connect("] {
+            assert!(!handler.contains(retry), "{retry}");
+        }
+        assert!(script.contains("replaced: \"This remote is open in another tab or window."));
+        // Coming back into view must not take the stream back either; Retry or pairing does.
+        assert!(handler.contains("streamReplaced = true;"));
+        let visible = &script[script.find("\"visibilitychange\"").unwrap()..];
+        let visible = &visible[visible.find("if (").unwrap()..];
+        let condition = &visible[..visible.find('{').unwrap()];
+        assert!(condition.contains("!streamReplaced"), "{condition}");
+        let connect = &script[script.find("function connect() {").unwrap()..];
+        // A Windows checkout may end lines with CRLF, so match the closing brace without its newline.
+        let connect = &connect[..connect.find("\n}").unwrap()];
+        assert!(connect.contains("streamReplaced = false;"));
+    }
+
+    #[test]
     fn focus_stays_near_a_removed_speaker_and_moves_to_the_code_when_unpaired() {
         let script = only_element(PAGE, "script").unwrap();
         assert!(script.contains("focusNeighbor(order, focusedRow.root);"));
