@@ -568,9 +568,11 @@ pub struct AppState {
     pub hidden: Vec<HiddenSpeaker>,
     pub groups: Vec<Group>,
     /// The zones (spec S245), stored and migrated from the groups; the
-    /// windows still show the groups.
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+    /// windows still show the groups, the web remote shows the zones.
     pub zones: Vec<audiosync_core::policy::zones::Zone>,
+    /// The speaker presets (spec S251) in list order, with the current one
+    /// marked (spec S253).
+    pub presets: Vec<PresetItem>,
     pub equalizer: EqSettings,
     /// Newest first.
     pub notices: Vec<Notice>,
@@ -600,6 +602,15 @@ pub struct AppState {
     pub calibration: CalibrationState,
     /// Calibrate All Speakers, in its own card.
     pub calibrate_all: CalibrateAllState,
+}
+
+/// A speaker preset as the web remote lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresetItem {
+    pub id: String,
+    pub name: String,
+    /// The speakers play it exactly now, the first such preset in list order.
+    pub current: bool,
 }
 
 /// Calibrate All Speakers (spec S235 to S240): where a run stands and the
@@ -877,12 +888,12 @@ pub trait Backend {
     fn delete_group(&mut self, id: &str);
     /// Switches zone `id`'s members as the core's click plan says (spec
     /// S246, S247).
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
     fn toggle_zone(&mut self, _id: &str) {}
     /// Sets zone `id`'s volume, 0 to 100, which scales each member's own
     /// volume (spec S249).
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
     fn set_zone_volume(&mut self, _id: &str, _position: f64) {}
+    /// Recalls preset `id` as a full scene (spec S252).
+    fn recall_preset(&mut self, _id: &str) {}
     fn set_equalizer(&mut self, settings: EqSettings);
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
@@ -1200,7 +1211,17 @@ impl MockBackend {
                 name: "Downstairs".into(),
                 members: vec!["airplay:kitchen".into(), "airplay:living".into()],
             }],
-            zones: Vec::new(),
+            zones: vec![audiosync_core::policy::zones::Zone {
+                id: "zone:1".into(),
+                name: "Downstairs".into(),
+                members: vec!["airplay:kitchen".into(), "airplay:living".into()],
+                volume: 100.0,
+            }],
+            presets: vec![PresetItem {
+                id: "preset:1".into(),
+                name: "Evening".into(),
+                current: false,
+            }],
             equalizer: EqSettings::default(),
             notices: Vec::new(),
             pin_prompt: None,
@@ -1391,6 +1412,36 @@ impl Backend for MockBackend {
         }
         if turn_on {
             self.state.running = true;
+        }
+    }
+
+    fn toggle_zone(&mut self, id: &str) {
+        let Some(zone) = self.state.zones.iter().find(|z| z.id == id).cloned() else {
+            return;
+        };
+        let turn_on = !zone
+            .members
+            .iter()
+            .all(|key| self.state.speaker(key).is_some_and(|s| s.enabled));
+        for member in &zone.members {
+            if let Some(speaker) = self.speaker_mut(member) {
+                speaker.enabled = turn_on;
+            }
+        }
+        if turn_on {
+            self.state.running = true;
+        }
+    }
+
+    fn set_zone_volume(&mut self, id: &str, position: f64) {
+        if let Some(zone) = self.state.zones.iter_mut().find(|z| z.id == id) {
+            zone.volume = position.clamp(0.0, 100.0);
+        }
+    }
+
+    fn recall_preset(&mut self, id: &str) {
+        for preset in &mut self.state.presets {
+            preset.current = preset.id == id;
         }
     }
 

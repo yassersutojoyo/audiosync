@@ -104,8 +104,8 @@ use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
     Group, GroupError, HiddenSpeaker, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase,
-    PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
-    Waiting, clamp_delay_ms,
+    PinPrompt, PresetItem, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind,
+    ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -1345,7 +1345,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// The speakers on now as a preset sees them (spec S251, S253): list
     /// order, the reference output left out, no own volume for a
     /// fixed-volume Cast speaker.
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
     fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
         state
             .speakers
@@ -1361,24 +1360,40 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// The ID of the preset the speakers play exactly now, the first in
     /// list order (spec S253).
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
+    #[cfg(test)]
     pub(crate) fn current_preset(&self) -> Option<String> {
-        let state = self.snapshot();
-        let on = Self::speakers_on_now(&state);
+        self.snapshot()
+            .presets
+            .into_iter()
+            .find(|preset| preset.current)
+            .map(|preset| preset.id)
+    }
+
+    /// The presets in list order, the one `state` plays exactly marked
+    /// current (spec S253).
+    fn preset_items(&self, state: &AppState) -> Vec<PresetItem> {
+        let on = Self::speakers_on_now(state);
         let scene = Scene {
             on: &on,
             zones: &self.zones,
             master: state.master_volume,
             gains_db: self.equalizer.gains_db,
         };
-        presets::current(&self.presets, &scene).map(|preset| preset.id.clone())
+        let current = presets::current(&self.presets, &scene).map(|preset| preset.id.as_str());
+        self.presets
+            .iter()
+            .map(|preset| PresetItem {
+                id: preset.id.clone(),
+                name: preset.name.clone(),
+                current: current == Some(preset.id.as_str()),
+            })
+            .collect()
     }
 
     /// Recalls preset `id` as the core's plan says (spec S252), a full
     /// scene. Returns each stored member left off, by its shown name, with
     /// the reason, for the notice the windows will post; `None` for an ID no
     /// preset has.
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
     pub(crate) fn recall_preset(&mut self, id: &str) -> Option<Vec<(String, LeftOff)>> {
         let preset = self.presets.iter().find(|preset| preset.id == id)?.clone();
         let state = self.snapshot();
@@ -2727,7 +2742,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 )
                 .collect(),
         );
-        AppState {
+        let mut state = AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
             airplay_none_found: self.airplay_none_found(),
@@ -2740,6 +2755,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             hidden,
             groups: self.groups.clone(),
             zones: self.zones.list().to_vec(),
+            presets: Vec::new(),
             equalizer: self.equalizer,
             notices: self
                 .notices
@@ -2769,7 +2785,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 busy: self.calibration_run.is_some() || self.calibrate_all.run.is_some(),
             },
             calibrate_all: self.calibrate_all_state(),
-        }
+        };
+        state.presets = self.preset_items(&state);
+        state
     }
 
     fn set_running(&mut self, on: bool) {
@@ -3235,6 +3253,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if self.zones.set_volume(id, position) {
             self.push_zone_volumes();
         }
+    }
+
+    fn recall_preset(&mut self, id: &str) {
+        // The inherent recall returns the members left off for a notice no window posts yet.
+        let _ = AudioAdapter::recall_preset(self, id);
     }
 
     fn new_group(&mut self, name: &str) -> Result<(), GroupError> {

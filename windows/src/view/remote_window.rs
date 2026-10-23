@@ -426,6 +426,11 @@ impl App {
                             Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
                             Action::AirPlayDelay { ms } => backend.set_airplay_delay(ms),
                             Action::Master { volume } => backend.set_master_volume(volume),
+                            Action::ToggleZone { id } => backend.toggle_zone(&id),
+                            Action::ZoneVolume { id, volume } => {
+                                backend.set_zone_volume(&id, volume);
+                            }
+                            Action::RecallPreset { id } => backend.recall_preset(&id),
                         }
                     }
                 }
@@ -904,6 +909,41 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.airplay_delay_ms, Some(2100.0));
         assert!(!state.speaker(&asks).expect("listed").enabled);
+    }
+
+    // covers: S257
+    #[test]
+    fn phone_zone_and_preset_commands_apply_without_showing_the_main_window() {
+        let app = over_loopback(MockBackend::new());
+        let main_shown = app.main.window().is_visible();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.remote.borrow_mut().commands = Some(receiver);
+        for command in [
+            audiosync_remote::Command::Zone {
+                id: "zone:1".into(),
+                change: audiosync_remote::ZoneChange {
+                    toggle: true,
+                    volume: Some(30.0),
+                },
+            },
+            audiosync_remote::Command::Preset {
+                id: "preset:1".into(),
+            },
+        ] {
+            sender.send(command).expect("sent");
+        }
+        app.take_remote_commands();
+        let state = app.snapshot();
+        for key in ["airplay:kitchen", "airplay:living"] {
+            assert!(state.speaker(key).expect("listed").enabled, "{key}");
+        }
+        assert_eq!(state.zones[0].volume, 30.0);
+        assert!(state.presets[0].current);
+        assert_eq!(
+            app.main.window().is_visible(),
+            main_shown,
+            "a phone command leaves the main window as it was"
+        );
     }
 
     struct FakeProfiles(std::sync::Mutex<Vec<Category>>);
