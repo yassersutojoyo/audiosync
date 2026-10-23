@@ -13,7 +13,7 @@ use audiosync_cast::error::{EndReason, LaunchError};
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::message::{
     CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_DEVICE_AUTH, NS_HEARTBEAT, NS_MEDIA,
-    NS_RECEIVER, PLATFORM, PayloadError, PayloadType, SENDER,
+    NS_MULTIZONE, NS_RECEIVER, PLATFORM, PayloadError, PayloadType, SENDER,
 };
 use audiosync_cast::status::ControlType;
 use common::{app, json_message};
@@ -914,4 +914,53 @@ fn a_reused_app_is_the_senders_to_stop() {
     assert_eq!(out[0].0, PLATFORM);
     assert_eq!(out[0].2["type"], "STOP");
     assert_eq!(out[0].2["sessionId"], "s-5");
+}
+
+// covers: C27, C94
+#[test]
+fn multizone_messages_reach_the_host_only_on_a_group_channel() {
+    let start = Instant::now();
+    let members = || {
+        json_message(
+            PLATFORM,
+            SENDER,
+            NS_MULTIZONE,
+            json!({"type": "MULTIZONE_STATUS", "requestId": 0, "status": {"devices": []}}),
+        )
+    };
+    let mut single = ready(start, Vec::new());
+    single.handle(start, members());
+    assert_eq!(
+        events(&mut single),
+        vec![Event::Dropped(Dropped::Namespace(NS_MULTIZONE.to_owned()))]
+    );
+
+    let mut group = ready(start, Vec::new());
+    group.request_members();
+    let out = sent(&mut group);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].0, PLATFORM);
+    assert_eq!(out[0].1, NS_MULTIZONE);
+    assert_eq!(out[0].2["type"], "GET_STATUS");
+    group.handle(start, members());
+    assert!(
+        events(&mut group)
+            .iter()
+            .any(|event| matches!(event, Event::Multizone(_)))
+    );
+    // No reply within 5 s is not an error.
+    let mut silent = ready(start, Vec::new());
+    silent.request_members();
+    sent(&mut silent);
+    silent.handle(
+        start + STATUS_TIMEOUT,
+        json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PONG"})),
+    );
+    silent.tick(start + STATUS_TIMEOUT * 2);
+    assert!(!silent.is_ended());
+    assert!(
+        !events(&mut silent)
+            .iter()
+            .any(|event| matches!(event, Event::Ended(_) | Event::LaunchFailed(_)))
+    );
 }
