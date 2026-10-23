@@ -1005,3 +1005,42 @@ fn a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format() {
     );
     assert_eq!(cast_wait_ms(None, -100.0, Some(Codec::Wav)), 3000.0);
 }
+
+// covers: S235
+#[test]
+fn an_expected_arrival_that_is_not_a_number_counts_as_0() {
+    for rate in [RATE, 192_000] {
+        let speakers = vec![
+            speaker("ref", Class::Local, None, f64::NAN),
+            speaker("bt", Class::Local, None, f64::NEG_INFINITY),
+            speaker("tv", Class::Cast, Some(400.0), f64::NAN),
+        ];
+        let run = Run::new(rate, "ref", speakers).expect("no window passes the limit");
+        let step = run.step().unwrap();
+        assert_eq!(
+            step.window_frames,
+            (1750.0 * f64::from(rate) / 1000.0) as usize,
+            "{rate} Hz: the sweep and 1 s"
+        );
+        assert!(!step.searching);
+    }
+}
+
+// covers: S235, S241
+#[test]
+fn a_cast_speaker_stored_at_0_ms_searches_like_one_without_an_offset() {
+    for stored in [None, Some(0.0), Some(-5.0), Some(f64::NAN)] {
+        let speakers = vec![
+            speaker("ref", Class::Local, None, 50.0),
+            speaker("tv", Class::Cast, stored, 3000.0),
+        ];
+        let mut run = Run::new(RATE, "ref", speakers).unwrap();
+        let steps = drive(
+            &mut run,
+            arrivals(&[(1, [Heard::At(3050.0), Heard::At(3052.0)])]),
+        );
+        assert!(steps[1].searching, "{stored:?} is no stored offset");
+        assert_eq!(steps[1].window_frames, MAX_RECORDING_FRAMES);
+        assert!(!steps[2].searching);
+    }
+}
