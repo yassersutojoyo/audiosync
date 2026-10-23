@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -24,6 +24,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::input::InputWriter;
+use audiosync_airplay::ptp::PtpPorts;
 use audiosync_airplay::rtp::{
     HEADER_BYTES, ResendRequest, RtpHeader, SyncPacket, TYPE_RESEND_REPLY, TimingPacket,
 };
@@ -42,6 +43,52 @@ const POLL: Duration = Duration::from_millis(10);
 pub fn serial() -> MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Two PTP ports below every ephemeral range: a released ephemeral port can go to a
+/// later `[::1]` socket, which on macOS fails the service's `[::]` bind after a family move.
+pub fn free_ptp_ports() -> PtpPorts {
+    const FIRST: u16 = 20_000;
+    const COUNT: u16 = 12_000;
+    static CURSOR: Mutex<Option<u16>> = Mutex::new(None);
+    let mut cursor = CURSOR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Spread over the range so test binaries run side by side rarely meet.
+    let mut offset = cursor.unwrap_or_else(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos());
+        ((nanos ^ std::process::id()) % u32::from(COUNT)) as u16
+    });
+    let mut next_free = || {
+        for _ in 0..COUNT {
+            let port = FIRST + offset;
+            offset = (offset + 1) % COUNT;
+            if port_free(port) {
+                return port;
+            }
+        }
+        panic!("no free port in {FIRST}..{}", FIRST + COUNT);
+    };
+    let event = next_free();
+    let general = next_free();
+    *cursor = Some(offset);
+    PtpPorts { event, general }
+}
+
+/// One family after the other, since a dual-stack IPv6 bind takes the IPv4 port too.
+fn port_free(port: u16) -> bool {
+    if UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_err() {
+        return false;
+    }
+    match UdpSocket::bind((Ipv6Addr::UNSPECIFIED, port)) {
+        Ok(_) => true,
+        Err(error) => !matches!(
+            error.kind(),
+            std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+        ),
+    }
 }
 
 /// How the receiver behaves; changeable while it runs.
