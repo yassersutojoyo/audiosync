@@ -1014,15 +1014,27 @@ fn an_expected_arrival_that_is_not_a_number_counts_as_0() {
             speaker("ref", Class::Local, None, f64::NAN),
             speaker("bt", Class::Local, None, f64::NEG_INFINITY),
             speaker("tv", Class::Cast, Some(400.0), f64::NAN),
+            speaker("hdmi", Class::Local, None, f64::INFINITY),
         ];
-        let run = Run::new(rate, "ref", speakers).expect("no window passes the limit");
-        let step = run.step().unwrap();
-        assert_eq!(
-            step.window_frames,
-            (1750.0 * f64::from(rate) / 1000.0) as usize,
-            "{rate} Hz: the sweep and 1 s"
+        let mut run = Run::new(rate, "ref", speakers).expect("no window passes the limit");
+        let steps = drive(&mut run, |_| Heard::At(50.0));
+        assert_eq!(steps.len(), 7, "the reference, then two sweeps for each");
+        for step in &steps {
+            assert_eq!(
+                step.window_frames,
+                (1750.0 * f64::from(rate) / 1000.0) as usize,
+                "{rate} Hz, row {} {:?}: the sweep and 1 s",
+                step.row,
+                step.take
+            );
+            assert!(!step.searching);
+        }
+        assert!(
+            run.finish().rows()[1..]
+                .iter()
+                .all(|r| r.state.is_certain()),
+            "{rate} Hz: every row is measured"
         );
-        assert!(!step.searching);
     }
 }
 

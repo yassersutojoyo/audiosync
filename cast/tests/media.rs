@@ -514,17 +514,25 @@ fn a_silent_media_stop_moves_on_to_the_receiver_stop_after_two_seconds() {
     assert_eq!(out[0].0, "t-1");
     assert_eq!(out[0].2["type"], "STOP");
     assert_eq!(out[0].2["mediaSessionId"], 7);
+    let media_stop_id = out[0].2["requestId"]
+        .as_u64()
+        .expect("media STOP has a requestId");
     channel.tick(start + STOP_STEP_TIMEOUT - Duration::from_millis(1));
     assert!(sent(&mut channel).is_empty(), "the media STOP still waits");
     let receiver_stop_at = start + STOP_STEP_TIMEOUT;
     channel.tick(receiver_stop_at);
     let out = sent(&mut channel);
+    assert_eq!(out.len(), 1);
+    let receiver_stop_id = out[0].2["requestId"]
+        .as_u64()
+        .expect("receiver STOP has a requestId");
+    assert!(receiver_stop_id > 0 && receiver_stop_id != media_stop_id);
     assert_eq!(
         out,
         vec![(
             PLATFORM.to_owned(),
             NS_RECEIVER.to_owned(),
-            json!({"type": "STOP", "sessionId": "s-1", "requestId": 104})
+            json!({"type": "STOP", "sessionId": "s-1", "requestId": receiver_stop_id})
         )]
     );
     assert!(!channel.is_ended());

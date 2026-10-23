@@ -203,6 +203,19 @@ pub struct Speaker {
     pub mic_left_out: Option<MicKind>,
 }
 
+/// A speaker hidden with Hide Speaker, as Speakers > Hidden Speakers lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HiddenSpeaker {
+    /// The ID its row had, its speaker key.
+    pub id: String,
+    /// Its name now while it is listed, else the name it had when hidden.
+    pub name: String,
+    /// The kind its row showed when it was hidden, for while it isn't listed.
+    pub kind_text: String,
+    /// Its kind while it is listed; `None` while it isn't.
+    pub present: Option<SpeakerKind>,
+}
+
 /// A Google Cast speaker's own state. Its delay is the measured offset the
 /// user sets, since Cast can't be kept in sync automatically.
 #[derive(Clone, Debug, PartialEq)]
@@ -342,6 +355,15 @@ pub struct PasswordPrompt {
 }
 
 impl Speaker {
+    /// The reference output: the one local output with no offset of its own.
+    pub fn is_reference(&self) -> bool {
+        self.delay_ms.is_none()
+            && !matches!(
+                self.kind,
+                SpeakerKind::AirPlay | SpeakerKind::AirPlay2 | SpeakerKind::Cast
+            )
+    }
+
     /// Whether the speaker lists show it. A virtual output (a loopback
     /// driver, a voice changer, a meeting app's device) is listed only while
     /// Show Virtual Devices is on or while it is turned on. The main window
@@ -540,7 +562,10 @@ pub struct AppState {
     pub source_id: String,
     /// 0 to 100.
     pub master_volume: f64,
+    /// The speakers listed; a hidden one never is.
     pub speakers: Vec<Speaker>,
+    /// The hidden speakers, by name (case-insensitively), then by ID.
+    pub hidden: Vec<HiddenSpeaker>,
     pub groups: Vec<Group>,
     pub equalizer: EqSettings,
     /// Newest first.
@@ -710,6 +735,22 @@ impl AppState {
         }
     }
 
+    /// Whether a hidden speaker that is present belongs under This PC
+    /// (`this_pc`) or Connected Speakers: that section's empty text then
+    /// says its speakers are hidden.
+    pub fn hidden_in(&self, this_pc: bool) -> bool {
+        self.hidden.iter().any(|hidden| {
+            hidden
+                .present
+                .is_some_and(|kind| kind.is_this_pc() == this_pc)
+        })
+    }
+
+    /// Whether the speakers present are all hidden, at least one of them.
+    pub fn all_hidden(&self) -> bool {
+        self.speakers.is_empty() && self.hidden.iter().any(|hidden| hidden.present.is_some())
+    }
+
     /// Speakers switched on right now.
     pub fn active_speakers(&self) -> usize {
         self.speakers.iter().filter(|s| s.enabled).count()
@@ -786,6 +827,13 @@ pub trait Backend {
     /// Gives speaker `id` the name `name`; an empty one brings back its
     /// system name (spec S228).
     fn rename_speaker(&mut self, id: &str, name: &str);
+    /// Hide Speaker on speaker `id`'s row: a speaker that is on goes off
+    /// first, as its own switch turns it off, then it leaves every list.
+    /// What was set for it stays. `kind` is the kind its row shows, kept so
+    /// Hidden Speakers can name it while it isn't listed.
+    fn hide_speaker(&mut self, _id: &str, _kind: &str) {}
+    /// A Hidden Speakers entry: speaker `id` is listed again, off.
+    fn unhide_speaker(&mut self, _id: &str) {}
     /// Turns every present member on, or all of them off when the group is on.
     fn toggle_group(&mut self, id: &str);
     /// Makes a group of the speakers that are on now. The UI names it
@@ -987,6 +1035,8 @@ pub struct MockBackend {
     state: AppState,
     next_id: u64,
     view: ViewSettings,
+    /// The rows of the hidden speakers, to list them again as they were.
+    hidden_rows: Vec<Speaker>,
 }
 
 #[cfg(any(not(windows), test))]
@@ -1088,6 +1138,7 @@ impl MockBackend {
             source_id: "system".into(),
             master_volume: volume::DEFAULT_MASTER_POSITION,
             speakers,
+            hidden: Vec::new(),
             groups: vec![Group {
                 id: "group:1".into(),
                 name: "Downstairs".into(),
@@ -1111,6 +1162,7 @@ impl MockBackend {
             state,
             next_id: 1,
             view: ViewSettings::default(),
+            hidden_rows: Vec::new(),
         }
     }
 
@@ -1241,6 +1293,32 @@ impl Backend for MockBackend {
     fn rename_speaker(&mut self, id: &str, name: &str) {
         if let Some(speaker) = self.speaker_mut(id) {
             speaker.name = speaker_names::shown_after(name, &speaker.system_name);
+        }
+    }
+
+    fn hide_speaker(&mut self, id: &str, kind: &str) {
+        let Some(index) = self.state.speakers.iter().position(|s| s.id == id) else {
+            return;
+        };
+        if self.state.speakers[index].is_reference() {
+            return;
+        }
+        let mut row = self.state.speakers.remove(index);
+        row.enabled = false;
+        self.state.hidden.push(HiddenSpeaker {
+            id: row.id.clone(),
+            name: row.name.clone(),
+            kind_text: kind.to_owned(),
+            present: Some(row.kind),
+        });
+        self.hidden_rows.push(row);
+    }
+
+    fn unhide_speaker(&mut self, id: &str) {
+        self.state.hidden.retain(|hidden| hidden.id != id);
+        if let Some(index) = self.hidden_rows.iter().position(|s| s.id == id) {
+            let row = self.hidden_rows.remove(index);
+            self.state.speakers.push(row);
         }
     }
 

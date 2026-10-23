@@ -442,6 +442,8 @@ struct CastModel {
         if let volume = volumes.removeValue(forKey: old) { volumes[new] = volume }
         if let level = levels.removeValue(forKey: old) { levels[new] = level }
         if let wanted = requested, wanted.id == old { requested = (new, wanted.level) }
+        // As the sender: it moves the offset over none or 0 ms (a cleared one), and keeps any other.
+        if offsets[new] == nil, let offset = offsets.removeValue(forKey: old) { offsets[new] = offset }
     }
 
     /// The sender listed `id` for an address the user added: it shows again

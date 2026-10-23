@@ -44,11 +44,21 @@ struct CalibrateAllButton: View {
     }
 }
 
+/// The measured height of the sheet's scrolling rows; nil until the first layout.
+final class CalibrateAllListHeight: ObservableObject {
+    @Published var height: CGFloat?
+}
+
 /// The Calibrate All Speakers sheet: the run's progress with Cancel, then
 /// every speaker's current and new delay, the shared AirPlay delay, Apply,
 /// Undo and Measure Again (S238, S239).
 struct CalibrateAllSheetView: View {
     @ObservedObject var model: AppModel
+    /// An object rather than @State: the Command Line Tools can't expand @State.
+    @StateObject private var list = CalibrateAllListHeight()
+
+    /// Keeps Apply and Close on a 13-inch screen with a dozen or more rows.
+    private static let maxListHeight: CGFloat = 420
 
     var body: some View {
         let t = model.text
@@ -71,10 +81,21 @@ struct CalibrateAllSheetView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            if let sheet = status.sheet {
-                results(sheet, status: status, t: t)
+            if status.sheet != nil || !visibleLeftOut(status).isEmpty {
+                // The sheet can't be dismissed by hand, so a long list must never push the buttons off screen.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let sheet = status.sheet {
+                            results(sheet, status: status, t: t)
+                        }
+                        leftOutRows(status, t: t)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { list.height = $0 }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: list.height.map { min($0, Self.maxListHeight) })
             }
-            leftOutRows(status, t: t)
             if status.sheet == nil, !status.isRunning, status.line == nil, let blocker = status.blocker {
                 Text(t.calibrateAllSheetBlocker(blocker))
                     .foregroundStyle(Brand.secondaryText)
@@ -164,7 +185,7 @@ struct CalibrateAllSheetView: View {
     @ViewBuilder
     private func leftOutRows(_ status: CalibrateAllStatus, t: UIStrings) -> some View {
         let choosing = canStartRun(status)
-        let rows = choosing ? status.leftOut : status.leftOut.filter { !$0.included }
+        let rows = visibleLeftOut(status)
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(rows) { row in
@@ -197,6 +218,10 @@ struct CalibrateAllSheetView: View {
                 }
             }
         }
+    }
+
+    private func visibleLeftOut(_ status: CalibrateAllStatus) -> [CalibrateAllLeftOut] {
+        canStartRun(status) ? status.leftOut : status.leftOut.filter { !$0.included }
     }
 
     /// No run holds the outputs and no finished sheet waits for Apply.

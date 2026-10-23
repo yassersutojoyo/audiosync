@@ -283,6 +283,34 @@ where
         .collect())
 }
 
+/// A speaker hidden with Hide Speaker: its speaker key, and the name and
+/// kind its row showed then, so Hidden Speakers can name it while it isn't
+/// listed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedHidden {
+    pub key: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+}
+
+/// The hidden speakers as stored, read leniently: an entry that isn't one is
+/// skipped, and so is anything that isn't a list.
+fn hidden_that_read<'de, D>(deserializer: D) -> Result<Vec<SavedHidden>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(entries) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
+}
+
 /// Everything the file keeps. See the module documentation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -309,6 +337,13 @@ pub struct Settings {
         deserialize_with = "names_that_are_text"
     )]
     pub speaker_names: BTreeMap<String, String>,
+    /// The speakers hidden with Hide Speaker, by speaker key; left out of the
+    /// file while none is.
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "hidden_that_read"
+    )]
+    pub hidden_speakers: Vec<SavedHidden>,
     pub groups: Vec<SavedGroup>,
     pub equalizer: SavedEqualizer,
     /// View > Show Virtual Devices.
@@ -344,6 +379,7 @@ impl Default for Settings {
             airplay: BTreeMap::new(),
             auto_connect: BTreeSet::new(),
             speaker_names: BTreeMap::new(),
+            hidden_speakers: Vec::new(),
             groups: Vec::new(),
             equalizer: SavedEqualizer::default(),
             show_virtual_devices: false,
@@ -414,6 +450,22 @@ fn usable_name_key(key: &str) -> bool {
             && key
                 .strip_prefix(crate::adapter::CAST_PREFIX)
                 .is_some_and(|id| !id.is_empty())
+}
+
+/// The first [`MAX_ENTRIES`] hidden speakers with a usable key, one entry
+/// per key.
+fn clamp_hidden(hidden: Vec<SavedHidden>) -> Vec<SavedHidden> {
+    let mut keys = BTreeSet::new();
+    hidden
+        .into_iter()
+        .filter(|entry| usable_name_key(&entry.key) && keys.insert(entry.key.clone()))
+        .take(MAX_ENTRIES)
+        .map(|entry| SavedHidden {
+            key: entry.key,
+            name: cut(entry.name),
+            kind: cut(entry.kind),
+        })
+        .collect()
 }
 
 /// `text` cut to at most [`MAX_TEXT`] bytes, at a character boundary.
@@ -497,6 +549,7 @@ impl Settings {
                     .collect(),
             )
             .saved(),
+            hidden_speakers: clamp_hidden(self.hidden_speakers),
             groups,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             show_virtual_devices: self.show_virtual_devices,
@@ -904,6 +957,43 @@ mod tests {
         assert!(read.speaker_names.is_empty());
         let without = Settings::default().to_json();
         assert!(!without.contains("speaker_names"), "no names, no field");
+    }
+
+    #[test]
+    fn hidden_speakers_are_read_leniently_and_left_out_while_none_is() {
+        let text = r#"{"version": 2, "master_volume": 40, "hidden_speakers": [
+            {"key": "lc:desk", "name": "Desk", "kind": "Speakers"},
+            {"key": "cc:attic"},
+            {"name": "No key"},
+            {"key": "nonsense", "name": "Bad key"},
+            {"key": "lc:desk", "name": "Twice"},
+            7
+        ]}"#;
+        let (read, _) = Settings::from_json(text).expect("one odd entry spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        assert_eq!(
+            read.hidden_speakers,
+            [
+                SavedHidden {
+                    key: "lc:desk".into(),
+                    name: "Desk".into(),
+                    kind: "Speakers".into(),
+                },
+                SavedHidden {
+                    key: "cc:attic".into(),
+                    name: String::new(),
+                    kind: String::new(),
+                },
+            ]
+        );
+        let (read, _) =
+            Settings::from_json(r#"{"version": 2, "hidden_speakers": {}}"#).expect("read");
+        assert!(read.hidden_speakers.is_empty());
+        let without = Settings::default().to_json();
+        assert!(
+            !without.contains("hidden_speakers"),
+            "none hidden, no field"
+        );
     }
 
     #[test]

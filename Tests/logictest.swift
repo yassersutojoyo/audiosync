@@ -3838,13 +3838,15 @@ do {
         var gains: [String: Double] = [:]
         /// The UIDs given a new gain after their attach, in call order.
         var regained: [String] = []
-        init(active: [String], refusing: Set<String>) {
+        let refusal: Error
+        init(active: [String], refusing: Set<String>, refusal: Error = NSError(domain: "logictest", code: -1)) {
             activeOutputUIDs = active
             self.refusing = refusing
+            self.refusal = refusal
         }
         func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
             tried.append(uid)
-            if refusing.contains(uid) { throw NSError(domain: "logictest", code: -1) }
+            if refusing.contains(uid) { throw refusal }
             activeOutputUIDs.append(uid)
             deviceIDs[uid] = device
             delays[uid] = delayMs
@@ -3915,6 +3917,35 @@ do {
             && twice?.notices.map(\.uid) == ["bt", "usb"],
           "S69 start failure: two failures share one alert and get a notice each",
           "\(String(describing: twice))")
+
+    // S36: a capture rate the ring can't hold names the rate and Audio MIDI Setup, not exclusive use.
+    let tooFast = LocalOutputSync.apply(
+        enabled: ["usb", "bt"], listing: [usb, bt],
+        to: RefusingEngine(active: [], refusing: ["usb"],
+                           refusal: OutputRenderer.StartFailure.captureRateTooHigh(352_800)),
+        holdBacks: [:], gain: { _ in 1 })
+    let strings = UIStrings()
+    let generic = strings.outputCouldNotStart(names: "USB DAC")
+    let rateText = strings.outputCouldNotStart(names: "USB DAC", refusedCaptureRate: 352_800)
+    let rateText384 = strings.outputCouldNotStart(names: "USB DAC", refusedCaptureRate: 384_000)
+    check(tooFast.failures == [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 352_800)]
+            && applied.failures.allSatisfy { $0.refusedCaptureRate == nil },
+          "S36 start failure: a refused capture rate comes back with the failure, any other failure without one",
+          "\(tooFast.failures)")
+    check(rateText.contains("USB DAC") && rateText.contains("352.8 kHz") && rateText.contains("192 kHz")
+            && rateText.contains("Audio MIDI Setup") && !rateText.contains("exclusively")
+            && rateText384.contains("384 kHz") && generic.contains("exclusively"),
+          "S36 start failure: the text names the capture rate, the 192 kHz limit and Audio MIDI Setup", rateText)
+    check(OutputRenderer.StartFailure.captureRateTooHigh(384_000).description.contains("384000 Hz"),
+          "S36 start failure: the debug log names the refused rate")
+    let rateFailures = [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 384_000),
+                        F(uid: "bt", deviceName: "Headphones", refusedCaptureRate: 384_000)]
+    let mixedFailures = [rateFailures[0], F(uid: "bt", deviceName: "Headphones")]
+    check(LocalOutputSync.sharedRefusedRate(rateFailures) == 384_000
+            && LocalOutputSync.sharedRefusedRate(mixedFailures) == nil
+            && LocalOutputSync.sharedRefusedRate([]) == nil,
+          "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
+          "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
 
     // S72: a master change gives each running local speaker its gain again;
     // one switched on but not running (here "tv") gets no call.
@@ -5592,6 +5623,31 @@ do {
           "cast model: a playing speaker added by address that a browse finds stays on and playing under its id, "
             + "and Off still stops it")
 
+    var offsetMoves = CastModel()
+    offsetMoves.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = offsetMoves.setOffset(manualID, ms: 240)
+    offsetMoves.apply(.gone(id: manualID))
+    if let browsed { offsetMoves.apply(browsed) }
+    var offsetKept = CastModel()
+    offsetKept.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = offsetKept.setOffset(manualID, ms: 240)
+    offsetKept.apply(.gone(id: manualID))
+    offsetKept.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: 100, former: manualID))
+    var ownSet = CastModel()
+    _ = ownSet.setOffset(manualID, ms: 240)
+    _ = ownSet.setOffset(realID, ms: 100)
+    ownSet.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: 100, former: manualID))
+    var ownCleared = CastModel()
+    _ = ownCleared.setOffset(manualID, ms: 240)
+    _ = ownCleared.setOffset(realID, ms: 50)
+    let cleared = ownCleared.clearOffset(realID)
+    ownCleared.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: 240, former: manualID))
+    check(offsetMoves.offset(of: realID) == 240 && offsetMoves.offsets[manualID] == nil
+            && offsetKept.offset(of: realID) == 100 && ownSet.offset(of: realID) == 100
+            && cleared && ownCleared.offset(of: realID) == 240,
+          "cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender "
+            + "does: over none or a cleared one, never over one the id already had")
+
     var stopped = CastModel()
     stopped.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
     stopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
@@ -5606,7 +5662,6 @@ do {
             && !CastSender.answers(ip: "127.0.0.1", port: 9, timeout: 1),
           "cast address: a name that doesn't resolve or an address where nothing answers is not found, with its own text")
 }
-
 
 // MARK: Menu bar panel colors: contrast with the material counted as clear
 do {
@@ -5661,6 +5716,86 @@ do {
           "panel colors: the wordmark's sync and the type icons keep 3:1 over any window", summary)
     check(resolved(.audioSyncWordmarkSync, dark: false).g < resolved(.audioSyncWordmarkSync, dark: true).g,
           "panel colors: sync is the darker teal on light and the mint on dark")
+}
+
+// MARK: Hidden speakers — out of every list by key, settings kept, back off when shown
+do {
+    let t = UIStrings()
+    check(HiddenSpeakers.key(id: "BuiltInSpeakerDevice", tag: .builtIn) == "lc:BuiltInSpeakerDevice"
+          && HiddenSpeakers.key(id: "native:AA11BB22CC33", tag: .airplay) == "ap:native:AA11BB22CC33"
+          && HiddenSpeakers.key(id: "cast:nest-1", tag: .cast) == "cast:nest-1"
+          && HiddenSpeakers.key(id: "teams-uid", tag: .virtual) == "lc:teams-uid",
+          "hidden speakers: the key is the speaker key, and a Cast speaker's app ID")
+
+    typealias Row = (id: String, name: String, tag: SpeakerTag, on: Bool)
+    let rows: [Row] = [("BuiltIn", "MacBook Speakers", .builtIn, true), ("teams", "Microsoft Teams Audio", .virtual, true),
+                       ("native:AA11BB22CC33", "Kitchen", .airplay, false), ("cast:nest-1", "Nest", .cast, false)]
+    let rowKey = { (r: Row) in HiddenSpeakers.key(id: r.id, tag: r.tag) }
+    var hidden = HiddenSpeakers()
+    check(hidden.hide(key: "lc:teams", name: "Microsoft Teams Audio", kind: "Virtual")
+          && !hidden.hide(key: "lc:teams", name: "Renamed", kind: "Virtual")
+          && hidden.entries.map(\.name) == ["Microsoft Teams Audio"],
+          "hidden speakers: hiding twice keeps one entry with its first name")
+    let split = hidden.partition(rows, key: rowKey)
+    check(split.shown.map(\.id) == ["BuiltIn", "native:AA11BB22CC33", "cast:nest-1"] && split.hidden.map(\.id) == ["teams"],
+          "hidden speakers: a hidden speaker leaves the rows, the others keep their order")
+
+    // The Web Remote plans its commands against the rows the window lists.
+    let remoteRows = split.shown.map {
+        RemoteRow(RemoteRow.Facts(id: $0.id, name: $0.name, kind: t.speakerTag($0.tag), on: $0.on, volume: 50), text: t)
+    }
+    let snapshot = RemoteSnapshot(computerName: "Mac", master: 100, nowPlaying: nil, rows: remoteRows)
+    let command = RemoteCommand(json: "{\"type\":\"speaker\",\"id\":\"teams\",\"on\":true}")
+    check(!snapshot.json.contains("Microsoft Teams Audio")
+          && command.map { RemoteAction.plan($0, rows: remoteRows) } == [],
+          "hidden speakers: the remote snapshot loses a hidden speaker, and a command naming it changes nothing")
+
+    // Rediscovery: the same key comes back in a new list and stays hidden.
+    hidden.hide(key: "cast:nest-1", name: "Nest", kind: "Google Cast")
+    hidden.hide(key: "ap:native:AA11BB22CC33", name: "Kitchen", kind: "AirPlay")
+    let again: [Row] = [("cast:nest-1", "Nest Audio", .cast, false), ("native:AA11BB22CC33", "Kitchen", .airplay, false)]
+    check(hidden.partition(again, key: rowKey).shown.isEmpty,
+          "hidden speakers: a Cast or AirPlay speaker that re-announces, even under a new name, stays hidden")
+
+    let group = GroupSummary.summarize(members: ["lc:BuiltIn", "lc:teams"],
+                                       isAvailable: { !hidden.contains($0) }, isEnabled: { _ in true })
+    check(group.available == 1 && group.allOn, "hidden speakers: a group counts a hidden member as not present")
+    check(hidden.autoConnecting(["lc:teams", "lc:usb", "lc:other"], marked: ["lc:teams", "lc:usb"]) == ["lc:usb"],
+          "hidden speakers: auto-connect skips a hidden speaker marked for it")
+
+    let menu = hidden.menu(present: ["lc:teams": (name: "Teams", kind: "Virtual")], text: t)
+    check(menu.map(\.title) == ["Kitchen (AirPlay, not found)", "Nest (Google Cast, not found)", "Teams (Virtual)"]
+          && HiddenSpeakers().menu(present: [:], text: t).isEmpty,
+          "hidden speakers: the menu is sorted by shown name, uses the current name when present, says not found otherwise",
+          menu.map(\.title).joined(separator: " | "))
+
+    // Shown again: back in the rows; nothing else was touched, so its saved values stay.
+    var store: [String: Any] = [AppSettings.Keys.localOffsets: ["teams": 120.0]]
+    let settings = SettingsStore(read: { store[$0] }, write: { value, key in store[key] = value })
+    settings.save(hiddenSpeakers: hidden)
+    let loaded = settings.load()
+    check(loaded.hiddenSpeakers == hidden && loaded.localOffsets["teams"] == 120,
+          "hidden speakers: the hidden set survives a settings round trip, with the offset kept")
+    check(hidden.show("lc:teams")?.name == "Microsoft Teams Audio" && hidden.show("lc:teams") == nil
+          && hidden.partition(rows, key: rowKey).shown.contains { $0.id == "teams" },
+          "hidden speakers: showing a speaker brings its row back")
+    hidden.show("cast:nest-1")
+    hidden.show("ap:native:AA11BB22CC33")
+    settings.save(hiddenSpeakers: hidden)
+    check(store[AppSettings.Keys.hiddenSpeakers] == nil, "hidden speakers: the setting goes once nothing is hidden")
+
+    let lenient = HiddenSpeakers(stored: [["key": "lc:a", "name": "A", "kind": "USB"], ["name": "no key"], "junk",
+                                          ["key": "lc:b"], ["key": "lc:a", "name": "again"]] as [Any])
+    check(lenient.entries == [.init(key: "lc:a", name: "A", kind: "USB"), .init(key: "lc:b", name: "", kind: "")]
+          && HiddenSpeakers(stored: "nonsense").isEmpty,
+          "hidden speakers: a malformed stored entry is skipped")
+
+    var moved = HiddenSpeakers()
+    moved.hide(key: "ap:123456789", name: "Den", kind: "AirPlay")
+    moved.hide(key: "lc:usb", name: "Desk", kind: "USB")
+    moved.migrate(airPlay: ["123456789": "native:00075BCD15"])
+    check(moved.contains("ap:native:00075BCD15") && !moved.contains("ap:123456789") && moved.contains("lc:usb"),
+          "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

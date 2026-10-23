@@ -745,12 +745,11 @@ impl CastSpeakers {
         else {
             return;
         };
+        // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
         let memory = self.memory();
-        if let (Some(offset), None, Some(link)) = (
-            memory.offset(&manual),
-            memory.offset(&id),
-            self.link.as_mut(),
-        ) {
+        let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
+        if let (Some(offset), None, Some(link)) = (stored(&manual), stored(&id), self.link.as_mut())
+        {
             link.set_offset(id, offset);
             self.pending.push(BackendEvent::CastMemoryChanged);
         }
@@ -2414,6 +2413,39 @@ pub mod tests {
         assert_eq!(speakers[0].offset_ms, 400.0);
         assert_eq!(fake.state().started, [manual, id(KITCHEN)]);
         assert_eq!(fake.state().stops, 1);
+    }
+
+    // covers: C18, C77
+    #[test]
+    fn a_browse_moves_the_offset_over_a_zero_but_not_over_an_offset_the_id_has() {
+        const LIVING: &str = "fedcba9876543210fedcba9876543210";
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        for (text, id, own) in [("192.0.2.31", KITCHEN, 0.0), ("192.0.2.32", LIVING, 100.0)] {
+            cast.add_address(address(text));
+            assert!(cast.set_offset(&address(text).device_id().to_string(), 400.0));
+            assert!(cast.set_offset(id, own));
+        }
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 31),
+        );
+        fake.announce_at(LIVING, "Living", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 32));
+        cast.poll();
+        let offset = |id: &str| {
+            cast.speakers()
+                .into_iter()
+                .find(|speaker| speaker.id == id)
+                .map(|speaker| speaker.offset_ms)
+        };
+        assert_eq!(
+            offset(KITCHEN),
+            Some(400.0),
+            "0 ms, left by an Undo, counts as none"
+        );
+        assert_eq!(offset(LIVING), Some(100.0), "the ID's own offset stays");
     }
 
     // covers: C18

@@ -96,6 +96,7 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] native AirPlay: settings saved under the bundled engine's ID \(old) now belong to \(receiver.name) (\(receiver.id))")
         }
         let migrated = SpeakerIDMigration.apply(renames, to: saved)
+        hiddenSpeakers.migrate(airPlay: renames)
         airplayVolume = migrated.airplayVolumes
         groups = migrated.groups
         autoConnect = migrated.autoConnect

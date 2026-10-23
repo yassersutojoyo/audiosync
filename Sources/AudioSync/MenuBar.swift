@@ -40,6 +40,8 @@ final class AppModel: ObservableObject {
         /// Why a local speaker sits out of microphone calibration: headphones
         /// or a virtual output; nil when it takes part, and for other speakers.
         var calibrationLeftOut: CalibrationLeftOut? = nil
+        /// The local output the others' delays are relative to: it can't be hidden.
+        var isReference = false
 
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
@@ -51,6 +53,14 @@ final class AppModel: ObservableObject {
         var renamedFrom: String? { isRenamed ? systemName : nil }
         /// The badge icon, from the reported name so a rename doesn't change it.
         var symbol: String { tag.symbol(name: systemName.isEmpty ? name : systemName) }
+    }
+
+    /// The Hidden Speakers menu, and which sections hold a present speaker
+    /// that is hidden (their empty text then says so).
+    struct HiddenState: Equatable {
+        var menu: [HiddenSpeakers.MenuItem] = []
+        var inThisMac = false
+        var inConnected = false
     }
 
     struct Group: Identifiable, Equatable {
@@ -111,6 +121,9 @@ final class AppModel: ObservableObject {
         var setAutoConnect: (String, Bool) -> Void = { _, _ in }
         /// Speaker key, system name, the name typed (`SpeakerNames.rename`).
         var renameSpeaker: (String, String, String) -> Void = { _, _, _ in }
+        /// Hide Speaker: key, name and kind (`HiddenSpeakers`); a Hidden Speakers entry by key.
+        var hideSpeaker: (String, String, String) -> Void = { _, _, _ in }
+        var unhideSpeaker: (String) -> Void = { _ in }
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
         var setSwitchWhenSourceQuits: (Bool) -> Void = { _ in }
@@ -178,6 +191,9 @@ final class AppModel: ObservableObject {
     /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
     @Published var calibrateAll = CalibrateAllStatus()
     @Published var groups: [Group] = []
+    @Published var hidden = HiddenState()
+    /// The row whose switch takes the keyboard focus once it is built (H11).
+    @Published var focusSwitch: String?
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
     @Published var switchWhenSourceQuits = false
@@ -289,6 +305,27 @@ final class AppModel: ObservableObject {
         case .cast: actions.setCastEnabled(speaker.id, on)
         default: actions.setLocalEnabled(speaker.id, on)
         }
+    }
+
+    /// Hide Speaker in a row's menu: the host turns it off first when it is on.
+    func hide(_ speaker: Speaker) {
+        // H11: the next row's switch takes the focus, else the previous row's.
+        let sections = layout
+        let section = sections.thisMac.contains { $0.id == speaker.id } ? sections.thisMac : sections.connected
+        var neighbour: Speaker?
+        if let at = section.firstIndex(where: { $0.id == speaker.id }) {
+            neighbour = at + 1 < section.count ? section[at + 1] : (at > 0 ? section[at - 1] : nil)
+        }
+        actions.hideSpeaker(HiddenSpeakers.key(id: speaker.id, tag: speaker.tag), speaker.name,
+                            text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2))
+        focusSwitch = neighbour?.id
+        AccessibilityNotification.Announcement(text.speakerHidden(speaker.name)).post()
+    }
+
+    /// A Hidden Speakers entry, from the gear menu or the Speakers menu.
+    func unhide(_ entry: HiddenSpeakers.MenuItem) {
+        actions.unhideSpeaker(entry.key)
+        AccessibilityNotification.Announcement(text.speakerShown(entry.name)).post()
     }
 
     func setVolume(_ speaker: Speaker, _ position: Double) {
@@ -727,7 +764,9 @@ struct MenuBarView: View {
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
-            Text(model.layout.thisMac.isEmpty ? t.noSpeakers : model.networkEmptyText)
+            Text(model.layout.thisMac.isEmpty
+                 ? (model.hidden.inThisMac || model.hidden.inConnected ? t.panelAllHidden : t.noSpeakers)
+                 : model.hidden.inConnected ? t.panelConnectedHidden : model.networkEmptyText)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -838,6 +877,8 @@ private struct CompactRow: View {
                     .lineLimit(1)
                     .layoutPriority(2)
                     .help(name)
+                    // The button's own label reads the name; the tooltip would repeat it.
+                    .accessibilityHidden(true)
                 if let kind {
                     SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2)
                 }
