@@ -46,7 +46,7 @@
     --notice: #443927;
     --error: #FF99A4;
     --focus: #63DAC2;
-    --knob: #F6F6F6;
+    --knob: #1E1E1E;
   }
 }
 * { box-sizing: border-box; }
@@ -181,8 +181,8 @@ footer .error { flex-basis: 100%; margin-top: 0; }
 
 <section id="setup" class="setup card" aria-labelledby="setup-title" hidden>
 <div class="setup-head">
-<h2 id="setup-title">Add AudioSync to the Home Screen</h2>
-<button id="setup-hide" type="button" aria-describedby="setup-title">Hide</button>
+<h2 id="setup-title" data-text="setupTitle"></h2>
+<button id="setup-hide" type="button" aria-describedby="setup-title" data-text="hide"></button>
 </div>
 <ol id="setup-steps"></ol>
 <p id="setup-order" class="muted"></p>
@@ -190,37 +190,37 @@ footer .error { flex-basis: 100%; margin-top: 0; }
 
 <form id="pair" class="pair card" hidden novalidate>
 <p id="pair-hint"></p>
-<label for="code">Pairing code</label>
+<label for="code" data-text="codeLabel"></label>
 <div class="pair-line">
 <input id="code" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" aria-describedby="pair-error">
-<button id="pair-button" class="primary" type="submit">Pair</button>
+<button id="pair-button" class="primary" type="submit" data-text="pair"></button>
 </div>
 <p id="pair-error" class="error" hidden></p>
 </form>
 
 <section id="remote" hidden>
 <div id="banner" class="banner" hidden>
-<p id="banner-text">Can't reach AudioSync. Retrying…</p>
-<button id="retry" type="button">Retry</button>
+<p id="banner-text" data-text="lost"></p>
+<button id="retry" type="button" data-text="retry"></button>
 </div>
-<p id="loading" class="state-text muted">Connecting to AudioSync…</p>
+<p id="loading" class="state-text muted" data-text="connecting"></p>
 <fieldset id="controls" hidden>
 <section class="playing card" aria-labelledby="playing-label">
-<h2 id="playing-label" class="sr-only">Now playing</h2>
+<h2 id="playing-label" class="sr-only" data-text="nowPlaying"></h2>
 <p id="playing-title" class="title"></p>
 <p id="playing-detail" class="detail muted"></p>
 <div class="slider-line">
-<label for="master">Master volume</label>
+<label for="master" data-text="masterVolume"></label>
 <input id="master" type="range" min="0" max="100" step="1">
 <output id="master-value" for="master"></output>
 </div>
 <p id="master-error" class="error" hidden></p>
 </section>
-<p id="empty" class="state-text muted" hidden>AudioSync hasn't found any speakers yet. Check that they're on and on the same network.</p>
+<p id="empty" class="state-text muted" data-text="noSpeakers" hidden></p>
 <div id="speakers"></div>
 <footer>
 <p id="computer" class="muted"></p>
-<button id="unpair" type="button" aria-describedby="unpair-error">Unpair this phone</button>
+<button id="unpair" type="button" aria-describedby="unpair-error" data-text="unpair"></button>
 <p id="unpair-error" class="error" hidden></p>
 </footer>
 </fieldset>
@@ -230,6 +230,16 @@ footer .error { flex-basis: 100%; margin-top: 0; }
 "use strict";
 
 const TEXT = {
+  setupTitle: "Add AudioSync to the Home Screen",
+  hide: "Hide",
+  codeLabel: "Pairing code",
+  pair: "Pair",
+  retry: "Retry",
+  connecting: "Connecting to AudioSync…",
+  nowPlaying: "Now playing",
+  masterVolume: "Master volume",
+  noSpeakers: "AudioSync hasn't found any speakers yet. Check that they're on and on the same network.",
+  unpair: "Unpair this phone",
   hintBrowser: "Add to Home Screen first, then open it from there and enter the code.",
   hintStandalone: "Enter the code AudioSync shows.",
   codeShape: "The code has 6 digits.",
@@ -380,7 +390,8 @@ function showPairing(message) {
   ui.pairHint.textContent = isStandalone() ? TEXT.hintStandalone : TEXT.hintBrowser;
   ui.pairButton.disabled = false;
   showError(ui.pairError, message);
-  if (message) { announce(message); }
+  // The app unpaired the phone mid-use: focus was in the remote, which is now hidden.
+  if (message) { announce(message); ui.code.focus(); }
 }
 
 function showRemote() {
@@ -752,6 +763,15 @@ function updateRow(row, speaker) {
   if (!row.delaySender.busy() && !editing) { showDelay(row, speaker.delay_ms); }
 }
 
+// Removing the focused card drops focus to the page top; move it to the next card, else the previous one, else the title.
+function focusNeighbor(order, gone) {
+  const at = order.indexOf(gone);
+  const alive = (root) => root.isConnected;
+  const neighbor = order.slice(at + 1).find(alive) || order.slice(0, at).reverse().find(alive);
+  const row = neighbor && [...rows.values()].find((candidate) => candidate.root === neighbor);
+  (row ? row.name : ui.title).focus();
+}
+
 function showComputer(name) {
   const shown = (typeof name === "string" && name.trim()) || localName;
   ui.computer.textContent = shown ? TEXT.computer(shown) : "";
@@ -774,6 +794,8 @@ function render(next) {
   ui.playingDetail.hidden = ui.playingDetail.textContent === "";
   if (!masterControl.held()) { masterControl.show(next.master.volume); }
 
+  const order = Array.from(ui.speakers.children);
+  const focusedRow = [...rows.values()].find((row) => row.root.contains(document.activeElement));
   const seen = new Set();
   let previous = null;
   for (const speaker of next.speakers) {
@@ -791,6 +813,7 @@ function render(next) {
   for (const [id, row] of rows) {
     if (!seen.has(id)) { row.root.remove(); rows.delete(id); }
   }
+  if (focusedRow && !focusedRow.root.isConnected) { focusNeighbor(order, focusedRow.root); }
   ui.empty.hidden = next.speakers.length > 0;
 }
 
@@ -869,6 +892,7 @@ document.addEventListener("visibilitychange", () => {
 
 const host = window.location.hostname.replace(/\.$/, "");
 const localName = host.toLowerCase().endsWith(".local") ? host.slice(0, -".local".length) : "";
+for (const element of document.querySelectorAll("[data-text]")) { element.textContent = TEXT[element.dataset.text]; }
 showComputer("");
 showSetup();
 
