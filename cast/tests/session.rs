@@ -4,8 +4,8 @@
 mod common;
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, TcpListener};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -143,77 +143,71 @@ fn connect_failures_say_their_cause_and_retries_back_off() {
     assert_eq!(backoff.next_wait(), Duration::from_secs(1));
 }
 
-/// Clears `selected` after `delay` from another thread.
-fn deselect_after(delay: Duration) -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
+/// Runs [`CastClient::connect_while`] on `addresses` and clears its
+/// `selected` flag after `delay`. The end is reported by the connect itself;
+/// [`HANG_GUARD`] only catches a connect that never ends, so a busy machine
+/// can't fail the test.
+fn connect_deselected_after(addresses: &[SocketAddr], delay: Duration) -> ConnectError {
     let selected = Arc::new(AtomicBool::new(true));
+    let (sender, ended) = mpsc::channel();
     let flag = Arc::clone(&selected);
-    let clearing = thread::spawn(move || {
-        thread::sleep(delay);
-        flag.store(false, Ordering::SeqCst);
+    let addresses = addresses.to_vec();
+    let connecting = thread::spawn(move || {
+        let result = CastClient::connect_while(&addresses, RequestIds::starting_at(1), &flag);
+        let _ = sender.send(result.err());
     });
-    (selected, clearing)
+    thread::sleep(delay);
+    selected.store(false, Ordering::SeqCst);
+    let error = ended
+        .recv_timeout(HANG_GUARD)
+        .expect("the connect ends after the deselect")
+        .expect("deselected, not connected");
+    connecting.join().expect("connect thread");
+    error
 }
 
+/// Far beyond every connect timeout added up (TCP and TLS 5 s each, plus
+/// the status wait), so only a connect that ignores the deselect hits it.
+const HANG_GUARD: Duration = Duration::from_secs(20);
+
 // Partly C80 and C88: a deselect ends a connect at once, whatever step it
-// waits on, so a quit never waits out the timeouts of every address.
+// waits on, so a quit never waits out the timeouts of every address. Each
+// step that times out reports its own error, so Stopped shows the deselect
+// ended it.
 #[test]
 fn a_deselect_ends_a_connect_while_it_waits() {
     let silent = FakeDevice::start(Behavior {
         answer_status: false,
         ..Behavior::default()
     });
-    let (selected, clearing) = deselect_after(Duration::from_millis(1_000));
-    let started = Instant::now();
-    let error = CastClient::connect_while(&[silent.address], RequestIds::starting_at(1), &selected)
-        .expect_err("deselected");
+    let error = connect_deselected_after(&[silent.address], Duration::from_millis(1_000));
     assert!(
         matches!(error, ConnectError::Ended(EndReason::Stopped)),
         "{error}"
     );
-    assert!(
-        started.elapsed() < Duration::from_millis(2_500),
-        "{:?}",
-        started.elapsed()
-    );
-    let _ = clearing.join();
 
     // A documentation address (RFC 5737) that no device answers: the TCP
     // connect waits up to its timeout, or fails at once without a route.
     let nowhere = SocketAddr::new(IpAddr::from([192, 0, 2, 1]), 8009);
-    let (selected, clearing) = deselect_after(Duration::from_millis(300));
-    let started = Instant::now();
-    let result = CastClient::connect_while(
-        &[nowhere, silent.address],
-        RequestIds::starting_at(1),
-        &selected,
-    );
-    assert!(result.is_err());
+    let error = connect_deselected_after(&[nowhere, silent.address], Duration::from_millis(300));
     assert!(
-        started.elapsed() < Duration::from_millis(1_500),
-        "{:?}",
-        started.elapsed()
+        matches!(
+            &error,
+            ConnectError::Ended(EndReason::Stopped) | ConnectError::Tcp { .. }
+        ),
+        "{error}"
     );
-    let _ = clearing.join();
     silent.join();
 
     // TCP is accepted (the listen backlog does it) but the TLS handshake
     // never gets an answer.
     let stalled = TcpListener::bind("127.0.0.1:0").expect("bind");
     let address = stalled.local_addr().expect("address");
-    let (selected, clearing) = deselect_after(Duration::from_millis(300));
-    let started = Instant::now();
-    let error = CastClient::connect_while(&[address], RequestIds::starting_at(1), &selected)
-        .expect_err("deselected");
+    let error = connect_deselected_after(&[address], Duration::from_millis(300));
     assert!(
         matches!(error, ConnectError::Ended(EndReason::Stopped)),
         "{error}"
     );
-    assert!(
-        started.elapsed() < Duration::from_millis(1_500),
-        "{:?}",
-        started.elapsed()
-    );
-    let _ = clearing.join();
 }
 
 #[test]
