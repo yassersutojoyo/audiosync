@@ -54,10 +54,12 @@ const PRECISE_WAIT: Duration = Duration::from_millis(20);
 const IDLE_TURN: Duration = Duration::from_millis(100);
 /// How often discovery is polled.
 const DISCOVERY_POLL: Duration = Duration::from_millis(20);
-/// How long the end of a shutdown waits for the I/O threads. They end
-/// within `transport::POLL_INTERVAL` of their close, except a writer blocked
-/// in a send that a socket shutdown doesn't wake (Windows), which ends at its
-/// own send timeout; nothing waits for that one.
+/// How long the end of a shutdown waits for the I/O threads. The UDP
+/// threads end once their close's wake-up datagram reaches them, the RTSP
+/// reader within `transport::POLL_INTERVAL`. Two end later and nothing
+/// waits for them: a UDP thread whose wake-up couldn't be sent, at
+/// `transport::UDP_BACKSTOP`, and a writer blocked in a send that a socket
+/// shutdown doesn't wake (Windows), at its own send timeout.
 const THREAD_GRACE: Duration = Duration::from_millis(100);
 /// Room for the last turns and the thread wait, so a shutdown finishes
 /// within 2 s overall (P129): sessions still open 2 s minus this after the

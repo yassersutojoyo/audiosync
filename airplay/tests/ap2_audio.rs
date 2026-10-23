@@ -556,18 +556,21 @@ impl Recorder {
     fn bind() -> Recorder {
         let socket = UdpSocket::bind("127.0.0.1:0").expect("a socket");
         let reader = socket.try_clone().expect("a clone");
-        reader
-            .set_read_timeout(Some(Duration::from_millis(20)))
-            .expect("timeout");
         let got = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let got = Arc::clone(&got);
             let stop = Arc::clone(&stop);
+            // No read timeout: on Windows a receive that times out can drop
+            // the datagram arriving at that moment. `drop` wakes the reader.
             std::thread::spawn(move || {
                 let mut buffer = [0u8; 4096];
-                while !stop.load(Ordering::Acquire) {
-                    if let Ok((len, from)) = reader.recv_from(&mut buffer) {
+                loop {
+                    let received = reader.recv_from(&mut buffer);
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    if let Ok((len, from)) = received {
                         let datagram = (Instant::now(), from, buffer[..len].to_vec());
                         got.lock().expect("datagrams").push(datagram);
                     }
@@ -602,12 +605,33 @@ impl Recorder {
         self.take();
         self.after(span)
     }
+
+    /// The first datagram since the last `take` that matches, waiting up
+    /// to [`LONG`] for it; what was received stays for the next `take`.
+    fn wait_for(&self, matches: impl Fn(&Datagram) -> bool) -> Option<Datagram> {
+        let mut found = None;
+        wait_until(LONG, || {
+            found = self
+                .got
+                .lock()
+                .expect("datagrams")
+                .iter()
+                .find(|datagram| matches(datagram))
+                .cloned();
+            found.is_some()
+        });
+        found
+    }
 }
 
 impl Drop for Recorder {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(thread) = self.thread.take() {
+        // The reader blocks without a timeout, so join only once the wake went out.
+        let woken = UdpSocket::bind("127.0.0.1:0")
+            .and_then(|waker| waker.send_to(&[], ("127.0.0.1", self.port())))
+            .is_ok();
+        if let Some(thread) = self.thread.take().filter(|_| woken) {
             let _ = thread.join();
         }
     }
@@ -757,11 +781,10 @@ fn ap2_audio_reaches_the_receiver() {
 
     // Sync packets under NTP come from the control socket, which takes
     // retransmission requests; a resend is the packet as first sent.
-    let syncs = udp.control.fresh(Duration::from_millis(1_200));
-    let (_, sender_control, sync) = syncs
-        .iter()
-        .find(|(_, _, bytes)| bytes.len() == 20 && bytes[1] == 0xD4)
-        .cloned()
+    udp.control.take();
+    let (_, sender_control, sync) = udp
+        .control
+        .wait_for(|(_, _, bytes)| bytes.len() == 20 && bytes[1] == 0xD4)
         .expect("a sync packet");
     assert_eq!(sync.len(), 20);
     let wanted = seq_of(&audio[3].2);
@@ -776,10 +799,9 @@ fn ap2_audio_reaches_the_receiver() {
         .socket
         .send_to(&request, sender_control)
         .expect("a resend request");
-    let replies = udp.control.after(Duration::from_millis(500));
-    let reply = replies
-        .iter()
-        .find(|(_, _, bytes)| bytes.len() > 4 && bytes[1] == 0xD6)
+    let reply = udp
+        .control
+        .wait_for(|(_, _, bytes)| bytes.len() > 4 && bytes[1] == 0xD6)
         .expect("a resend");
     assert_eq!(&reply.2[RESEND_PREFIX_BYTES..], &audio[3].2[..]);
 
@@ -800,12 +822,11 @@ fn ap2_audio_reaches_the_receiver() {
         "{:?}",
         events.of(&key)
     );
-    let again = udp.data.after(Duration::from_millis(800));
+    let (_, _, again) = udp.data.wait_for(|_| true).expect("audio again");
     let second = stream_key(&server.fake()).expect("shk");
     assert_ne!(second, shk);
-    assert!(!again.is_empty());
-    assert_eq!(open_packet(&second, &again[0].2).expect("opens").counter, 0);
-    assert!(open_packet(&shk, &again[0].2).is_none());
+    assert_eq!(open_packet(&second, &again).expect("opens").counter, 0);
+    assert!(open_packet(&shk, &again).is_none());
     sender.shutdown();
 }
 
