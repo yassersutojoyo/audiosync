@@ -2892,7 +2892,9 @@ fn describe_source(source: &SourceId) -> String {
 fn lead_source(source: &SourceId) -> SourceKind {
     match source {
         SourceId::WholeSystem => SourceKind::System,
-        SourceId::App { .. } => SourceKind::App,
+        SourceId::App { .. } | SourceId::Apps { .. } | SourceId::AppsExcept { .. } => {
+            SourceKind::App
+        }
         SourceId::Input { .. } => SourceKind::Input,
     }
 }

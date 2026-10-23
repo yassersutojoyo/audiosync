@@ -62,7 +62,7 @@ enum LocalDelay {
         let sourceKind: UInt32
         switch source {
         case .system: sourceKind = UInt32(ASC_LEAD_SOURCE_SYSTEM)
-        case .app: sourceKind = UInt32(ASC_LEAD_SOURCE_APP)
+        case .app, .mix: sourceKind = UInt32(ASC_LEAD_SOURCE_APP)
         case .input: sourceKind = UInt32(ASC_LEAD_SOURCE_INPUT)
         }
         let outputKind: UInt32
