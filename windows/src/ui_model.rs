@@ -4,16 +4,17 @@
 //! The UI reads an [`AppState`] snapshot from a [`Backend`] and calls the
 //! backend's methods for every user action, then reads a new snapshot. On
 //! Windows the backend is `crate::adapter::AudioAdapter` over the WASAPI audio
-//! backend; elsewhere [`MockBackend`] stands in with example data, for work on
-//! the UI. Nothing here makes a sound or opens an audio device.
+//! backend; elsewhere, with the `mock-backend` feature, [`MockBackend`] stands
+//! in with example data, for work on the UI. Nothing here makes a sound or
+//! opens an audio device.
 
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
-#[cfg(any(not(windows), test))]
+#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 use audiosync_core::volume;
 
-#[cfg(any(not(windows), test))]
+#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 use crate::speaker_names;
 use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
 
@@ -105,33 +106,33 @@ pub enum Availability {
     NeedsCode,
     /// A pairing with it runs: the PIN prompt is open or about to open.
     #[cfg_attr(
-        all(not(windows), not(test)),
+        all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows backend pairs")
     )]
     Pairing,
     /// It was switched on while another Apple TV has the PIN prompt; its
     /// pairing gets the prompt once that one ends.
     #[cfg_attr(
-        all(not(windows), not(test)),
+        all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows backend pairs")
     )]
     WaitingToPair,
     /// It needs a kind of pairing AudioSync for Windows can't do yet.
     #[cfg_attr(
-        all(not(windows), not(test)),
+        all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows backend lists real receivers")
     )]
     PairingNotYet,
     /// Only AirPlay 2 can play it, which AudioSync for Windows doesn't speak
     /// yet.
     #[cfg_attr(
-        all(not(windows), not(test)),
+        all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows backend lists real receivers")
     )]
     AirPlay2NotYet,
     /// It wants an encryption, codec or format AudioSync can't send.
     #[cfg_attr(
-        all(not(windows), not(test)),
+        all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows backend lists real receivers")
     )]
     Unsupported,
@@ -140,7 +141,7 @@ pub enum Availability {
 /// What went wrong with an AirPlay speaker, as a notice words it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    all(not(windows), not(test)),
+    all(not(os_backend), not(test)),
     expect(dead_code, reason = "only the Windows backend posts notices")
 )]
 pub enum AirPlayProblem {
@@ -254,7 +255,7 @@ pub struct CastGroup {
 /// Where a Google Cast speaker that is on is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    all(not(windows), not(test)),
+    all(not(os_backend), not(test)),
     expect(dead_code, reason = "only the Windows backend plays to Cast")
 )]
 pub enum CastState {
@@ -270,7 +271,7 @@ pub enum CastState {
 /// listed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(
-    all(not(windows), not(test)),
+    all(not(os_backend), not(test)),
     expect(dead_code, reason = "only the Windows backend looks for Cast")
 )]
 pub enum CastList {
@@ -288,7 +289,7 @@ pub enum CastList {
 /// Why a Google Cast speaker can't play, as a notice words it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    all(not(windows), not(test)),
+    all(not(os_backend), not(test)),
     expect(dead_code, reason = "only the Windows backend posts notices")
 )]
 pub enum CastProblem {
@@ -308,7 +309,7 @@ pub enum CastProblem {
 /// of showing it as playing; it stays on and plays again by itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    all(not(windows), not(test)),
+    all(not(os_backend), not(test)),
     expect(
         dead_code,
         reason = "only the Windows backend reports a waiting speaker"
@@ -329,7 +330,7 @@ pub enum Waiting {
 /// Where a pairing's PIN prompt is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    all(not(windows), not(test)),
+    all(not(os_backend), not(test)),
     expect(dead_code, reason = "only the Windows backend pairs")
 )]
 pub enum PinPhase {
@@ -409,7 +410,7 @@ pub struct Notice {
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    all(not(windows), not(test)),
+    all(not(os_backend), not(test)),
     expect(dead_code, reason = "only the Windows backend posts notices")
 )]
 pub enum NoticeMessage {
@@ -538,13 +539,6 @@ pub enum SpeakerState {
     Playing,
     /// On while streaming is on, but it can't play right now (a group:
     /// none of its present members can).
-    #[cfg_attr(
-        all(not(windows), not(test)),
-        expect(
-            dead_code,
-            reason = "only the Windows backend reports a waiting speaker"
-        )
-    )]
     Waiting(Waiting),
 }
 
@@ -1089,7 +1083,7 @@ pub fn delay_field_text(typed: &str) -> String {
 pub static MOCK_CAST_HOLD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A host under `.invalid` (RFC 6761) stands for one nothing answers.
-#[cfg(any(not(windows), test))]
+#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool {
     #[cfg(test)]
     if address.host().ends_with(".held") {
@@ -1099,7 +1093,7 @@ fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool 
 }
 
 /// Example data for UI work and tests: no device is opened, nothing plays.
-#[cfg(any(not(windows), test))]
+#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 pub struct MockBackend {
     state: AppState,
     next_id: u64,
@@ -1108,14 +1102,14 @@ pub struct MockBackend {
     hidden_rows: Vec<Speaker>,
 }
 
-#[cfg(any(not(windows), test))]
+#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 impl Default for MockBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(any(not(windows), test))]
+#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 impl MockBackend {
     pub fn new() -> Self {
         let source = |id: &str, name: &str, kind| Source {
@@ -1304,7 +1298,7 @@ impl MockBackend {
     }
 }
 
-#[cfg(any(not(windows), test))]
+#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 impl Backend for MockBackend {
     fn snapshot(&self) -> AppState {
         self.state.clone()

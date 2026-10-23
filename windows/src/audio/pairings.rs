@@ -69,13 +69,17 @@ struct Airplay2File {
     writable: bool,
 }
 
+/// How the system encrypts the file's contents for the current user only
+/// (`crate::os::sealer`).
+pub trait Seal: Sync {
+    fn seal(&self, plain: &[u8]) -> io::Result<Vec<u8>>;
+    fn open(&self, sealed: &[u8]) -> io::Result<Zeroizing<Vec<u8>>>;
+}
+
 /// Encrypts and decrypts the file's contents: DPAPI for the current user in
 /// the app, something simpler in tests that run off Windows.
 #[derive(Clone, Copy)]
-pub struct Sealer {
-    seal: fn(&[u8]) -> io::Result<Vec<u8>>,
-    open: fn(&[u8]) -> io::Result<Zeroizing<Vec<u8>>>,
-}
+pub struct Sealer(&'static dyn Seal);
 
 impl fmt::Debug for Sealer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -84,22 +88,16 @@ impl fmt::Debug for Sealer {
 }
 
 impl Sealer {
-    /// DPAPI, for the current Windows user. Off Windows nothing can be
-    /// sealed, so nothing is stored.
-    pub fn current_user() -> Sealer {
-        Sealer {
-            seal: dpapi::protect,
-            open: dpapi::unprotect,
-        }
+    pub const fn new(seal: &'static dyn Seal) -> Sealer {
+        Sealer(seal)
     }
 
-    /// A sealer from two functions, for tests.
-    #[cfg(test)]
-    pub fn with(
-        seal: fn(&[u8]) -> io::Result<Vec<u8>>,
-        open: fn(&[u8]) -> io::Result<Zeroizing<Vec<u8>>>,
-    ) -> Sealer {
-        Sealer { seal, open }
+    pub fn seal(&self, plain: &[u8]) -> io::Result<Vec<u8>> {
+        self.0.seal(plain)
+    }
+
+    pub fn open(&self, sealed: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
+        self.0.open(sealed)
     }
 }
 
@@ -171,7 +169,7 @@ impl PairingStore {
     pub fn in_memory() -> PairingStore {
         PairingStore {
             path: None,
-            sealer: Sealer::current_user(),
+            sealer: crate::os::sealer(),
             entries: BTreeMap::new(),
             keep_aside: false,
             kept_aside: None,
@@ -388,7 +386,7 @@ impl PairingStore {
                 "the AirPlay 2 identity file is left as it is",
             ));
         }
-        let sealed = (self.sealer.seal)(&file.identity.to_bytes()?)?;
+        let sealed = self.sealer.seal(&file.identity.to_bytes()?)?;
         data_folder::write_atomically(&path, &sealed)
     }
 
@@ -409,7 +407,7 @@ impl PairingStore {
             };
         }
         let plain = encode(&self.entries)?;
-        let sealed = (self.sealer.seal)(&plain)?;
+        let sealed = self.sealer.seal(&plain)?;
         // Flushed to disk before it replaces the old file, so a power cut
         // leaves the old file or the new one, never an empty one.
         data_folder::write_atomically(path, &sealed)
@@ -435,7 +433,7 @@ fn read_airplay2(path: &Path, sealer: Sealer) -> Result<Option<Airplay2Identity>
             )));
         }
     };
-    let plain = (sealer.open)(&sealed).map_err(|error| {
+    let plain = sealer.open(&sealed).map_err(|error| {
         Airplay2Read::Ignored(format!(
             "the AirPlay 2 identity file can't be decrypted for this Windows user: {error}"
         ))
@@ -463,7 +461,8 @@ fn read(path: &Path, sealer: Sealer) -> Result<Option<BTreeMap<String, Credentia
             ));
         }
     };
-    let plain = (sealer.open)(&sealed)
+    let plain = sealer
+        .open(&sealed)
         .map_err(|error| format!("the file can't be decrypted for this Windows user: {error}"))?;
     decode(&plain)
         .map(Some)
@@ -520,114 +519,6 @@ fn decode(plain: &[u8]) -> Option<BTreeMap<String, Credentials>> {
     Some(entries)
 }
 
-#[cfg(windows)]
-mod dpapi {
-    //! `CryptProtectData` and `CryptUnprotectData` for the current user,
-    //! never with a prompt.
-
-    use std::io;
-
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
-    use windows::Win32::Security::Cryptography::{
-        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
-    };
-    use windows::core::w;
-    use zeroize::{Zeroize, Zeroizing};
-
-    /// Extra entropy, so another app's DPAPI call for the same user can't
-    /// simply decrypt the file.
-    const ENTROPY: &[u8] = b"AudioSync AirPlay pairings";
-
-    fn blob(bytes: &[u8]) -> io::Result<CRYPT_INTEGER_BLOB> {
-        let size = u32::try_from(bytes.len())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "too much data"))?;
-        Ok(CRYPT_INTEGER_BLOB {
-            cbData: size,
-            pbData: bytes.as_ptr().cast_mut(),
-        })
-    }
-
-    /// Copies what DPAPI returned, wipes it when `wipe`, and frees it.
-    fn take(out: CRYPT_INTEGER_BLOB, wipe: bool) -> Vec<u8> {
-        if out.pbData.is_null() {
-            return Vec::new();
-        }
-        // SAFETY: DPAPI returned `cbData` bytes at `pbData`, allocated with
-        // LocalAlloc, which nothing else holds; they are copied, then freed
-        // once.
-        unsafe {
-            let bytes = std::slice::from_raw_parts_mut(out.pbData, out.cbData as usize);
-            let copy = bytes.to_vec();
-            if wipe {
-                bytes.zeroize();
-            }
-            LocalFree(Some(HLOCAL(out.pbData.cast())));
-            copy
-        }
-    }
-
-    pub fn protect(plain: &[u8]) -> io::Result<Vec<u8>> {
-        let input = blob(plain)?;
-        let entropy = blob(ENTROPY)?;
-        let mut out = CRYPT_INTEGER_BLOB::default();
-        // SAFETY: `input` and `entropy` point at live slices for the call;
-        // DPAPI fills `out`, which `take` frees.
-        unsafe {
-            CryptProtectData(
-                &input,
-                w!("AudioSync AirPlay pairings"),
-                Some(&entropy),
-                None,
-                None,
-                CRYPTPROTECT_UI_FORBIDDEN,
-                &mut out,
-            )?;
-        }
-        Ok(take(out, false))
-    }
-
-    pub fn unprotect(sealed: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
-        let input = blob(sealed)?;
-        let entropy = blob(ENTROPY)?;
-        let mut out = CRYPT_INTEGER_BLOB::default();
-        // SAFETY: as in `protect`; the decrypted bytes are wiped before
-        // they are freed.
-        unsafe {
-            CryptUnprotectData(
-                &input,
-                None,
-                Some(&entropy),
-                None,
-                None,
-                CRYPTPROTECT_UI_FORBIDDEN,
-                &mut out,
-            )?;
-        }
-        Ok(Zeroizing::new(take(out, true)))
-    }
-}
-
-#[cfg(not(windows))]
-mod dpapi {
-    //! Off Windows there is no DPAPI, so nothing is stored.
-
-    use std::io;
-
-    use zeroize::Zeroizing;
-
-    fn unsupported() -> io::Error {
-        io::Error::new(io::ErrorKind::Unsupported, "DPAPI is only on Windows")
-    }
-
-    pub fn protect(_plain: &[u8]) -> io::Result<Vec<u8>> {
-        Err(unsupported())
-    }
-
-    pub fn unprotect(_sealed: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
-        Err(unsupported())
-    }
-}
-
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -641,25 +532,29 @@ pub mod tests {
 
     /// A stand-in for DPAPI off Windows: flips every bit, and refuses data
     /// that doesn't start with its tag.
-    fn flip_seal(plain: &[u8]) -> io::Result<Vec<u8>> {
-        let mut sealed = b"FLIP".to_vec();
-        sealed.extend(plain.iter().map(|byte| !byte));
-        Ok(sealed)
-    }
+    struct Flip;
 
-    fn flip_open(sealed: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
-        let body = sealed
-            .strip_prefix(b"FLIP")
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not sealed"))?;
-        Ok(Zeroizing::new(body.iter().map(|byte| !byte).collect()))
+    impl Seal for Flip {
+        fn seal(&self, plain: &[u8]) -> io::Result<Vec<u8>> {
+            let mut sealed = b"FLIP".to_vec();
+            sealed.extend(plain.iter().map(|byte| !byte));
+            Ok(sealed)
+        }
+
+        fn open(&self, sealed: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
+            let body = sealed
+                .strip_prefix(b"FLIP")
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "not sealed"))?;
+            Ok(Zeroizing::new(body.iter().map(|byte| !byte).collect()))
+        }
     }
 
     /// The sealer the tests use: DPAPI on Windows, the stand-in elsewhere.
     pub fn sealer() -> Sealer {
         if cfg!(windows) {
-            Sealer::current_user()
+            crate::os::sealer()
         } else {
-            Sealer::with(flip_seal, flip_open)
+            Sealer::new(&Flip)
         }
     }
 
@@ -793,7 +688,7 @@ pub mod tests {
         );
 
         // Sealed correctly, but not what the store writes.
-        let sealed = (sealer().seal)(b"AudioSync pairings 1\n\x05\x00abc").unwrap();
+        let sealed = sealer().seal(b"AudioSync pairings 1\n\x05\x00abc").unwrap();
         fs::write(&path, sealed).unwrap();
         let (_, loaded) = PairingStore::open(path.clone(), sealer());
         assert_eq!(

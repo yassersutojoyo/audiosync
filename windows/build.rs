@@ -10,7 +10,11 @@ fn main() {
     let config = slint_build::CompilerConfiguration::new().with_style("fluent".into());
     slint_build::compile_with_config("ui/main.slint", config).expect("the Slint UI compiles");
 
+    // `os_backend`: the target has an audio backend in src/os, so the engine,
+    // the adapter and the single instance are built (tests build them anywhere).
+    println!("cargo::rustc-check-cfg=cfg(os_backend)");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo::rustc-cfg=os_backend");
         embed_windows_resources();
     }
 }

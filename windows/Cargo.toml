@@ -12,6 +12,12 @@ publish = false
 name = "audiosync"
 path = "src/main.rs"
 
+[features]
+# On a host without an audio backend (src/os/other.rs), the windows show
+# example speakers and nothing plays, for work on the UI. It does nothing on
+# Windows, and release builds never turn it on.
+mock-backend = []
+
 [dependencies]
 audiosync-core = { path = "../core" }
 # AudioSync's own AirPlay sender: discovery, one session per speaker and the

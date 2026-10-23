@@ -37,7 +37,7 @@ use super::outputs::{Endpoint, EndpointReading, Listing};
 use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
 
-pub use media_sessions::{MediaSessionReader, read_media_sessions};
+pub use media_sessions::read_media_sessions;
 
 /// The platform calls of the Windows backend.
 pub struct WasapiDriver {

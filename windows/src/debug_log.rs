@@ -101,10 +101,6 @@ impl DebugLog {
     }
 
     /// Whether lines reach a file.
-    #[cfg_attr(
-        all(not(windows), not(test)),
-        expect(dead_code, reason = "only the Windows audio backend asks")
-    )]
     pub fn enabled(&self) -> bool {
         self.writer.is_some()
     }

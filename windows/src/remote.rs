@@ -355,37 +355,7 @@ pub fn qr_pixels(text: &str, scale: usize) -> Option<(usize, Vec<[u8; 3]>)> {
     Some((side, pixels))
 }
 
-/// Windows' DNS host name for this PC.
-#[cfg(windows)]
-pub fn computer_name() -> Option<String> {
-    use windows::Win32::System::SystemInformation::{ComputerNameDnsHostname, GetComputerNameExW};
-    use windows::core::PWSTR;
-
-    let mut size = 0u32;
-    // The first call fails and reports the size the name needs.
-    // SAFETY: no buffer is passed; `size` is a valid out parameter.
-    let _ = unsafe { GetComputerNameExW(ComputerNameDnsHostname, None, &mut size) };
-    if size == 0 {
-        return None;
-    }
-    let mut buffer = vec![0u16; size as usize];
-    // SAFETY: `buffer` holds `size` UTF-16 units, as `size` says.
-    unsafe {
-        GetComputerNameExW(
-            ComputerNameDnsHostname,
-            Some(PWSTR(buffer.as_mut_ptr())),
-            &mut size,
-        )
-    }
-    .ok()?;
-    buffer.truncate(size as usize);
-    String::from_utf16(&buffer).ok()
-}
-
-#[cfg(not(windows))]
-pub fn computer_name() -> Option<String> {
-    std::env::var("HOSTNAME").ok()
-}
+pub use crate::os::computer_name;
 
 #[cfg(test)]
 mod tests {

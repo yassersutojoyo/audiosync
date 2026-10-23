@@ -145,11 +145,11 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     written
 }
 
-/// The app's data folder, `%LOCALAPPDATA%\AudioSync`, or `None` when Windows
-/// names no such folder. The folder may not exist yet.
+/// The app's data folder, `%LOCALAPPDATA%\AudioSync`, or `None` when the
+/// system names no folder for it (`crate::os::data_base`). The folder may
+/// not exist yet.
 pub fn folder() -> Option<PathBuf> {
-    let local = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
-    local.is_absolute().then(|| local.join(FOLDER_NAME))
+    crate::os::data_base().map(|base| base.join(FOLDER_NAME))
 }
 
 /// The temporary file `path` is written through: the same name with this

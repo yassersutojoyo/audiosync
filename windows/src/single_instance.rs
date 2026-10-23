@@ -509,9 +509,14 @@ mod tests {
     fn the_check_comes_before_the_log_and_the_app_start() {
         let main = include_str!("main.rs");
         let body = &main[main.find("fn main() -> ExitCode").expect("main")..];
-        let acquire = body.find("single_instance::acquire()").expect("acquire");
+        let claim = body.find("os::claim_instance()").expect("claim");
         let log = body.find("DebugLog::from_env()").expect("log");
         let run = body.find("match run(").expect("run");
-        assert!(acquire < log && log < run);
+        assert!(claim < log && log < run);
+        let os = include_str!("os/windows.rs");
+        let claim = &os[os.find("pub fn claim_instance()").expect("claim_instance")..];
+        let claim = &claim[..claim.find("\n}").expect("claim_instance ends")];
+        assert!(claim.contains("single_instance::acquire()"));
+        assert!(!claim.contains("DebugLog::from_env()"));
     }
 }

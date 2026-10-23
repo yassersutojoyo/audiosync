@@ -228,12 +228,14 @@ the results close.
 
 ## On a Mac
 
-The Windows-only code sits behind `#[cfg(windows)]`, so `cargo test` runs the
-logic tests on macOS too, and `cargo run` opens the window (without the Windows
+The Windows-only code sits behind `#[cfg(windows)]`, mostly in `src/os/`, so
+`cargo test` runs the logic tests on macOS too, and
+`cargo run --features mock-backend` opens the window (without the Windows
 version check or the tray icon, and with the icons of Segoe Fluent Icons drawn
 as boxes), which is handy for UI work. There the window shows example speakers
-from a mock backend: nothing plays and no audio device is opened. A Windows
-build can be checked there but not linked:
+from a mock backend: nothing plays and no audio device is opened. Release
+builds never turn that feature on. A Windows build can be checked there but
+not linked:
 
 ```bash
 rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
@@ -244,10 +246,16 @@ cargo check --target aarch64-pc-windows-msvc
 ## Where things are
 
 - `src/main.rs`: startup
+- `src/os/`: what differs per system behind one face: `windows.rs` (the
+  WASAPI backend and media sessions, single instance, tray icon,
+  `%LOCALAPPDATA%`, DPAPI, the PC's name and the time format), `other.rs`
+  (the UI-only build) and `engine.rs`, which starts the AirPlay sender, the
+  Google Cast host and the adapter over any audio driver
 - `src/single_instance.rs`: one copy per Windows session; a second launch
   asks the running copy to show its main window, then exits (unit-tested)
 - `src/ui_model.rs`: what the windows show and can ask for (the `Backend`
-  trait) and the mock backend the window runs on off Windows, unit-tested
+  trait) and the mock backend the window runs on off Windows with the
+  `mock-backend` feature, unit-tested
 - `src/adapter.rs`: the `Backend` on Windows. It turns what the window asks
   for into audio backend calls, with the session rules of `audiosync-core`
   (switching a speaker on starts streaming, a source that quits stops it), and

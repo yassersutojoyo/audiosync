@@ -2,47 +2,50 @@
 //!
 //! The Windows 11 check at startup, then the main window, the equalizer, the
 //! tray icon with its flyout, and the About dialog, laid out like the macOS
-//! app. The data comes through the `Backend` trait in `ui_model`. On Windows
-//! that is the adapter over the WASAPI audio backend, which captures and plays
-//! for real. On other hosts, where the UI is worked on, a mock with example
-//! speakers stands in: nothing plays and no audio device is opened.
+//! app. The data comes through the `Backend` trait in `ui_model`, which
+//! `os::start` opens. On Windows that is the adapter over the WASAPI audio
+//! backend, which captures and plays for real. On other hosts, where the UI
+//! is worked on, the `mock-backend` feature gives a mock with example
+//! speakers: nothing plays and no audio device is opened.
 //!
 //! With `AUDIOSYNC_DEBUG=1` in the environment, the app writes what it does
 //! to `%TEMP%\audiosync-debug.log` (`debug_log`).
 
-// No console window next to the app. Test builds keep the console so their
-// output stays visible.
-#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+// No console window next to the app; other systems ignore the attribute.
+// Test builds keep the console so their output stays visible.
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
-#[cfg(any(windows, test))]
+// Off a backend the UI-only build uses only part of these.
+#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
 mod adapter;
-#[cfg(any(windows, test))]
+#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
 mod audio;
 mod backdrop;
 #[cfg(test)]
 mod contrast;
-#[cfg(any(windows, test))]
+#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
 mod data_folder;
 mod debug_log;
 mod guide;
 mod launch_at_login;
 mod network_profile;
 mod now_playing_card;
+mod os;
 mod os_version;
-#[cfg(any(windows, test))]
+#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
 mod placement;
 mod platform;
 mod remote;
-#[cfg(any(windows, test))]
+#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
 mod settings;
-#[cfg(any(windows, test))]
+#[cfg(any(os_backend, test))]
 mod single_instance;
 mod speaker_names;
 // Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
 #[cfg(test)]
 #[rustfmt::skip]
 mod tokens;
-#[cfg(windows)]
+#[cfg(os_backend)]
 mod tray;
 mod ui_model;
 mod view;
@@ -50,7 +53,6 @@ mod view;
 use std::process::ExitCode;
 use std::time::Duration;
 
-#[cfg(windows)]
 use slint::ComponentHandle;
 
 use debug_log::DebugLog;
@@ -79,52 +81,8 @@ const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
 const PREVIEW_PIN_VAR: &str = "AUDIOSYNC_PREVIEW_PIN";
 
 fn main() -> ExitCode {
-    // Before the log, which a launch empties, and before any audio, tray or
-    // window: a second launch only hands over to the running copy.
-    #[cfg(windows)]
-    let launched = std::time::Instant::now();
-    #[cfg(windows)]
-    let (instance, waited_for) = match single_instance::acquire() {
-        single_instance::Acquired::First(instance) => (instance, None),
-        single_instance::Acquired::Second
-            if !launch_at_login::hands_over_to_running_copy(
-                launch_at_login::started_in_background(std::env::args_os()),
-            ) =>
-        {
-            let log = DebugLog::appending_from_env();
-            log.log(|| {
-                format!(
-                    "process {}: AudioSync already runs in this session; started with {}, \
-                     so it leaves that copy as it is; exiting",
-                    std::process::id(),
-                    launch_at_login::BACKGROUND_FLAG
-                )
-            });
-            log.flush(LOG_FLUSH_AT_EXIT);
-            return ExitCode::SUCCESS;
-        }
-        single_instance::Acquired::Second => {
-            // A copy that is quitting doesn't answer; once it's gone, this
-            // launch starts instead, as on the Mac.
-            let (outcome, first) = single_instance::second_launch(
-                single_instance::hand_over,
-                || match single_instance::acquire() {
-                    single_instance::Acquired::First(instance) => Some(instance),
-                    single_instance::Acquired::Second => None,
-                },
-                || launched.elapsed(),
-                std::thread::sleep,
-            );
-            match first {
-                Some(instance) => (instance, Some(outcome)),
-                None => {
-                    let log = DebugLog::appending_from_env();
-                    log.log(|| outcome.log_line(std::process::id()));
-                    log.flush(LOG_FLUSH_AT_EXIT);
-                    return ExitCode::SUCCESS;
-                }
-            }
-        }
+    let Some(instance) = os::claim_instance() else {
+        return ExitCode::SUCCESS;
     };
     let log = DebugLog::from_env();
     log.log(|| {
@@ -143,23 +101,9 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    #[cfg(windows)]
-    if let Some(outcome) = waited_for {
-        log.log(|| outcome.took_over_line());
-    }
-    #[cfg(windows)]
-    match &instance {
-        Ok(_) => log.log(|| "single instance: this is the only copy in the session".to_owned()),
-        Err(error) => {
-            log.log(|| format!("single instance: a second launch can't reach this copy ({error})"))
-        }
-    }
+    instance.log_state(&log);
 
-    match run(
-        &log,
-        #[cfg(windows)]
-        instance.as_ref().ok(),
-    ) {
+    match run(&log, &instance) {
         Ok(()) => {
             log.log(|| "exiting".to_owned());
             log.flush(LOG_FLUSH_AT_EXIT);
@@ -183,8 +127,8 @@ fn stop_with_error(log: &DebugLog, message: &str) {
 #[derive(Debug)]
 enum StartError {
     Window(slint::PlatformError),
-    #[cfg(windows)]
-    Audio(audio::backend::BackendError),
+    /// The audio backend couldn't open, for the system's reason.
+    Audio(String),
 }
 
 impl StartError {
@@ -194,11 +138,10 @@ impl StartError {
             // A window system that failed can't give the UI's strings.
             StartError::Window(error) => format!("AudioSync could not start: {error}"),
             // The UI's words, with the system's reason as the detail.
-            #[cfg(windows)]
             StartError::Audio(error) => AboutDialog::new()
                 .map(|dialog| {
                     let strings = dialog.global::<Strings>();
-                    strings.invoke_audio_failed(error.to_string().into()).into()
+                    strings.invoke_audio_failed(error.as_str().into()).into()
                 })
                 .unwrap_or_else(|_| format!("AudioSync could not start: {error}")),
         }
@@ -211,215 +154,16 @@ impl From<slint::PlatformError> for StartError {
     }
 }
 
-/// What the windows show and drive: the Windows audio backend, with the
-/// AirPlay sender, through the adapter that keeps the UI's own state. Both
-/// log to `log`.
-#[cfg(windows)]
-fn backend(
-    log: &DebugLog,
-    labels: &audio::now_playing::SharedLabels,
-    track_reader: audio::wasapi::MediaSessionReader,
-) -> Result<Box<dyn ui_model::Backend>, StartError> {
-    let mut audio = audio::wasapi::open().map_err(StartError::Audio)?;
-    log.log(|| "audio: the WASAPI backend is open".to_owned());
-    audio.set_debug_log(log.clone());
-    let settings_file = settings::SettingsFile::default_path().map_or_else(
-        settings::SettingsFile::in_memory,
-        settings::SettingsFile::at,
-    );
-    // Read at launch only, like the Mac: a change applies at the next launch.
-    let airplay2 = settings_file.load().0.airplay2_experimental;
-    start_airplay(&mut audio, airplay2, log);
-    let cast_file = start_cast(&mut audio, log);
-    audio.set_track_reader(Box::new(track_reader));
-    audio.set_receiver_labels(labels.clone());
-    let mut adapter = adapter::AudioAdapter::with_settings(
-        audio,
-        platform::notice_time,
-        log.clone(),
-        settings_file,
-    );
-    adapter.set_cast_file(cast_file);
-    Ok(Box::new(adapter))
-}
-
-/// The file that keeps each Google Cast speaker's offset and audio format.
-#[cfg(windows)]
-const CAST_FILE_NAME: &str = "cast-speakers.json";
-
-/// Starts the Google Cast host with the speakers' offsets and formats from
-/// their file, and returns that file for the changes; `None` when Windows
-/// names no data folder, so they last until AudioSync quits. Without a host
-/// no Cast speaker is listed.
-#[cfg(windows)]
-fn start_cast(
-    audio: &mut audio::wasapi::WasapiBackend,
-    log: &DebugLog,
-) -> Option<std::path::PathBuf> {
-    use audiosync_cast::host::DeviceMemory;
-    let path = data_folder::folder().map(|folder| folder.join(CAST_FILE_NAME));
-    let memory = match path.as_deref().map(data_folder::read_at_launch) {
-        None => DeviceMemory::default(),
-        Some(Ok(bytes)) => DeviceMemory::from_json(&String::from_utf8_lossy(&bytes)),
-        Some(Err(error)) => {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                log.log(|| format!("Cast: the speakers' file couldn't be read: {error}"));
-            }
-            DeviceMemory::default()
-        }
-    };
-    match audio::cast::HostLink::start(memory) {
-        Ok((link, browse_error)) => {
-            match browse_error {
-                Some(error) => log.log(|| format!("Cast: discovery couldn't start: {error}")),
-                None => log.log(|| "Cast: browsing for speakers".to_owned()),
-            }
-            audio.set_cast(Box::new(link));
-        }
-        Err(error) => log.log(|| format!("Cast: the host couldn't start: {error}")),
-    }
-    path
-}
-
-/// What AirPlay receivers show while no track counts, from the strings.
-#[cfg(windows)]
-fn receiver_labels(strings: &Strings<'_>) -> audio::now_playing::ReceiverLabels {
-    audio::now_playing::ReceiverLabels {
-        title: strings.get_receiver_untitled().into(),
-        album: strings.get_receiver_album().into(),
-        whole_system: strings.get_source_system().into(),
-        unnamed_source: strings.get_receiver_unnamed_source().into(),
-    }
-}
-
-/// Starts the AirPlay sender and its discovery through the audio backend,
-/// which keeps the way to start a new one when the user retries. Without a
-/// sender the app runs on with local outputs only; without discovery no
-/// AirPlay speaker is listed.
-#[cfg(windows)]
-fn start_airplay(audio: &mut audio::wasapi::WasapiBackend, airplay2: bool, log: &DebugLog) {
-    let starter_log = log.clone();
-    audio.start_airplay(
-        Box::new(move || start_sender(airplay2, &starter_log)),
-        open_pairings(log),
-    );
-}
-
-/// A new AirPlay sender, browsing for receivers when its discovery could
-/// start, and the feed for its input; `None` when it couldn't start.
-#[cfg(windows)]
-fn start_sender(airplay2: bool, log: &DebugLog) -> Option<audio::airplay::StartedSender> {
-    use audio::airplay::{FeedSlot, SenderLink, StartedSender};
-    let (link, input) = match SenderLink::start(airplay2) {
-        Ok(started) => started,
-        Err(error) => {
-            log.log(|| format!("AirPlay: the sender couldn't start: {error}"));
-            return None;
-        }
-    };
-    let browsing = match link.start_discovery() {
-        Ok(()) => {
-            log.log(|| "AirPlay: browsing for receivers".to_owned());
-            true
-        }
-        Err(error) => {
-            log.log(|| format!("AirPlay: discovery couldn't start: {error}"));
-            false
-        }
-    };
-    Some(StartedSender {
-        link: Box::new(link),
-        feed: Some(FeedSlot::new(input)),
-        browsing,
-    })
-}
-
-/// The paired Apple TVs' credentials, from the file in the app's data
-/// folder; kept for this run only when Windows names no such folder.
-#[cfg(windows)]
-fn open_pairings(log: &DebugLog) -> audio::pairings::PairingStore {
-    use audio::pairings::{PairingStore, Sealer};
-    let Some(path) = PairingStore::default_path() else {
-        log.log(|| {
-            "AirPlay pairings: no app data folder; pairings last until AudioSync quits".to_owned()
-        });
-        return PairingStore::in_memory();
-    };
-    let (store, loaded) = PairingStore::open(path, Sealer::current_user());
-    log.log(|| format!("AirPlay pairings: {loaded}"));
-    store
-}
-
-/// Off Windows, example speakers to work on the UI with.
-#[cfg(not(windows))]
-fn backend(log: &DebugLog) -> Result<Box<dyn ui_model::Backend>, StartError> {
-    log.log(|| "audio: example speakers from the mock backend; nothing plays".to_owned());
-    Ok(Box::new(ui_model::MockBackend::new()))
-}
-
-#[cfg(windows)]
-thread_local! {
-    /// The app and its log, for a second launch's request to show the main
-    /// window.
-    static RUNNING_APP: std::cell::RefCell<Option<(std::rc::Weak<view::App>, DebugLog)>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// A second launch asked for the main window: shown as by the tray's Open.
-#[cfg(windows)]
-fn show_main_for_second_launch() {
-    let running = RUNNING_APP.with(|cell| {
-        let cell = cell.borrow();
-        let (app, log) = cell.as_ref()?;
-        Some((app.upgrade()?, log.clone()))
-    });
-    if let Some((app, log)) = running {
-        log.log(|| "a second launch asked for the main window: shown".to_owned());
-        app.show_main();
-    }
-}
-
 /// Shows the main window and runs the UI until the user exits.
-fn run(
-    log: &DebugLog,
-    #[cfg(windows)] instance: Option<&single_instance::Instance>,
-) -> Result<(), StartError> {
-    #[cfg(windows)]
-    let labels = audio::now_playing::SharedLabels::default();
-    #[cfg(windows)]
-    let (track_reader, card_reader) = audio::wasapi::read_media_sessions(log.clone());
-    #[cfg(windows)]
-    let backend = backend(log, &labels, track_reader)?;
-    #[cfg(not(windows))]
-    let backend = backend(log)?;
+fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
+    let os::Started { backend, media } = os::start(log)?;
     let app = view::App::new(backend, log.clone())?;
-    #[cfg(windows)]
-    labels.set(receiver_labels(&app.strings()));
-    #[cfg(windows)]
-    app.set_media_controls(Box::new(card_reader));
-
-    #[cfg(windows)]
-    if let Some(instance) = instance {
-        RUNNING_APP.with(|cell| {
-            *cell.borrow_mut() = Some((std::rc::Rc::downgrade(&app), log.clone()));
-        });
-        instance.listen(show_main_for_second_launch);
-    }
+    media.attach(&app);
+    instance.listen(&app, log);
 
     // With a tray icon, closing the main window keeps AudioSync running in
-    // the notification area; without one (or off Windows), it quits.
-    #[cfg(windows)]
-    let _tray = match tray::Tray::create(&app) {
-        Ok(tray) => {
-            log.log(|| "tray icon: shown".to_owned());
-            app.set_tray_available(true);
-            Some(tray)
-        }
-        Err(error) => {
-            log.log(|| format!("tray icon: not shown ({error}); closing the main window quits"));
-            None
-        }
-    };
+    // the notification area; without one, it quits.
+    let tray = os::create_tray(&app, log);
 
     // To look at both appearances without changing the Windows setting, only
     // while the debug log is on.
@@ -445,10 +189,7 @@ fn run(
             ui_model::Appearance::Light
         });
     }
-    #[cfg(windows)]
-    let tray_available = _tray.is_some();
-    #[cfg(not(windows))]
-    let tray_available = false;
+    let tray_available = tray.is_some();
     let background = launch_at_login::started_in_background(std::env::args_os());
     if launch_at_login::opens_main_window(background, tray_available) {
         app.show_main();
