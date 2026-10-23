@@ -130,6 +130,9 @@ struct CalibrateAll {
     phase: AllPhase,
     sheet: Option<KeptSheet>,
     endings: u64,
+    /// Outputs left out by kind that the user chose Include Anyway for,
+    /// until the results close.
+    included: BTreeSet<String>,
 }
 
 /// After this many polls, 20 seconds, of AirPlay discovery without a single
@@ -918,18 +921,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Why Calibrate All can't start now: a reference that plays and
     /// another speaker that plays (S235).
     fn calibrate_all_blocked(&self) -> Option<Failure> {
-        let lineup = calibrate_all::lineup(&self.audio);
-        let Some(reference) = lineup.reference.as_deref() else {
-            return Some(Failure::NoReference);
-        };
-        let reference_plays = lineup
-            .members
-            .iter()
-            .any(|m| m.class == Class::Local && m.id == reference);
-        if lineup.session.is_none() || !reference_plays {
-            return Some(Failure::NotPlaying);
-        }
-        (lineup.members.len() < 2).then_some(Failure::NothingToMeasure)
+        calibrate_all::blocked(
+            &calibrate_all::lineup(&self.audio),
+            &self.calibrate_all.included,
+        )
     }
 
     fn calibrate_all_state(&self) -> CalibrateAllState {
@@ -2920,7 +2915,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
             return;
         }
-        match AllRun::start(&mut self.audio, clock::now_ns(), self.log.clone()) {
+        let started = AllRun::start(
+            &mut self.audio,
+            &self.calibrate_all.included,
+            clock::now_ns(),
+            self.log.clone(),
+        );
+        match started {
             Ok(run) => {
                 self.calibrate_all.phase = AllPhase::Idle;
                 self.calibrate_all.sheet = None;

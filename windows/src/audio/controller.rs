@@ -1877,6 +1877,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     id: endpoint.id.clone(),
                     name: endpoint.name.clone(),
                     kind: endpoint.kind,
+                    traits: endpoint.traits.clone(),
                     is_default: endpoint.is_default,
                     is_reference: self.policy.reference() == Some(endpoint.id.as_str()),
                     enabled: settings.enabled,

@@ -11,7 +11,7 @@
 //! thread; its decisions need no hardware, so they are tested against an
 //! [`AllRig`] of fakes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -27,6 +27,7 @@ use super::calibration::{
     CalibrationTap, Failure, LATENCY_ALLOWANCE_S, Microphone, MicrophoneError, MicrophoneId, Route,
     SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, ns, trim_start,
 };
+use super::outputs::{DeviceTraits, MicKind};
 use crate::debug_log::DebugLog;
 
 /// A speaker that is on, as a run sees it.
@@ -79,6 +80,68 @@ pub struct Lineup {
     pub members: Vec<Member>,
     /// Each playing local output's hold-back, in ms.
     pub hold_backs_ms: BTreeMap<String, f64>,
+    /// The playing local outputs' devices, by endpoint ID; an output
+    /// missing here takes part.
+    pub devices: BTreeMap<String, LocalDevice>,
+}
+
+/// A playing local output's device, as the plan reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalDevice {
+    pub name: String,
+    pub traits: DeviceTraits,
+}
+
+/// A playing local output that microphone calibration leaves out by its
+/// kind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeftOut {
+    /// Its endpoint ID.
+    pub id: String,
+    pub kind: MicKind,
+    /// The user chose Include Anyway: it is measured as a speaker.
+    pub included: bool,
+}
+
+impl Lineup {
+    fn kind_of(&self, member: &Member) -> MicKind {
+        if member.class != Class::Local || self.reference.as_deref() == Some(member.id.as_str()) {
+            return MicKind::Speaker;
+        }
+        self.devices
+            .get(&member.id)
+            .map_or(MicKind::Speaker, |device| device.traits.mic_kind())
+    }
+
+    /// The lineup a run measures, and the outputs left out by kind in their
+    /// order. One whose ID is in `included` stays in, flagged as included.
+    pub fn plan(&self, _included: &BTreeSet<String>) -> (Lineup, Vec<LeftOut>) {
+        (self.clone(), Vec::new())
+    }
+}
+
+/// Why a run can't start over `lineup` (S235): a reference that plays and
+/// another speaker that plays and that the microphone can hear.
+pub fn blocked(lineup: &Lineup, included: &BTreeSet<String>) -> Option<Failure> {
+    let Some(reference) = lineup.reference.as_deref() else {
+        return Some(Failure::NoReference);
+    };
+    let reference_plays = lineup
+        .members
+        .iter()
+        .any(|m| m.class == Class::Local && m.id == reference);
+    if lineup.session.is_none() || !reference_plays {
+        return Some(Failure::NotPlaying);
+    }
+    let (planned, left_out) = lineup.plan(included);
+    if planned.members.len() >= 2 {
+        return None;
+    }
+    Some(if left_out.iter().any(|left| !left.included) {
+        Failure::OnlyLeftOut
+    } else {
+        Failure::NothingToMeasure
+    })
 }
 
 /// What a run uses of the app: the backend, through the blanket impl below,
@@ -121,6 +184,18 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
     let engine = audio.calibration_engine();
     let outputs = audio.outputs();
     let allowance_ms = LATENCY_ALLOWANCE_S * 1000.0;
+    let devices = engine
+        .playing
+        .iter()
+        .filter_map(|id| {
+            let output = outputs.iter().find(|output| output.id == *id)?;
+            let device = LocalDevice {
+                name: output.name.clone(),
+                traits: output.traits.clone(),
+            };
+            Some((id.clone(), device))
+        })
+        .collect();
     let mut locals: Vec<Member> = engine
         .playing
         .iter()
@@ -177,6 +252,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
         reference: engine.reference,
         members: locals.into_iter().chain(airplay).chain(casts).collect(),
         hold_backs_ms: engine.hold_backs_ms,
+        devices,
     }
 }
 
@@ -270,6 +346,8 @@ pub struct AllRun {
     taking_part: Vec<usize>,
     /// The row a Measure Again measures.
     again: Option<usize>,
+    /// The outputs measured whatever their kind.
+    included: BTreeSet<String>,
     rate: u32,
     /// The reference, by endpoint ID.
     reference: String,
@@ -290,27 +368,31 @@ pub struct AllRun {
 }
 
 impl AllRun {
-    /// Starts a run over every speaker that plays: the music fades out.
-    /// Refused with why when it can't start; nothing changed then.
-    pub fn start(rig: &mut dyn AllRig, now_ns: u64, log: DebugLog) -> Result<AllRun, Failure> {
-        let lineup = rig.lineup();
+    /// Starts a run over every speaker that plays and that the microphone
+    /// can hear, with the outputs in `included` measured whatever their
+    /// kind: the music fades out. Refused with why when it can't start;
+    /// nothing changed then.
+    pub fn start(
+        rig: &mut dyn AllRig,
+        included: &BTreeSet<String>,
+        now_ns: u64,
+        log: DebugLog,
+    ) -> Result<AllRun, Failure> {
+        let everyone = rig.lineup();
         let refuse = |failure: Failure| {
             log.log(|| format!("Calibrate All refused: {failure:?}"));
             Err(failure)
         };
-        let Some(reference) = lineup.reference.clone() else {
-            return refuse(Failure::NoReference);
-        };
-        let reference_plays = lineup
-            .members
-            .iter()
-            .any(|m| m.class == Class::Local && m.id == reference);
-        let (Some(session), Some(tap), true) = (lineup.session, rig.tap(), reference_plays) else {
+        log_plan(&log, &everyone, included);
+        if let Some(failure) = blocked(&everyone, included) {
+            return refuse(failure);
+        }
+        let (Some(reference), Some(session), Some(tap)) =
+            (everyone.reference.clone(), everyone.session, rig.tap())
+        else {
             return refuse(Failure::NotPlaying);
         };
-        if lineup.members.len() < 2 {
-            return refuse(Failure::NothingToMeasure);
-        }
+        let lineup = everyone.plan(included).0;
         let rate = match probe(rig) {
             Ok(rate) => rate,
             Err(failure) => return refuse(failure),
@@ -330,11 +412,12 @@ impl AllRun {
             lineup.members.clone(),
             taking_part,
             None,
+            included.clone(),
             rate,
             reference,
             session,
             tap,
-            &lineup,
+            &everyone,
             now_ns,
             log,
         ))
@@ -396,11 +479,18 @@ impl AllRun {
             Err(failure) => return refuse(failure),
         }
         log.log(|| format!("Measure Again of {} started", measured.key()));
+        // The sheet's rows were all measured, whatever their kind.
+        let included = members
+            .iter()
+            .filter(|m| m.class == Class::Local)
+            .map(|m| m.id.clone())
+            .collect();
         Ok(AllRun::new(
             run,
             members.to_vec(),
             vec![reference_row, row],
             Some(row),
+            included,
             rate,
             reference.id.clone(),
             session,
@@ -417,6 +507,7 @@ impl AllRun {
         members: Vec<Member>,
         taking_part: Vec<usize>,
         again: Option<usize>,
+        included: BTreeSet<String>,
         rate: u32,
         reference: String,
         session: u64,
@@ -448,6 +539,7 @@ impl AllRun {
             members,
             taking_part,
             again,
+            included,
             rate,
             reference,
             stage: Stage::Quiet {
@@ -530,7 +622,7 @@ impl AllRun {
             }
             _ => {}
         }
-        if let Some(reason) = self.change(&rig.lineup()) {
+        if let Some(reason) = self.change(&rig.lineup().plan(&self.included).0) {
             if !matches!(self.stage, Stage::Estimating { .. }) {
                 self.log
                     .log(|| format!("Calibrate All stopped by a change: {reason:?}"));
@@ -866,6 +958,26 @@ impl Drop for AllRun {
     }
 }
 
+/// One line per playing local output: what Windows said about it and
+/// whether the run measures it.
+fn log_plan(log: &DebugLog, lineup: &Lineup, included: &BTreeSet<String>) {
+    for member in lineup.members.iter().filter(|m| m.class == Class::Local) {
+        let device = lineup.devices.get(&member.id).cloned().unwrap_or_default();
+        let kind = lineup.kind_of(member);
+        let result = match kind {
+            MicKind::Speaker => "takes part",
+            _ if included.contains(&member.id) => "included anyway",
+            _ => "left out",
+        };
+        log.log(|| {
+            format!(
+                "Calibrate All plan: {:?} ({}), form factor {:?}, enumerator {:?}: {kind:?}, {result}",
+                device.name, member.id, device.traits.form_factor, device.traits.enumerator
+            )
+        });
+    }
+}
+
 fn speaker(member: &Member) -> Speaker {
     Speaker {
         id: member.key(),
@@ -1043,6 +1155,7 @@ pub(crate) mod tests {
                         ("builtin".to_owned(), 2000.0),
                         ("usb".to_owned(), 2150.0),
                     ]),
+                    devices: BTreeMap::new(),
                 },
                 tap: Arc::new(CalibrationTap::new()),
                 solo: None,
@@ -1196,7 +1309,7 @@ pub(crate) mod tests {
 
     fn start(rig: &mut FakeRig) -> AllRun {
         let now = rig.now.get();
-        AllRun::start(rig, now, DebugLog::default()).expect("it starts")
+        AllRun::start(rig, &BTreeSet::new(), now, DebugLog::default()).expect("it starts")
     }
 
     fn measured(sheet: &Sheet, row: usize) -> f64 {
@@ -1461,19 +1574,19 @@ pub(crate) mod tests {
         let mut rig = FakeRig::new();
         rig.mic = Err(MicrophoneError::Denied);
         assert_eq!(
-            AllRun::start(&mut rig, now, DebugLog::default()).err(),
+            AllRun::start(&mut rig, &BTreeSet::new(), now, DebugLog::default()).err(),
             Some(Failure::MicrophoneDenied)
         );
         let mut rig = FakeRig::new();
         rig.lineup.members.truncate(1);
         assert_eq!(
-            AllRun::start(&mut rig, now, DebugLog::default()).err(),
+            AllRun::start(&mut rig, &BTreeSet::new(), now, DebugLog::default()).err(),
             Some(Failure::NothingToMeasure)
         );
         let mut rig = FakeRig::new();
         rig.lineup.session = None;
         assert_eq!(
-            AllRun::start(&mut rig, now, DebugLog::default()).err(),
+            AllRun::start(&mut rig, &BTreeSet::new(), now, DebugLog::default()).err(),
             Some(Failure::NotPlaying)
         );
         assert!(!rig.tap.is_active());
@@ -1481,7 +1594,7 @@ pub(crate) mod tests {
         let mut rig = FakeRig::new();
         rig.lineup.members[3].latency_ms = 1e9;
         assert_eq!(
-            AllRun::start(&mut rig, now, DebugLog::default()).err(),
+            AllRun::start(&mut rig, &BTreeSet::new(), now, DebugLog::default()).err(),
             Some(Failure::TooLong(None))
         );
         assert!(!rig.tap.is_active());
@@ -1695,6 +1808,137 @@ pub(crate) mod tests {
             casts(&backend),
             [(ATTIC.to_owned(), Some(2400.0))],
             "Attic is measured as one speaker, Living Room is left out"
+        );
+    }
+
+    /// Turns on a local output whose device reports `form_factor` and
+    /// `enumerator`, heard 2100 ms after its sweep entered its path.
+    fn add_device(rig: &mut FakeRig, id: &str, form_factor: u32, enumerator: &str) {
+        let at = rig
+            .lineup
+            .members
+            .iter()
+            .position(|m| m.class != Class::Local)
+            .unwrap_or(rig.lineup.members.len());
+        rig.lineup
+            .members
+            .insert(at, member(Class::Local, id, Some(100.0), 2600.0));
+        rig.lineup.hold_backs_ms.insert(id.to_owned(), 2100.0);
+        rig.lineup.devices.insert(
+            id.to_owned(),
+            LocalDevice {
+                name: format!("Output {id}"),
+                traits: DeviceTraits {
+                    form_factor: Some(form_factor),
+                    enumerator: Some(enumerator.to_owned()),
+                },
+            },
+        );
+        rig.heard_after_ms
+            .insert(member_key(Class::Local, id), vec![2100.0]);
+    }
+
+    #[test]
+    fn headphones_and_virtual_outputs_are_listed_left_out_and_never_swept() {
+        let mut rig = FakeRig::new();
+        add_device(&mut rig, "phones", 3, "HDAUDIO");
+        add_device(&mut rig, "cable", 1, "ROOT");
+        add_device(&mut rig, "bt-speaker", 1, "BTHENUM");
+        let (planned, left_out) = rig.lineup.plan(&BTreeSet::new());
+        assert_eq!(
+            left_out,
+            vec![
+                LeftOut {
+                    id: "phones".to_owned(),
+                    kind: MicKind::Headphones,
+                    included: false,
+                },
+                LeftOut {
+                    id: "cable".to_owned(),
+                    kind: MicKind::Virtual,
+                    included: false,
+                },
+            ]
+        );
+        let keys: Vec<String> = planned.members.iter().map(Member::key).collect();
+        assert_eq!(
+            keys,
+            [
+                "local:builtin",
+                "local:usb",
+                "local:bt-speaker",
+                "airplay:kitchen",
+                "cast:den"
+            ]
+        );
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |_, _| {});
+        assert_eq!(finished.failure, None);
+        let sheet = finished.sheet.expect("a sheet");
+        assert_eq!(sheet.ended(), None, "an output left out changes nothing");
+        assert_eq!(sheet.rows().len(), 5);
+        assert!(
+            run.members()
+                .iter()
+                .all(|m| m.id != "phones" && m.id != "cable")
+        );
+        assert!(
+            !rig.solos
+                .iter()
+                .any(|key| key == "local:phones" || key == "local:cable"),
+            "no sweep on an output left out: {:?}",
+            rig.solos
+        );
+        assert!(rig.solos.iter().any(|key| key == "local:bt-speaker"));
+    }
+
+    #[test]
+    fn an_output_included_anyway_is_measured_as_a_speaker() {
+        let mut rig = FakeRig::new();
+        add_device(&mut rig, "phones", 5, "USB");
+        let included = BTreeSet::from(["phones".to_owned()]);
+        let (_, left_out) = rig.lineup.plan(&included);
+        assert_eq!(
+            left_out,
+            vec![LeftOut {
+                id: "phones".to_owned(),
+                kind: MicKind::Headphones,
+                included: true,
+            }]
+        );
+        let now = rig.now.get();
+        let mut run = AllRun::start(&mut rig, &included, now, DebugLog::default()).expect("starts");
+        let finished = run_to_end(&mut rig, &mut run, |_, _| {});
+        let sheet = finished.sheet.expect("a sheet");
+        let row = run
+            .members()
+            .iter()
+            .position(|m| m.id == "phones")
+            .expect("its row");
+        assert!(sheet.rows()[row].state.is_certain());
+        assert!(rig.solos.iter().any(|key| key == "local:phones"));
+    }
+
+    #[test]
+    fn only_left_out_outputs_besides_the_reference_block_with_their_own_reason() {
+        let mut rig = FakeRig::new();
+        rig.lineup.members.truncate(1);
+        add_device(&mut rig, "phones", 3, "BTHENUM");
+        let none = BTreeSet::new();
+        assert_eq!(blocked(&rig.lineup, &none), Some(Failure::OnlyLeftOut));
+        let now = rig.now.get();
+        assert_eq!(
+            AllRun::start(&mut rig, &none, now, DebugLog::default()).err(),
+            Some(Failure::OnlyLeftOut)
+        );
+        assert!(!rig.tap.is_active());
+        let included = BTreeSet::from(["phones".to_owned()]);
+        assert_eq!(blocked(&rig.lineup, &included), None);
+        rig.lineup.members.truncate(1);
+        assert_eq!(
+            blocked(&rig.lineup, &none),
+            Some(Failure::NothingToMeasure),
+            "with only the reference on, nothing is left out"
         );
     }
 }

@@ -48,6 +48,41 @@ pub struct Endpoint {
     pub is_default: bool,
     /// What kind of device it is.
     pub kind: OutputKind,
+    /// What Windows said about it, as read.
+    pub traits: DeviceTraits,
+}
+
+/// The endpoint properties an output's kind comes from, as read; `None`
+/// when Windows couldn't tell.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeviceTraits {
+    /// `PKEY_AudioEndpoint_FormFactor`.
+    pub form_factor: Option<u32>,
+    /// `PKEY_Device_EnumeratorName`.
+    pub enumerator: Option<String>,
+}
+
+impl DeviceTraits {
+    pub fn mic_kind(&self) -> MicKind {
+        mic_kind(self.form_factor, self.enumerator.as_deref())
+    }
+}
+
+/// What microphone calibration makes of an output: only external speakers
+/// can be heard by a microphone in the room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MicKind {
+    Speaker,
+    /// Headphones, a headset or a handset: they play into the ears.
+    Headphones,
+    /// A software device: nothing comes out of it into the room.
+    Virtual,
+}
+
+/// The [`MicKind`] of an output from its form factor and the enumerator of
+/// its device. A property that couldn't be read leaves the output in.
+pub fn mic_kind(_form_factor: Option<u32>, _enumerator: Option<&str>) -> MicKind {
+    MicKind::Speaker
 }
 
 /// `EndpointFormFactor` values, as Windows documents them.
@@ -60,6 +95,8 @@ pub mod form_factor {
     pub const HEADPHONES: u32 = 3;
     /// `Headset`.
     pub const HEADSET: u32 = 5;
+    /// `Handset`: a phone's earpiece.
+    pub const HANDSET: u32 = 6;
     /// `DigitalAudioDisplayDevice`: a display or TV, over HDMI or
     /// DisplayPort.
     pub const DIGITAL_AUDIO_DISPLAY: u32 = 9;
@@ -253,6 +290,10 @@ pub fn list_endpoints(readings: Vec<EndpointReading>, default_id: Option<&str>) 
         listing.endpoints.push(Endpoint {
             is_default: default_id == Some(id.as_str()),
             kind: output_kind(properties.form_factor, enumerator, properties.display_port),
+            traits: DeviceTraits {
+                form_factor: properties.form_factor,
+                enumerator: properties.enumerator,
+            },
             name: properties.name.unwrap_or_else(|| id.clone()),
             id,
         });
@@ -730,6 +771,7 @@ mod tests {
             name: format!("Output {id}"),
             is_default: false,
             kind: OutputKind::Other,
+            traits: DeviceTraits::default(),
         }
     }
 
@@ -830,6 +872,10 @@ mod tests {
                 name: "Headphones (Example Buds)".to_owned(),
                 is_default: true,
                 kind: OutputKind::Bluetooth,
+                traits: DeviceTraits {
+                    form_factor: Some(3),
+                    enumerator: Some("BTHENUM".to_owned()),
+                },
             }],
             "the stereo endpoint stays, whatever the hands-free one's form factor"
         );
@@ -878,6 +924,7 @@ mod tests {
                 name: "a".to_owned(),
                 is_default: false,
                 kind: OutputKind::Other,
+                traits: DeviceTraits::default(),
             }]
         );
         assert_eq!(
@@ -930,6 +977,7 @@ mod tests {
             name: format!("Output {id}"),
             is_default: false,
             kind,
+            traits: DeviceTraits::default(),
         }
     }
 
@@ -1434,5 +1482,79 @@ mod tests {
         assert_eq!(period_frames(0, 48_000), 0);
         assert_eq!(period_frames(-1, 48_000), 0);
         assert_eq!(period_frames(i64::MAX, 48_000), 9_600, "at most 200 ms");
+    }
+
+    #[test]
+    fn microphone_calibration_hears_external_speakers_only() {
+        let kind = |form: Option<u32>, bus: Option<&str>| mic_kind(form, bus);
+        let headphones = Some(form_factor::HEADPHONES);
+        let speakers = Some(form_factor::SPEAKERS);
+        assert_eq!(kind(headphones, Some("HDAUDIO")), MicKind::Headphones);
+        assert_eq!(kind(headphones, Some("BTHENUM")), MicKind::Headphones);
+        assert_eq!(
+            kind(Some(form_factor::HEADSET), Some("USB")),
+            MicKind::Headphones
+        );
+        assert_eq!(
+            kind(Some(form_factor::HANDSET), Some("BTHENUM")),
+            MicKind::Headphones
+        );
+        assert_eq!(kind(headphones, None), MicKind::Headphones);
+        assert_eq!(kind(speakers, Some("ROOT")), MicKind::Virtual);
+        assert_eq!(kind(headphones, Some("Root")), MicKind::Virtual);
+        assert_eq!(kind(None, Some("ROOT")), MicKind::Virtual);
+        assert_eq!(
+            kind(speakers, Some("BTHENUM")),
+            MicKind::Speaker,
+            "a Bluetooth speaker"
+        );
+        assert_eq!(kind(speakers, Some("BTHLEDevice")), MicKind::Speaker);
+        assert_eq!(kind(speakers, Some("HDAUDIO")), MicKind::Speaker);
+        assert_eq!(kind(speakers, Some("USB")), MicKind::Speaker);
+        assert_eq!(
+            kind(Some(form_factor::LINE_LEVEL), Some("HDAUDIO")),
+            MicKind::Speaker
+        );
+        assert_eq!(
+            kind(Some(form_factor::DIGITAL_AUDIO_DISPLAY), Some("HDAUDIO")),
+            MicKind::Speaker
+        );
+        assert_eq!(kind(Some(8), Some("HDAUDIO")), MicKind::Speaker, "S/PDIF");
+        assert_eq!(
+            kind(Some(0), Some("SWD")),
+            MicKind::Speaker,
+            "a remote session"
+        );
+        assert_eq!(kind(None, None), MicKind::Speaker, "nothing could be read");
+        assert_eq!(kind(None, Some("HDAUDIO")), MicKind::Speaker);
+        assert_eq!(kind(speakers, None), MicKind::Speaker);
+    }
+
+    #[test]
+    fn the_reference_is_always_an_output_the_microphone_hears() {
+        for form in 0..=10 {
+            for bus in ["HDAUDIO", "INTELAUDIO", "USB", "BTHENUM", "ROOT", "SWD", ""] {
+                if output_kind(Some(form), bus, false) == OutputKind::BuiltIn {
+                    assert_eq!(
+                        mic_kind(Some(form), Some(bus)),
+                        MicKind::Speaker,
+                        "{form} {bus}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_listing_keeps_what_windows_said_about_each_device() {
+        let listing = list_endpoints(vec![reading(0, "a", "Headphones", 3, "HDAUDIO")], None);
+        assert_eq!(
+            listing.endpoints[0].traits,
+            DeviceTraits {
+                form_factor: Some(3),
+                enumerator: Some("HDAUDIO".to_owned()),
+            }
+        );
+        assert_eq!(listing.endpoints[0].traits.mic_kind(), MicKind::Headphones);
     }
 }

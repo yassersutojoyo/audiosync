@@ -88,6 +88,9 @@ pub struct OutputInfo {
     pub name: String,
     /// What kind of device it is.
     pub kind: OutputKind,
+    /// What Windows said about its device, which decides whether microphone
+    /// calibration can hear it.
+    pub traits: super::outputs::DeviceTraits,
     /// Whether it is Windows' default output. AudioSync plays to each output
     /// by ID, so this is for display only.
     pub is_default: bool,

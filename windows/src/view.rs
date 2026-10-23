@@ -3525,7 +3525,9 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
         Failure::HandsFreeMicrophone => strings.get_calibration_hands_free(),
         Failure::MicrophoneInUse => strings.get_calibration_microphone_in_use(),
         Failure::Unfinished => strings.get_calibration_unfinished(),
-        Failure::NothingToMeasure => strings.invoke_calibrate_all_nothing(reference.into()),
+        Failure::NothingToMeasure | Failure::OnlyLeftOut => {
+            strings.invoke_calibrate_all_nothing(reference.into())
+        }
         Failure::TooShort(_) => strings.get_calibration_too_short(),
         Failure::TooLong(_) => strings.get_calibration_too_long(),
         Failure::Clipped(which) => strings.invoke_calibration_clipped(subject(which)),
