@@ -88,6 +88,13 @@ impl EqSettings {
             .find(|preset| preset.gains_db == self.gains_db)
     }
 
+    /// Reset: flat gains and a 0 dB preamp, so the picker reads Flat; the
+    /// enabled flag stays (S33).
+    pub fn reset(&mut self) {
+        self.gains_db = PRESETS[0].gains_db;
+        self.preamp_db = 0.0;
+    }
+
     /// These settings with the preamp and every gain quantized for the host's controls (S23).
     pub fn quantized(&self) -> EqSettings {
         EqSettings {
@@ -177,6 +184,125 @@ pub const PRESETS: [Preset; PRESET_COUNT] = [
 /// The preset with this identifier.
 pub fn preset(id: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|preset| preset.id == id)
+}
+
+/// Most curves the user can save (S242).
+pub const MAX_USER_CURVES: usize = 50;
+
+/// Longest name of a saved curve, in Unicode scalars (S242).
+pub const MAX_CURVE_NAME_CHARS: usize = 40;
+
+/// A curve the user saved under a name: ten band gains, no preamp (S242).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserCurve {
+    pub name: String,
+    /// Band gains in dB, 32 Hz to 16 kHz, on the controls' steps.
+    pub gains_db: [f64; BAND_COUNT],
+}
+
+/// The curve a set of gains matches: a preset by its index in [`PRESETS`],
+/// or a saved curve by its index in the user's list (S33, S242).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurveMatch {
+    Preset(usize),
+    User(usize),
+}
+
+/// The first curve whose ten gains all equal `gains_db` exactly: the presets
+/// in menu order, then the saved curves in their order. The preamp never
+/// counts (S33, S242).
+pub fn matching_curve(gains_db: &[f64; BAND_COUNT], user: &[UserCurve]) -> Option<CurveMatch> {
+    if let Some(index) = PRESETS.iter().position(|p| p.gains_db == *gains_db) {
+        return Some(CurveMatch::Preset(index));
+    }
+    user.iter()
+        .position(|curve| curve.gains_db == *gains_db)
+        .map(CurveMatch::User)
+}
+
+/// A typed name as a curve keeps it: trimmed and cut to
+/// [`MAX_CURVE_NAME_CHARS`]; `None` when nothing is left (S242).
+pub fn curve_name(typed: &str) -> Option<String> {
+    let name: String = typed.trim().chars().take(MAX_CURVE_NAME_CHARS).collect();
+    let name = name.trim_end();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn same_name(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
+}
+
+/// Saves `gains_db` under `typed`. A saved curve of the same name, ignoring
+/// case, takes the new gains in its place; otherwise the curve goes last.
+/// Returns its index, or `None` for an empty name or a full list (S242).
+pub fn save_curve(
+    curves: &mut Vec<UserCurve>,
+    typed: &str,
+    gains_db: &[f64; BAND_COUNT],
+) -> Option<usize> {
+    let name = curve_name(typed)?;
+    let gains_db = gains_db.map(quantize_gain_db);
+    if let Some(index) = curves.iter().position(|c| same_name(&c.name, &name)) {
+        curves[index] = UserCurve { name, gains_db };
+        return Some(index);
+    }
+    if curves.len() >= MAX_USER_CURVES {
+        return None;
+    }
+    curves.push(UserCurve { name, gains_db });
+    Some(curves.len() - 1)
+}
+
+/// Renames the saved curve at `index`; false for a bad index, an empty name
+/// or a name another saved curve has, ignoring case (S242).
+pub fn rename_curve(curves: &mut [UserCurve], index: usize, typed: &str) -> bool {
+    let Some(name) = curve_name(typed) else {
+        return false;
+    };
+    let taken = curves
+        .iter()
+        .enumerate()
+        .any(|(i, c)| i != index && same_name(&c.name, &name));
+    match curves.get_mut(index) {
+        Some(curve) if !taken => {
+            curve.name = name;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Deletes the saved curve at `index`; false for a bad index (S242).
+pub fn delete_curve(curves: &mut Vec<UserCurve>, index: usize) -> bool {
+    if index >= curves.len() {
+        return false;
+    }
+    curves.remove(index);
+    true
+}
+
+/// Saved curves as read back from storage: names as [`curve_name`] keeps
+/// them, gains on the controls' steps (a band that is not a number is 0 dB),
+/// unnamed curves and later duplicates of a name left out, at most
+/// [`MAX_USER_CURVES`] (S242).
+pub fn sanitized_curves(saved: impl IntoIterator<Item = UserCurve>) -> Vec<UserCurve> {
+    let mut curves: Vec<UserCurve> = Vec::new();
+    for curve in saved {
+        if curves.len() >= MAX_USER_CURVES {
+            break;
+        }
+        let Some(name) = curve_name(&curve.name) else {
+            continue;
+        };
+        if curves.iter().any(|c| same_name(&c.name, &name)) {
+            continue;
+        }
+        curves.push(UserCurve {
+            name,
+            gains_db: curve.gains_db.map(quantize_gain_db),
+        });
+    }
+    curves
 }
 
 /// Normalized biquad coefficients (a0 = 1).

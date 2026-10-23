@@ -218,6 +218,8 @@ final class AppModel: ObservableObject {
     @Published var localNetworkHint: LocalNetworkHint = .none
     @Published var nowPlaying: NowPlayingMonitor.Track?
     @Published var equalizerOn = false
+    /// The curve the equalizer picker shows, or "Custom".
+    @Published var equalizerCurve = ""
     /// Problems worth telling the user about (auto-connect, a lost source…),
     /// newest first; shown in the window and the menu bar panel instead of a
     /// modal alert, until dismissed or their cause is gone.

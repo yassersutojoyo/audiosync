@@ -16,8 +16,10 @@ extension AppDelegate {
     func setUpMenuBar() {
         let settings = StoredEqualizer.decode(UserDefaults.standard.data(forKey: Keys.equalizer))
         engine.updateEqualizer(settings)
-        equalizerModel = EqualizerModel(settings: settings)
+        let curves = StoredCurves.decode(UserDefaults.standard.data(forKey: Keys.equalizerCurves))
+        equalizerModel = EqualizerModel(settings: settings, curves: curves)
         equalizerModel.onChange = { [weak self] new in self?.equalizerChanged(new) }
+        equalizerModel.onCurvesChange = { [weak self] new in self?.equalizerCurvesChanged(new) }
         equalizerWindow = EqualizerWindowController(model: equalizerModel)
 
         nowPlaying.onChange = { [weak self] track in self?.nowPlayingChanged(track) }
@@ -45,6 +47,19 @@ extension AppDelegate {
             UserDefaults.standard.set(data, forKey: Keys.equalizer)
         }
         publish(\.equalizerOn, settings.enabled)
+        publishEqualizerCurve()
+    }
+
+    private func equalizerCurvesChanged(_ curves: [Equalizer.Curve]) {
+        if let data = StoredCurves.encode(curves) {
+            UserDefaults.standard.set(data, forKey: Keys.equalizerCurves)
+        }
+        publishEqualizerCurve()
+    }
+
+    private func publishEqualizerCurve() {
+        guard let equalizerModel else { return }
+        publish(\.equalizerCurve, text.equalizerCurveName(equalizerModel.shownCurve, saved: equalizerModel.curves))
     }
 
     private func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {
@@ -254,6 +269,7 @@ extension AppDelegate {
             access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
             emptySince: airplayEmptySince, now: Date()))
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
+        publishEqualizerCurve()
         publish(\.zones, zoneSnapshot())
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)

@@ -631,6 +631,50 @@ do {
 // MARK: Equalizer presets (the core runs the filters; core/tests/eq.rs)
 check(Equalizer.presets.allSatisfy { $0.gains.count == Equalizer.frequencies.count }, "eq: every preset has 10 bands")
 check(Equalizer.presets.map(\.id) == Equalizer.PresetID.allCases, "eq: one preset per id, in menu order")
+check(Equalizer.presets.count == asc_eq_preset_count(), "eq: the app names every preset the core has")
+do {
+    var reset = Equalizer.Settings(enabled: true, preamp: -4, gains: Equalizer.presets[1].gains)
+    reset.reset()
+    check(reset.enabled && reset.preamp == 0 && Equalizer.matching(reset.gains, saved: []) == .preset(.flat),
+          "eq: Reset reads Flat, zeroes the preamp and keeps the switch")
+
+    var gains = Equalizer.Settings().gains
+    gains[3] = 2.5
+    var curves: [Equalizer.Curve] = []
+    check(Equalizer.save("  Desk  ", gains: gains, in: &curves) == 0 && curves[0].name == "Desk",
+          "eq curves: a saved curve keeps its trimmed name")
+    check(Equalizer.matching(gains, saved: curves) == .saved(0), "eq curves: the gains match the saved curve")
+    let model = EqualizerModel(settings: Equalizer.Settings(enabled: false, preamp: -3, gains: gains), curves: curves)
+    model.pick(gains: Equalizer.presets[1].gains)
+    model.pick(gains: curves[0].gains)
+    check(model.shownCurve == .saved(0) && model.settings.preamp == -3 && model.settings.enabled,
+          "eq curves: picking a curve keeps the preamp and turns the equalizer on")
+    check(Equalizer.save("Flat-ish", gains: Equalizer.presets[0].gains, in: &curves) == 1
+            && Equalizer.matching(Equalizer.presets[0].gains, saved: curves) == .preset(.flat),
+          "eq curves: a preset matches before a saved curve with its gains")
+    check(Equalizer.save("DESK", gains: Equalizer.presets[1].gains, in: &curves) == 0 && curves.count == 2,
+          "eq curves: saving under a taken name, ignoring case, replaces that curve")
+    check(Equalizer.save("   ", gains: gains, in: &curves) == nil, "eq curves: an empty name saves nothing")
+    check(!Equalizer.rename(0, to: "flat-ISH", in: &curves) && Equalizer.rename(0, to: "Office", in: &curves)
+            && curves[0].name == "Office",
+          "eq curves: a rename to another curve's name is refused")
+    check(Equalizer.curveName(String(repeating: "x", count: 60))?.count == Equalizer.maxCurveNameCharacters,
+          "eq curves: a name is cut to 40 characters")
+    var full = (0..<Equalizer.maxCurves).map { Equalizer.Curve(name: "C\($0)", gains: gains) }
+    check(Equalizer.save("One more", gains: gains, in: &full) == nil && Equalizer.save("c7", gains: gains, in: &full) == 7,
+          "eq curves: a full list refuses a new name but replaces a taken one")
+
+    let stored = Data(#"[{"name":" Desk ","gains":[1.3,"loud",30,-30]},{"name":"desk","gains":[]},{"gains":[1]},7,{"name":"Late","gains":[0]}]"#.utf8)
+    let read = StoredCurves.decode(stored)
+    check(read.map(\.name) == ["Desk", "Late"] && read[0].gains == [1.5, 0, 12, -12, 0, 0, 0, 0, 0, 0],
+          "eq curves: stored curves are read leniently and cleaned")
+    check(StoredCurves.decode(StoredCurves.encode(read)) == read && StoredCurves.decode(nil).isEmpty,
+          "eq curves: saved curves come back unchanged")
+    let text = UIStrings()
+    check(text.equalizerCurveName(nil, saved: read) == text.equalizerCustom
+            && text.equalizerCurveName(.saved(1), saved: read) == "Late",
+          "eq curves: the picker names the shown curve, or Custom when none matches")
+}
 
 // MARK: Notices — several at once, one per subject, newest first
 do {

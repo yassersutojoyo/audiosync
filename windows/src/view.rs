@@ -19,7 +19,7 @@ use std::time::Duration;
 use audiosync_core::calibrate_all::{
     AirPlayShared, Class, EndReason, Measurement, RowState as SheetRowState, SharedState,
 };
-use audiosync_core::eq::{self, EqSettings};
+use audiosync_core::eq::{self, CurveMatch, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
@@ -61,6 +61,10 @@ enum DialogPurpose {
     Rename(String),
     /// Only a message (no name field), e.g. why a group can't be made yet.
     Message,
+    /// Save Curve in the equalizer.
+    SaveCurve,
+    /// Rename in the equalizer, for the saved curve at this index.
+    RenameCurve(usize),
 }
 
 /// UI state the backend doesn't keep: which sync controls are open, what is
@@ -1566,7 +1570,7 @@ impl App {
         }
 
         self.show_calibrate_all(card);
-        self.show_equalizer_state(&state.equalizer);
+        self.show_equalizer_state(&state);
         drop(ui);
         *self.now_playing_source.borrow_mut() = CardSource::of(&state);
         let _ = self.sync_now_playing();
@@ -1719,27 +1723,36 @@ impl App {
         Some(target)
     }
 
-    fn show_equalizer_state(&self, settings: &EqSettings) {
+    fn show_equalizer_state(&self, state: &AppState) {
+        let settings = &state.equalizer;
         let strings = self.strings();
-        let mut presets: Vec<SharedString> = eq::PRESETS
+        let names: Vec<SharedString> = eq::PRESETS
             .iter()
             .map(|p| strings.invoke_equalizer_preset(p.id.into()))
+            .chain(
+                state
+                    .equalizer_curves
+                    .iter()
+                    .map(|c| c.name.as_str().into()),
+            )
             .collect();
-        let preset_index = match ui_model::matching_preset_index(settings) {
-            Some(index) => index,
-            None => {
-                presets.push(strings.get_equalizer_custom());
-                presets.len() - 1
-            }
-        };
-        sync_model(&self.models.presets, presets);
+        let shown = ui_model::shown_curve(state);
+        let preset_index = ui_model::picker_index(shown);
+        let curve_name = usize::try_from(preset_index)
+            .ok()
+            .and_then(|index| names.get(index).cloned())
+            .unwrap_or_else(|| strings.get_equalizer_custom());
+        sync_model(&self.models.presets, names);
+        self.main.set_equalizer_curve(curve_name);
+        self.equalizer
+            .set_saved_curve_shown(matches!(shown, Some(CurveMatch::User(_))));
         sync_model(
             &self.models.gains,
             settings.gains_db.iter().map(|&g| g as f32).collect(),
         );
         self.equalizer.set_enabled(settings.enabled);
         self.equalizer.set_preamp(settings.preamp_db as f32);
-        self.equalizer.set_preset_index(preset_index as i32);
+        self.equalizer.set_preset_index(preset_index);
     }
 
     fn connect_main(self: &Rc<Self>) {
@@ -2093,24 +2106,36 @@ impl App {
         let w = weak.clone();
         eq_window.on_preset_selected(move |index| {
             with_app(&w, |app| {
-                if let Some(preset) = usize::try_from(index).ok().and_then(|i| eq::PRESETS.get(i)) {
-                    // Like the Mac: picking a preset turns the equalizer on.
-                    app.change_equalizer(|s| {
-                        s.apply_preset(preset);
-                        s.enabled = true;
-                    });
+                let curves = app.snapshot().equalizer_curves;
+                let gains_db = match ui_model::picked_curve(index, curves.len()) {
+                    Some(CurveMatch::Preset(i)) => eq::PRESETS[i].gains_db,
+                    Some(CurveMatch::User(i)) => curves[i].gains_db,
+                    None => return,
+                };
+                // Like the Mac: picking a curve turns the equalizer on.
+                app.change_equalizer(|s| {
+                    s.gains_db = gains_db;
+                    s.enabled = true;
+                });
+            })
+        });
+        let w = weak.clone();
+        eq_window.on_save_curve(move || with_app(&w, App::ask_save_curve));
+        let w = weak.clone();
+        eq_window.on_rename_curve(move || with_app(&w, App::ask_rename_curve));
+        let w = weak.clone();
+        eq_window.on_delete_curve(move || {
+            with_app(&w, |app| {
+                let state = app.snapshot();
+                if let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) {
+                    let mut curves = state.equalizer_curves;
+                    eq::delete_curve(&mut curves, index);
+                    app.update(|b| b.set_equalizer_curves(curves));
                 }
             })
         });
         let w = weak.clone();
-        eq_window.on_reset(move || {
-            with_app(&w, |app| {
-                app.change_equalizer(|s| {
-                    s.apply_preset(&eq::PRESETS[0]);
-                    s.preamp_db = 0.0;
-                })
-            })
-        });
+        eq_window.on_reset(move || with_app(&w, |app| app.change_equalizer(EqSettings::reset)));
         let w = weak;
         eq_window.on_close_requested(move || {
             with_app(&w, |app| {
@@ -2840,6 +2865,7 @@ impl App {
             dialog.set_heading(strings.get_new_group_title());
             dialog.set_message(strings.get_new_group_message());
             dialog.set_placeholder(strings.get_new_group_placeholder());
+            dialog.set_field_label(strings.get_new_group_field_label());
             dialog.set_name(SharedString::new());
             dialog.set_show_field(true);
             dialog.set_confirm_label(strings.get_create());
@@ -2858,9 +2884,71 @@ impl App {
         dialog.set_heading(strings.get_rename_group_title());
         dialog.set_message(strings.invoke_rename_group_message(group.name.as_str().into()));
         dialog.set_placeholder(SharedString::new());
+        dialog.set_field_label(strings.get_new_group_field_label());
         dialog.set_name(group.name.as_str().into());
         dialog.set_show_field(true);
         dialog.set_confirm_label(strings.get_rename());
+        self.open_dialog();
+    }
+
+    fn ask_save_curve(&self) {
+        let state = self.snapshot();
+        let strings = self.strings();
+        let dialog = &self.group_dialog;
+        let shown = match ui_model::shown_curve(&state) {
+            Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
+            _ => None,
+        };
+        if shown.is_none() && state.equalizer_curves.len() >= eq::MAX_USER_CURVES {
+            *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
+            dialog.set_heading(strings.get_save_curve_title());
+            dialog.set_message(strings.invoke_curves_full(count(eq::MAX_USER_CURVES)));
+            dialog.set_show_field(false);
+            dialog.set_confirm_label(strings.get_ok());
+        } else {
+            let name = shown.map_or_else(
+                || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
+                |curve| curve.name.as_str().into(),
+            );
+            *self.dialog_purpose.borrow_mut() = DialogPurpose::SaveCurve;
+            dialog.set_heading(strings.get_save_curve_title());
+            dialog.set_message(strings.get_save_curve_message());
+            dialog.set_placeholder(strings.get_curve_name_field_label());
+            dialog.set_field_label(strings.get_curve_name_field_label());
+            dialog.set_name(name);
+            dialog.set_show_field(true);
+            dialog.set_confirm_label(strings.get_save());
+        }
+        self.open_dialog();
+    }
+
+    fn ask_rename_curve(&self) {
+        let state = self.snapshot();
+        let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) else {
+            return;
+        };
+        let name = state.equalizer_curves[index].name.as_str();
+        let strings = self.strings();
+        let dialog = &self.group_dialog;
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(index);
+        dialog.set_heading(strings.get_rename_curve_title());
+        dialog.set_message(strings.invoke_rename_group_message(name.into()));
+        dialog.set_placeholder(strings.get_curve_name_field_label());
+        dialog.set_field_label(strings.get_curve_name_field_label());
+        dialog.set_name(name.into());
+        dialog.set_show_field(true);
+        dialog.set_confirm_label(strings.get_rename());
+        self.open_dialog();
+    }
+
+    /// Shows `message` in the name dialog, without a field.
+    fn show_dialog_message(&self, heading: SharedString, message: SharedString) {
+        let dialog = &self.group_dialog;
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
+        dialog.set_heading(heading);
+        dialog.set_message(message);
+        dialog.set_show_field(false);
+        dialog.set_confirm_label(self.strings().get_ok());
         self.open_dialog();
     }
 
@@ -2893,6 +2981,35 @@ impl App {
             }
             DialogPurpose::Rename(id) => self.update(|b| b.rename_group(&id, name)),
             DialogPurpose::Message => {}
+            DialogPurpose::SaveCurve => {
+                let state = self.snapshot();
+                let mut curves = state.equalizer_curves;
+                // An empty name saves nothing (spec S242).
+                if eq::curve_name(name).is_none() {
+                    return;
+                }
+                if eq::save_curve(&mut curves, name, &state.equalizer.gains_db).is_some() {
+                    self.update(|b| b.set_equalizer_curves(curves));
+                } else {
+                    let strings = self.strings();
+                    self.show_dialog_message(
+                        strings.get_save_curve_title(),
+                        strings.invoke_curves_full(count(eq::MAX_USER_CURVES)),
+                    );
+                }
+            }
+            DialogPurpose::RenameCurve(index) => {
+                let mut curves = self.snapshot().equalizer_curves;
+                if eq::rename_curve(&mut curves, index, name) {
+                    self.update(|b| b.set_equalizer_curves(curves));
+                } else if let Some(taken) = eq::curve_name(name) {
+                    let strings = self.strings();
+                    self.show_dialog_message(
+                        strings.get_rename_curve_title(),
+                        strings.invoke_curve_name_taken(taken.as_str().into()),
+                    );
+                }
+            }
         }
     }
 
@@ -6600,6 +6717,78 @@ mod tests {
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape on Create closed the dialog");
         assert_eq!(app.snapshot().groups.len(), groups, "and made no group");
+    }
+
+    #[test]
+    fn curves_are_saved_picked_renamed_and_deleted_and_custom_is_no_entry() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let presets = eq::PRESETS.len();
+        let names = || eq_window.get_preset_names().iter().collect::<Vec<_>>();
+        assert_eq!(names().len(), presets);
+        assert_eq!(eq_window.get_preset_index(), 0, "Flat");
+
+        eq_window.invoke_gain_changed(3, 2.5);
+        eq_window.invoke_preamp_changed(-3.0);
+        assert_eq!(eq_window.get_preset_index(), -1);
+        assert_eq!(names().len(), presets, "Custom is not an entry");
+        assert_eq!(app.main.get_equalizer_curve(), "Custom");
+        assert!(!eq_window.get_saved_curve_shown());
+
+        eq_window.invoke_save_curve();
+        assert!(app.group_dialog.window().is_visible());
+        assert_eq!(app.group_dialog.get_name(), "Curve 1");
+        app.group_dialog.invoke_confirmed("Desk".into());
+        let state = app.snapshot();
+        assert_eq!(state.equalizer_curves.len(), 1);
+        assert_eq!(state.equalizer.preamp_db, -3.0, "a save leaves the preamp");
+        assert_eq!(eq_window.get_preset_index(), presets as i32);
+        assert_eq!(names()[presets], "Desk");
+        slint::platform::update_timers_and_animations();
+        assert_eq!(eq_window.get_picker_shown_index(), presets as i32);
+        assert_eq!(app.main.get_equalizer_curve(), "Desk");
+        assert!(eq_window.get_saved_curve_shown());
+
+        eq_window.invoke_preset_selected(0);
+        assert_eq!(eq_window.get_preset_index(), 0);
+        eq_window.invoke_preset_selected(presets as i32);
+        let state = app.snapshot();
+        assert_eq!(state.equalizer.gains_db[3], 2.5);
+        assert_eq!(state.equalizer.preamp_db, -3.0, "a curve leaves the preamp");
+        assert!(state.equalizer.enabled, "picking a curve turns it on");
+
+        eq_window.invoke_rename_curve();
+        assert_eq!(app.group_dialog.get_name(), "Desk");
+        assert_eq!(app.group_dialog.get_field_label(), "Curve name");
+        app.group_dialog.invoke_confirmed("Office".into());
+        assert_eq!(app.snapshot().equalizer_curves[0].name, "Office");
+
+        // The curve dialogs share the group name dialog.
+        app.ask_new_group();
+        assert_eq!(app.group_dialog.get_field_label(), "Group name");
+        app.group_dialog.invoke_cancelled();
+        eq_window.invoke_save_curve();
+        app.group_dialog.invoke_cancelled();
+        let group = app.snapshot().groups[0].id.clone();
+        app.ask_rename(&group);
+        assert_eq!(app.group_dialog.get_field_label(), "Group name");
+        app.group_dialog.invoke_cancelled();
+
+        eq_window.invoke_delete_curve();
+        assert!(app.snapshot().equalizer_curves.is_empty());
+        assert_eq!(eq_window.get_preset_index(), -1, "the gains stay");
+        slint::platform::update_timers_and_animations();
+        assert_eq!(
+            eq_window.get_picker_shown_index(),
+            -1,
+            "a shorter list leaves the picker on Custom"
+        );
+        assert_eq!(names().len(), presets);
+
+        eq_window.invoke_reset();
+        let state = app.snapshot();
+        assert_eq!(state.equalizer.preamp_db, 0.0);
+        assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
     }
 
     #[test]

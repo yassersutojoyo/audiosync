@@ -327,9 +327,11 @@ struct MainView: View {
                     if model.equalizerOn {
                         Circle().fill(accent).frame(width: 6, height: 6)
                     }
-                    Text(model.equalizerOn ? t.on : t.off)
+                    Text(model.equalizerOn ? model.equalizerCurve : t.off)
                         .font(.callout)
                         .foregroundStyle(Brand.secondaryText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
@@ -339,7 +341,7 @@ struct MainView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(t.equalizer)
-        .accessibilityValue(model.equalizerOn ? t.on : t.off)
+        .accessibilityValue(model.equalizerOn ? t.equalizerCardOn(model.equalizerCurve) : t.off)
     }
 
     // MARK: Right column

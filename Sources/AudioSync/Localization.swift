@@ -1095,6 +1095,30 @@ struct UIStrings {
     let equalizerPreamp = "Pre"
     func equalizerCaption(maxGain: Int) -> String { "±\(maxGain) dB · applied to every speaker" }
     let equalizerPreampAccessibility = "Preamp"
+    /// The label in front of the equalizer's picker of presets and saved curves.
+    let equalizerCurve = "Curve"
+    let equalizerSaveCurve = "Save Curve…"
+    func equalizerRenameCurve(_ name: String) -> String { "Rename “\(name)”…" }
+    func equalizerDeleteCurve(_ name: String) -> String { "Delete “\(name)”" }
+    let saveCurveTitle = "Save Curve"
+    let saveCurveMessage = "The ten band gains are saved under this name; the preamp stays as you set it. A curve saved under the same name is replaced."
+    let curveNameField = "Curve name"
+    let save = "Save"
+    let renameCurveTitle = "Rename Curve"
+    func numberedCurve(_ n: Int) -> String { "Curve \(n)" }
+    func curvesFull(_ n: Int) -> String { "You can keep up to \(n) saved curves. Delete one, then save again." }
+    func curveNameTaken(_ name: String) -> String { "Another saved curve is already called “\(name)”." }
+    /// The Equalizer card's VoiceOver value while the equalizer is on.
+    func equalizerCardOn(_ curve: String) -> String { "On, \(curve)" }
+
+    /// The curve the picker shows: a preset's name, a saved curve's, or Custom.
+    func equalizerCurveName(_ match: Equalizer.CurveMatch?, saved: [Equalizer.Curve]) -> String {
+        switch match {
+        case .preset(let id): return equalizerPreset(id)
+        case .saved(let index) where saved.indices.contains(index): return saved[index].name
+        default: return equalizerCustom
+        }
+    }
 
     func equalizerPreset(_ id: Equalizer.PresetID) -> String {
         switch id {
