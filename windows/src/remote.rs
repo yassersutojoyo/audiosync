@@ -454,6 +454,7 @@ mod tests {
             hidden: Vec::new(),
             groups: Vec::new(),
             equalizer: Default::default(),
+            equalizer_curves: Vec::new(),
             notices: Vec::new(),
             pin_prompt: None,
             password_prompt: None,

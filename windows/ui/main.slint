@@ -214,6 +214,8 @@ component SpeakerSection inherits VerticalLayout {
 // The Equalizer card: opens the equalizer window and says whether it is on.
 component EqualizerCard inherits Rectangle {
     in property <bool> on;
+    // The picker's curve, or "Custom".
+    in property <string> curve;
     callback clicked();
     callback focus-changed(bool);
 
@@ -226,7 +228,7 @@ component EqualizerCard inherits Rectangle {
     forward-focus: focus;
     accessible-role: button;
     accessible-label: Strings.equalizer;
-    accessible-value: root.on ? Strings.on : Strings.off;
+    accessible-value: root.on ? Strings.equalizer-card-on(root.curve) : Strings.off;
     accessible-action-default => {
         root.clicked();
     }
@@ -282,9 +284,11 @@ component EqualizerCard inherits Rectangle {
         }
 
         Text {
-            text: root.on ? Strings.on : Strings.off;
+            text: root.on ? root.curve : Strings.off;
             color: Tokens.secondary-text;
             font-size: Tokens.font-size-callout;
+            overflow: elide;
+            max-width: 160px;
             vertical-alignment: center;
             accessible-role: none;
         }
@@ -678,6 +682,7 @@ export component MainWindow inherits Window {
     in property <int> source-index;
     in property <float> master-volume;
     in property <bool> equalizer-on;
+    in property <string> equalizer-curve;
     // The Now Playing card, while a media session counts for the source.
     in property <bool> now-playing-shown;
     in property <string> now-playing-title;
@@ -1263,6 +1268,7 @@ export component MainWindow inherits Window {
 
                     equalizer-card := EqualizerCard {
                         on: root.equalizer-on;
+                        curve: root.equalizer-curve;
                         clicked => {
                             root.equalizer-requested();
                         }

@@ -7,7 +7,7 @@
 //! backend; elsewhere [`MockBackend`] stands in with example data, for work on
 //! the UI. Nothing here makes a sound or opens an audio device.
 
-use audiosync_core::eq::{self, EqSettings};
+use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 #[cfg(any(not(windows), test))]
@@ -568,6 +568,8 @@ pub struct AppState {
     pub hidden: Vec<HiddenSpeaker>,
     pub groups: Vec<Group>,
     pub equalizer: EqSettings,
+    /// The equalizer curves the user saved, in the picker's order (spec S242).
+    pub equalizer_curves: Vec<UserCurve>,
     /// Newest first.
     pub notices: Vec<Notice>,
     /// The PIN prompt to show, while a pairing asks for a PIN.
@@ -872,6 +874,9 @@ pub trait Backend {
     fn rename_group(&mut self, id: &str, name: &str);
     fn delete_group(&mut self, id: &str);
     fn set_equalizer(&mut self, settings: EqSettings);
+    /// Replaces the saved equalizer curves; the backend keeps them as the
+    /// core cleans a stored list (spec S242).
+    fn set_equalizer_curves(&mut self, curves: Vec<UserCurve>);
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
@@ -1189,6 +1194,7 @@ impl MockBackend {
                 members: vec!["airplay:kitchen".into(), "airplay:living".into()],
             }],
             equalizer: EqSettings::default(),
+            equalizer_curves: Vec::new(),
             notices: Vec::new(),
             pin_prompt: None,
             password_prompt: None,
@@ -1476,6 +1482,10 @@ impl Backend for MockBackend {
         self.state.equalizer = settings.quantized();
     }
 
+    fn set_equalizer_curves(&mut self, curves: Vec<UserCurve>) {
+        self.state.equalizer_curves = eq::sanitized_curves(curves);
+    }
+
     fn dismiss_notice(&mut self, id: u64) {
         self.state.notices.retain(|n| n.id != id);
     }
@@ -1505,11 +1515,30 @@ impl Backend for MockBackend {
     }
 }
 
-/// The preset whose gains these settings have, if any (else the UI says "Custom").
-pub fn matching_preset_index(settings: &EqSettings) -> Option<usize> {
-    eq::PRESETS
-        .iter()
-        .position(|preset| preset.gains_db == settings.gains_db)
+/// The curve the equalizer picker shows: the first preset, then the first
+/// saved curve, with the current gains (spec S242).
+pub fn shown_curve(state: &AppState) -> Option<CurveMatch> {
+    eq::matching_curve(&state.equalizer.gains_db, &state.equalizer_curves)
+}
+
+/// `curve`'s entry in the picker, presets first; -1 for none ("Custom").
+pub fn picker_index(curve: Option<CurveMatch>) -> i32 {
+    let index = match curve {
+        Some(CurveMatch::Preset(index)) => index,
+        Some(CurveMatch::User(index)) => eq::PRESETS.len() + index,
+        None => return -1,
+    };
+    i32::try_from(index).unwrap_or(-1)
+}
+
+/// The picker's entry `index` as a curve, presets first.
+pub fn picked_curve(index: i32, saved: usize) -> Option<CurveMatch> {
+    let index = usize::try_from(index).ok()?;
+    match index.checked_sub(eq::PRESETS.len()) {
+        None => Some(CurveMatch::Preset(index)),
+        Some(user) if user < saved => Some(CurveMatch::User(user)),
+        Some(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -1787,11 +1816,47 @@ mod tests {
     #[test]
     fn the_equalizer_is_quantized_and_matches_presets() {
         let mut backend = MockBackend::new();
+        assert_eq!(
+            shown_curve(&backend.snapshot()),
+            Some(CurveMatch::Preset(0))
+        );
         let mut settings = EqSettings::default();
         settings.gains_db[0] = 3.3;
         backend.set_equalizer(settings);
         assert_eq!(backend.snapshot().equalizer.gains_db[0], 3.5);
-        assert_eq!(matching_preset_index(&EqSettings::default()), Some(0));
-        assert_eq!(matching_preset_index(&backend.snapshot().equalizer), None);
+        assert_eq!(shown_curve(&backend.snapshot()), None);
+        assert_eq!(picker_index(None), -1, "Custom is not an entry");
+    }
+
+    #[test]
+    fn the_picker_lists_the_presets_then_the_saved_curves() {
+        let mut backend = MockBackend::new();
+        let mut gains = [0.0; eq::BAND_COUNT];
+        gains[3] = 2.5;
+        backend.set_equalizer_curves(vec![
+            UserCurve {
+                name: "Desk".into(),
+                gains_db: gains,
+            },
+            UserCurve {
+                name: "desk".into(),
+                gains_db: [1.0; eq::BAND_COUNT],
+            },
+        ]);
+        let state = backend.snapshot();
+        assert_eq!(state.equalizer_curves.len(), 1, "a name is kept once");
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: -4.0,
+            gains_db: gains,
+        });
+        let shown = shown_curve(&backend.snapshot());
+        assert_eq!(shown, Some(CurveMatch::User(0)), "the preamp never counts");
+        let index = picker_index(shown);
+        assert_eq!(index, i32::try_from(eq::PRESETS.len()).unwrap());
+        assert_eq!(picked_curve(index, 1), shown);
+        assert_eq!(picked_curve(0, 1), Some(CurveMatch::Preset(0)));
+        assert_eq!(picked_curve(index + 1, 1), None);
+        assert_eq!(picked_curve(-1, 1), None);
     }
 }

@@ -63,7 +63,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use audiosync_core::clock;
-use audiosync_core::eq::EqSettings;
+use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
 use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
 use audiosync_core::policy::session::{
     AutoStartGate, DropReason, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start,
@@ -92,7 +92,7 @@ use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, KeptAside, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedSource,
+    self, KeptAside, SavedCurve, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedSource,
     SavedSpeaker, Settings, SettingsFile,
 };
 use crate::speaker_names::SpeakerNames;
@@ -286,6 +286,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// source UI ID, until that app quits.
     heard_twice_dismissed: BTreeMap<String, BTreeSet<String>>,
     equalizer: EqSettings,
+    /// The equalizer curves the user saved (spec S242).
+    equalizer_curves: Vec<UserCurve>,
     /// Polls since the sources were last listed.
     polls: u32,
     /// The local time now, as a notice shows it.
@@ -397,6 +399,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             heard_twice: None,
             heard_twice_dismissed: BTreeMap::new(),
             equalizer: EqSettings::default(),
+            equalizer_curves: Vec::new(),
             polls: 0,
             clock,
             log,
@@ -495,6 +498,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .map_or(1, |last| last.saturating_add(1));
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
+        self.equalizer_curves = settings::clamp_curves(&saved.equalizer_curves);
         self.cast_addresses = saved.cast_addresses.clone();
         for address in saved
             .cast_addresses
@@ -623,6 +627,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 })
                 .collect(),
             equalizer: SavedEqualizer::from(self.equalizer),
+            equalizer_curves: self.equalizer_curves.iter().map(SavedCurve::from).collect(),
             show_virtual_devices: self.view.show_virtual_devices,
             appearance: self.view.appearance,
             window: self.view.window,
@@ -2496,6 +2501,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             hidden,
             groups: self.groups.clone(),
             equalizer: self.equalizer,
+            equalizer_curves: self.equalizer_curves.clone(),
             notices: self
                 .notices
                 .iter()
@@ -2947,6 +2953,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn set_equalizer(&mut self, settings: EqSettings) {
         self.equalizer = settings.quantized();
         self.audio.set_equalizer(self.equalizer);
+    }
+
+    fn set_equalizer_curves(&mut self, curves: Vec<UserCurve>) {
+        self.equalizer_curves = sanitized_curves(curves);
     }
 
     fn dismiss_notice(&mut self, id: u64) {
@@ -6521,6 +6531,11 @@ mod tests {
         };
         equalizer.gains_db[0] = 4.5;
         adapter.set_equalizer(equalizer);
+        let curves = vec![UserCurve {
+            name: "Desk".into(),
+            gains_db: equalizer.gains_db,
+        }];
+        adapter.set_equalizer_curves(curves.clone());
         adapter.set_view_settings(ViewSettings {
             show_virtual_devices: true,
             appearance: ui_model::Appearance::Light,
@@ -6557,6 +6572,7 @@ mod tests {
         assert_eq!(headphones.delay_ms, Some(15.0));
         assert_eq!(state.groups, groups);
         assert_eq!(state.equalizer, equalizer);
+        assert_eq!(state.equalizer_curves, curves);
         assert!(adapter.view_settings().show_virtual_devices);
         assert!(adapter.view_settings().airplay2_experimental);
         assert_eq!(

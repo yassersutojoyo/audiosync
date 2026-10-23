@@ -40,7 +40,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::speaker_names::SpeakerNames;
-use audiosync_core::eq::{BAND_COUNT, EqSettings};
+use audiosync_core::eq::{BAND_COUNT, EqSettings, UserCurve, sanitized_curves};
 use audiosync_core::policy::delay::{
     MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS, sanitize_airplay_adjustment_ms,
 };
@@ -311,6 +311,68 @@ where
         .collect())
 }
 
+/// A curve the user saved in the equalizer: a name and ten band gains in dB,
+/// band 0 (32 Hz) first (spec S242).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedCurve {
+    pub name: String,
+    pub gains_db: Vec<f64>,
+}
+
+impl SavedCurve {
+    /// The curve with missing bands flat and extra ones dropped; the core
+    /// puts the gains on the controls' steps when the list is read.
+    fn curve(&self) -> UserCurve {
+        let mut gains_db = [0.0; BAND_COUNT];
+        for (gain, saved) in gains_db.iter_mut().zip(&self.gains_db) {
+            *gain = *saved;
+        }
+        UserCurve {
+            name: self.name.clone(),
+            gains_db,
+        }
+    }
+}
+
+impl From<&UserCurve> for SavedCurve {
+    fn from(curve: &UserCurve) -> SavedCurve {
+        SavedCurve {
+            name: curve.name.clone(),
+            gains_db: curve.gains_db.to_vec(),
+        }
+    }
+}
+
+/// The saved curves as stored, read leniently: an entry without a text name
+/// is skipped, a band that is not a number reads as 0 dB, and anything that
+/// isn't a list reads as no curves.
+fn curves_that_read<'de, D>(deserializer: D) -> Result<Vec<SavedCurve>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(entries) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.get("name")?.as_str()?.to_owned();
+            let gains_db = entry
+                .get("gains_db")
+                .and_then(serde_json::Value::as_array)
+                .map(|gains| gains.iter().map(|g| g.as_f64().unwrap_or(0.0)).collect())
+                .unwrap_or_default();
+            Some(SavedCurve { name, gains_db })
+        })
+        .collect())
+}
+
+/// The saved curves cleaned as the core reads them back (spec S242).
+pub fn clamp_curves(saved: &[SavedCurve]) -> Vec<UserCurve> {
+    sanitized_curves(saved.iter().map(SavedCurve::curve))
+}
+
 /// Everything the file keeps. See the module documentation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -346,6 +408,13 @@ pub struct Settings {
     pub hidden_speakers: Vec<SavedHidden>,
     pub groups: Vec<SavedGroup>,
     pub equalizer: SavedEqualizer,
+    /// The equalizer curves the user saved, in the picker's order (spec
+    /// S242); left out of the file while there are none.
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "curves_that_read"
+    )]
+    pub equalizer_curves: Vec<SavedCurve>,
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
     /// View > Appearance.
@@ -382,6 +451,7 @@ impl Default for Settings {
             hidden_speakers: Vec::new(),
             groups: Vec::new(),
             equalizer: SavedEqualizer::default(),
+            equalizer_curves: Vec::new(),
             show_virtual_devices: false,
             appearance: Appearance::System,
             window: None,
@@ -552,6 +622,10 @@ impl Settings {
             hidden_speakers: clamp_hidden(self.hidden_speakers),
             groups,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
+            equalizer_curves: clamp_curves(&self.equalizer_curves)
+                .iter()
+                .map(SavedCurve::from)
+                .collect(),
             show_virtual_devices: self.show_virtual_devices,
             appearance: self.appearance,
             window: self.window.and_then(clamp_window),
@@ -993,6 +1067,44 @@ mod tests {
         assert!(
             !without.contains("hidden_speakers"),
             "none hidden, no field"
+        );
+    }
+
+    #[test]
+    fn equalizer_curves_are_read_leniently_and_left_out_while_none_is() {
+        let text = r#"{"version": 2, "master_volume": 40, "equalizer_curves": [
+            {"name": "  Desk  ", "gains_db": [1.3, "loud", null, 30, -30]},
+            {"name": "desk", "gains_db": [6, 6, 6, 6, 6, 6, 6, 6, 6, 6]},
+            {"name": "   ", "gains_db": []},
+            {"gains_db": [1, 2]},
+            {"name": "Late", "gains_db": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9]},
+            7
+        ]}"#;
+        let (read, _) = Settings::from_json(text).expect("one odd entry spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        let mut desk = vec![0.0; BAND_COUNT];
+        desk[..5].copy_from_slice(&[1.5, 0.0, 0.0, 12.0, -12.0]);
+        assert_eq!(
+            read.equalizer_curves,
+            [
+                SavedCurve {
+                    name: "Desk".into(),
+                    gains_db: desk,
+                },
+                SavedCurve {
+                    name: "Late".into(),
+                    gains_db: vec![0.0; BAND_COUNT],
+                },
+            ]
+        );
+        let (again, _) = Settings::from_json(&read.to_json()).expect("read");
+        assert_eq!(again.equalizer_curves, read.equalizer_curves);
+        let (read, _) =
+            Settings::from_json(r#"{"version": 2, "equalizer_curves": {}}"#).expect("read");
+        assert!(read.equalizer_curves.is_empty());
+        assert!(
+            !Settings::default().to_json().contains("equalizer_curves"),
+            "no curves, no field"
         );
     }
 
