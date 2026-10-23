@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
-use audiosync_airplay::reconnect::{Backoff, RETRY_INTERVAL, retry_delay};
+use audiosync_airplay::reconnect::{Backoff, MAX_BACK_OFF, RETRY_INTERVAL, retry_delay};
 
 const SECOND: Duration = Duration::from_secs(1);
 
@@ -68,4 +68,24 @@ fn errors_that_need_the_user_stop_the_retries() {
         assert_eq!(backoff.on_failure(kind, now), None, "{kind:?}");
         assert_eq!(backoff.failures(), 0);
     }
+}
+
+// A pair-verify refused for the receiver's state waits for the back-off
+// it names, capped, and otherwise follows the usual schedule.
+// covers: P142, P154
+#[test]
+fn a_receiver_state_refusal_waits_for_its_back_off() {
+    let now = Instant::now();
+    let mut backoff = Backoff::new();
+    assert_eq!(
+        backoff.on_receiver_state(30 * SECOND, now),
+        now + 30 * SECOND
+    );
+    assert_eq!(
+        backoff.on_receiver_state(Duration::ZERO, now),
+        now + 2 * SECOND
+    );
+    assert_eq!(backoff.failures(), 2);
+    let huge = Duration::from_secs(u64::MAX);
+    assert_eq!(backoff.on_receiver_state(huge, now), now + MAX_BACK_OFF);
 }

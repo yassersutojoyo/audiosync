@@ -5,12 +5,12 @@
 mod common;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
-use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
+use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
 use audiosync_airplay::pairing::PairingEvent;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
@@ -19,6 +19,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2};
+use common::hap::Answer;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 
 const LONG: Duration = Duration::from_secs(15);
@@ -577,6 +578,121 @@ fn rejected_homekit_credentials_are_dropped_and_the_next_start_pairs_again() {
     );
     let keys = server.fake().keys();
     assert!(keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    sender.shutdown();
+}
+
+// A back-off from pair-verify keeps the credentials and holds the retry
+// for the seconds it names; error 2 drops them.
+// covers: P142, P154
+#[test]
+fn a_verify_back_off_keeps_the_credentials_and_delays_the_retry() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x80),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 50);
+    let key = device.key.clone();
+    let with_password = || {
+        let mut options = options();
+        options.password = Some(Secret::new("3939".to_owned()));
+        options
+    };
+    sender.add_speaker(device.clone(), with_password());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    {
+        let mut fake = server.fake();
+        fake.hap
+            .answers
+            .push((("/pair-verify", 1), Answer::Error(3)));
+        fake.hap.back_off = Some(30);
+    }
+    let before = Instant::now();
+    sender.add_speaker(device.clone(), with_password());
+    let retrying = events.wait_state(&sender, &key, 1, LONG, |s| {
+        matches!(s, SpeakerState::Retrying { .. })
+    });
+    let after = Instant::now();
+    assert!(retrying.is_some(), "{:?}", events.of(&key));
+    let at = events
+        .of(&key)
+        .into_iter()
+        .find_map(|event| match event {
+            SpeakerEvent::State(SpeakerState::Retrying { at }) => Some(at),
+            _ => None,
+        })
+        .expect("retrying");
+    assert!(at >= before + Duration::from_secs(30), "{:?}", at - before);
+    assert!(at <= after + Duration::from_secs(30), "{:?}", at - after);
+    assert_eq!(errors(&events, &key), vec![ErrorKind::PairingFailed]);
+    // Hosts read the reason, which must not ask the user to pair again.
+    let reasons: Vec<UserReason> = events
+        .of(&key)
+        .into_iter()
+        .filter_map(|event| match event {
+            SpeakerEvent::Error(error) => Some(error.reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons, vec![UserReason::Refused]);
+    assert!(
+        !events.of(&key).contains(&SpeakerEvent::HomeKitRejected),
+        "the credentials stay"
+    );
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The credentials were kept, so the next start verifies again; error 2
+    // rejects them.
+    {
+        let mut fake = server.fake();
+        fake.requests.clear();
+        fake.hap.answers.clear();
+        fake.hap.back_off = None;
+        fake.hap
+            .answers
+            .push((("/pair-verify", 1), Answer::Error(2)));
+    }
+    sender.add_speaker(device, with_password());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    assert!(
+        server
+            .fake()
+            .keys()
+            .contains(&"POST /pair-verify".to_owned())
+    );
+    assert_eq!(
+        errors(&events, &key),
+        vec![ErrorKind::PairingFailed, ErrorKind::PairingRequired]
+    );
+    assert!(events.of(&key).contains(&SpeakerEvent::HomeKitRejected));
     sender.shutdown();
 }
 

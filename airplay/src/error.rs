@@ -5,6 +5,7 @@
 //! Nothing here panics.
 
 use std::fmt;
+use std::time::Duration;
 
 use crate::rtsp::Method;
 use crate::sdp::Codec;
@@ -156,6 +157,10 @@ pub struct SessionError {
     /// The codec to retry with on a new connection: set when a receiver
     /// refused an ANNOUNCE offering PCM and also lists ALAC (P74).
     pub fallback: Option<Codec>,
+    /// Set when a PairingFailed describes the receiver's state rather than
+    /// the credentials (a pair-verify error item, P154): the speaker is
+    /// retried as usual (P142), no sooner than this wait.
+    pub retry_after: Option<Duration>,
     /// A short diagnostic for protocol errors. Never contains the password.
     pub detail: Option<&'static str>,
 }
@@ -167,6 +172,7 @@ impl SessionError {
             method: None,
             status: None,
             fallback: None,
+            retry_after: None,
             detail: None,
         }
     }
