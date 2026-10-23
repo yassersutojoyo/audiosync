@@ -5735,14 +5735,28 @@ do {
             && RemoteCommand(json: "{\"type\":\"preset\",\"id\":\"p2\",\"recall\":false}") == nil
             && RemoteCommand(json: "{\"type\":\"zone\",\"id\":\"z1\",\"toggle\":1}") == nil,
           "web remote: zone and preset commands read as the core sends them; anything else is dropped")
-    check(zonePlan(zoneCommand) == [.setZoneVolume(id: "z1", position: 30), .toggleZone(id: "z1")]
-            && zonePlan(presetCommand) == [.recallPreset(id: "p2")],
+    check(zonePlan(zoneCommand) == [.setZoneVolume(id: "z1", position: 30), .toggleZone(id: "z1", keepOff: [])]
+            && zonePlan(presetCommand) == [.recallPreset(id: "p2", keepOff: [])],
           "web remote: a zone command sets the zone's volume, then flips it; a preset command recalls it")
     let noMember = zonePlan("{\"type\":\"zone\",\"id\":\"z2\",\"toggle\":true}").isEmpty
     let unknownZone = zonePlan("{\"type\":\"zone\",\"id\":\"z9\",\"volume\":10}").isEmpty
     let unknownPreset = zonePlan("{\"type\":\"preset\",\"id\":\"p9\",\"recall\":true}").isEmpty
     check(noMember && unknownZone && unknownPreset,
           "web remote: a zone with no listed member doesn't flip; an unknown zone or preset changes nothing")
+    let codeRows = zoneRows + [RemoteRow(Facts(id: "tv", name: "TV", kind: "AirPlay", on: false, volume: 50,
+                                               isAirPlay: true, needsCode: true, key: "ap:tv"), text: t)]
+    let codeZones = [SpeakerZone(id: "z3", name: "Den", members: ["ap:tv", "lc:bt"], volume: 100),
+                     SpeakerZone(id: "z4", name: "TV", members: ["ap:tv"], volume: 100)].map {
+        RemoteZoneRow($0, listed: codeRows)
+    }
+    let codePresets = [RemotePresetRow(id: "p3", name: "Movie", current: false, members: ["ap:tv", "lc:bt"])]
+    func codePlan(_ command: RemoteCommand) -> [RemoteAction] {
+        RemoteAction.plan(command, rows: codeRows, zones: codeZones, presets: codePresets)
+    }
+    check(codePlan(.zone(id: "z3", toggle: true, volume: nil)) == [.toggleZone(id: "z3", keepOff: ["ap:tv"])]
+            && codePlan(.preset(id: "p3")) == [.recallPreset(id: "p3", keepOff: ["ap:tv"])]
+            && codePlan(.zone(id: "z4", toggle: true, volume: nil)).isEmpty,
+          "web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip")
 
     // covers: S258
     let duringRun = [zoneCommand, presetCommand, "{\"type\":\"master\",\"volume\":20}",

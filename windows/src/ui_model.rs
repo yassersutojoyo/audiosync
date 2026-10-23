@@ -435,6 +435,9 @@ pub enum NoticeMessage {
     /// Another app holds a speaker's device for itself (exclusive mode). It
     /// stays on and plays once that app lets go; the notice then clears.
     SpeakerBusy { speaker: String },
+    /// A zone or preset the web remote turned on left this speaker off: it
+    /// asks for a code, which only the PC can answer.
+    PairFirst { speaker: String },
     /// An AirPlay speaker stopped playing; it stays on while AudioSync keeps
     /// trying to reach it.
     AirPlayRetrying {
@@ -611,6 +614,8 @@ pub struct PresetItem {
     pub name: String,
     /// The speakers play it exactly now, the first such preset in list order.
     pub current: bool,
+    /// The stored members' keys, in order.
+    pub members: Vec<String>,
 }
 
 /// Calibrate All Speakers (spec S235 to S240): where a run stands and the
@@ -888,12 +893,25 @@ pub trait Backend {
     fn delete_group(&mut self, id: &str);
     /// Switches zone `id`'s members as the core's click plan says (spec
     /// S246, S247).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the window lists no zones or presets yet")
+    )]
     fn toggle_zone(&mut self, _id: &str) {}
     /// Sets zone `id`'s volume, 0 to 100, which scales each member's own
     /// volume (spec S249).
     fn set_zone_volume(&mut self, _id: &str, _position: f64) {}
     /// Recalls preset `id` as a full scene (spec S252).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the window lists no zones or presets yet")
+    )]
     fn recall_preset(&mut self, _id: &str) {}
+    /// A zone click from the web remote: the members in `keep_off`, which
+    /// ask for a code, stay off with a notice each (spec S257).
+    fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]);
+    /// A recall from the web remote, `keep_off` as for a zone click.
+    fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]);
     fn set_equalizer(&mut self, settings: EqSettings);
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
@@ -1221,6 +1239,7 @@ impl MockBackend {
                 id: "preset:1".into(),
                 name: "Evening".into(),
                 current: false,
+                members: vec!["airplay:living".into(), "local:desk".into()],
             }],
             equalizer: EqSettings::default(),
             notices: Vec::new(),
@@ -1336,6 +1355,17 @@ impl Backend for MockBackend {
         if let Some(speaker) = self.speaker_mut(id) {
             speaker.enabled = on;
         }
+        // Like the adapter: an unpaired speaker that asks for a code prompts for it.
+        if let Some(speaker) = self.state.speaker(id).filter(|speaker| {
+            on && speaker.availability == Availability::NeedsCode && !speaker.paired
+        }) {
+            self.state.pin_prompt = Some(PinPrompt {
+                speaker_id: speaker.id.clone(),
+                name: speaker.name.clone(),
+                phase: PinPhase::Ready,
+                wrong_pin: false,
+            });
+        }
         // Like the Mac: turning a speaker on starts streaming.
         if on {
             self.state.running = true;
@@ -1416,14 +1446,22 @@ impl Backend for MockBackend {
     }
 
     fn toggle_zone(&mut self, id: &str) {
+        self.toggle_zone_from_phone(id, &[]);
+    }
+
+    fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]) {
         let Some(zone) = self.state.zones.iter().find(|z| z.id == id).cloned() else {
             return;
         };
-        let turn_on = !zone
+        let members: Vec<&String> = zone
             .members
             .iter()
+            .filter(|key| !keep_off.contains(key))
+            .collect();
+        let turn_on = !members
+            .iter()
             .all(|key| self.state.speaker(key).is_some_and(|s| s.enabled));
-        for member in &zone.members {
+        for member in members {
             if let Some(speaker) = self.speaker_mut(member) {
                 speaker.enabled = turn_on;
             }
@@ -1440,6 +1478,16 @@ impl Backend for MockBackend {
     }
 
     fn recall_preset(&mut self, id: &str) {
+        self.recall_preset_from_phone(id, &[]);
+    }
+
+    fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        let Some(preset) = self.state.presets.iter().find(|p| p.id == id).cloned() else {
+            return;
+        };
+        for member in preset.members.iter().filter(|key| !keep_off.contains(key)) {
+            self.set_speaker_enabled(member, true);
+        }
         for preset in &mut self.state.presets {
             preset.current = preset.id == id;
         }

@@ -1207,10 +1207,10 @@ fn zone(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
     let checked = match lock(&shared.published)
         .current
         .as_ref()
-        .and_then(|state| state.zone(&id))
+        .and_then(|state| state.zone(&id).map(|zone| state.check_zone(zone, &change)))
     {
         None => Err(text::unknown_zone()),
-        Some(zone) => zone.check(&change).map_err(|problem| match problem {
+        Some(result) => result.map_err(|problem| match problem {
             ZoneProblem::Unavailable => text::zone_unavailable(),
             ZoneProblem::Range(range) => range_error(range),
         }),

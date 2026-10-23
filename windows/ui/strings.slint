@@ -462,6 +462,12 @@ export global Strings {
         return @tr("{} is in use by another app. Close that app, or stop apps from taking exclusive control of it in Sound settings. AudioSync plays to it as soon as it's free.", speaker);
     }
 
+    // A zone or preset turned on from the web remote left out a speaker that
+    // asks for a code: the prompt would wait on the PC with nobody there.
+    public pure function notice-pair-first(speaker: string) -> string {
+        return @tr("{} stayed off. Pair it on the computer first.", speaker);
+    }
+
     // A member of the stereo pair or home theater group `target` stays off
     // by itself while the target is listed, on or off.
     public pure function notice-airplay-plays-in-group(speaker: string, target: string) -> string {
@@ -723,6 +729,9 @@ export global Strings {
         }
         if kind == NoticeKind.speaker-busy {
             return @tr("{} in use", name);
+        }
+        if kind == NoticeKind.pair-first {
+            return @tr("{} stayed off", name);
         }
         if kind == NoticeKind.airplay-retrying {
             return @tr("{} reconnecting", name);

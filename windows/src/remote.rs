@@ -254,9 +254,11 @@ pub enum Action {
     Master {
         volume: f64,
     },
-    /// A click on the zone, as the core's click plan carries it out.
+    /// A click on the zone, as the core's click plan carries it out;
+    /// `keep_off` are the members that would ask for a code.
     ToggleZone {
         id: String,
+        keep_off: Vec<String>,
     },
     ZoneVolume {
         id: String,
@@ -264,6 +266,7 @@ pub enum Action {
     },
     RecallPreset {
         id: String,
+        keep_off: Vec<String>,
     },
 }
 
@@ -314,24 +317,31 @@ pub fn actions(
                 });
             }
             if change.toggle {
-                let present = zone
-                    .members
-                    .iter()
-                    .any(|key| state.speaker(key).is_some_and(&shown));
-                if !present {
+                let can_play = zone.members.iter().any(|key| {
+                    state
+                        .speaker(key)
+                        .is_some_and(|speaker| shown(speaker) && can_drive(state, speaker))
+                });
+                if !can_play {
                     return Err(Refusal::Unavailable);
                 }
                 actions.push(Action::ToggleZone {
                     id: zone.id.clone(),
+                    keep_off: keep_off(state, &zone.members),
                 });
             }
             Ok(actions)
         }
         Command::Preset { id } => {
-            if !state.presets.iter().any(|preset| &preset.id == id) {
-                return Err(Refusal::Unknown);
-            }
-            Ok(vec![Action::RecallPreset { id: id.clone() }])
+            let preset = state
+                .presets
+                .iter()
+                .find(|preset| &preset.id == id)
+                .ok_or(Refusal::Unknown)?;
+            Ok(vec![Action::RecallPreset {
+                id: id.clone(),
+                keep_off: keep_off(state, &preset.members),
+            }])
         }
         Command::Master { volume } => {
             if !in_range(*volume) {
@@ -385,6 +395,20 @@ pub fn actions(
             Ok(actions)
         }
     }
+}
+
+/// The members a zone click or recall from the page leaves off: switched on,
+/// they would ask for a code on the PC with nobody there.
+fn keep_off(state: &AppState, members: &[String]) -> Vec<String> {
+    members
+        .iter()
+        .filter(|key| {
+            state
+                .speaker(key)
+                .is_some_and(|speaker| asks_for_code(state, speaker))
+        })
+        .cloned()
+        .collect()
 }
 
 /// The computer's name as a `.local` host: Windows' DNS host name, in lower
@@ -822,11 +846,14 @@ mod tests {
         let mut state = state();
         state.speakers[2].enabled = true;
         state.speakers[2].waiting = Some(Waiting::ForAirPlay2Slot);
+        let mut tv = speaker("tv", SpeakerKind::AirPlay, None);
+        tv.availability = Availability::NeedsCode;
+        state.speakers.push(tv);
         state.zones = vec![
             Zone {
                 id: "zone:a".into(),
                 name: "Downstairs".into(),
-                members: vec!["kitchen".into(), "loop".into(), "desk".into()],
+                members: vec!["kitchen".into(), "loop".into(), "desk".into(), "tv".into()],
                 volume: 80.0,
             },
             Zone {
@@ -841,11 +868,13 @@ mod tests {
                 id: "preset:a".into(),
                 name: "Evening".into(),
                 current: true,
+                members: vec!["desk".into()],
             },
             PresetItem {
                 id: "preset:b".into(),
                 name: "Party".into(),
                 current: false,
+                members: vec!["tv".into(), "kitchen".into()],
             },
         ];
         state
@@ -865,7 +894,7 @@ mod tests {
         let downstairs = &snapshot.zones[0];
         assert_eq!(
             downstairs.members,
-            ["kitchen", "desk"],
+            ["kitchen", "desk", "tv"],
             "the hidden output stays out"
         );
         assert_eq!(downstairs.volume, 80.0);
@@ -873,7 +902,7 @@ mod tests {
             downstairs.counts,
             ZoneCounts {
                 on: 2,
-                total: 2,
+                total: 3,
                 waiting: 1
             }
         );
@@ -907,7 +936,8 @@ mod tests {
                     volume: 40.0
                 },
                 Action::ToggleZone {
-                    id: "zone:a".into()
+                    id: "zone:a".into(),
+                    keep_off: vec!["tv".into()],
                 },
             ])
         );
@@ -920,7 +950,8 @@ mod tests {
                 not_virtual
             ),
             Ok(vec![Action::RecallPreset {
-                id: "preset:b".into()
+                id: "preset:b".into(),
+                keep_off: vec!["tv".into()],
             }])
         );
         assert_eq!(
@@ -941,6 +972,13 @@ mod tests {
             actions(&zone_command("zone:b", true, None), &state, not_virtual),
             Err(Refusal::Unavailable),
             "a zone whose only member the window hides"
+        );
+        let mut only_tv = state.clone();
+        only_tv.zones[1].members = vec!["tv".into()];
+        assert_eq!(
+            actions(&zone_command("zone:b", true, None), &only_tv, not_virtual),
+            Err(Refusal::Unavailable),
+            "a zone whose only member asks for a code"
         );
         assert_eq!(
             actions(

@@ -55,8 +55,9 @@ final class WebRemote {
         var zones: () -> [SpeakerZone] = { [] }
         var presets: () -> [RemotePresetRow] = { [] }
         var setZoneVolume: (String, Double) -> Void = { _, _ in }
-        var toggleZone: (String, StartOrigin) -> Void = { _, _ in }
-        var recallPreset: (String, StartOrigin) -> Void = { _, _ in }
+        /// Zone or preset ID, the member keys to keep off with a notice, and the origin.
+        var toggleZone: (String, [String], StartOrigin) -> Void = { _, _, _ in }
+        var recallPreset: (String, [String], StartOrigin) -> Void = { _, _, _ in }
     }
 
     let settings: WebRemoteSettings
@@ -296,8 +297,8 @@ final class WebRemote {
         case .setAirPlayDelay(let ms): model.actions.setAirPlayDelay(ms)
         case .setMaster(let position): model.actions.setMaster(position)
         case .setZoneVolume(let id, let position): host.setZoneVolume(id, position)
-        case .toggleZone(let id): host.toggleZone(id, .remote)
-        case .recallPreset(let id): host.recallPreset(id, .remote)
+        case .toggleZone(let id, let keepOff): host.toggleZone(id, keepOff, .remote)
+        case .recallPreset(let id, let keepOff): host.recallPreset(id, keepOff, .remote)
         }
     }
 

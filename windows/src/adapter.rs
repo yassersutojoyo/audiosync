@@ -1386,6 +1386,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 id: preset.id.clone(),
                 name: preset.name.clone(),
                 current: current == Some(preset.id.as_str()),
+                members: preset
+                    .members
+                    .iter()
+                    .map(|member| member.key.clone())
+                    .collect(),
             })
             .collect()
     }
@@ -1394,7 +1399,123 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// scene. Returns each stored member left off, by its shown name, with
     /// the reason, for the notice the windows will post; `None` for an ID no
     /// preset has.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the window lists no zones or presets yet")
+    )]
     pub(crate) fn recall_preset(&mut self, id: &str) -> Option<Vec<(String, LeftOff)>> {
+        self.recall_preset_keeping_off(id, &[])
+    }
+
+    /// The core's plan for a click on zone `id` (spec S246, S247), carried
+    /// out: present members only, at most one Cast speaker, every AirPlay 2
+    /// member on even when it waits for the AirPlay 2 place. The members in
+    /// `keep_off` (a phone's click: they ask for a code) count as not listed
+    /// and get a notice each when the zone turns on.
+    fn toggle_zone_keeping_off(&mut self, id: &str, keep_off: &[String]) {
+        let state = self.snapshot();
+        let Some(zone) = self.zones.get(id).cloned() else {
+            return;
+        };
+        let in_zone = |key: &str| zone.members.iter().any(|member| member == key);
+        let elsewhere = |kind: SpeakerKind| {
+            state.speakers.iter().filter(move |speaker| {
+                speaker.kind == kind && speaker.enabled && !in_zone(&speaker.id)
+            })
+        };
+        let situation = Situation {
+            streaming: state.running,
+            cast_on_elsewhere: elsewhere(SpeakerKind::Cast).next().is_some(),
+            airplay2_playing_elsewhere: state.running
+                && elsewhere(SpeakerKind::AirPlay2).any(|speaker| speaker.waiting.is_none()),
+        };
+        let members: Vec<(SpeakerKey, bool, zones::Member)> = zone
+            .members
+            .iter()
+            .filter_map(|text| {
+                let key = SpeakerKey::parse(text)?;
+                let listed = state.speaker(text);
+                let kind = match (&key, listed.map(|speaker| speaker.kind)) {
+                    (SpeakerKey::Local(_), _) => MemberKind::Local,
+                    (SpeakerKey::Cast(_), _) => MemberKind::Cast,
+                    (SpeakerKey::AirPlay(_), Some(SpeakerKind::AirPlay2)) => MemberKind::AirPlay2,
+                    (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
+                    (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
+                };
+                let on = listed.is_some_and(|speaker| speaker.enabled);
+                let member = zones::Member {
+                    kind,
+                    listed: listed.is_some() && !keep_off.contains(text),
+                    on,
+                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                    needs_airplay2: listed.is_none()
+                        && !self.view.airplay2_experimental
+                        && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
+                    in_target: matches!(&key, SpeakerKey::AirPlay(id)
+                        if self.audio.airplay_holding_target(id).is_some()),
+                };
+                Some((key, on, member))
+            })
+            .collect();
+        let facts: Vec<zones::Member> = members.iter().map(|(_, _, member)| *member).collect();
+        let plan = zones::click_plan(&facts, situation);
+        let turn_on = match plan.action {
+            zones::ClickAction::Nothing => return,
+            zones::ClickAction::TurnOn { .. } => true,
+            zones::ClickAction::TurnOff => false,
+        };
+        self.log.log(|| {
+            let switched = if turn_on { "on" } else { "off" };
+            format!("the user switched zone \"{}\" {switched}", zone.name)
+        });
+        if turn_on {
+            for text in keep_off.iter().filter(|text| zone.members.contains(text)) {
+                if let (Some(key), Some(speaker)) = (SpeakerKey::parse(text), state.speaker(text)) {
+                    self.post_pair_first(&key, &speaker.name);
+                }
+            }
+        }
+        let running = self.running();
+        for ((key, on, _), step) in members.iter().zip(&plan.steps) {
+            let switch_on = match step {
+                // While streaming is off every member starts a new attempt.
+                Step::On | Step::Waiting if !running || !on => true,
+                Step::Off | Step::CastLeftOff(_) if *on => false,
+                Step::CastLeftOff(reason) => {
+                    self.log
+                        .log(|| format!("zone \"{}\": {key} stays off ({reason:?})", zone.name));
+                    continue;
+                }
+                _ => continue,
+            };
+            self.switch_zone_member(key, switch_on);
+        }
+        if turn_on {
+            self.start_if_switched_on();
+        } else {
+            self.stop_if_idle();
+        }
+        self.take_events();
+    }
+
+    fn post_pair_first(&mut self, key: &SpeakerKey, name: &str) {
+        self.log
+            .log(|| format!("web remote: {key} stays off, it asks for a code"));
+        self.post(
+            NoticeSubject::Speaker(key.clone()),
+            NoticeMessage::PairFirst {
+                speaker: name.to_owned(),
+            },
+        );
+    }
+
+    /// The members in `keep_off` (a phone's recall: they ask for a code)
+    /// count as not found and get a notice each instead.
+    fn recall_preset_keeping_off(
+        &mut self,
+        id: &str,
+        keep_off: &[String],
+    ) -> Option<Vec<(String, LeftOff)>> {
         let preset = self.presets.iter().find(|preset| preset.id == id)?.clone();
         let state = self.snapshot();
         let mut members: Vec<(SpeakerKey, Option<f64>, String, RecallMember)> = Vec::new();
@@ -1418,9 +1539,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .map(|speaker| speaker.name.clone())
                 .or_else(|| hidden.map(|entry| entry.name.clone()))
                 .unwrap_or_else(|| self.custom_names.shown(&member.key, key.id()));
+            if keep_off.contains(&member.key) {
+                self.post_pair_first(&key, &name);
+            }
             let facts = RecallMember {
                 kind,
-                found: listed.is_some() || hidden.is_some(),
+                found: (listed.is_some() || hidden.is_some()) && !keep_off.contains(&member.key),
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
                 busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
@@ -1454,7 +1578,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let left_off: Vec<(String, LeftOff)> = members
             .iter()
             .zip(&plan.steps)
-            .filter_map(|((_, _, name, _), step)| match step {
+            .filter_map(|((key, _, name, _), step)| match step {
+                RecallStep::LeftOff(_) if keep_off.contains(&key.to_string()) => None,
                 RecallStep::LeftOff(reason) => Some((name.clone(), *reason)),
                 _ => None,
             })
@@ -3165,86 +3290,16 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
-    /// The core's plan for a click on zone `id` (spec S246, S247), carried
-    /// out: present members only, at most one Cast speaker, every AirPlay 2
-    /// member on even when it waits for the AirPlay 2 place.
     fn toggle_zone(&mut self, id: &str) {
-        let state = self.snapshot();
-        let Some(zone) = self.zones.get(id).cloned() else {
-            return;
-        };
-        let in_zone = |key: &str| zone.members.iter().any(|member| member == key);
-        let elsewhere = |kind: SpeakerKind| {
-            state.speakers.iter().filter(move |speaker| {
-                speaker.kind == kind && speaker.enabled && !in_zone(&speaker.id)
-            })
-        };
-        let situation = Situation {
-            streaming: state.running,
-            cast_on_elsewhere: elsewhere(SpeakerKind::Cast).next().is_some(),
-            airplay2_playing_elsewhere: state.running
-                && elsewhere(SpeakerKind::AirPlay2).any(|speaker| speaker.waiting.is_none()),
-        };
-        let members: Vec<(SpeakerKey, bool, zones::Member)> = zone
-            .members
-            .iter()
-            .filter_map(|text| {
-                let key = SpeakerKey::parse(text)?;
-                let listed = state.speaker(text);
-                let kind = match (&key, listed.map(|speaker| speaker.kind)) {
-                    (SpeakerKey::Local(_), _) => MemberKind::Local,
-                    (SpeakerKey::Cast(_), _) => MemberKind::Cast,
-                    (SpeakerKey::AirPlay(_), Some(SpeakerKind::AirPlay2)) => MemberKind::AirPlay2,
-                    (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
-                    (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
-                };
-                let on = listed.is_some_and(|speaker| speaker.enabled);
-                let member = zones::Member {
-                    kind,
-                    listed: listed.is_some(),
-                    on,
-                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
-                    needs_airplay2: listed.is_none()
-                        && !self.view.airplay2_experimental
-                        && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
-                    in_target: matches!(&key, SpeakerKey::AirPlay(id)
-                        if self.audio.airplay_holding_target(id).is_some()),
-                };
-                Some((key, on, member))
-            })
-            .collect();
-        let facts: Vec<zones::Member> = members.iter().map(|(_, _, member)| *member).collect();
-        let plan = zones::click_plan(&facts, situation);
-        let turn_on = match plan.action {
-            zones::ClickAction::Nothing => return,
-            zones::ClickAction::TurnOn { .. } => true,
-            zones::ClickAction::TurnOff => false,
-        };
-        self.log.log(|| {
-            let switched = if turn_on { "on" } else { "off" };
-            format!("the user switched zone \"{}\" {switched}", zone.name)
-        });
-        let running = self.running();
-        for ((key, on, _), step) in members.iter().zip(&plan.steps) {
-            let switch_on = match step {
-                // While streaming is off every member starts a new attempt.
-                Step::On | Step::Waiting if !running || !on => true,
-                Step::Off | Step::CastLeftOff(_) if *on => false,
-                Step::CastLeftOff(reason) => {
-                    self.log
-                        .log(|| format!("zone \"{}\": {key} stays off ({reason:?})", zone.name));
-                    continue;
-                }
-                _ => continue,
-            };
-            self.switch_zone_member(key, switch_on);
-        }
-        if turn_on {
-            self.start_if_switched_on();
-        } else {
-            self.stop_if_idle();
-        }
-        self.take_events();
+        self.toggle_zone_keeping_off(id, &[]);
+    }
+
+    fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        self.toggle_zone_keeping_off(id, keep_off);
+    }
+
+    fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        let _ = self.recall_preset_keeping_off(id, keep_off);
     }
 
     /// Sets zone `id`'s volume (S245), which its playing members hear at
@@ -8363,6 +8418,47 @@ mod tests {
         assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
         adapter.toggle_zone("zone:9");
         assert!(!adapter.snapshot().running, "no such zone: nothing");
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_zone_click_or_recall_leaves_a_code_asking_member_off_with_a_notice() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let tv_id = ap(&tv);
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), tv_id.clone()])],
+            speaker_presets: vec![saved_preset(&[
+                (key(HEADPHONES), Some(40.0)),
+                (tv_id.clone(), Some(20.0)),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        fake.take_calls();
+        let pair_first = NoticeMessage::PairFirst {
+            speaker: "Den TV".to_owned(),
+        };
+        let keep_off = [tv_id.clone()];
+
+        adapter.toggle_zone_from_phone("zone:1", &keep_off);
+        assert!(enabled(&adapter, SPEAKERS));
+        assert!(!speaker_of(&adapter, &tv_id).enabled);
+        assert!(!fake.take_calls().contains(&Call::StartPairing(id_of(&tv))));
+        assert_eq!(adapter.snapshot().pin_prompt, None);
+        assert!(messages(&adapter).contains(&pair_first));
+
+        adapter.dismiss_all_notices();
+        adapter.recall_preset_from_phone("preset:1", &keep_off);
+        assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
+        assert!(!speaker_of(&adapter, &tv_id).enabled);
+        assert!(!fake.take_calls().contains(&Call::StartPairing(id_of(&tv))));
+        assert!(messages(&adapter).contains(&pair_first));
+
+        adapter.recall_preset("preset:1");
+        assert!(
+            fake.take_calls().contains(&Call::StartPairing(id_of(&tv))),
+            "a recall at the PC still pairs it"
+        );
     }
 
     // covers: S246

@@ -1316,8 +1316,8 @@ fn zoned(calibrating: bool) -> State {
     "zones": [
         {{"id": "zone 1", "name": "Downstairs", "volume": 80, "members": ["kitchen", "living room"],
          "counts": {{"on": 2, "total": 2, "waiting": 0}}}},
-        {{"id": "attic", "name": "Attic", "volume": 100, "members": [],
-         "counts": {{"on": 0, "total": 0, "waiting": 0}}}}
+        {{"id": "attic", "name": "Attic", "volume": 100, "members": ["den"],
+         "counts": {{"on": 0, "total": 1, "waiting": 0}}}}
     ],
     "presets": [
         {{"id": "preset:1", "name": "Evening", "current": true}},
@@ -1349,7 +1349,7 @@ fn zone_toggle_and_volume_routes_are_accepted() {
         state["zones"][0]["members"],
         json!(["kitchen", "living room"])
     );
-    assert_eq!(state["zones"][1]["counts"]["total"], 0);
+    assert_eq!(state["zones"][1]["counts"]["total"], 1);
     assert_eq!(state["calibrating"], false);
 
     for body in [
@@ -1479,7 +1479,7 @@ fn unknown_zone_and_unknown_preset_answer_404() {
 
 // covers: S257
 #[test]
-fn a_zone_with_no_present_member_answers_409() {
+fn a_zone_with_no_member_that_can_play_answers_409() {
     let remote = start("zone-unavailable");
     let token = pair(&remote);
     let token = Some(token.as_str());

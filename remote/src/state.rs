@@ -411,6 +411,21 @@ impl State {
         self.speakers.iter().find(|speaker| speaker.id == id)
     }
 
+    /// Whether `change` can be carried out on `zone`: a toggle needs a
+    /// member the page may drive, as one that would ask for a code stays off
+    /// (S257).
+    pub fn check_zone(&self, zone: &Zone, change: &ZoneChange) -> Result<(), ZoneProblem> {
+        zone.check(change)?;
+        let can_play = zone
+            .members
+            .iter()
+            .any(|id| self.speaker(id).is_some_and(|speaker| speaker.available));
+        if change.toggle && !can_play {
+            return Err(ZoneProblem::Unavailable);
+        }
+        Ok(())
+    }
+
     pub fn zone(&self, id: &str) -> Option<&Zone> {
         self.zones.iter().find(|zone| zone.id == id)
     }

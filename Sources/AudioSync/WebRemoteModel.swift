@@ -59,6 +59,8 @@ struct RemoteRow: Equatable {
     var key = ""
     /// Switched on, it waits for an AirPlay 2 speaker to free a slot.
     var waiting = false
+    /// Switched on, it would ask for a code on the Mac with nobody there.
+    var asksForCode = false
 }
 
 extension RemoteRow {
@@ -95,7 +97,7 @@ extension RemoteRow {
                   available: !codeBlocked,
                   notice: f.note ?? (codeBlocked ? text.remoteTurnOnInApp : nil),
                   volumeAdjustable: f.on && castVolume,
-                  isCast: f.cast != nil, key: f.key, waiting: f.waiting)
+                  isCast: f.cast != nil, key: f.key, waiting: f.waiting, asksForCode: codeBlocked)
     }
 
     var json: [String: Any] {
@@ -145,6 +147,8 @@ struct RemoteZoneRow: Equatable {
 struct RemotePresetRow: Equatable {
     var id, name: String
     var current: Bool
+    /// The stored members' `SpeakerKey` values; the page never sees them.
+    var members: [String] = []
 
     var json: [String: Any] { ["id": id, "name": name, "current": current] }
 }
@@ -239,8 +243,10 @@ enum RemoteAction: Equatable {
     case setAirPlayDelay(ms: Double)
     case setMaster(position: Double)
     case setZoneVolume(id: String, position: Double)
-    case toggleZone(id: String)
-    case recallPreset(id: String)
+    /// `keepOff`: the members' keys that would ask for a code; they stay
+    /// off with a notice, and the rest plays (S257).
+    case toggleZone(id: String, keepOff: [String])
+    case recallPreset(id: String, keepOff: [String])
 
     /// The switch first, then the slider (enabled or not by that switch),
     /// then the delay; a value already in place changes nothing. Nothing
@@ -253,10 +259,15 @@ enum RemoteAction: Equatable {
             guard let zone = zones.first(where: { $0.id == id }) else { return [] }
             var actions: [RemoteAction] = []
             if let volume { actions.append(.setZoneVolume(id: id, position: RemoteSnapshot.volume(volume))) }
-            if toggle, !zone.members.isEmpty { actions.append(.toggleZone(id: id)) }
+            let members = zone.members.compactMap { member in rows.first { $0.id == member } }
+            if toggle, members.contains(where: \.available) {
+                actions.append(.toggleZone(id: id, keepOff: members.filter(\.asksForCode).map(\.key)))
+            }
             return actions
         case .preset(let id):
-            return presets.contains { $0.id == id } ? [.recallPreset(id: id)] : []
+            guard let preset = presets.first(where: { $0.id == id }) else { return [] }
+            let keepOff = rows.filter { $0.asksForCode && preset.members.contains($0.key) }.map(\.key)
+            return [.recallPreset(id: id, keepOff: keepOff)]
         case .master(let volume):
             return [.setMaster(position: RemoteSnapshot.volume(volume))]
         case .speaker(let id, let on, let volume, let delayMs):
