@@ -191,6 +191,17 @@ pub extern "C" fn asc_output_gain(local_position: f64, master_position: f64) -> 
     volume::output_gain(local_position, master_position)
 }
 
+/// [`volume::zoned_output_gain`]: a local output's gain through its zone,
+/// 100 outside a zone (S71, S249).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_zone_output_gain(
+    local_position: f64,
+    zone_position: f64,
+    master_position: f64,
+) -> f64 {
+    volume::zoned_output_gain(local_position, zone_position, master_position)
+}
+
 /// [`volume::apply_gain`] on `frames` interleaved stereo frames, in place (S64, S65).
 /// Real-time safe.
 ///
@@ -1267,6 +1278,13 @@ mod tests {
                 ZONE_STEP_CAST_ONE_AT_A_TIME.to_string(),
             ),
             ("ASC_ZONE_STEP_CAST_BUSY", ZONE_STEP_CAST_BUSY.to_string()),
+            ("ASC_METER_POLL_MS", crate::meter::METER_POLL_MS.to_string()),
+            ("ASC_LEAD_SOURCE_SYSTEM", LEAD_SOURCE_SYSTEM.to_string()),
+            ("ASC_LEAD_SOURCE_APP", LEAD_SOURCE_APP.to_string()),
+            ("ASC_LEAD_SOURCE_INPUT", LEAD_SOURCE_INPUT.to_string()),
+            ("ASC_LEAD_OUTPUT_LOCAL", LEAD_OUTPUT_LOCAL.to_string()),
+            ("ASC_LEAD_OUTPUT_AIRPLAY", LEAD_OUTPUT_AIRPLAY.to_string()),
+            ("ASC_LEAD_OUTPUT_CAST", LEAD_OUTPUT_CAST.to_string()),
             ("ASC_CAST_RATE", CAST_RATE.to_string()),
             ("ASC_CAST_APPEARED", CAST_APPEARED.to_string()),
             ("ASC_CAST_CHANGED", CAST_CHANGED.to_string()),
@@ -1390,6 +1408,20 @@ mod tests {
         );
         assert_eq!(asc_output_gain(f64::NAN, 100.0), 0.0);
         assert_eq!(asc_output_gain(150.0, 100.0), 1.0);
+    }
+
+    // covers: S71, S249
+    #[test]
+    fn a_zoned_gain_crosses_the_boundary_as_the_core_makes_it() {
+        assert_eq!(asc_zone_output_gain(50.0, 50.0, 100.0), 0.125 * 0.125);
+        for (local, master) in [(60.0, 50.0), (37.0, 81.0), (0.0, 100.0)] {
+            assert_eq!(
+                asc_zone_output_gain(local, 100.0, master).to_bits(),
+                asc_output_gain(local, master).to_bits(),
+                "zone 100 is no zone"
+            );
+        }
+        assert_eq!(asc_zone_output_gain(100.0, 0.0, 100.0), 0.0);
     }
 
     // covers: S70

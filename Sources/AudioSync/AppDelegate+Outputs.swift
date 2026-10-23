@@ -9,12 +9,39 @@ extension AppDelegate {
 
     // MARK: - Speaker / source state (shared by the window and the menu bar panel)
 
-    /// A local speaker's linear gain, through the core's volume curve; 0
-    /// while a calibration plays its signal through another output (S232, S235).
+    /// A local speaker's linear gain through its zone, on the core's volume
+    /// curve (S71, S249); 0 while a calibration plays its signal through
+    /// another output (S232, S235).
     private func effectiveGain(_ uid: String) -> Double {
         if let solo = calibrationRun?.soloUID ?? calibrateAllRun?.localSolo, solo != uid { return 0 }
+        let zone = SpeakerZone.volume(of: SpeakerKey.make(id: uid, kind: .local), in: zones)
         return engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume,
-                                           masterPosition: masterVolume)
+                                           zonePosition: zone, masterPosition: masterVolume)
+    }
+
+    /// Zone `id`'s volume (0 to 100, S245); its playing members hear it at once (S249).
+    func setZoneVolume(_ id: String, _ position: Double) {
+        guard position.isFinite, let index = zones.firstIndex(where: { $0.id == id }) else { return }
+        zones[index].volume = max(0, min(100, position))
+        pushModel()
+    }
+
+    /// Every zone volume to the speakers, as a master change does (S72,
+    /// S249): local gains, the AirPlay sender's zones by receiver ID, and
+    /// the Cast device in a session.
+    func applyZoneVolumes() {
+        reapplyLocalGains()
+        nativeAirPlay?.setZones(nativeZoneVolumes())
+        if let level = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast)) { castSender?.setVolume(level) }
+    }
+
+    /// The zone volume of every AirPlay speaker in a zone, by receiver ID.
+    func nativeZoneVolumes() -> [String: Double] {
+        var out: [String: Double] = [:]
+        for (appID, volume) in SpeakerZone.volumes(zones, kind: .airplay) {
+            if let receiver = NativeAirPlayID.receiver(appID) { out[receiver] = volume }
+        }
+        return out
     }
 
     /// Every running local output gets its gain again.
@@ -110,13 +137,19 @@ extension AppDelegate {
     /// The hold-back of every local speaker taking part: switched on and
     /// listed now (S172, S176). They wait for L while an AirPlay speaker is
     /// chosen, for the Cast speaker's offset while one is, and for the
-    /// longer of the two when both are.
+    /// longer of the two when both are; an input device as the source keeps
+    /// them off that wait (live input).
     func localHoldBackTargets() -> [String: Double] {
-        let wait = CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil,
-                                           cast: castModel.anchorMs)
+        let wait = LocalDelay.networkWaitMs(source: audioSource, output: .local, networkMs: networkWaitMs)
         return LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
                                     offsets: localOffsetMs, airPlayChosen: wait != nil,
                                     latencyMs: wait ?? airPlayLatencyMs)
+    }
+
+    /// What the network speakers play at: L while an AirPlay speaker is
+    /// chosen, the Cast speaker's offset while one is on, the longer of both.
+    var networkWaitMs: Double? {
+        CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil, cast: castModel.anchorMs)
     }
 
     /// Holds the AirPlay speakers or the Cast feed back, live, so both play
@@ -181,6 +214,7 @@ extension AppDelegate {
         switch audioSource {
         case .system: nowPlaying.preferredBundleID = nil
         case .app(let bundleID): nowPlaying.preferredBundleID = bundleID
+        case .mix: nowPlaying.preferredBundleID = nil
         case .input: nowPlaying.preferredBundleID = ""
         }
         nowPlaying.refresh()
@@ -194,6 +228,29 @@ extension AppDelegate {
         clearNotices([Notice.source, Notice.capture])   // about the old source
         // The tap is built for one source; switching means rebuilding it. The
         // AirPlay selection stays as it is (deselecting would race the reselect).
+        autoStartFailed = false
+        if change == .restart {
+            stopEngine()
+            startEngine(origin: .user)
+        }
+        pushModel()
+    }
+
+    /// The channel pair stored for the input source (`InputChannelPair.index`);
+    /// 0 for every other source.
+    var currentInputPair: Int {
+        guard case .input(let uid) = audioSource else { return 0 }
+        return inputPairs[uid] ?? 0
+    }
+
+    /// Chooses the channel pair the input source plays (S14). A running
+    /// session restarts on it, as for a source switch.
+    func setInputPair(_ index: Int) {
+        guard case .input(let uid) = audioSource else { return }
+        let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
+        guard change != .none else { return }
+        inputPairs[uid] = index == 0 ? nil : index
+        clearNotices([Notice.capture])   // about the old pair
         autoStartFailed = false
         if change == .restart {
             stopEngine()

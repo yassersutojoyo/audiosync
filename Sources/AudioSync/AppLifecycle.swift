@@ -97,7 +97,8 @@ enum AppLifecycle {
     /// A second report of the same quit finds the session stopped or the
     /// source switched, so it gives nil.
     static func sourceQuit(_ report: SourceQuitReport, source: AudioSource,
-                           setting: WhenSourceQuits) -> (bundleID: String, action: SourceQuit.Action)? {
+                           setting: WhenSourceQuits, isRunning: (String) -> Bool = SourceApps.isRunning)
+        -> (bundleID: String, action: SourceQuit.Action)? {
         let quit: String?
         let streaming: SourceQuit.Streaming
         switch report {
@@ -114,7 +115,8 @@ enum AppLifecycle {
             streaming = .rebuilding
         }
         guard let quit else { return nil }
-        let action = SourceQuit.decide(setting: setting, source: source, quitBundleID: quit, streaming: streaming)
+        let action = SourceQuit.decide(setting: setting, source: source, quitBundleID: quit, streaming: streaming,
+                                       isRunning: isRunning)
         return action == .keep ? nil : (quit, action)
     }
 }

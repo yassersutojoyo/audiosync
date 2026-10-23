@@ -27,6 +27,27 @@ struct SpeakerZone: Codable, Equatable {
         }
         return out
     }
+
+    /// The zone volume of a speaker in no zone (S249).
+    static let noZoneVolume = 100.0
+
+    /// The zone volume of speaker `key`: its zone's, 100 in no zone (S249).
+    static func volume(of key: String, in zones: [SpeakerZone]) -> Double {
+        zones.first { $0.members.contains(key) }?.volume ?? noZoneVolume
+    }
+
+    /// The zone volume of every speaker of `kind` in a zone, by the ID after
+    /// its key's prefix (S249); the first zone holding a key wins.
+    static func volumes(_ zones: [SpeakerZone], kind: SpeakerKey.Kind) -> [String: Double] {
+        var out: [String: Double] = [:]
+        for zone in zones {
+            for key in zone.members {
+                guard let (id, found) = SpeakerKey.parseAny(key), found == kind, out[id] == nil else { continue }
+                out[id] = zone.volume
+            }
+        }
+        return out
+    }
 }
 
 /// The one-time move of the saved groups to zones (S248).

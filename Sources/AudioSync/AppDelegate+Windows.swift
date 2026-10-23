@@ -16,8 +16,10 @@ extension AppDelegate {
     func setUpMenuBar() {
         let settings = StoredEqualizer.decode(UserDefaults.standard.data(forKey: Keys.equalizer))
         engine.updateEqualizer(settings)
-        equalizerModel = EqualizerModel(settings: settings)
+        let curves = StoredCurves.decode(UserDefaults.standard.data(forKey: Keys.equalizerCurves))
+        equalizerModel = EqualizerModel(settings: settings, curves: curves)
         equalizerModel.onChange = { [weak self] new in self?.equalizerChanged(new) }
+        equalizerModel.onCurvesChange = { [weak self] new in self?.equalizerCurvesChanged(new) }
         equalizerWindow = EqualizerWindowController(model: equalizerModel)
 
         nowPlaying.onChange = { [weak self] track in self?.nowPlayingChanged(track) }
@@ -45,6 +47,19 @@ extension AppDelegate {
             UserDefaults.standard.set(data, forKey: Keys.equalizer)
         }
         publish(\.equalizerOn, settings.enabled)
+        publishEqualizerCurve()
+    }
+
+    private func equalizerCurvesChanged(_ curves: [Equalizer.Curve]) {
+        if let data = StoredCurves.encode(curves) {
+            UserDefaults.standard.set(data, forKey: Keys.equalizerCurves)
+        }
+        publishEqualizerCurve()
+    }
+
+    private func publishEqualizerCurve() {
+        guard let equalizerModel else { return }
+        publish(\.equalizerCurve, text.equalizerCurveName(equalizerModel.shownCurve, saved: equalizerModel.curves))
     }
 
     private func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {
@@ -70,6 +85,9 @@ extension AppDelegate {
         var a = AppModel.Actions()
         a.setPower = { [weak self] on in self?.setStreaming(on) }
         a.selectSource = { [weak self] id in self?.setSource(AudioSource(defaultsValue: id)) }
+        a.selectInputPair = { [weak self] index in self?.setInputPair(index) }
+        a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
+        a.setMixMode = { [weak self] mode in self?.setMixMode(mode) }
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
         a.setAirPlayEnabled = { [weak self] id, on in self?.setNativeAirPlayEnabled(id, on) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
@@ -231,6 +249,7 @@ extension AppDelegate {
     func pushModel() {
         publish(\.running, engine.isRunning)
         publish(\.sourceID, audioSource.defaultsValue)
+        publish(\.inputPair, currentInputPair)
         publish(\.master, masterVolume)
         // Hidden speakers leave the rows here, so every list built from them loses them.
         let hiddenKey = { (s: AppModel.Speaker) in HiddenSpeakers.key(id: s.id, tag: s.tag) }
@@ -254,6 +273,7 @@ extension AppDelegate {
             access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
             emptySince: airplayEmptySince, now: Date()))
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
+        publishEqualizerCurve()
         publish(\.zones, zoneSnapshot())
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
@@ -273,11 +293,21 @@ extension AppDelegate {
     /// plugged in and out.
     func pushSources() {
         let running = SourceApps.running()
-        let inputs = devices.allInputDevices().map { (uid: $0.uid, name: text.deviceName($0.name)) }
+        let inputDevices = devices.allInputDevices()
+        let inputs = inputDevices.map {
+            SourceList.Input(uid: $0.uid, name: text.deviceName($0.name), transport: $0.transport,
+                             inputSubTransports: $0.inputSubTransports)
+        }
+        let inputLog = SourceList.logLines(inputs)
+        if inputLog != loggedInputs {   // the picker is refreshed often; the log hears only of changes
+            loggedInputs = inputLog
+            inputLog.forEach { DebugTrace.log($0) }
+        }
+        let channels = Dictionary(inputDevices.map { ($0.uid, $0.inputChannels) }, uniquingKeysWith: { first, _ in first })
         let entries = SourceList.entries(systemName: text.sourceSystem,
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
-                                         chosenAppName: SourceApps.name(for:))
+                                         chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName)
         let icons = Dictionary(running.compactMap { app in app.icon.map { (app.bundleID, $0) } },
                                uniquingKeysWith: { first, _ in first })
         let sources = entries.map { entry -> AppModel.Source in
@@ -287,9 +317,39 @@ extension AppDelegate {
             } else if !entry.id.isEmpty {
                 icon = (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized)
             }
-            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput)
+            var pairs: [String] = []
+            if case .input(let uid) = AudioSource(defaultsValue: entry.id) {
+                pairs = InputChannelPair.offered(channels: channels[uid] ?? 0).map(text.inputChannelPair)
+            }
+            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs)
         }
         publish(\.sources, sources)
+        let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
+        let checked = SourceMix.checked(audioSource, mode: mode)
+        let mixApps = SourceList.mixApps(running.map { (bundleID: $0.bundleID, name: $0.name) }, checked: checked,
+                                         chosenAppName: SourceApps.name(for:))
+        publish(\.mixMode, mode)
+        publish(\.mixChecked, checked)
+        publish(\.mixApps, mixApps.map { entry in
+            AppModel.Source(id: entry.id, name: entry.name,
+                            icon: (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized), isInput: false)
+        })
+    }
+
+    /// Checks or unchecks an app in the several-apps menu.
+    func toggleMixApp(_ bundleID: String) {
+        let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
+        setSource(SourceMix.toggle(bundleID, in: audioSource, mode: mode, ownBundleID: Bundle.main.bundleIdentifier))
+        pushSources()
+    }
+
+    /// Switches the several-apps menu between "only these" and "all except these".
+    func setMixMode(_ mode: AppMixMode) {
+        let current = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
+        rememberedMixMode = mode
+        guard mode != current else { return }
+        setSource(SourceMix.setMode(mode, from: current, of: audioSource, ownBundleID: Bundle.main.bundleIdentifier))
+        pushSources()
     }
 
     /// The picker's rows carry a 16-point icon; app icons come much larger.
@@ -421,10 +481,8 @@ extension AppDelegate {
     /// The Guide's text with its illustrations, in the light variant until the
     /// text view picks the one for its appearance.
     private func guideText() -> NSAttributedString {
-        // The text is wrapped by hand with indented continuation lines, which
-        // line up only in a fixed-width face.
         let body: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
             .foregroundColor: NSColor.labelColor,
         ]
         let artParagraph = NSMutableParagraphStyle()
@@ -435,7 +493,15 @@ extension AppDelegate {
 
         let guide = NSMutableAttributedString()
         for piece in GuideLayout.pieces(of: text.helpText, anchor: text.guideArtAnchor) {
-            guide.append(NSAttributedString(string: piece.text, attributes: body))
+            let paragraphs = GuideLayout.paragraphs(of: piece.text)
+            for (index, paragraph) in paragraphs.enumerated() {
+                let style = NSMutableParagraphStyle()
+                style.headIndent = (paragraph.hang as NSString).size(withAttributes: body).width
+                var attributes = body
+                attributes[.paragraphStyle] = style
+                let end = index < paragraphs.count - 1 ? "\n" : ""
+                guide.append(NSAttributedString(string: paragraph.text + end, attributes: attributes))
+            }
             guard let art = piece.art else { continue }
             let attachment = GuideArtAttachment(art: art, label: text.guideArtDescription(art), dark: false)
             let image = NSMutableAttributedString(attachment: attachment)

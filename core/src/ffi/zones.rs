@@ -178,8 +178,8 @@ pub unsafe extern "C" fn asc_zone_migration_keeps(
         .iter()
         .map(|&key| {
             (!key.is_null())
-                // SAFETY: non-null, and by the caller's contract NUL-terminated.
                 .then(|| {
+                    // SAFETY: non-null, and by the caller's contract NUL-terminated.
                     unsafe { CStr::from_ptr(key) }
                         .to_str()
                         .ok()

@@ -20,14 +20,89 @@ enum AudioSource: Hashable, Sendable {
     /// One app, named by its bundle ID: the app's own process plus the helper
     /// processes macOS holds it responsible for (see `AudioProcesses`).
     case app(bundleID: String)
+    /// Several apps by bundle ID: with `.only` their audio mixed into one
+    /// tap, with `.allExcept` every process's audio but theirs and
+    /// AudioSync's. Built through `mixed(_:bundleIDs:)`, which keeps it to
+    /// what a plain app or the whole system can't say.
+    case mix(AppMixMode, bundleIDs: [String])
     /// An input device, named by its Core Audio device UID.
     case input(uid: String)
 
-    /// The bundle ID of an app source; nil for the whole system and for input
-    /// devices.
+    /// The bundle ID of an app source; nil for the whole system, a mix and
+    /// input devices.
     var bundleID: String? {
         guard case .app(let id) = self else { return nil }
         return id
+    }
+
+    /// The apps whose audio is captured: one app, or a mix's apps in `.only`.
+    var capturedApps: [String] {
+        switch self {
+        case .app(let id): [id]
+        case .mix(.only, let ids): ids
+        default: []
+        }
+    }
+
+    /// The source for `bundleIDs` used as `mode` says. IDs that are empty,
+    /// repeated, AudioSync's own or not storable (holding a comma or colon)
+    /// are dropped. One app in `.only` is a plain app source, and no app
+    /// left is the whole system, so a stored mix always names a real mix.
+    static func mixed(_ mode: AppMixMode, bundleIDs: [String], ownBundleID: String? = nil) -> AudioSource {
+        var kept: [String] = []
+        for raw in bundleIDs {
+            let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, id != ownBundleID, !id.contains(","), !id.contains(":"),
+                  !kept.contains(id) else { continue }
+            kept.append(id)
+        }
+        if kept.isEmpty { return .system }
+        if mode == .only, kept.count == 1 { return .app(bundleID: kept[0]) }
+        return .mix(mode, bundleIDs: kept)
+    }
+}
+
+/// How a mix source uses its list of apps.
+enum AppMixMode: String, Hashable, Sendable {
+    /// Only these apps, mixed.
+    case only
+    /// Every app except these.
+    case allExcept
+}
+
+/// The source picker's several-apps menu: what checking an app or changing
+/// the mode makes of the current source.
+enum SourceMix {
+    /// The mode the menu shows: the mix's own, `.only` for one app, else
+    /// `remembered` (the mode last shown).
+    static func mode(of source: AudioSource, remembered: AppMixMode) -> AppMixMode {
+        if case .mix(let mode, _) = source { return mode }
+        if case .app = source { return .only }
+        return remembered
+    }
+
+    /// The apps the menu shows checked under `mode`.
+    static func checked(_ source: AudioSource, mode: AppMixMode) -> [String] {
+        switch source {
+        case .mix(let own, let ids) where own == mode: ids
+        case .app(let id) where mode == .only: [id]
+        default: []
+        }
+    }
+
+    /// Checking or unchecking `bundleID` in the menu showing `mode`.
+    static func toggle(_ bundleID: String, in source: AudioSource, mode: AppMixMode,
+                       ownBundleID: String? = nil) -> AudioSource {
+        var ids = checked(source, mode: mode)
+        if let index = ids.firstIndex(of: bundleID) { ids.remove(at: index) } else { ids.append(bundleID) }
+        return AudioSource.mixed(mode, bundleIDs: ids, ownBundleID: ownBundleID)
+    }
+
+    /// Switching the menu from `current` to `mode`: the checked apps carry
+    /// over, so "only Music and Safari" becomes "all except Music and Safari".
+    static func setMode(_ mode: AppMixMode, from current: AppMixMode, of source: AudioSource,
+                        ownBundleID: String? = nil) -> AudioSource {
+        AudioSource.mixed(mode, bundleIDs: checked(source, mode: current), ownBundleID: ownBundleID)
     }
 }
 
@@ -36,15 +111,21 @@ enum AudioSource: Hashable, Sendable {
 extension AudioSource {
     /// Marks an input device's UID in the stored form.
     private static let inputTag = "input:"
+    /// Mark a mix's comma-separated bundle IDs, by mode. A bundle ID never
+    /// holds a colon, so no app stored untagged reads as a mix.
+    private static let onlyTag = "apps:"
+    private static let exceptTag = "except:"
 
     /// The string kept in UserDefaults: "" for the whole system,
-    /// "input:<uid>" for an input device, and the plain bundle ID for an app.
+    /// "input:<uid>" for an input device, "apps:<id>,<id>" or
+    /// "except:<id>,<id>" for a mix, and the plain bundle ID for an app.
     /// The key dates from when only apps could be chosen, which is why an app
     /// is stored untagged: values saved by every earlier version still read.
     var defaultsValue: String {
         return switch self {
         case .system: ""
         case .app(let bundleID): bundleID
+        case .mix(let mode, let ids): (mode == .only ? Self.onlyTag : Self.exceptTag) + ids.joined(separator: ",")
         case .input(let uid): Self.inputTag + uid
         }
     }
@@ -55,6 +136,10 @@ extension AudioSource {
     init(defaultsValue stored: String?) {
         guard let stored, !stored.isEmpty else {
             self = .system
+            return
+        }
+        for (tag, mode) in [(Self.onlyTag, AppMixMode.only), (Self.exceptTag, AppMixMode.allExcept)] where stored.hasPrefix(tag) {
+            self = .mixed(mode, bundleIDs: stored.dropFirst(tag.count).split(separator: ",").map(String.init))
             return
         }
         self = stored.hasPrefix(Self.inputTag)
@@ -115,14 +200,15 @@ enum SourceQuit {
     }
 
     static func decide(setting: WhenSourceQuits, source: AudioSource, quitBundleID: String?,
-                       streaming: Streaming) -> Action {
+                       streaming: Streaming, isRunning: (String) -> Bool = SourceApps.isRunning) -> Action {
+        let single = judged(source, quitBundleID: quitBundleID, isRunning: isRunning)
         let code: UInt32 = switch streaming {
         case .off: UInt32(ASC_STREAMING_OFF)
         case .running: UInt32(ASC_STREAMING_RUNNING)
         case .rebuilding: UInt32(ASC_STREAMING_REBUILDING)
         }
         let answer: UInt32 = setting.defaultsValue.withCString { setting -> UInt32 in
-            source.defaultsValue.withCString { source -> UInt32 in
+            single.defaultsValue.withCString { source -> UInt32 in
                 guard let quitBundleID else { return asc_source_quit_decide(setting, source, nil, code) }
                 return quitBundleID.withCString { asc_source_quit_decide(setting, source, $0, code) }
             }
@@ -131,6 +217,25 @@ enum SourceQuit {
         case UInt32(ASC_SOURCE_QUIT_STOP): .stop
         case UInt32(ASC_SOURCE_QUIT_SWITCH_TO_SYSTEM): .switchToSystem
         default: .keep
+        }
+    }
+}
+
+extension SourceQuit {
+    /// The single-app or system source the core judges a quit by. A mix of
+    /// chosen apps lives as long as one of them runs, so the last one to
+    /// quit counts as the source app; "all except" outlives every app.
+    static func judged(_ source: AudioSource, quitBundleID: String?,
+                       isRunning: (String) -> Bool) -> AudioSource {
+        switch source {
+        case .mix(.only, let ids):
+            guard let quit = quitBundleID, ids.contains(quit),
+                  !ids.contains(where: { $0 != quit && isRunning($0) }) else { return .system }
+            return .app(bundleID: quit)
+        case .mix(.allExcept, _):
+            return .system
+        default:
+            return source
         }
     }
 }
@@ -196,6 +301,11 @@ enum SourceApps {
         let liveUsable = !(live?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         return displayName(running: live, installed: liveUsable ? nil : installedName(bundleID),
                            bundleID: bundleID)
+    }
+
+    /// Whether some instance of the app runs and hasn't terminated.
+    static func isRunning(_ bundleID: String) -> Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).contains { !$0.isTerminated }
     }
 
     /// The icon of a running or installed app; nil when the app isn't on the Mac.
