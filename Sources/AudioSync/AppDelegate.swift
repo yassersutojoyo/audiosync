@@ -247,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         airPlay2 = saved.airPlay2
         airPlay2AtLaunch = saved.airPlay2
         super.init()
+        _ = castModel.setMaster(saved.master)
     }
 
     /// The one-time migration of the absolute delays to offsets (S179), with

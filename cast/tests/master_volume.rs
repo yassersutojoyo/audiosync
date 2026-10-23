@@ -25,7 +25,11 @@ fn the_level_sent_is_the_master_times_the_own_level() {
 fn a_level_from_elsewhere_moves_the_own_level_by_the_master() {
     assert!(close(own_level(0.2, 0.5, 0.9), 0.4));
     assert!(close(own_level(0.3, 1.0, 0.9), 0.3));
-    assert_eq!(own_level(0.8, 0.5, 0.9), 1.0, "louder than the master allows");
+    assert_eq!(
+        own_level(0.8, 0.5, 0.9),
+        1.0,
+        "louder than the master allows"
+    );
     assert_eq!(own_level(0.2, 0.0, 0.7), 0.7, "master 0 leaves it");
     for bad in [f64::NAN, f64::INFINITY, -1.0] {
         assert_eq!(own_level(0.2, bad, 0.7), 0.7, "master {bad}");
@@ -36,7 +40,10 @@ fn a_level_from_elsewhere_moves_the_own_level_by_the_master() {
 #[test]
 fn a_reported_level_answers_a_sent_one_within_half_a_percent() {
     assert!(answers_level(0.4, 0.4));
-    assert!(answers_level(0.4, 0.400_000_005_960_464_5), "a 32-bit float");
+    assert!(
+        answers_level(0.4, 0.400_000_005_960_464_5),
+        "a 32-bit float"
+    );
     assert!(answers_level(0.4, 0.404));
     assert!(!answers_level(0.4, 0.41));
     assert!(!answers_level(0.4, f64::NAN));

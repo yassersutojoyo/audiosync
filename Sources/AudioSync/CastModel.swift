@@ -313,6 +313,9 @@ enum CastOutcome: Equatable {
     case playing(String)
     /// The device went off on its own; a notice says why when `problem` is set.
     case turnedOff(String, problem: CastProblem?)
+    /// Send this level, 0 to 1, to the device: it plays louder than the
+    /// master allows (C104). The row changed too.
+    case setVolume(Double)
     case memoryChanged
     /// The sender stopped working; `wasOn`: the speaker that was on, now off.
     case senderFailed(wasOn: String?)
@@ -336,6 +339,8 @@ struct CastModel {
         var status: CastStatus
         /// The `ASC_CAST_FORMAT_` code it plays in; 0 until the session reports it.
         var format: Int32 = 0
+        /// Whether the session reported the device's volume yet (C104).
+        var heardVolume = false
     }
 
     var discovery = Discovery.off
@@ -348,8 +353,16 @@ struct CastModel {
     private(set) var starting: String?
     /// Each device's volume as its latest status reports it.
     private(set) var volumes: [String: CastVolume] = [:]
-    /// A level the user set that no status has answered yet.
+    /// An own level the user set that no status has answered yet.
     private(set) var requested: (id: String, level: Double)?
+    /// Each device's own level, 0 to 1, which the master scales (C104).
+    private(set) var levels: [String: Double] = [:]
+    /// The master, 0 to 1.
+    private(set) var master = 1.0
+    /// The levels sent in this session that no status has answered yet,
+    /// oldest first; a drag sends one every 100 ms at most (C70).
+    private var unanswered: [Double] = []
+    private static let maxUnanswered = 16
     /// The offset the device memory holds, per device, in ms. 0 ms counts as
     /// none: the sender can't forget an offset, so Undo leaves 0 ms behind.
     private(set) var offsets: [String: Double] = [:]
@@ -401,11 +414,15 @@ struct CastModel {
     /// A session runs or starts for `id`: its volume, Mute and Resync reach it.
     func isLive(_ id: String) -> Bool { status(of: id) != .idle }
 
-    /// The slider position, 0 to 100: the level the user set until a status
-    /// answers it, else the reported one.
+    /// The slider position, 0 to 100: the own level the user set until a
+    /// status answers it, else the one kept, else the reported level.
     func volume(of id: String) -> Double {
-        let level = requested?.id == id ? requested!.level : (volumes[id]?.level ?? 1)
+        let level = ownLevel(of: id) ?? volumes[id]?.level ?? 1
         return min(100, max(0, level * 100))
+    }
+
+    private func ownLevel(of id: String) -> Double? {
+        requested?.id == id ? requested!.level : levels[id]
     }
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
@@ -419,9 +436,11 @@ struct CastModel {
         if enabled == old { enabled = new }
         if starting == old { starting = new }
         if let current = attempt, current.device == old {
-            attempt = Attempt(number: current.number, device: new, status: current.status)
+            attempt = Attempt(number: current.number, device: new, status: current.status,
+                              heardVolume: current.heardVolume)
         }
         if let volume = volumes.removeValue(forKey: old) { volumes[new] = volume }
+        if let level = levels.removeValue(forKey: old) { levels[new] = level }
         if let wanted = requested, wanted.id == old { requested = (new, wanted.level) }
     }
 
@@ -489,6 +508,7 @@ struct CastModel {
     mutating func stopSent() {
         attempt = nil
         requested = nil
+        unanswered = []
         members = nil
     }
 
@@ -553,10 +573,7 @@ struct CastModel {
         case .connectFailed:
             return current.status == .connecting ? nil : setStatus(.reconnecting)
         case .volume(_, let volume):
-            if requested?.id == id { requested = nil }
-            guard volumes[id] != volume else { return nil }
-            volumes[id] = volume
-            return .changed
+            return volumeReported(id, volume)
         case .members(_, let list):
             guard devices[id]?.group == true, members != list else { return nil }
             members = list
@@ -564,6 +581,7 @@ struct CastModel {
         case .ended(_, let end):
             attempt = nil
             requested = nil
+            unanswered = []
             members = nil
             if enabled == id { enabled = nil }
             return .turnedOff(id, problem: end.problem)
@@ -578,13 +596,63 @@ struct CastModel {
         return status == .playing ? .playing(current.device) : .changed
     }
 
-    /// The user's level for the device in a session, 0 to 100; nil when none
-    /// runs for it or the position isn't a number. Returns the level, 0 to 1.
+    /// The user's own level for the device in a session, 0 to 100. Returns
+    /// the level to send, master × own, 0 to 1 (C104); nil when no session
+    /// runs for it, the position isn't a number or the volume is fixed.
     mutating func setVolume(_ id: String, position: Double) -> Double? {
         guard isLive(id), position.isFinite else { return nil }
-        let level = min(1, max(0, position / 100))
-        requested = (id, level)
+        let own = min(1, max(0, position / 100))
+        requested = (id, own)
+        return levelToSend(id, own: own)
+    }
+
+    /// The master position, 0 to 100 (C104). Returns the level to send to
+    /// the device in a session; nil when none runs, the master is unchanged,
+    /// the device's own level isn't known yet or its volume is fixed.
+    mutating func setMaster(_ position: Double) -> Double? {
+        guard position.isFinite else { return nil }
+        let new = min(1, max(0, position / 100))
+        guard new != master else { return nil }
+        master = new
+        guard let id = attempt?.device, let own = ownLevel(of: id) else { return nil }
+        return levelToSend(id, own: own)
+    }
+
+    /// Master × `own`, kept to recognize the device's answer; nil for a
+    /// fixed volume (C68).
+    private mutating func levelToSend(_ id: String, own: Double) -> Double? {
+        guard volumes[id]?.fixed != true else { return nil }
+        let level = asc_cast_device_level(master, own)
+        if unanswered.count == Self.maxUnanswered { unanswered.removeFirst() }
+        unanswered.append(level)
         return level
+    }
+
+    /// A status's volume (C70, C104): the answer to a level sent keeps the
+    /// own level, any other level moves it by the master, and the session's
+    /// first one is brought down once when the master allows less.
+    private mutating func volumeReported(_ id: String, _ volume: CastVolume) -> CastOutcome? {
+        let shown = ownLevel(of: id)
+        let level = volume.level
+        let answered = unanswered.lastIndex { asc_cast_level_answers($0, level) }
+        let own: Double
+        if let answered {
+            unanswered.removeFirst(answered + 1)
+            own = shown ?? asc_cast_own_level(level, master, level)
+        } else {
+            own = asc_cast_own_level(level, master, shown ?? level)
+        }
+        if requested?.id == id, answered == nil || unanswered.isEmpty { requested = nil }
+        levels[id] = own
+        let first = attempt?.heardVolume == false
+        attempt?.heardVolume = true
+        let changed = volumes[id] != volume || ownLevel(of: id) != shown
+        volumes[id] = volume
+        if first, answered == nil, !asc_cast_level_answers(asc_cast_device_level(master, own), level),
+           let send = levelToSend(id, own: own) {
+            return .setVolume(send)
+        }
+        return changed ? .changed : nil
     }
 
     /// The step a device that reports none moves by, as a level.
@@ -599,9 +667,11 @@ struct CastModel {
         guard isLive(id), volumes[id]?.fixed != true else { return nil }
         let deviceStep = volumes[id]?.step ?? 0
         let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
-        let level = min(1, max(0, volume(of: id) / 100 + (up ? size : -size)))
-        requested = (id, level)
-        return deviceStep > 0 ? .device(up: up) : .level(level)
+        let own = min(1, max(0, volume(of: id) / 100 + (up ? size : -size)))
+        requested = (id, own)
+        // The device's own step moves its level, which is the own level only at master 1 (C104).
+        if deviceStep > 0, master == 1 { return .device(up: up) }
+        return levelToSend(id, own: own).map { .level($0) }
     }
 
     /// The user's offset for `id`, as the field takes it; nil when unchanged

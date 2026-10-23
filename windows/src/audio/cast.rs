@@ -52,9 +52,7 @@ use audiosync_cast::host::{
 };
 use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
-use audiosync_cast::status::{
-    ControlType, DeviceVolume, answers_level, device_level, own_level,
-};
+use audiosync_cast::status::{ControlType, DeviceVolume, answers_level, device_level, own_level};
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 
@@ -2592,7 +2590,10 @@ pub mod tests {
         assert_eq!(sent(&fake), [0.0]);
         report(&fake, &mut cast, 0.0);
         report(&fake, &mut cast, 0.3);
-        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9, "master 0 leaves it");
+        assert!(
+            (shown(&cast, KITCHEN) - 40.0).abs() < 1e-9,
+            "master 0 leaves it"
+        );
         assert_eq!(sent(&fake), [0.0], "a change from elsewhere isn't fought");
     }
 
@@ -2649,6 +2650,10 @@ pub mod tests {
         });
         cast.poll();
         cast.set_master(20.0);
-        assert_eq!(sent(&fake), [0.4, 0.8], "a fixed volume sends nothing (C68)");
+        assert_eq!(
+            sent(&fake),
+            [0.4, 0.8],
+            "a fixed volume sends nothing (C68)"
+        );
     }
 }
