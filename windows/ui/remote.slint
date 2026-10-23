@@ -284,12 +284,12 @@ export component RemoteWindow inherits Window {
                                 accessible-role: groupbox;
                                 accessible-label: Strings.remote-phone-picker;
 
-                                // Checkable buttons as a two-way choice; each click sets both,
-                                // since a click also flips the clicked one's own state.
+                                // Checkable buttons as a two-way choice; each click sets both, since a
+                                // click also flips the clicked one's own state and drops its binding.
                                 iphone-choice := Button {
                                     text: Strings.remote-iphone;
                                     checkable: true;
-                                    checked: true;
+                                    checked: root.steps-for-iphone;
                                     clicked => {
                                         root.steps-for-iphone = true;
                                         iphone-choice.checked = true;
@@ -300,7 +300,7 @@ export component RemoteWindow inherits Window {
                                 android-choice := Button {
                                     text: Strings.remote-android;
                                     checkable: true;
-                                    checked: false;
+                                    checked: !root.steps-for-iphone;
                                     clicked => {
                                         root.steps-for-iphone = false;
                                         iphone-choice.checked = false;

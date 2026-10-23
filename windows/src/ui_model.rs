@@ -44,6 +44,17 @@ pub enum SourceKind {
     App,
     /// An input device (line in, microphone).
     Input,
+    /// Every app except those named; the UI words it around the names.
+    AppsExcept,
+}
+
+/// An app the several-apps list offers, by executable file name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MixApp {
+    pub id: String,
+    pub name: String,
+    /// Checked in the mode the list shows.
+    pub checked: bool,
 }
 
 /// Something AudioSync can capture.
@@ -560,6 +571,10 @@ pub struct AppState {
     pub running: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
+    /// The several-apps list: the apps to check.
+    pub mix_apps: Vec<MixApp>,
+    /// The list shows "every app except the checked ones", not "only them".
+    pub mix_all_except: bool,
     /// 0 to 100.
     pub master_volume: f64,
     /// The speakers listed; a hidden one never is.
@@ -784,6 +799,21 @@ pub enum CastAddressError {
     NotFound,
 }
 
+/// An address Add by Address… took, with the check of whether something
+/// answers there, which can wait up to 3 s and so runs off the UI thread.
+#[derive(Clone, Debug)]
+pub struct CastAddressCheck {
+    pub address: crate::audio::cast_address::CastAddress,
+    pub answers: fn(&crate::audio::cast_address::CastAddress) -> bool,
+}
+
+impl CastAddressCheck {
+    /// Whether something answers at the address.
+    pub fn run(&self) -> bool {
+        (self.answers)(&self.address)
+    }
+}
+
 /// Why a new group wasn't made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupError {
@@ -803,6 +833,10 @@ pub trait Backend {
     fn snapshot(&self) -> AppState;
     fn set_running(&mut self, on: bool);
     fn select_source(&mut self, id: &str);
+    /// Checks or unchecks an app of the several-apps list, by executable.
+    fn toggle_mix_app(&mut self, executable: &str);
+    /// Switches the several-apps list to "all except" (true) or "only" (false).
+    fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
@@ -812,12 +846,27 @@ pub trait Backend {
     /// The Resync button of a Google Cast speaker: it restarts its stream so
     /// it plays at its set offset again.
     fn resync_speaker(&mut self, _id: &str) {}
-    /// Add by Address…: lists the Google Cast speaker at `text`, a host
-    /// name or IPv4 address with an optional port, and keeps it for the
-    /// next launch (spec C18). Nothing changes when `text` isn't one, or
-    /// when nothing answers there; finding that out waits up to 3 s.
-    fn add_cast_address(&mut self, _text: &str) -> Result<(), CastAddressError> {
+    /// Add by Address…, first half: takes `text`, a host name or IPv4
+    /// address with an optional port (spec C18), and returns the check that
+    /// the caller runs off the UI thread.
+    fn check_cast_address(&mut self, _text: &str) -> Result<CastAddressCheck, CastAddressError> {
         Err(CastAddressError::NotFound)
+    }
+    /// Add by Address…, second half: once the check `answered`, lists the
+    /// Google Cast speaker at `address` and keeps it for the next launch.
+    fn add_checked_cast_address(
+        &mut self,
+        _address: crate::audio::cast_address::CastAddress,
+        _answered: bool,
+    ) -> Result<(), CastAddressError> {
+        Err(CastAddressError::NotFound)
+    }
+    /// Both halves of Add by Address… in a row, on the calling thread.
+    #[cfg(test)]
+    fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
+        let check = self.check_cast_address(text)?;
+        let answered = check.run();
+        self.add_checked_cast_address(check.address, answered)
     }
     /// Remove, on the row of a speaker added by address.
     fn remove_cast_address(&mut self, _id: &str) {}
@@ -1029,6 +1078,20 @@ pub fn delay_field_text(typed: &str) -> String {
         .collect()
 }
 
+/// While a test holds it, the check of a host under `.held` waits.
+#[cfg(test)]
+pub static MOCK_CAST_HOLD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A host under `.invalid` (RFC 6761) stands for one nothing answers.
+#[cfg(any(not(windows), test))]
+fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool {
+    #[cfg(test)]
+    if address.host().ends_with(".held") {
+        drop(MOCK_CAST_HOLD.lock());
+    }
+    !address.host().ends_with(".invalid")
+}
+
 /// Example data for UI work and tests: no device is opened, nothing plays.
 #[cfg(any(not(windows), test))]
 pub struct MockBackend {
@@ -1136,6 +1199,19 @@ impl MockBackend {
                 source("input:line", "Line In", SourceKind::Input),
             ],
             source_id: "system".into(),
+            mix_apps: vec![
+                MixApp {
+                    id: "player.exe".into(),
+                    name: "Music Player".into(),
+                    checked: false,
+                },
+                MixApp {
+                    id: "browser.exe".into(),
+                    name: "Web Browser".into(),
+                    checked: false,
+                },
+            ],
+            mix_all_except: false,
             master_volume: volume::DEFAULT_MASTER_POSITION,
             speakers,
             hidden: Vec::new(),
@@ -1244,6 +1320,34 @@ impl Backend for MockBackend {
         if self.state.sources.iter().any(|s| s.id == id) {
             self.state.source_id = id.into();
         }
+    }
+
+    fn toggle_mix_app(&mut self, executable: &str) {
+        if let Some(app) = self
+            .state
+            .mix_apps
+            .iter_mut()
+            .find(|app| app.id == executable)
+        {
+            app.checked = !app.checked;
+        }
+        let checked: Vec<&str> = self
+            .state
+            .mix_apps
+            .iter()
+            .filter(|app| app.checked)
+            .map(|app| app.id.as_str())
+            .collect();
+        // Two apps make a mix, as the real backend's source key shows it.
+        self.state.source_id = if checked.len() > 1 {
+            format!("mix:only:{}", checked.join(","))
+        } else {
+            "system".into()
+        };
+    }
+
+    fn set_mix_all_except(&mut self, on: bool) {
+        self.state.mix_all_except = on;
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -1371,12 +1475,21 @@ impl Backend for MockBackend {
         self.state.groups.retain(|g| g.id != id);
     }
 
-    /// A host under `.invalid` (RFC 6761) stands for one nothing answers.
-    fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
-        let Some(address) = crate::audio::cast_address::CastAddress::parse(text) else {
-            return Err(CastAddressError::Invalid);
-        };
-        if address.host().ends_with(".invalid") {
+    fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
+        let address = crate::audio::cast_address::CastAddress::parse(text)
+            .ok_or(CastAddressError::Invalid)?;
+        Ok(CastAddressCheck {
+            address,
+            answers: mock_cast_answers,
+        })
+    }
+
+    fn add_checked_cast_address(
+        &mut self,
+        address: crate::audio::cast_address::CastAddress,
+        answered: bool,
+    ) -> Result<(), CastAddressError> {
+        if !answered {
             return Err(CastAddressError::NotFound);
         }
         let id = format!("cc:{}", address.text());

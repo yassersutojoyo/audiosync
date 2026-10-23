@@ -70,6 +70,8 @@ extension AppDelegate {
         var a = AppModel.Actions()
         a.setPower = { [weak self] on in self?.setStreaming(on) }
         a.selectSource = { [weak self] id in self?.setSource(AudioSource(defaultsValue: id)) }
+        a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
+        a.setMixMode = { [weak self] mode in self?.setMixMode(mode) }
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
         a.setAirPlayEnabled = { [weak self] id, on in self?.setNativeAirPlayEnabled(id, on) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
@@ -278,7 +280,7 @@ extension AppDelegate {
         let entries = SourceList.entries(systemName: text.sourceSystem,
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
-                                         chosenAppName: SourceApps.name(for:))
+                                         chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName)
         let icons = Dictionary(running.compactMap { app in app.icon.map { (app.bundleID, $0) } },
                                uniquingKeysWith: { first, _ in first })
         let sources = entries.map { entry -> AppModel.Source in
@@ -291,6 +293,32 @@ extension AppDelegate {
             return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput)
         }
         publish(\.sources, sources)
+        let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
+        let checked = SourceMix.checked(audioSource, mode: mode)
+        let mixApps = SourceList.mixApps(running.map { (bundleID: $0.bundleID, name: $0.name) }, checked: checked,
+                                         chosenAppName: SourceApps.name(for:))
+        publish(\.mixMode, mode)
+        publish(\.mixChecked, checked)
+        publish(\.mixApps, mixApps.map { entry in
+            AppModel.Source(id: entry.id, name: entry.name,
+                            icon: (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized), isInput: false)
+        })
+    }
+
+    /// Checks or unchecks an app in the several-apps menu.
+    func toggleMixApp(_ bundleID: String) {
+        let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
+        setSource(SourceMix.toggle(bundleID, in: audioSource, mode: mode, ownBundleID: Bundle.main.bundleIdentifier))
+        pushSources()
+    }
+
+    /// Switches the several-apps menu between "only these" and "all except these".
+    func setMixMode(_ mode: AppMixMode) {
+        let current = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
+        rememberedMixMode = mode
+        guard mode != current else { return }
+        setSource(SourceMix.setMode(mode, from: current, of: audioSource, ownBundleID: Bundle.main.bundleIdentifier))
+        pushSources()
     }
 
     /// The picker's rows carry a 16-point icon; app icons come much larger.

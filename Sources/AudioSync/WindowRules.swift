@@ -40,7 +40,13 @@ enum SourceList {
                         apps: [(bundleID: String, name: String)],
                         inputs: [(uid: String, name: String)],
                         chosen: AudioSource,
-                        chosenAppName: (String) -> String) -> [Entry] {
+                        chosenAppName: (String) -> String,
+                        mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") }) -> [Entry] {
+        var mixEntry: [Entry] = []
+        if case .mix(let mode, let ids) = chosen {
+            let names = ids.map { id in apps.first { $0.bundleID == id }?.name ?? chosenAppName(id) }
+            mixEntry = [Entry(id: chosen.defaultsValue, name: mixName(mode, names), isInput: false)]
+        }
         var appEntries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
         if case .app(let bundleID) = chosen, !appEntries.contains(where: { $0.id == bundleID }) {
             appEntries.append(Entry(id: bundleID, name: chosenAppName(bundleID), isInput: false))
@@ -50,7 +56,19 @@ enum SourceList {
             Entry(id: AudioSource.input(uid: $0.uid).defaultsValue, name: $0.name, isInput: true)
         }
         return [Entry(id: AudioSource.system.defaultsValue, name: systemName, isInput: false)]
-            + appEntries + inputEntries
+            + mixEntry + appEntries + inputEntries
+    }
+
+    /// The apps the several-apps menu offers: the running apps, plus the
+    /// checked ones that aren't running, so each can still be unchecked. By
+    /// name, as the picker sorts.
+    static func mixApps(_ apps: [(bundleID: String, name: String)], checked: [String],
+                        chosenAppName: (String) -> String) -> [Entry] {
+        var entries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
+        for id in checked where !entries.contains(where: { $0.id == id }) {
+            entries.append(Entry(id: id, name: chosenAppName(id), isInput: false))
+        }
+        return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }
 

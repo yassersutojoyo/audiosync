@@ -92,16 +92,16 @@ use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, KeptAside, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedSource,
-    SavedSpeaker, Settings, SettingsFile,
+    self, KeptAside, MixMode, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedMix,
+    SavedMixApp, SavedSource, SavedSpeaker, Settings, SettingsFile,
 };
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
-    CalibrationState, CastAddressError, CastGroup, CastList, CastRow, CastState, Group, GroupError,
-    HiddenSpeaker, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt,
-    SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting,
-    clamp_delay_ms,
+    CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
+    Group, GroupError, HiddenSpeaker, LeftOutRow, MixApp, Notice, NoticeMessage, PasswordPrompt,
+    PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind,
+    ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -168,6 +168,13 @@ enum Chosen {
         endpoint_id: String,
         name: String,
     },
+    /// Several apps by executable: only these mixed, or every app except
+    /// these. Always two or more with [`MixMode::Only`], one or more with
+    /// [`MixMode::AllExcept`] ([`mix_choice`]).
+    Mix {
+        mode: MixMode,
+        apps: Vec<SavedMixApp>,
+    },
 }
 
 impl Chosen {
@@ -183,6 +190,8 @@ impl Chosen {
                 endpoint_id: endpoint_id.clone(),
                 name: source.name.clone(),
             },
+            // The listing offers no mix; one is put together by checking apps.
+            SourceId::Apps { .. } | SourceId::AppsExcept { .. } => Chosen::WholeSystem,
         }
     }
 
@@ -195,6 +204,36 @@ impl Chosen {
             Chosen::Input { endpoint_id, .. } => SourceId::Input {
                 endpoint_id: endpoint_id.clone(),
             },
+            // `chosen_source` finds the processes of an "only these" mix.
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps,
+            } => SourceId::Apps {
+                root_pids: Vec::new(),
+                executables: apps.iter().map(|app| app.executable.clone()).collect(),
+            },
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps,
+            } => SourceId::AppsExcept {
+                executables: apps.iter().map(|app| app.executable.clone()).collect(),
+            },
+        }
+    }
+
+    /// The name the log and the notices use.
+    fn shown_name(&self) -> String {
+        match self {
+            Chosen::WholeSystem => WHOLE_SYSTEM_NAME.to_owned(),
+            Chosen::App { name, .. } | Chosen::Input { name, .. } => name.clone(),
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps,
+            } => mix_names(apps),
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps,
+            } => format!("All apps except {}", mix_names(apps)),
         }
     }
 
@@ -208,8 +247,99 @@ impl Chosen {
                 ..
             } => app_key(*root_pid, executable),
             Chosen::Input { endpoint_id, .. } => input_key(endpoint_id),
+            Chosen::Mix { mode, apps } => {
+                let executables: Vec<&str> =
+                    apps.iter().map(|app| app.executable.as_str()).collect();
+                let tag = match mode {
+                    MixMode::Only => "only",
+                    MixMode::AllExcept => "except",
+                };
+                format!("mix:{tag}:{}", executables.join(","))
+            }
         }
     }
+}
+
+/// A mix's apps by name, as the source menu lists them.
+fn mix_names(apps: &[SavedMixApp]) -> String {
+    let names: Vec<&str> = apps
+        .iter()
+        .map(|app| {
+            if app.name.is_empty() {
+                app.executable.as_str()
+            } else {
+                app.name.as_str()
+            }
+        })
+        .collect();
+    names.join(", ")
+}
+
+/// The mode the several-apps list shows for `chosen`: a mix's own, "only
+/// these" for one app, else `remembered`.
+fn mix_mode(chosen: &Chosen, remembered: MixMode) -> MixMode {
+    match chosen {
+        Chosen::Mix { mode, .. } => *mode,
+        Chosen::App { .. } => MixMode::Only,
+        _ => remembered,
+    }
+}
+
+/// The apps the several-apps list shows checked under `mode`.
+fn mix_checked(chosen: &Chosen, mode: MixMode) -> Vec<SavedMixApp> {
+    match chosen {
+        Chosen::Mix { mode: own, apps } if *own == mode => apps.clone(),
+        Chosen::App {
+            executable, name, ..
+        } if mode == MixMode::Only => vec![SavedMixApp {
+            executable: executable.clone(),
+            name: name.clone(),
+        }],
+        _ => Vec::new(),
+    }
+}
+
+/// The source for `apps` used as `mode` says: none left is the whole
+/// system, one app in "only these" a plain app (found by its executable at
+/// the next listing), otherwise a mix. Repeats are dropped, without case.
+fn mix_choice(mode: MixMode, apps: Vec<SavedMixApp>) -> Chosen {
+    let mut kept: Vec<SavedMixApp> = Vec::new();
+    for app in apps {
+        if !app.executable.is_empty()
+            && !kept
+                .iter()
+                .any(|other| other.executable.eq_ignore_ascii_case(&app.executable))
+        {
+            kept.push(app);
+        }
+    }
+    match (mode, kept.len()) {
+        (_, 0) => Chosen::WholeSystem,
+        (MixMode::Only, 1) => {
+            let app = kept.remove(0);
+            Chosen::App {
+                root_pid: 0,
+                name: if app.name.is_empty() {
+                    app.executable.clone()
+                } else {
+                    app.name
+                },
+                executable: app.executable,
+            }
+        }
+        _ => Chosen::Mix { mode, apps: kept },
+    }
+}
+
+/// Checking or unchecking `app` in the several-apps list showing `mode`.
+fn mix_toggle(chosen: &Chosen, mode: MixMode, app: SavedMixApp) -> Chosen {
+    let mut apps = mix_checked(chosen, mode);
+    let before = apps.len();
+    apps.retain(|kept| !kept.executable.eq_ignore_ascii_case(&app.executable));
+    if apps.len() == before {
+        apps.push(app);
+    }
+    mix_choice(mode, apps)
 }
 
 /// A notice as it was posted.
@@ -234,6 +364,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The sources as last listed, the whole system first.
     sources: Vec<SourceInfo>,
     chosen: Chosen,
+    /// The mode the several-apps list shows while no mix is chosen.
+    mix_mode: MixMode,
     /// The endpoint IDs of the last listing, to tell which outputs appeared.
     listed: BTreeSet<String>,
     /// The last name of every output listed, for a notice about one that is
@@ -373,6 +505,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 executable: String::new(),
             }],
             chosen: Chosen::WholeSystem,
+            mix_mode: MixMode::Only,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             kinds: BTreeMap::new(),
@@ -427,9 +560,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         adapter.list_devices();
         adapter.log.log(|| match &adapter.chosen {
             Chosen::WholeSystem => format!("source chosen: {WHOLE_SYSTEM_NAME} (the default)"),
-            Chosen::App { name, .. } | Chosen::Input { name, .. } => {
-                format!("source chosen: {name} ({}), as saved", adapter.chosen.key())
-            }
+            chosen => format!(
+                "source chosen: {} ({}), as saved",
+                chosen.shown_name(),
+                chosen.key()
+            ),
         });
         adapter
     }
@@ -504,6 +639,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.audio.add_cast_address(address);
         }
         self.chosen = match (&saved.input_device, &saved.source) {
+            (None, _) if let Some(mix) = &saved.source_mix => {
+                mix_choice(mix.mode, mix.apps.clone())
+            }
             (Some(input), _) => Chosen::Input {
                 endpoint_id: input.id.clone(),
                 name: if input.name.is_empty() {
@@ -592,7 +730,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         Settings {
             version: settings::VERSION,
             source: match &self.chosen {
-                Chosen::WholeSystem | Chosen::Input { .. } => SavedSource::System,
+                Chosen::WholeSystem | Chosen::Input { .. } | Chosen::Mix { .. } => {
+                    SavedSource::System
+                }
                 Chosen::App {
                     executable, name, ..
                 } => SavedSource::App {
@@ -604,6 +744,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 Chosen::Input { endpoint_id, name } => Some(SavedInput {
                     id: endpoint_id.clone(),
                     name: name.clone(),
+                }),
+                _ => None,
+            },
+            source_mix: match &self.chosen {
+                Chosen::Mix { mode, apps } => Some(SavedMix {
+                    mode: *mode,
+                    apps: apps.clone(),
                 }),
                 _ => None,
             },
@@ -1141,11 +1288,74 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.custom_names.shown(&speaker_key(endpoint_id), system)
     }
 
-    fn chosen_name(&self) -> String {
-        match &self.chosen {
-            Chosen::WholeSystem => WHOLE_SYSTEM_NAME.to_owned(),
-            Chosen::App { name, .. } | Chosen::Input { name, .. } => name.clone(),
+    /// Makes `picked` the source: the old one's notices go, and while
+    /// streaming, capture starts again from the new one (S141, S163).
+    fn choose(&mut self, picked: Chosen) {
+        if picked.key() == self.chosen.key() {
+            return;
         }
+        self.log
+            .log(|| format!("source chosen: {} ({})", picked.shown_name(), picked.key()));
+        self.chosen = picked;
+        self.notices
+            .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
+        // A start ends the running session by itself and keeps the AirPlay
+        // speakers in the stream, restarting only their timeline (S141); a
+        // stop would tear them down and connect them again.
+        let switch = source_switch(self.running());
+        let started = switch
+            .start
+            .is_some_and(|origin| self.start_session(origin));
+        if switch.stop_keeping_airplay && !started && self.running() {
+            self.audio.stop();
+        }
+    }
+
+    /// The apps the several-apps list offers: the listed apps, then the
+    /// checked ones that aren't listed, so each can still be unchecked.
+    fn mix_apps(&self) -> Vec<MixApp> {
+        let checked = mix_checked(&self.chosen, mix_mode(&self.chosen, self.mix_mode));
+        let is_checked = |executable: &str| {
+            checked
+                .iter()
+                .any(|app| app.executable.eq_ignore_ascii_case(executable))
+        };
+        let mut apps: Vec<MixApp> = Vec::new();
+        for source in &self.sources {
+            if matches!(source.id, SourceId::App { .. })
+                && !source.executable.is_empty()
+                && !apps
+                    .iter()
+                    .any(|app| app.id.eq_ignore_ascii_case(&source.executable))
+            {
+                apps.push(MixApp {
+                    id: source.executable.clone(),
+                    name: source.name.clone(),
+                    checked: is_checked(&source.executable),
+                });
+            }
+        }
+        for app in &checked {
+            if !apps
+                .iter()
+                .any(|listed| listed.id.eq_ignore_ascii_case(&app.executable))
+            {
+                apps.push(MixApp {
+                    id: app.executable.clone(),
+                    name: if app.name.is_empty() {
+                        app.executable.clone()
+                    } else {
+                        app.name.clone()
+                    },
+                    checked: true,
+                });
+            }
+        }
+        apps
+    }
+
+    fn chosen_name(&self) -> String {
+        self.chosen.shown_name()
     }
 
     /// Posts a notice, replacing an older one about the same subject.
@@ -1722,6 +1932,43 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return Ok(SourceId::WholeSystem);
         }
         self.refresh_sources();
+        if let Chosen::Mix {
+            mode: MixMode::Only,
+            apps,
+        } = &self.chosen
+        {
+            // Each app where it runs now; one that doesn't is skipped.
+            let mut root_pids = Vec::new();
+            for app in apps {
+                let listed = self.sources.iter().find_map(|source| match source.id {
+                    SourceId::App { root_pid }
+                        if source.executable.eq_ignore_ascii_case(&app.executable) =>
+                    {
+                        Some(root_pid)
+                    }
+                    _ => None,
+                });
+                let found = match listed {
+                    Some(pid) => Some(pid),
+                    None => {
+                        self.audio
+                            .find_app(0, &app.executable)?
+                            .and_then(|info| match info.id {
+                                SourceId::App { root_pid } => Some(root_pid),
+                                _ => None,
+                            })
+                    }
+                };
+                root_pids.extend(found);
+            }
+            if root_pids.is_empty() {
+                return Err(BackendError::SourceGone);
+            }
+            return Ok(SourceId::Apps {
+                root_pids,
+                executables: apps.iter().map(|app| app.executable.clone()).collect(),
+            });
+        }
         let key = self.chosen.key();
         if matches!(self.chosen, Chosen::Input { .. })
             && !self.sources.iter().any(|source| source_key(source) == key)
@@ -1812,7 +2059,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// What a notice says about a start that failed with `error`.
     fn start_problem(&self, error: &BackendError) -> NoticeMessage {
-        let app = matches!(self.chosen, Chosen::App { .. });
+        let app = matches!(
+            self.chosen,
+            Chosen::App { .. }
+                | Chosen::Mix {
+                    mode: MixMode::Only,
+                    ..
+                }
+        );
         match error {
             BackendError::InputGone => NoticeMessage::InputNotConnected {
                 source: self.chosen_name(),
@@ -2239,7 +2493,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let message = NoticeMessage::HeardTwice {
             source: match &self.chosen {
                 Chosen::WholeSystem => None,
-                Chosen::App { name, .. } | Chosen::Input { name, .. } => Some(name.clone()),
+                chosen => Some(chosen.shown_name()),
             },
             mute: names(false),
             shared: names(true),
@@ -2292,7 +2546,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 name: source.name.clone(),
                 kind: match source.id {
                     SourceId::WholeSystem => SourceKind::System,
-                    SourceId::App { .. } => SourceKind::App,
+                    SourceId::App { .. } | SourceId::Apps { .. } => SourceKind::App,
+                    SourceId::AppsExcept { .. } => SourceKind::AppsExcept,
                     SourceId::Input { .. } => SourceKind::Input,
                 },
             })
@@ -2301,7 +2556,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if !rows.iter().any(|row| row.id == chosen) {
             let kind = match self.chosen {
                 Chosen::Input { .. } => SourceKind::Input,
+                Chosen::Mix {
+                    mode: MixMode::AllExcept,
+                    ..
+                } => SourceKind::AppsExcept,
                 _ => SourceKind::App,
+            };
+            // The UI puts its own words around the apps "all except" leaves out.
+            let name = match &self.chosen {
+                Chosen::Mix { apps, .. } => mix_names(apps),
+                chosen => chosen.shown_name(),
             };
             // Apps come before input devices, as in the listing.
             let at = match kind {
@@ -2315,7 +2579,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 at,
                 Source {
                     id: chosen,
-                    name: self.chosen_name(),
+                    name,
                     kind,
                 },
             );
@@ -2491,6 +2755,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
+            mix_apps: self.mix_apps(),
+            mix_all_except: mix_mode(&self.chosen, self.mix_mode) == MixMode::AllExcept,
             master_volume: self.audio.master_volume(),
             speakers,
             hidden,
@@ -2562,28 +2828,41 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         else {
             return;
         };
-        if picked.key() == self.chosen.key() {
+        self.choose(picked);
+    }
+
+    fn toggle_mix_app(&mut self, executable: &str) {
+        let Some(app) = self
+            .mix_apps()
+            .into_iter()
+            .find(|app| app.id.eq_ignore_ascii_case(executable))
+        else {
             return;
-        }
-        self.log.log(|| {
-            let name = match &picked {
-                Chosen::WholeSystem => WHOLE_SYSTEM_NAME,
-                Chosen::App { name, .. } | Chosen::Input { name, .. } => name,
-            };
-            format!("source chosen: {name} ({})", picked.key())
-        });
-        self.chosen = picked;
-        self.notices
-            .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
-        // A start ends the running session by itself and keeps the AirPlay
-        // speakers in the stream, restarting only their timeline (S141); a
-        // stop would tear them down and connect them again.
-        let switch = source_switch(self.running());
-        let started = switch
-            .start
-            .is_some_and(|origin| self.start_session(origin));
-        if switch.stop_keeping_airplay && !started && self.running() {
-            self.audio.stop();
+        };
+        let mode = mix_mode(&self.chosen, self.mix_mode);
+        let picked = mix_toggle(
+            &self.chosen,
+            mode,
+            SavedMixApp {
+                executable: app.id,
+                name: app.name,
+            },
+        );
+        self.choose(picked);
+    }
+
+    fn set_mix_all_except(&mut self, on: bool) {
+        let mode = if on {
+            MixMode::AllExcept
+        } else {
+            MixMode::Only
+        };
+        let current = mix_mode(&self.chosen, self.mix_mode);
+        self.mix_mode = mode;
+        if mode != current {
+            // The checked apps carry over to the other mode.
+            let picked = mix_choice(mode, mix_checked(&self.chosen, current));
+            self.choose(picked);
         }
     }
 
@@ -2690,13 +2969,24 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
-    fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
+    fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
         let Some(address) = CastAddress::parse(text) else {
             self.log
                 .log(|| "Cast: Add by Address turned down what was typed".to_owned());
             return Err(CastAddressError::Invalid);
         };
-        if !(self.cast_probe)(&address) {
+        Ok(CastAddressCheck {
+            address,
+            answers: self.cast_probe,
+        })
+    }
+
+    fn add_checked_cast_address(
+        &mut self,
+        address: CastAddress,
+        answered: bool,
+    ) -> Result<(), CastAddressError> {
+        if !answered {
             self.log
                 .log(|| format!("Cast: nothing answers at {}", address.text()));
             return Err(CastAddressError::NotFound);
@@ -3438,6 +3728,7 @@ fn describe_source(source: &SourceInfo) -> String {
             source.name, source.executable
         ),
         SourceId::Input { endpoint_id } => format!("{} (input device {endpoint_id})", source.name),
+        SourceId::Apps { .. } | SourceId::AppsExcept { .. } => source.name.clone(),
     }
 }
 
@@ -3447,6 +3738,7 @@ fn source_key(source: &SourceInfo) -> String {
         SourceId::WholeSystem => SYSTEM_KEY.to_owned(),
         SourceId::App { root_pid } => app_key(*root_pid, &source.executable),
         SourceId::Input { endpoint_id } => input_key(endpoint_id),
+        SourceId::Apps { .. } | SourceId::AppsExcept { .. } => format!("mix:{}", source.name),
     }
 }
 
@@ -3548,12 +3840,12 @@ mod tests {
             .driver()
             .captures_started()
             .iter()
-            .filter_map(|target| match target {
-                CaptureTarget::Loopback(activation) => {
-                    Some((activation.mode, activation.target_pid))
-                }
-                CaptureTarget::Input { .. } => None,
+            .flat_map(|target| match target {
+                CaptureTarget::Loopback(activation) => vec![*activation],
+                CaptureTarget::Mix(activations) => activations.clone(),
+                CaptureTarget::Input { .. } => Vec::new(),
             })
+            .map(|activation| (activation.mode, activation.target_pid))
             .collect()
     }
 
@@ -3566,7 +3858,7 @@ mod tests {
             .iter()
             .filter_map(|target| match target {
                 CaptureTarget::Input { endpoint_id } => Some(endpoint_id.clone()),
-                CaptureTarget::Loopback(_) => None,
+                CaptureTarget::Loopback(_) | CaptureTarget::Mix(_) => None,
             })
             .collect()
     }
@@ -3575,6 +3867,85 @@ mod tests {
 
     fn mic() -> String {
         format!("input:{MIC}")
+    }
+
+    fn mix_app(executable: &str) -> SavedMixApp {
+        SavedMixApp {
+            executable: executable.to_owned(),
+            name: executable.trim_end_matches(".exe").to_owned(),
+        }
+    }
+
+    #[test]
+    fn checking_apps_builds_a_mix_and_unchecking_them_goes_back_to_one_app_or_the_system() {
+        let player = Chosen::App {
+            root_pid: 10,
+            executable: "player.exe".to_owned(),
+            name: "player".to_owned(),
+        };
+        let both = mix_toggle(&player, MixMode::Only, mix_app("browser.exe"));
+        assert_eq!(
+            both,
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps: vec![mix_app("player.exe"), mix_app("browser.exe")],
+            }
+        );
+        assert_eq!(both.key(), "mix:only:player.exe,browser.exe");
+        assert_eq!(
+            both.id(),
+            SourceId::Apps {
+                root_pids: Vec::new(),
+                executables: vec!["player.exe".to_owned(), "browser.exe".to_owned()],
+            },
+            "the pids are found at the next listing"
+        );
+        let one = mix_toggle(&both, MixMode::Only, mix_app("PLAYER.EXE"));
+        assert!(
+            matches!(&one, Chosen::App { executable, root_pid: 0, .. } if executable == "browser.exe"),
+            "one app left in \"only these\" is a plain app: {one:?}"
+        );
+        assert_eq!(
+            mix_toggle(&one, MixMode::Only, mix_app("browser.exe")),
+            Chosen::WholeSystem
+        );
+    }
+
+    #[test]
+    fn all_except_keeps_one_app_as_a_mix_and_switching_mode_carries_the_checked_apps() {
+        let except = mix_toggle(
+            &Chosen::WholeSystem,
+            MixMode::AllExcept,
+            mix_app("game.exe"),
+        );
+        assert_eq!(
+            except,
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps: vec![mix_app("game.exe")],
+            }
+        );
+        assert_eq!(
+            except.id(),
+            SourceId::AppsExcept {
+                executables: vec!["game.exe".to_owned()]
+            }
+        );
+        assert_eq!(mix_mode(&except, MixMode::Only), MixMode::AllExcept);
+        assert_eq!(mix_checked(&except, MixMode::Only), Vec::new());
+        let carried = mix_choice(MixMode::Only, mix_checked(&except, MixMode::AllExcept));
+        assert!(matches!(carried, Chosen::App { ref executable, .. } if executable == "game.exe"));
+        assert_eq!(
+            mix_choice(
+                MixMode::AllExcept,
+                vec![mix_app("a.exe"), mix_app("A.EXE"), mix_app("")]
+            ),
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps: vec![mix_app("a.exe")],
+            },
+            "repeats and empty names are dropped"
+        );
     }
 
     #[test]
@@ -7623,6 +7994,30 @@ mod tests {
         adapter.remove_cast_address(&id);
         assert!(adapter.snapshot().speaker(&id).is_none());
         assert!(adapter.current_settings().cast_addresses.is_empty());
+    }
+
+    #[test]
+    fn checking_an_address_leaves_the_wait_to_the_caller() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.set_cast_probe(|_| panic!("probed on the calling thread"));
+        let check = adapter.check_cast_address("192.0.2.20").expect("taken");
+        assert_eq!(check.address.text(), "192.0.2.20");
+        assert_eq!(
+            adapter.add_checked_cast_address(check.address.clone(), false),
+            Err(CastAddressError::NotFound)
+        );
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&cc_address("192.0.2.20"))
+                .is_none()
+        );
+        assert!(adapter.current_settings().cast_addresses.is_empty());
+        assert_eq!(
+            adapter.add_checked_cast_address(check.address, true),
+            Ok(())
+        );
+        assert_eq!(adapter.current_settings().cast_addresses, ["192.0.2.20"]);
     }
 
     #[test]

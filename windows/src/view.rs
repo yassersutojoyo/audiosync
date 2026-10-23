@@ -42,8 +42,9 @@ use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
     CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog,
     GuidePage, GuideStepItem, GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow,
-    NameField, NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart,
-    RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
+    MixAppItem, NameField, NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase,
+    RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout,
+    speaker_names,
 };
 
 mod help_window;
@@ -92,6 +93,8 @@ struct UiState {
     /// `airplay2_at_launch`.
     airplay2_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
+    /// Whether the source was a mix at the last refresh.
+    source_was_mix: bool,
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -185,6 +188,7 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
+    mix_apps: Rc<VecModel<MixAppItem>>,
     this_pc: Rc<VecModel<SpeakerItem>>,
     connected: Rc<VecModel<SpeakerItem>>,
     all_speakers: Rc<VecModel<SpeakerItem>>,
@@ -552,6 +556,10 @@ pub struct App {
     password_for: RefCell<Option<String>>,
     /// Add by Address…, for a Google Cast speaker discovery can't find.
     cast_address_dialog: CastAddressDialog,
+    /// The answer of the address check Add by Address… is waiting for.
+    cast_check: RefCell<Option<std::sync::mpsc::Receiver<cast_address::CheckAnswer>>>,
+    /// Looks for that answer while the check runs.
+    cast_check_timer: Timer,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -742,6 +750,7 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
+            mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
             connected: Rc::new(VecModel::default()),
             all_speakers: Rc::new(VecModel::default()),
@@ -765,6 +774,8 @@ impl App {
             password_dialog: PasswordDialog::new()?,
             password_for: RefCell::new(None),
             cast_address_dialog: CastAddressDialog::new()?,
+            cast_check: RefCell::default(),
+            cast_check_timer: Timer::default(),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
@@ -1278,6 +1289,7 @@ impl App {
     fn attach_models(&self) {
         let m = &self.models;
         self.main.set_sources(ModelRc::from(m.sources.clone()));
+        self.main.set_mix_apps(ModelRc::from(m.mix_apps.clone()));
         self.main.set_this_pc(ModelRc::from(m.this_pc.clone()));
         self.main.set_connected(ModelRc::from(m.connected.clone()));
         self.main.set_groups(ModelRc::from(m.groups.clone()));
@@ -1324,15 +1336,19 @@ impl App {
         }
         let state = self.snapshot();
         let strings = self.strings();
-        {
+        let became_mix = {
             let mut ui = self.ui.borrow_mut();
+            let is_mix = state.source_id.starts_with("mix:");
+            let became_mix = is_mix && !ui.source_was_mix;
+            ui.source_was_mix = is_mix;
             let show_virtual = ui.show_virtual;
             ui.listed_virtual.note(&state.speakers, show_virtual);
             // A speaker that went takes what was typed for it along: back,
             // it shows its saved delay.
             ui.delay_drafts
                 .retain(|id, _| state.speakers.iter().any(|s| s.id == *id));
-        }
+            became_mix
+        };
         let ui = self.ui.borrow();
         let item = |speaker: &ui_model::Speaker, show_kind: bool| {
             let draft = ui
@@ -1472,6 +1488,7 @@ impl App {
                 // The backend's name for it is English; the UI's is translated.
                 SourceKind::System => strings.get_source_system(),
                 SourceKind::App | SourceKind::Input => s.name.as_str().into(),
+                SourceKind::AppsExcept => strings.invoke_source_all_except(s.name.as_str().into()),
             })
             .collect();
         let source_index = state
@@ -1509,6 +1526,23 @@ impl App {
             groups,
         } = main_lists;
         sync_model(&m.sources, sources);
+        sync_model(
+            &m.mix_apps,
+            state
+                .mix_apps
+                .iter()
+                .map(|app| MixAppItem {
+                    name: app.name.as_str().into(),
+                    checked: app.checked,
+                })
+                .collect(),
+        );
+        self.main.set_mix_all_except(state.mix_all_except);
+        // The list opens once as the source becomes a mix; folding it is
+        // the user's.
+        if became_mix {
+            self.main.set_mix_open(true);
+        }
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
         sync_model(&m.all_speakers, all);
@@ -1746,6 +1780,12 @@ impl App {
         main.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
         main.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        let w = weak.clone();
+        main.on_mix_app_toggled(move |index| with_app(&w, |app| app.toggle_mix_app(index)));
+        let w = weak.clone();
+        main.on_mix_mode_selected(move |on| {
+            with_app(&w, |app| app.update(|b| b.set_mix_all_except(on)));
+        });
         let w = weak.clone();
         main.on_switch_source_on_quit_toggled(move |on| {
             let setting = if on {
@@ -2365,6 +2405,16 @@ impl App {
         self.guide.invoke_take_focus();
         crate::platform::bring_to_front(self.guide.window());
         true
+    }
+
+    fn toggle_mix_app(&self, index: i32) {
+        let state = self.snapshot();
+        if let Some(app) = usize::try_from(index)
+            .ok()
+            .and_then(|i| state.mix_apps.get(i))
+        {
+            self.update(|b| b.toggle_mix_app(&app.id));
+        }
     }
 
     fn select_source(&self, index: i32) {
@@ -3925,7 +3975,8 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_model::MockBackend;
+    use crate::ui_model::{MOCK_CAST_HOLD, MockBackend};
+    use std::sync::PoisonError;
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
@@ -5825,13 +5876,19 @@ mod tests {
             state: ui_model::CastState::Connecting,
             muted: true,
             volume_fixed: false,
-            volume_step: 1.0,
+            volume_step: crate::audio::cast::volume_step(Some(
+                &audiosync_cast::status::DeviceVolume {
+                    step_interval: Some(0.05),
+                    ..Default::default()
+                },
+            )),
             group: None,
             added_by_address: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert_eq!(row.kind, SpeakerKind::Cast);
         assert!(row.cast && row.muted && !row.volume_fixed);
+        assert_eq!(row.volume_step, 5.0);
         assert_eq!(row.cast_state, CastState::Connecting);
         let strings = app.strings();
         assert_eq!(
@@ -5872,7 +5929,9 @@ mod tests {
         );
 
         speaker.cast = None;
-        assert!(!speaker_item(&state, &speaker, true, false, None).cast);
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert!(!row.cast);
+        assert_eq!(row.volume_step, 1.0);
     }
 
     #[test]
@@ -6385,6 +6444,7 @@ mod tests {
         // The field took the cursor back with its text selected.
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
+        settle_cast_check(&app);
         assert!(window.is_visible());
         assert_eq!(
             dialog.get_error(),
@@ -6393,11 +6453,23 @@ mod tests {
 
         type_text(window, "speaker.local");
         press(window, Key::Return);
+        settle_cast_check(&app);
         assert!(!window.is_visible(), "Enter added it");
         assert_eq!(dialog.get_address(), "", "the field is cleared");
         let state = app.snapshot();
         let row = state.speaker("cc:speaker.local").expect("listed");
         assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
+    }
+
+    /// Waits for the address check Add by Address… started, if any, and
+    /// takes its answer.
+    fn settle_cast_check(app: &App) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while app.cast_check.borrow().is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+            app.take_cast_check();
+        }
+        draw_frames();
     }
 
     /// What the dialog's two live regions hold, in order.
@@ -6434,6 +6506,7 @@ mod tests {
 
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
+        settle_cast_check(&app);
         assert_eq!(cast_address_said(&app), (String::new(), not_found));
 
         press(window, Key::Escape);
@@ -6464,8 +6537,58 @@ mod tests {
         type_text(window, "speaker.local");
         assert!(dialog.get_can_add());
         press(window, Key::Return);
+        settle_cast_check(&app);
         assert!(!window.is_visible(), "Enter added it");
         assert!(app.snapshot().speaker("cc:speaker.local").is_some());
+    }
+
+    #[test]
+    fn add_by_address_waits_for_the_check_off_the_ui_thread_and_cancel_drops_its_answer() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let speakers = app.snapshot().speakers.len();
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        let hold = || {
+            MOCK_CAST_HOLD
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        };
+
+        let held = hold();
+        app.main.invoke_cast_add_address_requested();
+        type_text(window, "speaker.held");
+        press(window, Key::Return);
+        assert!(window.is_visible(), "open while the address is checked");
+        assert!(dialog.get_checking());
+        assert!(!dialog.get_can_add(), "Add is off during the check");
+        assert_eq!(strings.get_cast_address_checking(), "Checking…");
+        press(window, Key::Return);
+        assert!(app.snapshot().speaker("cc:speaker.held").is_none());
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape closes it during the check");
+        assert!(!dialog.get_checking());
+        drop(held);
+        std::thread::sleep(Duration::from_millis(200));
+        draw_frames();
+        assert_eq!(
+            app.snapshot().speakers.len(),
+            speakers,
+            "the late answer is dropped"
+        );
+
+        let held = hold();
+        app.main.invoke_cast_add_address_requested();
+        assert!(!dialog.get_checking());
+        assert_eq!(dialog.get_error(), "");
+        type_text(window, "speaker.held");
+        press(window, Key::Return);
+        assert!(dialog.get_checking());
+        drop(held);
+        settle_cast_check(&app);
+        assert!(!window.is_visible(), "added once the check answered");
+        assert!(!dialog.get_checking());
+        assert!(app.snapshot().speaker("cc:speaker.held").is_some());
     }
 
     #[test]
@@ -6812,9 +6935,9 @@ mod tests {
     fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_next_rows_options() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        // Switch, source, master volume, Equalizer, Calibrate All, then the
+        // Switch, Several apps, source, master volume, Equalizer, Calibrate All, then the
         // rows: the group's, This PC's, then the connected speakers' by name.
-        tab(window, 17);
+        tab(window, 18);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -6845,7 +6968,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 25);
+        tab(window, 26);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -6887,10 +7010,63 @@ mod tests {
     }
 
     #[test]
+    fn the_several_apps_list_opens_from_the_keyboard_and_checks_apps_and_the_mode() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        assert!(!app.main.get_mix_open(), "folded until asked for");
+        // The main switch, then Several apps.
+        tab(window, 2);
+        press(window, " ");
+        draw_frames();
+        assert!(app.main.get_mix_open());
+        assert_eq!(app.main.get_mix_apps().row_count(), 2);
+
+        app.main.invoke_mix_app_toggled(1);
+        app.main.invoke_mix_app_toggled(0);
+        let state = app.snapshot();
+        assert!(state.mix_apps.iter().all(|a| a.checked));
+        assert!(app.main.get_mix_apps().row_data(1).unwrap().checked);
+        app.main.invoke_mix_mode_selected(true);
+        assert!(app.snapshot().mix_all_except);
+        assert!(app.main.get_mix_all_except());
+
+        // Folded again by the user, it stays folded while the mix plays on.
+        press(window, " ");
+        draw_frames();
+        assert!(!app.main.get_mix_open());
+        app.refresh();
+        assert!(!app.main.get_mix_open(), "a refresh never reopens it");
+    }
+
+    #[test]
+    fn the_several_apps_list_opens_by_itself_once_as_the_source_becomes_a_mix() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        assert!(!app.main.get_mix_open());
+        app.main.invoke_mix_app_toggled(0);
+        assert!(!app.main.get_mix_open(), "one app is no mix yet");
+        app.main.invoke_mix_app_toggled(1);
+        assert!(app.main.get_mix_open());
+        app.main.set_mix_open(false);
+        app.main.invoke_mix_app_toggled(1);
+        app.main.invoke_mix_app_toggled(1);
+        assert!(
+            app.main.get_mix_open(),
+            "back to a mix after one app opens it again"
+        );
+        app.main.set_mix_open(false);
+        app.refresh();
+        assert!(!app.main.get_mix_open());
+    }
+
+    #[test]
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 15);
+        tab(window, 16);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -7108,7 +7284,7 @@ mod tests {
         let window = app.main.window();
         // As in the example's order without the group's row and Bedroom's:
         // the cable row's toggle.
-        tab(window, 13);
+        tab(window, 14);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");

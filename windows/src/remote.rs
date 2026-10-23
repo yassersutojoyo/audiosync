@@ -566,6 +566,8 @@ mod tests {
             running: true,
             sources: Vec::new(),
             source_id: String::new(),
+            mix_apps: Vec::new(),
+            mix_all_except: false,
             master_volume: 70.0,
             speakers: vec![
                 desk,

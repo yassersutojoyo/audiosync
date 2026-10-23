@@ -181,6 +181,7 @@ extension AppDelegate {
         switch audioSource {
         case .system: nowPlaying.preferredBundleID = nil
         case .app(let bundleID): nowPlaying.preferredBundleID = bundleID
+        case .mix: nowPlaying.preferredBundleID = nil
         case .input: nowPlaying.preferredBundleID = ""
         }
         nowPlaying.refresh()
