@@ -145,6 +145,10 @@ final class StreamEngine {
         }
     }
 
+    /// The largest sample magnitude captured since the last call (1 is full
+    /// scale), for the input level meter; nil while no session runs.
+    func takePeak() -> Float? { parts?.ring.takePeak() }
+
     /// Ends the session (S115, S186): every output and the AirPlay input
     /// fade out at once while capture still runs; once the outputs' devices
     /// have played their fades (at most 500 ms later), capture stops, so no

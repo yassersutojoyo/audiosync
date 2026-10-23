@@ -23,6 +23,11 @@ enum Brand {
     static let errorText = dynamic("AudioSyncErrorText",
                                    light: BrandTokens.Light.errorText, dark: BrandTokens.Dark.errorText)
 
+    /// The input level meter's track; its `tealText` fill measures 4.31:1 on
+    /// it in light appearance and 4.29:1 in dark (3:1 is the graphics bar).
+    static let meterTrack = dynamic("AudioSyncMeterTrack",
+                                    light: BrandTokens.Light.separator, dark: BrandTokens.Dark.separator)
+
     /// Small secondary text (captions, notes, values), in place of `.secondary`.
     /// WCAG AA needs 4.5:1 for small text, and `.secondary` misses it in light
     /// appearance. Measured on macOS 26 (window and card #FFFFFF, menu bar panel

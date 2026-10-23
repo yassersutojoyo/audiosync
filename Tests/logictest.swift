@@ -5743,5 +5743,48 @@ do {
           "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
 }
 
+// MARK: Live input: the lead per source and output, and the input level meter (LocalDelay.swift, InputLevel.swift)
+do {
+    let sources: [AudioSource] = [.system, .app(bundleID: "com.example.player"), .input(uid: "mic")]
+    let outputs: [LocalDelay.LeadOutput] = [.local, .airPlay, .cast]
+    for source in sources {
+        for output in outputs {
+            let liveLocal = source == .input(uid: "mic") && output == .local
+            let wait = LocalDelay.networkWaitMs(source: source, output: output, networkMs: 1750)
+            check(wait == (liveLocal ? nil : 1750), "lead: \(source) on \(output) waits \(String(describing: wait)) ms")
+            check(LocalDelay.networkWaitMs(source: source, output: output, networkMs: nil) == nil,
+                  "lead: \(source) on \(output) waits for nothing without network speakers")
+        }
+    }
+    let live = LocalDelay.leadDescription(source: .input(uid: "mic"), networkMs: 2000)
+    let recorded = LocalDelay.leadDescription(source: .system, networkMs: 2000)
+    check(live.contains("live input") && live.contains("start lead") && live.contains("2000 ms"),
+          "lead: the debug log says live input skips the wait: \(live)")
+    check(recorded == "lead: local speakers wait 2000 ms for the network speakers", "lead: \(recorded)")
+
+    let meter = InputLevel()
+    check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden without an input")
+    check(meter.update(peak: 1) && meter.shown && meter.level == 1, "input level: full scale fills it")
+    meter.update(peak: 0)
+    check(abs(meter.level - 0.85) < 1e-5, "input level: it falls back a step, \(meter.level)")
+    check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden again, emptied")
+    check(UIStrings(locale: Locale(identifier: "en_US")).inputLevelValue(0.42) == "42%",
+          "input level: VoiceOver reads a percent")
+
+    func luminance(_ c: BrandRGB) -> Double {
+        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue)
+    }
+    func contrast(_ a: BrandRGB, _ b: BrandRGB) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    for (name, fill, track) in [("light", BrandTokens.Light.tealText, BrandTokens.Light.separator),
+                                ("dark", BrandTokens.Dark.tealText, BrandTokens.Dark.separator)] {
+        let ratio = contrast(fill, track)
+        check(ratio >= 3, "input level: the fill on its track reaches 3:1 in \(name) appearance (\(ratio))")
+    }
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

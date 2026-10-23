@@ -58,7 +58,18 @@ extension AppDelegate {
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
         syncCast()   // the Cast speaker that is on connects
         syncLocalOutputs(origin: origin)
+        DebugTrace.log("[AudioSync] " + LocalDelay.leadDescription(source: audioSource, networkMs: networkWaitMs))
+        startInputLevel()
         verifyAudioFlowing(origin: origin)
+    }
+
+    /// Moves the input level meter while this session captures an input
+    /// device; it hides once the session stops or captures something else.
+    func startInputLevel() {
+        appModel.inputLevel.follow { [weak self] in
+            guard let self, case .input = self.audioSource, self.engine.isRunning else { return nil }
+            return self.engine.takePeak()
+        }
     }
 
     /// macOS answered the microphone request a start made: start again, or

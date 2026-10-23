@@ -152,6 +152,8 @@ final class AppModel: ObservableObject {
     @Published var running = false
     @Published var sourceID = ""
     @Published var sources: [Source] = []
+    /// The level meter under the source; it publishes on its own.
+    let inputLevel = InputLevel()
     @Published var master: Double = 100
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
@@ -1131,6 +1133,30 @@ struct SourcePicker: View {
             Image(systemName: "speaker.wave.3.fill")
                 .frame(width: edge, height: edge)
                 .foregroundStyle(accent)
+        }
+    }
+}
+
+/// The input level meter under the source picker, while an input device is
+/// captured: a bar that only reads out, never a control or a focus stop.
+struct InputLevelMeter: View {
+    @ObservedObject var level: InputLevel
+    let text: UIStrings
+
+    var body: some View {
+        if level.shown {
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Brand.meterTrack)
+                    Capsule().fill(Brand.tealText)
+                        .frame(width: geometry.size.width * CGFloat(min(max(level.level, 0), 1)))
+                }
+            }
+            .frame(height: 4)
+            .padding(.horizontal, 10)
+            .accessibilityElement()
+            .accessibilityLabel(text.inputLevel)
+            .accessibilityValue(text.inputLevelValue(level.level))
         }
     }
 }
