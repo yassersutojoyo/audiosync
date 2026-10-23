@@ -363,6 +363,20 @@ enum CalibrateAllFlow {
         ([speaker] + silenced.filter { $0.kind == speaker.kind }).map { settleSeconds($0) }.max() ?? 0
     }
 
+    /// The zone the sheet's own button runs: the one the open sheet
+    /// measures, so a zone sheet never turns into a whole run (S255).
+    static func startZone(_ status: CalibrateAllStatus) -> String? {
+        status.shown ? status.zone?.id : nil
+    }
+
+    /// Whether the sheet lists the outputs that sit out before the run
+    /// starts, so one can be included anyway: for Calibrate Zone only when
+    /// one is a member of the zone, since no other is measured (S255).
+    static func previewsLeftOut(_ leftOut: [CalibrateAllLeftOut], zone: CalibrateZoneScope?) -> Bool {
+        guard let zone else { return !leftOut.isEmpty }
+        return leftOut.contains { zone.members.contains(SpeakerKey.make(id: $0.id, kind: .local)) }
+    }
+
     /// A speaker's key (`SpeakerKey`), as a zone holds it.
     static func zoneKey(_ speaker: CalibrateAllSpeaker) -> String {
         switch speaker.kind {

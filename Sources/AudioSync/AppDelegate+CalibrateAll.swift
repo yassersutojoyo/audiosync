@@ -9,9 +9,10 @@ import CAudioSyncCore
 extension AppDelegate {
 
     /// "Calibrate All Speakers": the sheet opens and the run starts, or the
-    /// sheet says why it can't.
+    /// sheet says why it can't. From an open Calibrate Zone sheet it runs
+    /// that zone again (S255).
     func startCalibrateAll() {
-        startCalibrateRun(zone: nil)
+        startCalibrateRun(zone: CalibrateAllFlow.startZone(appModel.calibrateAll))
     }
 
     /// "Calibrate Zone…" in zone `id`'s Options menu (S255): Calibrate All
@@ -38,7 +39,7 @@ extension AppDelegate {
                                                        zone: scope.map(calibrateZoneSheet))
             followCalibrateAll()
             // The sheet lists the outputs that sit out before any run, so one can be included anyway first.
-            if !appModel.calibrateAll.leftOut.isEmpty { return }
+            if CalibrateAllFlow.previewsLeftOut(appModel.calibrateAll.leftOut, zone: scope) { return }
         }
         let planned: Result<CalibrateZonePlan, CalibrateAllBlocker> = if let scope {
             CalibrateAllFlow.zonePlan(calibrateAllInputs(), zone: scope)
@@ -113,9 +114,12 @@ extension AppDelegate {
         appModel.calibrateAll.againRow = index
         var speakers = sheet.speakers
         speakers[index] = speaker
+        // On a zone sheet every other speaker that plays is silenced, and its play-out is waited for (S255).
+        let outside: [CalibrateAllSpeaker] = appModel.calibrateAll.zone == nil
+            ? [] : ((try? calibrateAllPlan().get()) ?? []).filter { !taking.contains($0.id) }
         let run = CalibrateAllRun(app: self, mode: .again(row: index), speakers: speakers, handle: handle,
                                   rate: sheet.rate, microphone: sheet.microphone, taking: taking,
-                                  zone: appModel.calibrateAll.zone?.id)
+                                  zone: appModel.calibrateAll.zone?.id, silenced: outside)
         calibrateAllRun = run
         run.start()
     }

@@ -4983,6 +4983,20 @@ do {
           "calibrate zone: the AirPlay line names, in zone order, each other zone with a listed AirPlay speaker, "
             + "and speakers in no zone (S255)", "\(moves) | \(porch)")
 
+    let zoneSheet = CalibrateZoneSheet(id: "z1", name: "Upstairs", airPlayMoves: moves)
+    let opened = CalibrateAllStatus(shown: true, zone: zoneSheet)
+    let closed = CalibrateAllStatus(shown: false, zone: zoneSheet)
+    let headphones = CalibrateAllLeftOut(id: "pods", name: "AirPods", reason: .headphones, included: false)
+    let member = CalibrateAllLeftOut(id: "usb", name: "Desk", reason: .headphones, included: false)
+    // covers: S255
+    check(CalibrateAllFlow.startZone(opened) == "z1" && CalibrateAllFlow.startZone(closed) == nil
+            && CalibrateAllFlow.startZone(CalibrateAllStatus(shown: true)) == nil
+            && !CalibrateAllFlow.previewsLeftOut([headphones], zone: scope)
+            && CalibrateAllFlow.previewsLeftOut([headphones, member], zone: scope)
+            && CalibrateAllFlow.previewsLeftOut([headphones], zone: nil),
+          "calibrate zone: the open sheet's button runs its zone again, never a whole run, and lists the outputs "
+            + "that sit out first only when one is in the zone (S255)")
+
     var started = CalibrateAllContext(source: "system", session: 3, streaming: true, switchedOn: ["mac", "usb"],
                                       playing: ["mac", "usb"], delays: [:])
     started.zoneMembers = ["lc:usb", "lc:attic"]
