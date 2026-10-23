@@ -52,6 +52,10 @@ pub struct SourceInfo {
     /// remember a choice by it. Empty for the whole system and for an input
     /// device.
     pub executable: String,
+    /// An input device's channels in the format Windows runs it at, which
+    /// decide the channel pairs it offers; 0 for other sources and when
+    /// Windows doesn't say.
+    pub channels: u16,
 }
 
 /// What kind of device an output is, as Windows describes its endpoint.
@@ -849,6 +853,11 @@ pub trait AudioBackend {
 
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
+
+    /// The channel pair input device `endpoint_id` plays from its next
+    /// start (`InputPair::index`, 0 for channels 1-2). A running capture
+    /// keeps its pair until started again.
+    fn set_input_pair(&mut self, endpoint_id: &str, pair: u16);
 
     /// What a microphone calibration depends on: the session, the outputs
     /// that play, the reference and their hold-backs.

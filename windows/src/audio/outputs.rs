@@ -177,6 +177,10 @@ pub struct EndpointProperties {
     pub enumerator: Option<String>,
     /// Whether its jack is DisplayPort (`PKEY_AudioEndpoint_JackSubType`).
     pub display_port: bool,
+    /// The channels of the format the audio engine runs it at
+    /// (`PKEY_AudioEngine_DeviceFormat`); only input devices use it, to
+    /// offer their channel pairs.
+    pub channels: Option<u16>,
 }
 
 /// Something the listing did with an endpoint that the log should say.
@@ -866,6 +870,7 @@ mod tests {
                 form_factor: Some(form),
                 enumerator: Some(bus.to_owned()),
                 display_port: false,
+                channels: None,
             }),
         }
     }

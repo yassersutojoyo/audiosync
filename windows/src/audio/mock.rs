@@ -570,7 +570,7 @@ impl Driver for MockDriver {
         if let Some(error) = &self.capture_error {
             return Err(error.clone());
         }
-        if let CaptureTarget::Input { endpoint_id } = &target
+        if let CaptureTarget::Input { endpoint_id, .. } = &target
             && !self
                 .inputs
                 .iter()
@@ -733,6 +733,19 @@ impl Controller<MockDriver> {
         driver.changed = true;
     }
 
+    /// Gives a connected input device `channels` channels.
+    pub fn set_input_channels(&mut self, id: &str, channels: u16) {
+        let driver = self.driver_mut();
+        for input in &mut driver.inputs {
+            if input.id.as_deref() == Ok(id)
+                && let Ok(properties) = &mut input.properties
+            {
+                properties.channels = Some(channels);
+            }
+        }
+        driver.changed = true;
+    }
+
     /// Makes listing the input devices fail with `error`, or work again.
     pub fn fail_input_listing(&mut self, error: Option<BackendError>) {
         self.driver_mut().inputs_error = error;
@@ -748,7 +761,7 @@ impl Controller<MockDriver> {
             let mut link = lock(link);
             let captures_it = matches!(
                 &link.target,
-                CaptureTarget::Input { endpoint_id } if endpoint_id == id
+                CaptureTarget::Input { endpoint_id, .. } if endpoint_id == id
             );
             if captures_it && link.state == CaptureState::Running {
                 link.state = CaptureState::Failed(BackendError::DeviceGone);

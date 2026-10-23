@@ -76,6 +76,8 @@ export global Strings {
     out property <string> edit-paste: @tr("Paste");
     out property <string> edit-select-all: @tr("Select all");
     out property <string> source-label: @tr("Audio Source");
+    // The channel pair choice of an input device with more than two channels.
+    out property <string> input-channels-label: @tr("Input Channels");
     out property <string> equalizer: @tr("Equalizer");
     // The Now Playing card: its name for Narrator, and its buttons.
     out property <string> now-playing: @tr("Now Playing");
@@ -389,6 +391,14 @@ export global Strings {
     // The link under the newest notice in the flyout to the window that lists the others.
     public pure function more-notices(count: int) -> string {
         return @tr("{n} more notice…" | "{n} more notices…" % count);
+    }
+
+    // An input channel pair: two channels, or a device's odd last one alone.
+    public pure function input-channel-pair(first: int, last: int) -> string {
+        if first == last {
+            return @tr("Channel {}", first);
+        }
+        return @tr("Channels {}-{}", first, last);
     }
 
     // The app being captured quit while streaming.

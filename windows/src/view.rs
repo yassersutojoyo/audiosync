@@ -19,6 +19,7 @@ use std::time::Duration;
 use audiosync_core::calibrate_all::{
     AirPlayShared, Class, EndReason, Measurement, RowState as SheetRowState, SharedState,
 };
+use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
@@ -185,6 +186,8 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
+    /// The chosen input device's channel pairs; empty up to two channels.
+    input_pairs: Rc<VecModel<SharedString>>,
     this_pc: Rc<VecModel<SpeakerItem>>,
     connected: Rc<VecModel<SpeakerItem>>,
     all_speakers: Rc<VecModel<SpeakerItem>>,
@@ -742,6 +745,7 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
+            input_pairs: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
             connected: Rc::new(VecModel::default()),
             all_speakers: Rc::new(VecModel::default()),
@@ -1278,6 +1282,8 @@ impl App {
     fn attach_models(&self) {
         let m = &self.models;
         self.main.set_sources(ModelRc::from(m.sources.clone()));
+        self.main
+            .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.main.set_this_pc(ModelRc::from(m.this_pc.clone()));
         self.main.set_connected(ModelRc::from(m.connected.clone()));
         self.main.set_groups(ModelRc::from(m.groups.clone()));
@@ -1287,6 +1293,8 @@ impl App {
         self.main
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
         self.flyout.set_sources(ModelRc::from(m.sources.clone()));
+        self.flyout
+            .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
             .set_speakers(ModelRc::from(m.all_speakers.clone()));
         self.flyout.set_groups(ModelRc::from(m.groups.clone()));
@@ -1479,6 +1487,9 @@ impl App {
             .iter()
             .position(|s| s.id == state.source_id)
             .map_or(-1, |i| i as i32);
+        let (input_pairs, input_pair_index) = input_pair_choice(&state, |first, last| {
+            strings.invoke_input_channel_pair(first, last)
+        });
         let status = strings.invoke_status(state.running, count(state.active_speakers()));
         let flyout_notices = newest_notices(&notices, FLYOUT_NOTICE_LIMIT);
 
@@ -1509,6 +1520,9 @@ impl App {
             groups,
         } = main_lists;
         sync_model(&m.sources, sources);
+        sync_model(&m.input_pairs, input_pairs);
+        self.main.set_input_pair_index(input_pair_index);
+        self.flyout.set_input_pair_index(input_pair_index);
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
         sync_model(&m.all_speakers, all);
@@ -1746,6 +1760,10 @@ impl App {
         main.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
         main.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        let w = weak.clone();
+        main.on_input_pair_selected(move |index| {
+            with_app(&w, |app| app.select_input_pair(index));
+        });
         let w = weak.clone();
         main.on_switch_source_on_quit_toggled(move |on| {
             let setting = if on {
@@ -2019,6 +2037,10 @@ impl App {
         flyout.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
         flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        let w = weak.clone();
+        flyout.on_input_pair_selected(move |index| {
+            with_app(&w, |app| app.select_input_pair(index));
+        });
         let w = weak.clone();
         flyout.on_master_volume_changed(move |volume| {
             with_app(&w, |app| app.update(|b| b.set_master_volume(volume.into())))
@@ -2374,6 +2396,13 @@ impl App {
             .and_then(|i| state.sources.get(i))
         {
             self.update(|b| b.select_source(&source.id));
+        }
+    }
+
+    /// `index` is the pair's place in the list, which is its stored index.
+    fn select_input_pair(&self, index: i32) {
+        if let Ok(pair) = u16::try_from(index) {
+            self.update(|b| b.select_input_pair(pair));
         }
     }
 
@@ -2938,6 +2967,26 @@ impl WindowState for TrayFlyout {
         self.set_source_index(source_index);
         self.set_master_volume(state.master_volume as f32);
     }
+}
+
+/// The channel pairs the chosen input device offers, labeled by `label`
+/// (first and last channel, from 1), and the place of the one it plays: a
+/// saved pair the device no longer has plays 1-2, so 1-2 shows.
+fn input_pair_choice(
+    state: &AppState,
+    label: impl Fn(i32, i32) -> SharedString,
+) -> (Vec<SharedString>, i32) {
+    let channels = state
+        .sources
+        .iter()
+        .find(|source| source.id == state.source_id && source.kind == SourceKind::Input)
+        .map_or(0, |source| source.channels);
+    let labels = InputPair::offered(channels)
+        .into_iter()
+        .map(|pair| label(i32::from(pair.left) + 1, i32::from(pair.right) + 1))
+        .collect();
+    let (playing, _) = InputPair::resolve(state.input_pair, channels);
+    (labels, i32::from(playing.index))
 }
 
 /// The newest `limit` notices: what a window lists. A window that shows
@@ -4060,6 +4109,62 @@ mod tests {
             .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
         assert!(app.snapshot().notices.is_empty());
         assert_eq!(app.main.get_notices().row_count(), 0);
+    }
+
+    #[test]
+    fn an_input_device_with_more_than_two_channels_offers_its_pairs_in_both_windows() {
+        let app = app_over(MockBackend::new());
+        let labels = |model: ModelRc<SharedString>| -> Vec<String> {
+            (0..model.row_count())
+                .filter_map(|row| model.row_data(row))
+                .map(String::from)
+                .collect()
+        };
+        assert_eq!(
+            app.main.get_input_pairs().row_count(),
+            0,
+            "not for the whole system"
+        );
+
+        let line_in = app
+            .snapshot()
+            .sources
+            .iter()
+            .position(|source| source.id == "input:line")
+            .expect("listed");
+        app.main.invoke_source_selected(line_in as i32);
+        let offered = ["Channels 1-2", "Channels 3-4", "Channel 5"];
+        assert_eq!(labels(app.main.get_input_pairs()), offered);
+        assert_eq!(labels(app.flyout.get_input_pairs()), offered);
+        assert_eq!(app.main.get_input_pair_index(), 0);
+
+        app.flyout.invoke_input_pair_selected(2);
+        assert_eq!(app.snapshot().input_pair, 2);
+        assert_eq!(app.main.get_input_pair_index(), 2);
+        assert_eq!(app.flyout.get_input_pair_index(), 2);
+
+        app.main.invoke_source_selected(0);
+        assert_eq!(app.main.get_input_pairs().row_count(), 0);
+        assert_eq!(app.main.get_input_pair_index(), 0);
+    }
+
+    #[test]
+    fn a_saved_pair_the_device_no_longer_has_shows_channels_one_and_two() {
+        let mut state = MockBackend::new().snapshot();
+        state.source_id = "input:line".into();
+        state.input_pair = 7;
+        let (labels, index) =
+            input_pair_choice(&state, |first, last| format!("{first}-{last}").into());
+        assert_eq!(labels, ["1-2", "3-4", "5-5"]);
+        assert_eq!(index, 0);
+        state
+            .sources
+            .iter_mut()
+            .for_each(|source| source.channels = 2);
+        assert_eq!(
+            input_pair_choice(&state, |_, _| "x".into()),
+            (Vec::new(), 0)
+        );
     }
 
     #[test]

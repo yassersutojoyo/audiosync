@@ -62,6 +62,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use audiosync_core::channels::InputPair;
 use audiosync_core::clock;
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
@@ -86,7 +87,7 @@ use audiosync_core::calibrate_all::{
 
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress};
 use crate::audio::calibration::{self, CalibrationRun, Failure};
-use crate::audio::capture::WHOLE_SYSTEM_NAME;
+use crate::audio::capture::{WHOLE_SYSTEM_NAME, describe_pair};
 use crate::audio::outputs::MicKind;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
@@ -273,6 +274,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     auto_connect: BTreeSet<String>,
     /// The speakers hidden with Hide Speaker, in the order they were hidden.
     hidden: Vec<SavedHidden>,
+    /// The channel pair each input device plays, by endpoint ID; 1-2 for
+    /// one without an entry.
+    input_pairs: BTreeMap<String, u16>,
     /// The names the user gave speakers (spec S228).
     custom_names: SpeakerNames,
     groups: Vec<Group>,
@@ -371,6 +375,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 id: SourceId::WholeSystem,
                 name: WHOLE_SYSTEM_NAME.to_owned(),
                 executable: String::new(),
+                channels: 0,
             }],
             chosen: Chosen::WholeSystem,
             listed: BTreeSet::new(),
@@ -388,6 +393,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
             hidden: Vec::new(),
+            input_pairs: BTreeMap::new(),
             custom_names: SpeakerNames::default(),
             groups: Vec::new(),
             next_group: 1,
@@ -442,6 +448,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.set_master_volume(saved.master_volume);
         // A hidden speaker is never switched on, not even by the saved on-state.
         self.hidden = saved.hidden_speakers.clone();
+        for (endpoint_id, pair) in &saved.input_pairs {
+            self.audio.set_input_pair(endpoint_id, *pair);
+        }
+        self.input_pairs = saved.input_pairs.clone();
         self.when_source_quits = WhenSourceQuits::from_stored(Some(&saved.when_source_quits));
         self.audio.set_when_source_quits(self.when_source_quits);
         if !self.delays_to_migrate {
@@ -607,6 +617,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }),
                 _ => None,
             },
+            input_pairs: self.input_pairs.clone(),
             master_volume: self.audio.master_volume(),
             outputs,
             airplay,
@@ -1139,6 +1150,26 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .get(endpoint_id)
             .map_or(endpoint_id, String::as_str);
         self.custom_names.shown(&speaker_key(endpoint_id), system)
+    }
+
+    /// The channels an input device was last listed with; 0 when it isn't.
+    fn listed_channels(&self, endpoint_id: &str) -> u16 {
+        self.sources
+            .iter()
+            .find(|source| {
+                matches!(&source.id, SourceId::Input { endpoint_id: id } if id == endpoint_id)
+            })
+            .map_or(0, |source| source.channels)
+    }
+
+    /// The pair saved for the chosen input device; 0 for any other source.
+    fn chosen_input_pair(&self) -> u16 {
+        match &self.chosen {
+            Chosen::Input { endpoint_id, .. } => {
+                self.input_pairs.get(endpoint_id).copied().unwrap_or(0)
+            }
+            _ => 0,
+        }
     }
 
     fn chosen_name(&self) -> String {
@@ -2295,6 +2326,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     SourceId::App { .. } => SourceKind::App,
                     SourceId::Input { .. } => SourceKind::Input,
                 },
+                channels: source.channels,
             })
             .collect();
         let chosen = self.chosen.key();
@@ -2317,6 +2349,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     id: chosen,
                     name: self.chosen_name(),
                     kind,
+                    channels: 0,
                 },
             );
         }
@@ -2491,6 +2524,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
+            input_pair: self.chosen_input_pair(),
             master_volume: self.audio.master_volume(),
             speakers,
             hidden,
@@ -2578,6 +2612,41 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         // A start ends the running session by itself and keeps the AirPlay
         // speakers in the stream, restarting only their timeline (S141); a
         // stop would tear them down and connect them again.
+        let switch = source_switch(self.running());
+        let started = switch
+            .start
+            .is_some_and(|origin| self.start_session(origin));
+        if switch.stop_keeping_airplay && !started && self.running() {
+            self.audio.stop();
+        }
+    }
+
+    /// A new pair is kept for the chosen input device; while streaming,
+    /// capture starts again from it, as a new source does.
+    fn select_input_pair(&mut self, pair: u16) {
+        let Chosen::Input { endpoint_id, name } = &self.chosen else {
+            return;
+        };
+        if self.chosen_input_pair() == pair {
+            return;
+        }
+        let endpoint_id = endpoint_id.clone();
+        self.log.log(|| {
+            let channels = InputPair::offered(self.listed_channels(&endpoint_id))
+                .get(usize::from(pair))
+                .map_or_else(
+                    || format!("pair {}", pair + 1),
+                    |found| describe_pair(*found),
+                );
+            format!("input channels chosen for {name}: {channels}")
+        });
+        if pair == 0 {
+            self.input_pairs.remove(&endpoint_id);
+        } else {
+            self.input_pairs.insert(endpoint_id.clone(), pair);
+        }
+        self.audio.set_input_pair(&endpoint_id, pair);
+        self.notices.clear(&[NoticeSubject::Capture]);
         let switch = source_switch(self.running());
         let started = switch
             .start
@@ -3565,7 +3634,7 @@ mod tests {
             .captures_started()
             .iter()
             .filter_map(|target| match target {
-                CaptureTarget::Input { endpoint_id } => Some(endpoint_id.clone()),
+                CaptureTarget::Input { endpoint_id, .. } => Some(endpoint_id.clone()),
                 CaptureTarget::Loopback(_) => None,
             })
             .collect()
@@ -3662,6 +3731,74 @@ mod tests {
         restored.set_running(true);
         assert!(restored.snapshot().running);
         assert_eq!(input_captures(&restored), [MIC]);
+    }
+
+    /// The input devices captured and the pair each played, in order.
+    fn input_pair_captures(adapter: &AudioAdapter<MockBackend>) -> Vec<(String, u16)> {
+        adapter
+            .audio
+            .driver()
+            .captures_started()
+            .iter()
+            .filter_map(|target| match target {
+                CaptureTarget::Input { endpoint_id, pair } => Some((endpoint_id.clone(), *pair)),
+                CaptureTarget::Loopback(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_input_channel_pair_restarts_capture_and_is_kept_per_device() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 6);
+        adapter.refresh_sources();
+        adapter.select_source(&mic());
+        let state = adapter.snapshot();
+        let row = state.sources.last().expect("listed");
+        assert_eq!((row.id.clone(), row.channels), (mic(), 6));
+        assert_eq!(state.input_pair, 0);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_running(true);
+        assert_eq!(input_pair_captures(&adapter), [(MIC.to_owned(), 0)]);
+
+        // Channels 3-4: capture starts again from them, and they're kept.
+        adapter.select_input_pair(1);
+        assert!(adapter.snapshot().running);
+        assert_eq!(adapter.snapshot().input_pair, 1);
+        assert_eq!(
+            input_pair_captures(&adapter),
+            [(MIC.to_owned(), 0), (MIC.to_owned(), 1)]
+        );
+        adapter.select_input_pair(1);
+        assert_eq!(
+            input_pair_captures(&adapter).len(),
+            2,
+            "the same pair again"
+        );
+        let saved = adapter.current_settings();
+        assert_eq!(saved.input_pairs, BTreeMap::from([(MIC.to_owned(), 1)]));
+
+        // The next launch plays the kept pair.
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_input(MIC, "Interface (USB Audio)", "USB");
+        let mut restored = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        restored.restore(saved);
+        restored.refresh_sources();
+        turn_on(&mut restored, SPEAKERS);
+        restored.set_running(true);
+        assert_eq!(input_pair_captures(&restored), [(MIC.to_owned(), 1)]);
+
+        // Back to 1-2, the device needs no entry; another source has no pair.
+        adapter.select_input_pair(0);
+        assert!(adapter.current_settings().input_pairs.is_empty());
+        adapter.select_source("system");
+        adapter.select_input_pair(2);
+        assert_eq!(adapter.snapshot().input_pair, 0);
+        assert!(adapter.current_settings().input_pairs.is_empty());
     }
 
     #[test]

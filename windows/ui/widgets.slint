@@ -6,7 +6,7 @@
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, Slider, Switch } from "std-widgets.slint";
+import { Button, ComboBox, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Availability, CastState, DeviceVolumeHint, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
@@ -490,6 +490,22 @@ export component BrandMark inherits Rectangle {
 // focus ring are the standard Switch's.
 export component ToggleSwitch inherits Switch {
     accessible-role: button;
+}
+
+// An input device's channel pair choice. It shows `chosen` again after a
+// pick, so it only moves once the backend took the pick.
+export component PairPicker inherits ComboBox {
+    in property <int> chosen;
+    callback picked(int);
+    current-index: root.chosen;
+    accessible-label: Strings.input-channels-label;
+    changed chosen => {
+        self.current-index = root.chosen;
+    }
+    selected => {
+        root.picked(self.current-index);
+        self.current-index = root.chosen;
+    }
 }
 
 // A volume slider with its value. `changed` reports every move.

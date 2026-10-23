@@ -52,6 +52,9 @@ pub struct Source {
     pub id: String,
     pub name: String,
     pub kind: SourceKind,
+    /// An input device's channels, which offer pairs above two; 0 for
+    /// anything else and for a device that doesn't say.
+    pub channels: u16,
 }
 
 /// The kind of output a speaker is, shown as a small icon and read by Narrator.
@@ -560,6 +563,9 @@ pub struct AppState {
     pub running: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
+    /// The channel pair saved for the chosen input device, as an index (1
+    /// for channels 3-4); 0 for 1-2 and for any other source.
+    pub input_pair: u16,
     /// 0 to 100.
     pub master_volume: f64,
     /// The speakers listed; a hidden one never is.
@@ -803,6 +809,9 @@ pub trait Backend {
     fn snapshot(&self) -> AppState;
     fn set_running(&mut self, on: bool);
     fn select_source(&mut self, id: &str);
+    /// Plays channel pair `pair` (1 for channels 3-4) of the chosen input
+    /// device, and keeps it for that device.
+    fn select_input_pair(&mut self, pair: u16);
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
@@ -1053,6 +1062,7 @@ impl MockBackend {
             id: id.into(),
             name: name.into(),
             kind,
+            channels: 0,
         };
         let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
             id: id.into(),
@@ -1133,9 +1143,13 @@ impl MockBackend {
                 source("system", "All System Audio", SourceKind::System),
                 source("app:player", "Music Player", SourceKind::App),
                 source("app:browser", "Web Browser", SourceKind::App),
-                source("input:line", "Line In", SourceKind::Input),
+                Source {
+                    channels: 5,
+                    ..source("input:line", "Line In", SourceKind::Input)
+                },
             ],
             source_id: "system".into(),
+            input_pair: 0,
             master_volume: volume::DEFAULT_MASTER_POSITION,
             speakers,
             hidden: Vec::new(),
@@ -1243,6 +1257,18 @@ impl Backend for MockBackend {
     fn select_source(&mut self, id: &str) {
         if self.state.sources.iter().any(|s| s.id == id) {
             self.state.source_id = id.into();
+            self.state.input_pair = 0;
+        }
+    }
+
+    fn select_input_pair(&mut self, pair: u16) {
+        let chosen = self
+            .state
+            .sources
+            .iter()
+            .find(|source| source.id == self.state.source_id);
+        if chosen.is_some_and(|source| source.kind == SourceKind::Input) {
+            self.state.input_pair = pair;
         }
     }
 

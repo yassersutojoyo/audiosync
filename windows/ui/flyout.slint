@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { DeviceVolumeHint, GroupItem, NoticeItem, RowState, SpeakerItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // group that is on but can't play right now under it ("Waiting for device",
@@ -80,6 +80,9 @@ export component TrayFlyout inherits Window {
     in property <string> status;
     in property <[string]> sources;
     in property <int> source-index;
+    // The chosen input device's channel pairs; none up to two channels.
+    in property <[string]> input-pairs;
+    in property <int> input-pair-index;
     in property <float> master-volume;
     in property <[SpeakerItem]> speakers;
     in property <[GroupItem]> groups;
@@ -97,6 +100,7 @@ export component TrayFlyout inherits Window {
     in property <string> notice-announcement;
     callback power-toggled(bool);
     callback source-selected(int);
+    callback input-pair-selected(int);
     callback master-volume-changed(float);
     callback speaker-toggled(string);
     callback group-toggled(string);
@@ -257,6 +261,14 @@ export component TrayFlyout inherits Window {
                 selected => {
                     root.source-selected(self.current-index);
                     self.current-index = root.source-index;
+                }
+            }
+
+            if root.input-pairs.length > 0: PairPicker {
+                model: root.input-pairs;
+                chosen: root.input-pair-index;
+                picked(index) => {
+                    root.input-pair-selected(index);
                 }
             }
 

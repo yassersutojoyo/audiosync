@@ -311,6 +311,31 @@ where
         .collect())
 }
 
+/// The largest input pair index kept: a device with 1024 channels.
+const MAX_INPUT_PAIR: u64 = 511;
+
+/// The input channel pairs as stored, read leniently: an entry whose pair
+/// isn't a whole number from 1 to [`MAX_INPUT_PAIR`] is skipped, and so is
+/// anything that isn't a map.
+fn pairs_that_read<'de, D>(deserializer: D) -> Result<BTreeMap<String, u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(entries) = value else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(id, pair)| {
+            let pair = pair
+                .as_u64()
+                .filter(|pair| (1..=MAX_INPUT_PAIR).contains(pair))?;
+            Some((id, u16::try_from(pair).ok()?))
+        })
+        .collect())
+}
+
 /// Everything the file keeps. See the module documentation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -323,6 +348,13 @@ pub struct Settings {
     /// The input device chosen as the source, if one is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_device: Option<SavedInput>,
+    /// The channel pair each input device plays, by endpoint ID, as an
+    /// index (1 for channels 3-4); a device without an entry plays 1-2.
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "pairs_that_read"
+    )]
+    pub input_pairs: BTreeMap<String, u16>,
     /// The master volume slider position, 0 to 100.
     pub master_volume: f64,
     /// The local outputs, by endpoint ID.
@@ -374,6 +406,7 @@ impl Default for Settings {
             version: VERSION,
             source: SavedSource::System,
             input_device: None,
+            input_pairs: BTreeMap::new(),
             master_volume: DEFAULT_MASTER_POSITION,
             outputs: BTreeMap::new(),
             airplay: BTreeMap::new(),
@@ -531,6 +564,14 @@ impl Settings {
             version: VERSION,
             source,
             input_device,
+            input_pairs: self
+                .input_pairs
+                .into_iter()
+                .filter(|(id, pair)| {
+                    usable_id(id) && (1..=MAX_INPUT_PAIR).contains(&u64::from(*pair))
+                })
+                .take(MAX_ENTRIES)
+                .collect(),
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
             outputs: clamp_speakers(self.outputs, output_delays),
             airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS)),
@@ -1199,6 +1240,42 @@ mod tests {
             }
         );
         assert!(!Settings::default().to_json().contains("input_device"));
+    }
+
+    #[test]
+    fn input_channel_pairs_survive_a_round_trip_and_odd_entries_are_skipped() {
+        let path = test_dir("settings-input-pairs").join(FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        let chosen = Settings {
+            input_pairs: BTreeMap::from([
+                ("{0.0.1.00000000}.{interface}".to_owned(), 1),
+                ("{0.0.1.00000000}.{mixer}".to_owned(), 3),
+            ]),
+            ..sample()
+        };
+        file.save(&chosen).expect("saved");
+        assert_eq!(file.load().0, chosen);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("JSON");
+        assert_eq!(json["input_pairs"]["{0.0.1.00000000}.{interface}"], 1);
+
+        let text = r#"{"version": 2, "master_volume": 40, "input_pairs": {
+            "kept": 2, "first": 0, "negative": -1, "text": "3", "half": 1.5,
+            "beyond": 512, "": 1
+        }}"#;
+        let (read, found) = Settings::from_json(text).expect("one odd entry spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        assert_eq!(read.input_pairs, BTreeMap::from([("kept".to_owned(), 2)]));
+        assert_eq!(
+            found,
+            Loaded::Read {
+                version: 2,
+                adjusted: true
+            }
+        );
+        let (read, _) = Settings::from_json(r#"{"version": 2, "input_pairs": [1]}"#).expect("read");
+        assert!(read.input_pairs.is_empty());
+        assert!(!Settings::default().to_json().contains("input_pairs"));
     }
 
     #[test]

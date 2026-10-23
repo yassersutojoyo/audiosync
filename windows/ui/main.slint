@@ -9,7 +9,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, GroupItem, HiddenItem, LeftOutItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -676,6 +676,9 @@ export component MainWindow inherits Window {
     in property <string> status;
     in property <[string]> sources;
     in property <int> source-index;
+    // The chosen input device's channel pairs; none up to two channels.
+    in property <[string]> input-pairs;
+    in property <int> input-pair-index;
     in property <float> master-volume;
     in property <bool> equalizer-on;
     // The Now Playing card, while a media session counts for the source.
@@ -743,6 +746,7 @@ export component MainWindow inherits Window {
 
     callback power-toggled(bool);
     callback source-selected(int);
+    callback input-pair-selected(int);
     callback master-volume-changed(float);
     callback equalizer-requested();
     // A Now Playing button: 0 Previous, 1 Play or Pause, 2 Next.
@@ -1210,6 +1214,17 @@ export component MainWindow inherits Window {
                                 selected => {
                                     root.source-selected(self.current-index);
                                     self.current-index = root.source-index;
+                                }
+                            }
+
+                            if root.input-pairs.length > 0: PairPicker {
+                                model: root.input-pairs;
+                                chosen: root.input-pair-index;
+                                changed has-focus => {
+                                    root.control-focus-changed(MainControl.input-pair, self.has-focus);
+                                }
+                                picked(index) => {
+                                    root.input-pair-selected(index);
                                 }
                             }
                         }

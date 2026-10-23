@@ -54,6 +54,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::policy::delay::native_airplay_latency_ms;
 use audiosync_core::policy::source::AudioSource;
@@ -74,8 +75,8 @@ use super::backend::{
 };
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
-    CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType, decide_capture, display_name,
-    input_sources, running_app, source_list,
+    CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType, decide_capture, describe_pair,
+    display_name, input_sources, running_app, source_list,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -365,6 +366,9 @@ pub struct Controller<D: Driver> {
     session: Option<Session<D>>,
     /// The equalizer settings, for the running session and the next.
     equalizer: EqSettings,
+    /// The channel pair each input device plays, by endpoint ID; one
+    /// without an entry plays channels 1-2.
+    input_pairs: BTreeMap<String, u16>,
     /// Events for the next poll.
     pending: Vec<BackendEvent>,
     /// The debug log; it writes nothing unless `AUDIOSYNC_DEBUG=1`.
@@ -463,6 +467,7 @@ impl<D: Driver> Controller<D> {
             listing_ok: false,
             session: None,
             equalizer: EqSettings::default(),
+            input_pairs: BTreeMap::new(),
             pending: Vec::new(),
             log: DebugLog::default(),
             names: BTreeMap::new(),
@@ -1427,7 +1432,7 @@ impl<D: Driver> Controller<D> {
             SourceId::WholeSystem | SourceId::Input { .. } => ProcessTable::default(),
             SourceId::App { .. } => self.driver.processes()?,
         };
-        decide_capture(source, self.driver.own_pid(), &processes)?;
+        decide_capture(source, self.driver.own_pid(), &processes, &self.input_pairs)?;
         self.log
             .log(|| "the capture starts once the last session's outputs have faded out".to_owned());
         self.next_start = Some(source.clone());
@@ -1635,7 +1640,7 @@ impl<D: Driver> Controller<D> {
             SourceId::WholeSystem | SourceId::Input { .. } => ProcessTable::default(),
             SourceId::App { .. } => self.driver.processes()?,
         };
-        let target = decide_capture(source, self.driver.own_pid(), &processes)?;
+        let target = decide_capture(source, self.driver.own_pid(), &processes, &self.input_pairs)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         // The capture equalizes at the session rate, after any resampling
@@ -2333,6 +2338,14 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.quit_watch.set_setting(setting);
     }
 
+    fn set_input_pair(&mut self, endpoint_id: &str, pair: u16) {
+        if pair == 0 {
+            self.input_pairs.remove(endpoint_id);
+        } else {
+            self.input_pairs.insert(endpoint_id.to_owned(), pair);
+        }
+    }
+
     fn retry_airplay(&mut self) {
         if self
             .airplay
@@ -2705,7 +2718,18 @@ fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> St
                 LoopbackMode::IncludeTree => format!("process {pid} and its children"),
             }
         }
-        CaptureTarget::Input { endpoint_id } => format!("input device {endpoint_id}"),
+        CaptureTarget::Input { endpoint_id, pair } => {
+            let playing = setup.map_or(InputPair::FIRST, |attempt| attempt.pair);
+            let channels = describe_pair(playing);
+            if setup.is_some() && *pair != playing.index {
+                format!(
+                    "input device {endpoint_id}, {channels} (saved pair {} is not available)",
+                    pair + 1
+                )
+            } else {
+                format!("input device {endpoint_id}, {channels}")
+            }
+        }
     };
     let format = match setup {
         Some(attempt) => {
@@ -4144,7 +4168,8 @@ mod tests {
         assert_eq!(
             backend.driver().captures_started(),
             [CaptureTarget::Input {
-                endpoint_id: "mic".to_owned()
+                endpoint_id: "mic".to_owned(),
+                pair: 0,
             }]
         );
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
@@ -4807,6 +4832,7 @@ mod tests {
                 form_factor: Some(5),
                 enumerator: Some("BTHHFENUM".to_owned()),
                 display_port: false,
+                channels: None,
             }),
         });
         backend.enumerate_endpoint(EndpointReading {

@@ -443,6 +443,7 @@ mod tests {
             running: true,
             sources: Vec::new(),
             source_id: String::new(),
+            input_pair: 0,
             master_volume: 70.0,
             speakers: vec![
                 desk,
