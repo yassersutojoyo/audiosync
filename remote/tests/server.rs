@@ -807,10 +807,7 @@ fn a_device_keeps_two_event_streams_and_a_third_ends_the_oldest() {
     );
     // A page that knows it was replaced stops reconnecting, which would end the next stream.
     assert!(
-        streams[0].data.ends_with("event: replaced
-data: {}
-
-"),
+        streams[0].data.ends_with("event: replaced\ndata: {}\n\n"),
         "{:?}",
         streams[0].data
     );

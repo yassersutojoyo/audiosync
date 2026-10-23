@@ -240,6 +240,7 @@ const TEXT = {
   unpairConfirm: "Unpair this phone? You'll need a new code from AudioSync to use it again.",
   lost: "Can't reach AudioSync. Retrying…",
   noUpdates: "AudioSync answers but isn't sending updates. Retrying…",
+  replaced: "This remote is open in another tab or window. Choose Retry to use it here.",
   busy: "AudioSync is serving too many connections. Retrying…",
   waiting: "AudioSync is starting. Retrying…",
   back: "Connected to AudioSync.",
@@ -432,6 +433,11 @@ function connect() {
     if (stranded && (!now || now === document.body || ui.banner.contains(now) || ui.pair.contains(now))) {
       ui.master.focus();
     }
+  });
+  // Sent when a newer page of this device took the stream; reconnecting would take it back.
+  events.addEventListener("replaced", () => {
+    stopStream();
+    setLost(true, TEXT.replaced);
   });
   events.onerror = () => {
     stopStream();
