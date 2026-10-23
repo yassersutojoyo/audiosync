@@ -62,6 +62,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use audiosync_core::channels::InputPair;
 use audiosync_core::clock;
 use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
 use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
@@ -85,27 +86,28 @@ use crate::audio::backend::{
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::cast_address::{self, CastAddress};
 use audiosync_core::calibrate_all::{
-    Applied, Change, Class, EndReason, RowState, Sheet, Take, Target,
+    Applied, Class, EndReason, RowState, Sheet, Take, Target, airplay_moves,
 };
 
-use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress};
+use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress, ZoneScope};
 use crate::audio::calibration::{self, CalibrationRun, Failure};
-use crate::audio::capture::WHOLE_SYSTEM_NAME;
+use crate::audio::capture::{WHOLE_SYSTEM_NAME, describe_pair};
 use crate::audio::outputs::MicKind;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, KeptAside, SavedCurve, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedPreset,
-    SavedSource, SavedSpeaker, SavedZone, Settings, SettingsFile,
+    self, KeptAside, MixMode, SavedCurve, SavedEqualizer, SavedGroup, SavedHidden, SavedInput,
+    SavedMix, SavedMixApp, SavedPreset, SavedSource, SavedSpeaker, SavedZone, Settings,
+    SettingsFile,
 };
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AbsentMember, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
-    HiddenSpeaker, InTarget, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase,
-    PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, Source, SourceKind, Speaker,
-    SpeakerKind, ViewSettings, Waiting, ZoneError, clamp_delay_ms,
+    HiddenSpeaker, InTarget, LeftOutRow, MixApp, Notice, NoticeMessage, PasswordPrompt, PinPhase,
+    PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, Source, SourceKind, SourceName,
+    Speaker, SpeakerKind, ViewSettings, Waiting, ZoneError, ZoneSheet, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -126,6 +128,9 @@ struct KeptSheet {
     again_ended: Option<EndReason>,
     /// What Apply wrote, kept for Undo while every value still holds.
     applied: Option<Applied>,
+    /// The AirPlay adjustment A before and after Apply. Undo and the check
+    /// that drops it use A, not L, so a new L_s changes neither (S238).
+    airplay_adjustment: Option<(f64, f64)>,
     undone: bool,
 }
 
@@ -140,6 +145,17 @@ struct CalibrateAll {
     /// Outputs left out by kind that the user chose Include Anyway for,
     /// until the results close.
     included: BTreeSet<String>,
+    /// The zone Calibrate Zone measures, until the results close or a
+    /// whole run starts (spec S255).
+    zone: Option<MeasuredZone>,
+}
+
+/// The zone of a Calibrate Zone run as it was at the start.
+struct MeasuredZone {
+    id: String,
+    name: String,
+    /// Its member keys then: losing one ends the run (spec S240).
+    members: Vec<String>,
 }
 
 /// After this many polls, 20 seconds, of AirPlay discovery without a single
@@ -190,6 +206,13 @@ enum Chosen {
         endpoint_id: String,
         name: String,
     },
+    /// Several apps by executable: only these mixed, or every app except
+    /// these. Always two or more with [`MixMode::Only`], one or more with
+    /// [`MixMode::AllExcept`] ([`mix_choice`]).
+    Mix {
+        mode: MixMode,
+        apps: Vec<SavedMixApp>,
+    },
 }
 
 impl Chosen {
@@ -205,6 +228,8 @@ impl Chosen {
                 endpoint_id: endpoint_id.clone(),
                 name: source.name.clone(),
             },
+            // The listing offers no mix; one is put together by checking apps.
+            SourceId::Apps { .. } | SourceId::AppsExcept { .. } => Chosen::WholeSystem,
         }
     }
 
@@ -217,6 +242,52 @@ impl Chosen {
             Chosen::Input { endpoint_id, .. } => SourceId::Input {
                 endpoint_id: endpoint_id.clone(),
             },
+            // `chosen_source` finds the processes of an "only these" mix.
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps,
+            } => SourceId::Apps {
+                root_pids: Vec::new(),
+                executables: apps.iter().map(|app| app.executable.clone()).collect(),
+            },
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps,
+            } => SourceId::AppsExcept {
+                executables: apps.iter().map(|app| app.executable.clone()).collect(),
+            },
+        }
+    }
+
+    /// The name the log and the notices use.
+    fn shown_name(&self) -> String {
+        match self {
+            Chosen::WholeSystem => WHOLE_SYSTEM_NAME.to_owned(),
+            Chosen::App { name, .. } | Chosen::Input { name, .. } => name.clone(),
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps,
+            } => mix_names(apps).join(", "),
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps,
+            } => format!("All apps except {}", mix_names(apps).join(", ")),
+        }
+    }
+
+    /// The name the double-audio notice uses, `None` for the whole system.
+    fn notice_name(&self) -> Option<SourceName> {
+        match self {
+            Chosen::WholeSystem => None,
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps,
+            } => Some(SourceName::Apps(mix_names(apps))),
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps,
+            } => Some(SourceName::AllAppsExcept(mix_names(apps))),
+            chosen => Some(SourceName::Named(chosen.shown_name())),
         }
     }
 
@@ -230,8 +301,97 @@ impl Chosen {
                 ..
             } => app_key(*root_pid, executable),
             Chosen::Input { endpoint_id, .. } => input_key(endpoint_id),
+            Chosen::Mix { mode, apps } => {
+                let executables: Vec<&str> =
+                    apps.iter().map(|app| app.executable.as_str()).collect();
+                let tag = match mode {
+                    MixMode::Only => "only",
+                    MixMode::AllExcept => "except",
+                };
+                format!("mix:{tag}:{}", executables.join(","))
+            }
         }
     }
+}
+
+/// A mix's apps by name, as the source menu lists them.
+fn mix_names(apps: &[SavedMixApp]) -> Vec<String> {
+    apps.iter()
+        .map(|app| {
+            if app.name.is_empty() {
+                app.executable.clone()
+            } else {
+                app.name.clone()
+            }
+        })
+        .collect()
+}
+
+/// The mode the several-apps list shows for `chosen`: a mix's own, "only
+/// these" for one app, else `remembered`.
+fn mix_mode(chosen: &Chosen, remembered: MixMode) -> MixMode {
+    match chosen {
+        Chosen::Mix { mode, .. } => *mode,
+        Chosen::App { .. } => MixMode::Only,
+        _ => remembered,
+    }
+}
+
+/// The apps the several-apps list shows checked under `mode`.
+fn mix_checked(chosen: &Chosen, mode: MixMode) -> Vec<SavedMixApp> {
+    match chosen {
+        Chosen::Mix { mode: own, apps } if *own == mode => apps.clone(),
+        Chosen::App {
+            executable, name, ..
+        } if mode == MixMode::Only => vec![SavedMixApp {
+            executable: executable.clone(),
+            name: name.clone(),
+        }],
+        _ => Vec::new(),
+    }
+}
+
+/// The source for `apps` used as `mode` says: none left is the whole
+/// system, one app in "only these" a plain app (found by its executable at
+/// the next listing), otherwise a mix. Repeats are dropped, without case.
+fn mix_choice(mode: MixMode, apps: Vec<SavedMixApp>) -> Chosen {
+    let mut kept: Vec<SavedMixApp> = Vec::new();
+    for app in apps {
+        if !app.executable.is_empty()
+            && !kept
+                .iter()
+                .any(|other| other.executable.eq_ignore_ascii_case(&app.executable))
+        {
+            kept.push(app);
+        }
+    }
+    match (mode, kept.len()) {
+        (_, 0) => Chosen::WholeSystem,
+        (MixMode::Only, 1) => {
+            let app = kept.remove(0);
+            Chosen::App {
+                root_pid: 0,
+                name: if app.name.is_empty() {
+                    app.executable.clone()
+                } else {
+                    app.name
+                },
+                executable: app.executable,
+            }
+        }
+        _ => Chosen::Mix { mode, apps: kept },
+    }
+}
+
+/// Checking or unchecking `app` in the several-apps list showing `mode`.
+fn mix_toggle(chosen: &Chosen, mode: MixMode, app: SavedMixApp) -> Chosen {
+    let mut apps = mix_checked(chosen, mode);
+    let before = apps.len();
+    apps.retain(|kept| !kept.executable.eq_ignore_ascii_case(&app.executable));
+    if apps.len() == before {
+        apps.push(app);
+    }
+    mix_choice(mode, apps)
 }
 
 /// A notice as it was posted.
@@ -256,6 +416,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The sources as last listed, the whole system first.
     sources: Vec<SourceInfo>,
     chosen: Chosen,
+    /// The mode the several-apps list shows while no mix is chosen.
+    mix_mode: MixMode,
     /// The endpoint IDs of the last listing, to tell which outputs appeared.
     listed: BTreeSet<String>,
     /// The last name of every output listed, for a notice about one that is
@@ -295,6 +457,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     auto_connect: BTreeSet<String>,
     /// The speakers hidden with Hide Speaker, in the order they were hidden.
     hidden: Vec<SavedHidden>,
+    /// The channel pair each input device plays, by endpoint ID; 1-2 for
+    /// one without an entry.
+    input_pairs: BTreeMap<String, u16>,
     /// The names the user gave speakers (spec S228).
     custom_names: SpeakerNames,
     /// The groups as saved; only the Mac still shows them (S248).
@@ -317,7 +482,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// source UI ID, until that app quits.
     heard_twice_dismissed: BTreeMap<String, BTreeSet<String>>,
     equalizer: EqSettings,
-    /// The equalizer curves the user saved (spec S242).
+    /// The equalizer curves the user saved (spec S270).
     equalizer_curves: Vec<UserCurve>,
     /// Polls since the sources were last listed.
     polls: u32,
@@ -404,8 +569,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 id: SourceId::WholeSystem,
                 name: WHOLE_SYSTEM_NAME.to_owned(),
                 executable: String::new(),
+                channels: 0,
             }],
             chosen: Chosen::WholeSystem,
+            mix_mode: MixMode::Only,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             kinds: BTreeMap::new(),
@@ -421,6 +588,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
             hidden: Vec::new(),
+            input_pairs: BTreeMap::new(),
             custom_names: SpeakerNames::default(),
             groups: Vec::new(),
             zones: Zones::default(),
@@ -473,9 +641,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         adapter.list_devices();
         adapter.log.log(|| match &adapter.chosen {
             Chosen::WholeSystem => format!("source chosen: {WHOLE_SYSTEM_NAME} (the default)"),
-            Chosen::App { name, .. } | Chosen::Input { name, .. } => {
-                format!("source chosen: {name} ({}), as saved", adapter.chosen.key())
-            }
+            chosen => format!(
+                "source chosen: {} ({}), as saved",
+                chosen.shown_name(),
+                chosen.key()
+            ),
         });
         adapter
     }
@@ -489,6 +659,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.audio.set_master_volume(saved.master_volume);
         // A hidden speaker is never switched on, not even by the saved on-state.
         self.hidden = saved.hidden_speakers.clone();
+        for (endpoint_id, pair) in &saved.input_pairs {
+            self.audio.set_input_pair(endpoint_id, *pair);
+        }
+        self.input_pairs = saved.input_pairs.clone();
         self.when_source_quits = WhenSourceQuits::from_stored(Some(&saved.when_source_quits));
         self.audio.set_when_source_quits(self.when_source_quits);
         if !self.delays_to_migrate {
@@ -546,6 +720,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.audio.add_cast_address(address);
         }
         self.chosen = match (&saved.input_device, &saved.source) {
+            (None, _) if let Some(mix) = &saved.source_mix => {
+                mix_choice(mix.mode, mix.apps.clone())
+            }
             (Some(input), _) => Chosen::Input {
                 endpoint_id: input.id.clone(),
                 name: if input.name.is_empty() {
@@ -634,7 +811,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         Settings {
             version: settings::VERSION,
             source: match &self.chosen {
-                Chosen::WholeSystem | Chosen::Input { .. } => SavedSource::System,
+                Chosen::WholeSystem | Chosen::Input { .. } | Chosen::Mix { .. } => {
+                    SavedSource::System
+                }
                 Chosen::App {
                     executable, name, ..
                 } => SavedSource::App {
@@ -646,6 +825,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 Chosen::Input { endpoint_id, name } => Some(SavedInput {
                     id: endpoint_id.clone(),
                     name: name.clone(),
+                }),
+                _ => None,
+            },
+            input_pairs: self.input_pairs.clone(),
+            source_mix: match &self.chosen {
+                Chosen::Mix { mode, apps } => Some(SavedMix {
+                    mode: *mode,
+                    apps: apps.clone(),
                 }),
                 _ => None,
             },
@@ -829,6 +1016,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Moves a Calibrate All or Measure Again on, and takes in how it ended.
     /// Returns whether what the card shows changed.
     fn tick_calibrate_all(&mut self) -> bool {
+        self.stop_calibrate_all_for_zones(false);
         let Some(run) = self.calibrate_all.run.as_mut() else {
             return false;
         };
@@ -877,6 +1065,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 failure,
                 again_ended: None,
                 applied: None,
+                airplay_adjustment: None,
                 undone: false,
             });
             return;
@@ -886,8 +1075,35 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return;
         };
         let ended = sheet.ended();
-        if !kept.sheet.replace(sheet) && failure.is_none() {
+        if kept.sheet.replace(sheet) {
+            // An off row measured now keeps the values it was measured from (S255).
+            kept.members = members;
+        } else if failure.is_none() {
             kept.again_ended = Some(ended.unwrap_or(EndReason::Cancelled));
+        }
+    }
+
+    /// A zone click, or the measured zone losing a member or going, ends a
+    /// run as a change of the speakers (spec S240).
+    fn stop_calibrate_all_for_zones(&mut self, clicked: bool) {
+        let Some(run) = self
+            .calibrate_all
+            .run
+            .as_mut()
+            .filter(|run| run.is_running())
+        else {
+            return;
+        };
+        let zone_changed = self.calibrate_all.zone.as_ref().is_some_and(|measured| {
+            self.zones.get(&measured.id).is_none_or(|zone| {
+                measured
+                    .members
+                    .iter()
+                    .any(|key| !zone.members.contains(key))
+            })
+        });
+        if clicked || zone_changed {
+            run.stop(&mut self.audio, EndReason::SpeakersChanged, clock::now_ns());
         }
     }
 
@@ -952,16 +1168,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
             now.is_none_or(|now| (now - then.unwrap_or(0.0)).abs() <= 0.5)
         };
         if let Some(applied) = &kept.applied {
-            let held = applied.changes.iter().all(|change| {
-                let now = match &change.target {
-                    Target::AirPlay => self.airplay_delay_ms(),
-                    Target::Speaker(key) => kept
+            let held = applied.changes.iter().all(|change| match &change.target {
+                Target::AirPlay => kept.airplay_adjustment.is_none_or(|(_, written)| {
+                    holds(Some(self.audio.airplay_adjustment()), Some(written))
+                }),
+                Target::Speaker(key) => {
+                    let now = kept
                         .members
                         .iter()
                         .find(|m| m.key() == *key)
-                        .and_then(|m| self.calibrated_now(m.class, &m.id)),
-                };
-                holds(now, Some(change.new_ms))
+                        .and_then(|m| self.calibrated_now(m.class, &m.id));
+                    holds(now, Some(change.new_ms))
+                }
             });
             if held {
                 return false;
@@ -970,6 +1188,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .log(|| "Calibrate All: a delay changed after Apply, Undo goes".to_owned());
             if let Some(kept) = self.calibrate_all.sheet.as_mut() {
                 kept.applied = None;
+                kept.airplay_adjustment = None;
             }
             return true;
         }
@@ -1030,6 +1249,141 @@ impl<A: AudioBackend> AudioAdapter<A> {
             other_running: self.calibration_run.is_some(),
             sheet: all.sheet.as_ref().map(|kept| self.sheet_state(kept, busy)),
             endings: all.endings,
+            zone: all.zone.as_ref().map(|measured| self.zone_sheet(measured)),
+        }
+    }
+
+    fn zone_sheet(&self, measured: &MeasuredZone) -> ZoneSheet {
+        let off_rows = self
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .map(|kept| {
+                (0..kept.members.len())
+                    .filter(|row| kept.sheet.is_off(*row))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let listed: Vec<String> = self
+            .audio
+            .airplay_speakers()
+            .into_iter()
+            .map(|speaker| airplay_key(&speaker.id))
+            .filter(|key| !self.is_hidden(key))
+            .collect();
+        ZoneSheet {
+            name: measured.name.clone(),
+            off_rows,
+            airplay_moves: airplay_moves(
+                &self.zones,
+                &measured.id,
+                listed.iter().map(String::as_str),
+            ),
+        }
+    }
+
+    /// "Calibrate Zone…" in zone `id`'s Options menu (spec S255): Calibrate
+    /// All over the zone, every other speaker that plays silenced for the
+    /// run.
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+    pub(crate) fn start_calibrate_zone(&mut self, id: &str) {
+        if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
+            return;
+        }
+        let Some(zone) = self.zones.get(id).cloned() else {
+            return;
+        };
+        let scope = self.zone_scope(&zone);
+        self.log.log(|| {
+            format!(
+                "Calibrate Zone \"{}\": present {:?}, off {:?}",
+                zone.name,
+                scope.present,
+                scope.off.iter().map(Member::key).collect::<Vec<_>>()
+            )
+        });
+        let started = AllRun::start_zone(
+            &mut self.audio,
+            &self.calibrate_all.included,
+            &scope,
+            clock::now_ns(),
+            self.log.clone(),
+        );
+        let measured = MeasuredZone {
+            id: zone.id,
+            name: zone.name,
+            members: zone.members,
+        };
+        self.calibrate_all_started(started, Some(measured));
+    }
+
+    fn calibrate_all_started(
+        &mut self,
+        started: Result<AllRun, Failure>,
+        zone: Option<MeasuredZone>,
+    ) {
+        let all = &mut self.calibrate_all;
+        all.zone = zone;
+        match started {
+            Ok(run) => {
+                all.phase = AllPhase::Idle;
+                all.sheet = None;
+                all.run = Some(run);
+            }
+            Err(failure) => {
+                all.phase = AllPhase::Failed(failure);
+                all.endings += 1;
+            }
+        }
+    }
+
+    /// The zone `zone` as Calibrate Zone reads it now (spec S255): its
+    /// present members, and those that don't play with their stored delays.
+    fn zone_scope(&self, zone: &zones::Zone) -> ZoneScope {
+        let state = self.snapshot();
+        let playing: Vec<String> = calibrate_all::lineup(&self.audio)
+            .members
+            .iter()
+            .map(Member::speaker_key)
+            .collect();
+        let present: BTreeSet<String> = zone
+            .members
+            .iter()
+            .filter(|key| state.speaker(key).is_some())
+            .filter(|key| {
+                !matches!(SpeakerKey::parse(key), Some(SpeakerKey::AirPlay(id))
+                    if self.audio.airplay_holding_target(&id).is_some())
+            })
+            .cloned()
+            .collect();
+        let off = zone
+            .members
+            .iter()
+            .filter(|key| present.contains(*key) && !playing.contains(*key))
+            .filter_map(|key| {
+                let (class, id, offset_ms) = match SpeakerKey::parse(key)? {
+                    SpeakerKey::Local(id) => {
+                        let offset = self.calibrated_now(Class::Local, &id);
+                        (Class::Local, id, offset)
+                    }
+                    SpeakerKey::AirPlay(id) => (Class::AirPlay, id, self.airplay_delay_ms()),
+                    SpeakerKey::Cast(id) => {
+                        let offset = self.calibrated_now(Class::Cast, &id).filter(|ms| *ms > 0.0);
+                        (Class::Cast, id, offset)
+                    }
+                };
+                Some(Member {
+                    id,
+                    class,
+                    offset_ms,
+                    latency_ms: 0.0,
+                })
+            })
+            .collect();
+        ZoneScope {
+            members: zone.members.clone(),
+            present,
+            off,
         }
     }
 
@@ -1053,38 +1407,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The AirPlay delay is set through the sender's latency, unknown while
-    /// AirPlay doesn't play: Apply and Undo wait rather than leave it out.
-    fn airplay_waits(&self, kept: &KeptSheet) -> bool {
-        if self.audio.airplay_sender_latency_ms().is_some() {
-            return false;
-        }
-        let airplay = |changes: &[Change]| changes.iter().any(|c| c.target == Target::AirPlay);
-        match &kept.applied {
-            Some(applied) => airplay(&applied.changes),
-            None => kept
-                .sheet
-                .changes()
-                .is_ok_and(|applied| airplay(&applied.changes)),
-        }
-    }
-
-    fn calibrate_all_waits(&self) -> bool {
-        let waits = self
-            .calibrate_all
-            .sheet
-            .as_ref()
-            .is_some_and(|kept| self.airplay_waits(kept));
-        if waits {
-            self.log
-                .log(|| "Calibrate All: the AirPlay delay waits for AirPlay to play".to_owned());
-        }
-        waits
-    }
-
     fn sheet_state(&self, kept: &KeptSheet, busy: bool) -> SheetState {
         let sheet = &kept.sheet;
-        let waits = self.airplay_waits(kept);
         let open = sheet.ended().is_none() && !sheet.applied();
         SheetState {
             rows: sheet
@@ -1103,10 +1427,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ended: sheet.ended(),
             failure: kept.failure,
             again_ended: kept.again_ended,
-            can_apply: !busy && !waits && sheet.changes().is_ok(),
-            airplay_waits: waits,
+            can_apply: !busy && sheet.changes().is_ok(),
             applied: sheet.applied(),
-            can_undo: !busy && !waits && kept.applied.is_some(),
+            can_undo: !busy && kept.applied.is_some(),
             undone: kept.undone,
         }
     }
@@ -1191,11 +1514,94 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.custom_names.shown(&speaker_key(endpoint_id), system)
     }
 
-    fn chosen_name(&self) -> String {
+    /// The channels an input device was last listed with; 0 when it isn't.
+    fn listed_channels(&self, endpoint_id: &str) -> u16 {
+        self.sources
+            .iter()
+            .find(|source| {
+                matches!(&source.id, SourceId::Input { endpoint_id: id } if id == endpoint_id)
+            })
+            .map_or(0, |source| source.channels)
+    }
+
+    /// The pair saved for the chosen input device; 0 for any other source.
+    fn chosen_input_pair(&self) -> u16 {
         match &self.chosen {
-            Chosen::WholeSystem => WHOLE_SYSTEM_NAME.to_owned(),
-            Chosen::App { name, .. } | Chosen::Input { name, .. } => name.clone(),
+            Chosen::Input { endpoint_id, .. } => {
+                self.input_pairs.get(endpoint_id).copied().unwrap_or(0)
+            }
+            _ => 0,
         }
+    }
+
+    /// Makes `picked` the source: the old one's notices go, and while
+    /// streaming, capture starts again from the new one (S141, S163).
+    fn choose(&mut self, picked: Chosen) {
+        if picked.key() == self.chosen.key() {
+            return;
+        }
+        self.log
+            .log(|| format!("source chosen: {} ({})", picked.shown_name(), picked.key()));
+        self.chosen = picked;
+        self.notices
+            .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
+        // A start ends the running session by itself and keeps the AirPlay
+        // speakers in the stream, restarting only their timeline (S141); a
+        // stop would tear them down and connect them again.
+        let switch = source_switch(self.running());
+        let started = switch
+            .start
+            .is_some_and(|origin| self.start_session(origin));
+        if switch.stop_keeping_airplay && !started && self.running() {
+            self.audio.stop();
+        }
+    }
+
+    /// The apps the several-apps list offers: the listed apps, then the
+    /// checked ones that aren't listed, so each can still be unchecked.
+    fn mix_apps(&self) -> Vec<MixApp> {
+        let checked = mix_checked(&self.chosen, mix_mode(&self.chosen, self.mix_mode));
+        let is_checked = |executable: &str| {
+            checked
+                .iter()
+                .any(|app| app.executable.eq_ignore_ascii_case(executable))
+        };
+        let mut apps: Vec<MixApp> = Vec::new();
+        for source in &self.sources {
+            if matches!(source.id, SourceId::App { .. })
+                && !source.executable.is_empty()
+                && !apps
+                    .iter()
+                    .any(|app| app.id.eq_ignore_ascii_case(&source.executable))
+            {
+                apps.push(MixApp {
+                    id: source.executable.clone(),
+                    name: source.name.clone(),
+                    checked: is_checked(&source.executable),
+                });
+            }
+        }
+        for app in &checked {
+            if !apps
+                .iter()
+                .any(|listed| listed.id.eq_ignore_ascii_case(&app.executable))
+            {
+                apps.push(MixApp {
+                    id: app.executable.clone(),
+                    name: if app.name.is_empty() {
+                        app.executable.clone()
+                    } else {
+                        app.name.clone()
+                    },
+                    checked: true,
+                });
+            }
+        }
+        apps
+    }
+
+    fn chosen_name(&self) -> String {
+        self.chosen.shown_name()
     }
 
     /// Posts a notice, replacing an older one about the same subject.
@@ -1399,6 +1805,120 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// stored member left off, by its shown name, with the reason; `None`
     /// for an ID no preset has.
     pub(crate) fn recall_preset(&mut self, id: &str) -> Option<Vec<(String, LeftOff)>> {
+        self.recall_preset_keeping_off(id, &[])
+    }
+
+    /// The core's plan for a click on zone `id` (spec S246, S247), carried
+    /// out: present members only, at most one Cast speaker, every AirPlay 2
+    /// member on even when it waits for the AirPlay 2 place. The members in
+    /// `keep_off` (a phone's click: they ask for a code) count as not listed
+    /// and get a notice each when the zone turns on.
+    fn toggle_zone_keeping_off(&mut self, id: &str, keep_off: &[String]) {
+        self.stop_calibrate_all_for_zones(true);
+        let state = self.snapshot();
+        let Some(zone) = self.zones.get(id).cloned() else {
+            return;
+        };
+        let in_zone = |key: &str| zone.members.iter().any(|member| member == key);
+        let elsewhere = |kind: SpeakerKind| {
+            state.speakers.iter().filter(move |speaker| {
+                speaker.kind == kind && speaker.enabled && !in_zone(&speaker.id)
+            })
+        };
+        let situation = Situation {
+            streaming: state.running,
+            cast_on_elsewhere: elsewhere(SpeakerKind::Cast).next().is_some(),
+            airplay2_playing_elsewhere: state.running
+                && elsewhere(SpeakerKind::AirPlay2).any(|speaker| speaker.waiting.is_none()),
+        };
+        let members: Vec<(SpeakerKey, bool, zones::Member)> = zone
+            .members
+            .iter()
+            .filter_map(|text| {
+                let key = SpeakerKey::parse(text)?;
+                let listed = state.speaker(text);
+                let kind = match (&key, listed.map(|speaker| speaker.kind)) {
+                    (SpeakerKey::Local(_), _) => MemberKind::Local,
+                    (SpeakerKey::Cast(_), _) => MemberKind::Cast,
+                    (SpeakerKey::AirPlay(_), Some(SpeakerKind::AirPlay2)) => MemberKind::AirPlay2,
+                    (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
+                    (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
+                };
+                let on = listed.is_some_and(|speaker| speaker.enabled);
+                let member = zones::Member {
+                    kind,
+                    listed: listed.is_some() && !keep_off.contains(text),
+                    on,
+                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                    needs_airplay2: listed.is_none()
+                        && !self.view.airplay2_experimental
+                        && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
+                    in_target: matches!(&key, SpeakerKey::AirPlay(id)
+                        if self.audio.airplay_holding_target(id).is_some()),
+                };
+                Some((key, on, member))
+            })
+            .collect();
+        let facts: Vec<zones::Member> = members.iter().map(|(_, _, member)| *member).collect();
+        let plan = zones::click_plan(&facts, situation);
+        let turn_on = match plan.action {
+            zones::ClickAction::Nothing => return,
+            zones::ClickAction::TurnOn { .. } => true,
+            zones::ClickAction::TurnOff => false,
+        };
+        self.log.log(|| {
+            let switched = if turn_on { "on" } else { "off" };
+            format!("the user switched zone \"{}\" {switched}", zone.name)
+        });
+        if turn_on {
+            for text in keep_off.iter().filter(|text| zone.members.contains(text)) {
+                if let (Some(key), Some(speaker)) = (SpeakerKey::parse(text), state.speaker(text)) {
+                    self.post_pair_first(&key, &speaker.name);
+                }
+            }
+        }
+        let running = self.running();
+        for ((key, on, _), step) in members.iter().zip(&plan.steps) {
+            let switch_on = match step {
+                // While streaming is off every member starts a new attempt.
+                Step::On | Step::Waiting if !running || !on => true,
+                Step::Off | Step::CastLeftOff(_) if *on => false,
+                Step::CastLeftOff(reason) => {
+                    self.log
+                        .log(|| format!("zone \"{}\": {key} stays off ({reason:?})", zone.name));
+                    continue;
+                }
+                _ => continue,
+            };
+            self.unwatch(&key.to_string());
+            self.switch_zone_member(key, switch_on);
+        }
+        if turn_on {
+            self.start_if_switched_on();
+        } else {
+            self.stop_if_idle();
+        }
+        self.take_events();
+    }
+
+    fn post_pair_first(&mut self, key: &SpeakerKey, name: &str) {
+        self.log
+            .log(|| format!("web remote: {key} stays off, it asks for a code"));
+        self.post(
+            NoticeSubject::Speaker(key.clone()),
+            NoticeMessage::PairFirst {
+                speaker: name.to_owned(),
+            },
+        );
+    }
+
+    /// The members in `keep_off` (a phone's recall: they ask for a code)
+    /// count as not found and get a notice each instead.
+    fn recall_preset_keeping_off(
+        &mut self,
+        id: &str,
+        keep_off: &[String],
+    ) -> Option<Vec<(String, LeftOff)>> {
         let preset = self.presets.iter().find(|preset| preset.id == id)?.clone();
         let state = self.snapshot();
         let mut members: Vec<(SpeakerKey, Option<f64>, String, RecallMember)> = Vec::new();
@@ -1434,9 +1954,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     SpeakerKey::AirPlay(id) => self.airplay_name(id),
                     _ => self.custom_names.shown(&member.key, key.id()),
                 });
+            if keep_off.contains(&member.key) {
+                self.post_pair_first(&key, &name);
+            }
             let facts = RecallMember {
                 kind,
-                found: listed.is_some() || hidden.is_some() || in_target,
+                found: (listed.is_some() || hidden.is_some() || in_target)
+                    && !keep_off.contains(&member.key),
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
                 busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
@@ -1469,7 +1993,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let left_off: Vec<(String, LeftOff)> = members
             .iter()
             .zip(&plan.steps)
-            .filter_map(|((_, _, name, _), step)| match step {
+            .filter_map(|((key, _, name, _), step)| match step {
+                RecallStep::LeftOff(_) if keep_off.contains(&key.to_string()) => None,
                 RecallStep::LeftOff(reason) => Some((name.clone(), *reason)),
                 _ => None,
             })
@@ -1478,6 +2003,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .iter()
             .zip(&plan.steps)
             .filter_map(|((key, _, name, _), step)| match step {
+                // Each has its pair-first notice instead.
+                RecallStep::LeftOff(_) if keep_off.contains(&key.to_string()) => None,
                 RecallStep::LeftOff(reason) => {
                     Some((name.clone(), self.left_off_reason(key, *reason)))
                 }
@@ -1492,7 +2019,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .map(|((key, ..), _)| key.to_string())
                 .collect()
         };
-        let left_keys = keys_where(|step, _| matches!(step, RecallStep::LeftOff(_)));
+        let mut left_keys = keys_where(|step, _| matches!(step, RecallStep::LeftOff(_)));
+        left_keys.retain(|key| !keep_off.contains(key));
         // A member that was on already isn't the recall's to report on.
         let starting = keys_where(|step, facts| {
             matches!(step, RecallStep::On | RecallStep::Waiting) && !facts.on
@@ -2099,8 +2627,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Switches on the auto-connect speakers among `appeared`, then starts
-    /// streaming once for all of them, unless the user switched streaming off
-    /// or an automatic start failed (S120).
+    /// streaming once for all of them, unless the user switched streaming off,
+    /// an automatic start failed (S120) or no speaker is left on.
     fn auto_connect(&mut self, appeared: &[String]) {
         let hits: Vec<&String> = appeared
             .iter()
@@ -2121,7 +2649,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.output_failed(id, false);
             }
         }
-        if !self.running() {
+        if !self.running() && self.enabled_count() > 0 {
             self.start_session(StartOrigin::AutoConnect);
         }
     }
@@ -2192,6 +2720,43 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return Ok(SourceId::WholeSystem);
         }
         self.refresh_sources();
+        if let Chosen::Mix {
+            mode: MixMode::Only,
+            apps,
+        } = &self.chosen
+        {
+            // Each app where it runs now; one that doesn't is skipped.
+            let mut root_pids = Vec::new();
+            for app in apps {
+                let listed = self.sources.iter().find_map(|source| match source.id {
+                    SourceId::App { root_pid }
+                        if source.executable.eq_ignore_ascii_case(&app.executable) =>
+                    {
+                        Some(root_pid)
+                    }
+                    _ => None,
+                });
+                let found = match listed {
+                    Some(pid) => Some(pid),
+                    None => {
+                        self.audio
+                            .find_app(0, &app.executable)?
+                            .and_then(|info| match info.id {
+                                SourceId::App { root_pid } => Some(root_pid),
+                                _ => None,
+                            })
+                    }
+                };
+                root_pids.extend(found);
+            }
+            if root_pids.is_empty() {
+                return Err(BackendError::SourceGone);
+            }
+            return Ok(SourceId::Apps {
+                root_pids,
+                executables: apps.iter().map(|app| app.executable.clone()).collect(),
+            });
+        }
         let key = self.chosen.key();
         if matches!(self.chosen, Chosen::Input { .. })
             && !self.sources.iter().any(|source| source_key(source) == key)
@@ -2282,7 +2847,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// What a notice says about a start that failed with `error`.
     fn start_problem(&self, error: &BackendError) -> NoticeMessage {
-        let app = matches!(self.chosen, Chosen::App { .. });
+        let app = matches!(
+            self.chosen,
+            Chosen::App { .. }
+                | Chosen::Mix {
+                    mode: MixMode::Only,
+                    ..
+                }
+        );
         match error {
             BackendError::InputGone => NoticeMessage::InputNotConnected {
                 source: self.chosen_name(),
@@ -2707,10 +3279,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .collect()
         };
         let message = NoticeMessage::HeardTwice {
-            source: match &self.chosen {
-                Chosen::WholeSystem => None,
-                Chosen::App { name, .. } | Chosen::Input { name, .. } => Some(name.clone()),
-            },
+            source: self.chosen.notice_name(),
             mute: names(false),
             shared: names(true),
             default_output: paths
@@ -2762,16 +3331,27 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 name: source.name.clone(),
                 kind: match source.id {
                     SourceId::WholeSystem => SourceKind::System,
-                    SourceId::App { .. } => SourceKind::App,
+                    SourceId::App { .. } | SourceId::Apps { .. } => SourceKind::App,
+                    SourceId::AppsExcept { .. } => SourceKind::AppsExcept,
                     SourceId::Input { .. } => SourceKind::Input,
                 },
+                channels: source.channels,
             })
             .collect();
         let chosen = self.chosen.key();
         if !rows.iter().any(|row| row.id == chosen) {
             let kind = match self.chosen {
                 Chosen::Input { .. } => SourceKind::Input,
+                Chosen::Mix {
+                    mode: MixMode::AllExcept,
+                    ..
+                } => SourceKind::AppsExcept,
                 _ => SourceKind::App,
+            };
+            // The UI puts its own words around the apps "all except" leaves out.
+            let name = match &self.chosen {
+                Chosen::Mix { apps, .. } => mix_names(apps).join(", "),
+                chosen => chosen.shown_name(),
             };
             // Apps come before input devices, as in the listing.
             let at = match kind {
@@ -2785,8 +3365,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 at,
                 Source {
                     id: chosen,
-                    name: self.chosen_name(),
+                    name,
                     kind,
+                    channels: 0,
                 },
             );
         }
@@ -2990,6 +3571,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
+            input_pair: self.chosen_input_pair(),
+            mix_apps: self.mix_apps(),
+            mix_all_except: mix_mode(&self.chosen, self.mix_mode) == MixMode::AllExcept,
             master_volume: self.audio.master_volume(),
             speakers,
             absent,
@@ -3067,22 +3651,70 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         else {
             return;
         };
-        if picked.key() == self.chosen.key() {
+        self.choose(picked);
+    }
+
+    fn toggle_mix_app(&mut self, executable: &str) {
+        let Some(app) = self
+            .mix_apps()
+            .into_iter()
+            .find(|app| app.id.eq_ignore_ascii_case(executable))
+        else {
+            return;
+        };
+        let mode = mix_mode(&self.chosen, self.mix_mode);
+        let picked = mix_toggle(
+            &self.chosen,
+            mode,
+            SavedMixApp {
+                executable: app.id,
+                name: app.name,
+            },
+        );
+        self.choose(picked);
+    }
+
+    fn set_mix_all_except(&mut self, on: bool) {
+        let mode = if on {
+            MixMode::AllExcept
+        } else {
+            MixMode::Only
+        };
+        let current = mix_mode(&self.chosen, self.mix_mode);
+        self.mix_mode = mode;
+        if mode != current {
+            // The checked apps carry over to the other mode.
+            let picked = mix_choice(mode, mix_checked(&self.chosen, current));
+            self.choose(picked);
+        }
+    }
+
+    /// A new pair is kept for the chosen input device; while streaming,
+    /// capture starts again from it, as a new source does.
+    fn select_input_pair(&mut self, pair: u16) {
+        let Chosen::Input { endpoint_id, name } = &self.chosen else {
+            return;
+        };
+        if self.chosen_input_pair() == pair {
             return;
         }
+        let endpoint_id = endpoint_id.clone();
         self.log.log(|| {
-            let name = match &picked {
-                Chosen::WholeSystem => WHOLE_SYSTEM_NAME,
-                Chosen::App { name, .. } | Chosen::Input { name, .. } => name,
-            };
-            format!("source chosen: {name} ({})", picked.key())
+            let channels = InputPair::offered(self.listed_channels(&endpoint_id))
+                .get(usize::from(pair))
+                .map_or_else(
+                    || format!("pair {}", pair + 1),
+                    |found| describe_pair(*found),
+                );
+            format!("input channels chosen for {name}: {channels}")
         });
-        self.chosen = picked;
-        self.notices
-            .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
-        // A start ends the running session by itself and keeps the AirPlay
-        // speakers in the stream, restarting only their timeline (S141); a
-        // stop would tear them down and connect them again.
+        if pair == 0 {
+            self.input_pairs.remove(&endpoint_id);
+        } else {
+            self.input_pairs.insert(endpoint_id.clone(), pair);
+        }
+        self.audio.set_input_pair(&endpoint_id, pair);
+        self.notices.clear(&[NoticeSubject::Capture]);
         let switch = source_switch(self.running());
         let started = switch
             .start
@@ -3239,12 +3871,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.stop_if_idle();
     }
 
-    /// Stores the adjustment that makes L what the user entered, with the
-    /// sender's latency of this moment (spec S178, S181).
+    /// Stores the adjustment that makes L what the user entered, against
+    /// the sender's latency of this moment or the last one known (spec
+    /// S178, S181).
     fn set_airplay_delay(&mut self, ms: f64) {
-        let Some(sender) = self.audio.airplay_sender_latency_ms() else {
-            return;
-        };
+        let sender = self.audio.airplay_adjustment_base_ms();
         if let Some(adjustment) = native_airplay_adjustment_ms(ms, sender) {
             self.audio.set_airplay_adjustment(adjustment);
         }
@@ -3345,88 +3976,16 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
-    /// Present members only; absent ones are left alone.
-    /// The core's plan for a click on zone `id` (spec S246, S247), carried
-    /// out: present members only, at most one Cast speaker, every AirPlay 2
-    /// member on even when it waits for the AirPlay 2 place.
     fn toggle_zone(&mut self, id: &str) {
-        let state = self.snapshot();
-        let Some(zone) = self.zones.get(id).cloned() else {
-            return;
-        };
-        let in_zone = |key: &str| zone.members.iter().any(|member| member == key);
-        let elsewhere = |kind: SpeakerKind| {
-            state.speakers.iter().filter(move |speaker| {
-                speaker.kind == kind && speaker.enabled && !in_zone(&speaker.id)
-            })
-        };
-        let situation = Situation {
-            streaming: state.running,
-            cast_on_elsewhere: elsewhere(SpeakerKind::Cast).next().is_some(),
-            airplay2_playing_elsewhere: state.running
-                && elsewhere(SpeakerKind::AirPlay2).any(|speaker| speaker.waiting.is_none()),
-        };
-        let members: Vec<(SpeakerKey, bool, zones::Member)> = zone
-            .members
-            .iter()
-            .filter_map(|text| {
-                let key = SpeakerKey::parse(text)?;
-                let listed = state.speaker(text);
-                let kind = match (&key, listed.map(|speaker| speaker.kind)) {
-                    (SpeakerKey::Local(_), _) => MemberKind::Local,
-                    (SpeakerKey::Cast(_), _) => MemberKind::Cast,
-                    (SpeakerKey::AirPlay(_), Some(SpeakerKind::AirPlay2)) => MemberKind::AirPlay2,
-                    (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
-                    (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
-                };
-                let on = listed.is_some_and(|speaker| speaker.enabled);
-                let member = zones::Member {
-                    kind,
-                    listed: listed.is_some(),
-                    on,
-                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
-                    needs_airplay2: listed.is_none()
-                        && !self.view.airplay2_experimental
-                        && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
-                    in_target: matches!(&key, SpeakerKey::AirPlay(id)
-                        if self.audio.airplay_holding_target(id).is_some()),
-                };
-                Some((key, on, member))
-            })
-            .collect();
-        let facts: Vec<zones::Member> = members.iter().map(|(_, _, member)| *member).collect();
-        let plan = zones::click_plan(&facts, situation);
-        let turn_on = match plan.action {
-            zones::ClickAction::Nothing => return,
-            zones::ClickAction::TurnOn { .. } => true,
-            zones::ClickAction::TurnOff => false,
-        };
-        self.log.log(|| {
-            let switched = if turn_on { "on" } else { "off" };
-            format!("the user switched zone \"{}\" {switched}", zone.name)
-        });
-        let running = self.running();
-        for ((key, on, _), step) in members.iter().zip(&plan.steps) {
-            let switch_on = match step {
-                // While streaming is off every member starts a new attempt.
-                Step::On | Step::Waiting if !running || !on => true,
-                Step::Off | Step::CastLeftOff(_) if *on => false,
-                Step::CastLeftOff(reason) => {
-                    self.log
-                        .log(|| format!("zone \"{}\": {key} stays off ({reason:?})", zone.name));
-                    continue;
-                }
-                _ => continue,
-            };
-            self.unwatch(&key.to_string());
-            self.switch_zone_member(key, switch_on);
-        }
-        if turn_on {
-            self.start_if_switched_on();
-        } else {
-            self.stop_if_idle();
-        }
-        self.take_events();
+        self.toggle_zone_keeping_off(id, &[]);
+    }
+
+    fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        self.toggle_zone_keeping_off(id, keep_off);
+    }
+
+    fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        let _ = self.recall_preset_keeping_off(id, keep_off);
     }
 
     fn new_zone(&mut self, name: &str) -> Result<(), ZoneError> {
@@ -3697,6 +4256,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
+    fn input_peak(&mut self) -> Option<f32> {
+        self.audio.input_peak()
+    }
+
     /// Also writes the settings file when anything changed since the last
     /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {
@@ -3766,17 +4329,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             clock::now_ns(),
             self.log.clone(),
         );
-        match started {
-            Ok(run) => {
-                self.calibrate_all.phase = AllPhase::Idle;
-                self.calibrate_all.sheet = None;
-                self.calibrate_all.run = Some(run);
-            }
-            Err(failure) => {
-                self.calibrate_all.phase = AllPhase::Failed(failure);
-                self.calibrate_all.endings += 1;
-            }
-        }
+        self.calibrate_all_started(started, None);
     }
 
     fn cancel_calibrate_all(&mut self) {
@@ -3825,7 +4378,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn apply_calibrate_all(&mut self) {
-        if self.calibrate_all.run.is_some() || self.calibrate_all_waits() {
+        if self.calibrate_all.run.is_some() {
             return;
         }
         let Some(kept) = self.calibrate_all.sheet.as_mut() else {
@@ -3842,17 +4395,24 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let members = kept.members.clone();
         self.log
             .log(|| format!("Calibrate All applied: {:?}", applied.changes));
+        let before = self.audio.airplay_adjustment();
         for change in &applied.changes {
             self.write_calibrated(&members, &change.target, Some(change.new_ms));
         }
+        let airplay_adjustment = applied
+            .changes
+            .iter()
+            .any(|change| change.target == Target::AirPlay)
+            .then(|| (before, self.audio.airplay_adjustment()));
         if let Some(kept) = self.calibrate_all.sheet.as_mut() {
             kept.applied = Some(applied);
+            kept.airplay_adjustment = airplay_adjustment;
         }
         self.calibrate_all.endings += 1;
     }
 
     fn undo_calibrate_all(&mut self) {
-        if self.calibrate_all.run.is_some() || self.calibrate_all_waits() {
+        if self.calibrate_all.run.is_some() {
             return;
         }
         let Some(kept) = self.calibrate_all.sheet.as_mut() else {
@@ -3863,11 +4423,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         };
         kept.undone = true;
         let members = kept.members.clone();
+        let airplay_adjustment = kept.airplay_adjustment.take();
         let previous = applied.undo.undo();
         self.log
             .log(|| format!("Calibrate All undone: {previous:?}"));
         for (target, value) in &previous {
-            self.write_calibrated(&members, target, *value);
+            match (target, airplay_adjustment) {
+                (Target::AirPlay, Some((before, _))) => self.audio.set_airplay_adjustment(before),
+                _ => self.write_calibrated(&members, target, *value),
+            }
         }
         self.calibrate_all.endings += 1;
     }
@@ -4076,6 +4640,7 @@ fn describe_source(source: &SourceInfo) -> String {
             source.name, source.executable
         ),
         SourceId::Input { endpoint_id } => format!("{} (input device {endpoint_id})", source.name),
+        SourceId::Apps { .. } | SourceId::AppsExcept { .. } => source.name.clone(),
     }
 }
 
@@ -4085,6 +4650,7 @@ fn source_key(source: &SourceInfo) -> String {
         SourceId::WholeSystem => SYSTEM_KEY.to_owned(),
         SourceId::App { root_pid } => app_key(*root_pid, &source.executable),
         SourceId::Input { endpoint_id } => input_key(endpoint_id),
+        SourceId::Apps { .. } | SourceId::AppsExcept { .. } => format!("mix:{}", source.name),
     }
 }
 
@@ -4186,12 +4752,12 @@ mod tests {
             .driver()
             .captures_started()
             .iter()
-            .filter_map(|target| match target {
-                CaptureTarget::Loopback(activation) => {
-                    Some((activation.mode, activation.target_pid))
-                }
-                CaptureTarget::Input { .. } => None,
+            .flat_map(|target| match target {
+                CaptureTarget::Loopback(activation) => vec![*activation],
+                CaptureTarget::Mix(activations) => activations.clone(),
+                CaptureTarget::Input { .. } => Vec::new(),
             })
+            .map(|activation| (activation.mode, activation.target_pid))
             .collect()
     }
 
@@ -4203,8 +4769,8 @@ mod tests {
             .captures_started()
             .iter()
             .filter_map(|target| match target {
-                CaptureTarget::Input { endpoint_id } => Some(endpoint_id.clone()),
-                CaptureTarget::Loopback(_) => None,
+                CaptureTarget::Input { endpoint_id, .. } => Some(endpoint_id.clone()),
+                CaptureTarget::Loopback(_) | CaptureTarget::Mix(_) => None,
             })
             .collect()
     }
@@ -4213,6 +4779,110 @@ mod tests {
 
     fn mic() -> String {
         format!("input:{MIC}")
+    }
+
+    fn mix_app(executable: &str) -> SavedMixApp {
+        SavedMixApp {
+            executable: executable.to_owned(),
+            name: executable.trim_end_matches(".exe").to_owned(),
+        }
+    }
+
+    #[test]
+    fn checking_apps_builds_a_mix_and_unchecking_them_goes_back_to_one_app_or_the_system() {
+        let player = Chosen::App {
+            root_pid: 10,
+            executable: "player.exe".to_owned(),
+            name: "player".to_owned(),
+        };
+        let both = mix_toggle(&player, MixMode::Only, mix_app("browser.exe"));
+        assert_eq!(
+            both,
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps: vec![mix_app("player.exe"), mix_app("browser.exe")],
+            }
+        );
+        assert_eq!(both.key(), "mix:only:player.exe,browser.exe");
+        assert_eq!(
+            both.id(),
+            SourceId::Apps {
+                root_pids: Vec::new(),
+                executables: vec!["player.exe".to_owned(), "browser.exe".to_owned()],
+            },
+            "the pids are found at the next listing"
+        );
+        let one = mix_toggle(&both, MixMode::Only, mix_app("PLAYER.EXE"));
+        assert!(
+            matches!(&one, Chosen::App { executable, root_pid: 0, .. } if executable == "browser.exe"),
+            "one app left in \"only these\" is a plain app: {one:?}"
+        );
+        assert_eq!(
+            mix_toggle(&one, MixMode::Only, mix_app("browser.exe")),
+            Chosen::WholeSystem
+        );
+    }
+
+    // covers: S242
+    #[test]
+    fn the_double_audio_notice_leaves_the_all_except_wording_to_the_ui() {
+        let except = mix_choice(
+            MixMode::AllExcept,
+            vec![mix_app("game.exe"), mix_app("chat.exe")],
+        );
+        assert_eq!(
+            except.notice_name(),
+            Some(SourceName::AllAppsExcept(vec![
+                "game".into(),
+                "chat".into()
+            ]))
+        );
+        let only = mix_choice(
+            MixMode::Only,
+            vec![mix_app("game.exe"), mix_app("chat.exe")],
+        );
+        assert_eq!(
+            only.notice_name(),
+            Some(SourceName::Apps(vec!["game".into(), "chat".into()]))
+        );
+        assert_eq!(Chosen::WholeSystem.notice_name(), None);
+    }
+
+    #[test]
+    fn all_except_keeps_one_app_as_a_mix_and_switching_mode_carries_the_checked_apps() {
+        let except = mix_toggle(
+            &Chosen::WholeSystem,
+            MixMode::AllExcept,
+            mix_app("game.exe"),
+        );
+        assert_eq!(
+            except,
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps: vec![mix_app("game.exe")],
+            }
+        );
+        assert_eq!(
+            except.id(),
+            SourceId::AppsExcept {
+                executables: vec!["game.exe".to_owned()]
+            }
+        );
+        assert_eq!(mix_mode(&except, MixMode::Only), MixMode::AllExcept);
+        assert_eq!(mix_checked(&except, MixMode::Only), Vec::new());
+        let carried = mix_choice(MixMode::Only, mix_checked(&except, MixMode::AllExcept));
+        assert!(matches!(carried, Chosen::App { ref executable, .. } if executable == "game.exe"));
+        assert_eq!(
+            mix_choice(
+                MixMode::AllExcept,
+                vec![mix_app("a.exe"), mix_app("A.EXE"), mix_app("")]
+            ),
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps: vec![mix_app("a.exe")],
+            },
+            "repeats and empty names are dropped"
+        );
     }
 
     #[test]
@@ -4300,6 +4970,74 @@ mod tests {
         restored.set_running(true);
         assert!(restored.snapshot().running);
         assert_eq!(input_captures(&restored), [MIC]);
+    }
+
+    /// The input devices captured and the pair each played, in order.
+    fn input_pair_captures(adapter: &AudioAdapter<MockBackend>) -> Vec<(String, u16)> {
+        adapter
+            .audio
+            .driver()
+            .captures_started()
+            .iter()
+            .filter_map(|target| match target {
+                CaptureTarget::Input { endpoint_id, pair } => Some((endpoint_id.clone(), *pair)),
+                CaptureTarget::Loopback(_) | CaptureTarget::Mix(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_input_channel_pair_restarts_capture_and_is_kept_per_device() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 6);
+        adapter.refresh_sources();
+        adapter.select_source(&mic());
+        let state = adapter.snapshot();
+        let row = state.sources.last().expect("listed");
+        assert_eq!((row.id.clone(), row.channels), (mic(), 6));
+        assert_eq!(state.input_pair, 0);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_running(true);
+        assert_eq!(input_pair_captures(&adapter), [(MIC.to_owned(), 0)]);
+
+        // Channels 3-4: capture starts again from them, and they're kept.
+        adapter.select_input_pair(1);
+        assert!(adapter.snapshot().running);
+        assert_eq!(adapter.snapshot().input_pair, 1);
+        assert_eq!(
+            input_pair_captures(&adapter),
+            [(MIC.to_owned(), 0), (MIC.to_owned(), 1)]
+        );
+        adapter.select_input_pair(1);
+        assert_eq!(
+            input_pair_captures(&adapter).len(),
+            2,
+            "the same pair again"
+        );
+        let saved = adapter.current_settings();
+        assert_eq!(saved.input_pairs, BTreeMap::from([(MIC.to_owned(), 1)]));
+
+        // The next launch plays the kept pair.
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_input(MIC, "Interface (USB Audio)", "USB");
+        let mut restored = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        restored.restore(saved);
+        restored.refresh_sources();
+        turn_on(&mut restored, SPEAKERS);
+        restored.set_running(true);
+        assert_eq!(input_pair_captures(&restored), [(MIC.to_owned(), 1)]);
+
+        // Back to 1-2, the device needs no entry; another source has no pair.
+        adapter.select_input_pair(0);
+        assert!(adapter.current_settings().input_pairs.is_empty());
+        adapter.select_source("system");
+        adapter.select_input_pair(2);
+        assert_eq!(adapter.snapshot().input_pair, 0);
+        assert!(adapter.current_settings().input_pairs.is_empty());
     }
 
     #[test]
@@ -5404,6 +6142,38 @@ mod tests {
     }
 
     #[test]
+    fn an_auto_connect_speaker_that_cant_start_posts_no_start_notice() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_auto_connect(&key(HEADPHONES), true);
+        unplug(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        for id in [SPEAKERS, HEADPHONES] {
+            adapter
+                .audio_mut()
+                .fail_output(id, Some(BackendError::UnsupportedFormat));
+        }
+        // Speakers can't restart in the pass that switches Headphones on, so
+        // the failed auto-connect leaves no speaker on.
+        adapter.audio_mut().end_renderer(SPEAKERS);
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [
+                NoticeMessage::SpeakerFailed {
+                    speaker: "Speakers".to_owned()
+                },
+                NoticeMessage::SpeakerFailed {
+                    speaker: "Headphones".to_owned()
+                },
+            ],
+            "the failures, and no Start notice as if the user pressed Start"
+        );
+    }
+
+    #[test]
     fn notices_can_be_dismissed_one_by_one_or_all_at_once() {
         let mut adapter = adapter();
         turn_on(&mut adapter, HEADPHONES);
@@ -5542,7 +6312,7 @@ mod tests {
     fn twice(source: Option<&str>, mute: &[&str], shared: &[&str]) -> NoticeMessage {
         let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect();
         NoticeMessage::HeardTwice {
-            source: source.map(str::to_owned),
+            source: source.map(|name| SourceName::Named(name.to_owned())),
             mute: names(mute),
             shared: names(shared),
             default_output: None,
@@ -7366,6 +8136,7 @@ mod tests {
             failure: None,
             again_ended: None,
             applied: None,
+            airplay_adjustment: None,
             undone: false,
         });
         let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
@@ -7409,6 +8180,7 @@ mod tests {
             failure: None,
             again_ended: None,
             applied: None,
+            airplay_adjustment: None,
             undone: false,
         });
         adapter.poll();
@@ -7433,6 +8205,7 @@ mod tests {
             failure: None,
             again_ended: None,
             applied: None,
+            airplay_adjustment: None,
             undone: false,
         });
     }
@@ -7469,7 +8242,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_waits_for_airplay_to_play_rather_than_leave_its_delay_out() {
+    fn apply_without_a_sender_stores_the_airplay_delay_for_the_next_one() {
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
         keep(
@@ -7481,13 +8254,102 @@ mod tests {
             ]),
         );
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
-        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
-        assert!(shown.airplay_waits && !shown.can_apply);
+        assert!(
+            adapter
+                .snapshot()
+                .calibrate_all
+                .sheet
+                .expect("results")
+                .can_apply
+        );
 
         adapter.apply_calibrate_all();
         let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
-        assert!(!shown.applied, "nothing was set");
-        assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).delay_ms, Some(0.0));
+        assert!(shown.applied && shown.can_undo);
+        let airplay_ms = adapter
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .and_then(|kept| kept.applied.as_ref())
+            .and_then(|applied| applied.changes.iter().find(|c| c.target == Target::AirPlay))
+            .expect("an AirPlay change")
+            .new_ms;
+        assert_eq!(
+            adapter.audio.airplay_adjustment(),
+            airplay_ms - crate::audio::outputs::DEFAULT_SENDER_LATENCY_MS,
+            "against the default L_s"
+        );
+
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(1750.0));
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(airplay_ms));
+    }
+
+    /// Applies an AirPlay row against a sender's L_s of 2000 ms, then a
+    /// new sender, as after Retry, starts at 1750 ms.
+    fn applied_before_a_new_sender() -> (AudioAdapter<MockBackend>, FakeAirPlay, f64) {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let old = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(old.link(), None);
+        old.set_latency(std::time::Duration::from_millis(2000));
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(2000.0));
+        adapter.audio.set_airplay_adjustment(100.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(2100.0), 2150.0),
+            ]),
+        );
+        adapter.apply_calibrate_all();
+        let written = adapter.audio.airplay_adjustment();
+        assert_ne!(written, 100.0, "Apply wrote a new adjustment");
+
+        let new = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(new.link(), None);
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(1750.0));
+        (adapter, new, written)
+    }
+
+    #[test]
+    fn a_new_sender_latency_after_apply_keeps_undo_and_undo_restores_the_adjustment() {
+        let (mut adapter, _sender, written) = applied_before_a_new_sender();
+        assert!(
+            adapter
+                .snapshot()
+                .calibrate_all
+                .sheet
+                .expect("results")
+                .can_undo,
+            "the user changed nothing, only L_s moved"
+        );
+        assert_eq!(adapter.audio.airplay_adjustment(), written);
+
+        adapter.undo_calibrate_all();
+        assert_eq!(adapter.audio.airplay_adjustment(), 100.0);
+    }
+
+    #[test]
+    fn an_airplay_delay_changed_after_apply_still_drops_undo() {
+        let (mut adapter, _sender, written) = applied_before_a_new_sender();
+        let shown = adapter.snapshot().airplay_delay_ms.expect("a sender runs");
+        adapter.set_airplay_delay(shown + 40.0);
+        adapter.poll();
+        assert_ne!(adapter.audio.airplay_adjustment(), written);
+        assert!(
+            !adapter
+                .snapshot()
+                .calibrate_all
+                .sheet
+                .expect("results")
+                .can_undo
+        );
     }
 
     #[test]
@@ -8566,6 +9428,97 @@ mod tests {
         }
     }
 
+    fn zone_adapter(members: &[&str]) -> AudioAdapter<MockBackend> {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(members.iter().map(|id| key(id)).collect())],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter
+    }
+
+    // covers: S255
+    #[test]
+    fn calibrate_zone_reads_the_zone_now_and_says_why_it_cant_start() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        let zone = adapter.zones.get("zone:1").cloned().expect("the zone");
+        let scope = adapter.zone_scope(&zone);
+        assert_eq!(scope.present, BTreeSet::from([key("bluetooth"), key("tv")]));
+        let off: Vec<String> = scope.off.iter().map(Member::key).collect();
+        assert_eq!(off, ["local:tv"], "listed, never switched on");
+        assert!(!speaker_of(&adapter, &key("tv")).enabled);
+
+        // The mock has no microphone: refused once the zone's plan holds.
+        adapter.start_calibrate_zone("zone:1");
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.phase, AllPhase::Failed(Failure::NoMicrophone));
+        assert_eq!(state.zone.expect("the zone's sheet").name, "Downstairs");
+
+        let mut adapter = zone_adapter(&["tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibrate_zone("zone:1");
+        assert_eq!(
+            adapter.snapshot().calibrate_all.phase,
+            AllPhase::Failed(Failure::NothingToMeasure),
+            "only the reference plays in the zone"
+        );
+    }
+
+    /// A Calibrate Zone run over zone:1 that has just started.
+    fn zone_running(adapter: &mut AudioAdapter<MockBackend>) {
+        adapter.calibrate_all.run = Some(crate::audio::calibrate_all::tests::zone_run());
+        adapter.calibrate_all.zone = Some(MeasuredZone {
+            id: "zone:1".to_owned(),
+            name: "Downstairs".to_owned(),
+            members: vec![key("bluetooth"), key("tv")],
+        });
+        adapter.stop_calibrate_all_for_zones(false);
+        assert!(
+            adapter.calibrate_all.run.as_ref().unwrap().is_running(),
+            "the zone as it was keeps the run going"
+        );
+    }
+
+    fn ended_as_a_change(adapter: &mut AudioAdapter<MockBackend>) {
+        let _ = adapter.tick_calibrate_all();
+        let all = &adapter.calibrate_all;
+        assert!(all.run.is_none(), "the outputs are given back");
+        let kept = all.sheet.as_ref().expect("the results so far");
+        assert_eq!(kept.sheet.ended(), Some(EndReason::SpeakersChanged));
+        assert_eq!(kept.applied, None);
+    }
+
+    // covers: S240, S255
+    #[test]
+    fn a_zone_click_ends_the_run_and_applies_nothing() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        zone_running(&mut adapter);
+        adapter.toggle_zone("zone:1");
+        ended_as_a_change(&mut adapter);
+    }
+
+    // covers: S240
+    #[test]
+    fn deleting_the_measured_zone_ends_the_run() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        zone_running(&mut adapter);
+        assert!(adapter.zones.delete("zone:1"));
+        ended_as_a_change(&mut adapter);
+
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        zone_running(&mut adapter);
+        assert!(adapter.zones.remove_speaker(&key("tv")));
+        ended_as_a_change(&mut adapter);
+    }
+
     #[test]
     fn a_zone_volume_change_reaches_the_playing_members_as_a_master_change_does() {
         let (mut adapter, fake) = cast_adapter();
@@ -8655,6 +9608,47 @@ mod tests {
         assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
         adapter.toggle_zone("zone:9");
         assert!(!adapter.snapshot().running, "no such zone: nothing");
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_zone_click_or_recall_leaves_a_code_asking_member_off_with_a_notice() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let tv_id = ap(&tv);
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), tv_id.clone()])],
+            speaker_presets: vec![saved_preset(&[
+                (key(HEADPHONES), Some(40.0)),
+                (tv_id.clone(), Some(20.0)),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        fake.take_calls();
+        let pair_first = NoticeMessage::PairFirst {
+            speaker: "Den TV".to_owned(),
+        };
+        let keep_off = [tv_id.clone()];
+
+        adapter.toggle_zone_from_phone("zone:1", &keep_off);
+        assert!(enabled(&adapter, SPEAKERS));
+        assert!(!speaker_of(&adapter, &tv_id).enabled);
+        assert!(!fake.take_calls().contains(&Call::StartPairing(id_of(&tv))));
+        assert_eq!(adapter.snapshot().pin_prompt, None);
+        assert!(messages(&adapter).contains(&pair_first));
+
+        adapter.dismiss_all_notices();
+        adapter.recall_preset_from_phone("preset:1", &keep_off);
+        assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
+        assert!(!speaker_of(&adapter, &tv_id).enabled);
+        assert!(!fake.take_calls().contains(&Call::StartPairing(id_of(&tv))));
+        assert!(messages(&adapter).contains(&pair_first));
+
+        adapter.recall_preset("preset:1");
+        assert!(
+            fake.take_calls().contains(&Call::StartPairing(id_of(&tv))),
+            "a recall at the PC still pairs it"
+        );
     }
 
     // covers: S246
@@ -8941,6 +9935,27 @@ mod tests {
         adapter.poll();
         turn_on(&mut adapter, "builtin");
         adapter
+    }
+
+    // covers: S257, S265
+    #[test]
+    fn a_phone_recall_posts_the_preset_notice_but_not_for_a_member_kept_off() {
+        let mut adapter = preset_adapter(vec![saved_preset(&[
+            (key(SPEAKERS), None),
+            (key(HEADPHONES), None),
+            (key("late"), None),
+        ])]);
+        Backend::recall_preset_from_phone(&mut adapter, "preset:1", &[key(HEADPHONES)]);
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("late", PresetLeftOff::NotFound)]
+            )],
+            "the member that asks for a code has its own notice instead"
+        );
+        assert!(enabled(&adapter, SPEAKERS));
+        assert!(!enabled(&adapter, HEADPHONES));
     }
 
     // covers: S265

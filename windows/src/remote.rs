@@ -9,11 +9,17 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
-use audiosync_remote::{Command, DEFAULT_PORT, NowPlaying, Speaker as RemoteSpeaker, State};
+use audiosync_remote::{
+    Command, DEFAULT_PORT, NowPlaying, Preset as RemotePreset, Source as RemoteSource,
+    SourceKind as RemoteSourceKind, Speaker as RemoteSpeaker, State, Zone as RemoteZone,
+    ZoneCounts,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::now_playing_card::{CardTrack, app_name};
-use crate::ui_model::{AppState, Availability, MAX_DELAY_MS, MIN_DELAY_MS, Speaker, SpeakerKind};
+use crate::ui_model::{
+    AppState, Availability, MAX_DELAY_MS, MIN_DELAY_MS, SourceKind, Speaker, SpeakerKind, Waiting,
+};
 
 /// The lowest port the setting takes: below it are the well-known services.
 pub const MIN_PORT: u16 = 1024;
@@ -57,6 +63,12 @@ pub fn parse_port(text: &str) -> Option<u16> {
         .filter(|port| *port >= MIN_PORT)
 }
 
+/// Whether Use Port takes `text`: a valid port other than `current`, or
+/// `current` again after listening on it failed.
+pub fn use_port_enabled(text: &str, current: u16, failed_on_port: bool) -> bool {
+    parse_port(text).is_some_and(|port| port != current || failed_on_port)
+}
+
 /// The words a speaker row shows, from the interface's strings.
 pub trait RowText {
     /// The speaker's kind ("AirPlay 2", "Bluetooth").
@@ -65,6 +77,10 @@ pub trait RowText {
     fn note(&self, state: &AppState, speaker: &Speaker) -> String;
     /// The note of a speaker that asks for a code, which the page can't turn on.
     fn turn_on_at_pc(&self) -> String;
+    /// The whole system's name in the source picker; the backend's is English.
+    fn source_system(&self) -> String;
+    /// The name of a source that takes every app except `names`.
+    fn source_all_except(&self, names: &str) -> String;
 }
 
 /// A speaker that would ask for a PIN or password when turned on: the prompt
@@ -130,7 +146,8 @@ pub fn listed(state: &AppState, listed: impl Fn(&Speaker) -> bool) -> Vec<&Speak
 }
 
 /// What the page shows for `state`: the speakers the window lists, the
-/// master volume, the track on the Now Playing card, and the computer's name.
+/// master volume, the track on the Now Playing card, the source picker's
+/// entries in its order, and the computer's name.
 pub fn snapshot(
     state: &AppState,
     shown: impl Fn(&Speaker) -> bool,
@@ -138,8 +155,9 @@ pub fn snapshot(
     computer_name: &str,
     text: &dyn RowText,
 ) -> State {
-    let speakers = listed(state, shown)
-        .into_iter()
+    let listed_now = listed(state, shown);
+    let speakers = listed_now
+        .iter()
         .map(|speaker| {
             let (ms, min, max) = delay_field(state, speaker).unwrap_or((0.0, 0, 0));
             let note = if asks_for_code(state, speaker) {
@@ -163,6 +181,26 @@ pub fn snapshot(
             }
         })
         .collect();
+    let sources = state
+        .sources
+        .iter()
+        .map(|source| RemoteSource {
+            id: source.id.clone(),
+            name: match source.kind {
+                SourceKind::System => text.source_system(),
+                SourceKind::AppsExcept => text.source_all_except(&source.name),
+                SourceKind::App | SourceKind::Input => source.name.clone(),
+            },
+            kind: match source.kind {
+                SourceKind::System => RemoteSourceKind::System,
+                SourceKind::App | SourceKind::AppsExcept => RemoteSourceKind::App,
+                SourceKind::Input => RemoteSourceKind::Input,
+            },
+            // The window's picker refuses none of its entries.
+            available: true,
+            notice: None,
+        })
+        .collect();
     State {
         computer_name: computer_name.to_owned(),
         master_volume: volume(state.master_volume),
@@ -172,7 +210,64 @@ pub fn snapshot(
             source: app_name(&track.app_id),
         }),
         speakers,
+        zones: zones(state, &listed_now),
+        presets: state
+            .presets
+            .iter()
+            .map(|preset| RemotePreset {
+                id: preset.id.clone(),
+                name: preset.name.clone(),
+                current: preset.current,
+            })
+            .collect(),
+        calibrating: calibrating(state),
+        sources,
+        source_id: state
+            .sources
+            .iter()
+            .any(|source| source.id == state.source_id)
+            .then(|| state.source_id.clone()),
     }
+}
+
+/// A microphone run holds the outputs: a one-speaker calibration, Calibrate
+/// All or Measure Again, or the cut-off sweep of one playing out.
+pub fn calibrating(state: &AppState) -> bool {
+    state.calibration.busy
+}
+
+/// The zones as the page shows them: each one's members that the page lists
+/// now, in zone order, and how many of them are on (a waiting one included).
+fn zones(state: &AppState, listed_now: &[&Speaker]) -> Vec<RemoteZone> {
+    state
+        .zones
+        .iter()
+        .map(|zone| {
+            let members: Vec<&Speaker> = zone
+                .members
+                .iter()
+                .filter_map(|key| listed_now.iter().find(|speaker| &speaker.id == key))
+                .copied()
+                .collect();
+            let count = |test: &dyn Fn(&Speaker) -> bool| {
+                u32::try_from(members.iter().filter(|speaker| test(speaker)).count())
+                    .unwrap_or(u32::MAX)
+            };
+            RemoteZone {
+                id: zone.id.clone(),
+                name: zone.name.clone(),
+                volume: volume(zone.volume),
+                members: members.iter().map(|speaker| speaker.id.clone()).collect(),
+                counts: ZoneCounts {
+                    on: count(&|speaker| speaker.enabled),
+                    total: count(&|_| true),
+                    waiting: count(&|speaker| {
+                        speaker.enabled && speaker.waiting == Some(Waiting::ForAirPlay2Slot)
+                    }),
+                },
+            }
+        })
+        .collect()
 }
 
 /// One change a command makes, as a control in the window would.
@@ -197,6 +292,24 @@ pub enum Action {
     Master {
         volume: f64,
     },
+    /// A click on the zone, as the core's click plan carries it out;
+    /// `keep_off` are the members that would ask for a code.
+    ToggleZone {
+        id: String,
+        keep_off: Vec<String>,
+    },
+    ZoneVolume {
+        id: String,
+        volume: f64,
+    },
+    RecallPreset {
+        id: String,
+        keep_off: Vec<String>,
+    },
+    /// A pick in the source picker.
+    Source {
+        id: String,
+    },
 }
 
 /// Why a command changed nothing.
@@ -204,10 +317,17 @@ pub enum Action {
 pub enum Refusal {
     /// No listed speaker has that ID (any more).
     UnknownSpeaker,
+    /// The source picker doesn't list that ID (any more).
+    UnknownSource,
     /// The speaker can't be driven now, or not that way.
     Unavailable,
     /// A volume or delay outside what the control takes.
     OutOfRange,
+    /// No zone or preset has that ID (any more).
+    Unknown,
+    /// A microphone run holds the outputs; a command can arrive before the
+    /// page's snapshot says so.
+    Calibrating,
 }
 
 /// The actions `command` takes on `state`, among the speakers the window
@@ -220,12 +340,68 @@ pub fn actions(
     shown: impl Fn(&Speaker) -> bool,
 ) -> Result<Vec<Action>, Refusal> {
     let in_range = |value: f64| value.is_finite() && (0.0..=100.0).contains(&value);
+    if calibrating(state) {
+        return Err(Refusal::Calibrating);
+    }
     match command {
+        Command::Zone { id, change } => {
+            let zone = state
+                .zones
+                .iter()
+                .find(|zone| &zone.id == id)
+                .ok_or(Refusal::Unknown)?;
+            let mut actions = Vec::new();
+            if let Some(volume) = change.volume {
+                if !in_range(volume) {
+                    return Err(Refusal::OutOfRange);
+                }
+                actions.push(Action::ZoneVolume {
+                    id: zone.id.clone(),
+                    volume,
+                });
+            }
+            if change.toggle {
+                let can_play = zone.members.iter().any(|key| {
+                    state
+                        .speaker(key)
+                        .is_some_and(|speaker| shown(speaker) && can_drive(state, speaker))
+                });
+                if !can_play {
+                    return Err(Refusal::Unavailable);
+                }
+                actions.push(Action::ToggleZone {
+                    id: zone.id.clone(),
+                    keep_off: keep_off(state, &zone.members),
+                });
+            }
+            Ok(actions)
+        }
+        Command::Preset { id } => {
+            let preset = state
+                .presets
+                .iter()
+                .find(|preset| &preset.id == id)
+                .ok_or(Refusal::Unknown)?;
+            Ok(vec![Action::RecallPreset {
+                id: id.clone(),
+                keep_off: keep_off(state, &preset.members),
+            }])
+        }
         Command::Master { volume } => {
             if !in_range(*volume) {
                 return Err(Refusal::OutOfRange);
             }
             Ok(vec![Action::Master { volume: *volume }])
+        }
+        Command::Source { id } => {
+            if !state.sources.iter().any(|source| &source.id == id) {
+                return Err(Refusal::UnknownSource);
+            }
+            Ok(if *id == state.source_id {
+                Vec::new()
+            } else {
+                vec![Action::Source { id: id.clone() }]
+            })
         }
         Command::Speaker { id, change } => {
             let speaker = state
@@ -273,6 +449,20 @@ pub fn actions(
             Ok(actions)
         }
     }
+}
+
+/// The members a zone click or recall from the page leaves off: switched on,
+/// they would ask for a code on the PC with nobody there.
+fn keep_off(state: &AppState, members: &[String]) -> Vec<String> {
+    members
+        .iter()
+        .filter(|key| {
+            state
+                .speaker(key)
+                .is_some_and(|speaker| asks_for_code(state, speaker))
+        })
+        .cloned()
+        .collect()
 }
 
 /// The computer's name as a `.local` host: Windows' DNS host name, in lower
@@ -384,8 +574,10 @@ pub fn computer_name() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_model::PresetItem;
     use crate::ui_model::{CastRow, CastState};
-    use audiosync_remote::SpeakerChange;
+    use audiosync_core::policy::zones::Zone;
+    use audiosync_remote::{SpeakerChange, ZoneChange};
 
     struct Text;
 
@@ -403,6 +595,101 @@ mod tests {
         fn turn_on_at_pc(&self) -> String {
             "Turn it on at the PC".to_owned()
         }
+        fn source_system(&self) -> String {
+            "Alle Systemaudio".to_owned()
+        }
+        fn source_all_except(&self, names: &str) -> String {
+            format!("All apps except {names}")
+        }
+    }
+
+    fn with_sources() -> AppState {
+        let source = |id: &str, name: &str, kind| crate::ui_model::Source {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            kind,
+            channels: 0,
+        };
+        AppState {
+            sources: vec![
+                source("system", "All System Audio", SourceKind::System),
+                source("app:42:Spotify.exe", "Spotify", SourceKind::App),
+                source("input:{mic}", "USB Mic", SourceKind::Input),
+            ],
+            source_id: "app:42:Spotify.exe".to_owned(),
+            ..state()
+        }
+    }
+
+    #[test]
+    fn the_snapshot_lists_the_pickers_sources_in_its_order_with_the_current_one() {
+        let snapshot = snapshot(&with_sources(), not_virtual, None, "Studio PC", &Text);
+        let listed: Vec<(&str, &str, RemoteSourceKind)> = snapshot
+            .sources
+            .iter()
+            .map(|source| (source.id.as_str(), source.name.as_str(), source.kind))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("system", "Alle Systemaudio", RemoteSourceKind::System),
+                ("app:42:Spotify.exe", "Spotify", RemoteSourceKind::App),
+                ("input:{mic}", "USB Mic", RemoteSourceKind::Input),
+            ]
+        );
+        assert!(snapshot.sources.iter().all(|source| source.available));
+        assert_eq!(snapshot.source_id.as_deref(), Some("app:42:Spotify.exe"));
+        // What the server serves: the JSON round trip keeps the current source.
+        let served = State::from_json(&snapshot.to_json(1)).unwrap();
+        assert_eq!(served.source_id.as_deref(), Some("app:42:Spotify.exe"));
+    }
+
+    #[test]
+    fn an_all_apps_except_source_is_an_app_named_around_its_list() {
+        let mut state = with_sources();
+        state.sources.push(crate::ui_model::Source {
+            id: "mix:Spotify, Chrome".to_owned(),
+            name: "Spotify, Chrome".to_owned(),
+            kind: SourceKind::AppsExcept,
+            channels: 0,
+        });
+        state.source_id = "mix:Spotify, Chrome".to_owned();
+        let snapshot = snapshot(&state, not_virtual, None, "Studio PC", &Text);
+        let mix = snapshot.sources.last().unwrap();
+        assert_eq!(mix.kind, RemoteSourceKind::App);
+        assert_eq!(mix.name, "All apps except Spotify, Chrome");
+        assert_eq!(snapshot.source_id.as_deref(), Some("mix:Spotify, Chrome"));
+    }
+
+    #[test]
+    fn a_current_source_the_picker_doesnt_list_goes_out_as_none() {
+        let unlisted = AppState {
+            source_id: "input:{unplugged}".to_owned(),
+            ..with_sources()
+        };
+        let snapshot = snapshot(&unlisted, not_virtual, None, "Studio PC", &Text);
+        assert_eq!(snapshot.source_id, None);
+        assert_eq!(snapshot.sources.len(), 3);
+    }
+
+    #[test]
+    fn a_source_pick_is_the_pickers_and_a_repeat_or_an_unknown_one_does_nothing() {
+        let state = with_sources();
+        let pick = |id: &str| Command::Source { id: id.to_owned() };
+        assert_eq!(
+            actions(&pick("input:{mic}"), &state, not_virtual),
+            Ok(vec![Action::Source {
+                id: "input:{mic}".to_owned()
+            }])
+        );
+        assert_eq!(
+            actions(&pick("app:42:Spotify.exe"), &state, not_virtual),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            actions(&pick("app:7:Gone.exe"), &state, not_virtual),
+            Err(Refusal::UnknownSource)
+        );
     }
 
     fn speaker(id: &str, kind: SpeakerKind, delay: Option<f64>) -> Speaker {
@@ -444,6 +731,9 @@ mod tests {
             running: true,
             sources: Vec::new(),
             source_id: String::new(),
+            input_pair: 0,
+            mix_apps: Vec::new(),
+            mix_all_except: false,
             master_volume: 70.0,
             speakers: vec![
                 desk,
@@ -483,6 +773,16 @@ mod tests {
             id: id.to_owned(),
             change,
         }
+    }
+
+    #[test]
+    fn use_port_takes_only_a_valid_port_that_changes_or_retries() {
+        assert!(!use_port_enabled("", 8080, true));
+        assert!(!use_port_enabled("80", 8080, true));
+        assert!(!use_port_enabled("70000", 8080, true));
+        assert!(!use_port_enabled("8080", 8080, false));
+        assert!(use_port_enabled("8080", 8080, true));
+        assert!(use_port_enabled(" 8081 ", 8080, false));
     }
 
     #[test]
@@ -705,6 +1005,183 @@ mod tests {
             Err(Refusal::OutOfRange),
             "no AirPlay sender, no delay field"
         );
+    }
+
+    fn zoned() -> AppState {
+        let mut state = state();
+        state.speakers[2].enabled = true;
+        state.speakers[2].waiting = Some(Waiting::ForAirPlay2Slot);
+        let mut tv = speaker("tv", SpeakerKind::AirPlay, None);
+        tv.availability = Availability::NeedsCode;
+        state.speakers.push(tv);
+        state.zones = vec![
+            Zone {
+                id: "zone:a".into(),
+                name: "Downstairs".into(),
+                members: vec!["kitchen".into(), "loop".into(), "desk".into(), "tv".into()],
+                volume: 80.0,
+            },
+            Zone {
+                id: "zone:b".into(),
+                name: "Studio".into(),
+                members: vec!["loop".into()],
+                volume: 100.0,
+            },
+        ];
+        state.presets = vec![
+            PresetItem {
+                id: "preset:a".into(),
+                name: "Evening".into(),
+                current: true,
+                members: vec!["desk".into()],
+            },
+            PresetItem {
+                id: "preset:b".into(),
+                name: "Party".into(),
+                current: false,
+                members: vec!["tv".into(), "kitchen".into()],
+            },
+        ];
+        state
+    }
+
+    fn zone_command(id: &str, toggle: bool, volume: Option<f64>) -> Command {
+        Command::Zone {
+            id: id.to_owned(),
+            change: ZoneChange { toggle, volume },
+        }
+    }
+
+    // covers: S256, S253
+    #[test]
+    fn the_snapshot_lists_zones_with_the_listed_members_and_the_presets() {
+        let snapshot = snapshot(&zoned(), not_virtual, None, "Desk PC", &Text);
+        let downstairs = &snapshot.zones[0];
+        assert_eq!(
+            downstairs.members,
+            ["kitchen", "desk", "tv"],
+            "the hidden output stays out"
+        );
+        assert_eq!(downstairs.volume, 80.0);
+        assert_eq!(
+            downstairs.counts,
+            ZoneCounts {
+                on: 2,
+                total: 3,
+                waiting: 1
+            }
+        );
+        assert_eq!(snapshot.zones[1].counts.total, 0);
+        let presets: Vec<(&str, bool)> = snapshot
+            .presets
+            .iter()
+            .map(|preset| (preset.id.as_str(), preset.current))
+            .collect();
+        assert_eq!(presets, [("preset:a", true), ("preset:b", false)]);
+        assert!(!snapshot.calibrating);
+        assert!(
+            State::from_json(&snapshot.to_json(0)).is_ok(),
+            "the snapshot passes the crate's checks"
+        );
+    }
+
+    // covers: S257
+    #[test]
+    fn zone_and_preset_commands_map_to_the_windows_actions() {
+        let state = zoned();
+        assert_eq!(
+            actions(
+                &zone_command("zone:a", true, Some(40.0)),
+                &state,
+                not_virtual
+            ),
+            Ok(vec![
+                Action::ZoneVolume {
+                    id: "zone:a".into(),
+                    volume: 40.0
+                },
+                Action::ToggleZone {
+                    id: "zone:a".into(),
+                    keep_off: vec!["tv".into()],
+                },
+            ])
+        );
+        assert_eq!(
+            actions(
+                &Command::Preset {
+                    id: "preset:b".into()
+                },
+                &state,
+                not_virtual
+            ),
+            Ok(vec![Action::RecallPreset {
+                id: "preset:b".into(),
+                keep_off: vec!["tv".into()],
+            }])
+        );
+        assert_eq!(
+            actions(&zone_command("zone:gone", true, None), &state, not_virtual),
+            Err(Refusal::Unknown)
+        );
+        assert_eq!(
+            actions(
+                &Command::Preset {
+                    id: "preset:gone".into()
+                },
+                &state,
+                not_virtual
+            ),
+            Err(Refusal::Unknown)
+        );
+        assert_eq!(
+            actions(&zone_command("zone:b", true, None), &state, not_virtual),
+            Err(Refusal::Unavailable),
+            "a zone whose only member the window hides"
+        );
+        let mut only_tv = state.clone();
+        only_tv.zones[1].members = vec!["tv".into()];
+        assert_eq!(
+            actions(&zone_command("zone:b", true, None), &only_tv, not_virtual),
+            Err(Refusal::Unavailable),
+            "a zone whose only member asks for a code"
+        );
+        assert_eq!(
+            actions(
+                &zone_command("zone:a", false, Some(101.0)),
+                &state,
+                not_virtual
+            ),
+            Err(Refusal::OutOfRange)
+        );
+    }
+
+    // covers: S258
+    #[test]
+    fn the_host_refuses_a_command_that_arrives_during_a_run() {
+        let mut state = zoned();
+        state.calibration.busy = true;
+        assert!(snapshot(&state, not_virtual, None, "Desk PC", &Text).calibrating);
+        let commands = [
+            Command::Master { volume: 50.0 },
+            speaker_command(
+                "desk",
+                SpeakerChange {
+                    on: Some(false),
+                    ..Default::default()
+                },
+            ),
+            zone_command("zone:a", true, None),
+            Command::Preset {
+                id: "preset:a".into(),
+            },
+        ];
+        for command in &commands {
+            assert_eq!(
+                actions(command, &state, not_virtual),
+                Err(Refusal::Calibrating),
+                "{command:?}"
+            );
+        }
     }
 
     #[test]

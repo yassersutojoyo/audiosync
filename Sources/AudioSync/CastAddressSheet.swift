@@ -43,11 +43,11 @@ struct CastAddressSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 8) {
-                if draft.adding { ProgressView().controlSize(.small).accessibilityLabel(t.castAddLooking) }
+                if draft.adding { ProgressView().controlSize(.small).accessibilityLabel(t.castAddChecking) }
                 Spacer(minLength: 0)
                 Button(t.cancel) { model.castAddShown = false }
                     .keyboardShortcut(.cancelAction)
-                Button(t.castAdd, action: add)
+                Button(draft.adding ? t.castAddChecking : t.castAdd, action: add)
                     .keyboardShortcut(.defaultAction)
                     .disabled(draft.adding || draft.typed.trimmingCharacters(in: .whitespaces).isEmpty)
             }

@@ -14,7 +14,7 @@ export enum RowPart { none, toggle, delay, volume, sync, options, name }
 
 // A main-window control outside the notices, the speaker rows and the zone headers;
 // one taking the focus applies an open speaker rename.
-export enum MainControl { power, source, transport, master-volume, equalizer, calibration, airplay-delay }
+export enum MainControl { power, source, input-pair, transport, master-volume, equalizer, calibration, airplay-delay }
 
 // The kind of output: the icon in a speaker's toggle, and the line under a
 // connected speaker's name.
@@ -48,6 +48,13 @@ export enum PinPhase { starting, ready, checking }
 // What a switched-on local output's own volume in Windows calls for: none,
 // or the hint under its volume slider (low, muted, or both).
 export enum DeviceVolumeHint { none, low, muted, muted-low }
+
+// An app of the several-apps list under the source menu.
+export struct MixAppItem {
+    name: string,
+    // Checked in the mode the list shows.
+    checked: bool,
+}
 
 // An output that is on but left out of Calibrate All by its kind.
 export struct LeftOutItem {
@@ -207,7 +214,7 @@ export struct ZoneItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones, presets-left-off }
+export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones, presets-left-off }
 
 export struct NoticeItem {
     id: int,

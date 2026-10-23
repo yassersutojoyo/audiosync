@@ -263,7 +263,7 @@ struct WebRemoteView: View {
                     // Read here, not on a change: a second failure in a row leaves forgetFailed true.
                     if settings.forgetFailed { announcer.say(t.webRemoteForgetFailed) }
                 }
-                    .disabled(settings.deviceCount == 0)
+                    .disabled(!RemoteDevicesFile.canForget(count: settings.deviceCount, failed: settings.forgetFailed))
             }
             if settings.forgetFailed {
                 Text(t.webRemoteForgetFailed)

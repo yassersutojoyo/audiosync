@@ -245,6 +245,205 @@ mod tests {
         assert!(script.contains("element.textContent = TEXT[element.dataset.text];"));
     }
 
+    /// The colors one `:root` block of the style sets, by custom property.
+    fn theme(block: &str) -> Vec<(String, [u8; 3])> {
+        block
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.trim().strip_prefix("--")?.split_once(':')?;
+                let hex = value.trim().strip_prefix('#')?.strip_suffix(';')?;
+                let byte = |at: usize| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok();
+                Some((name.to_owned(), [byte(0)?, byte(2)?, byte(4)?]))
+            })
+            .collect()
+    }
+
+    /// The contrast ratio of two sRGB colors (WCAG 2.2, contrast ratio and relative luminance).
+    fn contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
+        let luminance = |color: [u8; 3]| {
+            let linear = |channel: u8| {
+                let c = f64::from(channel) / 255.0;
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2])
+        };
+        let (light, dark) = (
+            luminance(a).max(luminance(b)),
+            luminance(a).min(luminance(b)),
+        );
+        (light + 0.05) / (dark + 0.05)
+    }
+
+    // covers: S258
+    #[test]
+    fn the_calibrating_line_and_disabled_controls_keep_4_5_to_1_in_both_themes() {
+        let style = only_element(PAGE, "style").unwrap();
+        let light = &style[style.find(":root {").unwrap()..];
+        let light = &light[..light.find('}').unwrap()];
+        let dark = &style[style.find("prefers-color-scheme: dark").unwrap()..];
+        let dark = &dark[dark.find(":root {").unwrap()..];
+        let dark = &dark[..dark.find('}').unwrap()];
+        assert!(style.contains(".calibrating { background: var(--notice); color: var(--text);"));
+        assert!(style.contains("button:disabled, input[type=text]:disabled, input[type=number]:disabled { color: var(--muted);"));
+        assert!(style.contains("button.primary:disabled { background: var(--surface);"));
+        let faded = style
+            .lines()
+            .find(|line| line.contains("opacity: 0.5"))
+            .unwrap();
+        assert!(
+            !faded.contains("button") && !faded.contains("number"),
+            "only controls without text fade: {faded}"
+        );
+        for block in [light, dark] {
+            let colors = theme(block);
+            let color = |name: &str| {
+                colors
+                    .iter()
+                    .find(|(found, _)| found == name)
+                    .unwrap_or_else(|| panic!("--{name}"))
+                    .1
+            };
+            for (text, back) in [
+                ("text", "notice"),
+                ("muted", "surface"),
+                ("on-accent", "accent"),
+            ] {
+                let ratio = contrast(color(text), color(back));
+                assert!(ratio >= 4.5, "--{text} on --{back}: {ratio:.2}");
+            }
+        }
+    }
+
+    // covers: S258
+    #[test]
+    fn calibrating_disables_every_write_but_unpair_and_the_policy_takes_the_new_script() {
+        let open = PAGE.find("<fieldset id=\"writes\">").unwrap();
+        let close = open + PAGE[open..].find("</fieldset>").unwrap();
+        let writes = &PAGE[open..close];
+        for id in ["master", "presets", "zones", "speakers"] {
+            assert!(writes.contains(&format!("id=\"{id}\"")), "{id}");
+        }
+        let footer = &PAGE[close..];
+        assert!(footer.contains("id=\"unpair\""));
+        let line = PAGE
+            .lines()
+            .find(|line| line.contains("id=\"calibrating\""))
+            .unwrap();
+        assert!(line.ends_with(" hidden></p>") && line.contains("tabindex=\"-1\""));
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("ui.writes.disabled = now;"));
+        assert!(script.contains("showCalibrating(next.calibrating);"));
+        assert!(script.contains("calibrating: \"AudioSync is calibrating."));
+        let policy = content_security_policy(PAGE).unwrap();
+        assert!(policy.contains(&hash_source(script)));
+        assert!(policy.contains(&hash_source(only_element(PAGE, "style").unwrap())));
+    }
+
+    fn line_with<'a>(needle: &str) -> &'a str {
+        PAGE.lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}"))
+            .trim_end()
+    }
+
+    #[test]
+    fn every_text_the_script_names_is_in_the_table() {
+        let script = only_element(PAGE, "script").unwrap();
+        let start = script.find("const TEXT = {").unwrap();
+        let table = &script[start..start + script[start..].find("\n};").unwrap()];
+        let rest = &script[start + table.len()..];
+        let mut names = 0;
+        for use_site in rest.split("TEXT.").skip(1) {
+            let name: String = use_site
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            assert!(table.contains(&format!("\n  {name}: ")), "TEXT.{name}");
+            names += 1;
+        }
+        assert!(names >= 30, "{names}");
+    }
+
+    #[test]
+    fn the_source_picker_has_empty_loading_and_error_states() {
+        for (id, state) in [
+            ("source-empty", "data-text=\"noSources\""),
+            ("source-status", ""),
+            ("source-error", "class=\"error\""),
+        ] {
+            let line = line_with(&format!("id=\"{id}\""));
+            assert!(line.ends_with(" hidden></p>"), "{id}");
+            assert!(line.contains(state), "{id}");
+        }
+        let picker = line_with("<select id=\"source\"");
+        assert!(picker.contains("aria-labelledby=\"source-title\""));
+        assert!(picker.contains("aria-describedby=\"source-status source-error\""));
+        let script = only_element(PAGE, "script").unwrap();
+        // Empty: the list gives way to its text and focus stays in the card.
+        assert!(script.contains("ui.sourceEmpty.hidden = !empty;"));
+        assert!(script.contains("ui.sourceTitle.focus();"));
+        // Loading: a pick waits for the app's next snapshot, busy and announced.
+        assert!(script.contains("ui.source.setAttribute(\"aria-busy\", \"true\");"));
+        assert!(script.contains("next.source_id === switchingTo"));
+        assert!(script.contains("announce(TEXT.switched(name));"));
+        // Error: the server's answer, or a pick the app never took.
+        assert!(script.contains("endSwitch(problem ? problem.message : \"\");"));
+        assert!(
+            script
+                .contains("window.setTimeout(() => endSwitch(TEXT.notSwitched), SWITCH_WAIT_MS);")
+        );
+        assert!(script.contains("showError(ui.sourceError, message);"));
+        assert!(script.contains("post(\"/api/source\", { id })"));
+    }
+
+    #[test]
+    fn a_pick_never_leaves_a_stale_error_or_a_blank_picker() {
+        let script = only_element(PAGE, "script").unwrap();
+        let shown = &script[script.find("function showSources(next) {").unwrap()..];
+        let shown = &shown[..shown.find("fillSources(list, listed);").unwrap()];
+        // A switch that lands after the wait clears the error the wait left.
+        assert!(
+            shown.contains("} else if (switchingTo === null && next.source_id !== shownSource) {")
+        );
+        assert!(shown.contains("showError(ui.sourceError, \"\");"));
+        assert!(shown.contains("shownSource = next.source_id;"));
+        // A snapshot that drops the pick ends the wait at once.
+        assert!(shown.contains(
+            "} else if (switchingTo !== null && !list.some((source) => source.id === switchingTo)) {"
+        ));
+        assert!(shown.contains("endSwitch(TEXT.notSwitched);"));
+        // Going back to the source in use waits for nothing.
+        let picked = &script[script
+            .find("ui.source.addEventListener(\"change\"")
+            .unwrap()..];
+        let back = picked.find("if (id === snapshot.source_id) {").unwrap();
+        let timer = picked.find("switchTimer = window.setTimeout(").unwrap();
+        assert!(back < timer);
+        let branch = &picked[back..timer];
+        assert!(branch.contains("endSwitch(\"\");"));
+        assert!(branch.contains("sourceSender.set(id);"));
+        assert!(branch.contains("return;"));
+    }
+
+    #[test]
+    fn device_names_reach_the_page_only_as_text() {
+        let script = only_element(PAGE, "script").unwrap();
+        for markup_sink in [
+            "innerHTML",
+            "outerHTML",
+            "insertAdjacentHTML",
+            "document.write",
+        ] {
+            assert!(!script.contains(markup_sink), "{markup_sink}");
+        }
+        assert!(script.contains("option.textContent = reason ? TEXT.sourceWithNotice(source.name, reason) : source.name;"));
+        assert!(script.contains("group.label = heading;"));
+    }
+
     #[test]
     fn the_icons_are_png_of_their_size() {
         for (icon, size) in [(ICON_180, 180u32), (ICON_512, 512)] {

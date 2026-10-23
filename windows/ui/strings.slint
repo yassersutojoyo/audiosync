@@ -76,6 +76,14 @@ export global Strings {
     out property <string> edit-paste: @tr("Paste");
     out property <string> edit-select-all: @tr("Select all");
     out property <string> source-label: @tr("Audio Source");
+    // The channel pair choice of an input device with more than two channels.
+    out property <string> input-channels-label: @tr("Input Channels");
+    // The level meter under the source while an input device is captured,
+    // for Narrator: its name and how full the bar is, in percent.
+    out property <string> input-level: @tr("Input level");
+    public pure function input-level-value(percent: int) -> string {
+        return @tr("{}%", percent);
+    }
     out property <string> equalizer: @tr("Equalizer");
     // The Now Playing card: its name for Narrator, and its buttons.
     out property <string> now-playing: @tr("Now Playing");
@@ -103,6 +111,14 @@ export global Strings {
     out property <string> airplay-delay-hint: @tr("While an AirPlay speaker is on, the speakers on this PC wait this long for it. Heard the AirPlay speakers late? Raise it.");
     out property <string> auto-connect: @tr("Auto-connect when available");
     out property <string> source-system: @tr("All System Audio");
+    // Several apps as the source: the list under the source menu.
+    out property <string> source-mix-title: @tr("Several apps");
+    out property <string> source-mix-only: @tr("Only the checked apps");
+    out property <string> source-mix-all-except: @tr("All apps except the checked ones");
+    out property <string> source-mix-mode: @tr("Which apps to send");
+    out property <string> source-mix-empty: @tr("Apps show up here once they play sound.");
+    // Windows' process loopback reaches apps only, never the system sounds session.
+    out property <string> source-mix-all-except-note: @tr("Windows system sounds, such as notification chimes, aren't included.");
 
     // Notices: what happened and what to do about it
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
@@ -254,6 +270,8 @@ export global Strings {
     out property <string> all-speakers-hidden: @tr("Every speaker here is hidden. Choose Hidden Speakers in the Speakers menu to show one again.");
     // The tray flyout's list when every speaker is hidden: it has no Speakers menu.
     out property <string> flyout-all-hidden: @tr("Every speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again.");
+    // The same list when only the PC's own speakers are left in it.
+    out property <string> flyout-connected-hidden: @tr("Every connected speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again.");
 
     // Add by Address…: a Google Cast speaker that discovery can't find.
     out property <string> cast-add-address: @tr("Add by Address…");
@@ -414,6 +432,11 @@ export global Strings {
         return @tr("AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}", detail);
     }
 
+    // The source menu's name for "all apps except" these, by name.
+    public pure function source-all-except(names: string) -> string {
+        return @tr("All apps except {}", names);
+    }
+
     // The status under the wordmark (and the tray icon's tooltip).
     public pure function status(running: bool, speakers: int) -> string {
         if !running {
@@ -450,6 +473,14 @@ export global Strings {
     // The link under the newest notice in the flyout to the window that lists the others.
     public pure function more-notices(count: int) -> string {
         return @tr("{n} more notice…" | "{n} more notices…" % count);
+    }
+
+    // An input channel pair: two channels, or a device's odd last one alone.
+    public pure function input-channel-pair(first: int, last: int) -> string {
+        if first == last {
+            return @tr("Channel {}", first);
+        }
+        return @tr("Channels {}-{}", first, last);
     }
 
     // The app being captured quit while streaming.
@@ -519,6 +550,12 @@ export global Strings {
     // device", in the device's properties under Sound settings.
     public pure function notice-speaker-busy(speaker: string) -> string {
         return @tr("{} is in use by another app. Close that app, or stop apps from taking exclusive control of it in Sound settings. AudioSync plays to it as soon as it's free.", speaker);
+    }
+
+    // A zone or preset turned on from the web remote left out a speaker that
+    // asks for a code: the prompt would wait on the PC with nobody there.
+    public pure function notice-pair-first(speaker: string) -> string {
+        return @tr("{} stayed off. Pair it on the computer first.", speaker);
     }
 
     // A member of the stereo pair or home theater group `target` stays off
@@ -667,6 +704,11 @@ export global Strings {
         return @tr("Open the Volume mixer, find {0} and set its output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", source);
     }
 
+    // For an "all apps except" source: `names` are the apps it leaves out.
+    public pure function guide-route-all-except(names: string) -> string {
+        return @tr("Open the Volume mixer, find every app other than {0} and set each one's output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", names);
+    }
+
     public pure function guide-change-default(current: string) -> string {
         return @tr("Open Sound settings and make an output you don't listen to the default instead of {0}, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", current);
     }
@@ -689,6 +731,10 @@ export global Strings {
 
     public pure function guide-keep-app-unmuted(source: string) -> string {
         return @tr("Don't mute {0} itself in the Volume mixer: AudioSync would capture silence.", source);
+    }
+
+    public pure function guide-keep-all-except-unmuted(names: string) -> string {
+        return @tr("Don't mute any app other than {0} in the Volume mixer: AudioSync would capture silence from it.", names);
     }
 
     // The label of a guide step's button.
@@ -782,6 +828,9 @@ export global Strings {
         }
         if kind == NoticeKind.speaker-busy {
             return @tr("{} in use", name);
+        }
+        if kind == NoticeKind.pair-first {
+            return @tr("{} stayed off", name);
         }
         if kind == NoticeKind.airplay-retrying {
             return @tr("{} reconnecting", name);
@@ -1298,7 +1347,6 @@ export global Strings {
     out property <string> calibrate-all-not-measured: @tr("Not measured.");
     // A delay never stored: "Was none."
     out property <string> calibrate-all-none: @tr("none");
-    out property <string> calibrate-all-airplay-waits: @tr("AirPlay isn't playing, so the AirPlay delay can't be set now. Apply and Undo work again once it plays.");
     out property <string> calibrate-all-busy: @tr("Another calibration is still running.");
     out property <string> calibrate-all-nothing-certain: @tr("No speaker was measured clearly, so there is nothing to apply.");
     out property <string> calibrate-all-estimating: @tr("Working out the delays…");

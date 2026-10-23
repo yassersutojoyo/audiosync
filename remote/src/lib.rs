@@ -2,9 +2,9 @@
 //!
 //! When the user turns it on, the app runs one small HTTP/1.1 server on the
 //! home network. It serves one page, built into the binary, and a JSON API
-//! under `/api` that lets a paired phone switch speakers on and off and set
-//! their volume and delay and the master volume: nothing the app's own
-//! window can't do.
+//! under `/api` that lets a paired phone switch speakers on and off, set
+//! their volume and delay and the master volume, and pick the capture
+//! source: nothing the app's own window can't do.
 //!
 //! The app stays the source of truth. It publishes a full [`State`] snapshot
 //! whenever something the page shows changes ([`RemoteServer::publish`]);
@@ -42,4 +42,7 @@ pub mod state;
 pub mod text;
 
 pub use server::{Capacity, Config, DEFAULT_PORT, RemoteError, RemoteServer, ServerEvent, Timing};
-pub use state::{Command, NowPlaying, Speaker, SpeakerChange, State, StateError};
+pub use state::{
+    Command, NowPlaying, Preset, Source, SourceKind, Speaker, SpeakerChange, State, StateError,
+    Zone, ZoneChange, ZoneCounts,
+};

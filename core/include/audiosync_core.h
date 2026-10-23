@@ -492,6 +492,39 @@ bool asc_ring_supports_rate(const AscRing *ring, uint32_t rate);
 /* Any thread: frames written since the last reset (the session's frames captured). */
 uint64_t asc_ring_frames_written(const AscRing *ring);
 
+/*
+ * Any thread: the largest sample magnitude written since the last call (1 is
+ * full scale; non-finite samples don't count), for one level meter polling at
+ * its own pace; 0 for NULL.
+ */
+float asc_ring_take_peak(const AscRing *ring);
+
+/* How often the UI polls asc_ring_take_peak for the input level meter, in ms. */
+#define ASC_METER_POLL_MS 100
+
+/*
+ * The input level meter's length, 0 to 1, after a poll that took `peak` while
+ * it showed `previous`: the peak on a dB scale from -60 to 0 dBFS, or the
+ * previous length less 0.15 when that is longer. Non-finite values count as
+ * silence. Pure function for the UI thread.
+ */
+float asc_meter_level(float previous, float peak);
+
+/*
+ * The input level meter's length as a screen reader reads it: whole percent
+ * in steps of 10, so the value changes a few times per word instead of at every
+ * poll. A non-finite length counts as 0. Pure function.
+ */
+uint32_t asc_meter_spoken_percent(float level);
+
+/*
+ * Any thread: the session lead of the ring's renderers in capture frames, into
+ * *frames, once every counted renderer has published its start lead (S208).
+ * False, writing nothing, before that, while none counts, or for a NULL
+ * argument. For the debug log.
+ */
+bool asc_ring_session_lead_frames(const AscRing *ring, int64_t *frames);
+
 /* Takes the ring's only writer; NULL while another writer exists. */
 AscRingWriter *asc_ring_writer_create(AscRing *ring);
 
@@ -886,6 +919,25 @@ typedef struct AscLocalOutput {
  */
 bool asc_local_hold_backs_ms(const AscLocalOutput *outputs, size_t count, bool airplay_chosen, double airplay_latency_ms, double *hold_backs_ms);
 
+/* asc_lead_network_wait_ms's source and output kinds. */
+#define ASC_LEAD_SOURCE_SYSTEM 0  /* the system's mix */
+#define ASC_LEAD_SOURCE_APP 1     /* one app or several */
+#define ASC_LEAD_SOURCE_INPUT 2   /* an input device: live */
+#define ASC_LEAD_OUTPUT_LOCAL 0   /* a device the local renderer plays, Bluetooth included */
+#define ASC_LEAD_OUTPUT_AIRPLAY 1
+#define ASC_LEAD_OUTPUT_CAST 2
+
+/*
+ * Whether an output of `output` kind waits for the network speakers while
+ * the session captures `source`: true, writing the wait into wait_ms, when it
+ * does; false, writing nothing, when it doesn't or wait_ms is NULL. A local
+ * output skips the wait for an input source, so a live voice is heard at its
+ * device's start lead; every other pair waits network_ms, which counts only
+ * when has_network. An unknown source counts as the system, an unknown output
+ * as a network speaker. Pure function for the control thread.
+ */
+bool asc_lead_network_wait_ms(uint32_t source, uint32_t output, bool has_network, double network_ms, double *wait_ms);
+
 /*
  * An offset input from the user, ready to store: clamped to -2000...20 000 ms
  * into *sanitized_ms. False, writing nothing, for a non-finite value (which
@@ -1242,6 +1294,14 @@ typedef struct AscCalibrationChange {
  */
 AscCalibrationRun *asc_calibration_run_create(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference);
 
+/*
+ * asc_calibration_run_create for Calibrate Zone: each speaker whose `off`
+ * entry is true is a zone member that is off, listed on the sheet and never
+ * swept; `off` NULL means none. NULL too when no speaker is left besides
+ * the reference and the off ones.
+ */
+AscCalibrationRun *asc_calibration_run_create_listing(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference, const bool *off);
+
 /* The next step into *step; false, writing nothing, once the run is over or for a NULL argument. */
 bool asc_calibration_run_step(const AscCalibrationRun *run, AscCalibrationStep *step);
 
@@ -1293,6 +1353,17 @@ uint32_t asc_calibration_sheet_apply(AscCalibrationSheet *sheet, AscCalibrationC
  */
 AscCalibrationRun *asc_calibration_sheet_measure_again(const AscCalibrationSheet *sheet, size_t index);
 
+/* Whether row `index` is a zone member that was off, listed and not measured; false out of range or for NULL. */
+bool asc_calibration_sheet_row_off(const AscCalibrationSheet *sheet, size_t index);
+
+/*
+ * Measure Again on an off row, with the speaker's stored delay (none when
+ * has_offset is false) and expected arrival as the host reads them now.
+ * NULL for a row that isn't off and as asc_calibration_sheet_measure_again;
+ * asc_calibration_sheet_measure_again refuses an off row.
+ */
+AscCalibrationRun *asc_calibration_sheet_measure_again_off(const AscCalibrationSheet *sheet, size_t index, bool has_offset, double offset_ms, double latency_ms);
+
 /*
  * Puts the row of a Measure Again sheet in place of the old one and frees
  * `again`. False, leaving `sheet` and its rows as they were, for an `again`
@@ -1304,6 +1375,29 @@ bool asc_calibration_sheet_replace(AscCalibrationSheet *sheet, AscCalibrationShe
 
 /* Frees a sheet. */
 void asc_calibration_sheet_destroy(AscCalibrationSheet *sheet);
+
+/* What asc_calibration_zone_plan answers. */
+#define ASC_CALIBRATION_ZONE_OK 0                 /* rows, off and silenced hold the plan */
+#define ASC_CALIBRATION_ZONE_NO_REFERENCE 1       /* the reference isn't present and on */
+#define ASC_CALIBRATION_ZONE_NOTHING_TO_MEASURE 2 /* no member besides it is present and on */
+#define ASC_CALIBRATION_ZONE_INVALID 3            /* a NULL argument or a key that isn't UTF-8 */
+
+/* A speaker the host lists, as asc_calibration_zone_plan sorts it. */
+typedef struct AscCalibrationZoneSpeaker {
+    const char *key; /* its speaker key (S149) */
+    bool present;    /* listed, not hidden and not held by a target (S246) */
+    bool on;         /* on and playing */
+} AscCalibrationZoneSpeaker;
+
+/*
+ * The plan of Calibrate Zone (S255) over the zone keyed `members`, in zone
+ * order: the rows, each an index into `speakers`, go into `rows` with one
+ * `off` flag each (for asc_calibration_run_create_listing), *row_count says
+ * how many, and silenced[i] whether speaker i plays silenced for the run.
+ * `rows`, `off` and `silenced` hold `count` elements. Answers an
+ * ASC_CALIBRATION_ZONE_ code. Pure function for the control thread.
+ */
+uint32_t asc_calibration_zone_plan(const char *const *members, size_t member_count, const char *reference, const AscCalibrationZoneSpeaker *speakers, size_t count, size_t *rows, bool *off, size_t *row_count, bool *silenced);
 
 /*
  * A Cast speaker's expected arrival (AscCalibrationSpeaker.latency_ms), which
@@ -2058,8 +2152,9 @@ typedef struct AscRemote AscRemote;
  * The host's command callback, on a server thread, one call at a time:
  * command_json is NUL-terminated UTF-8 valid during the call only, either
  * {"type":"speaker","id":...} with the posted "on", "volume" (0 to 100) and
- * "delay_ms" among the fields, or {"type":"master","volume":...}. Every
- * value was checked against the last snapshot's ranges.
+ * "delay_ms" among the fields, {"type":"master","volume":...}, or
+ * {"type":"source","id":...}, a source the last snapshot listed as
+ * available. Every value was checked against the last snapshot's ranges.
  */
 typedef void (*AscRemoteCommand)(void *context, const char *command_json);
 
@@ -2084,8 +2179,13 @@ uint32_t asc_remote_port(AscRemote *remote);
  * Publishes the snapshot in state_json: {"computer_name", "master": {"volume"},
  * "now_playing": {"title", "artist", "source"} or null, "speakers": [{"id",
  * "name", "kind", "on", "volume", "delay_ms", "delay_min_ms", "delay_max_ms",
- * "available", "notice"}]}, volumes 0 to 100, ids unique; computer_name is
- * the name the page's footer shows, empty when left out. The server numbers
+ * "available", "notice"}], "sources": [{"id", "name", "kind" ("system",
+ * "app" or "input"), "available", "notice"}], "source_id"}, volumes 0 to
+ * 100, ids unique and not empty; computer_name is the name the page's footer
+ * shows, empty when left out. sources is the source picker's list in its
+ * order (none when left out; available is true when left out), and
+ * source_id the one in use, or null; one the list doesn't hold counts as
+ * null. The server numbers
  * it and streams it to the open pages; an unchanged snapshot sends nothing.
  * Returns false when it doesn't read; the previous one then stays. Neither
  * the snapshot nor the name ever reaches the log.

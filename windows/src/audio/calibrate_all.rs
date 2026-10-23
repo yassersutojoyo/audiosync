@@ -18,9 +18,11 @@ use std::thread;
 
 use audiosync_core::calibrate::{MAX_RATE, MIN_RATE, SIGNAL_SECONDS};
 use audiosync_core::calibrate_all::{
-    Class, EndReason, PlanError, RowState, Run, Sheet, Speaker, Step as RunStep, Take, cast_wait_ms,
+    Class, EndReason, PlanError, RowState, Run, Sheet, Speaker, Step as RunStep, Take, ZoneSpeaker,
+    cast_wait_ms, zone_plan,
 };
 use audiosync_core::policy::delay::{MAX_HOLD_BACK_MS, native_airplay_latency_ms};
+use audiosync_core::policy::speakers::SpeakerKey;
 
 use super::backend::{AudioBackend, CastStatus};
 use super::calibration::{
@@ -48,6 +50,21 @@ impl Member {
     /// Its ID on the sheet, unique across the classes.
     pub fn key(&self) -> String {
         member_key(self.class, &self.id)
+    }
+
+    /// Its speaker key (S149), as a zone holds it.
+    pub fn speaker_key(&self) -> String {
+        let id = self.id.clone();
+        match self.class {
+            Class::Local => SpeakerKey::Local(id),
+            Class::AirPlay => SpeakerKey::AirPlay(id),
+            Class::Cast => SpeakerKey::Cast(id),
+        }
+        .to_string()
+    }
+
+    fn same(&self, other: &Member) -> bool {
+        self.class == other.class && self.id == other.id
     }
 
     fn route(&self) -> Route {
@@ -157,6 +174,53 @@ pub fn blocked(lineup: &Lineup, included: &BTreeSet<String>) -> Option<Failure> 
     } else {
         Failure::NothingToMeasure
     })
+}
+
+/// The zone a Calibrate Zone run measures (S255), as the host reads it at
+/// the start.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ZoneScope {
+    /// The zone's member keys (S149), in zone order.
+    pub members: Vec<String>,
+    /// Of those, the present ones (S246): listed, not hidden, not a target
+    /// that needs AirPlay 2 and not playing as part of a target.
+    pub present: BTreeSet<String>,
+    /// The present members that are off, with their stored delays: listed
+    /// on the sheet and never swept.
+    pub off: Vec<Member>,
+}
+
+impl ZoneScope {
+    /// The sheet's rows over `everyone`, each with whether it is off: the
+    /// reference, then the present members in zone order.
+    fn rows(&self, everyone: &Lineup) -> Result<Vec<(Member, bool)>, PlanError> {
+        let reference = everyone
+            .reference
+            .as_deref()
+            .map(|id| SpeakerKey::Local(id.to_owned()).to_string())
+            .ok_or(PlanError::NoReference)?;
+        let playing = everyone.members.len();
+        let all: Vec<&Member> = everyone.members.iter().chain(&self.off).collect();
+        let speakers: Vec<ZoneSpeaker> = all
+            .iter()
+            .enumerate()
+            .map(|(i, member)| {
+                let key = member.speaker_key();
+                ZoneSpeaker {
+                    present: self.present.contains(&key) || !self.members.contains(&key),
+                    on: i < playing,
+                    key,
+                }
+            })
+            .collect();
+        let plan = zone_plan(&self.members, &reference, &speakers)?;
+        Ok(plan
+            .rows
+            .iter()
+            .zip(plan.off)
+            .map(|(i, off)| (all[*i].clone(), off))
+            .collect())
+    }
 }
 
 /// What a run uses of the app: the backend, through the blanket impl below,
@@ -359,6 +423,9 @@ pub struct AllRun {
     members: Vec<Member>,
     /// The rows this run measures, the reference's first.
     taking_part: Vec<usize>,
+    /// The speakers that play and aren't measured, kept quiet in the mix
+    /// send by the solo until the run gives the outputs back (S255).
+    silenced: Vec<Member>,
     /// The row a Measure Again measures.
     again: Option<usize>,
     /// The outputs measured whatever their kind.
@@ -393,6 +460,29 @@ impl AllRun {
         now_ns: u64,
         log: DebugLog,
     ) -> Result<AllRun, Failure> {
+        AllRun::start_over(rig, included, None, now_ns, log)
+    }
+
+    /// Calibrate Zone (S255): a run over `zone`'s present members that are
+    /// on, its members that are off listed and never swept, and every other
+    /// speaker that plays silenced until the run gives the outputs back.
+    pub fn start_zone(
+        rig: &mut dyn AllRig,
+        included: &BTreeSet<String>,
+        zone: &ZoneScope,
+        now_ns: u64,
+        log: DebugLog,
+    ) -> Result<AllRun, Failure> {
+        AllRun::start_over(rig, included, Some(zone), now_ns, log)
+    }
+
+    fn start_over(
+        rig: &mut dyn AllRig,
+        included: &BTreeSet<String>,
+        zone: Option<&ZoneScope>,
+        now_ns: u64,
+        log: DebugLog,
+    ) -> Result<AllRun, Failure> {
         let everyone = rig.lineup();
         let refuse = |failure: Failure| {
             log.log(|| format!("Calibrate All refused: {failure:?}"));
@@ -407,25 +497,61 @@ impl AllRun {
         else {
             return refuse(Failure::NotPlaying);
         };
-        let lineup = everyone.plan(included).0;
+        let rows = match zone.map(|zone| zone.rows(&everyone)) {
+            None => everyone
+                .members
+                .iter()
+                .map(|m| (m.clone(), false))
+                .collect(),
+            Some(Ok(rows)) => rows,
+            Some(Err(error)) => return refuse(plan_failure(error)),
+        };
+        let on = Lineup {
+            members: rows
+                .iter()
+                .filter(|(_, off)| !off)
+                .map(|(m, _)| m.clone())
+                .collect(),
+            ..everyone.clone()
+        };
+        if let Some(failure) = blocked(&on, included) {
+            return refuse(failure);
+        }
+        let measured = on.plan(included).0.members;
+        let rows: Vec<(Member, bool)> = rows
+            .into_iter()
+            .filter(|(m, off)| *off || measured.iter().any(|n| n.same(m)))
+            .collect();
         let rate = match probe(rig) {
             Ok(rate) => rate,
             Err(failure) => return refuse(failure),
         };
-        let speakers = lineup.members.iter().map(speaker).collect();
-        let run = match Run::new(rate, &member_key(Class::Local, &reference), speakers) {
+        let speakers = rows.iter().map(|(m, _)| speaker(m)).collect();
+        let off: Vec<bool> = rows.iter().map(|(_, off)| *off).collect();
+        let run = match Run::listing(rate, &member_key(Class::Local, &reference), speakers, &off) {
             Ok(run) => run,
             Err(error) => return refuse(plan_failure(error)),
         };
-        let taking_part = (0..lineup.members.len()).collect();
+        let members: Vec<Member> = rows.into_iter().map(|(m, _)| m).collect();
+        let taking_part: Vec<usize> = (0..members.len()).filter(|row| !off[*row]).collect();
+        let silenced = everyone
+            .plan(included)
+            .0
+            .members
+            .into_iter()
+            .filter(|m| !measured.iter().any(|n| n.same(m)))
+            .collect();
         log.log(|| {
-            let keys: Vec<String> = lineup.members.iter().map(Member::key).collect();
-            format!("Calibrate All started at {rate} Hz against {reference}: {keys:?}")
+            let keys: Vec<String> = members.iter().map(Member::key).collect();
+            format!(
+                "Calibrate All started at {rate} Hz against {reference}: {keys:?}, off {off:?}, silenced {silenced:?}"
+            )
         });
         Ok(AllRun::new(
             run,
-            lineup.members.clone(),
+            members,
             taking_part,
+            silenced,
             None,
             included.clone(),
             rate,
@@ -453,9 +579,10 @@ impl AllRun {
             log.log(|| format!("Measure Again of row {row} refused: {failure:?}"));
             Err(failure)
         };
-        let Some(run) = sheet.measure_again(row) else {
+        let off = sheet.is_off(row);
+        if !off && sheet.measure_again(row).is_none() {
             return refuse(Failure::Unfinished);
-        };
+        }
         let Some(reference_row) = sheet
             .rows()
             .iter()
@@ -485,9 +612,17 @@ impl AllRun {
         ) else {
             return refuse(Failure::NotPlaying);
         };
-        if now.offset_ms != measured.offset_ms {
+        // An off row was read while it didn't play: it starts from its values now (S255).
+        let run = if off {
+            sheet.measure_again_off(row, now.offset_ms, now.latency_ms)
+        } else if now.offset_ms != measured.offset_ms {
             return refuse(Failure::Interrupted);
-        }
+        } else {
+            sheet.measure_again(row)
+        };
+        let Some(run) = run else {
+            return refuse(Failure::Unfinished);
+        };
         match probe(rig) {
             Ok(heard) if heard == rate => {}
             Ok(_) => return refuse(Failure::MicrophoneChanged),
@@ -500,10 +635,21 @@ impl AllRun {
             .filter(|m| m.class == Class::Local)
             .map(|m| m.id.clone())
             .collect();
+        let silenced = lineup
+            .members
+            .iter()
+            .filter(|m| !m.same(reference) && !m.same(measured))
+            .cloned()
+            .collect();
+        let mut members = members.to_vec();
+        if off {
+            members[row] = now.clone();
+        }
         Ok(AllRun::new(
             run,
-            members.to_vec(),
+            members,
             vec![reference_row, row],
+            silenced,
             Some(row),
             included,
             rate,
@@ -521,6 +667,7 @@ impl AllRun {
         run: Run,
         members: Vec<Member>,
         taking_part: Vec<usize>,
+        silenced: Vec<Member>,
         again: Option<usize>,
         included: BTreeSet<String>,
         rate: u32,
@@ -553,6 +700,7 @@ impl AllRun {
             run: Some(run),
             members,
             taking_part,
+            silenced,
             again,
             included,
             rate,
@@ -608,14 +756,21 @@ impl AllRun {
 
     /// The user's Cancel: the sweep fades out and nothing changes.
     pub fn cancel(&mut self, rig: &mut dyn AllRig, now_ns: u64) {
+        self.stop(rig, EndReason::Cancelled, now_ns);
+    }
+
+    /// Stops the run with `reason`, as a change the host sees (a zone
+    /// click, the measured zone changing, S240) or the user's Cancel.
+    pub fn stop(&mut self, rig: &mut dyn AllRig, reason: EndReason, now_ns: u64) {
         if !self.is_running() {
             return;
         }
-        self.log.log(|| "Calibrate All cancelled".to_owned());
+        self.log
+            .log(|| format!("Calibrate All stopped: {reason:?}"));
         if matches!(self.stage, Stage::Estimating { .. }) {
-            self.pending_end.get_or_insert(EndReason::Cancelled);
+            self.pending_end.get_or_insert(reason);
         } else {
-            self.end(rig, Some(EndReason::Cancelled), None, now_ns);
+            self.end(rig, Some(reason), None, now_ns);
         }
     }
 
@@ -779,22 +934,28 @@ impl AllRun {
         if lineup.reference.as_deref() != Some(self.reference.as_str()) {
             return Some(EndReason::SpeakersChanged);
         }
-        let mut found = 0;
         for row in &self.taking_part {
             let member = &self.members[*row];
-            match lineup
-                .members
-                .iter()
-                .find(|now| now.class == member.class && now.id == member.id)
-            {
+            match lineup.members.iter().find(|now| now.same(member)) {
                 None => return Some(EndReason::SpeakerTurnedOff),
                 Some(now) if now.offset_ms != member.offset_ms => {
                     return Some(EndReason::SpeakersChanged);
                 }
-                Some(_) => found += 1,
+                Some(_) => {}
             }
         }
-        if self.again.is_none() && lineup.members.len() > found {
+        // A silenced speaker turned off, or any other turned on, changes the list.
+        let known = |now: &Member| {
+            self.taking_part
+                .iter()
+                .map(|row| &self.members[*row])
+                .chain(&self.silenced)
+                .any(|m| m.same(now))
+        };
+        let listed = |m: &Member| lineup.members.iter().any(|now| now.same(m));
+        if self.again.is_none()
+            && (!lineup.members.iter().all(known) || !self.silenced.iter().all(listed))
+        {
             return Some(EndReason::SpeakersChanged);
         }
         let moved = self
@@ -947,6 +1108,7 @@ impl AllRun {
         let latency_ms = self
             .members
             .iter()
+            .chain(&self.silenced)
             .filter(|member| member.route() == route)
             .map(|member| member.latency_ms)
             .fold(0.0, f64::max)
@@ -1375,6 +1537,117 @@ pub(crate) mod tests {
             ]
         );
         given_back(&rig);
+    }
+
+    /// A zone of the AirPlay and USB speakers, plus an attic speaker that is
+    /// off; the reference and the Cast speaker play outside it.
+    fn kitchen_zone() -> ZoneScope {
+        let members: Vec<String> = ["ap:kitchen", "lc:usb", "lc:attic"]
+            .map(str::to_owned)
+            .into();
+        ZoneScope {
+            present: members.iter().cloned().collect(),
+            members,
+            off: vec![member(Class::Local, "attic", Some(40.0), 0.0)],
+        }
+    }
+
+    fn start_zone(rig: &mut FakeRig, zone: &ZoneScope) -> Result<AllRun, Failure> {
+        let now = rig.now.get();
+        AllRun::start_zone(rig, &BTreeSet::new(), zone, now, DebugLog::default())
+    }
+
+    /// A Calibrate Zone run that has just started, for the adapter's tests.
+    pub(crate) fn zone_run() -> AllRun {
+        start_zone(&mut FakeRig::new(), &kitchen_zone()).expect("it starts")
+    }
+
+    // covers: S255
+    #[test]
+    fn a_zone_run_sweeps_its_members_in_zone_order_and_keeps_the_rest_silenced() {
+        let mut rig = FakeRig::new();
+        let mut run = start_zone(&mut rig, &kitchen_zone()).expect("it starts");
+        let finished = run_to_end(&mut rig, &mut run, |rig, _| {
+            assert_ne!(
+                rig.solo.as_ref().map(Member::key).as_deref(),
+                Some("cast:den")
+            );
+        });
+        assert_eq!(finished.failure, None);
+        let sheet = finished.sheet.expect("a sheet");
+        assert_eq!(sheet.ended(), None);
+        let rows: Vec<&str> = sheet.rows().iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(
+            rows,
+            [
+                "local:builtin",
+                "airplay:kitchen",
+                "local:usb",
+                "local:attic"
+            ]
+        );
+        assert!((measured(&sheet, 1) - 2040.0).abs() <= 2.0);
+        assert!((measured(&sheet, 2) - -20.0).abs() <= 2.0);
+        assert!(sheet.is_off(3), "the attic speaker is listed, never swept");
+        assert_eq!(sheet.rows()[3].state, RowState::NotMeasured);
+        assert_eq!(
+            rig.solos,
+            [
+                "local:builtin",
+                "airplay:kitchen",
+                "airplay:kitchen",
+                "local:usb",
+                "local:usb"
+            ],
+            "the Cast speaker outside the zone is never heard alone"
+        );
+        given_back(&rig);
+    }
+
+    // covers: S255, S246
+    #[test]
+    fn a_zone_run_needs_a_member_that_is_on_and_present() {
+        let mut rig = FakeRig::new();
+        let mut zone = kitchen_zone();
+        zone.members.retain(|key| key == "lc:attic");
+        assert_eq!(
+            start_zone(&mut rig, &zone).err(),
+            Some(Failure::NothingToMeasure)
+        );
+        // A hidden member plays on as a speaker outside the zone.
+        let mut zone = kitchen_zone();
+        zone.present.remove("lc:usb");
+        let mut run = start_zone(&mut rig, &zone).expect("it starts");
+        let finished = run_to_end(&mut rig, &mut run, |_, _| {});
+        let sheet = finished.sheet.expect("a sheet");
+        let rows: Vec<&str> = sheet.rows().iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(rows, ["local:builtin", "airplay:kitchen", "local:attic"]);
+        assert!(!rig.solos.iter().any(|key| key == "local:usb"));
+    }
+
+    // covers: S240, S255
+    #[test]
+    fn a_silenced_speaker_going_or_an_off_member_turning_on_ends_a_zone_run() {
+        for meddle in [
+            |rig: &mut FakeRig| rig.remove("cast:den"),
+            |rig: &mut FakeRig| {
+                let attic = member(Class::Local, "attic", Some(40.0), 2540.0);
+                rig.lineup.members.push(attic);
+            },
+        ] {
+            let mut rig = FakeRig::new();
+            let mut run = start_zone(&mut rig, &kitchen_zone()).expect("it starts");
+            let mut ticks = 0;
+            let finished = run_to_end(&mut rig, &mut run, |rig, _| {
+                ticks += 1;
+                if ticks == 50 {
+                    meddle(rig);
+                }
+            });
+            let sheet = finished.sheet.expect("a sheet");
+            assert_eq!(sheet.ended(), Some(EndReason::SpeakersChanged));
+            given_back(&rig);
+        }
     }
 
     #[test]
@@ -1823,6 +2096,64 @@ pub(crate) mod tests {
             casts(&backend),
             [(ATTIC.to_owned(), Some(2400.0))],
             "Attic is measured as one speaker, Living Room is left out"
+        );
+    }
+
+    #[test]
+    fn only_a_cast_speaker_without_an_offset_waits_for_the_unknown_start_guess() {
+        use audiosync_cast::audio::Codec;
+        use audiosync_cast::discovery::DeviceId;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::SessionEvent;
+        use audiosync_core::calibrate_all::{
+            CAST_LATENCY_ALLOWANCE_MS, CAST_UNKNOWN_FLAC_MS, CAST_UNKNOWN_WAV_MS,
+        };
+
+        use crate::audio::backend::SourceId;
+        use crate::audio::cast::tests::{ATTIC, FakeCast};
+        use crate::audio::mock::MockBackend;
+
+        let mut backend = MockBackend::demo();
+        let cast = FakeCast::default();
+        cast.announce(ATTIC, "Attic", 32_123);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_output_enabled("speakers", true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_offset(ATTIC, 2400.0);
+        backend.set_cast_enabled(ATTIC, true).unwrap();
+        cast.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: DeviceId::parse(ATTIC).unwrap(),
+            event: SessionEvent::Playing,
+        });
+        backend.poll();
+        let wait = |backend: &MockBackend| {
+            let speaker = backend.cast_speakers().into_iter().next().unwrap();
+            let guess_ms = match speaker.format {
+                Some(Codec::Wav) => CAST_UNKNOWN_WAV_MS,
+                _ => CAST_UNKNOWN_FLAC_MS,
+            };
+            let latency_ms = lineup(backend)
+                .members
+                .into_iter()
+                .find(|member| member.class == Class::Cast)
+                .map(|member| member.latency_ms);
+            (latency_ms, speaker.hold_back_ms, guess_ms)
+        };
+
+        let (latency_ms, hold_back_ms, _) = wait(&backend);
+        assert_eq!(
+            latency_ms,
+            Some(2400.0 + hold_back_ms + CAST_LATENCY_ALLOWANCE_MS),
+            "a calibrated speaker waits for its offset, without the guess on top"
+        );
+        backend.set_cast_offset(ATTIC, 0.0);
+        let (latency_ms, hold_back_ms, guess_ms) = wait(&backend);
+        assert_eq!(
+            latency_ms,
+            Some(hold_back_ms + guess_ms),
+            "an uncalibrated speaker waits for the guess"
         );
     }
 

@@ -6,7 +6,7 @@ use std::io;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -23,10 +23,17 @@ pub const WRONG_PER_WINDOW: usize = 5;
 pub const WRONG_PER_PEER: u32 = 10;
 /// Wrong codes from all peers together after which pairing stays locked for
 /// everyone until the code is rotated. Above [`WRONG_PER_PEER`], so one peer
-/// alone never locks out the others.
+/// alone never locks out the others. Only tries while a code works count,
+/// since a guess can't succeed while none does.
 pub const WRONG_BEFORE_LOCK: u32 = 40;
 /// Devices remembered at once; pairing another drops the oldest.
 pub const MAX_DEVICES: usize = 8;
+/// A paired device that sends no request for this long is forgotten. The
+/// cookie outlives it, so a lost phone stops working on its own.
+pub const DEVICE_IDLE_LIMIT: Duration = Duration::from_secs(90 * 24 * 60 * 60);
+/// How far a device's last-seen time moves before the file is written again,
+/// so a busy page doesn't write it on every request.
+const SEEN_SAVE_STEP: u64 = 24 * 60 * 60;
 /// The paired-device file's format.
 const FILE_VERSION: u64 = 1;
 
@@ -173,7 +180,14 @@ impl Pairing {
             Some(_) => PairOutcome::Wrong,
             None => PairOutcome::Expired,
         };
-        self.wrong_total = self.wrong_total.saturating_add(1);
+        if outcome == PairOutcome::Wrong {
+            self.wrong_total = self.wrong_total.saturating_add(1);
+        } else if self.wrong_by_peer.len() >= WRONG_BEFORE_LOCK as usize
+            && !self.wrong_by_peer.contains_key(&peer)
+        {
+            // Keeps the map bounded now that these tries don't move the total.
+            return outcome;
+        }
         let tries = self.wrong_by_peer.entry(peer).or_default();
         tries.total = tries.total.saturating_add(1);
         tries.recent.push_back(now);
@@ -208,14 +222,45 @@ fn from_hex(text: &str) -> Option<TokenHash> {
     Some(hash)
 }
 
-/// The paired devices: only each token's SHA-256, oldest first. A change
-/// returns a [`Snapshot`] that the caller saves after letting go of its
-/// lock, so a slow disk never holds up a reader.
+/// Seconds since 1970; a clock set before that reads as 0.
+fn unix_seconds(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// One paired device: its token's hash and when it last sent a request.
+#[derive(Clone, Copy, Debug)]
+struct Device {
+    hash: TokenHash,
+    seen: u64,
+    /// `seen` as the last snapshot had it.
+    seen_saved: u64,
+}
+
+impl Device {
+    /// A clock that jumped ahead may drop the device: from here that reads
+    /// the same as a device left unused.
+    fn idle_too_long(&self, now: u64) -> bool {
+        now.saturating_sub(self.seen) >= DEVICE_IDLE_LIMIT.as_secs()
+    }
+
+    /// Whether the file's time for this device is a day or more off.
+    fn needs_saving(&self) -> bool {
+        self.seen.abs_diff(self.seen_saved) >= SEEN_SAVE_STEP
+    }
+}
+
+/// The paired devices: only each token's SHA-256 and its last-seen time,
+/// oldest first. A change returns a [`Snapshot`] that the caller saves after
+/// letting go of its lock, so a slow disk never holds up a reader.
 #[derive(Debug)]
 pub struct TokenStore {
     path: Option<PathBuf>,
-    hashes: Vec<TokenHash>,
+    devices: Vec<Device>,
     generation: u64,
+    /// The file as read differs from the store: no last-seen times, idle
+    /// devices or times ahead of the clock.
+    rewrite: bool,
 }
 
 /// Why the paired-device file was not read at start; the store starts empty.
@@ -230,7 +275,7 @@ pub enum LoadProblem {
 #[must_use = "a change reaches the file only once its snapshot is saved"]
 pub struct Snapshot {
     path: Option<PathBuf>,
-    hashes: Vec<TokenHash>,
+    devices: Vec<(TokenHash, u64)>,
     generation: u64,
 }
 
@@ -250,8 +295,10 @@ impl DeviceFile {
         if snapshot.generation <= *written {
             return Ok(());
         }
-        let devices: Vec<String> = snapshot.hashes.iter().map(|hash| hex(hash)).collect();
-        let text = json!({ "version": FILE_VERSION, "devices": devices }).to_string();
+        let hashes: Vec<String> = snapshot.devices.iter().map(|(hash, _)| hex(hash)).collect();
+        let seen: Vec<u64> = snapshot.devices.iter().map(|(_, seen)| *seen).collect();
+        // "seen" sits beside "devices" so a reader of the older layout still counts them.
+        let text = json!({ "version": FILE_VERSION, "devices": hashes, "seen": seen }).to_string();
         write_replacing(path, text.as_bytes())?;
         *written = snapshot.generation;
         Ok(())
@@ -262,18 +309,37 @@ impl TokenStore {
     /// The store at `path`; a missing file is an empty store, an unreadable
     /// or damaged one too, reported so the host can log it.
     pub fn open(path: Option<PathBuf>) -> (TokenStore, Option<LoadProblem>) {
+        TokenStore::open_at(path, SystemTime::now())
+    }
+
+    /// [`TokenStore::open`] at `now`: devices idle too long are left out, a
+    /// time ahead of the clock counts as now, and a file from before last-seen
+    /// times were kept counts every device as seen now.
+    pub fn open_at(path: Option<PathBuf>, now: SystemTime) -> (TokenStore, Option<LoadProblem>) {
         let mut store = TokenStore {
             path,
-            hashes: Vec::new(),
+            devices: Vec::new(),
             generation: 0,
+            rewrite: false,
         };
         let Some(path) = store.path.as_deref() else {
             return (store, None);
         };
+        let now = unix_seconds(now);
         let problem = match fs::read(path) {
-            Ok(bytes) => match parse_file(&bytes) {
-                Some(hashes) => {
-                    store.hashes = hashes;
+            Ok(bytes) => match parse_file(&bytes, now) {
+                Some((mut devices, upgraded)) => {
+                    let read = devices.len();
+                    devices.retain(|device| !device.idle_too_long(now));
+                    for device in &mut devices {
+                        device.seen = device.seen.min(now);
+                    }
+                    store.rewrite = upgraded
+                        || devices.len() != read
+                        || devices
+                            .iter()
+                            .any(|device| device.seen != device.seen_saved);
+                    store.devices = devices;
                     None
                 }
                 None => Some(LoadProblem::NotInFormat),
@@ -284,33 +350,88 @@ impl TokenStore {
         (store, problem)
     }
 
+    /// The snapshot that brings the file in line with what was loaded, once.
+    /// Without it, a file no device uses would never lose its idle devices.
+    pub fn take_rewrite(&mut self) -> Option<Snapshot> {
+        std::mem::take(&mut self.rewrite).then(|| self.snapshot())
+    }
+
+    /// The devices held, idle or not; [`TokenStore::count_at`] leaves the idle out.
     pub fn len(&self) -> usize {
-        self.hashes.len()
+        self.devices.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hashes.is_empty()
+        self.devices.is_empty()
     }
 
-    /// Whether `token` belongs to a paired device.
-    pub fn contains(&self, token: &str) -> bool {
+    /// The devices that still work at `now`.
+    pub fn count_at(&self, now: SystemTime) -> usize {
+        let now = unix_seconds(now);
+        self.devices
+            .iter()
+            .filter(|device| !device.idle_too_long(now))
+            .count()
+    }
+
+    fn position(&self, token: &str) -> Option<usize> {
         if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return false;
+            return None;
         }
         let hash = token_hash(token);
-        self.hashes.iter().fold(false, |found, kept| {
-            found | equal_in_constant_time(kept, &hash)
-        })
+        // Every hash is compared, so the time taken doesn't tell which one matched.
+        self.devices
+            .iter()
+            .enumerate()
+            .fold(None, |found, (index, device)| {
+                if equal_in_constant_time(&device.hash, &hash) {
+                    Some(index)
+                } else {
+                    found
+                }
+            })
     }
 
-    /// Remembers a new device's token, dropping the oldest beyond
-    /// [`MAX_DEVICES`]. The token works at once, saved or not, until the
-    /// app quits.
-    pub fn add(&mut self, token: &str) -> Snapshot {
-        self.hashes.push(token_hash(token));
-        if self.hashes.len() > MAX_DEVICES {
-            let excess = self.hashes.len() - MAX_DEVICES;
-            self.hashes.drain(..excess);
+    /// Whether `token` belongs to a paired device that hasn't been idle too long.
+    pub fn contains(&self, token: &str, now: SystemTime) -> bool {
+        let now = unix_seconds(now);
+        self.position(token)
+            .is_some_and(|index| !self.devices[index].idle_too_long(now))
+    }
+
+    /// A request carrying `token` at `now`: forgets the devices idle too
+    /// long and marks this one seen. A time ahead of the clock counts as now,
+    /// so a clock that jumped ahead and back keeps no device longer. The
+    /// snapshot comes when the file needs writing: a device was forgotten, or
+    /// a time in the file is a day or more off.
+    pub fn check(&mut self, token: &str, now: SystemTime) -> (bool, Option<Snapshot>) {
+        let now = unix_seconds(now);
+        let before = self.devices.len();
+        self.devices.retain(|device| !device.idle_too_long(now));
+        for device in &mut self.devices {
+            device.seen = device.seen.min(now);
+        }
+        let found = self.position(token);
+        if let Some(index) = found {
+            self.devices[index].seen = now;
+        }
+        let changed = self.devices.len() != before || self.devices.iter().any(Device::needs_saving);
+        (found.is_some(), changed.then(|| self.snapshot()))
+    }
+
+    /// Remembers a new device's token, seen at `now`, dropping the oldest
+    /// beyond [`MAX_DEVICES`]. The token works at once, saved or not, until
+    /// the app quits.
+    pub fn add(&mut self, token: &str, now: SystemTime) -> Snapshot {
+        let now = unix_seconds(now);
+        self.devices.push(Device {
+            hash: token_hash(token),
+            seen: now,
+            seen_saved: now,
+        });
+        if self.devices.len() > MAX_DEVICES {
+            let excess = self.devices.len() - MAX_DEVICES;
+            self.devices.drain(..excess);
         }
         self.snapshot()
     }
@@ -318,42 +439,72 @@ impl TokenStore {
     /// Forgets one device; none when it wasn't paired.
     pub fn remove(&mut self, token: &str) -> Option<Snapshot> {
         let hash = token_hash(token);
-        let before = self.hashes.len();
-        self.hashes.retain(|kept| *kept != hash);
-        (self.hashes.len() != before).then(|| self.snapshot())
+        let before = self.devices.len();
+        self.devices.retain(|device| device.hash != hash);
+        (self.devices.len() != before).then(|| self.snapshot())
     }
 
     /// Forgets every device.
     pub fn clear(&mut self) -> Snapshot {
-        self.hashes.clear();
+        self.devices.clear();
         self.snapshot()
     }
 
     fn snapshot(&mut self) -> Snapshot {
         self.generation += 1;
+        for device in &mut self.devices {
+            device.seen_saved = device.seen;
+        }
         Snapshot {
             path: self.path.clone(),
-            hashes: self.hashes.clone(),
+            devices: self
+                .devices
+                .iter()
+                .map(|device| (device.hash, device.seen))
+                .collect(),
             generation: self.generation,
         }
     }
 }
 
-fn parse_file(bytes: &[u8]) -> Option<Vec<TokenHash>> {
+/// The devices in `bytes`, and whether the file had no "seen" list, in which
+/// case every one counts as seen at `now`.
+fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool)> {
     let value: Value = serde_json::from_slice(bytes).ok()?;
     if value.get("version")?.as_u64()? != FILE_VERSION {
         return None;
     }
-    let mut hashes: Vec<TokenHash> = value
+    let hashes: Vec<TokenHash> = value
         .get("devices")?
         .as_array()?
         .iter()
         .map(|item| item.as_str().and_then(from_hex))
         .collect::<Option<_>>()?;
-    if hashes.len() > MAX_DEVICES {
-        hashes.drain(..hashes.len() - MAX_DEVICES);
+    let upgraded = value.get("seen").is_none();
+    let seen: Vec<u64> = match value.get("seen") {
+        None => vec![now; hashes.len()],
+        Some(seen) => seen
+            .as_array()?
+            .iter()
+            .map(Value::as_u64)
+            .collect::<Option<_>>()?,
+    };
+    if seen.len() != hashes.len() {
+        return None;
     }
-    Some(hashes)
+    let mut devices: Vec<Device> = hashes
+        .into_iter()
+        .zip(seen)
+        .map(|(hash, seen)| Device {
+            hash,
+            seen,
+            seen_saved: seen,
+        })
+        .collect();
+    if devices.len() > MAX_DEVICES {
+        devices.drain(..devices.len() - MAX_DEVICES);
+    }
+    Some((devices, upgraded))
 }
 
 /// Writes next to `path` and renames over it, so a crash leaves the old
@@ -520,6 +671,68 @@ mod tests {
     }
 
     #[test]
+    fn wrong_tries_while_no_code_works_never_lock_pairing() {
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&code);
+        let expired = start + Duration::from_secs(600);
+        for _ in 0..WRONG_PER_WINDOW {
+            assert_eq!(
+                pairing.attempt(peer(1), &wrong, expired),
+                PairOutcome::Expired
+            );
+        }
+        for last in 2..=200 {
+            assert_eq!(
+                pairing.attempt(peer(last), &wrong, expired),
+                PairOutcome::Expired
+            );
+        }
+        assert!(!pairing.locked());
+        assert!(pairing.wrong_by_peer.len() <= WRONG_BEFORE_LOCK as usize);
+        // The per-peer limits still hold while no code works.
+        assert_eq!(
+            pairing.attempt(peer(1), &wrong, expired),
+            PairOutcome::Limited
+        );
+        let fresh = pairing.rotate(expired).unwrap();
+        assert_eq!(
+            pairing.attempt(peer(1), &fresh, expired),
+            PairOutcome::Paired
+        );
+    }
+
+    #[test]
+    fn wrong_tries_while_a_code_works_still_lock_after_expired_ones() {
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&code);
+        for index in 0..WRONG_BEFORE_LOCK - 1 {
+            let from = peer(1 + (index as usize / WRONG_PER_WINDOW) as u8);
+            assert_eq!(pairing.attempt(from, &wrong, start), PairOutcome::Wrong);
+        }
+        let expired = start + Duration::from_secs(600);
+        assert_eq!(
+            pairing.attempt(peer(60), &wrong, expired),
+            PairOutcome::Expired
+        );
+        assert!(!pairing.locked(), "an expired try is not the fortieth");
+        let fresh = pairing.rotate(expired).unwrap();
+        let wrong = wrong_for(&fresh);
+        for index in 0..WRONG_BEFORE_LOCK {
+            let from = peer(1 + (index as usize / WRONG_PER_WINDOW) as u8);
+            assert_eq!(pairing.attempt(from, &wrong, expired), PairOutcome::Wrong);
+        }
+        assert!(pairing.locked());
+        assert_eq!(
+            pairing.attempt(peer(60), &fresh, expired),
+            PairOutcome::Locked
+        );
+    }
+
+    #[test]
     fn tries_refused_as_limited_never_count_toward_the_lock() {
         // Otherwise one address could lock pairing for every phone within a minute.
         let start = Instant::now();
@@ -633,11 +846,20 @@ mod tests {
             .map(|_| random_token().unwrap())
             .collect();
         for token in &tokens {
-            device_file.save(store.add(token)).unwrap();
+            device_file
+                .save(store.add(token, SystemTime::now()))
+                .unwrap();
         }
         assert_eq!(store.len(), MAX_DEVICES);
-        assert!(!store.contains(&tokens[0]), "the oldest is dropped");
-        assert!(tokens[1..].iter().all(|token| store.contains(token)));
+        assert!(
+            !store.contains(&tokens[0], SystemTime::now()),
+            "the oldest is dropped"
+        );
+        assert!(
+            tokens[1..]
+                .iter()
+                .all(|token| store.contains(token, SystemTime::now()))
+        );
 
         let file = fs::read_to_string(&path).unwrap();
         assert!(tokens.iter().all(|token| !file.contains(token.as_str())));
@@ -646,11 +868,15 @@ mod tests {
         let (reopened, problem) = TokenStore::open(Some(path.clone()));
         assert!(problem.is_none());
         assert_eq!(reopened.len(), MAX_DEVICES);
-        assert!(reopened.contains(&tokens[MAX_DEVICES]));
+        assert!(reopened.contains(&tokens[MAX_DEVICES], SystemTime::now()));
 
         device_file.save(store.remove(&tokens[3]).unwrap()).unwrap();
         assert!(store.remove(&tokens[3]).is_none());
-        assert!(!TokenStore::open(Some(path.clone())).0.contains(&tokens[3]));
+        assert!(
+            !TokenStore::open(Some(path.clone()))
+                .0
+                .contains(&tokens[3], SystemTime::now())
+        );
         device_file.save(store.clear()).unwrap();
         assert!(TokenStore::open(Some(path)).0.is_empty());
     }
@@ -662,11 +888,158 @@ mod tests {
         let device_file = DeviceFile::default();
         let first = random_token().unwrap();
         let second = random_token().unwrap();
-        let older = store.add(&first);
-        let newer = store.add(&second);
+        let older = store.add(&first, SystemTime::now());
+        let newer = store.add(&second, SystemTime::now());
         device_file.save(newer).unwrap();
         device_file.save(older).unwrap();
-        assert!(TokenStore::open(Some(path)).0.contains(&second));
+        assert!(
+            TokenStore::open(Some(path))
+                .0
+                .contains(&second, SystemTime::now())
+        );
+    }
+
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+    fn day_zero() -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(1_800_000_000)
+    }
+
+    #[test]
+    fn a_device_idle_for_ninety_days_is_forgotten() {
+        let path = scratch("auth-idle");
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
+        let device_file = DeviceFile::default();
+        let token = random_token().unwrap();
+        let other = random_token().unwrap();
+        device_file.save(store.add(&token, start)).unwrap();
+        device_file.save(store.add(&other, start)).unwrap();
+
+        // Every request starts the ninety days over.
+        let used = start + DAY * 89;
+        assert!(store.check(&token, used).0);
+        let idle = used + DAY * 89;
+        assert!(store.check(&token, idle).0);
+        assert!(!store.contains(&other, idle), "the other went unused");
+        assert_eq!(store.count_at(idle), 1);
+
+        let (paired, snapshot) = store.check(&token, idle + DAY);
+        assert!(paired);
+        device_file
+            .save(snapshot.expect("a forgotten device is written out"))
+            .unwrap();
+        assert_eq!(store.len(), 1);
+        let (reopened, _) = TokenStore::open_at(Some(path), idle + DAY);
+        assert_eq!(reopened.len(), 1);
+        assert!(reopened.contains(&token, idle + DAY * 90 - Duration::from_secs(1)));
+        assert!(!reopened.contains(&token, idle + DAY * 91));
+    }
+
+    #[test]
+    fn last_seen_is_written_once_a_day_and_survives_a_restart() {
+        let path = scratch("auth-seen");
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
+        let device_file = DeviceFile::default();
+        let token = random_token().unwrap();
+        device_file.save(store.add(&token, start)).unwrap();
+        let (paired, snapshot) = store.check(&token, start + DAY / 2);
+        assert!(paired && snapshot.is_none());
+        let (_, snapshot) = store.check(&token, start + DAY * 2);
+        device_file.save(snapshot.expect("a day later")).unwrap();
+        let (_, snapshot) = store.check(&token, start + DAY * 2);
+        assert!(snapshot.is_none());
+
+        let (reopened, _) = TokenStore::open_at(Some(path), start + DAY * 2);
+        assert!(reopened.contains(&token, start + DAY * 91));
+        assert!(!reopened.contains(&token, start + DAY * 92));
+    }
+
+    #[test]
+    fn a_file_without_last_seen_counts_every_device_as_seen_now() {
+        let path = scratch("auth-upgrade");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let token = random_token().unwrap();
+        let text = json!({ "version": 1, "devices": [hex(&token_hash(&token))] }).to_string();
+        fs::write(&path, text).unwrap();
+        let opened = day_zero() + DAY * 400;
+        let (mut store, problem) = TokenStore::open_at(Some(path.clone()), opened);
+        assert!(problem.is_none());
+        assert!(store.contains(&token, opened + DAY * 89));
+        assert!(!store.contains(&token, opened + DAY * 90));
+
+        // Written once at load, so restarts without a request still let it expire.
+        DeviceFile::default()
+            .save(store.take_rewrite().expect("an upgraded file is written"))
+            .unwrap();
+        assert!(store.take_rewrite().is_none());
+        let (mut reopened, _) = TokenStore::open_at(Some(path.clone()), opened + DAY * 60);
+        assert!(reopened.take_rewrite().is_none());
+        let (reopened, _) = TokenStore::open_at(Some(path), opened + DAY * 90);
+        assert!(reopened.is_empty());
+    }
+
+    #[test]
+    fn a_clock_that_jumped_ahead_and_back_keeps_no_device_longer() {
+        let path = scratch("auth-clock-back");
+        let start = day_zero();
+        let ahead = start + DAY * 80;
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
+        let device_file = DeviceFile::default();
+        let token = random_token().unwrap();
+        device_file.save(store.add(&token, start)).unwrap();
+        device_file
+            .save(store.check(&token, ahead).1.expect("a year later"))
+            .unwrap();
+
+        let (paired, snapshot) = store.check(&token, start + DAY);
+        assert!(paired);
+        device_file
+            .save(snapshot.expect("a time ahead of the clock is written back"))
+            .unwrap();
+        assert!(!store.contains(&token, start + DAY * 91));
+
+        device_file
+            .save(store.check(&token, ahead).1.unwrap())
+            .unwrap();
+        let (mut reopened, _) = TokenStore::open_at(Some(path.clone()), start + DAY);
+        DeviceFile::default()
+            .save(
+                reopened
+                    .take_rewrite()
+                    .expect("a loaded time ahead of the clock"),
+            )
+            .unwrap();
+        assert!(reopened.contains(&token, start + DAY * 90));
+        let (reopened, _) = TokenStore::open_at(Some(path), start + DAY * 91);
+        assert!(reopened.is_empty());
+    }
+
+    #[test]
+    fn a_clock_that_jumps_ninety_days_ahead_forgets_every_device() {
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(None, start);
+        let token = random_token().unwrap();
+        let other = random_token().unwrap();
+        let _ = store.add(&token, start);
+        let _ = store.add(&other, start);
+        let (paired, snapshot) = store.check(&token, start + DAY * 90);
+        assert!(!paired, "the device sending the request goes too");
+        assert!(snapshot.is_some());
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn a_last_seen_list_that_does_not_match_the_devices_is_damage() {
+        let path = scratch("auth-seen-damaged");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let hash = hex(&token_hash(&random_token().unwrap()));
+        let text = json!({ "version": 1, "devices": [hash], "seen": [] }).to_string();
+        fs::write(&path, text).unwrap();
+        let (store, problem) = TokenStore::open(Some(path));
+        assert!(store.is_empty());
+        assert!(matches!(problem, Some(LoadProblem::NotInFormat)));
     }
 
     #[test]
@@ -683,10 +1056,12 @@ mod tests {
     fn only_well_formed_tokens_are_looked_up() {
         let (mut store, _) = TokenStore::open(None);
         let token = random_token().unwrap();
-        DeviceFile::default().save(store.add(&token)).unwrap();
-        assert!(store.contains(&token));
-        assert!(!store.contains(""));
-        assert!(!store.contains(&token[..31]));
-        assert!(!store.contains(&format!("{}g", &token[..31])));
+        DeviceFile::default()
+            .save(store.add(&token, SystemTime::now()))
+            .unwrap();
+        assert!(store.contains(&token, SystemTime::now()));
+        assert!(!store.contains("", SystemTime::now()));
+        assert!(!store.contains(&token[..31], SystemTime::now()));
+        assert!(!store.contains(&format!("{}g", &token[..31]), SystemTime::now()));
     }
 }

@@ -16,7 +16,7 @@ use audiosync_core::policy::zones::{Zone, Zones};
 use audiosync_core::volume;
 
 use crate::speaker_names;
-use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
+use audiosync_core::calibrate_all::{AirPlayMoves, AirPlayShared, Class, EndReason, RowState};
 
 pub use crate::audio::backend::{CastMembers, InTarget};
 use crate::audio::calibration::{Failure, Phase};
@@ -44,6 +44,17 @@ pub enum SourceKind {
     App,
     /// An input device (line in, microphone).
     Input,
+    /// Every app except those named; the UI words it around the names.
+    AppsExcept,
+}
+
+/// An app the several-apps list offers, by executable file name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MixApp {
+    pub id: String,
+    pub name: String,
+    /// Checked in the mode the list shows.
+    pub checked: bool,
 }
 
 /// Something AudioSync can capture.
@@ -52,6 +63,9 @@ pub struct Source {
     pub id: String,
     pub name: String,
     pub kind: SourceKind,
+    /// An input device's channels, which offer pairs above two; 0 for
+    /// anything else and for a device that doesn't say.
+    pub channels: u16,
 }
 
 /// The kind of output a speaker is, shown as a small icon and read by Narrator.
@@ -423,6 +437,17 @@ pub struct Notice {
     pub time: String,
 }
 
+/// A source other than the whole system, as a notice names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceName {
+    /// An app or an input device, by the name shown for it.
+    Named(String),
+    /// Several apps, by name; the UI joins the list.
+    Apps(Vec<String>),
+    /// Every app except the listed ones; the UI words it around the list.
+    AllAppsExcept(Vec<String>),
+}
+
 /// What a notice says. The UI words it (the notice texts in
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -464,6 +489,9 @@ pub enum NoticeMessage {
     /// Another app holds a speaker's device for itself (exclusive mode). It
     /// stays on and plays once that app lets go; the notice then clears.
     SpeakerBusy { speaker: String },
+    /// A zone or preset the web remote turned on left this speaker off: it
+    /// asks for a code, which only the PC can answer.
+    PairFirst { speaker: String },
     /// An AirPlay speaker stopped playing; it stays on while AudioSync keeps
     /// trying to reach it.
     AirPlayRetrying {
@@ -511,14 +539,14 @@ pub enum NoticeMessage {
     /// itself once an output is back or no AirPlay speaker is on.
     NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
-    /// is heard twice. `source` is the app's name, or `None` for the whole
+    /// is heard twice. `source` names the app, or is `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
     /// user may mute; `shared` the ones AudioSync plays to as well, where
     /// only sending the source elsewhere helps. `default_output` is the one
     /// of them that counts because it is Windows' default output (the whole
     /// system only); any other plays the source because an app plays there.
     HeardTwice {
-        source: Option<String>,
+        source: Option<SourceName>,
         mute: Vec<String>,
         shared: Vec<String>,
         default_output: Option<String>,
@@ -574,13 +602,6 @@ pub enum PresetLeftOff {
 /// At most this many presets: the settings file keeps no more (spec S251).
 pub const MAX_PRESETS: usize = crate::settings::MAX_ENTRIES;
 
-/// A speaker preset as the windows list it (spec S259).
-#[derive(Clone, Debug, PartialEq)]
-pub struct PresetEntry {
-    pub id: String,
-    pub name: String,
-}
-
 /// The speakers on now as a preset sees them (spec S251, S253): list
 /// order, the reference output left out, no own volume for a fixed-volume
 /// Cast speaker. A hidden speaker is never listed, so never captured.
@@ -633,9 +654,15 @@ pub fn show_presets(state: &mut AppState, presets: &[Preset]) {
     state.current_preset = current_preset(presets, state);
     state.presets = presets
         .iter()
-        .map(|preset| PresetEntry {
+        .map(|preset| PresetItem {
             id: preset.id.clone(),
             name: preset.name.clone(),
+            current: state.current_preset.as_deref() == Some(preset.id.as_str()),
+            members: preset
+                .members
+                .iter()
+                .map(|member| member.key.clone())
+                .collect(),
         })
         .collect();
 }
@@ -704,6 +731,13 @@ pub struct AppState {
     pub running: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
+    /// The channel pair saved for the chosen input device, as an index (1
+    /// for channels 3-4); 0 for 1-2 and for any other source.
+    pub input_pair: u16,
+    /// The several-apps list: the apps to check.
+    pub mix_apps: Vec<MixApp>,
+    /// The list shows "every app except the checked ones", not "only them".
+    pub mix_all_except: bool,
     /// 0 to 100.
     pub master_volume: f64,
     /// The speakers listed; a hidden one never is.
@@ -715,10 +749,11 @@ pub struct AppState {
     /// The zone members that aren't listed and aren't hidden.
     pub absent: Vec<AbsentMember>,
     pub equalizer: EqSettings,
-    /// The equalizer curves the user saved, in the picker's order (spec S242).
+    /// The equalizer curves the user saved, in the picker's order (spec S270).
     pub equalizer_curves: Vec<UserCurve>,
-    /// The speaker presets in list order (spec S259).
-    pub presets: Vec<PresetEntry>,
+    /// The speaker presets in list order (spec S259), the current one
+    /// marked (spec S253).
+    pub presets: Vec<PresetItem>,
     /// The ID of the preset that plays exactly now (spec S253, S264).
     pub current_preset: Option<String>,
     /// Newest first.
@@ -751,6 +786,17 @@ pub struct AppState {
     pub calibrate_all: CalibrateAllState,
 }
 
+/// A speaker preset as the windows and the web remote list it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresetItem {
+    pub id: String,
+    pub name: String,
+    /// The speakers play it exactly now, the first such preset in list order.
+    pub current: bool,
+    /// The stored members' keys, in order.
+    pub members: Vec<String>,
+}
+
 /// Calibrate All Speakers (spec S235 to S240): where a run stands and the
 /// results of the last one.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -766,6 +812,21 @@ pub struct CalibrateAllState {
     pub endings: u64,
     /// The outputs that are on but left out by their kind.
     pub left_out: Vec<LeftOutRow>,
+    /// The zone a Calibrate Zone run measures or measured (spec S255).
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+    pub zone: Option<ZoneSheet>,
+}
+
+/// What a Calibrate Zone sheet says besides Calibrate All's (spec S255).
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+pub struct ZoneSheet {
+    /// "Bring the computer into <name>".
+    pub name: String,
+    /// The sheet's rows that are members that were off: "Off".
+    pub off_rows: Vec<usize>,
+    /// Whom the shared AirPlay delay moves besides the zone.
+    pub airplay_moves: AirPlayMoves,
 }
 
 /// An output that is on, which Calibrate All leaves out by its kind unless
@@ -820,9 +881,6 @@ pub struct SheetState {
     /// The last Measure Again ended early, so its row stayed.
     pub again_ended: Option<EndReason>,
     pub can_apply: bool,
-    /// Apply or Undo would set the AirPlay delay while AirPlay doesn't
-    /// play, so it can't be worked out: both wait.
-    pub airplay_waits: bool,
     pub applied: bool,
     /// Undo restores what Apply replaced, in one step.
     pub can_undo: bool,
@@ -992,6 +1050,15 @@ impl AppState {
         self.speakers.is_empty() && self.hidden.iter().any(|hidden| hidden.present.is_some())
     }
 
+    /// Whether the tray flyout lists only the PC's own speakers because
+    /// every connected speaker present is hidden and there is no zone.
+    pub fn connected_all_hidden(&self) -> bool {
+        self.zones.is_empty()
+            && !self.speakers.is_empty()
+            && self.speakers.iter().all(|s| s.kind.is_this_pc())
+            && self.hidden_in(false)
+    }
+
     /// Speakers switched on right now.
     pub fn active_speakers(&self) -> usize {
         self.speakers.iter().filter(|s| s.enabled).count()
@@ -1081,6 +1148,13 @@ pub trait Backend {
     fn snapshot(&self) -> AppState;
     fn set_running(&mut self, on: bool);
     fn select_source(&mut self, id: &str);
+    /// Plays channel pair `pair` (1 for channels 3-4) of the chosen input
+    /// device, and keeps it for that device.
+    fn select_input_pair(&mut self, pair: u16);
+    /// Checks or unchecks an app of the several-apps list, by executable.
+    fn toggle_mix_app(&mut self, executable: &str);
+    /// Switches the several-apps list to "all except" (true) or "only" (false).
+    fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
@@ -1151,9 +1225,14 @@ pub trait Backend {
     /// Use … Instead in a zone's menu: the stereo pair or home theater that
     /// member `speaker_id` plays as part of takes its place in the zone.
     fn use_target_instead(&mut self, speaker_id: &str);
+    /// A zone click from the web remote: the members in `keep_off`, which
+    /// ask for a code, stay off with a notice each (spec S257).
+    fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]);
+    /// A recall from the web remote, `keep_off` as for a zone click.
+    fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]);
     fn set_equalizer(&mut self, settings: EqSettings);
     /// Replaces the saved equalizer curves; the backend keeps them as the
-    /// core cleans a stored list (spec S242).
+    /// core cleans a stored list (spec S270).
     fn set_equalizer_curves(&mut self, curves: Vec<UserCurve>);
     /// Save as Preset…: what plays now becomes preset `name`, last in the
     /// list (spec S251, S262). The UI names it ("Preset 2") when the user
@@ -1239,6 +1318,14 @@ pub trait Backend {
     /// snapshot may have changed. The UI calls it about twice a second.
     fn poll(&mut self) -> bool {
         false
+    }
+
+    /// While an input device is captured, the largest sample magnitude
+    /// since the last call (1 is full scale), for the level meter; `None`
+    /// for any other source and while stopped. The UI calls it every
+    /// `METER_POLL_MS` while the meter shows.
+    fn input_peak(&mut self) -> Option<f32> {
+        None
     }
 
     /// The windows' own settings as last saved: what the UI shows them with
@@ -1411,6 +1498,7 @@ impl MockBackend {
             id: id.into(),
             name: name.into(),
             kind,
+            channels: 0,
         };
         let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
             id: id.into(),
@@ -1492,9 +1580,26 @@ impl MockBackend {
                 source("system", "All System Audio", SourceKind::System),
                 source("app:player", "Music Player", SourceKind::App),
                 source("app:browser", "Web Browser", SourceKind::App),
-                source("input:line", "Line In", SourceKind::Input),
+                Source {
+                    channels: 5,
+                    ..source("input:line", "Line In", SourceKind::Input)
+                },
             ],
             source_id: "system".into(),
+            input_pair: 0,
+            mix_apps: vec![
+                MixApp {
+                    id: "player.exe".into(),
+                    name: "Music Player".into(),
+                    checked: false,
+                },
+                MixApp {
+                    id: "browser.exe".into(),
+                    name: "Web Browser".into(),
+                    checked: false,
+                },
+            ],
+            mix_all_except: false,
             master_volume: volume::DEFAULT_MASTER_POSITION,
             speakers,
             hidden: Vec::new(),
@@ -1575,6 +1680,26 @@ impl MockBackend {
     #[cfg(test)]
     pub fn retain_speakers(&mut self, keep: impl Fn(&Speaker) -> bool) {
         self.state.speakers.retain(keep);
+    }
+
+    /// Adds preset `id` of the speakers `members` at the master and the
+    /// curve now, with no own volumes.
+    #[cfg(test)]
+    pub fn add_preset(&mut self, id: &str, name: &str, members: &[&str]) {
+        self.presets.push(Preset {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            members: members
+                .iter()
+                .map(|key| policy_presets::PresetMember {
+                    key: (*key).to_owned(),
+                    volume: None,
+                })
+                .collect(),
+            zones: Vec::new(),
+            master: self.state.master_volume,
+            gains_db: self.state.equalizer.gains_db,
+        });
     }
 
     /// Adds a zone of the speakers `members`, which leave any other zone.
@@ -1738,7 +1863,47 @@ impl Backend for MockBackend {
     fn select_source(&mut self, id: &str) {
         if self.state.sources.iter().any(|s| s.id == id) {
             self.state.source_id = id.into();
+            self.state.input_pair = 0;
         }
+    }
+
+    fn select_input_pair(&mut self, pair: u16) {
+        let chosen = self
+            .state
+            .sources
+            .iter()
+            .find(|source| source.id == self.state.source_id);
+        if chosen.is_some_and(|source| source.kind == SourceKind::Input) {
+            self.state.input_pair = pair;
+        }
+    }
+
+    fn toggle_mix_app(&mut self, executable: &str) {
+        if let Some(app) = self
+            .state
+            .mix_apps
+            .iter_mut()
+            .find(|app| app.id == executable)
+        {
+            app.checked = !app.checked;
+        }
+        let checked: Vec<&str> = self
+            .state
+            .mix_apps
+            .iter()
+            .filter(|app| app.checked)
+            .map(|app| app.id.as_str())
+            .collect();
+        // Two apps make a mix, as the real backend's source key shows it.
+        self.state.source_id = if checked.len() > 1 {
+            format!("mix:only:{}", checked.join(","))
+        } else {
+            "system".into()
+        };
+    }
+
+    fn set_mix_all_except(&mut self, on: bool) {
+        self.state.mix_all_except = on;
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -1752,6 +1917,17 @@ impl Backend for MockBackend {
     fn set_speaker_enabled(&mut self, id: &str, on: bool) {
         if let Some(speaker) = self.speaker_mut(id) {
             speaker.enabled = on;
+        }
+        // Like the adapter: an unpaired speaker that asks for a code prompts for it.
+        if let Some(speaker) = self.state.speaker(id).filter(|speaker| {
+            on && speaker.availability == Availability::NeedsCode && !speaker.paired
+        }) {
+            self.state.pin_prompt = Some(PinPrompt {
+                speaker_id: speaker.id.clone(),
+                name: speaker.name.clone(),
+                phase: PinPhase::Ready,
+                wrong_pin: false,
+            });
         }
         // Like the Mac: turning a speaker on starts streaming.
         if on {
@@ -1818,12 +1994,19 @@ impl Backend for MockBackend {
     }
 
     fn toggle_zone(&mut self, id: &str) {
+        self.toggle_zone_from_phone(id, &[]);
+    }
+
+    fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]) {
         let Some(zone) = self.state.zones.iter().find(|z| z.id == id).cloned() else {
             return;
         };
         let turn_on = self.state.zone_state(&zone).click_turns_on();
         let mut cast_on = false;
         for member in &zone.members {
+            if keep_off.contains(member) {
+                continue;
+            }
             let Some(speaker) = self.speaker_mut(member) else {
                 continue;
             };
@@ -2000,12 +2183,17 @@ impl Backend for MockBackend {
     }
 
     fn recall_preset(&mut self, id: &str) {
+        self.recall_preset_from_phone(id, &[]);
+    }
+
+    fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]) {
         let Some(preset) = self.presets.iter().find(|preset| preset.id == id).cloned() else {
             return;
         };
         let mut left_off = Vec::new();
         let mut members = Vec::new();
-        for member in &preset.members {
+        // A phone's recall leaves the members that ask for a code off (S257).
+        for member in preset.members.iter().filter(|m| !keep_off.contains(&m.key)) {
             if let Some(hidden) = self.state.hidden.iter().find(|h| h.id == member.key) {
                 left_off.push((hidden.name.clone(), PresetLeftOff::Hidden));
             } else if self.state.speaker(&member.key).is_some() {
@@ -2017,8 +2205,18 @@ impl Backend for MockBackend {
         let nothing_changed = members.is_empty();
         if !nothing_changed {
             for speaker in &mut self.state.speakers {
-                if !speaker.is_reference() {
-                    speaker.enabled = members.iter().any(|(key, _)| *key == speaker.id);
+                if !speaker.is_reference() && !members.iter().any(|(key, _)| *key == speaker.id) {
+                    speaker.enabled = false;
+                }
+            }
+            // As its own switch does, so one that asks for a code asks.
+            for (key, _) in &members {
+                if self
+                    .state
+                    .speaker(key)
+                    .is_some_and(|speaker| !speaker.enabled)
+                {
+                    self.set_speaker_enabled(key, true);
                 }
             }
             for (key, volume) in members {
@@ -2086,7 +2284,7 @@ impl Backend for MockBackend {
 }
 
 /// The curve the equalizer picker shows: the first preset, then the first
-/// saved curve, with the current gains (spec S242).
+/// saved curve, with the current gains (spec S270).
 pub fn shown_curve(state: &AppState) -> Option<CurveMatch> {
     eq::matching_curve(&state.equalizer.gains_db, &state.equalizer_curves)
 }
@@ -2165,6 +2363,34 @@ mod tests {
         // Hidden or minimized: what was kept stays.
         let kept = Some(frame(100, 1000.0, true));
         assert_eq!(frame_to_keep(MainWindowShows::Not, kept), kept);
+    }
+
+    #[test]
+    fn the_flyout_says_so_when_only_connected_speakers_are_hidden() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:1", "Zone 1", &[]);
+        let connected: Vec<String> = backend
+            .snapshot()
+            .speakers
+            .iter()
+            .filter(|s| !s.kind.is_this_pc())
+            .map(|s| s.id.clone())
+            .collect();
+        for id in &connected {
+            backend.hide_speaker(id, "AirPlay");
+        }
+        let state = backend.snapshot();
+        assert!(!state.connected_all_hidden(), "a zone is still listed");
+        backend.delete_zone("zone:1");
+        let state = backend.snapshot();
+        assert!(state.connected_all_hidden());
+        assert!(!state.all_hidden(), "the PC's own speakers are listed");
+
+        backend.unhide_speaker(&connected[0]);
+        assert!(!backend.snapshot().connected_all_hidden());
+        let mut only_this_pc = MockBackend::new();
+        only_this_pc.hide_speaker("local:headphones", "Headphones");
+        assert!(!only_this_pc.snapshot().connected_all_hidden());
     }
 
     #[test]
