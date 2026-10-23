@@ -6281,6 +6281,52 @@ mod tests {
         assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
     }
 
+    /// What the dialog's two live regions hold, in order.
+    fn cast_address_said(app: &App) -> (String, String) {
+        let dialog = &app.cast_address_dialog;
+        (dialog.get_said_odd().into(), dialog.get_said_even().into())
+    }
+
+    #[test]
+    fn every_turned_down_address_is_announced_even_with_the_same_reason() {
+        let app = app_over(MockBackend::new());
+        let invalid: String = app.strings().get_cast_address_invalid().into();
+        let not_found: String = app.strings().get_cast_address_not_found().into();
+        app.main.invoke_cast_add_address_requested();
+        let window = app.cast_address_dialog.window();
+        assert_eq!(cast_address_said(&app), (String::new(), String::new()));
+
+        type_text(window, "not an address");
+        press(window, Key::Return);
+        assert_eq!(cast_address_said(&app), (invalid.clone(), String::new()));
+
+        // The same reason again moves to the other region, which Narrator
+        // reads as new; text that only stayed the same it would skip.
+        type_text(window, "still not one");
+        press(window, Key::Return);
+        assert_eq!(cast_address_said(&app), (String::new(), invalid.clone()));
+
+        press(window, Key::Return);
+        assert_eq!(
+            cast_address_said(&app),
+            (invalid, String::new()),
+            "Enter on the same address"
+        );
+
+        type_text(window, "speaker.invalid");
+        press(window, Key::Return);
+        assert_eq!(cast_address_said(&app), (String::new(), not_found));
+
+        press(window, Key::Escape);
+        assert_eq!(cast_address_said(&app), (String::new(), String::new()));
+        app.main.invoke_cast_add_address_requested();
+        assert_eq!(
+            cast_address_said(&app),
+            (String::new(), String::new()),
+            "reopened with nothing to say"
+        );
+    }
+
     #[test]
     fn escape_on_the_add_by_address_dialog_cancels_from_the_field_or_a_button() {
         for tabs in [0, 1, 2] {
