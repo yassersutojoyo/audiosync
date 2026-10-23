@@ -708,13 +708,20 @@ impl Drop for RemoteServer {
 }
 
 fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
+    let mut refused = VecDeque::new();
     while !shared.stopped.load(Ordering::SeqCst) {
+        drain_refused(&mut refused);
         let mut idle = true;
         for listener in listeners {
             match listener.accept() {
                 Ok((stream, peer)) => {
                     idle = false;
-                    admit(stream, peer, shared);
+                    if let Some(stream) = admit(stream, peer, shared) {
+                        if refused.len() >= MAX_REFUSED {
+                            refused.pop_front();
+                        }
+                        refused.push_back((stream, Instant::now() + REFUSED_LINGER));
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => idle = false,
@@ -727,7 +734,32 @@ fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
     }
 }
 
-fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
+/// Reads and drops what refused clients still send; closes each once the
+/// client closed its side or its time is up.
+fn drain_refused(refused: &mut VecDeque<(TcpStream, Instant)>) {
+    let now = Instant::now();
+    let mut buffer = [0u8; 1024];
+    refused.retain_mut(|(stream, until)| {
+        if now >= *until {
+            return false;
+        }
+        for _ in 0..8 {
+            match stream.read(&mut buffer) {
+                Ok(0) => return false,
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return false,
+            }
+        }
+        true
+    });
+}
+
+/// Starts serving a connection, or answers 503 and hands the connection
+/// back to linger: closing with an unread request would reset it, and a
+/// reset can discard the answer before the client reads it.
+fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) -> Option<TcpStream> {
     let from = peer.ip().to_canonical();
     let admitted = stream
         .local_addr()
@@ -735,7 +767,7 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
     if !admitted {
         shared.report(ServerEvent::NotPrivate { from });
         let _ = stream.shutdown(Shutdown::Both);
-        return;
+        return None;
     }
     // Accepted sockets inherit the listener's non-blocking mode on WinSock and BSD.
     let _ = stream.set_nonblocking(false);
@@ -770,10 +802,11 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
             &Response::error(&text::busy()),
             &shared.content_security_policy,
         );
-        return;
+        let _ = stream.shutdown(Shutdown::Write);
+        return stream.set_nonblocking(true).is_ok().then_some(stream);
     }
     let Ok(handle) = stream.try_clone() else {
-        return;
+        return None;
     };
     let slot = Slot {
         peer,
@@ -808,6 +841,7 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
             thread,
         });
     }
+    None
 }
 
 /// What a request gets: one response, or the event stream.

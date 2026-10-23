@@ -943,32 +943,43 @@ fn a_full_server_makes_room_by_closing_the_oldest_reserved_waiter() {
     let first = start_with(config.clone());
     let token = pair(&first);
     first.server.stop();
-    let remote = start_with(Config {
-        capacity: Capacity {
-            connections: 2,
-            per_peer: 3,
-            reserved: 1,
-            reserved_per_peer: 2,
-        },
-        ..config
-    });
-    remote.server.publish(sample());
-    // Accepted in order: the first takes the shared slot, the second the reserved one.
-    let _shared = idle_connection(&remote);
-    let mut waiter = idle_connection(&remote);
-    let reply = get(&remote, "/api/state", Some(&token));
-    assert_eq!(reply.status, 200, "{}", reply.body);
-    let started = Instant::now();
-    assert_eq!(read_all(&mut waiter), "");
-    assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "the waiter stayed"
-    );
+    let capacity = Capacity {
+        connections: 2,
+        per_peer: 3,
+        reserved: 1,
+        reserved_per_peer: 2,
+    };
+    for round in 1.. {
+        let remote = start_with(Config {
+            capacity,
+            ..config.clone()
+        });
+        remote.server.publish(sample());
+        // Accepted in order: the first takes the shared slot, the second the reserved one.
+        let _shared = idle_connection(&remote);
+        let opened = Instant::now();
+        let mut waiter = idle_connection(&remote);
+        let reply = get(&remote, "/api/state", Some(&token));
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        // Closed unanswered; a waiter left in place would get a 503 after 1 s.
+        let answer = read_all(&mut waiter);
+        if answer.is_empty() {
+            break;
+        }
+        // On a starved run the waiter's 1 s ran out before the paired request came.
+        assert!(opened.elapsed() >= Duration::from_secs(1), "{answer:?}");
+        assert!(round < 5, "every round outlasted the waiter's time");
+    }
 }
 
 #[test]
 fn a_busy_answer_arrives_after_a_request_the_server_never_read() {
-    let remote = start("busy-linger");
+    let timing = Timing {
+        // The idle connections must outlast every round on a slow run.
+        request: Duration::from_secs(60),
+        ..Timing::default()
+    };
+    let remote = start_with(config("busy-linger", timing));
     let _idle: Vec<TcpStream> = (0..8).map(|_| idle_connection(&remote)).collect();
     let raw = format!(
         "GET /api/state HTTP/1.1\r\nHost: {}\r\nX-Padding: {}\r\n\r\n",
