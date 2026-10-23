@@ -721,7 +721,9 @@ mod tests {
     #[test]
     fn a_write_keeps_to_its_deadline_across_partial_sends() {
         let (mut tcp, _device) = connected();
-        let limit = Duration::from_millis(200);
+        // A full second keeps macOS runner jitter (100 ms seen) inside the
+        // margin, while a retry that waited the whole limit again would not be.
+        let limit = Duration::from_secs(1);
         tcp.write_until = Some(Instant::now() + limit);
         let started = Instant::now();
         let chunk = vec![0u8; 1 << 16];
