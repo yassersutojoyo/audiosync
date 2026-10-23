@@ -333,6 +333,9 @@ struct CastModel {
     /// The offset the device memory holds, per device, in ms. 0 ms counts as
     /// none: the sender can't forget an offset, so Undo leaves 0 ms behind.
     private(set) var offsets: [String: Double] = [:]
+    /// Devices whose offset the app wrote this run. Their memory reads are
+    /// ignored, since one taken before the write can arrive after it.
+    private var offsetsWritten: Set<String> = []
     /// The playing group's members as its session last reported them; nil
     /// until it does, and once the session is over.
     private(set) var members: [CastMember]?
@@ -353,7 +356,7 @@ struct CastModel {
     mutating func apply(_ change: CastDeviceChange) -> Bool {
         switch change {
         case .appeared(let device, let offset), .changed(let device, let offset):
-            if let offset { offsets[device.id] = offset > 0 ? offset : nil }
+            if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
             return changed
@@ -538,13 +541,16 @@ struct CastModel {
     mutating func setOffset(_ id: String, ms: Double) -> Double? {
         guard let clamped = Self.clampedOffset(ms), offset(of: id) != clamped else { return nil }
         offsets[id] = clamped > 0 ? clamped : nil
+        offsetsWritten.insert(id)
         return clamped
     }
 
     /// Forgets the offset of `id`, so its next calibration searches the
     /// longest window again; false when none was stored.
     mutating func clearOffset(_ id: String) -> Bool {
-        offsets.removeValue(forKey: id) != nil
+        guard offsets.removeValue(forKey: id) != nil else { return false }
+        offsetsWritten.insert(id)
+        return true
     }
 
     /// An offset in whole ms, clamped to 0 to 20 000; nil when it isn't finite.
