@@ -1154,7 +1154,8 @@ AscCalibrationRun *asc_calibration_sheet_measure_again(const AscCalibrationSheet
  * Puts the row of a Measure Again sheet in place of the old one and frees
  * `again`. False, leaving `sheet` and its rows as they were, for an `again`
  * that was cancelled or ended by a change, one not from this sheet's
- * Measure Again, or a NULL argument; `again` is freed either way.
+ * Measure Again, or a NULL argument; `again` is freed either way, except
+ * when it is `sheet` itself: then false, and nothing is freed.
  */
 bool asc_calibration_sheet_replace(AscCalibrationSheet *sheet, AscCalibrationSheet *again);
 
