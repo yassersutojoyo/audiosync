@@ -5663,6 +5663,61 @@ do {
           "cast address: a name that doesn't resolve or an address where nothing answers is not found, with its own text")
 }
 
+// MARK: Menu bar panel colors: contrast with the material counted as clear
+do {
+    typealias RGBA = (r: Double, g: Double, b: Double, a: Double)
+    func resolved(_ color: NSColor, dark: Bool) -> RGBA {
+        var out: RGBA = (0, 0, 0, 0)
+        NSAppearance(named: dark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
+            let c = color.usingColorSpace(.sRGB)!
+            out = (Double(c.redComponent), Double(c.greenComponent), Double(c.blueComponent), Double(c.alphaComponent))
+        }
+        return out
+    }
+    func over(_ top: RGBA, _ bottom: RGBA) -> RGBA {
+        (top.r * top.a + bottom.r * (1 - top.a), top.g * top.a + bottom.g * (1 - top.a),
+         top.b * top.a + bottom.b * (1 - top.a), 1)
+    }
+    func luminance(_ c: RGBA) -> Double {
+        func channel(_ v: Double) -> Double { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+    func ratio(_ a: RGBA, _ b: RGBA) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    func rgb(_ c: BrandRGB) -> RGBA { (c.red, c.green, c.blue, 1) }
+
+    // Worst case: the material adds nothing, so only the backing (and a row's
+    // 7% hover fill) stands between the content and a black or white window.
+    var worst: [String: Double] = [:]
+    for dark in [false, true] {
+        let ink: RGBA = dark ? (1, 1, 1, 1) : (0, 0, 0, 1)
+        for backdrop in [(0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0, 1.0)] as [RGBA] {
+            let panel = over(resolved(.audioSyncPanelBacking, dark: dark), backdrop)
+            let row = over((ink.r, ink.g, ink.b, 0.07), panel)
+            let pairs: [(String, RGBA, RGBA)] = [
+                // Brand.secondaryText is `.primary` at 70%, and the label color itself is the ink at 85%.
+                ("secondary text", (ink.r, ink.g, ink.b, BrandTokens.Opacity.secondaryText * 0.85), row),
+                ("wordmark sync", resolved(.audioSyncWordmarkSync, dark: dark), panel),
+                ("active blue", resolved(.audioSyncActiveBlue, dark: dark), row),
+                ("teal icon", rgb(dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText), row),
+            ]
+            for (name, color, background) in pairs {
+                let r = ratio(over(color, background), background)
+                worst[name] = min(worst[name] ?? .infinity, r)
+            }
+        }
+    }
+    let summary = worst.keys.sorted().map { String(format: "%@ %.2f", $0, worst[$0]!) }.joined(separator: ", ")
+    check(worst["secondary text"]! >= 4.5, "panel colors: secondary text keeps 4.5:1 over any window", summary)
+    // The wordmark's "sync" and the BrandMark fill are logotypes, exempt from WCAG 1.4.3, so their floor is 3:1.
+    check(worst["wordmark sync"]! >= 3 && worst["active blue"]! >= 3 && worst["teal icon"]! >= 3,
+          "panel colors: the wordmark's sync and the type icons keep 3:1 over any window", summary)
+    check(resolved(.audioSyncWordmarkSync, dark: false).g < resolved(.audioSyncWordmarkSync, dark: true).g,
+          "panel colors: sync is the darker teal on light and the mint on dark")
+}
+
 // MARK: Hidden speakers — out of every list by key, settings kept, back off when shown
 do {
     let t = UIStrings()
