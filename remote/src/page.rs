@@ -136,6 +136,20 @@ mod tests {
     }
 
     #[test]
+    fn the_home_screen_steps_start_hidden_and_name_the_order() {
+        // Hidden in the markup, so a Home Screen app never flashes them before the script runs.
+        let card = PAGE
+            .lines()
+            .find(|line| line.contains("id=\"setup\""))
+            .unwrap();
+        assert!(card.ends_with(" hidden>"));
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("(display-mode: standalone)"));
+        assert!(script.contains("localStorage.setItem(SETUP_HIDDEN_KEY"));
+        assert!(script.contains("Do step 2 before you enter the code"));
+    }
+
+    #[test]
     fn the_icons_are_png_of_their_size() {
         for (icon, size) in [(ICON_180, 180u32), (ICON_512, 512)] {
             assert_eq!(&icon[..8], b"\x89PNG\r\n\x1a\n");
