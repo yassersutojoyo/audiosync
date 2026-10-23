@@ -44,15 +44,15 @@ Tests/bench.sh   # 60 min: writes Tests/baseline/rust.json and the results below
 Tests/soak.sh    # 60 min, judged against that baseline
 ```
 
-Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder under `$TMPDIR`), and both build the Rust core first, since the harness links it. N is at least 1. `soak.sh` also takes `--baseline FILE` (it warns when that baseline names another engine) and `--device NAME` (AirPlay, aggregate and multi-output devices are refused). `bench.sh` takes `--baseline-out FILE` and `--no-doc`; without `--no-doc` it rewrites the results between the marker comments below from the baseline, so the table always matches it. `--doc-only` just rewrites that table. It needs `python3`, which comes with the Command Line Tools.
+Both take `--minutes N` and `--out DIR` (by default the logs go to a new folder under `$TMPDIR`), and both build the Rust core first, since the harness links it. N is at least 1. `soak.sh` also takes `--outputs N` (0, 1 or 2 local outputs, 2 by default), `--delay-ms MS` (the delay of every output, a whole number from 0 to 20000, 2000 by default), `--baseline FILE` (it warns when that baseline names another engine) and `--device NAME` (AirPlay, aggregate and multi-output devices are refused). `bench.sh` takes `--baseline-out FILE` and `--no-doc`; without `--no-doc` it rewrites the results between the marker comments below from the baseline, so the table always matches it. `--doc-only` just rewrites that table. It needs `python3`, which comes with the Command Line Tools.
 
-`summary.txt` in the output folder has the verdict. `soak.sh` exits 0 on PASS, 1 on FAIL, 2 when it can't start (the harness doesn't compile, fewer than two usable outputs, or a baseline that lacks a metric the run is judged on) and 3 when there's no baseline file. It warns, on stderr and in the summary, when the baseline came from another Mac model, another macOS version or other outputs. Ctrl-C stops the harness too.
+`summary.txt` in the output folder has the verdict. `soak.sh` exits 0 on PASS, 1 on FAIL, 2 when it can't start (the harness doesn't compile, fewer usable outputs than `--outputs` asks for, or a baseline that lacks a metric the run is judged on) and 3 when there's no baseline file. It warns, on stderr and in the summary, when the baseline came from another Mac model, another macOS version or other outputs. Ctrl-C stops the harness too.
 
 `Tests/run-tests.sh` only compiles the harness and checks its memory rule on made-up series (`Tests/soakrulestest.swift`); it never runs these.
 
 ## Thresholds
 
-`soak.sh` plays through two local outputs and compares the numbers with the baseline's `two_local` run:
+`soak.sh` plays through two local outputs by default and compares the numbers with the baseline's `two_local` run. With one output it skips inter-output drift; with none it judges only memory and CPU:
 
 - Event rates (local dropouts, local starved renders, local drift corrections): the allowed rate is max(2 × baseline, baseline + 5) per hour. The run passes when its count is at most that rate times the hours it ran, rounded up, so a short run still gets room for one event.
 - Inter-output drift and local lag error (the worst 10-second mean, as an absolute value): at most the baseline plus 50 ms. That's one drift-correction dead band: each output is held within it of its target, so going past baseline plus 50 ms means correction isn't keeping up.
