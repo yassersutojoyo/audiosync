@@ -9,11 +9,16 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
-use audiosync_remote::{Command, DEFAULT_PORT, NowPlaying, Speaker as RemoteSpeaker, State};
+use audiosync_remote::{
+    Command, DEFAULT_PORT, NowPlaying, Source as RemoteSource, SourceKind as RemoteSourceKind,
+    Speaker as RemoteSpeaker, State,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::now_playing_card::{CardTrack, app_name};
-use crate::ui_model::{AppState, Availability, MAX_DELAY_MS, MIN_DELAY_MS, Speaker, SpeakerKind};
+use crate::ui_model::{
+    AppState, Availability, MAX_DELAY_MS, MIN_DELAY_MS, SourceKind, Speaker, SpeakerKind,
+};
 
 /// The lowest port the setting takes: below it are the well-known services.
 pub const MIN_PORT: u16 = 1024;
@@ -65,6 +70,8 @@ pub trait RowText {
     fn note(&self, state: &AppState, speaker: &Speaker) -> String;
     /// The note of a speaker that asks for a code, which the page can't turn on.
     fn turn_on_at_pc(&self) -> String;
+    /// The whole system's name in the source picker; the backend's is English.
+    fn source_system(&self) -> String;
 }
 
 /// A speaker that would ask for a PIN or password when turned on: the prompt
@@ -130,7 +137,8 @@ pub fn listed(state: &AppState, listed: impl Fn(&Speaker) -> bool) -> Vec<&Speak
 }
 
 /// What the page shows for `state`: the speakers the window lists, the
-/// master volume, the track on the Now Playing card, and the computer's name.
+/// master volume, the track on the Now Playing card, the source picker's
+/// entries in its order, and the computer's name.
 pub fn snapshot(
     state: &AppState,
     shown: impl Fn(&Speaker) -> bool,
@@ -163,6 +171,25 @@ pub fn snapshot(
             }
         })
         .collect();
+    let sources = state
+        .sources
+        .iter()
+        .map(|source| RemoteSource {
+            id: source.id.clone(),
+            name: match source.kind {
+                SourceKind::System => text.source_system(),
+                SourceKind::App | SourceKind::Input => source.name.clone(),
+            },
+            kind: match source.kind {
+                SourceKind::System => RemoteSourceKind::System,
+                SourceKind::App => RemoteSourceKind::App,
+                SourceKind::Input => RemoteSourceKind::Input,
+            },
+            // The window's picker refuses none of its entries.
+            available: true,
+            notice: None,
+        })
+        .collect();
     State {
         computer_name: computer_name.to_owned(),
         master_volume: volume(state.master_volume),
@@ -172,6 +199,8 @@ pub fn snapshot(
             source: app_name(&track.app_id),
         }),
         speakers,
+        sources,
+        source_id: Some(state.source_id.clone()),
     }
 }
 
@@ -197,6 +226,10 @@ pub enum Action {
     Master {
         volume: f64,
     },
+    /// A pick in the source picker.
+    Source {
+        id: String,
+    },
 }
 
 /// Why a command changed nothing.
@@ -204,6 +237,8 @@ pub enum Action {
 pub enum Refusal {
     /// No listed speaker has that ID (any more).
     UnknownSpeaker,
+    /// The source picker doesn't list that ID (any more).
+    UnknownSource,
     /// The speaker can't be driven now, or not that way.
     Unavailable,
     /// A volume or delay outside what the control takes.
@@ -226,6 +261,16 @@ pub fn actions(
                 return Err(Refusal::OutOfRange);
             }
             Ok(vec![Action::Master { volume: *volume }])
+        }
+        Command::Source { id } => {
+            if !state.sources.iter().any(|source| &source.id == id) {
+                return Err(Refusal::UnknownSource);
+            }
+            Ok(if *id == state.source_id {
+                Vec::new()
+            } else {
+                vec![Action::Source { id: id.clone() }]
+            })
         }
         Command::Speaker { id, change } => {
             let speaker = state
@@ -403,6 +448,69 @@ mod tests {
         fn turn_on_at_pc(&self) -> String {
             "Turn it on at the PC".to_owned()
         }
+        fn source_system(&self) -> String {
+            "Alle Systemaudio".to_owned()
+        }
+    }
+
+    fn with_sources() -> AppState {
+        let source = |id: &str, name: &str, kind| crate::ui_model::Source {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            kind,
+        };
+        AppState {
+            sources: vec![
+                source("system", "All System Audio", SourceKind::System),
+                source("app:42:Spotify.exe", "Spotify", SourceKind::App),
+                source("input:{mic}", "USB Mic", SourceKind::Input),
+            ],
+            source_id: "app:42:Spotify.exe".to_owned(),
+            ..state()
+        }
+    }
+
+    #[test]
+    fn the_snapshot_lists_the_pickers_sources_in_its_order_with_the_current_one() {
+        let snapshot = snapshot(&with_sources(), not_virtual, None, "Studio PC", &Text);
+        let listed: Vec<(&str, &str, RemoteSourceKind)> = snapshot
+            .sources
+            .iter()
+            .map(|source| (source.id.as_str(), source.name.as_str(), source.kind))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("system", "Alle Systemaudio", RemoteSourceKind::System),
+                ("app:42:Spotify.exe", "Spotify", RemoteSourceKind::App),
+                ("input:{mic}", "USB Mic", RemoteSourceKind::Input),
+            ]
+        );
+        assert!(snapshot.sources.iter().all(|source| source.available));
+        assert_eq!(snapshot.source_id.as_deref(), Some("app:42:Spotify.exe"));
+        // What the server serves: the JSON round trip keeps the current source.
+        let served = State::from_json(&snapshot.to_json(1)).unwrap();
+        assert_eq!(served.source_id.as_deref(), Some("app:42:Spotify.exe"));
+    }
+
+    #[test]
+    fn a_source_pick_is_the_pickers_and_a_repeat_or_an_unknown_one_does_nothing() {
+        let state = with_sources();
+        let pick = |id: &str| Command::Source { id: id.to_owned() };
+        assert_eq!(
+            actions(&pick("input:{mic}"), &state, not_virtual),
+            Ok(vec![Action::Source {
+                id: "input:{mic}".to_owned()
+            }])
+        );
+        assert_eq!(
+            actions(&pick("app:42:Spotify.exe"), &state, not_virtual),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            actions(&pick("app:7:Gone.exe"), &state, not_virtual),
+            Err(Refusal::UnknownSource)
+        );
     }
 
     fn speaker(id: &str, kind: SpeakerKind, delay: Option<f64>) -> Speaker {

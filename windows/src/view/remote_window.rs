@@ -148,6 +148,10 @@ impl RowText for StringsText<'_> {
         self.0.get_remote_turn_on_at_pc().into()
     }
 
+    fn source_system(&self) -> String {
+        self.0.get_source_system().into()
+    }
+
     fn kind(&self, speaker: &Speaker) -> String {
         self.0
             .invoke_speaker_kind(speaker_kind(speaker.kind))
@@ -426,6 +430,7 @@ impl App {
                             Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
                             Action::AirPlayDelay { ms } => backend.set_airplay_delay(ms),
                             Action::Master { volume } => backend.set_master_volume(volume),
+                            Action::Source { id } => backend.select_source(&id),
                         }
                     }
                 }
@@ -855,6 +860,21 @@ mod tests {
         assert_eq!(turned.volume, 20.0);
         assert!(state.running, "turning a speaker on starts streaming");
         assert_eq!(state.master_volume, 40.0);
+    }
+
+    #[test]
+    fn a_source_picked_on_the_page_is_the_windows_pick() {
+        let app = over_loopback(MockBackend::new());
+        let sender = {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            app.remote.borrow_mut().commands = Some(receiver);
+            sender
+        };
+        let pick = |id: &str| audiosync_remote::Command::Source { id: id.to_owned() };
+        sender.send(pick("input:line")).expect("sent");
+        sender.send(pick("app:gone")).expect("sent");
+        app.poll_remote();
+        assert_eq!(app.snapshot().source_id, "input:line");
     }
 
     #[test]
