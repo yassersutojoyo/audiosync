@@ -16,7 +16,9 @@ import Foundation
 // longer current is dropped, so a late end never turns off a speaker the
 // user turned on again.
 
-/// A Cast device's ID as the app's rows and notices use it.
+/// A Cast device's ID as the app's rows and notices use it ("cast:<device
+/// ID>"), and its speaker key ("cc:<device ID>", S243) that names, groups and
+/// presets keep.
 enum CastID {
     static let prefix = "cast:"
 
@@ -25,6 +27,20 @@ enum CastID {
     static func device(_ appID: String) -> String? {
         appID.hasPrefix(prefix) ? String(appID.dropFirst(prefix.count)) : nil
     }
+
+    static func key(_ device: String) -> String { SpeakerKey.make(id: device, kind: .cast) }
+
+    /// The device ID of a Cast speaker's key; nil for any other key.
+    static func device(key: String) -> String? {
+        guard let (id, kind) = SpeakerKey.parseAny(key), kind == .cast else { return nil }
+        return id
+    }
+
+    /// A row's app ID as its key; one without the "cast:" prefix is taken as the device ID itself.
+    static func key(appID: String) -> String { key(device(appID) ?? appID) }
+
+    /// A Cast key as the row's app ID; nil for any other key.
+    static func app(key: String) -> String? { device(key: key).map { app($0) } }
 }
 
 struct CastDevice: Equatable {

@@ -245,13 +245,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         airplayVolume = saved.airplayVolumes
         groups = saved.groups
         autoConnect = saved.autoConnect
-        speakerNames = saved.speakerNames
+        speakerNames = saved.speakerNames.castKeysMoved()
         showVirtualDevices = saved.showVirtualDevices
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits
         airPlay2 = saved.airPlay2
         airPlay2AtLaunch = saved.airPlay2
         super.init()
+        // didSet doesn't run in init, so the moved Cast names are saved here, once.
+        if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
         _ = castModel.setMaster(saved.master)
     }
 

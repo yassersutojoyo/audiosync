@@ -131,6 +131,20 @@ check(AppAppearance.light.appearanceName == .aqua && AppAppearance.dark.appearan
 check(SpeakerKey.make(id: "123", airplay: true) == "ap:123", "speaker key: AirPlay prefix")
 check(SpeakerKey.parse("lc:58-18:output").map { $0.id == "58-18:output" && !$0.airplay } == true, "speaker key: local parse keeps colons")
 check(SpeakerKey.parse("zz:1") == nil, "speaker key: unknown prefix rejected")
+check(SpeakerKey.parseAny("CC:tv") == nil && SpeakerKey.parseAny("cast:tv") == nil && SpeakerKey.parseAny("tv") == nil
+      && SpeakerKey.make(id: "manual:203.0.113.20:8009", kind: .cast) == "cc:manual:203.0.113.20:8009"
+      && SpeakerKey.parseAny("cc:manual:203.0.113.20:8009").map { $0.id == "manual:203.0.113.20:8009" && $0.kind == .cast } == true
+      && SpeakerKey.parse("cc:tv") == nil,
+      "speaker key: Cast prefix, colons kept")
+check(CastID.key(appID: CastID.app("nest-1")) == "cc:nest-1" && CastID.app(key: "cc:nest-1") == "cast:nest-1"
+      && CastID.device(key: "cc:nest-1") == "nest-1" && CastID.device(key: "lc:cast:nest-1") == nil
+      && SpeakerKey.of(id: "cast:nest-1", tag: .cast) == "cc:nest-1"
+      && SpeakerKey.of(id: "native:A1", tag: .airplay) == "ap:native:A1" && SpeakerKey.of(id: "usb-1", tag: .usb) == "lc:usb-1",
+      "speaker key: Cast app ID maps to its key and back")
+check(["ap:native:pair:5A1B-77", "ap:pair:5A1B-77", "ap:native:theater:9F00", "ap:theater:9F00"].allSatisfy { key in
+          SpeakerKey.parseAny(key).map { SpeakerKey.make(id: $0.id, kind: $0.kind) == key && $0.kind == .airplay } == true
+      } && SpeakerKey.parse("ap:native:pair:5A1B-77").map { $0.id == "native:pair:5A1B-77" && $0.airplay } == true,
+      "speaker key: pair and theater targets round-trip")
 let g = SpeakerGroup(id: "g", name: "Room", members: ["ap:1", "lc:2"])
 let decoded = try! JSONDecoder().decode(SpeakerGroup.self, from: try! JSONEncoder().encode(g))
 check(decoded == g, "groups: JSON round-trip")
@@ -3053,6 +3067,14 @@ do {
     stored.values[AppSettings.Keys.speakerNames] = ["a": 5, "b": "  ", "c": "Den"] as [String: Any]
     check(store.load().speakerNames.custom == ["c": "Den"],
           "speaker names: a stored entry that isn't a name is skipped")
+
+    let before = SpeakerNames(custom: ["lc:cast:nest-1": "Den", "lc:cast:tv": "Old", "cc:tv": "Lounge",
+                                       "lc:cast:": "Blank ID", "lc:usb-uid": "Desk"])
+    let moved = before.castKeysMoved()
+    check(moved.custom == ["cc:nest-1": "Den", "cc:tv": "Lounge", "lc:usb-uid": "Desk"]
+              && moved.castKeysMoved() == moved && SpeakerNames().castKeysMoved() == SpeakerNames()
+              && moved.shown(key: CastID.key("nest-1"), system: "Nest") == "Den",
+          "speaker names: Cast names move from lc:cast: once", "moved: \(moved.custom)")
 
     let deskTarget = SpeakerRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
     let kitchenTarget = SpeakerRename.Target(id: "hp-1", key: homePod, system: "HomePod")

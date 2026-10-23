@@ -46,8 +46,8 @@ final class AppModel: ObservableObject {
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
         var isCast: Bool { tag == .cast }
-        /// Stable key across both kinds, used by groups and auto-connect.
-        var key: String { SpeakerKey.make(id: id, airplay: isAirPlay) }
+        /// Stable key across every kind, used by names, groups and auto-connect.
+        var key: String { SpeakerKey.of(id: id, tag: tag) }
         var isRenamed: Bool { !systemName.isEmpty && name != systemName }
         /// The system name when renamed, for VoiceOver labels.
         var renamedFrom: String? { isRenamed ? systemName : nil }
