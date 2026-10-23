@@ -974,6 +974,56 @@ check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: nil) == .waiting,
 check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: 2) == .waiting, "capture: playing only briefly → still waiting")
 check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: CaptureCheck.playingGrace) == .notWorking, "capture: playing for the grace period with no frames → not working")
 check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: nil) != .notWorking, "capture: a paused or unknown source never blames the permission")
+do {
+    // Seen on a Mac: right after launch, All System Audio silent, and Music
+    // reporting a paused local file as playing, its position standing still.
+    var watch = CaptureWatch()
+    var blamed = false
+    for step in 0..<15 {
+        let uptime = 100 + 2 * Double(step)
+        let stuck = NowPlayingMonitor.Position(elapsed: 42, length: 200, readAt: uptime - 0.3, playing: true)
+        if watch.verdict(at: uptime, framesCaptured: 0, heardAudio: false,
+                         reportsPlaying: true, position: stuck) == .notWorking { blamed = true }
+    }
+    check(!blamed, "capture: a track reported playing whose position stands still never blames the permission")
+}
+do {
+    var watch = CaptureWatch()
+    var blamed = false
+    for step in 0..<15 {
+        let uptime = 100 + 2 * Double(step)
+        let moving = NowPlayingMonitor.Position(elapsed: 10 + 2 * Double(step), length: 200,
+                                                readAt: uptime - 0.3, playing: true)
+        if watch.verdict(at: uptime, framesCaptured: 0, heardAudio: true,
+                         reportsPlaying: true, position: moving) == .notWorking { blamed = true }
+    }
+    check(!blamed, "capture: once this app run heard audio, later silence never blames the permission")
+}
+do {
+    var watch = CaptureWatch()
+    var blamed = false
+    for step in 0..<15 {
+        let uptime = 100 + 2 * Double(step)
+        if watch.verdict(at: uptime, framesCaptured: 0, heardAudio: false,
+                         reportsPlaying: true, position: nil) == .notWorking { blamed = true }
+    }
+    check(!blamed, "capture: a playing report with no position to watch never blames the permission")
+}
+do {
+    var watch = CaptureWatch()
+    var verdicts: [CaptureCheck] = []
+    for step in 0..<15 {
+        let uptime = 100 + 2 * Double(step)
+        let moving = NowPlayingMonitor.Position(elapsed: 10 + 2 * Double(step), length: 200,
+                                                readAt: uptime - 0.3, playing: true)
+        verdicts.append(watch.verdict(at: uptime, framesCaptured: 0, heardAudio: false,
+                                      reportsPlaying: true, position: moving))
+    }
+    check(verdicts.first == .waiting && verdicts.last == .notWorking,
+          "capture: a track that keeps advancing with nothing ever captured blames the permission after the grace period")
+    check(watch.verdict(at: 200, framesCaptured: 512, heardAudio: false, reportsPlaying: true, position: nil) == .flowing,
+          "capture: frames arriving clear the verdict")
+}
 
 // MARK: Capture stage — stereo from any input layout, a rate for every session, an app tap that follows the app
 do {

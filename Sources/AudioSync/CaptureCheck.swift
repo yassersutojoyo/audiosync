@@ -30,6 +30,25 @@ enum CaptureCheck: Equatable {
     }
 }
 
+/// One session's capture check over time: turns the periodic Now Playing
+/// readings and the capture counters into a `CaptureCheck`.
+struct CaptureWatch {
+    private var playingSince: TimeInterval?
+
+    /// - Parameters:
+    ///   - uptime: `ProcessInfo.systemUptime` of this check.
+    ///   - framesCaptured: frames written since this session started.
+    ///   - heardAudio: some captured frame in this app run was not silent.
+    ///   - reportsPlaying: Now Playing reports the source as playing.
+    ///   - position: the latest Now Playing reading's position, if any.
+    mutating func verdict(at uptime: TimeInterval, framesCaptured: Int64, heardAudio: Bool,
+                          reportsPlaying: Bool, position: NowPlayingMonitor.Position?) -> CaptureCheck {
+        if reportsPlaying { playingSince = playingSince ?? uptime } else { playingSince = nil }
+        return CaptureCheck.verdict(framesCaptured: framesCaptured,
+                                    knownPlayingFor: playingSince.map { uptime - $0 })
+    }
+}
+
 /// The capture's sample rate changed under a running session: the tap's format
 /// can follow an output device's rate, and an input device can be switched to
 /// another rate.
