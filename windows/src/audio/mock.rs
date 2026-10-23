@@ -137,6 +137,10 @@ struct CaptureLink {
     equalizer: EqProcessor,
     /// The network senders' feeds, until the capture stops.
     feeds: Feeds,
+    /// A mix lacks the stream of one of its apps.
+    missing: bool,
+    /// How often a mix was moved onto new apps.
+    retargets: u32,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -168,7 +172,13 @@ impl CaptureHandle for MockCapture {
             return false;
         }
         link.target = target.clone();
+        link.retargets += 1;
+        link.missing = false;
         true
+    }
+
+    fn holds_all(&self) -> bool {
+        !lock(&self.link).missing
     }
 }
 
@@ -329,6 +339,19 @@ impl MockDriver {
     /// them.
     pub fn capture_target(&self) -> Option<CaptureTarget> {
         self.capture.as_ref().map(|link| lock(link).target.clone())
+    }
+
+    /// The running mix loses the stream of one of its apps, as when its
+    /// loopback fails to open.
+    pub fn lose_mix_stream(&self) {
+        if let Some(link) = &self.capture {
+            lock(link).missing = true;
+        }
+    }
+
+    /// How often the running mix was moved onto new apps.
+    pub fn capture_retargets(&self) -> u32 {
+        self.capture.as_ref().map_or(0, |link| lock(link).retargets)
     }
 
     /// Whether the running capture feeds the AirPlay sender.
@@ -604,6 +627,8 @@ impl Driver for MockDriver {
             writer: Some(writer),
             equalizer,
             feeds,
+            missing: false,
+            retargets: 0,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })

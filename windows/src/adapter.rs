@@ -233,7 +233,7 @@ impl Chosen {
             Chosen::Mix {
                 mode: MixMode::AllExcept,
                 apps,
-            } => format!("every app except {}", mix_names(apps)),
+            } => format!("All apps except {}", mix_names(apps)),
         }
     }
 

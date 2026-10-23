@@ -171,6 +171,12 @@ pub trait CaptureHandle {
     fn retarget(&mut self, _target: &CaptureTarget) -> bool {
         false
     }
+
+    /// Whether a mix has a stream for each of its apps; true for any other
+    /// capture, and while it can't be told.
+    fn holds_all(&self) -> bool {
+        true
+    }
 }
 
 /// A running output. Dropping it stops the output at once and waits for its
@@ -1768,6 +1774,13 @@ impl<D: Driver> Controller<D> {
             return;
         };
         if same_mix(&target, &running) {
+            // An app whose loopback failed to open, or failed while it runs,
+            // is tried again.
+            if let Some(session) = self.session.as_mut()
+                && !session.capture.holds_all()
+            {
+                session.capture.retarget(&target);
+            }
             return;
         }
         self.log.log(|| {
@@ -2817,7 +2830,7 @@ fn describe_source(source: &SourceId) -> String {
             executables.join(", ")
         ),
         SourceId::AppsExcept { executables } => {
-            format!("every app except {}", executables.join(", "))
+            format!("All apps except {}", executables.join(", "))
         }
         SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
     }
@@ -3253,6 +3266,30 @@ mod tests {
         assert_eq!(backend.driver().capture_target(), Some(included(&[3000])));
         assert_eq!(playing(&backend), outputs);
         assert_eq!(backend.running_source(), Some(source));
+    }
+
+    #[test]
+    fn a_mix_tries_again_an_app_whose_stream_it_lost() {
+        let mut backend = backend();
+        let source = SourceId::AppsExcept {
+            executables: vec!["PLAYER.exe".to_owned()],
+        };
+        backend.start(&source).unwrap();
+        backend.add_app(3000, "video.exe");
+        backend.poll();
+        assert_eq!(backend.driver().capture_retargets(), 1);
+        backend.driver().lose_mix_stream();
+        backend.mix_checked = None;
+        backend.poll();
+        assert_eq!(backend.driver().capture_retargets(), 2, "asked again");
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        backend.mix_checked = None;
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_retargets(),
+            2,
+            "a mix that holds every app is left alone"
+        );
     }
 
     #[test]

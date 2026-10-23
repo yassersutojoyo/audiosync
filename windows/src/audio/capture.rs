@@ -732,7 +732,7 @@ const IDLE_AFTER_HNS: u64 = 250_000;
 /// In a gap, silence is written up to this long before now, 10 ms, so a
 /// packet that starts the audio again rarely finds its first frames filled
 /// already.
-const IDLE_LAG_HNS: u64 = 100_000;
+pub(crate) const IDLE_LAG_HNS: u64 = 100_000;
 
 /// The most silence one gap writes, 21 s: more than the longest delay (S77),
 /// so after a longer stall (a PC that slept) every reader finds silence.
