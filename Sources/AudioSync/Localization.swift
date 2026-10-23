@@ -497,6 +497,11 @@ struct UIStrings {
             + "Another app may be using ports 319 and 320."
     }
 
+    /// PTP port 319 or 320 couldn't be bound (P158): the AirPlay 2 speakers
+    /// that need PTP timing can't play until it is free.
+    let nativeAirPlayPtpPortsTaken = "Another app is using port 319 or 320, so AirPlay speakers that need "
+        + "PTP timing can't play. Close that app, then turn the speaker on again."
+
     /// Another AirPlay 2 speaker plays, and only one can at a time: this one
     /// stays on and starts once the other stops (P169).
     func nativeAirPlayOneAirPlay2(name: String) -> String {
