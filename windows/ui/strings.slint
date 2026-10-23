@@ -623,6 +623,11 @@ export global Strings {
         return @tr("Open the Volume mixer, find {0} and set its output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", source);
     }
 
+    // For an "all apps except" source: `names` are the apps it leaves out.
+    public pure function guide-route-all-except(names: string) -> string {
+        return @tr("Open the Volume mixer, find every app other than {0} and set each one's output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", names);
+    }
+
     public pure function guide-change-default(current: string) -> string {
         return @tr("Open Sound settings and make an output you don't listen to the default instead of {0}, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", current);
     }
@@ -645,6 +650,10 @@ export global Strings {
 
     public pure function guide-keep-app-unmuted(source: string) -> string {
         return @tr("Don't mute {0} itself in the Volume mixer: AudioSync would capture silence.", source);
+    }
+
+    public pure function guide-keep-all-except-unmuted(names: string) -> string {
+        return @tr("Don't mute any app other than {0} in the Volume mixer: AudioSync would capture silence from it.", names);
     }
 
     // The label of a guide step's button.

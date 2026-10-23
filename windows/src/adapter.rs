@@ -98,8 +98,8 @@ use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
     Group, GroupError, HiddenSpeaker, LeftOutRow, MixApp, Notice, NoticeMessage, PasswordPrompt,
-    PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind,
-    ViewSettings, Waiting, clamp_delay_ms,
+    PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind, SourceName, Speaker,
+    SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -230,11 +230,27 @@ impl Chosen {
             Chosen::Mix {
                 mode: MixMode::Only,
                 apps,
-            } => mix_names(apps),
+            } => mix_names(apps).join(", "),
             Chosen::Mix {
                 mode: MixMode::AllExcept,
                 apps,
-            } => format!("All apps except {}", mix_names(apps)),
+            } => format!("All apps except {}", mix_names(apps).join(", ")),
+        }
+    }
+
+    /// The name the double-audio notice uses, `None` for the whole system.
+    fn notice_name(&self) -> Option<SourceName> {
+        match self {
+            Chosen::WholeSystem => None,
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps,
+            } => Some(SourceName::Apps(mix_names(apps))),
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps,
+            } => Some(SourceName::AllAppsExcept(mix_names(apps))),
+            chosen => Some(SourceName::Named(chosen.shown_name())),
         }
     }
 
@@ -262,18 +278,16 @@ impl Chosen {
 }
 
 /// A mix's apps by name, as the source menu lists them.
-fn mix_names(apps: &[SavedMixApp]) -> String {
-    let names: Vec<&str> = apps
-        .iter()
+fn mix_names(apps: &[SavedMixApp]) -> Vec<String> {
+    apps.iter()
         .map(|app| {
             if app.name.is_empty() {
-                app.executable.as_str()
+                app.executable.clone()
             } else {
-                app.name.as_str()
+                app.name.clone()
             }
         })
-        .collect();
-    names.join(", ")
+        .collect()
 }
 
 /// The mode the several-apps list shows for `chosen`: a mix's own, "only
@@ -2465,10 +2479,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .collect()
         };
         let message = NoticeMessage::HeardTwice {
-            source: match &self.chosen {
-                Chosen::WholeSystem => None,
-                chosen => Some(chosen.shown_name()),
-            },
+            source: self.chosen.notice_name(),
             mute: names(false),
             shared: names(true),
             default_output: paths
@@ -2538,7 +2549,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             };
             // The UI puts its own words around the apps "all except" leaves out.
             let name = match &self.chosen {
-                Chosen::Mix { apps, .. } => mix_names(apps),
+                Chosen::Mix { apps, .. } => mix_names(apps).join(", "),
                 chosen => chosen.shown_name(),
             };
             // Apps come before input devices, as in the listing.
@@ -3893,6 +3904,31 @@ mod tests {
             mix_toggle(&one, MixMode::Only, mix_app("browser.exe")),
             Chosen::WholeSystem
         );
+    }
+
+    // covers: S242
+    #[test]
+    fn the_double_audio_notice_leaves_the_all_except_wording_to_the_ui() {
+        let except = mix_choice(
+            MixMode::AllExcept,
+            vec![mix_app("game.exe"), mix_app("chat.exe")],
+        );
+        assert_eq!(
+            except.notice_name(),
+            Some(SourceName::AllAppsExcept(vec![
+                "game".into(),
+                "chat".into()
+            ]))
+        );
+        let only = mix_choice(
+            MixMode::Only,
+            vec![mix_app("game.exe"), mix_app("chat.exe")],
+        );
+        assert_eq!(
+            only.notice_name(),
+            Some(SourceName::Apps(vec!["game".into(), "chat".into()]))
+        );
+        assert_eq!(Chosen::WholeSystem.notice_name(), None);
     }
 
     #[test]
@@ -5269,7 +5305,7 @@ mod tests {
     fn twice(source: Option<&str>, mute: &[&str], shared: &[&str]) -> NoticeMessage {
         let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect();
         NoticeMessage::HeardTwice {
-            source: source.map(str::to_owned),
+            source: source.map(|name| SourceName::Named(name.to_owned())),
             mute: names(mute),
             shared: names(shared),
             default_output: None,

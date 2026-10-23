@@ -54,6 +54,7 @@ extension AppDelegate {
         status.sheet = nil
         status.line = nil
         status.againRow = nil
+        status.canUndo = false
         appModel.calibrateAll = status
         calibrateAllSheet = nil
         calibrateAllUndo = nil
@@ -105,7 +106,7 @@ extension AppDelegate {
         let answer = sheet.apply()
         guard answer.code == UInt32(ASC_CALIBRATION_APPLY_OK) else { return }
         let writes = CalibrateAllFlow.writes(answer.changes, speakers: sheet.speakers)
-        calibrateAllUndo = CalibrateAllUndo(writes: writes, previousAirPlay: airPlayDelay)
+        let previousAirPlay = airPlayDelay
         DebugTrace.log("[AudioSync] calibrate all: applied \(writes)")
         for write in writes {
             switch write {
@@ -114,15 +115,20 @@ extension AppDelegate {
             case .airPlay(let ms, _): setAirPlayDelay(ms)
             }
         }
+        // Kept only after every write, so the check that each write runs doesn't drop it halfway.
+        calibrateAllUndo = CalibrateAllUndo(writes: writes, previousAirPlay: previousAirPlay,
+                                            afterApply: writes.map(calibrateAllStored))
         shown.applied = true
         appModel.calibrateAll.sheet = shown
         appModel.calibrateAll.line = .applied
+        appModel.calibrateAll.canUndo = true
     }
 
     /// Undo after Apply: the replaced values come back in one step (S238).
     func undoCalibrateAll() {
         guard let undo = calibrateAllUndo else { return }
         calibrateAllUndo = nil
+        appModel.calibrateAll.canUndo = false
         for restore in CalibrateAllFlow.restores(undo) {
             switch restore {
             case .local(let id, let ms?):
@@ -227,6 +233,26 @@ extension AppDelegate {
         if appModel.calibrateAll.blocker != blocker { appModel.calibrateAll.blocker = blocker }
         let leftOut = CalibrateAllFlow.leftOut(inputs)
         if appModel.calibrateAll.leftOut != leftOut { appModel.calibrateAll.leftOut = leftOut }
+        followCalibrateAllUndo()
+    }
+
+    /// Undo goes once a value Apply wrote changed, so it can't overwrite that change (S238).
+    func followCalibrateAllUndo() {
+        guard let undo = calibrateAllUndo,
+              !CalibrateAllFlow.undoHolds(undo, now: undo.writes.map(calibrateAllStored))
+        else { return }
+        calibrateAllUndo = nil
+        appModel.calibrateAll.canUndo = false
+        DebugTrace.log("[AudioSync] calibrate all: a delay changed after Apply, Undo goes")
+    }
+
+    /// What is stored now for the speaker of `write`.
+    func calibrateAllStored(_ write: CalibrateAllWrite) -> CalibrateAllRestore {
+        switch write {
+        case .local(let id, _, _): .local(id: id, ms: localOffsetMs[id])
+        case .cast(let id, _, _): .cast(id: id, ms: CastID.device(id).flatMap { castModel.offsets[$0] })
+        case .airPlay: .airPlay(airPlayDelay)
+        }
     }
 
     /// "Include Anyway" or "Leave Out" on an output that sits out, for the

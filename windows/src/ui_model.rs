@@ -405,6 +405,17 @@ pub struct Notice {
     pub time: String,
 }
 
+/// A source other than the whole system, as a notice names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceName {
+    /// An app or an input device, by the name shown for it.
+    Named(String),
+    /// Several apps, by name; the UI joins the list.
+    Apps(Vec<String>),
+    /// Every app except the listed ones; the UI words it around the list.
+    AllAppsExcept(Vec<String>),
+}
+
 /// What a notice says. The UI words it (the notice texts in
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -493,14 +504,14 @@ pub enum NoticeMessage {
     /// itself once an output is back or no AirPlay speaker is on.
     NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
-    /// is heard twice. `source` is the app's name, or `None` for the whole
+    /// is heard twice. `source` names the app, or is `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
     /// user may mute; `shared` the ones AudioSync plays to as well, where
     /// only sending the source elsewhere helps. `default_output` is the one
     /// of them that counts because it is Windows' default output (the whole
     /// system only); any other plays the source because an app plays there.
     HeardTwice {
-        source: Option<String>,
+        source: Option<SourceName>,
         mute: Vec<String>,
         shared: Vec<String>,
         default_output: Option<String>,

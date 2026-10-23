@@ -683,6 +683,8 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
         "guide-mute-outputs",
         "guide-shared-outputs",
         "guide-keep-app-unmuted",
+        "guide-route-all-except",
+        "guide-keep-all-except-unmuted",
         "guide-open",
         "list-and",
     ] {

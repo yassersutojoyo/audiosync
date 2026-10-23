@@ -36,7 +36,8 @@ use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MainWindowShows, NoticeMessage,
-    PinPrompt, SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings, WindowFrame,
+    PinPrompt, SheetRow, SheetState, SourceKind, SourceName, SpeakerState, ViewSettings,
+    WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
@@ -3760,6 +3761,18 @@ fn join_names(names: &[String], and: impl FnOnce(&str, &str) -> String) -> Strin
     }
 }
 
+/// A source in the UI's words: what the double-audio notice and its guide
+/// name it with.
+fn source_name(strings: &Strings<'_>, source: &SourceName) -> SharedString {
+    match source {
+        SourceName::Named(name) => name.as_str().into(),
+        SourceName::Apps(names) => joined(strings, names),
+        SourceName::AllAppsExcept(names) => {
+            strings.invoke_source_all_except(joined(strings, names))
+        }
+    }
+}
+
 /// Output names as one list in the UI's words: what every notice and the
 /// guide name outputs with.
 fn joined(strings: &Strings<'_>, names: &[String]) -> SharedString {
@@ -3775,7 +3788,7 @@ fn joined(strings: &Strings<'_>, names: &[String]) -> SharedString {
 fn guide_intro(strings: &Strings<'_>, guide: &Guide) -> SharedString {
     let outputs = joined(strings, &guide.outputs);
     match &guide.source {
-        Some(source) => strings.invoke_guide_intro_app(source.as_str().into(), outputs),
+        Some(source) => strings.invoke_guide_intro_app(source_name(strings, source), outputs),
         None => strings.invoke_guide_intro_system(outputs),
     }
 }
@@ -3783,7 +3796,10 @@ fn guide_intro(strings: &Strings<'_>, guide: &Guide) -> SharedString {
 /// A guide step in the UI's words.
 fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
     match step {
-        GuideStep::RouteApp { app } => strings.invoke_guide_route_app(app.as_str().into()),
+        GuideStep::RouteApp {
+            app: SourceName::AllAppsExcept(names),
+        } => strings.invoke_guide_route_all_except(joined(strings, names)),
+        GuideStep::RouteApp { app } => strings.invoke_guide_route_app(source_name(strings, app)),
         GuideStep::ChangeDefault { current } => {
             strings.invoke_guide_change_default(current.as_str().into())
         }
@@ -3796,8 +3812,11 @@ fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
         GuideStep::SharedOutputs { outputs } => {
             strings.invoke_guide_shared_outputs(joined(strings, outputs))
         }
+        GuideStep::KeepAppUnmuted {
+            app: SourceName::AllAppsExcept(names),
+        } => strings.invoke_guide_keep_all_except_unmuted(joined(strings, names)),
         GuideStep::KeepAppUnmuted { app } => {
-            strings.invoke_guide_keep_app_unmuted(app.as_str().into())
+            strings.invoke_guide_keep_app_unmuted(source_name(strings, app))
         }
     }
 }
@@ -3903,9 +3922,11 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             let mute = joined(strings, mute);
             let shared = joined(strings, shared);
             match source {
-                Some(source) => {
-                    strings.invoke_notice_heard_twice_app(source.as_str().into(), mute, shared)
-                }
+                Some(source) => strings.invoke_notice_heard_twice_app(
+                    source_name(strings, source),
+                    mute,
+                    shared,
+                ),
                 None => strings.invoke_notice_heard_twice_system(mute, shared),
             }
         }
@@ -6764,6 +6785,57 @@ mod tests {
         }
     }
 
+    // covers: S242
+    #[test]
+    fn double_audio_from_all_apps_except_some_names_the_source_in_the_uis_words() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let source = SourceName::AllAppsExcept(vec!["Spotify".into(), "Chrome".into()]);
+        let text = notice_text(
+            &strings,
+            &NoticeMessage::HeardTwice {
+                source: Some(source.clone()),
+                mute: vec!["TV".into()],
+                shared: Vec::new(),
+                default_output: None,
+            },
+        );
+        let named = strings.invoke_source_all_except("Spotify and Chrome".into());
+        assert_eq!(named, "All apps except Spotify and Chrome");
+        assert!(text.contains(named.as_str()), "{text}");
+        let guide = Guide {
+            source: Some(source.clone()),
+            outputs: vec!["TV".into()],
+            steps: Vec::new(),
+        };
+        assert!(
+            guide_intro(&strings, &guide).contains(named.as_str()),
+            "the guide names it the same way"
+        );
+        // The steps say what the user does per app, not the menu's name.
+        let route = guide_step_text(
+            &strings,
+            &GuideStep::RouteApp {
+                app: source.clone(),
+            },
+        );
+        assert!(
+            route
+                .contains("find every app other than Spotify and Chrome and set each one's output"),
+            "{route}"
+        );
+        let unmuted = guide_step_text(&strings, &GuideStep::KeepAppUnmuted { app: source });
+        assert!(
+            unmuted.starts_with(
+                "Don't mute any app other than Spotify and Chrome in the Volume mixer"
+            ),
+            "{unmuted}"
+        );
+        let several = SourceName::Apps(vec!["Spotify".into(), "Chrome".into()]);
+        let route = guide_step_text(&strings, &GuideStep::RouteApp { app: several });
+        assert!(route.contains("find Spotify and Chrome and set"), "{route}");
+    }
+
     #[test]
     fn a_notices_dismiss_button_names_it_in_a_few_words() {
         let app = app_over(MockBackend::new());
@@ -6780,7 +6852,7 @@ mod tests {
         };
         assert_eq!(
             dismiss_label(NoticeMessage::HeardTwice {
-                source: Some("Music Player".into()),
+                source: Some(SourceName::Named("Music Player".into())),
                 mute: vec!["Speakers".into()],
                 shared: vec!["Headphones".into()],
                 default_output: None,

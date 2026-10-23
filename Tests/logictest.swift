@@ -4847,6 +4847,32 @@ do {
                        .local(id: "hdmi", ms: nil), .local(id: "usb", ms: 150)],
           "calibrate all: Undo restores each replaced delay and the AirPlay delay, and forgets one that wasn't stored",
           "\(restores)")
+
+    // Undo lasts only while every value Apply wrote is still stored (S238).
+    var appliedUndo = undo
+    appliedUndo.afterApply = [.local(id: "usb", ms: 100), .local(id: "hdmi", ms: 40), .cast(id: "cast:tv", ms: 900),
+                              .cast(id: "cast:hall", ms: 300), .airPlay(AirPlayDelay(adjustmentMs: 215))]
+    var manual = appliedUndo.afterApply
+    manual[0] = .local(id: "usb", ms: 120)
+    var cleared = appliedUndo.afterApply
+    cleared[2] = .cast(id: "cast:tv", ms: nil)
+    var nudged = appliedUndo.afterApply
+    nudged[4] = .airPlay(AirPlayDelay(adjustmentMs: 240))
+    check(CalibrateAllFlow.undoHolds(appliedUndo, now: appliedUndo.afterApply)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: manual)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: cleared)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: nudged),
+          "calibrate all: a delay changed by hand after Apply drops Undo")
+    var written = AirPlayDelay(), senderMoved = AirPlayDelay(), sameField = AirPlayDelay()
+    let entered = written.enter(1965, senderMs: 1750) && senderMoved.enter(2215, senderMs: 2000)
+        && sameField.enter(1965, senderMs: 2000)
+    var airPlayUndo = undo
+    airPlayUndo.afterApply = [.airPlay(written)]
+    check(entered && senderMoved.latencyMs(senderMs: 2000) != written.latencyMs(senderMs: 1750)
+            && CalibrateAllFlow.undoHolds(airPlayUndo, now: [.airPlay(senderMoved)])
+            && !CalibrateAllFlow.undoHolds(airPlayUndo, now: [.airPlay(sameField)]),
+          "calibrate all: a new AirPlay sender latency alone keeps Undo; the same field value typed at it drops Undo",
+          "\(written) \(senderMoved) \(sameField)")
     var castMemory = CastModel()
     _ = castMemory.setOffset("tv", ms: 900)
     for case .cast(let id, .none) in restores where id == "cast:tv" { _ = castMemory.clearOffset("tv") }
@@ -5605,11 +5631,55 @@ do {
     check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"source\":\"Music\",\"title\":\"Song\"}"),
           "web remote: Now Playing goes out with title, artist and source app", playing)
 
+    let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: "com.apple.Music", name: "Music")],
+                                     inputs: [SourceList.Input(uid: "BuiltInMic", name: "MacBook Microphone",
+                                                               transport: kAudioDeviceTransportTypeBuiltIn)],
+                                     chosen: .app(bundleID: "com.apple.Music"), chosenAppName: { $0 })
+    let remoteSources = entries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    check(remoteSources.map(\.id) == ["system", "app:com.apple.Music", "input:BuiltInMic"]
+            && remoteSources.map(\.kind) == [.system, .app, .input] && remoteSources.map(\.name) == entries.map(\.name),
+          "web remote: the page lists the picker's entries in its order, each with an ID the core takes")
+    check(zip(remoteSources, entries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
+            && ["", "app:", "input:", "Music"].allSatisfy { RemoteSource.pickerID($0) == nil },
+          "web remote: a page ID maps back to the picker's ID; one that names no source maps to nothing")
+    let sourced = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows,
+                                 sources: remoteSources, sourceID: "app:com.apple.Music")
+    let sourcedObject = (try? JSONSerialization.jsonObject(with: Data(sourced.json.utf8))) as? [String: Any]
+    let sourceKinds = (sourcedObject?["sources"] as? [[String: Any]])?.compactMap { $0["kind"] as? String }
+    check(sourcedObject?["source_id"] as? String == "app:com.apple.Music" && sourceKinds == ["system", "app", "input"]
+            && snapshot.json.contains("\"source_id\":null"),
+          "web remote: the snapshot carries the sources and the one in use", sourced.json)
+    func pick(_ id: String) -> [RemoteAction] {
+        RemoteCommand(json: "{\"type\":\"source\",\"id\":\"\(id)\"}").map {
+            RemoteAction.plan($0, rows: rows, sources: remoteSources, sourceID: "app:com.apple.Music")
+        } ?? []
+    }
+    check(pick("input:BuiltInMic") == [.selectSource(pickerID: "input:BuiltInMic")]
+            && pick("system") == [.selectSource(pickerID: "")]
+            && pick("app:com.apple.Music").isEmpty && pick("app:gone").isEmpty
+            && RemoteCommand(json: "{\"type\":\"source\",\"id\":3}") == nil,
+          "web remote: a source pick is the picker's own; the one in use or one it doesn't list changes nothing")
+    let except = AudioSource.mixed(.allExcept, bundleIDs: ["com.spotify.client", "com.google.Chrome"])
+    let mixEntries = SourceList.entries(systemName: "All System Audio",
+                                        apps: [(bundleID: "com.spotify.client", name: "Spotify")], inputs: [],
+                                        chosen: except, chosenAppName: { _ in "Chrome" },
+                                        mixName: { "All apps except " + $1.joined(separator: " and ") })
+    let mixSources = mixEntries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    let mixSource = mixSources.first { $0.id == except.defaultsValue }
+    let onlyID = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.google.Chrome"]).defaultsValue
+    check(mixSource?.kind == .app && mixSource?.name == "All apps except Spotify and Chrome"
+            && zip(mixSources, mixEntries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
+            && RemoteSource.pickerID(RemoteSource.pageID(onlyID)) == onlyID
+            && ["apps:", "except:"].allSatisfy { RemoteSource.pickerID($0) == nil },
+          "web remote: a several-apps source in use is listed under apps with the picker's name and maps back",
+          mixSources.map(\.id).joined(separator: " "))
+
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }
     var error: Int32 = 0
     var remote = asc_remote_start("{\"port\": 0, \"listen\": [\"127.0.0.1\"]}", noCommand, nil, &error)
-    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing),
+    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing)
+            && asc_remote_publish(remote, sourced.json),
           "web remote: the core accepts the snapshots", "start error \(error)")
     asc_remote_stop(&remote)
 
@@ -5681,6 +5751,24 @@ do {
     ]
     check(twoDevices == 2 && tenDevices == RemoteDevicesFile.maxDevices && unreadable.allSatisfy { $0 == 0 },
           "web remote: the paired count comes from the devices file, capped at 8; a file the core can't read counts as none")
+
+    let day: TimeInterval = 24 * 60 * 60
+    let seenNow = Date(timeIntervalSince1970: 1_800_000_000)
+    let seenFile = { (seen: String) in
+        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"\(hashB)\"],\"seen\":\(seen)}"),
+                                now: seenNow)
+    }
+    let recent = Int(seenNow.timeIntervalSince1970 - 89 * day), idle = Int(seenNow.timeIntervalSince1970 - 90 * day)
+    let ahead = Int(seenNow.timeIntervalSince1970 + 400 * day)
+    let nineHashes = Array(repeating: "\"\(hashA)\"", count: 9).joined(separator: ",")
+    let eightIdle = Array(repeating: String(idle), count: 8).joined(separator: ",")
+    let newestEight = RemoteDevicesFile.count(
+        devicesJSON("{\"version\":1,\"devices\":[\(nineHashes)],\"seen\":[\(recent),\(eightIdle)]}"), now: seenNow)
+    let mismatched: [Int] = [seenFile("[\(recent)]"), seenFile("[\(recent),-1]"), seenFile("[\(recent),1.5]"),
+                             seenFile("[\(recent),true]"), seenFile("{}")]
+    check(seenFile("[\(recent),\(idle)]") == 1 && seenFile("[\(ahead),\(recent)]") == 2 && newestEight == 0
+            && mismatched.allSatisfy { $0 == 0 },
+          "web remote: a device idle for 90 days isn't counted, only the newest 8 are; a seen list that doesn't match the devices counts as none")
 
     let devicesFolder = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-remote-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: devicesFolder, withIntermediateDirectories: true)
