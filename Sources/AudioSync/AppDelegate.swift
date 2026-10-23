@@ -129,10 +129,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// The groups became zones and this launch says so in a notice, once.
     private let zonesNoticeDue: Bool
-    /// The speaker presets (S251): stored and migrated from the groups, not shown yet.
+    /// The speaker presets (S251), stored and migrated from the groups.
     var presets: [SpeakerPreset] {
         didSet { if presets != oldValue { store.save(presets: presets) } }
     }
+    /// The preset the preset notice names, so deleting it clears the notice (S262).
+    var presetNoticeID: String?
     /// Speaker keys switched on as soon as they appear.
     var autoConnect: Set<String> {
         didSet { if autoConnect != oldValue { store.save(ids: autoConnect, forKey: Keys.autoConnect) } }
