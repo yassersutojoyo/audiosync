@@ -182,6 +182,31 @@ export global Strings {
         return @tr("{} is protected by a password. Enter the password set for it in the Home app or in the speaker's settings. Cancel turns the speaker off; turn it on again to retry.", speaker);
     }
 
+    // Speaker presets (spec S259 to S269)
+    out property <string> presets: @tr("Presets");
+    out property <string> save-preset: @tr("Save as Preset…");
+    out property <string> save-preset-title: @tr("Save Preset");
+    out property <string> save-preset-message: @tr("The speakers that are on, their volumes, the zone volumes, the master volume and the curve are saved. Delays and the preamp are not.");
+    out property <string> save-preset-needs-speakers: @tr("Turn on the speakers you want in the preset first, then save it.");
+    out property <string> preset-field-label: @tr("Preset name");
+    out property <string> preset-placeholder: @tr("Evening, Party…");
+    out property <string> rename-preset: @tr("Rename…");
+    out property <string> rename-preset-title: @tr("Rename Preset");
+    out property <string> update-preset: @tr("Update to Current Settings");
+    out property <string> delete-preset: @tr("Delete");
+    // View > Presets while there is none.
+    out property <string> no-presets: @tr("No Presets");
+    out property <string> presets-empty: @tr("No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset.");
+    // The flyout's preset row while no preset is current.
+    out property <string> choose-preset: @tr("Choose a Preset");
+    // What Narrator reads as the current preset row's value, and every row's
+    // help text.
+    out property <string> preset-current: @tr("Current");
+    out property <string> preset-recall-hint: @tr("Recalls this preset");
+    // Hidden and busy members in the preset notice.
+    out property <string> preset-hidden: @tr("Hidden");
+    out property <string> preset-busy: @tr("In use by another app");
+
     // Zones
     out property <string> new-zone: @tr("New Zone from Active Speakers…");
     out property <string> new-zone-title: @tr("New Zone");
@@ -807,6 +832,9 @@ export global Strings {
         }
         if kind == NoticeKind.groups-became-zones {
             return @tr("groups became zones");
+        }
+        if kind == NoticeKind.presets-left-off {
+            return @tr("some speakers stayed off");
         }
         return @tr("double audio");
     }
@@ -1480,6 +1508,38 @@ export global Strings {
     // row's note, and the zone menu's entry that puts the target in its place.
     public pure function zone-member-in-target(target: string) -> string {
         return @tr("Plays as part of {}", target);
+    }
+
+    // A new preset's name when none was typed.
+    public pure function numbered-preset(n: int) -> string {
+        return @tr("Preset {}", n);
+    }
+
+    // What Narrator says after Save, Update and Delete.
+    public pure function preset-saved(name: string) -> string {
+        return @tr("{} saved", name);
+    }
+
+    public pure function preset-updated(name: string) -> string {
+        return @tr("{} updated", name);
+    }
+
+    public pure function preset-deleted(name: string) -> string {
+        return @tr("{} deleted", name);
+    }
+
+    // The preset notice (S265): `list` is the members left off, each
+    // "<name> (<reason>)", joined with commas.
+    public pure function preset-left-off(preset: string, list: string) -> string {
+        return @tr("“{}” is on. Stayed off: {}.", preset, list);
+    }
+
+    public pure function preset-nothing-changed(preset: string, list: string) -> string {
+        return @tr("Nothing changed: no speaker in “{}” can play now. {}.", preset, list);
+    }
+
+    public pure function preset-member-left-off(name: string, reason: string) -> string {
+        return @tr("{} ({})", name, reason);
     }
 
     public pure function use-target-instead(target: string) -> string {

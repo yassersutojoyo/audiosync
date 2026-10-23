@@ -7,7 +7,7 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { DeviceVolumeHint, NoticeItem, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { DeviceVolumeHint, NoticeItem, PresetItem, RowState, SpeakerItem, ZoneItem } from "types.slint";
 import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
@@ -17,6 +17,96 @@ import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, Quie
 // when a switched-on output's own volume in Windows is low or muted (spec
 // S198). The flyout has no volume sliders, so the fix is in the main window;
 // the hint itself is in the toggle's description.
+// The preset pull-down under the source (spec S260): the current preset's
+// name, else "Choose a Preset"; its menu lists every preset, the current
+// one checked, and recalls the one chosen.
+component PresetPicker inherits Rectangle {
+    in property <[PresetItem]> presets;
+    // The current preset's name; empty while none is current.
+    in property <string> current;
+    callback recalled(string);
+
+    function open-menu() {
+        menu.show({ x: 0, y: root.height });
+    }
+
+    min-height: 32px;
+    border-radius: Fluent.radius-control;
+    border-width: 1px;
+    border-color: Fluent.stroke;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: Strings.presets;
+    accessible-value: root.current != "" ? root.current : Strings.choose-preset;
+    accessible-action-default => {
+        root.open-menu();
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.open-menu();
+        }
+
+        menu := ContextMenuArea {
+            Menu {
+                for preset in root.presets: MenuItem {
+                    title: preset.name;
+                    checkable: true;
+                    checked: preset.current;
+                    activated => {
+                        root.recalled(preset.id);
+                    }
+                }
+            }
+
+            focus := FocusScope {
+                focus-on-click: false;
+                key-pressed(event) => {
+                    if event.text == " " || event.text == Key.Return {
+                        root.open-menu();
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 8px;
+
+                    Glyph {
+                        glyph: Glyphs.presets;
+                        color: Tokens.teal-text;
+                        width: 16px;
+                    }
+
+                    Text {
+                        text: root.current != "" ? root.current : Strings.choose-preset;
+                        color: root.current != "" ? Tokens.text : Tokens.secondary-text;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        accessible-role: none;
+                    }
+
+                    Glyph {
+                        glyph: Glyphs.chevron-down;
+                        font-size: 12px;
+                        color: Tokens.secondary-text;
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        border-width: focus.has-focus ? 2px : 0px;
+        border-color: Tokens.focus;
+        border-radius: root.border-radius;
+    }
+}
+
 component FlyoutRow inherits HorizontalLayout {
     in property <string> glyph;
     in property <string> name;
@@ -88,6 +178,8 @@ export component TrayFlyout inherits Window {
     in property <float> master-volume;
     in property <[SpeakerItem]> speakers;
     in property <[ZoneItem]> zones;
+    in property <[PresetItem]> presets;
+    in property <string> current-preset;
     // AirPlay discovery has run for 20 seconds without finding a speaker.
     in property <bool> airplay-none-found;
     // Every speaker present is hidden.
@@ -105,6 +197,7 @@ export component TrayFlyout inherits Window {
     callback master-volume-changed(float);
     callback speaker-toggled(string);
     callback zone-toggled(string);
+    callback preset-recall-requested(string);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
     // Show How on a notice: open its guide.
@@ -262,6 +355,15 @@ export component TrayFlyout inherits Window {
                 selected => {
                     root.source-selected(self.current-index);
                     self.current-index = root.source-index;
+                }
+            }
+
+            // Recall only: the main window saves, renames and deletes.
+            if root.presets.length > 0: PresetPicker {
+                presets: root.presets;
+                current: root.current-preset;
+                recalled(id) => {
+                    root.preset-recall-requested(id);
                 }
             }
 

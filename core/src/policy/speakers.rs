@@ -342,6 +342,8 @@ pub enum NoticeSubject {
     Cast(String),
     /// The speaker zones: the saved groups became zones (S248).
     Zones,
+    /// The members a preset recall left off (S265).
+    Presets,
 }
 
 /// A privacy setting a notice can open (S153); the host maps it to its settings app.

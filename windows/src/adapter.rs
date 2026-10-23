@@ -66,7 +66,7 @@ use audiosync_core::clock;
 use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
 use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
 use audiosync_core::policy::presets::{
-    self, LeftOff, Preset, RecallAction, RecallMember, RecallOther, RecallStep, Scene, SpeakerNow,
+    self, LeftOff, Preset, RecallAction, RecallMember, RecallOther, RecallStep,
 };
 use audiosync_core::policy::session::{
     AutoStartGate, DropReason, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start,
@@ -104,8 +104,8 @@ use crate::ui_model::{
     self, AbsentMember, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
     HiddenSpeaker, InTarget, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase,
-    PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
-    Waiting, ZoneError, clamp_delay_ms,
+    PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, Source, SourceKind, Speaker,
+    SpeakerKind, ViewSettings, Waiting, ZoneError, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -282,6 +282,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The speaker presets (spec S251), the overlapping groups among them
     /// once (S254).
     presets: Vec<Preset>,
+    /// The preset the preset notice is about (spec S265).
+    preset_notice: Option<String>,
     gate: AutoStartGate,
     notices: Notices<NoticeSubject, Posted>,
     next_notice: u64,
@@ -399,6 +401,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             groups: Vec::new(),
             zones: Zones::default(),
             presets: Vec::new(),
+            preset_notice: None,
             gate: AutoStartGate::default(),
             notices: Notices::new(),
             next_notice: 1,
@@ -1356,43 +1359,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The speakers on now as a preset sees them (spec S251, S253): list
-    /// order, the reference output left out, no own volume for a
-    /// fixed-volume Cast speaker.
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
-    fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
-        state
-            .speakers
-            .iter()
-            .filter(|speaker| speaker.enabled && !speaker.is_reference())
-            .map(|speaker| SpeakerNow {
-                key: speaker.id.clone(),
-                volume: (!speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed))
-                    .then_some(speaker.volume),
-            })
-            .collect()
-    }
-
     /// The ID of the preset the speakers play exactly now, the first in
     /// list order (spec S253).
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
+    #[cfg(test)]
     pub(crate) fn current_preset(&self) -> Option<String> {
-        let state = self.snapshot();
-        let on = Self::speakers_on_now(&state);
-        let scene = Scene {
-            on: &on,
-            zones: &self.zones,
-            master: state.master_volume,
-            gains_db: self.equalizer.gains_db,
-        };
-        presets::current(&self.presets, &scene).map(|preset| preset.id.clone())
+        ui_model::current_preset(&self.presets, &self.snapshot())
     }
 
     /// Recalls preset `id` as the core's plan says (spec S252), a full
-    /// scene. Returns each stored member left off, by its shown name, with
-    /// the reason, for the notice the windows will post; `None` for an ID no
-    /// preset has.
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
+    /// scene, and posts the preset notice or clears it (S265). Returns each
+    /// stored member left off, by its shown name, with the reason; `None`
+    /// for an ID no preset has.
     pub(crate) fn recall_preset(&mut self, id: &str) -> Option<Vec<(String, LeftOff)>> {
         let preset = self.presets.iter().find(|preset| preset.id == id)?.clone();
         let state = self.snapshot();
@@ -1458,6 +1435,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 _ => None,
             })
             .collect();
+        let shown: Vec<(String, PresetLeftOff)> = members
+            .iter()
+            .zip(&plan.steps)
+            .filter_map(|((key, _, name, _), step)| match step {
+                RecallStep::LeftOff(reason) => {
+                    Some((name.clone(), self.left_off_reason(key, *reason)))
+                }
+                _ => None,
+            })
+            .collect();
+        let nothing_changed = plan.action == RecallAction::Nothing;
+        match ui_model::preset_notice(&preset.name, shown, nothing_changed) {
+            Some(message) => {
+                self.post(NoticeSubject::Presets, message);
+                self.preset_notice = Some(preset.id.clone());
+            }
+            None => self.clear_preset_notice(),
+        }
         if plan.action == RecallAction::Nothing {
             self.log.log(|| {
                 format!(
@@ -1498,6 +1493,55 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.start_if_switched_on();
         self.take_events();
         Some(left_off)
+    }
+
+    /// Why member `key` stayed off, as the preset notice words it, with the
+    /// shown name of the target it plays as part of.
+    fn left_off_reason(&self, key: &SpeakerKey, reason: LeftOff) -> PresetLeftOff {
+        match reason {
+            LeftOff::NotFound => PresetLeftOff::NotFound,
+            LeftOff::Hidden => PresetLeftOff::Hidden,
+            LeftOff::NeedsAirPlay2 => PresetLeftOff::NeedsAirPlay2,
+            LeftOff::Busy => PresetLeftOff::Busy,
+            LeftOff::InTarget => {
+                let target = match key {
+                    SpeakerKey::AirPlay(id) => self.audio.airplay_holding_target(id),
+                    _ => None,
+                };
+                PresetLeftOff::InTarget(target.map_or_else(String::new, |target| {
+                    self.custom_names
+                        .shown(&airplay_key(&target.id), &target.name)
+                }))
+            }
+        }
+    }
+
+    /// Takes the preset notice down.
+    fn clear_preset_notice(&mut self) {
+        self.notices.clear(&[NoticeSubject::Presets]);
+        self.preset_notice = None;
+    }
+
+    /// The preset notice goes once its preset plays again (spec S265).
+    fn follow_preset_notice(&mut self) -> bool {
+        let Some(id) = self.preset_notice.clone() else {
+            return false;
+        };
+        if self.notices.get(&NoticeSubject::Presets).is_none() {
+            self.preset_notice = None;
+            return false;
+        }
+        if ui_model::current_preset(&self.presets, &self.snapshot()).as_deref() == Some(id.as_str())
+        {
+            self.clear_preset_notice();
+            return true;
+        }
+        false
+    }
+
+    /// What plays now as preset `id` named `name`.
+    fn capture_preset(&self, id: &str, name: &str) -> Result<Preset, PresetError> {
+        ui_model::capture_preset(id, name, &self.snapshot()).ok_or(PresetError::NoSpeakerOn)
     }
 
     /// Tells why a Cast speaker can't play; it is off.
@@ -2791,7 +2835,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 .collect(),
         );
         let absent = self.absent_members(&speakers, &hidden);
-        AppState {
+        let mut state = AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
             airplay_none_found: self.airplay_none_found(),
@@ -2806,6 +2850,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             zones: self.zones.list().to_vec(),
             equalizer: self.equalizer,
             equalizer_curves: self.equalizer_curves.clone(),
+            presets: Vec::new(),
+            current_preset: None,
             notices: self
                 .notices
                 .iter()
@@ -2834,7 +2880,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 busy: self.calibration_run.is_some() || self.calibrate_all.run.is_some(),
             },
             calibrate_all: self.calibrate_all_state(),
-        }
+        };
+        ui_model::show_presets(&mut state, &self.presets);
+        state
     }
 
     fn set_running(&mut self, on: bool) {
@@ -3310,6 +3358,57 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.equalizer_curves = sanitized_curves(curves);
     }
 
+    fn save_preset(&mut self, name: &str) -> Result<(), PresetError> {
+        let id = ui_model::new_preset_id(&self.presets);
+        let preset = self.capture_preset(&id, name)?;
+        self.log.log(|| {
+            format!(
+                "preset \"{}\" saved with {} speaker(s)",
+                preset.name,
+                preset.members.len()
+            )
+        });
+        self.presets.push(preset);
+        Ok(())
+    }
+
+    fn rename_preset(&mut self, id: &str, name: &str) {
+        let Some(preset) = self.presets.iter_mut().find(|preset| preset.id == id) else {
+            return;
+        };
+        preset.name = presets::renamed_preset(&preset.name, name);
+        let name = preset.name.clone();
+        // The notice names the preset, so it follows the new name in place.
+        if self.preset_notice.as_deref() == Some(id)
+            && let Some(posted) = self.notices.get_mut(&NoticeSubject::Presets)
+            && let NoticeMessage::PresetLeftOff { preset, .. } = &mut posted.message
+        {
+            *preset = name;
+        }
+    }
+
+    fn update_preset(&mut self, id: &str) -> Result<(), PresetError> {
+        let Some(index) = self.presets.iter().position(|preset| preset.id == id) else {
+            return Ok(());
+        };
+        let name = self.presets[index].name.clone();
+        self.presets[index] = self.capture_preset(id, &name)?;
+        self.log.log(|| format!("preset \"{name}\" updated"));
+        Ok(())
+    }
+
+    fn delete_preset(&mut self, id: &str) {
+        self.presets.retain(|preset| preset.id != id);
+        self.log.log(|| format!("preset {id} deleted"));
+        if self.preset_notice.as_deref() == Some(id) {
+            self.clear_preset_notice();
+        }
+    }
+
+    fn recall_preset(&mut self, id: &str) {
+        let _ = AudioAdapter::recall_preset(self, id);
+    }
+
     fn dismiss_notice(&mut self, id: u64) {
         let subject = self
             .notices
@@ -3456,6 +3555,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         changed |= self.tick_calibration();
         changed |= self.follow_calibration_context();
         changed |= self.follow_calibrate_all();
+        changed |= self.follow_preset_notice();
         changed |= self.persist();
         changed
     }

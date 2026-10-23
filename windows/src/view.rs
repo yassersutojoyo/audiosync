@@ -21,6 +21,7 @@ use audiosync_core::calibrate_all::{
 };
 use audiosync_core::eq::{self, CurveMatch, EqSettings};
 use audiosync_core::policy::device_volume::Hint;
+use audiosync_core::policy::presets::new_preset_name;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
@@ -36,15 +37,16 @@ use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MainWindowShows, NoticeMessage,
-    PinPrompt, SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings, WindowFrame,
+    PinPrompt, PresetLeftOff, SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings,
+    WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
     CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GuidePage, GuideStepItem,
     GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow, NameField, NoticeItem,
-    NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerGroup,
-    SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, ZoneItem, ZoneNameDialog, ZoneTarget,
-    speaker_names,
+    NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart, RowState,
+    SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, ZoneItem, ZoneNameDialog,
+    ZoneTarget, speaker_names,
 };
 
 mod help_window;
@@ -66,6 +68,10 @@ enum DialogPurpose {
     Rename(String),
     /// Only a message (no name field), e.g. why a zone can't be made yet.
     Message,
+    /// Save as Preset….
+    SavePreset,
+    /// Rename… on a preset, by preset ID.
+    RenamePreset(String),
     /// Save Curve in the equalizer.
     SaveCurve,
     /// Rename in the equalizer, for the saved curve at this index.
@@ -209,6 +215,8 @@ struct Models {
     flyout_notices: Rc<VecModel<NoticeItem>>,
     gains: Rc<VecModel<f32>>,
     presets: Rc<VecModel<SharedString>>,
+    /// The speaker presets, in the main window and the flyout.
+    speaker_presets: Rc<VecModel<PresetItem>>,
     calibration_rows: Rc<VecModel<CalibrationRowItem>>,
     calibration_left_out: Rc<VecModel<LeftOutItem>>,
 }
@@ -823,6 +831,7 @@ impl App {
             flyout_notices: Rc::new(VecModel::default()),
             gains: Rc::new(VecModel::default()),
             presets: Rc::new(VecModel::default()),
+            speaker_presets: Rc::new(VecModel::default()),
             calibration_rows: Rc::new(VecModel::default()),
             calibration_left_out: Rc::new(VecModel::default()),
         };
@@ -1358,6 +1367,10 @@ impl App {
         self.main.set_zones(ModelRc::from(m.zones.clone()));
         self.main.set_notices(ModelRc::from(m.notices.clone()));
         self.main
+            .set_presets(ModelRc::from(m.speaker_presets.clone()));
+        self.flyout
+            .set_presets(ModelRc::from(m.speaker_presets.clone()));
+        self.main
             .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
         self.main
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
@@ -1467,6 +1480,9 @@ impl App {
         self.flyout.set_all_hidden(state.all_hidden());
         self.main
             .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
+        sync_model(&self.models.speaker_presets, preset_items(&state));
+        self.flyout
+            .set_current_preset(current_preset_name(&state).into());
         let listed = |s: &&ui_model::Speaker| lists(s);
         // A speaker in a zone is listed under it instead (spec S245).
         let zoned = |s: &&ui_model::Speaker| state.zone_of(&s.id).is_some();
@@ -2132,6 +2148,25 @@ impl App {
         let w = weak.clone();
         main.on_new_zone_requested(move || with_app(&w, App::ask_new_zone));
         let w = weak.clone();
+        main.on_preset_recall_requested(move |id| with_app(&w, |app| app.recall_preset(&id)));
+        let w = weak.clone();
+        main.on_preset_rename_requested(move |id| with_app(&w, |app| app.ask_rename_preset(&id)));
+        let w = weak.clone();
+        main.on_preset_update_requested(move |id| with_app(&w, |app| app.update_preset(&id)));
+        let w = weak.clone();
+        main.on_preset_delete_requested(move |id| with_app(&w, |app| app.delete_preset(&id)));
+        let w = weak.clone();
+        main.on_save_preset_requested(move || with_app(&w, App::ask_save_preset));
+        let w = weak.clone();
+        self.equalizer
+            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
+        let w = weak.clone();
+        self.help
+            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
+        let w = weak.clone();
+        self.remote_window
+            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
+        let w = weak.clone();
         main.on_speaker_move_to_zone_requested(move |id, zone| {
             with_app(&w, |app| app.move_to_zone(&id, &zone))
         });
@@ -2260,6 +2295,8 @@ impl App {
         flyout.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
         flyout.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
+        let w = weak.clone();
+        flyout.on_preset_recall_requested(move |id| with_app(&w, |app| app.recall_preset(&id)));
         let w = weak.clone();
         flyout.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
@@ -3245,6 +3282,123 @@ impl App {
         self.announce(said);
     }
 
+    /// Recalls preset `id` (spec S265) from any path; it opens, raises and
+    /// focuses nothing (S266).
+    fn recall_preset(&self, id: &str) {
+        self.update(|b| b.recall_preset(id));
+    }
+
+    /// Ctrl+`n`: the `n`th preset in list order; nothing without one.
+    fn recall_preset_at(&self, n: i32) {
+        let Some(index) = usize::try_from(n).ok().and_then(|n| n.checked_sub(1)) else {
+            return;
+        };
+        if let Some(preset) = self.snapshot().presets.get(index) {
+            self.recall_preset(&preset.id);
+        }
+    }
+
+    fn ask_save_preset(&self) {
+        let strings = self.strings();
+        if ui_model::speakers_on_now(&self.snapshot()).is_empty() {
+            self.show_dialog_message(
+                strings.get_save_preset_title(),
+                strings.get_save_preset_needs_speakers(),
+            );
+            return;
+        }
+        let dialog = &self.zone_dialog;
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::SavePreset;
+        dialog.set_heading(strings.get_save_preset_title());
+        dialog.set_message(strings.get_save_preset_message());
+        dialog.set_placeholder(strings.get_preset_placeholder());
+        dialog.set_field_label(strings.get_preset_field_label());
+        dialog.set_name(SharedString::new());
+        dialog.set_show_field(true);
+        dialog.set_confirm_label(strings.get_save());
+        self.open_dialog();
+    }
+
+    fn ask_rename_preset(&self, id: &str) {
+        let Some(preset) = self.snapshot().presets.into_iter().find(|p| p.id == id) else {
+            return;
+        };
+        let strings = self.strings();
+        let dialog = &self.zone_dialog;
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenamePreset(id.to_owned());
+        dialog.set_heading(strings.get_rename_preset_title());
+        dialog.set_message(strings.invoke_rename_message(preset.name.as_str().into()));
+        dialog.set_placeholder(strings.get_preset_placeholder());
+        dialog.set_field_label(strings.get_preset_field_label());
+        dialog.set_name(preset.name.as_str().into());
+        dialog.set_show_field(true);
+        dialog.set_confirm_label(strings.get_rename());
+        self.open_dialog();
+    }
+
+    /// Save in the Save Preset dialog: a blank name becomes "Preset n".
+    fn save_preset(&self, typed: &str) {
+        let names: Vec<String> = self
+            .snapshot()
+            .presets
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        let strings = self.strings();
+        let name = new_preset_name(typed, &names, |n| {
+            strings.invoke_numbered_preset(count(n)).to_string()
+        });
+        let saved = self.backend.borrow_mut().save_preset(&name);
+        self.refresh();
+        match saved {
+            Ok(()) => self.announce(strings.invoke_preset_saved(name.as_str().into())),
+            // The last speaker went off while the dialog was open.
+            Err(_) => self.show_dialog_message(
+                strings.get_save_preset_title(),
+                strings.get_save_preset_needs_speakers(),
+            ),
+        }
+    }
+
+    /// Update to Current Settings; it asks nothing (spec S262).
+    fn update_preset(&self, id: &str) {
+        let Some(preset) = self.snapshot().presets.into_iter().find(|p| p.id == id) else {
+            return;
+        };
+        let updated = self.backend.borrow_mut().update_preset(id);
+        self.refresh();
+        let strings = self.strings();
+        match updated {
+            Ok(()) => self.announce(strings.invoke_preset_updated(preset.name.as_str().into())),
+            Err(_) => self.show_dialog_message(
+                strings.get_update_preset(),
+                strings.get_save_preset_needs_speakers(),
+            ),
+        }
+    }
+
+    /// Delete; it asks nothing (spec S262). The focus goes to the next row,
+    /// else the previous one, else Save as Preset… (S267).
+    fn delete_preset(&self, id: &str) {
+        let presets = self.snapshot().presets;
+        let Some(index) = presets.iter().position(|p| p.id == id) else {
+            return;
+        };
+        let neighbour = presets
+            .get(index + 1)
+            .or_else(|| index.checked_sub(1).and_then(|i| presets.get(i)))
+            .map(|p| p.id.clone());
+        self.update(|b| b.delete_preset(id));
+        match neighbour {
+            Some(next) => self.main.set_focus_preset_id(next.into()),
+            None => self.main.set_focus_save_preset(true),
+        }
+        let said = self
+            .strings()
+            .invoke_preset_deleted(presets[index].name.as_str().into());
+        self.announce(said);
+    }
+
     fn open_dialog(&self) {
         if let Err(error) = self.zone_dialog.show() {
             self.show_window_error(&error);
@@ -3271,6 +3425,8 @@ impl App {
             }
             DialogPurpose::Rename(id) => self.update(|b| b.rename_zone(&id, name)),
             DialogPurpose::Message => {}
+            DialogPurpose::SavePreset => self.save_preset(name),
+            DialogPurpose::RenamePreset(id) => self.update(|b| b.rename_preset(&id, name)),
             DialogPurpose::SaveCurve => {
                 let state = self.snapshot();
                 let mut curves = state.equalizer_curves;
@@ -4290,6 +4446,29 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         }
         NoticeMessage::RemoteOnPublicNetwork => strings.get_remote_public_network(),
         NoticeMessage::GroupsBecameZones => strings.get_notice_groups_became_zones(),
+        NoticeMessage::PresetLeftOff {
+            preset,
+            left_off,
+            nothing_changed,
+        } => {
+            let members: Vec<String> = left_off
+                .iter()
+                .map(|(name, reason)| {
+                    strings
+                        .invoke_preset_member_left_off(
+                            name.as_str().into(),
+                            preset_left_off(strings, reason),
+                        )
+                        .to_string()
+                })
+                .collect();
+            let list = joined(strings, &members);
+            if *nothing_changed {
+                strings.invoke_preset_nothing_changed(preset.as_str().into(), list)
+            } else {
+                strings.invoke_preset_left_off(preset.as_str().into(), list)
+            }
+        }
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -4306,6 +4485,41 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             }
         }
     }
+}
+
+/// Why a preset's member stayed off, as the preset notice says it.
+fn preset_left_off(strings: &Strings<'_>, reason: &PresetLeftOff) -> SharedString {
+    match reason {
+        PresetLeftOff::NotFound => strings.get_zone_member_not_found(),
+        PresetLeftOff::Hidden => strings.get_preset_hidden(),
+        PresetLeftOff::NeedsAirPlay2 => strings.get_needs_airplay2(),
+        PresetLeftOff::InTarget(target) => {
+            strings.invoke_zone_member_in_target(target.as_str().into())
+        }
+        PresetLeftOff::Busy => strings.get_preset_busy(),
+    }
+}
+
+/// The presets as the Presets card, View > Presets and the flyout list them.
+fn preset_items(state: &AppState) -> Vec<PresetItem> {
+    state
+        .presets
+        .iter()
+        .map(|preset| PresetItem {
+            id: preset.id.as_str().into(),
+            name: preset.name.as_str().into(),
+            current: state.current_preset.as_deref() == Some(preset.id.as_str()),
+        })
+        .collect()
+}
+
+/// The current preset's name; empty while none is current.
+fn current_preset_name(state: &AppState) -> &str {
+    state
+        .presets
+        .iter()
+        .find(|preset| state.current_preset.as_deref() == Some(preset.id.as_str()))
+        .map_or("", |preset| preset.name.as_str())
 }
 
 /// A few words that name a notice, for its dismiss button.
@@ -4363,6 +4577,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::AirPlay2NextLaunch { .. } => (NoticeKind::Airplay2NextLaunch, ""),
         NoticeMessage::RemoteOnPublicNetwork => (NoticeKind::RemotePublicNetwork, ""),
         NoticeMessage::GroupsBecameZones => (NoticeKind::GroupsBecameZones, ""),
+        NoticeMessage::PresetLeftOff { .. } => (NoticeKind::PresetsLeftOff, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -7631,9 +7846,10 @@ mod tests {
     fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_next_rows_options() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        // Switch, source, master volume, Equalizer, Calibrate All, then the
-        // rows: This PC's, then the connected speakers' by name.
-        tab(window, 15);
+        // Switch, source, master volume, Save as Preset…, Equalizer,
+        // Calibrate All, then the rows: This PC's, then the connected
+        // speakers' by name.
+        tab(window, 16);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -7664,7 +7880,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 23);
+        tab(window, 24);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -7709,7 +7925,7 @@ mod tests {
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 13);
+        tab(window, 14);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -7943,7 +8159,7 @@ mod tests {
         let window = app.main.window();
         // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 13);
+        tab(window, 14);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");

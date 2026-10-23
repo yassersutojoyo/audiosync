@@ -457,6 +457,8 @@ mod tests {
             absent: Vec::new(),
             equalizer: Default::default(),
             equalizer_curves: Vec::new(),
+            presets: Vec::new(),
+            current_preset: None,
             notices: Vec::new(),
             pin_prompt: None,
             password_prompt: None,
