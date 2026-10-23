@@ -52,6 +52,8 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* manipulation drops double-tap zoom (quick taps on the delay steps zoomed iOS Safari in) and keeps pinch zoom. */
+html, body, button, input, label, .switch { touch-action: manipulation; }
 body {
   margin: 0;
   background: var(--background);
@@ -98,7 +100,8 @@ input[type=text], input[type=number] {
   border-radius: 10px;
   background: var(--surface);
   padding: 0 12px;
-  font-size: 1rem;
+  /* Below 16 px iOS zooms in on focus. */
+  font-size: max(16px, 1rem);
 }
 input[type=range] { width: 100%; min-width: 0; height: 44px; margin: 0; background: transparent; }
 .pair label { display: block; font-weight: 600; margin: 16px 0 8px; }
