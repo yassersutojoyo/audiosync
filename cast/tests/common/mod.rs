@@ -162,6 +162,9 @@ pub enum Command {
     DropConnection,
     /// Forget the running apps without telling anyone.
     ClearApps,
+    /// Stop reading the current connection, so the sender's writes fill
+    /// the socket buffers and then block.
+    Stall,
     Disconnect,
 }
 
@@ -601,6 +604,7 @@ fn serve(
     let mut stream = StreamOwned::new(connection, tcp);
     let mut reader = FrameReader::new();
     let mut buffer = vec![0u8; 16 * 1024];
+    let mut stalled = false;
     loop {
         loop {
             match commands.try_recv() {
@@ -615,6 +619,7 @@ fn serve(
                     write(&mut stream, &status);
                 }
                 Ok(Command::ClearApps) => device.apps.clear(),
+                Ok(Command::Stall) => stalled = true,
                 Ok(Command::DropConnection) => {
                     let _ = stream.sock.shutdown(std::net::Shutdown::Both);
                     return false;
@@ -626,6 +631,10 @@ fn serve(
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
             }
+        }
+        if stalled {
+            thread::sleep(Duration::from_millis(10));
+            continue;
         }
         match stream.read(&mut buffer) {
             Ok(0) => return false,
