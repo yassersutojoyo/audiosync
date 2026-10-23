@@ -453,6 +453,93 @@ fn other_methods_get_405() {
     server.stop();
 }
 
+/// Opens a stream response and waits for its first block: the pump has
+/// then taken the response in, so what the ring holds next is kept.
+fn streaming(server: &StreamServer) -> TcpStream {
+    let mut stream = get(server, "GET", "");
+    let (head, _) = http::read_response(&mut stream, Duration::ZERO);
+    assert_eq!(http::status(&head), 200);
+    let until = Instant::now() + Duration::from_secs(5);
+    while server.stats().frames_sent == 0 {
+        assert!(Instant::now() < until, "never streamed");
+        thread::sleep(Duration::from_millis(5));
+    }
+    stream
+}
+
+/// Polls the stats until `frames_dropped` reaches `at_least`, for 1.5 s:
+/// less than the 2 s queue, so a response nobody reads drops nothing yet.
+fn dropped_reaches(server: &StreamServer, at_least: u64) -> u64 {
+    let until = Instant::now() + Duration::from_millis(1500);
+    loop {
+        let dropped = server.stats().frames_dropped;
+        if dropped >= at_least || Instant::now() >= until {
+            return dropped;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+// covers: C52
+#[test]
+fn a_silent_input_keeps_the_response_open_with_silence() {
+    let (server, writer) = server(vec![LOCAL]);
+    let stop = Arc::new(AtomicBool::new(false));
+    let feeder = feed(writer, 7, Arc::clone(&stop));
+    let mut stream = get(&server, "GET", "");
+    let stopper = {
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            stop.store(true, Ordering::SeqCst);
+        })
+    };
+    let (_, body) = http::read_response(&mut stream, Duration::from_millis(900));
+    stopper.join().expect("stopper");
+    feeder.join().expect("feeder");
+    let chunks = http::chunks(&body);
+    let audio = &chunks[1..];
+    assert!(audio.len() > 10, "{} chunks", audio.len());
+    assert!(
+        audio.iter().all(|chunk| !chunk.is_empty()),
+        "the response ended"
+    );
+    assert!(audio.iter().flatten().any(|byte| *byte != 0), "the input");
+    assert!(
+        audio[audio.len() - 5..]
+            .iter()
+            .all(|chunk| chunk.len() == 960 * 4 && chunk.iter().all(|byte| *byte == 0)),
+        "silence after the input stopped"
+    );
+    assert!(server.stats().streaming);
+    server.stop();
+}
+
+// covers: C64
+#[test]
+fn a_backlog_in_the_ring_past_100_ms_is_dropped_and_counted() {
+    let (server, writer) = server(vec![LOCAL]);
+    let _stream = streaming(&server);
+    writer.write_i16(&vec![3i16; 2 * 24_000]);
+    assert!(dropped_reaches(&server, 1) > 0, "{:?}", server.stats());
+    server.stop();
+}
+
+// covers: C79
+#[test]
+fn frames_the_full_ring_refused_count_as_dropped() {
+    let (server, writer) = server(vec![LOCAL]);
+    let _stream = streaming(&server);
+    // 2 s into a 1 s ring: 48 000 frames never get in.
+    writer.write_i16(&vec![3i16; 2 * 96_000]);
+    let dropped = dropped_reaches(&server, 60_000);
+    assert!(
+        dropped >= 60_000,
+        "{dropped}: the ring's overflow is missing"
+    );
+    server.stop();
+}
+
 // The G6 hardware check reads these log lines.
 #[test]
 fn a_fetch_logs_its_header_names_and_three_values_capped_and_never_the_token() {

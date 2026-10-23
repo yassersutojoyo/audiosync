@@ -973,13 +973,17 @@ fn serve(mut stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
     }
 }
 
-fn write_chunk(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
+/// Writes `data` as one chunk in a single write, built in `scratch`: on a
+/// no-delay socket each write would leave as its own segment.
+fn write_chunk(stream: &mut impl Write, scratch: &mut Vec<u8>, data: &[u8]) -> io::Result<()> {
     if data.is_empty() {
         return Ok(());
     }
-    stream.write_all(format!("{:X}\r\n", data.len()).as_bytes())?;
-    stream.write_all(data)?;
-    stream.write_all(b"\r\n")
+    scratch.clear();
+    write!(scratch, "{:X}\r\n", data.len())?;
+    scratch.extend_from_slice(data);
+    scratch.extend_from_slice(b"\r\n");
+    stream.write_all(scratch)
 }
 
 fn serve_stream(
@@ -1023,7 +1027,8 @@ fn stream_body(
     let Ok(mut encoder) = format.encoder() else {
         return ResponseEnd::EncodeFailed;
     };
-    if write_chunk(stream, &format.stream_header()).is_err() {
+    let mut scratch = Vec::new();
+    if write_chunk(stream, &mut scratch, &format.stream_header()).is_err() {
         return ResponseEnd::ClosedByDevice;
     }
     loop {
@@ -1049,7 +1054,7 @@ fn stream_body(
         let Ok(bytes) = encoder.encode(block) else {
             return ResponseEnd::EncodeFailed;
         };
-        if write_chunk(stream, &bytes)
+        if write_chunk(stream, &mut scratch, &bytes)
             .and_then(|()| stream.flush())
             .is_err()
         {
@@ -1072,7 +1077,14 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
     let queue_blocks = (QUEUE_LIMIT.as_millis() / BLOCK.as_millis()) as u64;
     let mut start = Instant::now();
     let mut emitted: u64 = 0;
+    let mut overflow = reader.overflow();
     while !shared.stopped.load(Ordering::SeqCst) {
+        // Frames the full ring refused never reach a block: dropped too (C79).
+        let refused = reader.overflow();
+        shared
+            .ring_dropped
+            .fetch_add(refused - overflow, Ordering::Relaxed);
+        overflow = refused;
         let streaming = {
             let mut live = lock(&shared.live);
             if live.restart {
@@ -1174,4 +1186,36 @@ pub fn image_size(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
         at += 2 + length;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Records each write it is handed.
+    #[derive(Default)]
+    struct Writes(Vec<Vec<u8>>);
+
+    impl Write for Writes {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.push(buf.to_vec());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_chunk_leaves_in_one_write() {
+        let mut writes = Writes::default();
+        let mut scratch = Vec::new();
+        write_chunk(&mut writes, &mut scratch, &[7; 26]).unwrap();
+        write_chunk(&mut writes, &mut scratch, &[]).unwrap();
+        let mut expected = b"1A\r\n".to_vec();
+        expected.extend_from_slice(&[7; 26]);
+        expected.extend_from_slice(b"\r\n");
+        assert_eq!(writes.0, [expected]);
+    }
 }

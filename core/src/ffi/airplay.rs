@@ -1724,7 +1724,7 @@ pub struct AscAirPlayInput {
 /// Starts an AirPlay sender: its stream, silent until audio comes through
 /// its input ([`asc_airplay_take_input`]), and its driver thread. Discovery
 /// waits for [`asc_airplay_start_discovery`]. The master starts at 100.
-/// Null when the thread can't start.
+/// Null when the thread can't start or creating the sender failed.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
     create_with(live_browser)
@@ -1842,7 +1842,7 @@ pub unsafe extern "C" fn asc_airplay_destroy(airplay: *mut *mut AscAirPlay) {
 
 /// Starts browsing the local network for AirPlay receivers over multicast
 /// DNS (P7); they arrive through [`asc_airplay_next_receiver`]. False when
-/// the handle is null or multicast DNS can't start.
+/// the handle is null or dead or multicast DNS can't start.
 ///
 /// # Safety
 ///

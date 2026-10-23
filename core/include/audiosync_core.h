@@ -1252,7 +1252,7 @@ typedef struct AscAirPlayEvent {
  * Starts an AirPlay sender: its stream, silent until audio comes through its
  * input (asc_airplay_take_input), and its driver thread; discovery waits for
  * asc_airplay_start_discovery. The master starts at 100. Returns NULL when
- * the thread can't start.
+ * the thread can't start or creating the sender failed.
  */
 AscAirPlay *asc_airplay_create(void);
 
@@ -1276,7 +1276,7 @@ void asc_airplay_destroy(AscAirPlay **airplay);
 /*
  * Starts browsing the local network for AirPlay receivers over multicast DNS;
  * they arrive through asc_airplay_next_receiver. Returns false when the handle
- * is NULL or multicast DNS can't start.
+ * is NULL or dead or multicast DNS can't start.
  */
 bool asc_airplay_start_discovery(AscAirPlay *airplay);
 
@@ -1366,7 +1366,7 @@ double asc_airplay_set_hold_back(AscAirPlay *airplay, double hold_back_ms);
 
 /*
  * The base latency L in milliseconds: a local output lines up with the
- * speakers at L plus its own delay. 0 for a NULL handle.
+ * speakers at L plus its own delay. 0 for a NULL or dead handle.
  */
 double asc_airplay_latency_ms(const AscAirPlay *airplay);
 
@@ -1887,10 +1887,12 @@ typedef void (*AscRemoteCommand)(void *context, const char *command_json);
  * "listen"}, each optional: the port (default ASC_REMOTE_DEFAULT_PORT), the
  * computer's name so <local_name>.local is an accepted address, the file
  * that keeps the paired devices' token hashes (none: memory only), and the
- * IP literals to listen on (default every IPv6 and IPv4 address). command
- * gets each accepted change with context; both may be used from any thread
- * until asc_remote_stop returns. Returns NULL on failure with the reason
- * (ASC_REMOTE_ERROR_*) in *error when error isn't NULL.
+ * IP literals to listen on (default every IPv6 and IPv4 address). A NULL
+ * config_json takes every default; one that isn't UTF-8 fails with
+ * ASC_REMOTE_ERROR_CONFIG. command gets each accepted change with context;
+ * both may be used from any thread until asc_remote_stop returns. Returns
+ * NULL on failure with the reason (ASC_REMOTE_ERROR_*) in *error when error
+ * isn't NULL.
  */
 AscRemote *asc_remote_start(const char *config_json, AscRemoteCommand command, void *context, int32_t *error);
 

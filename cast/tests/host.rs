@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::host::{
-    AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, MAX_HOST_EVENTS, OUTPUT_SYNC,
-    OutputSync, StartRefused,
+    AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, MAX_HOST_EVENTS, MAX_OFFSET,
+    OUTPUT_SYNC, OutputSync, StartRefused,
 };
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::NS_MEDIA;
@@ -438,6 +438,9 @@ fn device_memory_keeps_formats_and_offsets_and_skips_damaged_entries() {
     assert_eq!(memory.format(&B), Codec::Wav);
     assert_eq!(memory.offset(&B), None);
     assert_eq!(DeviceMemory::from_json("not json"), DeviceMemory::default());
+    let damaged = DeviceMemory::from_json(&format!(r#"{{"{A}": {{"offsetMs": 60000}}}}"#));
+    assert_eq!(damaged.offset(&A), Some(MAX_OFFSET), "clamped on load");
+    assert_eq!(MAX_OFFSET, Duration::from_secs(20));
 
     let mut host = CastHost::new(memory).expect("worker");
     host.set_offset(B, Duration::from_millis(40));

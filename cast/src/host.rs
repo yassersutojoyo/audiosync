@@ -64,6 +64,10 @@ pub enum OutputSync {
 /// What every Cast output is: the protocol has no shared clock (C73).
 pub const OUTPUT_SYNC: OutputSync = OutputSync::MeasuredOffset;
 
+/// The longest stored offset: the host's ceiling for holding local outputs
+/// back, so a damaged file can't make them wait longer.
+pub const MAX_OFFSET: Duration = Duration::from_secs(20);
+
 /// What the host stores per device `id` between runs: the format that last
 /// worked (C84) and the measured offset (C77). Only the user, through the
 /// host, changes an offset; the sender never corrects one on its own.
@@ -115,7 +119,8 @@ impl DeviceMemory {
     }
 
     /// Reads [`DeviceMemory::to_json`]; entries it can't read are skipped,
-    /// so a damaged file costs only those devices.
+    /// so a damaged file costs only those devices, and an offset past
+    /// [`MAX_OFFSET`] reads as that.
     pub fn from_json(text: &str) -> DeviceMemory {
         let mut memory = DeviceMemory::default();
         let Ok(Value::Object(entries)) = serde_json::from_str::<Value>(text) else {
@@ -131,7 +136,9 @@ impl DeviceMemory {
                 memory.formats.insert(device, codec);
             }
             if let Some(ms) = entry["offsetMs"].as_u64() {
-                memory.offsets.insert(device, Duration::from_millis(ms));
+                memory
+                    .offsets
+                    .insert(device, Duration::from_millis(ms).min(MAX_OFFSET));
             }
         }
         memory
