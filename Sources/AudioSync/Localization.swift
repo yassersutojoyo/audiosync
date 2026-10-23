@@ -977,8 +977,8 @@ struct UIStrings {
     let castAddField = "Address"
     let castAddInvalid = "That isn't an IP address or host name. Check it and try again."
     let castAddNotFound = "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
-    /// What VoiceOver reads for the spinner while the address is tried.
-    let castAddLooking = "Looking for the speaker…"
+    /// The Add button and its spinner while the address is tried.
+    let castAddChecking = "Checking…"
     func castAddProblem(_ problem: CastAddProblem) -> String {
         switch problem {
         case .unreadable: return castAddInvalid
@@ -1106,7 +1106,7 @@ struct UIStrings {
 
     let webRemoteMenu = "Web Remote…"
     let webRemoteTitle = "Web Remote"
-    let webRemoteSummary = "Control the speakers from a phone or tablet on the same network."
+    let webRemoteSummary = "Control your speakers from a phone on the same network as this Mac."
     let webRemoteAddressTitle = "Address"
     /// Above the first address, then above the IP address after the Bonjour one.
     let webRemoteAddressLabel = "On the phone, open"
