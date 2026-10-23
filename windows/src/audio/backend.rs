@@ -7,6 +7,7 @@
 //! because of them, stays the UI's decision (the session rules in
 //! `audiosync_core::policy::session`).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -18,6 +19,16 @@ use audiosync_core::policy::source_quit::WhenSourceQuits;
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::cast_address::CastAddress;
 use super::routing::DirectPath;
+
+/// The zone volume, 0 to 100, of every speaker in a zone (spec S249), by
+/// kind under the backend's own IDs: endpoint, AirPlay and Cast device IDs.
+/// A speaker not listed is in no zone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ZoneVolumes {
+    pub local: BTreeMap<String, f64>,
+    pub airplay: BTreeMap<String, f64>,
+    pub cast: BTreeMap<String, f64>,
+}
 
 /// What AudioSync captures.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -692,6 +703,11 @@ pub trait AudioBackend {
     /// output and AirPlay speaker, live. A value that isn't finite is
     /// ignored.
     fn set_master_volume(&mut self, position: f64);
+
+    /// Sets every zone volume (spec S249): playing members get their new
+    /// gain or level at once, as a master change gives them, and a member
+    /// started later starts at it.
+    fn set_zone_volumes(&mut self, zones: ZoneVolumes);
 
     /// The master volume slider position.
     fn master_volume(&self) -> f64;
