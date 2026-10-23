@@ -100,8 +100,8 @@ use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
     Group, GroupError, HiddenSpeaker, LeftOutRow, MixApp, Notice, NoticeMessage, PasswordPrompt,
-    PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind,
-    ViewSettings, Waiting, clamp_delay_ms,
+    PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind, SourceName, Speaker,
+    SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -234,6 +234,18 @@ impl Chosen {
                 mode: MixMode::AllExcept,
                 apps,
             } => format!("All apps except {}", mix_names(apps)),
+        }
+    }
+
+    /// The name the double-audio notice uses, `None` for the whole system.
+    fn notice_name(&self) -> Option<SourceName> {
+        match self {
+            Chosen::WholeSystem => None,
+            Chosen::Mix {
+                mode: MixMode::AllExcept,
+                apps,
+            } => Some(SourceName::AllAppsExcept(mix_names(apps))),
+            chosen => Some(SourceName::Named(chosen.shown_name())),
         }
     }
 
@@ -2491,10 +2503,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .collect()
         };
         let message = NoticeMessage::HeardTwice {
-            source: match &self.chosen {
-                Chosen::WholeSystem => None,
-                chosen => Some(chosen.shown_name()),
-            },
+            source: self.chosen.notice_name(),
             mute: names(false),
             shared: names(true),
             default_output: paths
@@ -3912,6 +3921,27 @@ mod tests {
     }
 
     #[test]
+    fn the_double_audio_notice_leaves_the_all_except_wording_to_the_ui() {
+        let except = mix_choice(
+            MixMode::AllExcept,
+            vec![mix_app("game.exe"), mix_app("chat.exe")],
+        );
+        assert_eq!(
+            except.notice_name(),
+            Some(SourceName::AllAppsExcept("game, chat".to_owned()))
+        );
+        let only = mix_choice(
+            MixMode::Only,
+            vec![mix_app("game.exe"), mix_app("chat.exe")],
+        );
+        assert_eq!(
+            only.notice_name(),
+            Some(SourceName::Named("game, chat".to_owned()))
+        );
+        assert_eq!(Chosen::WholeSystem.notice_name(), None);
+    }
+
+    #[test]
     fn all_except_keeps_one_app_as_a_mix_and_switching_mode_carries_the_checked_apps() {
         let except = mix_toggle(
             &Chosen::WholeSystem,
@@ -5253,7 +5283,7 @@ mod tests {
     fn twice(source: Option<&str>, mute: &[&str], shared: &[&str]) -> NoticeMessage {
         let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect();
         NoticeMessage::HeardTwice {
-            source: source.map(str::to_owned),
+            source: source.map(|name| SourceName::Named(name.to_owned())),
             mute: names(mute),
             shared: names(shared),
             default_output: None,
