@@ -41,9 +41,9 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
     CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog,
-    GuidePage, GuideStepItem, GuideWindow, LeftOutItem, MainControl, MainWindow, NameField,
-    NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState,
-    SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
+    GuidePage, GuideStepItem, GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow,
+    NameField, NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart,
+    RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
 };
 
 mod help_window;
@@ -1374,6 +1374,11 @@ impl App {
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_cast_list(cast_list(state.cast_list));
         self.main.set_cast_by_address(state.cast_by_address);
+        self.main.set_this_pc_all_hidden(state.hidden_in(true));
+        self.main.set_connected_all_hidden(state.hidden_in(false));
+        self.flyout.set_all_hidden(state.all_hidden());
+        self.main
+            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
         let listed = |s: &&ui_model::Speaker| lists(s);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
@@ -1554,6 +1559,34 @@ impl App {
         if let Some(callback) = self.on_refresh.borrow().as_ref() {
             callback(&state);
         }
+    }
+
+    /// Hide Speaker in a row's menu. The backend keeps the kind the row
+    /// shows, for Hidden Speakers to name it while it isn't listed.
+    fn hide_speaker(&self, id: &str) {
+        let Some(speaker) = self.snapshot().speaker(id).cloned() else {
+            return;
+        };
+        let strings = self.main.global::<Strings>();
+        let kind = strings.invoke_speaker_kind(speaker_kind(speaker.kind));
+        self.update(|b| b.hide_speaker(id, &kind));
+        if self.snapshot().speaker(id).is_none() {
+            self.announce(strings.invoke_speaker_hidden(speaker.name.as_str().into()));
+        }
+    }
+
+    /// An entry of Speakers > Hidden Speakers.
+    fn unhide_speaker(&self, id: &str) {
+        let state = self.snapshot();
+        let Some(hidden) = state.hidden.iter().find(|hidden| hidden.id == id) else {
+            return;
+        };
+        let said = self
+            .main
+            .global::<Strings>()
+            .invoke_speaker_shown(hidden.name.as_str().into());
+        self.update(|b| b.unhide_speaker(id));
+        self.announce(said);
     }
 
     /// Has Narrator say `text` without moving the focus, through the live
@@ -1793,6 +1826,10 @@ impl App {
         main.on_cast_remove_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.remove_cast_address(&id)))
         });
+        let w = weak.clone();
+        main.on_speaker_hide_requested(move |id| with_app(&w, |app| app.hide_speaker(&id)));
+        let w = weak.clone();
+        main.on_speaker_unhide_requested(move |id| with_app(&w, |app| app.unhide_speaker(&id)));
         let w = weak.clone();
         main.on_calibrate_requested(move |id| {
             with_app(&w, |app| {
@@ -3206,10 +3243,25 @@ pub fn speaker_item(
             .cast
             .as_ref()
             .is_some_and(|cast| cast.added_by_address),
+        hideable: !speaker.is_reference(),
         // Needs the strings: set by the caller (`App::refresh`).
         cast_group_note: SharedString::default(),
         group_note: SharedString::default(),
     }
+}
+
+/// The entries of Speakers > Hidden Speakers.
+fn hidden_items(state: &AppState) -> Vec<HiddenItem> {
+    state
+        .hidden
+        .iter()
+        .map(|hidden| HiddenItem {
+            id: hidden.id.as_str().into(),
+            name: hidden.name.as_str().into(),
+            kind: hidden.kind_text.as_str().into(),
+            present: hidden.present.is_some(),
+        })
+        .collect()
 }
 
 fn cast_group(speaker: &ui_model::Speaker) -> Option<&ui_model::CastGroup> {
@@ -5194,6 +5246,63 @@ mod tests {
 
     fn name_of(app: &App, id: &str) -> String {
         app.snapshot().speaker(id).unwrap().name.clone()
+    }
+
+    #[test]
+    fn hide_speaker_takes_the_row_out_and_hidden_speakers_brings_it_back() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        let reference = app
+            .snapshot()
+            .speakers
+            .iter()
+            .find(|speaker| speaker.is_reference())
+            .map(|speaker| speaker.id.clone())
+            .expect("the mock has a reference");
+        assert!(!row_of(&app, &reference).hideable, "no Hide Speaker");
+        assert!(row_of(&app, "local:desk").hideable);
+        assert_eq!(app.main.get_hidden_speakers().row_count(), 0);
+        let name = name_of(&app, "local:desk");
+
+        app.main.invoke_speaker_hide_requested("local:desk".into());
+        assert!(app.snapshot().speaker("local:desk").is_none());
+        assert!(
+            !app.models
+                .connected
+                .iter()
+                .any(|row| row.id == "local:desk"),
+            "its row is gone"
+        );
+        assert_eq!(app.main.get_notice_announcement(), format!("{name} hidden"));
+        let entries = app.main.get_hidden_speakers();
+        assert_eq!(entries.row_count(), 1);
+        let entry = entries.row_data(0).unwrap();
+        assert_eq!(entry.id, "local:desk");
+        assert!(entry.present);
+        let usb = strings.invoke_speaker_kind(SpeakerKind::Usb);
+        assert_eq!(entry.kind, usb);
+        assert_eq!(
+            strings.invoke_hidden_speaker_entry(entry.name.clone(), entry.kind.clone(), true),
+            format!("{name} ({usb})")
+        );
+        assert_eq!(
+            strings.invoke_hidden_speaker_entry(entry.name, entry.kind, false),
+            format!("{name} ({usb}, not found)")
+        );
+        assert!(app.main.get_connected_all_hidden());
+        assert!(!app.main.get_this_pc_all_hidden());
+
+        app.main
+            .invoke_speaker_hide_requested(reference.as_str().into());
+        assert!(app.snapshot().speaker(&reference).is_some());
+
+        app.main
+            .invoke_speaker_unhide_requested("local:desk".into());
+        assert!(!app.snapshot().speaker("local:desk").unwrap().enabled);
+        assert!(row_of(&app, "local:desk").hideable);
+        assert_eq!(app.main.get_notice_announcement(), format!("{name} shown"));
+        assert_eq!(app.main.get_hidden_speakers().row_count(), 0);
+        assert!(!app.main.get_connected_all_hidden());
     }
 
     #[test]

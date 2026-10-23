@@ -355,6 +355,15 @@ pub struct PasswordPrompt {
 }
 
 impl Speaker {
+    /// The reference output: the one local output with no offset of its own.
+    pub fn is_reference(&self) -> bool {
+        self.delay_ms.is_none()
+            && !matches!(
+                self.kind,
+                SpeakerKind::AirPlay | SpeakerKind::AirPlay2 | SpeakerKind::Cast
+            )
+    }
+
     /// Whether the speaker lists show it. A virtual output (a loopback
     /// driver, a voice changer, a meeting app's device) is listed only while
     /// Show Virtual Devices is on or while it is turned on. The main window
@@ -734,6 +743,11 @@ impl AppState {
         })
     }
 
+    /// Whether the speakers present are all hidden, at least one of them.
+    pub fn all_hidden(&self) -> bool {
+        self.speakers.is_empty() && self.hidden.iter().any(|hidden| hidden.present.is_some())
+    }
+
     /// Speakers switched on right now.
     pub fn active_speakers(&self) -> usize {
         self.speakers.iter().filter(|s| s.enabled).count()
@@ -1018,6 +1032,8 @@ pub struct MockBackend {
     state: AppState,
     next_id: u64,
     view: ViewSettings,
+    /// The rows of the hidden speakers, to list them again as they were.
+    hidden_rows: Vec<Speaker>,
 }
 
 #[cfg(any(not(windows), test))]
@@ -1142,6 +1158,7 @@ impl MockBackend {
             state,
             next_id: 1,
             view: ViewSettings::default(),
+            hidden_rows: Vec::new(),
         }
     }
 
@@ -1272,6 +1289,32 @@ impl Backend for MockBackend {
     fn rename_speaker(&mut self, id: &str, name: &str) {
         if let Some(speaker) = self.speaker_mut(id) {
             speaker.name = speaker_names::shown_after(name, &speaker.system_name);
+        }
+    }
+
+    fn hide_speaker(&mut self, id: &str, kind: &str) {
+        let Some(index) = self.state.speakers.iter().position(|s| s.id == id) else {
+            return;
+        };
+        if self.state.speakers[index].is_reference() {
+            return;
+        }
+        let mut row = self.state.speakers.remove(index);
+        row.enabled = false;
+        self.state.hidden.push(HiddenSpeaker {
+            id: row.id.clone(),
+            name: row.name.clone(),
+            kind_text: kind.to_owned(),
+            present: Some(row.kind),
+        });
+        self.hidden_rows.push(row);
+    }
+
+    fn unhide_speaker(&mut self, id: &str) {
+        self.state.hidden.retain(|hidden| hidden.id != id);
+        if let Some(index) = self.hidden_rows.iter().position(|s| s.id == id) {
+            let row = self.hidden_rows.remove(index);
+            self.state.speakers.push(row);
         }
     }
 

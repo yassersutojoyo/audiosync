@@ -1117,6 +1117,7 @@ export component SpeakerRow inherits Rectangle {
     callback cast-resync();
     // Remove, for a Google Cast speaker the user added by address.
     callback cast-remove();
+    callback hide-requested();
     // Calibrate with Microphone, and Cancel while it runs.
     callback calibrate();
     callback cancel-calibration();
@@ -1288,6 +1289,15 @@ export component SpeakerRow inherits Rectangle {
                     title: Strings.cast-remove;
                     activated => {
                         root.cast-remove();
+                    }
+                }
+
+                if root.item.hideable: MenuSeparator { }
+
+                if root.item.hideable: MenuItem {
+                    title: Strings.hide-speaker;
+                    activated => {
+                        root.hide-requested();
                     }
                 }
             }

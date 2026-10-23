@@ -8,7 +8,7 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, GroupItem, LeftOutItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { Appearance, CalibrationRowItem, CastList, GroupItem, HiddenItem, LeftOutItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -49,6 +49,7 @@ component SpeakerSection inherits VerticalLayout {
     callback cast-muted(string, bool);
     callback cast-resync(string);
     callback cast-remove(string);
+    callback hide-requested(string);
     // Add by Address…, under the note while no Google Cast speaker is found.
     in property <bool> show-add-address;
     callback add-address();
@@ -152,6 +153,9 @@ component SpeakerSection inherits VerticalLayout {
                 }
                 cast-remove => {
                     root.cast-remove(speaker.id);
+                }
+                hide-requested => {
+                    root.hide-requested(speaker.id);
                 }
                 calibrate => {
                     root.calibrate(speaker.id);
@@ -703,6 +707,12 @@ export component MainWindow inherits Window {
     // Connected Speakers lists nothing only because Show Virtual Devices is
     // off and its outputs are virtual.
     in property <bool> connected-virtual-hidden;
+    // A section holds a hidden speaker that is present: when it lists
+    // nothing, its note says its speakers are hidden.
+    in property <bool> this-pc-all-hidden;
+    in property <bool> connected-all-hidden;
+    // Speakers > Hidden Speakers.
+    in property <[HiddenItem]> hidden-speakers;
     // AirPlay discovery runs but has found no speaker for 20 seconds.
     in property <bool> airplay-none-found;
     // What the Google Cast search says while it lists no speaker.
@@ -773,6 +783,9 @@ export component MainWindow inherits Window {
     // Speakers > Add by Address…, and Remove on a row added that way.
     callback cast-add-address-requested();
     callback cast-remove-requested(string);
+    // Hide Speaker in a speaker's menu, and an entry of Hidden Speakers.
+    callback speaker-hide-requested(string);
+    callback speaker-unhide-requested(string);
     // Calibrate with Microphone on a speaker's row, and its Cancel.
     callback calibrate-requested(string);
     callback cancel-calibration-requested();
@@ -956,6 +969,22 @@ export component MainWindow inherits Window {
                 shortcut: @keys(F5);
                 activated => {
                     root.refresh-devices();
+                }
+            }
+
+            Menu {
+                title: Strings.hidden-speakers;
+
+                if root.hidden-speakers.length == 0: MenuItem {
+                    title: Strings.no-hidden-speakers;
+                    enabled: false;
+                }
+
+                for hidden in root.hidden-speakers: MenuItem {
+                    title: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
+                    activated => {
+                        root.speaker-unhide-requested(hidden.id);
+                    }
                 }
             }
 
@@ -1308,6 +1337,9 @@ export component MainWindow inherits Window {
                         forget-pairing(id) => {
                             root.forget-pairing-requested(id);
                         }
+                        hide-requested(id) => {
+                            root.speaker-hide-requested(id);
+                        }
                         device-volume-fix(id) => {
                             root.device-volume-fix-requested(id);
                         }
@@ -1316,7 +1348,7 @@ export component MainWindow inherits Window {
                         focus-changed(id, part) => {
                             root.speaker-focus-changed(id, part);
                         }
-                        note: root.this-pc.length == 0 ? Strings.this-pc-none : "";
+                        note: root.this-pc.length > 0 ? "" : root.this-pc-all-hidden ? Strings.all-speakers-hidden : Strings.this-pc-none;
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }
@@ -1427,6 +1459,9 @@ export component MainWindow inherits Window {
                         forget-pairing(id) => {
                             root.forget-pairing-requested(id);
                         }
+                        hide-requested(id) => {
+                            root.speaker-hide-requested(id);
+                        }
                         device-volume-fix(id) => {
                             root.device-volume-fix-requested(id);
                         }
@@ -1454,7 +1489,7 @@ export component MainWindow inherits Window {
                         // when neither finds a speaker.
                         property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                         property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
-                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
                         property <string> cast-note: self.both-none ? "" : Strings.cast-list(root.cast-list);
                         note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
