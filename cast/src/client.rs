@@ -27,6 +27,9 @@ use crate::status::{AppSession, ReceiverStatus};
 
 /// TCP connect and TLS handshake limit per address.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// The longest one write waits on a device that stopped reading, once
+/// connected: short enough that a quit's teardown fits its margin (C88).
+const WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 /// The longest a read waits before timers run again.
 const READ_SLICE: Duration = Duration::from_millis(50);
 /// How often a TLS handshake waiting on the device looks again.
@@ -188,6 +191,8 @@ pub struct CastClient {
     /// Cleared when the user deselects the device; the launch and load
     /// waits give up with it (C80).
     selected: Option<Arc<AtomicBool>>,
+    /// The end of a running teardown's budget, which every write keeps to.
+    write_until: Option<Instant>,
 }
 
 impl fmt::Debug for CastClient {
@@ -287,10 +292,9 @@ impl CastClient {
                 }
             }
         };
-        stream
-            .get_ref()
-            .0
-            .set_nonblocking(false)
+        let tcp = &stream.get_ref().0;
+        tcp.set_nonblocking(false).map_err(tcp_error)?;
+        tcp.set_write_timeout(Some(WRITE_TIMEOUT))
             .map_err(tcp_error)?;
         let fingerprint = stream
             .peer_certificate()
@@ -315,6 +319,7 @@ impl CastClient {
             buffer: vec![0; 16 * 1024],
             ended: None,
             selected: None,
+            write_until: None,
         };
         loop {
             client.step(READ_SLICE);
@@ -506,11 +511,13 @@ impl CastClient {
     /// [`CastClient::stop`] for an owner that keeps the client.
     pub fn stop_in_place(&mut self, budget: Duration) -> EndReason {
         let until = Instant::now() + budget;
+        self.write_until = Some(until);
         self.channel.stop(Instant::now());
         while !self.channel.is_ended() && Instant::now() < until {
             self.step(READ_SLICE.min(STOP_STEP_TIMEOUT));
         }
         self.flush();
+        self.cap_write();
         let _ = self.stream.shutdown();
         self.end_reason().unwrap_or(EndReason::Stopped)
     }
@@ -570,6 +577,7 @@ impl CastClient {
 
     fn flush(&mut self) {
         while let Some(message) = self.channel.poll_outbound() {
+            self.cap_write();
             let result = match encode_frame(&message) {
                 Ok(frame) => self.stream.write_all(&frame),
                 Err(fault) => {
@@ -581,6 +589,14 @@ impl CastClient {
                 self.channel.end(EndReason::Io(error.to_string()));
                 return;
             }
+        }
+    }
+
+    fn cap_write(&self) {
+        if let Some(until) = self.write_until {
+            let left = until.saturating_duration_since(Instant::now());
+            let timeout = left.clamp(Duration::from_millis(1), WRITE_TIMEOUT);
+            let _ = self.stream.get_ref().0.set_write_timeout(Some(timeout));
         }
     }
 }
