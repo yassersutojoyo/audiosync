@@ -5352,6 +5352,35 @@ do {
           "guide: the illustrations carry no text and differ between light and dark")
 }
 
+// MARK: Guide text: hand-wrapped lines join into paragraphs the window wraps (GuideLayout)
+do {
+    let t = UIStrings()
+    let paragraphs = GuideLayout.paragraphs(of: t.helpText)
+    let texts = paragraphs.map(\.text)
+    let titles = t.helpText.split(separator: "\n").prefix(2).map(String.init)
+    let topics = ["First Steps", "More Controls", "Calibration", "Speaker Notes", "AirPlay", "Google Cast",
+                  "Notices", "Web Remote", "Tips", "Volume", "Notes"]
+    let unfinished = texts.filter { text in !text.isEmpty && !(text.last.map { ".:!?".contains($0) } ?? false) }
+    check(unfinished == titles + topics,
+          "guide: only the title and topic headings end without punctuation, so no paragraph breaks inside a sentence",
+          unfinished.joined(separator: " | "))
+    check(!texts.contains { $0.contains("\n") || $0.contains("  ") }
+            && texts.joined(separator: " ").split(separator: " ") == t.helpText.split { $0 == " " || $0 == "\n" },
+          "guide: no paragraph keeps a hard break or a wrap's indent, and every word stays in order")
+    let steps = paragraphs.filter { $0.text.first?.isNumber == true }
+    check(steps.map(\.hang) == ["1. ", "2. ", "3. ", "4. ", "5. "]
+            && paragraphs.filter { $0.text.hasPrefix("- ") }.allSatisfy { $0.hang == "- " }
+            && texts.filter(\.isEmpty).count == t.helpText.components(separatedBy: "\n").filter(\.isEmpty).count,
+          "guide: steps and list items indent past their marker, and the blank lines between topics stay",
+          "\(steps.map(\.hang))")
+
+    let made = GuideLayout.paragraphs(of: "Topic\nOne two\nthree.\n\n1. Step one\n   wraps\n- Item\n  goes on\nAfter")
+    check(made == [.init(text: "Topic", hang: ""), .init(text: "One two three.", hang: ""), .init(text: "", hang: ""),
+                   .init(text: "1. Step one wraps", hang: "1. "), .init(text: "- Item goes on", hang: "- "),
+                   .init(text: "After", hang: "")],
+          "guide: a heading stands alone, wrapped lines join, and a line back at the margin leaves the list", "\(made)")
+}
+
 // MARK: Guide topics: Calibration has its own topic, with the actions it names
 do {
     let t = UIStrings()
