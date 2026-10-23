@@ -408,10 +408,12 @@ pub struct Notice {
 /// A source other than the whole system, as a notice names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceName {
-    /// An app, several apps or an input device, by the name shown for it.
+    /// An app or an input device, by the name shown for it.
     Named(String),
+    /// Several apps, by name; the UI joins the list.
+    Apps(Vec<String>),
     /// Every app except the listed ones; the UI words it around the list.
-    AllAppsExcept(String),
+    AllAppsExcept(Vec<String>),
 }
 
 /// What a notice says. The UI words it (the notice texts in

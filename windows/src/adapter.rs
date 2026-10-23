@@ -229,11 +229,11 @@ impl Chosen {
             Chosen::Mix {
                 mode: MixMode::Only,
                 apps,
-            } => mix_names(apps),
+            } => mix_names(apps).join(", "),
             Chosen::Mix {
                 mode: MixMode::AllExcept,
                 apps,
-            } => format!("All apps except {}", mix_names(apps)),
+            } => format!("All apps except {}", mix_names(apps).join(", ")),
         }
     }
 
@@ -241,6 +241,10 @@ impl Chosen {
     fn notice_name(&self) -> Option<SourceName> {
         match self {
             Chosen::WholeSystem => None,
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps,
+            } => Some(SourceName::Apps(mix_names(apps))),
             Chosen::Mix {
                 mode: MixMode::AllExcept,
                 apps,
@@ -273,18 +277,16 @@ impl Chosen {
 }
 
 /// A mix's apps by name, as the source menu lists them.
-fn mix_names(apps: &[SavedMixApp]) -> String {
-    let names: Vec<&str> = apps
-        .iter()
+fn mix_names(apps: &[SavedMixApp]) -> Vec<String> {
+    apps.iter()
         .map(|app| {
             if app.name.is_empty() {
-                app.executable.as_str()
+                app.executable.clone()
             } else {
-                app.name.as_str()
+                app.name.clone()
             }
         })
-        .collect();
-    names.join(", ")
+        .collect()
 }
 
 /// The mode the several-apps list shows for `chosen`: a mix's own, "only
@@ -2573,7 +2575,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             };
             // The UI puts its own words around the apps "all except" leaves out.
             let name = match &self.chosen {
-                Chosen::Mix { apps, .. } => mix_names(apps),
+                Chosen::Mix { apps, .. } => mix_names(apps).join(", "),
                 chosen => chosen.shown_name(),
             };
             // Apps come before input devices, as in the listing.
@@ -3920,6 +3922,7 @@ mod tests {
         );
     }
 
+    // covers: S242
     #[test]
     fn the_double_audio_notice_leaves_the_all_except_wording_to_the_ui() {
         let except = mix_choice(
@@ -3928,7 +3931,10 @@ mod tests {
         );
         assert_eq!(
             except.notice_name(),
-            Some(SourceName::AllAppsExcept("game, chat".to_owned()))
+            Some(SourceName::AllAppsExcept(vec![
+                "game".into(),
+                "chat".into()
+            ]))
         );
         let only = mix_choice(
             MixMode::Only,
@@ -3936,7 +3942,7 @@ mod tests {
         );
         assert_eq!(
             only.notice_name(),
-            Some(SourceName::Named("game, chat".to_owned()))
+            Some(SourceName::Apps(vec!["game".into(), "chat".into()]))
         );
         assert_eq!(Chosen::WholeSystem.notice_name(), None);
     }

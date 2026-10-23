@@ -3767,7 +3767,10 @@ fn join_names(names: &[String], and: impl FnOnce(&str, &str) -> String) -> Strin
 fn source_name(strings: &Strings<'_>, source: &SourceName) -> SharedString {
     match source {
         SourceName::Named(name) => name.as_str().into(),
-        SourceName::AllAppsExcept(names) => strings.invoke_source_all_except(names.as_str().into()),
+        SourceName::Apps(names) => joined(strings, names),
+        SourceName::AllAppsExcept(names) => {
+            strings.invoke_source_all_except(joined(strings, names))
+        }
     }
 }
 
@@ -3794,6 +3797,9 @@ fn guide_intro(strings: &Strings<'_>, guide: &Guide) -> SharedString {
 /// A guide step in the UI's words.
 fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
     match step {
+        GuideStep::RouteApp {
+            app: SourceName::AllAppsExcept(names),
+        } => strings.invoke_guide_route_all_except(joined(strings, names)),
         GuideStep::RouteApp { app } => strings.invoke_guide_route_app(source_name(strings, app)),
         GuideStep::ChangeDefault { current } => {
             strings.invoke_guide_change_default(current.as_str().into())
@@ -3807,6 +3813,9 @@ fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
         GuideStep::SharedOutputs { outputs } => {
             strings.invoke_guide_shared_outputs(joined(strings, outputs))
         }
+        GuideStep::KeepAppUnmuted {
+            app: SourceName::AllAppsExcept(names),
+        } => strings.invoke_guide_keep_all_except_unmuted(joined(strings, names)),
         GuideStep::KeepAppUnmuted { app } => {
             strings.invoke_guide_keep_app_unmuted(source_name(strings, app))
         }
@@ -6788,11 +6797,12 @@ mod tests {
         }
     }
 
+    // covers: S242
     #[test]
     fn double_audio_from_all_apps_except_some_names_the_source_in_the_uis_words() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
-        let source = SourceName::AllAppsExcept("Spotify, Chrome".into());
+        let source = SourceName::AllAppsExcept(vec!["Spotify".into(), "Chrome".into()]);
         let text = notice_text(
             &strings,
             &NoticeMessage::HeardTwice {
@@ -6802,8 +6812,8 @@ mod tests {
                 default_output: None,
             },
         );
-        let named = strings.invoke_source_all_except("Spotify, Chrome".into());
-        assert_eq!(named, "All apps except Spotify, Chrome");
+        let named = strings.invoke_source_all_except("Spotify and Chrome".into());
+        assert_eq!(named, "All apps except Spotify and Chrome");
         assert!(text.contains(named.as_str()), "{text}");
         let guide = Guide {
             source: Some(source.clone()),
@@ -6814,8 +6824,28 @@ mod tests {
             guide_intro(&strings, &guide).contains(named.as_str()),
             "the guide names it the same way"
         );
-        let step = guide_step_text(&strings, &GuideStep::RouteApp { app: source });
-        assert!(step.contains(named.as_str()), "{step}");
+        // The steps say what the user does per app, not the menu's name.
+        let route = guide_step_text(
+            &strings,
+            &GuideStep::RouteApp {
+                app: source.clone(),
+            },
+        );
+        assert!(
+            route
+                .contains("find every app other than Spotify and Chrome and set each one's output"),
+            "{route}"
+        );
+        let unmuted = guide_step_text(&strings, &GuideStep::KeepAppUnmuted { app: source });
+        assert!(
+            unmuted.starts_with(
+                "Don't mute any app other than Spotify and Chrome in the Volume mixer"
+            ),
+            "{unmuted}"
+        );
+        let several = SourceName::Apps(vec!["Spotify".into(), "Chrome".into()]);
+        let route = guide_step_text(&strings, &GuideStep::RouteApp { app: several });
+        assert!(route.contains("find Spotify and Chrome and set"), "{route}");
     }
 
     #[test]

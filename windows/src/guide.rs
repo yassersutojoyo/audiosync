@@ -240,6 +240,28 @@ mod tests {
         assert_eq!(guide(&message).unwrap().outputs, names(&["TV", "Speakers"]));
     }
 
+    // covers: S242
+    #[test]
+    fn every_app_but_some_is_moved_and_kept_unmuted_like_one_app() {
+        let app = SourceName::AllAppsExcept(names(&["game", "chat"]));
+        let message = NoticeMessage::HeardTwice {
+            source: Some(app.clone()),
+            mute: names(&["TV"]),
+            shared: Vec::new(),
+            default_output: None,
+        };
+        assert_eq!(
+            steps(&message),
+            [
+                GuideStep::RouteApp { app: app.clone() },
+                GuideStep::MuteOutputs {
+                    outputs: names(&["TV"])
+                },
+                GuideStep::KeepAppUnmuted { app },
+            ]
+        );
+    }
+
     #[test]
     fn the_whole_system_changes_the_default_output() {
         let message = twice(None, &["Speakers"], &[], Some("Speakers"));
