@@ -682,13 +682,12 @@ pub struct CalibrateAllState {
     /// The outputs that are on but left out by their kind.
     pub left_out: Vec<LeftOutRow>,
     /// The zone a Calibrate Zone run measures or measured (spec S255).
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
     pub zone: Option<ZoneSheet>,
 }
 
 /// What a Calibrate Zone sheet says besides Calibrate All's (spec S255).
 #[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+#[cfg_attr(not(test), allow(dead_code, reason = "the rows don't say Off yet"))]
 pub struct ZoneSheet {
     /// "Bring the computer into <name>".
     pub name: String,
@@ -842,6 +841,13 @@ impl AppState {
                 0
             },
         }
+    }
+
+    /// Whether zone `zone`'s Calibrate Zone… can be chosen: a member is
+    /// here and no calibration holds the outputs, since a start then does
+    /// nothing (spec S255).
+    pub fn offers_zone_run(&self, zone: &Zone) -> bool {
+        self.zone_counts(zone).present > 0 && !self.calibration.busy
     }
 
     /// The note on `row` under `zone`, if it has one. The Cast note needs
@@ -1127,6 +1133,11 @@ pub trait Backend {
 
     /// Calibrate All Speakers: measures every speaker that is on.
     fn start_calibrate_all(&mut self) {}
+
+    /// "Calibrate Zone…" in zone `id`'s Options menu (spec S255): Calibrate
+    /// All over the zone, every other speaker that plays silenced for the
+    /// run.
+    fn start_calibrate_zone(&mut self, _id: &str) {}
 
     /// Cancel on the running Calibrate All or Measure Again: nothing
     /// changes.
@@ -2234,6 +2245,23 @@ mod tests {
         );
         let office = &state.zones[2];
         assert_eq!(state.zone_counts(office), ZoneCounts::default());
+    }
+
+    // covers: S255
+    #[test]
+    fn calibrate_zone_is_offered_while_a_member_is_here_and_no_calibration_holds_the_outputs() {
+        let mut state = MockBackend::zones_preview().snapshot();
+        let (living, office) = (state.zones[0].clone(), state.zones[2].clone());
+        assert!(state.offers_zone_run(&living));
+        assert!(
+            !state.offers_zone_run(&office),
+            "none of its members is here"
+        );
+        state.calibration.busy = true;
+        assert!(
+            !state.offers_zone_run(&living),
+            "a start would do nothing while a calibration holds the outputs"
+        );
     }
 
     #[test]

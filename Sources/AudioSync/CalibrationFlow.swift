@@ -42,6 +42,8 @@ enum CalibrationFailure: Equatable {
     case tooQuiet(CalibrationRecording?)
     case ambiguousEcho(CalibrationRecording?)
     case implausible
+    /// Calibrate Zone: no speaker in zone `zone` but the reference can be measured (S255).
+    case nothingToMeasure(zone: String)
 }
 
 /// The input device a run recorded with (an `AudioObjectID`) and its rate.

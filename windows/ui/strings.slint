@@ -213,6 +213,28 @@ export global Strings {
     out property <string> rename-zone: @tr("Rename Zone…");
     out property <string> rename-zone-title: @tr("Rename Zone");
     out property <string> delete-zone: @tr("Delete Zone");
+    // Calibrate Zone (spec S255): in a zone's menu, then what the Calibrate
+    // All card says for a zone run.
+    out property <string> calibrate-zone-item: @tr("Calibrate Zone…");
+
+    public pure function calibrate-zone-bring(zone: string) -> string {
+        return @tr("Bring the PC into “{}”: the microphone and its own speakers stay on it. Speakers outside the zone aren't measured.", zone);
+    }
+
+    public pure function calibrate-zone-nothing(zone: string) -> string {
+        return @tr("Nothing to measure in “{}”. Turn on a speaker in this zone first.", zone);
+    }
+
+    // After the AirPlay line: the other places the shared delay moves.
+    public pure function calibrate-zone-airplay-zones(zones: string) -> string {
+        return @tr("AirPlay speakers share one delay, so a new AirPlay delay applies to the AirPlay speakers in {} too.", zones);
+    }
+
+    out property <string> calibrate-zone-airplay-no-zone: @tr("AirPlay speakers share one delay, so a new AirPlay delay applies to the AirPlay speakers in no zone too.");
+
+    public pure function calibrate-zone-airplay-both(zones: string) -> string {
+        return @tr("AirPlay speakers share one delay, so a new AirPlay delay applies to the AirPlay speakers in {}, and those in no zone too.", zones);
+    }
     // In a zone without members.
     out property <string> zone-empty: @tr("No speakers");
     // Notes on a zone member's row: a stereo pair or home theater while

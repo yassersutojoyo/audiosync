@@ -203,6 +203,9 @@ export struct ZoneItem {
     expanded: bool,
     members: [SpeakerItem],
     targets: [ZoneTarget],
+    // Calibrate Zone… can be chosen: a member is here and no calibration
+    // holds the outputs.
+    can-calibrate: bool,
 }
 
 // What a notice is about, for its short name (Strings.notice-title).

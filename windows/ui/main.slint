@@ -178,6 +178,7 @@ component ZoneCard inherits VerticalLayout {
     callback zone-volume-changed <=> header.volume-changed;
     callback zone-rename <=> header.rename;
     callback zone-delete <=> header.delete;
+    callback zone-calibrate <=> header.calibrate;
     callback zone-use-target <=> header.use-target;
     callback zone-focus-changed <=> header.focus-changed;
     callback toggled <=> rows.toggled;
@@ -458,6 +459,8 @@ component CalibrationCard inherits Card {
     in property <[LeftOutItem]> left-out;
     // The AirPlay delay's line, empty without AirPlay speakers.
     in property <string> airplay;
+    // For a Calibrate Zone run: where to bring the PC; empty otherwise.
+    in property <string> zone;
     // How the run or the last action on its results ended.
     in property <string> outcome;
     in property <bool> can-apply;
@@ -529,6 +532,13 @@ component CalibrationCard inherits Card {
                     root.privacy-requested();
                 }
             }
+        }
+
+        if root.zone != "": Text {
+            text: root.zone;
+            font-size: Tokens.font-size-body;
+            color: Tokens.text;
+            wrap: word-wrap;
         }
 
         // The button's description says it already.
@@ -909,6 +919,7 @@ export component MainWindow inherits Window {
     in property <[CalibrationRowItem]> calibrate-all-rows;
     in property <[LeftOutItem]> calibrate-all-left-out;
     in property <string> calibrate-all-airplay;
+    in property <string> calibrate-all-zone;
     in property <string> calibrate-all-outcome;
     in property <bool> calibrate-all-can-apply;
     in property <bool> calibrate-all-can-undo;
@@ -977,6 +988,8 @@ export component MainWindow inherits Window {
     callback zone-volume-changed(string, float);
     callback zone-rename-requested(string);
     callback zone-deleted(string);
+    // Calibrate Zone… in a zone's menu.
+    callback zone-calibrate-requested(string);
     // Use <target> Instead in a zone's menu, by the member's ID.
     callback zone-use-target-requested(string);
     // Speakers > New Zone from Active Speakers… (Ctrl+N).
@@ -1531,6 +1544,7 @@ export component MainWindow inherits Window {
                         rows: root.calibrate-all-rows;
                         left-out: root.calibrate-all-left-out;
                         airplay: root.calibrate-all-airplay;
+                        zone: root.calibrate-all-zone;
                         outcome: root.calibrate-all-outcome;
                         can-apply: root.calibrate-all-can-apply;
                         can-undo: root.calibrate-all-can-undo;
@@ -1699,6 +1713,9 @@ export component MainWindow inherits Window {
                             }
                             zone-delete => {
                                 root.zone-deleted(zone.id);
+                            }
+                            zone-calibrate => {
+                                root.zone-calibrate-requested(zone.id);
                             }
                             zone-use-target(member) => {
                                 root.zone-use-target-requested(member);

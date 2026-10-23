@@ -251,6 +251,8 @@ struct UIStrings {
                 + "Give the microphone a clear line to both speakers and try again."
         case .implausible:
             return "The two speakers were too far apart to measure."
+        case .nothingToMeasure(let zone):
+            return "Nothing to measure in “\(zone)”. Turn on a speaker in this zone first."
         }
     }
 
@@ -278,7 +280,7 @@ struct UIStrings {
     let calibrateZoneItem = "Calibrate Zone…"
     let calibrateZone = "Calibrate Zone"
     func calibrateZoneBring(_ name: String) -> String {
-        "Bring the Mac into “\(name)”: the microphone and the built-in speakers measure from there. "
+        "Bring the Mac into “\(name)”: the microphone and the built-in speakers stay on it. "
             + "Speakers outside the zone aren't measured."
     }
 

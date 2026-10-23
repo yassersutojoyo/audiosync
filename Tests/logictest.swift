@@ -5453,6 +5453,17 @@ do {
             && zoneText.calibrateZoneBring("Upstairs").hasPrefix("Bring the Mac into “Upstairs”"),
           "calibrate zone: the sheet says where to bring the Mac and which other zones the AirPlay delay moves (S255)",
           "\(lines)")
+
+    let nothing = CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: "Upstairs")
+    // covers: S255
+    check(nothing == .nothingToMeasure(zone: "Upstairs")
+            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == .notPlaying
+            && CalibrateAllFlow.startFailure(.notPlaying, zone: "Upstairs") == .notPlaying
+            && CalibrateAllFlow.startFailure(.onlyLeftOut, zone: "Upstairs") == nil
+            && nothing.map(zoneText.calibrationFailure)
+                == "Nothing to measure in “Upstairs”. Turn on a speaker in this zone first.",
+          "calibrate zone: a zone with only the reference measurable says there is nothing to measure (S255)",
+          "\(String(describing: nothing))")
 }
 
 // MARK: Google Cast speakers: one session, matched by attempt (CastModel)

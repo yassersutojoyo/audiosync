@@ -1254,41 +1254,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// "Calibrate Zone…" in zone `id`'s Options menu (spec S255): Calibrate
-    /// All over the zone, every other speaker that plays silenced for the
-    /// run.
-    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
-    pub(crate) fn start_calibrate_zone(&mut self, id: &str) {
-        if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
-            return;
-        }
-        let Some(zone) = self.zones.get(id).cloned() else {
-            return;
-        };
-        let scope = self.zone_scope(&zone);
-        self.log.log(|| {
-            format!(
-                "Calibrate Zone \"{}\": present {:?}, off {:?}",
-                zone.name,
-                scope.present,
-                scope.off.iter().map(Member::key).collect::<Vec<_>>()
-            )
-        });
-        let started = AllRun::start_zone(
-            &mut self.audio,
-            &self.calibrate_all.included,
-            &scope,
-            clock::now_ns(),
-            self.log.clone(),
-        );
-        let measured = MeasuredZone {
-            id: zone.id,
-            name: zone.name,
-            members: zone.members,
-        };
-        self.calibrate_all_started(started, Some(measured));
-    }
-
     fn calibrate_all_started(
         &mut self,
         started: Result<AllRun, Failure>,
@@ -4022,6 +3987,37 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.log.clone(),
         );
         self.calibrate_all_started(started, None);
+    }
+
+    fn start_calibrate_zone(&mut self, id: &str) {
+        if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
+            return;
+        }
+        let Some(zone) = self.zones.get(id).cloned() else {
+            return;
+        };
+        let scope = self.zone_scope(&zone);
+        self.log.log(|| {
+            format!(
+                "Calibrate Zone \"{}\": present {:?}, off {:?}",
+                zone.name,
+                scope.present,
+                scope.off.iter().map(Member::key).collect::<Vec<_>>()
+            )
+        });
+        let started = AllRun::start_zone(
+            &mut self.audio,
+            &self.calibrate_all.included,
+            &scope,
+            clock::now_ns(),
+            self.log.clone(),
+        );
+        let measured = MeasuredZone {
+            id: zone.id,
+            name: zone.name,
+            members: zone.members,
+        };
+        self.calibrate_all_started(started, Some(measured));
     }
 
     fn cancel_calibrate_all(&mut self) {

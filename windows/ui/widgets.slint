@@ -1955,6 +1955,7 @@ export component ZoneHeader inherits Rectangle {
     callback volume-changed(float);
     callback rename();
     callback delete();
+    callback calibrate();
     // Use <target> Instead, by the member's ID.
     callback use-target(string);
     // The part of the header with the keyboard focus changed (its toggle,
@@ -2005,6 +2006,14 @@ export component ZoneHeader inherits Rectangle {
                     title: Strings.use-target-instead(target.target);
                     activated => {
                         root.use-target(target.member-id);
+                    }
+                }
+
+                MenuItem {
+                    title: Strings.calibrate-zone-item;
+                    enabled: root.item.can-calibrate;
+                    activated => {
+                        root.calibrate();
                     }
                 }
 

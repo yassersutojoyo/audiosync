@@ -485,8 +485,9 @@ fn keyboard_shortcuts_are_declared() {
 /// The row note and notice for a speaker that plays only AirPlay 2 name
 /// that item, and show only for a receiver the sender found; so does the
 /// note on a zone's stereo pair or home theater that needs it.
-/// The calibration results' AirPlay lines show only when an AirPlay
-/// speaker took part, so the sender ran.
+/// The calibration results' AirPlay lines, a zone run's line on whom the
+/// shared AirPlay delay moves included, show only when an AirPlay speaker
+/// took part, so the sender ran.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
 /// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
 /// name AirPlay too, with the receivers the sender plays, the ones it can't
@@ -521,6 +522,7 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"AirPlay delay: was {}. New: {} ms")
                 || line.contains("return @tr(\"The AirPlay speakers differ by {} ms.")
                 || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
+                || line.contains("@tr(\"AirPlay speakers share one delay, so a new AirPlay delay")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")

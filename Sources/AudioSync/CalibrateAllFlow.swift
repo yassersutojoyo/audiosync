@@ -373,6 +373,17 @@ enum CalibrateAllFlow {
         status.shown ? status.zone?.id : nil
     }
 
+    /// What the sheet says when a run over the speakers, or over zone
+    /// `zone`, can't start; nil leaves the reason to the sheet's blocker.
+    static func startFailure(_ blocker: CalibrateAllBlocker, zone: String?) -> CalibrationFailure? {
+        switch blocker {
+        case .noReference: .noReference
+        case .notPlaying: .notPlaying
+        case .noOtherSpeaker: zone.map { CalibrationFailure.nothingToMeasure(zone: $0) } ?? .notPlaying
+        case .onlyLeftOut, .referenceHeadphones, .busy: nil
+        }
+    }
+
     /// Whether a zone's Calibrate Zone… can be chosen: some member is here
     /// and no calibration holds the outputs, since a start then does nothing.
     static func offersZoneRun(_ status: CalibrateAllStatus, singleHoldsOutputs: Bool, present: Int) -> Bool {

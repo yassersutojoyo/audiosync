@@ -49,9 +49,11 @@ extension AppDelegate {
         let plan: CalibrateZonePlan
         switch planned {
         case .success(let made): plan = made
-        case .failure(.noReference): return calibrateAllFailed(.noReference)
-        case .failure(.notPlaying), .failure(.noOtherSpeaker): return calibrateAllFailed(.notPlaying)
-        case .failure: return followCalibrateAll()
+        case .failure(let blocker):
+            guard let failure = CalibrateAllFlow.startFailure(blocker, zone: scope?.name) else {
+                return followCalibrateAll()
+            }
+            return calibrateAllFailed(failure)
         }
         let speakers = plan.speakers
         switch AVCaptureDevice.authorizationStatus(for: .audio) {

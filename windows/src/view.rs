@@ -17,7 +17,8 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use audiosync_core::calibrate_all::{
-    AirPlayShared, Class, EndReason, Measurement, RowState as SheetRowState, SharedState,
+    AirPlayMoves, AirPlayShared, Class, EndReason, Measurement, RowState as SheetRowState,
+    SharedState,
 };
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, CurveMatch, EqSettings};
@@ -1599,6 +1600,7 @@ impl App {
                         present: count(counts.present),
                         volume: zone.volume as f32,
                         expanded: !ui.collapsed.contains(&zone.id),
+                        can_calibrate: state.offers_zone_run(zone),
                         ..ZoneItem::default()
                     },
                     members,
@@ -1875,6 +1877,7 @@ impl App {
         main.set_calibrate_all_privacy(card.privacy);
         main.set_calibrate_all_results_shown(card.results_shown);
         main.set_calibrate_all_airplay(card.airplay);
+        main.set_calibrate_all_zone(card.zone);
         main.set_calibrate_all_outcome(card.outcome);
         main.set_calibrate_all_can_apply(card.can_apply);
         main.set_calibrate_all_can_undo(card.can_undo);
@@ -2227,6 +2230,10 @@ impl App {
         main.on_zone_rename_requested(move |id| with_app(&w, |app| app.ask_rename_zone(&id)));
         let w = weak.clone();
         main.on_zone_deleted(move |id| with_app(&w, |app| app.delete_zone(&id)));
+        let w = weak.clone();
+        main.on_zone_calibrate_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.start_calibrate_zone(&id)))
+        });
         let w = weak.clone();
         main.on_zone_use_target_requested(move |member| {
             with_app(&w, |app| app.update(|b| b.use_target_instead(&member)))
@@ -4021,6 +4028,8 @@ struct CalibrateAllCard {
     rows: Vec<CalibrationRowItem>,
     left_out: Vec<LeftOutItem>,
     airplay: SharedString,
+    /// For a Calibrate Zone run: where to bring the PC.
+    zone: SharedString,
     outcome: SharedString,
     can_apply: bool,
     can_undo: bool,
@@ -4034,6 +4043,10 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
     let reference = state.reference_name.as_deref().unwrap_or_default();
     let status = match &all.phase {
         AllPhase::Running(progress) => all_progress_text(strings, progress),
+        AllPhase::Failed(Failure::NothingToMeasure) if all.zone.is_some() => {
+            let zone = all.zone.as_ref().map_or("", |zone| zone.name.as_str());
+            strings.invoke_calibrate_all_stopped(strings.invoke_calibrate_zone_nothing(zone.into()))
+        }
         AllPhase::Failed(failure) => {
             strings.invoke_calibrate_all_stopped(calibration_failure(strings, reference, *failure))
         }
@@ -4095,10 +4108,25 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
                 })
                 .collect()
         }),
-        airplay: sheet
-            .and_then(|sheet| sheet.airplay.as_ref())
-            .map_or_else(SharedString::default, |shared| {
-                airplay_line(strings, shared)
+        airplay: sheet.and_then(|sheet| sheet.airplay.as_ref()).map_or_else(
+            SharedString::default,
+            |shared| {
+                let line = airplay_line(strings, shared);
+                match all
+                    .zone
+                    .as_ref()
+                    .and_then(|zone| airplay_moves_line(strings, &zone.airplay_moves))
+                {
+                    Some(moves) => format!("{line} {moves}").into(),
+                    None => line,
+                }
+            },
+        ),
+        zone: all
+            .zone
+            .as_ref()
+            .map_or_else(SharedString::default, |zone| {
+                strings.invoke_calibrate_zone_bring(zone.name.as_str().into())
             }),
         outcome,
         can_apply: sheet.is_some_and(|sheet| sheet.can_apply),
@@ -4238,6 +4266,19 @@ fn airplay_line(strings: &Strings<'_>, shared: &AirPlayShared) -> SharedString {
             let differ = strings.invoke_calibrate_all_airplay_spread(spread);
             format!("{set} {differ}").into()
         }
+    }
+}
+
+/// Under a zone run's AirPlay line: the other zones the shared delay moves,
+/// and the speakers in no zone (spec S255); `None` when it moves no other.
+fn airplay_moves_line(strings: &Strings<'_>, moves: &AirPlayMoves) -> Option<SharedString> {
+    let quoted: Vec<String> = moves.zones.iter().map(|name| format!("“{name}”")).collect();
+    let named = (!quoted.is_empty()).then(|| joined(strings, &quoted));
+    match (named, moves.no_zone) {
+        (None, false) => None,
+        (None, true) => Some(strings.get_calibrate_zone_airplay_no_zone()),
+        (Some(named), false) => Some(strings.invoke_calibrate_zone_airplay_zones(named)),
+        (Some(named), true) => Some(strings.invoke_calibrate_zone_airplay_both(named)),
     }
 }
 
@@ -7015,6 +7056,68 @@ mod tests {
         let upstairs = app.models.zones.row_data(1).unwrap();
         assert_eq!(upstairs.members.row_count(), 1);
         assert_eq!(upstairs.targets.row_count(), 0);
+    }
+
+    // covers: S255
+    #[test]
+    fn calibrate_zone_is_offered_for_a_zone_with_a_member_here() {
+        let app = app_over(MockBackend::zones_preview());
+        assert!(app.models.zones.row_data(0).unwrap().can_calibrate);
+        assert!(
+            !app.models.zones.row_data(2).unwrap().can_calibrate,
+            "none of the office's members is here"
+        );
+    }
+
+    // covers: S255
+    #[test]
+    fn the_calibrate_all_card_of_a_zone_run_names_the_zone() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.calibrate_all.phase = AllPhase::Failed(Failure::NothingToMeasure);
+        state.calibrate_all.zone = Some(ui_model::ZoneSheet {
+            name: "Upstairs".into(),
+            off_rows: Vec::new(),
+            airplay_moves: AirPlayMoves {
+                zones: vec!["Kitchen".into(), "Garden".into()],
+                no_zone: true,
+            },
+        });
+        let card = calibrate_all_card(&strings, &state);
+        assert_eq!(
+            card.status,
+            "Nothing to measure in “Upstairs”. Turn on a speaker in this zone first. No delay was changed."
+        );
+        assert!(
+            card.zone.starts_with("Bring the PC into “Upstairs”"),
+            "{}",
+            card.zone
+        );
+        let moves = |zones: &[&str], no_zone| {
+            let moves = AirPlayMoves {
+                zones: zones.iter().map(|name| (*name).to_owned()).collect(),
+                no_zone,
+            };
+            airplay_moves_line(&strings, &moves).map(|line| line.to_string())
+        };
+        let share = "AirPlay speakers share one delay, so a new AirPlay delay applies to ";
+        assert_eq!(moves(&[], false), None);
+        assert_eq!(
+            moves(&[], true).unwrap(),
+            format!("{share}the AirPlay speakers in no zone too.")
+        );
+        assert_eq!(
+            moves(&["Kitchen", "Garden"], true).unwrap(),
+            format!(
+                "{share}the AirPlay speakers in “Kitchen” and “Garden”, and those in no zone too."
+            )
+        );
+
+        state.calibrate_all.zone = None;
+        let card = calibrate_all_card(&strings, &state);
+        assert!(card.zone.is_empty());
+        assert!(!card.status.contains("Upstairs"), "a whole run's text");
     }
 
     #[test]
