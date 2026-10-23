@@ -26,3 +26,55 @@ enum GuideLayout {
         return pieces
     }
 }
+
+extension GuideLayout {
+    /// One paragraph of the Guide, its source lines joined so the window wraps it at any width.
+    struct Paragraph: Equatable {
+        let text: String
+        /// The list marker, such as "1. " or "- ", that the wrapped lines indent past; empty outside a list.
+        let hang: String
+    }
+
+    /// The text's paragraphs, in order, with blank lines kept as empty ones. A line joins the
+    /// paragraph above it unless it starts a list item, sits no deeper than the item above it,
+    /// or follows a heading: a line whose words all start with a capital and that ends without punctuation.
+    static func paragraphs(of text: String) -> [Paragraph] {
+        var paragraphs: [Paragraph] = []
+        var itemIndent: Int?
+        var joinsNext = false
+        for line in text.components(separatedBy: "\n") {
+            let indent = line.prefix { $0 == " " }.count
+            let body = String(line.dropFirst(indent))
+            if body.isEmpty {
+                paragraphs.append(Paragraph(text: "", hang: ""))
+                itemIndent = nil
+                joinsNext = false
+            } else if let marker = listMarker(body) {
+                paragraphs.append(Paragraph(text: body, hang: marker))
+                itemIndent = indent
+                joinsNext = true
+            } else if joinsNext, itemIndent.map({ indent > $0 }) ?? true, let last = paragraphs.popLast() {
+                paragraphs.append(Paragraph(text: last.text + " " + body, hang: last.hang))
+            } else {
+                paragraphs.append(Paragraph(text: body, hang: ""))
+                itemIndent = nil
+                joinsNext = !isHeading(body)
+            }
+        }
+        return paragraphs
+    }
+
+    private static func listMarker(_ line: String) -> String? {
+        if line.hasPrefix("- ") { return "- " }
+        let digits = line.prefix { $0.isASCII && $0.isNumber }
+        guard !digits.isEmpty, line.dropFirst(digits.count).hasPrefix(". ") else { return nil }
+        return digits + ". "
+    }
+
+    private static func isHeading(_ line: String) -> Bool {
+        guard let last = line.last, !last.isPunctuation else { return false }
+        return line.split(separator: " ").allSatisfy { word in
+            word.first.map { !$0.isLetter || $0.isUppercase } ?? true
+        }
+    }
+}

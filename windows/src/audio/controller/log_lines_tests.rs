@@ -21,7 +21,7 @@ use super::{
 };
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::SourceId;
-use crate::audio::capture::{CAPTURE_ATTEMPTS, CaptureTarget, decide_capture};
+use crate::audio::capture::{CAPTURE_ATTEMPTS, CaptureTarget, decide_capture, pair_attempts};
 use crate::audio::outputs::{HNS_PER_MS, MixFormat, StreamSetup, render_buffer_hns, render_format};
 use crate::audio::process::{ProcessEntry, ProcessTable};
 use crate::audio::render::RenderPipeline;
@@ -141,12 +141,23 @@ fn rate(span: StatusSpan) -> f64 {
 fn a_capture_line_names_each_format_the_loopback_can_settle_on() {
     // The loopback reports the attempt Windows accepted as it is, so these
     // are the only formats a real capture line can show.
-    let whole = decide_capture(&SourceId::WholeSystem, OWN_PID, &ProcessTable::default())
-        .expect("the whole system can be captured");
-    let app = decide_capture(&SourceId::App { root_pid: APP_PID }, OWN_PID, &processes())
-        .expect("the app can be captured");
+    let whole = decide_capture(
+        &SourceId::WholeSystem,
+        OWN_PID,
+        &ProcessTable::default(),
+        &BTreeMap::new(),
+    )
+    .expect("the whole system can be captured");
+    let app = decide_capture(
+        &SourceId::App { root_pid: APP_PID },
+        OWN_PID,
+        &processes(),
+        &BTreeMap::new(),
+    )
+    .expect("the app can be captured");
     let input = CaptureTarget::Input {
         endpoint_id: "mic".to_owned(),
+        pair: 0,
     };
     let formats = [
         "48000 Hz, 2 ch, 32-bit float, converted by Windows",
@@ -180,7 +191,36 @@ fn a_capture_line_names_each_format_the_loopback_can_settle_on() {
     );
     assert_eq!(
         describe_capture_start(&input, Some(CAPTURE_ATTEMPTS[0]), false),
-        "capture started: input device mic; 48000 Hz, 2 ch, 32-bit float, converted by Windows"
+        "capture started: input device mic, channels 1-2; \
+         48000 Hz, 2 ch, 32-bit float, converted by Windows"
+    );
+}
+
+#[test]
+fn a_capture_line_names_the_input_pair_and_a_saved_pair_that_fell_back() {
+    let interface = |pair| CaptureTarget::Input {
+        endpoint_id: "interface".to_owned(),
+        pair,
+    };
+    let third_and_fourth = pair_attempts(1, 6, 44_100);
+    assert_eq!(
+        describe_capture_start(&interface(1), third_and_fourth.first().copied(), false),
+        "capture started: input device interface, channels 3-4; \
+         48000 Hz, 6 ch, 32-bit float, converted by Windows"
+    );
+    let fifth = pair_attempts(2, 5, 48_000);
+    assert_eq!(
+        describe_capture_start(&interface(2), fifth.first().copied(), false),
+        "capture started: input device interface, channel 5; \
+         48000 Hz, 5 ch, 32-bit float, converted by Windows"
+    );
+    // A pair the device lost has no attempts of its own: the stereo ones
+    // play 1-2, and the line says the saved pair went.
+    assert!(pair_attempts(3, 4, 48_000).is_empty());
+    assert_eq!(
+        describe_capture_start(&interface(3), Some(CAPTURE_ATTEMPTS[0]), false),
+        "capture started: input device interface, channels 1-2 (saved pair 4 is not available); \
+         48000 Hz, 2 ch, 32-bit float, converted by Windows"
     );
 }
 
