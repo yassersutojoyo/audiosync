@@ -4,6 +4,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-24
+
 ### Added
 
 - Web Remote: control your speakers from a phone on the same network. It's off until you turn it on under Web Remote… in the gear menu or the Window menu on the Mac, or in the File menu on Windows. Open the address it shows or scan its QR code, add the page to the Home Screen, open it from there and enter the pairing code, and the phone can switch each speaker on and off, set its volume and delay and Master Volume, and show what's playing. It uses plain HTTP, so keep it to your home network. Forget All Remote Devices unpairs every phone, also while the remote is off.
@@ -252,5 +254,7 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.5.0
