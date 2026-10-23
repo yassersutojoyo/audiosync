@@ -75,11 +75,11 @@ mod tests {
     use slint::platform::Key;
 
     use super::super::tests::{app_over, draw_frames, press};
-    use crate::ui_model::{MockBackend, NoticeMessage};
+    use crate::ui_model::{MockBackend, NoticeMessage, SourceName};
 
     fn heard_twice() -> NoticeMessage {
         NoticeMessage::HeardTwice {
-            source: Some("Player".to_owned()),
+            source: Some(SourceName::Named("Player".to_owned())),
             mute: vec!["TV".to_owned()],
             shared: Vec::new(),
             default_output: None,

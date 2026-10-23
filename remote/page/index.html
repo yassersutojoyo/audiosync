@@ -53,7 +53,7 @@
 [hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 /* manipulation drops double-tap zoom (quick taps on the delay steps zoomed iOS Safari in) and keeps pinch zoom. */
-html, body, button, input, label, .switch { touch-action: manipulation; }
+html, body, button, input, select, label, .switch { touch-action: manipulation; }
 body {
   margin: 0;
   background: var(--background);
@@ -79,7 +79,7 @@ p { margin: 0; }
   margin-bottom: 12px;
 }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-button, input { font: inherit; color: inherit; }
+button, input, select { font: inherit; color: inherit; }
 button {
   min-height: 44px;
   min-width: 44px;
@@ -92,9 +92,9 @@ button {
   cursor: pointer;
 }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-button:disabled, input:disabled { cursor: default; opacity: 0.5; }
+button:disabled, input:disabled, select:disabled { cursor: default; opacity: 0.5; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-input[type=text], input[type=number] {
+input[type=text], input[type=number], select {
   min-height: 44px;
   border: 1px solid var(--control-border);
   border-radius: 10px;
@@ -104,6 +104,8 @@ input[type=text], input[type=number] {
   font-size: max(16px, 1rem);
 }
 input[type=range] { width: 100%; min-width: 0; height: 44px; margin: 0; background: transparent; }
+.source select { display: block; width: 100%; min-width: 0; margin-top: 8px; }
+.source .status { margin-top: 8px; }
 .pair label { display: block; font-weight: 600; margin: 16px 0 8px; }
 .pair-line { display: flex; gap: 8px; }
 .pair-line input { flex: 1; min-width: 0; font-size: 1.5rem; letter-spacing: 0.2em; text-align: center; font-variant-numeric: tabular-nums; }
@@ -216,6 +218,13 @@ footer .error { flex-basis: 100%; margin-top: 0; }
 </div>
 <p id="master-error" class="error" hidden></p>
 </section>
+<section class="source card" aria-labelledby="source-title">
+<h2 id="source-title" tabindex="-1" data-text="source"></h2>
+<select id="source" aria-labelledby="source-title" aria-describedby="source-status source-error"></select>
+<p id="source-empty" class="status muted" data-text="noSources" hidden></p>
+<p id="source-status" class="status muted" hidden></p>
+<p id="source-error" class="error" hidden></p>
+</section>
 <p id="empty" class="state-text muted" data-text="noSpeakers" hidden></p>
 <div id="speakers"></div>
 <footer>
@@ -238,6 +247,15 @@ const TEXT = {
   connecting: "Connecting to AudioSync…",
   nowPlaying: "Now playing",
   masterVolume: "Master volume",
+  source: "Audio source",
+  noSources: "AudioSync hasn't listed any sources yet.",
+  noSource: "No source chosen",
+  sourceApps: "Apps",
+  sourceInputs: "Input devices",
+  sourceWithNotice: (name, notice) => `${name} (${notice})`,
+  switching: (name) => `Switching to ${name}…`,
+  switched: (name) => `Now capturing ${name}.`,
+  notSwitched: "AudioSync didn't switch the source. Try again.",
   noSpeakers: "AudioSync hasn't found any speakers yet. Check that they're on and on the same network.",
   unpair: "Unpair this phone",
   hintBrowser: "Add to Home Screen first, then open it from there and enter the code.",
@@ -277,6 +295,8 @@ const TEXT = {
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
 const SEND_EVERY_MS = 100;
 const DELAY_STEP_MS = 10;
+// A switch restarts the capture; past this the app has dropped or refused the pick.
+const SWITCH_WAIT_MS = 5000;
 const PAIRED_KEY = "audiosync.paired";
 const SETUP_HIDDEN_KEY = "audiosync.setupHidden";
 
@@ -304,6 +324,11 @@ const ui = {
   master: byId("master"),
   masterValue: byId("master-value"),
   masterError: byId("master-error"),
+  sourceTitle: byId("source-title"),
+  source: byId("source"),
+  sourceEmpty: byId("source-empty"),
+  sourceStatus: byId("source-status"),
+  sourceError: byId("source-error"),
   empty: byId("empty"),
   speakers: byId("speakers"),
   computer: byId("computer"),
@@ -321,6 +346,10 @@ let focusAfterPair = false;
 let snapshot = null;
 let rowCount = 0;
 const rows = new Map();
+let sourceList = "";
+let switchingTo = null;
+let switchTimer = null;
+let shownSource = null;
 
 function remember(paired) {
   try {
@@ -383,6 +412,7 @@ function stopStream() {
 function showPairing(message) {
   stopStream();
   snapshot = null;
+  endSwitch("");
   lost = false;
   focusAfterPair = false;
   ui.banner.hidden = true;
@@ -406,6 +436,7 @@ function showRemote() {
 function clearErrors() {
   showError(ui.masterError, "");
   showError(ui.unpairError, "");
+  showError(ui.sourceError, "");
   for (const row of rows.values()) { showError(row.error, ""); }
 }
 
@@ -787,6 +818,120 @@ function showComputer(name) {
   ui.computer.hidden = !shown;
 }
 
+function sourceName(id) {
+  const list = snapshot && Array.isArray(snapshot.sources) ? snapshot.sources : [];
+  const source = list.find((entry) => entry.id === id);
+  return source ? source.name : "";
+}
+
+function sourceOption(source) {
+  const option = document.createElement("option");
+  option.value = source.id;
+  const reason = source.available === false ? (source.notice || TEXT.unavailable) : source.notice;
+  option.textContent = reason ? TEXT.sourceWithNotice(source.name, reason) : source.name;
+  option.disabled = source.available === false;
+  return option;
+}
+
+// Rebuilt only when the list changes, so a picker open on the phone isn't replaced under the finger.
+function fillSources(list, listed) {
+  const key = JSON.stringify([list, listed]);
+  if (key === sourceList) { return; }
+  sourceList = key;
+  const options = [];
+  if (!listed) {
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = TEXT.noSource;
+    none.disabled = true;
+    options.push(none);
+  }
+  const headings = { app: TEXT.sourceApps, input: TEXT.sourceInputs };
+  let group = null;
+  for (const source of list) {
+    const heading = headings[source.kind];
+    if (!heading) {
+      group = null;
+      options.push(sourceOption(source));
+    } else {
+      if (!group || group.dataset.kind !== source.kind) {
+        group = document.createElement("optgroup");
+        group.label = heading;
+        group.dataset.kind = source.kind;
+        options.push(group);
+      }
+      group.append(sourceOption(source));
+    }
+  }
+  ui.source.replaceChildren(...options);
+}
+
+function showCurrentSource() {
+  const wanted = switchingTo || (snapshot && snapshot.source_id) || "";
+  if (ui.source.value !== wanted) { ui.source.value = wanted; }
+}
+
+function endSwitch(message) {
+  window.clearTimeout(switchTimer);
+  switchTimer = null;
+  switchingTo = null;
+  ui.source.removeAttribute("aria-busy");
+  ui.sourceStatus.textContent = "";
+  ui.sourceStatus.hidden = true;
+  if (message) {
+    showError(ui.sourceError, message);
+    announce(message);
+  }
+  showCurrentSource();
+}
+
+function showSources(next) {
+  const list = Array.isArray(next.sources) ? next.sources : [];
+  const listed = list.some((source) => source.id === next.source_id);
+  if (switchingTo !== null && next.source_id === switchingTo) {
+    const name = sourceName(switchingTo);
+    endSwitch("");
+    announce(TEXT.switched(name));
+  } else if (switchingTo !== null && !list.some((source) => source.id === switchingTo)) {
+    endSwitch(TEXT.notSwitched);
+  } else if (switchingTo === null && next.source_id !== shownSource) {
+    // A switch that landed after the wait: the error it left no longer holds.
+    showError(ui.sourceError, "");
+  }
+  shownSource = next.source_id;
+  const empty = list.length === 0;
+  if (empty && document.activeElement === ui.source) { ui.sourceTitle.focus(); }
+  ui.source.hidden = empty;
+  ui.sourceEmpty.hidden = !empty;
+  fillSources(list, listed);
+  showCurrentSource();
+}
+
+const sourceSender = sender((id) => post("/api/source", { id }), (problem, settled) => {
+  if (settled) { endSwitch(problem ? problem.message : ""); }
+});
+
+ui.source.addEventListener("change", () => {
+  const id = ui.source.value;
+  if (!snapshot || id === "" || (id === snapshot.source_id && switchingTo === null)) { return; }
+  showError(ui.sourceError, "");
+  if (id === snapshot.source_id) {
+    // Back to the source in use: no snapshot will name a change, so nothing waits for one.
+    endSwitch("");
+    sourceSender.set(id);
+    return;
+  }
+  window.clearTimeout(switchTimer);
+  switchingTo = id;
+  ui.source.setAttribute("aria-busy", "true");
+  const status = TEXT.switching(sourceName(id));
+  ui.sourceStatus.textContent = status;
+  ui.sourceStatus.hidden = false;
+  announce(status);
+  switchTimer = window.setTimeout(() => endSwitch(TEXT.notSwitched), SWITCH_WAIT_MS);
+  sourceSender.set(id);
+});
+
 function render(next) {
   snapshot = next;
   showRemote();
@@ -802,6 +947,7 @@ function render(next) {
   }
   ui.playingDetail.hidden = ui.playingDetail.textContent === "";
   if (!masterControl.held()) { masterControl.show(next.master.volume); }
+  showSources(next);
 
   const order = Array.from(ui.speakers.children);
   const focusedRow = [...rows.values()].find((row) => row.root.contains(document.activeElement));

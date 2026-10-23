@@ -245,6 +245,107 @@ mod tests {
         assert!(script.contains("element.textContent = TEXT[element.dataset.text];"));
     }
 
+    fn line_with<'a>(needle: &str) -> &'a str {
+        PAGE.lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle}"))
+            .trim_end()
+    }
+
+    #[test]
+    fn every_text_the_script_names_is_in_the_table() {
+        let script = only_element(PAGE, "script").unwrap();
+        let start = script.find("const TEXT = {").unwrap();
+        let table = &script[start..start + script[start..].find("\n};").unwrap()];
+        let rest = &script[start + table.len()..];
+        let mut names = 0;
+        for use_site in rest.split("TEXT.").skip(1) {
+            let name: String = use_site
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            assert!(table.contains(&format!("\n  {name}: ")), "TEXT.{name}");
+            names += 1;
+        }
+        assert!(names >= 30, "{names}");
+    }
+
+    #[test]
+    fn the_source_picker_has_empty_loading_and_error_states() {
+        for (id, state) in [
+            ("source-empty", "data-text=\"noSources\""),
+            ("source-status", ""),
+            ("source-error", "class=\"error\""),
+        ] {
+            let line = line_with(&format!("id=\"{id}\""));
+            assert!(line.ends_with(" hidden></p>"), "{id}");
+            assert!(line.contains(state), "{id}");
+        }
+        let picker = line_with("<select id=\"source\"");
+        assert!(picker.contains("aria-labelledby=\"source-title\""));
+        assert!(picker.contains("aria-describedby=\"source-status source-error\""));
+        let script = only_element(PAGE, "script").unwrap();
+        // Empty: the list gives way to its text and focus stays in the card.
+        assert!(script.contains("ui.sourceEmpty.hidden = !empty;"));
+        assert!(script.contains("ui.sourceTitle.focus();"));
+        // Loading: a pick waits for the app's next snapshot, busy and announced.
+        assert!(script.contains("ui.source.setAttribute(\"aria-busy\", \"true\");"));
+        assert!(script.contains("next.source_id === switchingTo"));
+        assert!(script.contains("announce(TEXT.switched(name));"));
+        // Error: the server's answer, or a pick the app never took.
+        assert!(script.contains("endSwitch(problem ? problem.message : \"\");"));
+        assert!(
+            script
+                .contains("window.setTimeout(() => endSwitch(TEXT.notSwitched), SWITCH_WAIT_MS);")
+        );
+        assert!(script.contains("showError(ui.sourceError, message);"));
+        assert!(script.contains("post(\"/api/source\", { id })"));
+    }
+
+    #[test]
+    fn a_pick_never_leaves_a_stale_error_or_a_blank_picker() {
+        let script = only_element(PAGE, "script").unwrap();
+        let shown = &script[script.find("function showSources(next) {").unwrap()..];
+        let shown = &shown[..shown.find("fillSources(list, listed);").unwrap()];
+        // A switch that lands after the wait clears the error the wait left.
+        assert!(
+            shown.contains("} else if (switchingTo === null && next.source_id !== shownSource) {")
+        );
+        assert!(shown.contains("showError(ui.sourceError, \"\");"));
+        assert!(shown.contains("shownSource = next.source_id;"));
+        // A snapshot that drops the pick ends the wait at once.
+        assert!(shown.contains(
+            "} else if (switchingTo !== null && !list.some((source) => source.id === switchingTo)) {"
+        ));
+        assert!(shown.contains("endSwitch(TEXT.notSwitched);"));
+        // Going back to the source in use waits for nothing.
+        let picked = &script[script
+            .find("ui.source.addEventListener(\"change\"")
+            .unwrap()..];
+        let back = picked.find("if (id === snapshot.source_id) {").unwrap();
+        let timer = picked.find("switchTimer = window.setTimeout(").unwrap();
+        assert!(back < timer);
+        let branch = &picked[back..timer];
+        assert!(branch.contains("endSwitch(\"\");"));
+        assert!(branch.contains("sourceSender.set(id);"));
+        assert!(branch.contains("return;"));
+    }
+
+    #[test]
+    fn device_names_reach_the_page_only_as_text() {
+        let script = only_element(PAGE, "script").unwrap();
+        for markup_sink in [
+            "innerHTML",
+            "outerHTML",
+            "insertAdjacentHTML",
+            "document.write",
+        ] {
+            assert!(!script.contains(markup_sink), "{markup_sink}");
+        }
+        assert!(script.contains("option.textContent = reason ? TEXT.sourceWithNotice(source.name, reason) : source.name;"));
+        assert!(script.contains("group.label = heading;"));
+    }
+
     #[test]
     fn the_icons_are_png_of_their_size() {
         for (icon, size) in [(ICON_180, 180u32), (ICON_512, 512)] {

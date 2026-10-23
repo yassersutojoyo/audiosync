@@ -224,6 +224,10 @@ struct UIStrings {
                 + "Privacy & Security → Microphone."
         case .noMicrophone:
             return "AudioSync couldn't record from the microphone. Check the input in System Settings → Sound."
+        case .handsFreeMicrophone:
+            return "The default input is a Bluetooth headset's hands-free microphone, and recording from it "
+                + "would switch the headset to call mode. Choose another input in System Settings → Sound, "
+                + "and try again."
         case .unsupportedRate:
             return "The audio source runs at a sample rate calibration can't use."
         case .sourceSilent:
@@ -475,6 +479,26 @@ struct UIStrings {
     let sourceLabel = "Audio Source"
     let sourceSystem = "All System Audio"
     let sourceInputsHeader = "Input Devices"
+    let inputChannelsLabel = "Input Channels"
+    /// One channel pair of an input device, counted from 1 as the device's
+    /// own settings count them.
+    func inputChannelPair(_ pair: InputChannelPair) -> String {
+        pair.isMono ? "Channel \(pair.left + 1)" : "Channels \(pair.left + 1)-\(pair.right + 1)"
+    }
+    /// The level meter under the source while an input device is captured,
+    /// for VoiceOver: its name, and how full the bar is in steps of 10%.
+    let inputLevel = "Input level"
+    func inputLevelValue(_ spokenPercent: Int) -> String { percent(spokenPercent) }
+    let sourceSeveralApps = "Several Apps"
+    let sourceMixOnly = "Only the Checked Apps"
+    let sourceMixAllExcept = "All Apps Except the Checked Ones"
+    let sourceMixEmpty = "No other apps are running."
+    /// The picker's name for a mix source, from its apps' names; the Windows
+    /// app words "all except" the same way.
+    func sourceMixName(_ mode: AppMixMode, _ names: [String]) -> String {
+        let list = names.joined(separator: ", ")
+        return mode == .only ? list : "All Apps Except \(list)"
+    }
     let microphoneDenied = """
         AudioSync is not allowed to use input devices.
         Open System Settings → Privacy & Security → Microphone and turn on AudioSync.
@@ -638,6 +662,8 @@ struct UIStrings {
         case .inputDisconnected, .inputNotFound:
             return "The input device was disconnected, so streaming has stopped. "
                 + "Plug it in again, or pick another source."
+        case .inputHandsFree:
+            return inputHandsFree
         case .appNotRunning(let bundleID):
             return sourceTerminated(name: SourceApps.name(for: bundleID))
         case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted:
@@ -701,6 +727,9 @@ struct UIStrings {
     let engineSetupFailed = "AudioSync couldn't set up its audio engine, so streaming can't start. "
         + "Quit AudioSync and open it again. If it keeps happening, restart your Mac."
 
+    private let inputHandsFree = "The selected input is a Bluetooth headset's hands-free microphone, "
+        + "which AudioSync doesn't record from. Pick another source."
+
     private let captureFailed = "AudioSync couldn't capture audio from the selected source. "
         + "Turn streaming off and on again, or pick another source. If it keeps happening, restart your Mac."
 
@@ -715,6 +744,8 @@ struct UIStrings {
             return captureFailed
         case .inputNotFound, .inputDisconnected:
             return "The selected input device is not connected. Plug it in, or pick another source."
+        case .inputHandsFree:
+            return inputHandsFree
         }
     }
 
@@ -822,18 +853,59 @@ struct UIStrings {
     /// The menu bar panel's short Quit, next to Open AudioSync.
     let quitShort = "Quit"
     let equalizer = "Equalizer"
-    let groups = "Groups"
-    let newGroup = "New Group from Active Speakers…"
-    let newGroupTitle = "New Speaker Group"
-    let newGroupMessage = "The speakers that are on right now become this group. Click the group later to switch them all at once."
-    let newGroupPlaceholder = "Living room, Office…"
-    /// VoiceOver label of the name field in the New Speaker Group alert.
-    let newGroupFieldLabel = "Group name"
-    let newGroupNeedsSpeakers = "Turn on the speakers you want in the group first, then create it."
-    let deleteGroup = "Delete Group"
-    let renameGroup = "Rename Group…"
-    let renameGroupTitle = "Rename Group"
-    func renameGroupMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
+    let zones = "Zones"
+    /// The gear menu and the Speakers menu (Command-N).
+    let newZone = "New Zone from Active Speakers…"
+    let newZoneTitle = "New Zone"
+    let newZoneMessage = "The speakers that are on right now move into this zone. A speaker in another zone leaves that zone."
+    /// New Zone… in a speaker's Move to Zone menu.
+    func newZoneForSpeaker(_ name: String) -> String { "\(name) moves into this zone." }
+    let newZonePlaceholder = "Living room, Kitchen…"
+    /// VoiceOver label of the name field in the New Zone alert.
+    let newZoneFieldLabel = "Zone name"
+    let newZoneNeedsSpeakers = "Turn on the speakers you want in the zone first, then create it."
+    /// A speaker's ⋯ menu: a submenu of the other zones, then New Zone….
+    let moveToZone = "Move to Zone"
+    let newZoneItem = "New Zone…"
+    let removeFromZone = "Remove from Zone"
+    let renameZone = "Rename Zone…"
+    let renameZoneTitle = "Rename Zone"
+    func renameMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
+    let deleteZone = "Delete Zone"
+    /// A zone header's count; `zoneWaiting` follows it when a member waits.
+    func zoneCount(on: Int, of total: Int) -> String { "\(on) of \(total) on" }
+    func zoneWaiting(_ n: Int) -> String { ", \(n) waiting" }
+    /// A zone none of whose members is here.
+    func zoneNoneHere(_ total: Int) -> String { "0 of \(total) here" }
+    /// A zone with no member, until it is deleted.
+    let zoneEmpty = "No speakers"
+    /// A zone header's VoiceOver label and value.
+    func zoneLabel(_ name: String) -> String { "\(name), zone" }
+    func zoneValue(on: Int, of total: Int, waiting: Int) -> String {
+        "\(on) of \(total) speaker\(total == 1 ? "" : "s") on" + (waiting > 0 ? zoneWaiting(waiting) : "")
+    }
+    func showZoneSpeakers(_ name: String) -> String { "Show speakers in \(name)" }
+    func hideZoneSpeakers(_ name: String) -> String { "Hide speakers in \(name)" }
+    /// A new zone's name when none was typed.
+    func numberedZone(_ n: Int) -> String { "Zone \(n)" }
+    /// This Mac and Connected Speakers when each of their speakers is in a zone.
+    let thisMacAllInZones = "Every output on this Mac is in a zone."
+    let connectedAllInZones = "Every connected speaker is in a zone."
+    /// A zone member that plays as part of a stereo pair or home theater (S247).
+    func zoneMemberInTarget(_ target: String) -> String { "Plays as part of \(target)" }
+    /// The zone menu's way to put that target in the member's place.
+    func useTargetInstead(_ target: String) -> String { "Use \(target) Instead" }
+    /// A stereo pair or home theater in a zone while the AirPlay 2 switch is off.
+    let needsAirPlay2 = "Needs AirPlay 2 (Experimental)"
+    /// A zone member that isn't listed right now.
+    let zoneMemberNotFound = "Not found"
+    /// A Cast member a zone click left off (S246).
+    let castStayedOff = "Stayed off, since one Cast speaker plays at a time"
+    /// What VoiceOver says after Move to Zone and Delete Zone.
+    func speakerMovedToZone(_ speaker: String, zone: String) -> String { "\(speaker) moved to \(zone)" }
+    func zoneDeleted(_ name: String) -> String { "\(name) deleted" }
+    /// The notice at the first launch after the groups became zones (S248).
+    let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it instead of in the speaker lists."
     let rename = "Rename"
     /// In a speaker's ⋯ menu and right-click menu: edits its name in the row.
     let renameSpeaker = "Rename…"
@@ -867,8 +939,6 @@ struct UIStrings {
     }
     /// A section whose every speaker is hidden.
     let allSpeakersHidden = "Every speaker here is hidden. Choose Hidden Speakers in the gear menu to show one again."
-    /// A new group's name when none was typed.
-    func numberedGroup(_ n: Int) -> String { "Group \(n)" }
     let create = "Create"
     let cancel = "Cancel"
     let autoConnect = "Auto-connect when available"
@@ -899,9 +969,6 @@ struct UIStrings {
     let openLocalNetworkSettings = "Open Local Network Settings"
     let launchAtLoginNeedsApproval = "Allow AudioSync in System Settings → General → Login Items & Extensions to finish turning on Launch at Login."
 
-    func groupMembers(_ available: Int, of total: Int) -> String {
-        available == total ? "\(total) speaker\(total == 1 ? "" : "s")" : "\(available) of \(total) speakers available"
-    }
     let syncAdjust = "Adjust sync"
     /// The hint under a local speaker's delay field: what the value is
     /// relative to (S181). Without the Mac's built-in speakers listed, the
@@ -977,8 +1044,8 @@ struct UIStrings {
     let castAddField = "Address"
     let castAddInvalid = "That isn't an IP address or host name. Check it and try again."
     let castAddNotFound = "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
-    /// What VoiceOver reads for the spinner while the address is tried.
-    let castAddLooking = "Looking for the speaker…"
+    /// The Add button and its spinner while the address is tried.
+    let castAddChecking = "Checking…"
     func castAddProblem(_ problem: CastAddProblem) -> String {
         switch problem {
         case .unreadable: return castAddInvalid
@@ -1059,6 +1126,30 @@ struct UIStrings {
     let equalizerPreamp = "Pre"
     func equalizerCaption(maxGain: Int) -> String { "±\(maxGain) dB · applied to every speaker" }
     let equalizerPreampAccessibility = "Preamp"
+    /// The label in front of the equalizer's picker of presets and saved curves.
+    let equalizerCurve = "Curve"
+    let equalizerSaveCurve = "Save Curve…"
+    func equalizerRenameCurve(_ name: String) -> String { "Rename “\(name)”…" }
+    func equalizerDeleteCurve(_ name: String) -> String { "Delete “\(name)”" }
+    let saveCurveTitle = "Save Curve"
+    let saveCurveMessage = "The ten band gains are saved under this name; the preamp stays as you set it. A curve saved under the same name is replaced."
+    let curveNameField = "Curve name"
+    let save = "Save"
+    let renameCurveTitle = "Rename Curve"
+    func numberedCurve(_ n: Int) -> String { "Curve \(n)" }
+    func curvesFull(_ n: Int) -> String { "You can keep up to \(n) saved curves. Delete one, then save again." }
+    func curveNameTaken(_ name: String) -> String { "Another saved curve is already called “\(name)”." }
+    /// The Equalizer card's VoiceOver value while the equalizer is on.
+    func equalizerCardOn(_ curve: String) -> String { "On, \(curve)" }
+
+    /// The curve the picker shows: a preset's name, a saved curve's, or Custom.
+    func equalizerCurveName(_ match: Equalizer.CurveMatch?, saved: [Equalizer.Curve]) -> String {
+        switch match {
+        case .preset(let id): return equalizerPreset(id)
+        case .saved(let index) where saved.indices.contains(index): return saved[index].name
+        default: return equalizerCustom
+        }
+    }
 
     func equalizerPreset(_ id: Equalizer.PresetID) -> String {
         switch id {
@@ -1106,7 +1197,7 @@ struct UIStrings {
 
     let webRemoteMenu = "Web Remote…"
     let webRemoteTitle = "Web Remote"
-    let webRemoteSummary = "Control the speakers from a phone or tablet on the same network."
+    let webRemoteSummary = "Control your speakers from a phone on the same network as this Mac."
     let webRemoteAddressTitle = "Address"
     /// Above the first address, then above the IP address after the Bonjour one.
     let webRemoteAddressLabel = "On the phone, open"
@@ -1186,7 +1277,7 @@ struct UIStrings {
            Home Settings → Speakers & TV → Allow Speaker & TV Access →
            "Anyone on the Same Network".
         4. Speakers are listed under 'This Mac' (the Mac's own speakers and
-           headphone jack), then your groups, then 'Connected Speakers': every
+           headphone jack), then your zones, then 'Connected Speakers': every
            AirPlay, Google Cast, Bluetooth, USB, HDMI or other output, by name, each with a
            small icon for its kind (in color while it plays).
         5. Click a speaker's round icon to start streaming to it. Click it again to turn
@@ -1203,9 +1294,12 @@ struct UIStrings {
           as Bluetooth. While an AirPlay
           speaker is on, every local speaker also waits the 'AirPlay delay'
           under Connected Speakers for it.
-        - Groups: turn on the speakers you want, then choose 'New Group from Active
-          Speakers' in the gear menu. Click the group to switch them all at once.
-          To rename or delete a group, right-click it or use its ⋯ button.
+        - Zones: turn on the speakers you want, then choose 'New Zone from Active
+          Speakers' in the gear menu. A speaker is in one zone at a time, and it
+          shows under its zone instead of under This Mac or Connected Speakers.
+          Click the zone's name to switch its speakers at once. To move a
+          speaker, choose 'Move to Zone' from its ⋯ button. To rename or delete
+          a zone, right-click it or use its ⋯ button.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           'Auto-connect when available'. AudioSync then turns it on whenever it
           appears.
@@ -1342,7 +1436,8 @@ struct UIStrings {
         - Then tune each other local speaker against the built-in speakers: if it
           plays first, raise its delay; if it plays late, lower it.
         - Bluetooth speakers and headphones add their own lag; they usually need
-          about −150 to −300 ms.
+          about −150 to −300 ms. A Bluetooth headset's hands-free microphone
+          carries call audio, so it isn't offered as a source.
         - Add multiple local speakers one by one and tune each separately.
 
         Volume
@@ -1364,7 +1459,7 @@ struct UIStrings {
     func guideArtAnchor(_ art: GuideArt) -> String {
         switch art {
         case .source: return "First Steps"
-        case .delay: return "- Groups:"
+        case .delay: return "- Zones:"
         case .classes: return "Notices"
         }
     }

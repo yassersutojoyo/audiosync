@@ -78,6 +78,11 @@ const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
 /// or after a wrong one (`view::App::preview_pin`). Nothing is paired.
 const PREVIEW_PIN_VAR: &str = "AUDIOSYNC_PREVIEW_PIN";
 
+/// With the debug log on, `1` here shows example speakers in zones instead
+/// of the real ones, one zone collapsed (`ui_model::MockBackend::zones_preview`).
+/// Nothing plays.
+const PREVIEW_ZONES_VAR: &str = "AUDIOSYNC_PREVIEW_ZONES";
+
 fn main() -> ExitCode {
     // Before the log, which a launch empties, and before any audio, tray or
     // window: a second launch only hands over to the running copy.
@@ -388,11 +393,23 @@ fn run(
     let labels = audio::now_playing::SharedLabels::default();
     #[cfg(windows)]
     let (track_reader, card_reader) = audio::wasapi::read_media_sessions(log.clone());
-    #[cfg(windows)]
-    let backend = backend(log, &labels, track_reader)?;
-    #[cfg(not(windows))]
-    let backend = backend(log)?;
+    let zones_preview = log.enabled() && std::env::var(PREVIEW_ZONES_VAR).as_deref() == Ok("1");
+    let backend: Box<dyn ui_model::Backend> = if zones_preview {
+        log.log(|| {
+            format!("audio: example speakers in zones from the mock backend; nothing plays ({PREVIEW_ZONES_VAR})")
+        });
+        Box::new(ui_model::MockBackend::zones_preview())
+    } else {
+        #[cfg(windows)]
+        let backend = backend(log, &labels, track_reader)?;
+        #[cfg(not(windows))]
+        let backend = backend(log)?;
+        backend
+    };
     let app = view::App::new(backend, log.clone())?;
+    if zones_preview {
+        app.set_zone_expanded("zone:upstairs", false);
+    }
     #[cfg(windows)]
     labels.set(receiver_labels(&app.strings()));
     #[cfg(windows)]
@@ -568,7 +585,12 @@ mod tests {
             "Control + Q",
             "Ctrl+Q",
         ),
-        ("New Group, Command-N", "new-group", "Control + N", "Ctrl+N"),
+        (
+            "New Zone from Active Speakers, Command-N",
+            "new-zone",
+            "Control + N",
+            "Ctrl+N",
+        ),
         ("Refresh Devices, Command-R", "refresh-devices", "F5", "F5"),
         (
             "Equalizer, Option-Command-E",
@@ -850,9 +872,9 @@ mod tests {
                 "more-notices-focused",
             ),
             (
-                "for group in root.groups: FlyoutRow {",
+                "for zone in root.zones: VerticalLayout {",
                 "focus-changed(focused)",
-                "group-focused",
+                "zone-focused",
             ),
             (
                 "for speaker in root.speakers: FlyoutRow {",
