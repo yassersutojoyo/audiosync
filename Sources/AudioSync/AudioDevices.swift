@@ -58,6 +58,23 @@ struct AudioDevices: Sendable {
         HALProperty.uint32(of: id, kAudioDevicePropertyDataSource, kAudioObjectPropertyScopeOutput)
     }
 
+    /// Whether an input device is a Bluetooth headset's hands-free input,
+    /// which AudioSync neither offers as a source nor records from: opening
+    /// it switches the headset to call mode, which interrupts its stereo
+    /// sound. A Bluetooth LE input and every wired or built-in one are fine.
+    static func isHandsFreeInput(transport: UInt32) -> Bool {
+        // Core Audio names no hands-free kind, but classic Bluetooth carries a microphone only over HFP or HSP.
+        transport == kAudioDeviceTransportTypeBluetooth
+    }
+
+    /// A transport as its four-character code ("blue", "usb ", "bltn") for
+    /// the debug log, or its number when it isn't printable.
+    static func transportCode(_ transport: UInt32) -> String {
+        let bytes = [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: transport >> UInt32($0)) }
+        guard bytes.allSatisfy({ (0x20...0x7E).contains($0) }) else { return String(transport) }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
     private static let hiddenTransports: Set<UInt32> = [
         kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate,
         kAudioDeviceTransportTypeAutoAggregate, kAudioDeviceTransportTypeAirPlay,

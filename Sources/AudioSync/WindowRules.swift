@@ -35,10 +35,12 @@ enum SourceList {
     /// in Core Audio's order. The chosen app stays listed while it isn't
     /// running (its name comes from `chosenAppName`), so the picker still
     /// says what will be captured; a chosen input device that is unplugged
-    /// is not listed. Devices without a UID can't be chosen and are skipped.
+    /// is not listed. Devices without a UID can't be chosen and are skipped,
+    /// and a Bluetooth headset's hands-free input
+    /// (`AudioDevices.isHandsFreeInput`) is left out, chosen or not.
     static func entries(systemName: String,
                         apps: [(bundleID: String, name: String)],
-                        inputs: [(uid: String, name: String)],
+                        inputs: [Input],
                         chosen: AudioSource,
                         chosenAppName: (String) -> String) -> [Entry] {
         var appEntries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
@@ -46,11 +48,34 @@ enum SourceList {
             appEntries.append(Entry(id: bundleID, name: chosenAppName(bundleID), isInput: false))
             appEntries.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
-        let inputEntries = inputs.filter { !$0.uid.isEmpty }.map {
+        let inputEntries = inputs.filter { leftOut($0) == nil }.map {
             Entry(id: AudioSource.input(uid: $0.uid).defaultsValue, name: $0.name, isInput: true)
         }
         return [Entry(id: AudioSource.system.defaultsValue, name: systemName, isInput: false)]
             + appEntries + inputEntries
+    }
+
+    /// An input device as Core Audio lists it; `transport` is
+    /// `kAudioDeviceTransportType…`, 0 when the device doesn't say.
+    typealias Input = (uid: String, name: String, transport: UInt32)
+
+    /// Why the picker leaves an input out, for the debug log; nil when it lists it.
+    static func leftOut(_ input: Input) -> String? {
+        if input.uid.isEmpty { return "no UID" }
+        if AudioDevices.isHandsFreeInput(transport: input.transport) {
+            return "a Bluetooth hands-free input, which would switch the headset to call mode"
+        }
+        return nil
+    }
+
+    /// One debug-log line per input device: its transport and whether the
+    /// picker lists it.
+    static func logLines(_ inputs: [Input]) -> [String] {
+        inputs.map { input in
+            let verdict = leftOut(input).map { "left out: \($0)" } ?? "listed"
+            return "[AudioSync] source picker: input \"\(input.name)\" (\(input.uid)), "
+                + "transport \(AudioDevices.transportCode(input.transport)): \(verdict)"
+        }
     }
 }
 

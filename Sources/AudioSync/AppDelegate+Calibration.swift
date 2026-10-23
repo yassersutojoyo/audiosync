@@ -41,6 +41,11 @@ extension AppDelegate {
             showCalibration(uid, .failed(.microphoneDenied))
             return
         }
+        if let refusal = CalibrationFlow.microphoneRefusal(defaultInputTransport: CalibrationMicrophone.defaultInputTransport()) {
+            DebugTrace.log("[AudioSync] calibration of \(uid) refused: the default input is a Bluetooth hands-free input")
+            showCalibration(uid, .failed(refusal))
+            return
+        }
         guard let reference = localReference else { return }
         let run = CalibrationRun(app: self, chosen: uid, reference: reference)
         calibrationRun = run
@@ -234,7 +239,7 @@ final class CalibrationRun {
             show(.running(.measuring(which)))
         } catch {
             DebugTrace.log("[AudioSync] calibration: the microphone didn't start: \(error)")
-            fail(.noMicrophone)
+            fail((error as? CalibrationMicrophone.StartError)?.failure ?? .noMicrophone)
         }
     }
 

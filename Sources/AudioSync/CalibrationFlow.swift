@@ -25,6 +25,9 @@ enum CalibrationFailure: Equatable {
     case microphoneDenied
     /// No default input device, or one AudioSync can't read.
     case noMicrophone
+    /// The default input is a Bluetooth headset's hands-free one, which
+    /// recording from would switch to call mode.
+    case handsFreeMicrophone
     /// The capture's rate is outside the test signal's range (S233).
     case unsupportedRate
     /// No block carried the signal: neither the capture nor the fill that
@@ -129,6 +132,15 @@ enum CalibrationLeftOut: Equatable {
 }
 
 enum CalibrationFlow {
+    /// Why calibration won't record from the default input, nil when it may:
+    /// a Bluetooth hands-free input is refused before anything plays, for one
+    /// speaker and for Calibrate All. No default input is the start's to report.
+    static func microphoneRefusal(defaultInputTransport: UInt32?) -> CalibrationFailure? {
+        guard let transport = defaultInputTransport, AudioDevices.isHandsFreeInput(transport: transport)
+        else { return nil }
+        return .handsFreeMicrophone
+    }
+
     /// Why an output sits out of calibration, nil when it takes part.
     /// `terminal` is its first output stream's `kAudioStreamPropertyTerminalType`,
     /// `dataSource` its output `kAudioDevicePropertyDataSource`, `name` the

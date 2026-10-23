@@ -2653,7 +2653,8 @@ do {
           "prompt withdrawal: no prompt open, nothing to close")
 
     let apps = [(bundleID: "com.apple.Music", name: "Music"), (bundleID: "com.spotify.client", name: "Spotify")]
-    let inputs = [(uid: "mic-1", name: "MacBook Pro Microphone"), (uid: "", name: "No UID")]
+    let inputs: [SourceList.Input] = [(uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+                                      (uid: "", name: "No UID", transport: kAudioDeviceTransportTypeUSB)]
     func list(_ chosen: AudioSource) -> [SourceList.Entry] {
         SourceList.entries(systemName: "All System Audio", apps: apps, inputs: inputs, chosen: chosen,
                            chosenAppName: { $0 == "com.apple.Safari" ? "Safari" : $0 })
@@ -2670,6 +2671,43 @@ do {
           "sources: a chosen input device that is unplugged is not listed")
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
+
+    // A Bluetooth headset's hands-free input switches it to call mode, so the
+    // picker leaves it out; a Bluetooth LE, USB or built-in input stays.
+    let headsetInputs: [SourceList.Input] = [
+        (uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+        (uid: "buds:input", name: "Example Buds", transport: kAudioDeviceTransportTypeBluetooth),
+        (uid: "hearing:input", name: "Example LE Mic", transport: kAudioDeviceTransportTypeBluetoothLE),
+        (uid: "usb-mic", name: "USB Mic", transport: kAudioDeviceTransportTypeUSB),
+    ]
+    func headsetList(_ chosen: AudioSource) -> [SourceList.Entry] {
+        SourceList.entries(systemName: "All System Audio", apps: [], inputs: headsetInputs, chosen: chosen,
+                           chosenAppName: { $0 })
+    }
+    check(headsetList(.system).map(\.id) == ["", "input:mic-1", "input:hearing:input", "input:usb-mic"],
+          "sources: a Bluetooth hands-free input is left out; Bluetooth LE, built-in and USB inputs stay",
+          "\(headsetList(.system).map(\.id))")
+    check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id),
+          "sources: a saved source that is a hands-free input isn't listed, like an unplugged one")
+    check(AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetooth)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetoothLE)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeUSB)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBuiltIn)
+            && !AudioDevices.isHandsFreeInput(transport: 0),
+          "sources: only a classic Bluetooth input counts as hands-free")
+    let inputLog = SourceList.logLines(headsetInputs)
+    check(inputLog.count == 4 && inputLog[1].contains("transport blue: left out: a Bluetooth hands-free input")
+            && inputLog[0].hasSuffix("transport bltn: listed") && inputLog[3].hasSuffix("transport usb : listed"),
+          "sources: the debug log names each input's transport and whether it was left out", "\(inputLog)")
+    check(AudioDevices.transportCode(0) == "0",
+          "sources: a transport that isn't four printable characters logs as a number")
+    // A saved hands-free source fails to start the way an unplugged input does.
+    check(CaptureInputDevice.choose(42, transport: kAudioDeviceTransportTypeBluetooth) == nil
+            && CaptureInputDevice.choose(nil, transport: nil) == nil
+            && CaptureInputDevice.choose(42, transport: kAudioDeviceTransportTypeUSB) == 42
+            && CaptureInputDevice.choose(42, transport: kAudioDeviceTransportTypeBluetoothLE) == 42
+            && CaptureInputDevice.choose(42, transport: nil) == 42,
+          "capture: a saved input that is a Bluetooth hands-free input is treated as not connected")
 
     let present: Set<String> = ["ap:a", "lc:b"]
     func summary(_ members: [String], on: Set<String>) -> (available: Int, allOn: Bool) {
@@ -4220,13 +4258,30 @@ do {
     }
 
     // Refusals the host makes before the estimate say why and that nothing changed.
-    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .sourceSilent, .interrupted,
-                                              .notPlaying, .noReference, .unsupportedRate]
+    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
+                                              .interrupted, .notPlaying, .noReference, .unsupportedRate]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
         check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
               "calibration: a refusal (\(failure)) says why and that the delay wasn't changed", message)
     }
+
+    // A hands-free default input is refused with its own reason, for one
+    // speaker and for Calibrate All (both ask microphoneRefusal first).
+    check(CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBluetooth) == .handsFreeMicrophone
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBuiltIn) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeUSB) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBluetoothLE) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: nil) == nil,
+          "calibration: only a Bluetooth hands-free default input is refused")
+    let handsFreeText = t.calibrationMessage(.failed(.handsFreeMicrophone)) ?? ""
+    let handsFreeAll = t.calibrateAllLine(.ended(.failed(.handsFreeMicrophone)))
+    check(handsFreeText.contains("hands-free") && handsFreeText.contains("Choose another input")
+            && handsFreeText != t.calibrationMessage(.failed(.noMicrophone))
+            && handsFreeAll.contains("hands-free") && handsFreeAll.hasSuffix(" No delay was changed.")
+            && !handsFreeText.contains("\u{2014}"),
+          "calibration: a hands-free microphone has its own reason, for one speaker and for Calibrate All",
+          "\(handsFreeText) | \(handsFreeAll)")
 
     // Both runs record with one input: a switch to another device, even at
     // the same rate, would change the input latency between them (S232).

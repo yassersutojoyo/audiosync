@@ -17,6 +17,11 @@ final class CalibrationMicrophone {
         case unusable
         /// Core Audio wouldn't start the IOProc.
         case notStarted(OSStatus)
+        /// A Bluetooth headset's hands-free input (`CalibrationFlow.microphoneRefusal`).
+        case handsFree
+
+        /// What the calibration says about it.
+        var failure: CalibrationFailure { self == .handsFree ? .handsFreeMicrophone : .noMicrophone }
     }
 
     /// The device's nominal rate, whole Hz.
@@ -29,6 +34,9 @@ final class CalibrationMicrophone {
     /// Opens the default input and starts recording up to `seconds`.
     init(seconds: Double) throws {
         guard let device = MicrophoneHAL.defaultInput() else { throw StartError.noDevice }
+        if CalibrationFlow.microphoneRefusal(defaultInputTransport: MicrophoneHAL.transport(of: device)) != nil {
+            throw StartError.handsFree
+        }
         switch CaptureInputFormat.check(MicrophoneHAL.inputFormats(of: device)) {
         case .usable: break
         case .noChannels: throw StartError.noDevice
@@ -66,6 +74,12 @@ final class CalibrationMicrophone {
               asc_calibration_signal_frames(UInt32(nominal)) > 0
         else { return nil }
         return UInt32(nominal)
+    }
+
+    /// The default input's `kAudioDevicePropertyTransportType`; nil without
+    /// a default input or when it can't be read.
+    static func defaultInputTransport() -> UInt32? {
+        MicrophoneHAL.defaultInput().flatMap(MicrophoneHAL.transport(of:))
     }
 
     /// Host ticks of the first recorded frame; nil before the first buffer.
@@ -150,6 +164,15 @@ private enum MicrophoneHAL {
         let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
                                                 &size, &device)
         return status == noErr && device != kAudioObjectUnknown ? device : nil
+    }
+
+    static func transport(of device: AudioObjectID) -> UInt32? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport) == noErr ? transport : nil
     }
 
     static func nominalRate(of device: AudioObjectID) -> Double {

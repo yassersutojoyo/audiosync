@@ -189,7 +189,11 @@ final class SourceCapture {
     /// An input device, read directly (S13, S14).
     private func startInput(_ uid: String) throws {
         guard let parts, let sink else { return }
-        guard let device = HAL.device(uid: uid) else { throw CaptureError.inputNotFound(uid) }
+        let found = HAL.device(uid: uid)
+        guard let device = CaptureInputDevice.choose(found, transport: found.flatMap(HAL.transport(of:))) else {
+            if found != nil { DebugTrace.log("[AudioSync] capture: input device \(uid) is a Bluetooth hands-free input") }
+            throw CaptureError.inputNotFound(uid)
+        }
         switch CaptureInputFormat.check(try HAL.inputStreamFormats(of: device)) {
         case .usable: break
         case .noChannels: throw CaptureError.inputNotFound(uid)
@@ -636,6 +640,12 @@ private extension SourceCapture {
         static func tapRate(of tap: AudioObjectID) -> Double {
             var format = AudioStreamBasicDescription()
             return read(tap, kAudioTapPropertyFormat, into: &format) == noErr ? format.mSampleRate : 0
+        }
+
+        /// A device's `kAudioDevicePropertyTransportType`, nil when it can't be read.
+        static func transport(of device: AudioObjectID) -> UInt32? {
+            var transport: UInt32 = 0
+            return read(device, kAudioDevicePropertyTransportType, into: &transport) == noErr ? transport : nil
         }
 
         /// False for a dead device, and for one whose state can't be read any more.

@@ -210,6 +210,17 @@ enum CaptureClose {
     }
 }
 
+/// The device a saved input source records from: nil when none with its
+/// UID is present, and for a Bluetooth hands-free input, which the picker
+/// doesn't list either, so a source saved before it was left out ends the
+/// way an unplugged one does.
+enum CaptureInputDevice {
+    static func choose(_ found: AudioObjectID?, transport: UInt32?) -> AudioObjectID? {
+        guard let found, !AudioDevices.isHandsFreeInput(transport: transport ?? 0) else { return nil }
+        return found
+    }
+}
+
 /// Whether an input device's streams can be read as they are (S14, S16).
 enum CaptureInputFormat: Equatable {
     case usable

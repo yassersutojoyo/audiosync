@@ -224,6 +224,10 @@ struct UIStrings {
                 + "Privacy & Security → Microphone."
         case .noMicrophone:
             return "AudioSync couldn't record from the microphone. Check the input in System Settings → Sound."
+        case .handsFreeMicrophone:
+            return "The default input is a Bluetooth headset's hands-free microphone, and recording from it "
+                + "would switch the headset to call mode. Choose another input in System Settings → Sound, "
+                + "and try again."
         case .unsupportedRate:
             return "The audio source runs at a sample rate calibration can't use."
         case .sourceSilent:
