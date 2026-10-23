@@ -347,6 +347,7 @@ const rows = new Map();
 let sourceList = "";
 let switchingTo = null;
 let switchTimer = null;
+let shownSource = null;
 
 function remember(paired) {
   try {
@@ -882,7 +883,13 @@ function showSources(next) {
     const name = sourceName(switchingTo);
     endSwitch("");
     announce(TEXT.switched(name));
+  } else if (switchingTo !== null && !list.some((source) => source.id === switchingTo)) {
+    endSwitch(TEXT.notSwitched);
+  } else if (switchingTo === null && next.source_id !== shownSource) {
+    // A switch that landed after the wait: the error it left no longer holds.
+    showError(ui.sourceError, "");
   }
+  shownSource = next.source_id;
   const empty = list.length === 0;
   if (empty && document.activeElement === ui.source) { ui.sourceTitle.focus(); }
   ui.source.hidden = empty;
@@ -899,6 +906,12 @@ ui.source.addEventListener("change", () => {
   const id = ui.source.value;
   if (!snapshot || id === "" || (id === snapshot.source_id && switchingTo === null)) { return; }
   showError(ui.sourceError, "");
+  if (id === snapshot.source_id) {
+    // Back to the source in use: no snapshot will name a change, so nothing waits for one.
+    endSwitch("");
+    sourceSender.set(id);
+    return;
+  }
   window.clearTimeout(switchTimer);
   switchingTo = id;
   ui.source.setAttribute("aria-busy", "true");

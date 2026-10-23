@@ -200,7 +200,11 @@ pub fn snapshot(
         }),
         speakers,
         sources,
-        source_id: Some(state.source_id.clone()),
+        source_id: state
+            .sources
+            .iter()
+            .any(|source| source.id == state.source_id)
+            .then(|| state.source_id.clone()),
     }
 }
 
@@ -491,6 +495,17 @@ mod tests {
         // What the server serves: the JSON round trip keeps the current source.
         let served = State::from_json(&snapshot.to_json(1)).unwrap();
         assert_eq!(served.source_id.as_deref(), Some("app:42:Spotify.exe"));
+    }
+
+    #[test]
+    fn a_current_source_the_picker_doesnt_list_goes_out_as_none() {
+        let unlisted = AppState {
+            source_id: "input:{unplugged}".to_owned(),
+            ..with_sources()
+        };
+        let snapshot = snapshot(&unlisted, not_virtual, None, "Studio PC", &Text);
+        assert_eq!(snapshot.source_id, None);
+        assert_eq!(snapshot.sources.len(), 3);
     }
 
     #[test]

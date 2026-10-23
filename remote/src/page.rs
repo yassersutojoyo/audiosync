@@ -278,6 +278,35 @@ mod tests {
     }
 
     #[test]
+    fn a_pick_never_leaves_a_stale_error_or_a_blank_picker() {
+        let script = only_element(PAGE, "script").unwrap();
+        let shown = &script[script.find("function showSources(next) {").unwrap()..];
+        let shown = &shown[..shown.find("fillSources(list, listed);").unwrap()];
+        // A switch that lands after the wait clears the error the wait left.
+        assert!(
+            shown.contains("} else if (switchingTo === null && next.source_id !== shownSource) {")
+        );
+        assert!(shown.contains("showError(ui.sourceError, \"\");"));
+        assert!(shown.contains("shownSource = next.source_id;"));
+        // A snapshot that drops the pick ends the wait at once.
+        assert!(shown.contains(
+            "} else if (switchingTo !== null && !list.some((source) => source.id === switchingTo)) {"
+        ));
+        assert!(shown.contains("endSwitch(TEXT.notSwitched);"));
+        // Going back to the source in use waits for nothing.
+        let picked = &script[script
+            .find("ui.source.addEventListener(\"change\"")
+            .unwrap()..];
+        let back = picked.find("if (id === snapshot.source_id) {").unwrap();
+        let timer = picked.find("switchTimer = window.setTimeout(").unwrap();
+        assert!(back < timer);
+        let branch = &picked[back..timer];
+        assert!(branch.contains("endSwitch(\"\");"));
+        assert!(branch.contains("sourceSender.set(id);"));
+        assert!(branch.contains("return;"));
+    }
+
+    #[test]
     fn device_names_reach_the_page_only_as_text() {
         let script = only_element(PAGE, "script").unwrap();
         for markup_sink in [
