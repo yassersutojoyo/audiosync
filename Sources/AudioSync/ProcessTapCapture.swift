@@ -513,12 +513,15 @@ private extension SourceCapture {
                 return
             }
             parts.gate.lastCallbackFrames.store(channels.frames, ordering: .relaxed)
+            let now = mach_absolute_time()
+            var offset = 0
             channels.forEachBlock(in: stereoBlock) { block, count in
                 if !self.heard.load(ordering: .relaxed), CaptureChannels.hasSound(block, frames: count) {
                     self.heard.store(true, ordering: .relaxed)
                     if self.provesPermission { CaptureSink.runHeard.store(true, ordering: .relaxed) }
                 }
-                self.parts.deliver(block, frames: count)
+                self.parts.deliver(block, frames: count, offset: offset, callbackFrames: channels.frames, now: now)
+                offset += count
             }
             frames.wrappingAdd(UInt64(channels.frames), ordering: .relaxed)
         }

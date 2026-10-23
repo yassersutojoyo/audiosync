@@ -1249,6 +1249,20 @@ do {
           "capture channels: a long callback is delivered in order, in blocks of at most 4096 frames",
           "\(blocked.blocks)")
     check(CaptureChannels.blockFrames <= 8192, "capture channels: a block never exceeds the ring's write margin")
+    // 8 kHz keeps the host ticks per frame whole on both Apple silicon and Intel timebases.
+    let stampGate = BlockGate()
+    stampGate.prepare(captureRate: 8000)
+    let callbackNow: UInt64 = 1_000_000_000_000
+    let starts = blocked.blocks.indices.map { index in
+        stampGate.blockStartTicks(callbackNow: callbackNow, callbackFrames: 10_000,
+                                  offset: blocked.blocks[..<index].reduce(0, +))
+    }
+    let step = stampGate.ticks(frames: 4096)
+    check(step > 0 && starts.count == 3 && starts[1] &- starts[0] == step && starts[2] &- starts[1] == step
+            && starts[2] &+ stampGate.ticks(frames: 1808) == callbackNow
+            && starts[0] == callbackNow &- stampGate.ticks(frames: 10_000),
+          "capture channels: each block of a long callback is stamped at its own place in the callback",
+          "\(starts) step \(step)")
 
     check(CaptureRate.session(reported: 0) == 48000 && CaptureRate.session(reported: .nan) == 48000,
           "capture rate: a rate that reads 0 counts as 48 kHz")
