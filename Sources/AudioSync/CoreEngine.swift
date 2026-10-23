@@ -42,6 +42,12 @@ final class CoreDelayRing {
     }
 
     var capacityFrames: Int { asc_ring_capacity(handle) }
+    /// Whether readers and renderers can be made for a capture at `rate` Hz:
+    /// the core takes the rate and the ring holds 24 s of it (S36).
+    func supports(captureRate rate: Double) -> Bool {
+        guard let hz = CoreRate.hz(rate) else { return false }
+        return asc_ring_supports_rate(handle, hz)
+    }
     /// Frames written since the ring was made (any thread).
     var framesWritten: Int64 { Int64(clamping: asc_ring_frames_written(handle)) }
 

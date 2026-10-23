@@ -666,10 +666,22 @@ struct UIStrings {
     /// A device's name, or a placeholder when Core Audio can't read it.
     func deviceName(_ name: String) -> String { name.isEmpty ? unknownDevice : name }
 
-    func outputCouldNotStart(names: String) -> String {
+    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason.
+    func outputCouldNotStart(names: String, refusedCaptureRate: Double? = nil) -> String {
         let deviceName = names.isEmpty ? unknownDevice : names
-        return "Could not start output for this speaker, so it's off: \(deviceName)\n"
-            + "Another app may be using it exclusively, or the format may be incompatible."
+        let first = "Could not start output for this speaker, so it's off: \(deviceName)\n"
+        guard let rate = refusedCaptureRate else {
+            return first + "Another app may be using it exclusively, or the format may be incompatible."
+        }
+        let highest = kiloHertz(Double(EngineParts.highestCaptureRate))
+        return first + "AudioSync captures the audio at \(kiloHertz(rate)), but plays it on local speakers "
+            + "only up to \(highest). In Audio MIDI Setup, set your Mac's output device, or the input device "
+            + "you stream from, to \(highest) or lower, then turn this speaker on again."
+    }
+
+    /// "384 kHz", "352.8 kHz".
+    private func kiloHertz(_ hz: Double) -> String {
+        String(format: "%g kHz", (hz / 100).rounded() / 10)
     }
 
     func streamingStartMessage(for error: Error) -> String {

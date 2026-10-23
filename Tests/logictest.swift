@@ -3838,13 +3838,15 @@ do {
         var gains: [String: Double] = [:]
         /// The UIDs given a new gain after their attach, in call order.
         var regained: [String] = []
-        init(active: [String], refusing: Set<String>) {
+        let refusal: Error
+        init(active: [String], refusing: Set<String>, refusal: Error = NSError(domain: "logictest", code: -1)) {
             activeOutputUIDs = active
             self.refusing = refusing
+            self.refusal = refusal
         }
         func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
             tried.append(uid)
-            if refusing.contains(uid) { throw NSError(domain: "logictest", code: -1) }
+            if refusing.contains(uid) { throw refusal }
             activeOutputUIDs.append(uid)
             deviceIDs[uid] = device
             delays[uid] = delayMs
@@ -3915,6 +3917,35 @@ do {
             && twice?.notices.map(\.uid) == ["bt", "usb"],
           "S69 start failure: two failures share one alert and get a notice each",
           "\(String(describing: twice))")
+
+    // S36: a capture rate the ring can't hold names the rate and Audio MIDI Setup, not exclusive use.
+    let tooFast = LocalOutputSync.apply(
+        enabled: ["usb", "bt"], listing: [usb, bt],
+        to: RefusingEngine(active: [], refusing: ["usb"],
+                           refusal: OutputRenderer.StartFailure.captureRateTooHigh(352_800)),
+        holdBacks: [:], gain: { _ in 1 })
+    let strings = UIStrings()
+    let generic = strings.outputCouldNotStart(names: "USB DAC")
+    let rateText = strings.outputCouldNotStart(names: "USB DAC", refusedCaptureRate: 352_800)
+    let rateText384 = strings.outputCouldNotStart(names: "USB DAC", refusedCaptureRate: 384_000)
+    check(tooFast.failures == [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 352_800)]
+            && applied.failures.allSatisfy { $0.refusedCaptureRate == nil },
+          "S36 start failure: a refused capture rate comes back with the failure, any other failure without one",
+          "\(tooFast.failures)")
+    check(rateText.contains("USB DAC") && rateText.contains("352.8 kHz") && rateText.contains("192 kHz")
+            && rateText.contains("Audio MIDI Setup") && !rateText.contains("exclusively")
+            && rateText384.contains("384 kHz") && generic.contains("exclusively"),
+          "S36 start failure: the text names the capture rate, the 192 kHz limit and Audio MIDI Setup", rateText)
+    check(OutputRenderer.StartFailure.captureRateTooHigh(384_000).description.contains("384000 Hz"),
+          "S36 start failure: the debug log names the refused rate")
+    let rateFailures = [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 384_000),
+                        F(uid: "bt", deviceName: "Headphones", refusedCaptureRate: 384_000)]
+    let mixedFailures = [rateFailures[0], F(uid: "bt", deviceName: "Headphones")]
+    check(LocalOutputSync.sharedRefusedRate(rateFailures) == 384_000
+            && LocalOutputSync.sharedRefusedRate(mixedFailures) == nil
+            && LocalOutputSync.sharedRefusedRate([]) == nil,
+          "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
+          "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
 
     // S72: a master change gives each running local speaker its gain again;
     // one switched on but not running (here "tv") gets no call.
