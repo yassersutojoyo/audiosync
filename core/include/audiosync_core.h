@@ -1947,8 +1947,9 @@ typedef struct AscRemote AscRemote;
  * The host's command callback, on a server thread, one call at a time:
  * command_json is NUL-terminated UTF-8 valid during the call only, either
  * {"type":"speaker","id":...} with the posted "on", "volume" (0 to 100) and
- * "delay_ms" among the fields, or {"type":"master","volume":...}. Every
- * value was checked against the last snapshot's ranges.
+ * "delay_ms" among the fields, {"type":"master","volume":...}, or
+ * {"type":"source","id":...}, a source the last snapshot listed as
+ * available. Every value was checked against the last snapshot's ranges.
  */
 typedef void (*AscRemoteCommand)(void *context, const char *command_json);
 
@@ -1973,8 +1974,13 @@ uint32_t asc_remote_port(AscRemote *remote);
  * Publishes the snapshot in state_json: {"computer_name", "master": {"volume"},
  * "now_playing": {"title", "artist", "source"} or null, "speakers": [{"id",
  * "name", "kind", "on", "volume", "delay_ms", "delay_min_ms", "delay_max_ms",
- * "available", "notice"}]}, volumes 0 to 100, ids unique; computer_name is
- * the name the page's footer shows, empty when left out. The server numbers
+ * "available", "notice"}], "sources": [{"id", "name", "kind" ("system",
+ * "app" or "input"), "available", "notice"}], "source_id"}, volumes 0 to
+ * 100, ids unique and not empty; computer_name is the name the page's footer
+ * shows, empty when left out. sources is the source picker's list in its
+ * order (none when left out; available is true when left out), and
+ * source_id the one in use, or null; one the list doesn't hold counts as
+ * null. The server numbers
  * it and streams it to the open pages; an unchanged snapshot sends nothing.
  * Returns false when it doesn't read; the previous one then stays. Neither
  * the snapshot nor the name ever reaches the log.

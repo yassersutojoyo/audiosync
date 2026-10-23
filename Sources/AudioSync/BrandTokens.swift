@@ -48,6 +48,10 @@ enum BrandTokens {
         /// A field's out-of-range outline and the small text that explains it: 5.66:1 on white,
         /// 6.97:1 on #2B2B2B.
         static let errorText = BrandRGB(red: 196 / 255, green: 43 / 255, blue: 28 / 255)
+        /// A playing AirPlay or Bluetooth speaker's type icon on the Mac: deeper on light and
+        /// lighter on dark than the system blue, so it keeps 3:1 on the menu bar panel over any
+        /// window.
+        static let activeBlue = BrandRGB(red: 0 / 255, green: 98 / 255, blue: 204 / 255)
     }
 
     /// Colors in dark appearance.
@@ -86,6 +90,10 @@ enum BrandTokens {
         /// A field's out-of-range outline and the small text that explains it: 5.66:1 on white,
         /// 6.97:1 on #2B2B2B.
         static let errorText = BrandRGB(red: 255 / 255, green: 153 / 255, blue: 164 / 255)
+        /// A playing AirPlay or Bluetooth speaker's type icon on the Mac: deeper on light and
+        /// lighter on dark than the system blue, so it keeps 3:1 on the menu bar panel over any
+        /// window.
+        static let activeBlue = BrandRGB(red: 94 / 255, green: 174 / 255, blue: 255 / 255)
     }
 
     enum Opacity {

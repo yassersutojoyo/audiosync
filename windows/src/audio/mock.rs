@@ -137,6 +137,10 @@ struct CaptureLink {
     equalizer: EqProcessor,
     /// The network senders' feeds, until the capture stops.
     feeds: Feeds,
+    /// A mix lacks the stream of one of its apps.
+    missing: bool,
+    /// How often a mix was moved onto new apps.
+    retargets: u32,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -156,6 +160,25 @@ impl CaptureHandle for MockCapture {
     /// The first way a real capture tries.
     fn setup(&self) -> Option<CaptureAttempt> {
         Some(CAPTURE_ATTEMPTS[0])
+    }
+
+    /// A mix follows its apps, as a real one does.
+    fn retarget(&mut self, target: &CaptureTarget) -> bool {
+        let mut link = lock(&self.link);
+        if !matches!(
+            (&link.target, target),
+            (CaptureTarget::Mix(_), CaptureTarget::Mix(_))
+        ) {
+            return false;
+        }
+        link.target = target.clone();
+        link.retargets += 1;
+        link.missing = false;
+        true
+    }
+
+    fn holds_all(&self) -> bool {
+        !lock(&self.link).missing
     }
 }
 
@@ -310,6 +333,25 @@ impl MockDriver {
     /// Every capture started, in order.
     pub fn captures_started(&self) -> &[CaptureTarget] {
         &self.captures_started
+    }
+
+    /// What the running capture takes in now, a mix's apps as it follows
+    /// them.
+    pub fn capture_target(&self) -> Option<CaptureTarget> {
+        self.capture.as_ref().map(|link| lock(link).target.clone())
+    }
+
+    /// The running mix loses the stream of one of its apps, as when its
+    /// loopback fails to open.
+    pub fn lose_mix_stream(&self) {
+        if let Some(link) = &self.capture {
+            lock(link).missing = true;
+        }
+    }
+
+    /// How often the running mix was moved onto new apps.
+    pub fn capture_retargets(&self) -> u32 {
+        self.capture.as_ref().map_or(0, |link| lock(link).retargets)
     }
 
     /// Whether the running capture feeds the AirPlay sender.
@@ -585,6 +627,8 @@ impl Driver for MockDriver {
             writer: Some(writer),
             equalizer,
             feeds,
+            missing: false,
+            retargets: 0,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -704,11 +748,22 @@ impl Controller<MockDriver> {
             .retain(|&session_pid| session_pid != pid);
         if let Some(link) = &driver.capture {
             let mut link = lock(link);
-            let captures_app = matches!(
-                link.target,
-                CaptureTarget::Loopback(activation)
-                    if activation.mode == LoopbackMode::IncludeTree && activation.target_pid == pid
-            );
+            let processes = &driver.processes;
+            let captures_app = match &link.target {
+                CaptureTarget::Loopback(activation) => {
+                    activation.mode == LoopbackMode::IncludeTree && activation.target_pid == pid
+                }
+                // A mix reports a quit once all of its apps quit.
+                CaptureTarget::Mix(activations) => {
+                    !activations.is_empty()
+                        && activations.iter().all(|activation| {
+                            !processes
+                                .iter()
+                                .any(|process| process.pid == activation.target_pid)
+                        })
+                }
+                CaptureTarget::Input { .. } => false,
+            };
             if captures_app && link.state == CaptureState::Running {
                 link.state = CaptureState::SourceQuit;
             }

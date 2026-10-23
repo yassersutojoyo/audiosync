@@ -80,6 +80,8 @@ final class AppModel: ObservableObject {
     struct Actions {
         var setPower: (Bool) -> Void = { _ in }
         var selectSource: (String) -> Void = { _ in }
+        var toggleMixApp: (String) -> Void = { _ in }
+        var setMixMode: (AppMixMode) -> Void = { _ in }
         var setMaster: (Double) -> Void = { _ in }
         var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
@@ -154,6 +156,11 @@ final class AppModel: ObservableObject {
     @Published var sources: [Source] = []
     /// The level meter under the source; it publishes on its own.
     let inputLevel = InputLevel()
+    /// The several-apps menu: the apps it offers, the mode it shows and the
+    /// apps checked in that mode.
+    @Published var mixApps: [Source] = []
+    @Published var mixMode: AppMixMode = .only
+    @Published var mixChecked: [String] = []
     @Published var master: Double = 100
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
@@ -712,6 +719,7 @@ struct MenuBarView: View {
         }
         .padding(BrandTokens.Spacing.panelPadding)
         .frame(width: 280)
+        .background(RoundedRectangle(cornerRadius: MenuBarPanel.cornerRadius).fill(Brand.panelBacking))
         .overlay(RoundedRectangle(cornerRadius: MenuBarPanel.cornerRadius)
             .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
         .tint(accent)
@@ -1009,14 +1017,14 @@ struct SpeakerBadge: View {
 /// waiting, in its own color while it plays. VoiceOver reads the kind in the
 /// row's label, so the icon itself is hidden; the tooltip names it.
 ///
-/// Non-text graphics need 3:1. Measured on macOS 26 against the card (#FFFFFF
-/// light), the menu bar panel (#F6F6F6 / #2B2B2B), the dark window (#323232)
-/// and the playing-row tint (#EDF7F6 / #1E2827):
-/// - grey (`.secondary`): light 3.88–3.95, dark 5.06–5.58
-/// - AirPlay (`.primary`): light 13.96–14.94, dark 9.68–11.22
-/// - Bluetooth (system blue): light 3.22–3.52, dark 3.96–4.68
-/// - others (`Brand.tealText`): light 5.36–5.85, dark 5.07–5.98. The brand
-///   teal itself reaches only 3.00 on a light playing row, so it isn't used.
+/// Non-text graphics need 3:1. On the menu bar panel, with its backing over a
+/// black or a white window and a row's hover fill, the worst cases are:
+/// - grey (`.secondary`): light 3.62, dark 4.11
+/// - AirPlay and Bluetooth (`Brand.activeBlue`): light 3.79, dark 3.98; on
+///   the main window's card, window and playing row 4.91–6.47. The system
+///   blue fell to 2.3 on the panel.
+/// - others (`Brand.tealText`): light 3.82, dark 3.68. The brand teal itself
+///   reaches only 3.00 on a light playing row, so it isn't used.
 struct SpeakerTypeIcon: View {
     let kind: SpeakerTag
     let state: SpeakerState
@@ -1050,7 +1058,7 @@ struct SpeakerTypeIcon: View {
     private var color: Color {
         switch kind.typeTint(state) {
         case .muted: return .secondary
-        case .active: return Color(nsColor: .systemBlue)
+        case .active: return Brand.activeBlue
         case .teal: return Brand.tealText
         }
     }
@@ -1087,6 +1095,12 @@ struct SourcePicker: View {
     @ObservedObject var model: AppModel
     var large = false
 
+    /// Whether the chosen source is a mix, which checks the Several Apps menu.
+    private var isMix: Bool {
+        if case .mix = AudioSource(defaultsValue: model.sourceID) { return true }
+        return false
+    }
+
     var body: some View {
         let t = model.text
         Menu {
@@ -1103,6 +1117,30 @@ struct SourcePicker: View {
                 }
                 if source.id.isEmpty { Divider() }
             }
+            Divider()
+            Menu {
+                Picker(t.sourceSeveralApps, selection: Binding(get: { model.mixMode },
+                                                               set: { model.actions.setMixMode($0) })) {
+                    Text(t.sourceMixOnly).tag(AppMixMode.only)
+                    Text(t.sourceMixAllExcept).tag(AppMixMode.allExcept)
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+                Divider()
+                if model.mixApps.isEmpty {
+                    Text(t.sourceMixEmpty)
+                }
+                ForEach(model.mixApps) { app in
+                    Toggle(isOn: Binding(get: { model.mixChecked.contains(app.id) },
+                                         set: { _ in model.actions.toggleMixApp(app.id) })) {
+                        if let icon = app.icon { Image(nsImage: icon) }
+                        Text(app.name)
+                    }
+                }
+            } label: {
+                if isMix { Image(systemName: "checkmark") }
+                Text(t.sourceSeveralApps)
+            }
         } label: {
             HStack(spacing: 8) {
                 sourceIcon(model.currentSource)
@@ -1112,6 +1150,9 @@ struct SourcePicker: View {
             }
         }
         .menuStyle(.borderlessButton)
+        // A borderless menu draws its label and chevron in the tint; the brand
+        // teal fell near 2:1 on the panel's material over a dark window.
+        .tint(.primary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, large ? 8 : 6)
@@ -1126,13 +1167,13 @@ struct SourcePicker: View {
         if let source, source.isInput {
             Image(systemName: "mic.fill")
                 .frame(width: edge, height: edge)
-                .foregroundStyle(accent)
+                .foregroundStyle(Brand.tealText)
         } else if let icon = source?.icon {
             Image(nsImage: icon).resizable().frame(width: edge, height: edge)
         } else {
             Image(systemName: "speaker.wave.3.fill")
                 .frame(width: edge, height: edge)
-                .foregroundStyle(accent)
+                .foregroundStyle(Brand.tealText)
         }
     }
 }

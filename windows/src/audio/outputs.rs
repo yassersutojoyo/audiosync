@@ -38,6 +38,12 @@ use audiosync_core::volume::{
 use super::SESSION_RATE;
 use super::backend::{BackendError, OutputKind};
 
+/// The L_s a new native sender starts with: the AirPlay delay adjustment A
+/// is set against it until a sender has reported one (S178).
+pub const DEFAULT_SENDER_LATENCY_MS: f64 = audiosync_airplay::stream::DEFAULT_LATENCY_FRAMES as f64
+    * 1000.0
+    / audiosync_airplay::audio::SAMPLE_RATE as f64;
+
 /// A connected render endpoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Endpoint {
@@ -413,6 +419,8 @@ pub struct OutputPolicy {
     airplay: AirPlay,
     /// The native sender's adjustment A in ms, −2000 to +20 000 (S178).
     airplay_adjustment_ms: f64,
+    /// The L_s the last sender reported, kept after it stops.
+    last_sender_latency_ms: Option<f64>,
     /// The endpoint IDs listed now.
     listed: BTreeSet<String>,
     /// The reference among them (S174).
@@ -433,6 +441,7 @@ impl OutputPolicy {
             master: DEFAULT_MASTER_POSITION,
             airplay,
             airplay_adjustment_ms: 0.0,
+            last_sender_latency_ms: airplay.sender_latency_ms(),
             listed: BTreeSet::new(),
             reference: None,
             cast_offset: None,
@@ -557,6 +566,14 @@ impl OutputPolicy {
         self.airplay.sender_latency_ms()
     }
 
+    /// The L_s an AirPlay delay the user enters is turned into A against:
+    /// the sender's now, else the last one reported, else a new sender's.
+    pub fn adjustment_base_ms(&self) -> f64 {
+        self.sender_latency_ms()
+            .or(self.last_sender_latency_ms)
+            .unwrap_or(DEFAULT_SENDER_LATENCY_MS)
+    }
+
     /// L while an AirPlay speaker is chosen: L_s + A, clamped to 0 to
     /// 20 000 ms (S178); `None` otherwise.
     fn airplay_latency_ms(&self) -> Option<f64> {
@@ -669,6 +686,9 @@ impl OutputPolicy {
     /// speaker is chosen or no longer is, or L_s changed while one is.
     pub fn set_airplay(&mut self, airplay: AirPlay) -> bool {
         let changed = airplay.anchor() != self.airplay.anchor();
+        if let Some(latency_ms) = airplay.sender_latency_ms() {
+            self.last_sender_latency_ms = Some(latency_ms);
+        }
         self.airplay = airplay;
         changed
     }
@@ -1245,6 +1265,21 @@ mod tests {
 
     fn sender(chosen: bool, latency: Duration) -> AirPlay {
         AirPlay::Available { chosen, latency }
+    }
+
+    #[test]
+    fn the_airplay_delay_base_is_the_last_sender_latency_known() {
+        let mut policy = OutputPolicy::new(AirPlay::Unavailable);
+        assert_eq!(DEFAULT_SENDER_LATENCY_MS, L.as_secs_f64() * 1000.0);
+        assert_eq!(policy.adjustment_base_ms(), DEFAULT_SENDER_LATENCY_MS);
+        policy.set_airplay(sender(false, Duration::from_secs(1)));
+        assert_eq!(policy.adjustment_base_ms(), 1000.0);
+        policy.set_airplay(AirPlay::Unavailable);
+        assert_eq!(policy.adjustment_base_ms(), 1000.0, "kept after it stops");
+        assert_eq!(
+            OutputPolicy::new(sender(true, L)).adjustment_base_ms(),
+            1750.0
+        );
     }
 
     #[test]

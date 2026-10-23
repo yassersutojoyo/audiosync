@@ -30,6 +30,24 @@ pub enum SourceId {
         /// The process ID of the app's top process.
         root_pid: u32,
     },
+    /// Several apps mixed: each top process in `root_pids` and every
+    /// process it started, each tree in its own loopback. A tree that no
+    /// longer runs is skipped, and an app with an audio session running one
+    /// of `executables` joins while the source plays.
+    Apps {
+        /// The process IDs of the apps' top processes.
+        root_pids: Vec<u32>,
+        /// The apps' executable file names, to find instances that start
+        /// later.
+        executables: Vec<String>,
+    },
+    /// Every app with an audio session except those running one of
+    /// `executables` (file names, such as `spotify.exe`), and never
+    /// AudioSync: each in its own loopback, as [`SourceId::Apps`].
+    AppsExcept {
+        /// The executable file names left out.
+        executables: Vec<String>,
+    },
     /// An input device (a microphone or line in): an active capture
     /// endpoint, by its endpoint ID.
     Input {
@@ -786,6 +804,10 @@ pub trait AudioBackend {
     /// The AirPlay sender's base latency L_s in milliseconds, or `None`
     /// while there is no sender.
     fn airplay_sender_latency_ms(&self) -> Option<f64>;
+
+    /// The L_s the AirPlay delay field's value is turned into A against,
+    /// also while there is no sender (spec S178).
+    fn airplay_adjustment_base_ms(&self) -> f64;
 
     /// The user's AirPlay delay adjustment A in milliseconds: L = L_s + A
     /// while an AirPlay speaker is chosen (spec S178).

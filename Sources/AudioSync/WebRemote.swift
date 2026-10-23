@@ -222,7 +222,16 @@ final class WebRemote {
         let playing = model.nowPlaying.map {
             RemoteSnapshot.Playing(title: $0.title, artist: $0.artist, source: $0.appName)
         }
-        return RemoteSnapshot(computerName: computerName, master: model.master, nowPlaying: playing, rows: rows())
+        let (sources, current) = sourceList()
+        return RemoteSnapshot(computerName: computerName, master: model.master, nowPlaying: playing, rows: rows(),
+                              sources: sources, sourceID: current)
+    }
+
+    /// The picker's entries and the page ID of the one in use, if it is listed.
+    private func sourceList() -> (sources: [RemoteSource], current: String?) {
+        let sources = model.sources.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+        let current = RemoteSource.pageID(model.sourceID)
+        return (sources, sources.contains { $0.id == current } ? current : nil)
     }
 
     /// The rows in the window's order (This Mac, then Connected Speakers).
@@ -261,7 +270,11 @@ final class WebRemote {
         if case .speaker(let id, _, _, _) = command, !listed.contains(where: { $0.id == id }) {
             DebugTrace.log("[AudioSync] web remote: ignored a command for \(id), which isn't listed (hidden or gone)")
         }
-        let actions = RemoteAction.plan(command, rows: listed)
+        let (sources, current) = sourceList()
+        if case .source(let id) = command, !sources.contains(where: { $0.id == id }) {
+            DebugTrace.log("[AudioSync] web remote: ignored a pick of a source the picker no longer lists")
+        }
+        let actions = RemoteAction.plan(command, rows: listed, sources: sources, sourceID: current)
         DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
         actions.forEach(apply)
         schedulePublish()
@@ -278,6 +291,7 @@ final class WebRemote {
         case .setCastOffset(let id, let ms): model.actions.setCastOffset(id, ms)
         case .setAirPlayDelay(let ms): model.actions.setAirPlayDelay(ms)
         case .setMaster(let position): model.actions.setMaster(position)
+        case .selectSource(let pickerID): model.actions.selectSource(pickerID)
         }
     }
 

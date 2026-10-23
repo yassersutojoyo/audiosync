@@ -143,8 +143,9 @@ pub enum SessionEvent {
     Recovered {
         relaunched: bool,
     },
-    /// The device saw the stream end while the sender kept it open, and the
-    /// sender loaded it again once (C86).
+    /// The device saw the stream end while the sender kept it open (C86),
+    /// or lost it during an outage (C81), and the sender loaded it again
+    /// once.
     Reloaded,
     /// The device refused WAV before it played, and the sender loads FLAC
     /// once instead (C84).
@@ -753,15 +754,12 @@ impl CastSession {
                     ));
                 } else {
                     self.finished_reloaded = true;
-                    match self.load_until_playing() {
-                        Ok(()) => self.report(SessionEvent::Reloaded),
-                        Err(_) if !self.selected.load(Ordering::SeqCst) => {
-                            self.end(SessionEnd::Deselected)
-                        }
-                        Err(error) => self.end(SessionEnd::Failed(error.into())),
-                    }
+                    self.reload();
                 }
             }
+            // Only the one GET_STATUS of a resume reports this, so it
+            // reloads once per recovery.
+            Event::PlaybackEnded(PlaybackEnd::Gone) => self.reload(),
             Event::Ended(reason) => match reason {
                 EndReason::TakenOver => self.end(SessionEnd::TakenOver),
                 EndReason::Stopped => self.end(SessionEnd::Stopped),
@@ -771,6 +769,16 @@ impl CastSession {
                 other => self.recover(other, false),
             },
             _ => {}
+        }
+    }
+
+    /// One more `LOAD` on the running app; if it fails, the session ends
+    /// with its reason.
+    fn reload(&mut self) {
+        match self.load_until_playing() {
+            Ok(()) => self.report(SessionEvent::Reloaded),
+            Err(_) if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
+            Err(error) => self.end(SessionEnd::Failed(error.into())),
         }
     }
 
