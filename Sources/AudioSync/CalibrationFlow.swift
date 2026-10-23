@@ -20,6 +20,8 @@ enum CalibrationFailure: Equatable {
     case noReference
     /// Streaming is off, or the chosen speaker or the reference isn't playing.
     case notPlaying
+    /// The built-in output plays to the headphone jack, so its speakers are silent.
+    case referenceHeadphones
     case microphoneDenied
     /// No default input device, or one AudioSync can't read.
     case noMicrophone
@@ -158,12 +160,13 @@ enum CalibrationFlow {
 
     /// Whether `chosen` can be calibrated now: a reference is listed, streaming
     /// runs, and both it and the reference play (S232: both take part).
+    /// `referenceLeftOut` is why the reference would sit out, if it would.
     static func blocker(streaming: Bool, reference: String?, chosen: String,
-                        playing: [String]) -> CalibrationFailure? {
+                        playing: [String], referenceLeftOut: CalibrationLeftOut? = nil) -> CalibrationFailure? {
         guard let reference else { return .noReference }
         guard streaming, chosen != reference, playing.contains(chosen), playing.contains(reference)
         else { return .notPlaying }
-        return nil
+        return referenceLeftOut == .headphones ? .referenceHeadphones : nil
     }
 
     /// Why the button can't start a calibration now, from what the row

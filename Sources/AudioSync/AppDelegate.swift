@@ -185,6 +185,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var localListed: [String] = []
     /// The reference chosen from the latest device list (S173).
     var localReference: String?
+    /// Refreshes the window when the headphone jack changes a built-in
+    /// output's data source, which calibration leaves out.
+    let dataSourceWatch = DataSourceWatch()
     /// The hold-back each running local output was last given, by UID (S177).
     var localHoldBacks: [String: Double] = [:]
     /// The device ID each local output was last started on, by UID, so a
@@ -495,6 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         guard !quitStepsRan else { return }
         quitStepsRan = true
         Self.exiting.store(true, ordering: .relaxed)
+        dataSourceWatch.stop()
         DebugTrace.log("[AudioSync] quitting")
         // Its destroy waits up to about 3.5 s for a session's teardown, so it
         // runs beside the fades and the AirPlay sender's teardown.

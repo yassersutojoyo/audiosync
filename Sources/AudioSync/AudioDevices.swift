@@ -201,3 +201,46 @@ private enum HALProperty {
         return buffers.reduce(0) { $0 + Int($1.mNumberChannels) }
     }
 }
+
+/// Watches the output data source of the built-in outputs, which plugging
+/// into the headphone jack changes without changing the device list, and
+/// calls `onChange` on the main queue. Main thread only.
+final class DataSourceWatch {
+    var onChange: () -> Void = {}
+    private var listeners: [AudioDeviceID: AudioObjectPropertyListenerBlock] = [:]
+
+    private static var address: AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDataSource, mScope: kAudioObjectPropertyScopeOutput,
+                                   mElement: kAudioObjectPropertyElementMain)
+    }
+
+    /// The devices whose data source is watched: the built-in outputs.
+    static func watched(_ devices: [AudioDevices.Device]) -> Set<AudioDeviceID> {
+        Set(devices.filter { $0.transport == kAudioDeviceTransportTypeBuiltIn }.map(\.id))
+    }
+
+    /// Watches the built-in outputs of `devices` and stops watching any other.
+    func follow(_ devices: [AudioDevices.Device]) {
+        let wanted = Self.watched(devices)
+        for (device, block) in listeners where !wanted.contains(device) { remove(device, block) }
+        for device in wanted where listeners[device] == nil {
+            var address = Self.address
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.onChange() }
+            if AudioObjectAddPropertyListenerBlock(device, &address, DispatchQueue.main, block) == noErr {
+                listeners[device] = block
+            }
+        }
+    }
+
+    func stop() {
+        for (device, block) in listeners { remove(device, block) }
+    }
+
+    deinit { stop() }
+
+    private func remove(_ device: AudioDeviceID, _ block: @escaping AudioObjectPropertyListenerBlock) {
+        var address = Self.address
+        AudioObjectRemovePropertyListenerBlock(device, &address, DispatchQueue.main, block)
+        listeners[device] = nil
+    }
+}

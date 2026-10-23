@@ -214,6 +214,8 @@ struct UIStrings {
             return "Calibration measures against the Mac's built-in speakers, and they aren't listed."
         case .notPlaying:
             return "Turn on streaming, this speaker and the built-in speakers first."
+        case .referenceHeadphones:
+            return calibrateAllUnavailable(.referenceHeadphones)
         case .microphoneDenied:
             return "AudioSync isn't allowed to use the microphone. Turn it on in System Settings → "
                 + "Privacy & Security → Microphone."
@@ -277,18 +279,31 @@ struct UIStrings {
         }
     }
 
+    /// The blocker as the sheet says it, where Include Anyway is right below.
+    func calibrateAllSheetBlocker(_ blocker: CalibrateAllBlocker) -> String {
+        guard blocker == .onlyLeftOut else { return calibrateAllUnavailable(blocker) }
+        return "The other speakers that are on are headphones or virtual outputs, which the microphone can't "
+            + "hear. Turn on another speaker, or choose Include Anyway below."
+    }
+
     /// Why an output sits out of microphone calibration, under its row.
     func calibrationLeftOut(_ reason: CalibrationLeftOut) -> String {
         switch reason {
-        case .headphones: "Headphones are left out: the microphone can't hear them."
-        case .virtual: "Virtual output: there's nothing for the microphone to hear."
+        case .headphones: "Left out of microphone calibration: the microphone can't hear headphones."
+        case .virtual: "Left out of microphone calibration: a virtual output has nothing for the microphone to hear."
         }
     }
 
     let calibrateAllLeftOutIncluded = "Included anyway: measured in this run."
     let includeAnyway = "Include Anyway"
     func includeAnywayLabel(of name: String) -> String { "Include \(name) anyway" }
-    let includeAnywayHelp = "For a speaker that reports itself as headphones. It counts until you close this window."
+    func includeAnywayHelp(_ reason: CalibrationLeftOut) -> String {
+        switch reason {
+        case .headphones: "For a speaker that reports itself as headphones. It counts until you close this window."
+        case .virtual: "For a virtual output that passes the sound on to a speaker. "
+            + "It counts until you close this window."
+        }
+    }
     let leaveOut = "Leave Out"
     func leaveOutLabel(of name: String) -> String { "Leave \(name) out" }
 

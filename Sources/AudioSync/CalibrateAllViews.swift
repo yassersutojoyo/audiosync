@@ -76,7 +76,7 @@ struct CalibrateAllSheetView: View {
             }
             leftOutRows(status, t: t)
             if status.sheet == nil, !status.isRunning, status.line == nil, let blocker = status.blocker {
-                Text(t.calibrateAllUnavailable(blocker))
+                Text(t.calibrateAllSheetBlocker(blocker))
                     .foregroundStyle(Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -188,9 +188,9 @@ struct CalibrateAllSheetView: View {
                             } else {
                                 Button(t.includeAnyway) { model.actions.includeInCalibrateAll(row.id, true) }
                                     .controlSize(.small)
-                                    .help(t.includeAnywayHelp)
+                                    .help(t.includeAnywayHelp(row.reason))
                                     .accessibilityLabel(t.includeAnywayLabel(of: row.name))
-                                    .accessibilityHint(t.includeAnywayHelp)
+                                    .accessibilityHint(t.includeAnywayHelp(row.reason))
                             }
                         }
                     }

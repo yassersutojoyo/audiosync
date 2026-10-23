@@ -15,8 +15,10 @@ extension AppDelegate {
     func startCalibration(_ uid: String) {
         guard calibrationRun == nil, calibrateAllRun == nil, !appModel.calibrateAll.holdsOutputs,
               calibrationLeftOut(uid) == nil else { return }
+        logCalibrationKinds([localReference, uid].compactMap { $0 })
         if let blocker = CalibrationFlow.blocker(streaming: engine.isRunning, reference: localReference, chosen: uid,
-                                                 playing: engine.activeOutputUIDs) {
+                                                 playing: engine.activeOutputUIDs,
+                                                 referenceLeftOut: localReference.flatMap { calibrationLeftOut($0) }) {
             showCalibration(uid, .failed(blocker))
             return
         }
