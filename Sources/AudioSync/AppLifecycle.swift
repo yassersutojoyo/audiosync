@@ -7,12 +7,12 @@ import CoreServices
 enum StartOrigin: Equatable {
     /// A click: the power switch, a speaker, a group, a source.
     case user
-    /// The phone, through the web remote (S266): acts as `user`, but the
-    /// user isn't looking at the Mac, so a failure is only a notice.
-    case remote
     /// AudioSync on its own: auto-connect, or a restart after the capture
     /// format changed.
     case automatic
+    /// A phone through the web remote (S256 to S258, S266): it counts as the
+    /// user's act, but nobody may be at the Mac, so a failure only posts a notice.
+    case remote
 }
 
 /// The decisions behind the app's launch, when the speakers are reconciled, a
@@ -100,7 +100,8 @@ enum AppLifecycle {
     /// A second report of the same quit finds the session stopped or the
     /// source switched, so it gives nil.
     static func sourceQuit(_ report: SourceQuitReport, source: AudioSource,
-                           setting: WhenSourceQuits) -> (bundleID: String, action: SourceQuit.Action)? {
+                           setting: WhenSourceQuits, isRunning: (String) -> Bool = SourceApps.isRunning)
+        -> (bundleID: String, action: SourceQuit.Action)? {
         let quit: String?
         let streaming: SourceQuit.Streaming
         switch report {
@@ -117,7 +118,8 @@ enum AppLifecycle {
             streaming = .rebuilding
         }
         guard let quit else { return nil }
-        let action = SourceQuit.decide(setting: setting, source: source, quitBundleID: quit, streaming: streaming)
+        let action = SourceQuit.decide(setting: setting, source: source, quitBundleID: quit, streaming: streaming,
+                                       isRunning: isRunning)
         return action == .keep ? nil : (quit, action)
     }
 }

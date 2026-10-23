@@ -106,6 +106,10 @@ pub struct Ring {
     stamp_sequence: AtomicU64,
     stamp_written: AtomicU64,
     stamp_time: AtomicU64,
+    /// The largest sample magnitude written since [`Ring::take_peak`] last
+    /// ran, as float bits: for non-negative floats the bit order is the
+    /// numeric order, so the writer raises it with one `fetch_max`.
+    peak: AtomicU32,
     /// Set while a [`RingWriter`] exists.
     writer_taken: AtomicBool,
     /// The start leads and hold-backs of the renderers reading it (S208).
@@ -146,6 +150,7 @@ impl Ring {
             stamp_sequence: AtomicU64::new(0),
             stamp_written: AtomicU64::new(0),
             stamp_time: AtomicU64::new(NO_STAMP),
+            peak: AtomicU32::new(0),
             writer_taken: AtomicBool::new(false),
             leads: SessionLeads::new(),
         }))
@@ -197,6 +202,14 @@ impl Ring {
     /// covers (S206). A relaxed load; the writer stores it with each write.
     pub fn block_frames(&self) -> usize {
         self.block_frames.load(Ordering::Relaxed) as usize
+    }
+
+    /// The largest sample magnitude written since the last call, 0 to 1 for
+    /// a signal inside full scale, and starts the next span at 0: the level
+    /// meter's reading, for one caller polling at its own pace. Non-finite
+    /// samples don't count. A relaxed swap, safe on any thread.
+    pub fn take_peak(&self) -> f32 {
+        f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
     }
 
     /// The newest stamp of the capture's blocks (S207), or `None` while
@@ -319,7 +332,16 @@ impl RingWriter {
     /// `[W - C, W - C + M)` (S37, S40). Never waits, allocates or locks.
     pub fn write_part(&mut self, interleaved: &[f32], frames: usize) {
         let frames = frames.min(interleaved.len() / 2);
-        self.store(&interleaved[..frames * 2]);
+        let samples = &interleaved[..frames * 2];
+        self.store(samples);
+        let peak = samples
+            .iter()
+            .map(|sample| sample.abs())
+            .filter(|magnitude| magnitude.is_finite())
+            .fold(0.0_f32, f32::max);
+        if peak > 0.0 {
+            self.ring.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
+        }
         if frames > 0 {
             self.open += frames as u64;
             self.publish_block();
@@ -482,6 +504,26 @@ mod tests {
         let mut writer = ring.writer().unwrap();
         writer.write(&[0.25, -0.5, 0.75, -1.0], 2);
         assert_eq!(read_raw(&ring, 0, 2), vec![0.25, -0.5, 0.75, -1.0]);
+    }
+
+    #[test]
+    fn the_peak_is_the_largest_magnitude_since_it_was_last_taken() {
+        let ring = Ring::new(16_384, 8192).unwrap();
+        let mut writer = ring.writer().unwrap();
+        assert_eq!(ring.take_peak(), 0.0);
+        writer.write(&[0.25, -0.5, 0.125, 0.0], 2);
+        writer.write(&[0.1, -0.2], 1);
+        assert_eq!(
+            ring.take_peak(),
+            0.5,
+            "the larger block wins, its sign aside"
+        );
+        assert_eq!(ring.take_peak(), 0.0, "taking it starts a new span");
+        // A frame count below the slice's length counts only those frames.
+        writer.write(&[f32::NAN, f32::INFINITY, -0.75, 0.0, 0.9, 0.9], 2);
+        assert_eq!(ring.take_peak(), 0.75, "non-finite samples don't count");
+        writer.write(&[-1.5, 0.0], 1);
+        assert_eq!(ring.take_peak(), 1.5, "a clipped sample reads above 1");
     }
 
     // covers: S35

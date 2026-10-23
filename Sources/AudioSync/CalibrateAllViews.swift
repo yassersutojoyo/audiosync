@@ -239,7 +239,7 @@ struct CalibrateAllSheetView: View {
                 Button(t.calibrationCancel) { model.actions.cancelCalibrateAll() }
                     .keyboardShortcut(.cancelAction)
             } else {
-                if status.line == .applied {
+                if status.canUndo {
                     Button(t.calibrateAllUndo) { model.actions.undoCalibrateAll() }
                         .accessibilityLabel(t.calibrateAllUndoLabel)
                         .help(t.calibrateAllUndoHelp)

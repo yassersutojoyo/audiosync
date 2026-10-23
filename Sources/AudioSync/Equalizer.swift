@@ -50,7 +50,7 @@ enum Equalizer {
         return (min(max(db, -maxGain), maxGain) / gainStep).rounded() * gainStep + 0.0
     }
 
-    // MARK: Saved curves (S242)
+    // MARK: Saved curves (S270)
 
     static let maxCurves = 50
     static let maxCurveNameCharacters = 40

@@ -92,6 +92,7 @@ export component RemoteWindow inherits Window {
     callback new-code-requested();
     callback forget-all-requested();
     callback port-submitted(string);
+    pure callback use-port-enabled(string, int, bool) -> bool;
     callback close-requested();
     // Ctrl+Q, File > Exit from this window.
     callback exit-requested();
@@ -187,6 +188,7 @@ export component RemoteWindow inherits Window {
 
                             Button {
                                 text: Strings.remote-use-port;
+                                enabled: root.use-port-enabled(port-field.text, root.port, root.port-problem);
                                 accessible-description: root.port-invalid ? Strings.remote-port-invalid : "";
                                 clicked => {
                                     root.port-submitted(port-field.text);

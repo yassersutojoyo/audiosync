@@ -239,6 +239,7 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 8) {
                 SectionTitle(t.sourceLabel)
                 SourcePicker(model: model, large: true)
+                InputLevelMeter(level: model.inputLevel, text: t)
             }
         }
     }

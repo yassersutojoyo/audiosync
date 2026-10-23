@@ -19,7 +19,9 @@ use std::time::Duration;
 use audiosync_core::calibrate_all::{
     AirPlayShared, Class, EndReason, Measurement, RowState as SheetRowState, SharedState,
 };
+use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, CurveMatch, EqSettings};
+use audiosync_core::meter;
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
@@ -36,14 +38,16 @@ use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MainWindowShows, NoticeMessage,
-    PinPrompt, SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings, WindowFrame,
+    PinPrompt, SheetRow, SheetState, SourceKind, SourceName, SpeakerState, ViewSettings,
+    WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
-    CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog,
-    GuidePage, GuideStepItem, GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow,
-    NameField, NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart,
-    RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
+    CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GuidePage, GuideStepItem,
+    GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow, MixAppItem, NameField,
+    NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState,
+    SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, ZoneItem, ZoneNameDialog,
+    ZoneTarget, speaker_names,
 };
 
 mod help_window;
@@ -54,12 +58,16 @@ fn pin_digits(text: &str) -> String {
     text.chars().filter(char::is_ascii_digit).take(4).collect()
 }
 
-/// What the group name dialog is open for.
+/// What the zone name dialog is open for.
 #[derive(Clone, Debug, PartialEq)]
 enum DialogPurpose {
-    NewGroup,
+    /// New Zone from Active Speakers.
+    NewZone,
+    /// New Zone… in a speaker's menu, by speaker ID.
+    NewZoneWith(String),
+    /// Rename Zone…, by zone ID.
     Rename(String),
-    /// Only a message (no name field), e.g. why a group can't be made yet.
+    /// Only a message (no name field), e.g. why a zone can't be made yet.
     Message,
     /// Save Curve in the equalizer.
     SaveCurve,
@@ -96,6 +104,11 @@ struct UiState {
     /// `airplay2_at_launch`.
     airplay2_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
+    /// The zones whose speakers are hidden by their arrow, by ID; a zone
+    /// opens expanded.
+    collapsed: HashSet<String>,
+    /// Whether the source was a mix at the last refresh.
+    source_was_mix: bool,
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -189,16 +202,45 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
+    /// The chosen input device's channel pairs; empty up to two channels.
+    input_pairs: Rc<VecModel<SharedString>>,
+    mix_apps: Rc<VecModel<MixAppItem>>,
     this_pc: Rc<VecModel<SpeakerItem>>,
     connected: Rc<VecModel<SpeakerItem>>,
+    /// The flyout's speakers in no zone.
     all_speakers: Rc<VecModel<SpeakerItem>>,
-    groups: Rc<VecModel<GroupItem>>,
+    zones: Rc<VecModel<ZoneItem>>,
+    /// Each zone's rows by zone ID, kept between refreshes so an unchanged
+    /// zone's item compares equal and its rows aren't rebuilt.
+    zone_models: RefCell<HashMap<String, ZoneModels>>,
     notices: Rc<VecModel<NoticeItem>>,
     flyout_notices: Rc<VecModel<NoticeItem>>,
     gains: Rc<VecModel<f32>>,
     presets: Rc<VecModel<SharedString>>,
     calibration_rows: Rc<VecModel<CalibrationRowItem>>,
     calibration_left_out: Rc<VecModel<LeftOutItem>>,
+}
+
+/// A zone's member rows and its Use … Instead entries.
+#[derive(Default)]
+struct ZoneModels {
+    members: Rc<VecModel<SpeakerItem>>,
+    targets: Rc<VecModel<ZoneTarget>>,
+}
+
+/// A zone as one refresh builds it, before its rows go into its models.
+struct ZoneRowsBuilt {
+    item: ZoneItem,
+    members: Vec<SpeakerItem>,
+    targets: Vec<ZoneTarget>,
+}
+
+/// The shape of the zones' member lists: it changes when any list's length
+/// does, which rebuilds that list's rows ([`sync_model`]).
+fn zone_shape(lengths: impl Iterator<Item = usize>) -> u64 {
+    lengths.fold(1, |shape, length| {
+        shape.wrapping_mul(31).wrapping_add(length as u64 + 1)
+    })
 }
 
 /// How many notices the main window lists, newest first.
@@ -315,13 +357,13 @@ const NATIVE_WINDOW_TRIES: u8 = 100;
 const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
-/// in them: the listed notice, the button for more notices, the group rows
-/// and the speaker rows.
+/// in them: the listed notice, the button for more notices, the zone rows
+/// and the speaker rows (a zone's members among them).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutParts {
     notices: bool,
     more_notices: bool,
-    groups: bool,
+    zones: bool,
     speakers: bool,
 }
 
@@ -330,19 +372,21 @@ impl FlyoutParts {
     fn overlaps(self, other: FlyoutParts) -> bool {
         (self.notices && other.notices)
             || (self.more_notices && other.more_notices)
-            || (self.groups && other.groups)
+            || (self.zones && other.zones)
             || (self.speakers && other.speakers)
     }
 }
 
 /// What the tray flyout shows: how many notices there are and how many of
-/// them it lists, and how many groups and speakers.
+/// them it lists, how many zones and speakers in no zone, and the shape of
+/// the zones' member lists ([`zone_shape`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
     listed_notices: usize,
-    groups: usize,
+    zones: usize,
     speakers: usize,
+    zone_members: u64,
 }
 
 impl FlyoutCounts {
@@ -358,8 +402,8 @@ impl FlyoutCounts {
         FlyoutParts {
             notices: self.listed_notices != next.listed_notices,
             more_notices: self.shows_more_notices() && !next.shows_more_notices(),
-            groups: self.groups != next.groups,
-            speakers: self.speakers != next.speakers,
+            zones: self.zones != next.zones,
+            speakers: self.speakers != next.speakers || self.zone_members != next.zone_members,
         }
     }
 }
@@ -374,8 +418,8 @@ struct MainFocus {
     dismiss_all: bool,
     /// A speaker row's control: the speaker id and the row's part.
     speaker: Option<(SharedString, RowPart)>,
-    /// A group row's control: the group id and the row's part.
-    group: Option<(SharedString, RowPart)>,
+    /// A zone header's control: the zone id and the header's part.
+    zone: Option<(SharedString, RowPart)>,
     /// Another main-window control: the streaming switch, the source, the
     /// transport, the master volume, the equalizer or calibration card or
     /// the AirPlay delay.
@@ -412,10 +456,10 @@ fn note_row_focus(slot: &mut Option<(SharedString, RowPart)>, id: SharedString, 
 enum MainFocusTarget {
     /// The notice at this index.
     Notice(usize),
-    /// A speaker or group row, by id, on this part (the row falls back to a
-    /// harmless part when it hasn't that one).
+    /// A speaker row or zone header, by id, on this part (the row falls
+    /// back to a harmless part when it hasn't that one).
     Speaker(SharedString, RowPart),
-    Group(SharedString, RowPart),
+    Zone(SharedString, RowPart),
     StreamingSwitch,
 }
 
@@ -438,13 +482,13 @@ fn neighbour<T>(
 }
 
 /// The options of the first row `new` lists, This PC's, then Connected
-/// Speakers', then the groups' (a row's list is empty, so its own list adds
-/// nothing); the streaming switch when every list is empty.
+/// Speakers', then the first zone header's (a row's list is empty, so its
+/// own list adds nothing); the streaming switch when every list is empty.
 fn first_row(new: &MainLists) -> MainFocusTarget {
     let speaker = new.this_pc.first().or_else(|| new.connected.first());
-    match (speaker, new.groups.first()) {
+    match (speaker, new.zones.first()) {
         (Some(speaker), _) => MainFocusTarget::Speaker(speaker.id.clone(), RowPart::Options),
-        (None, Some(group)) => MainFocusTarget::Group(group.id.clone(), RowPart::Options),
+        (None, Some(zone)) => MainFocusTarget::Zone(zone.id.clone(), RowPart::Options),
         (None, None) => MainFocusTarget::StreamingSwitch,
     }
 }
@@ -476,52 +520,70 @@ impl MainFocus {
         // streaming; once its list is empty, to the first row of the other
         // lists ([`first_row`]), and the streaming switch takes it only when
         // no row is left.
+        // The zones' cards are all rebuilt when their number changes.
+        let zones_rebuilt = old.zones.len() != new.zones.len();
         if let Some((id, part)) = &self.speaker {
-            for (old_rows, new_rows) in [
-                (&old.this_pc, &new.this_pc),
-                (&old.connected, &new.connected),
-            ] {
+            let none: &[SpeakerItem] = &[];
+            let mut lists: Vec<(&[SpeakerItem], &[SpeakerItem], Option<&SharedString>)> = vec![
+                (&old.this_pc, &new.this_pc, None),
+                (&old.connected, &new.connected, None),
+            ];
+            for zone in &old.zones {
+                let rows = new
+                    .zones
+                    .iter()
+                    .find(|z| z.id == zone.id)
+                    .map_or(none, |z| &z.rows[..]);
+                lists.push((&zone.rows, rows, Some(&zone.id)));
+            }
+            for (old_rows, new_rows, zone) in lists {
                 let Some(at) = old_rows.iter().position(|s| s.id == *id) else {
                     continue;
                 };
-                if old_rows.len() == new_rows.len() {
+                if old_rows.len() == new_rows.len() && !(zone.is_some() && zones_rebuilt) {
                     break;
                 }
-                let listed = new
-                    .this_pc
-                    .iter()
-                    .chain(&new.connected)
-                    .any(|s| s.id == *id);
-                return Some(if listed {
-                    MainFocusTarget::Speaker(id.clone(), *part)
+                if new.rows().any(|s| s.id == *id) {
+                    return Some(MainFocusTarget::Speaker(id.clone(), *part));
+                }
+                let part = if self.hiding.as_ref() == Some(id) {
+                    RowPart::Toggle
                 } else {
-                    let part = if self.hiding.as_ref() == Some(id) {
-                        RowPart::Toggle
-                    } else {
-                        RowPart::Options
-                    };
-                    neighbour(old_rows, new_rows, at, |s| &s.id).map_or_else(
-                        || first_row(new),
-                        |next| MainFocusTarget::Speaker(next, part),
-                    )
-                });
+                    RowPart::Options
+                };
+                // A zone's last row (or every row, collapsed): its header.
+                let header = zone
+                    .filter(|zone| new.zones.iter().any(|z| z.id == **zone))
+                    .map(|zone| MainFocusTarget::Zone(zone.clone(), RowPart::Options));
+                return Some(neighbour(old_rows, new_rows, at, |s| &s.id).map_or_else(
+                    || header.unwrap_or_else(|| first_row(new)),
+                    |next| MainFocusTarget::Speaker(next, part),
+                ));
             }
         }
-        if let Some((id, part)) = &self.group
-            && old.groups.len() != new.groups.len()
-            && let Some(at) = old.groups.iter().position(|g| g.id == *id)
+        if let Some((id, part)) = &self.zone
+            && zones_rebuilt
+            && let Some(at) = old.zones.iter().position(|z| z.id == *id)
         {
-            return Some(if new.groups.iter().any(|g| g.id == *id) {
-                MainFocusTarget::Group(id.clone(), *part)
+            return Some(if new.zones.iter().any(|z| z.id == *id) {
+                MainFocusTarget::Zone(id.clone(), *part)
             } else {
-                neighbour(&old.groups, &new.groups, at, |g| &g.id).map_or_else(
+                neighbour(&old.zones, &new.zones, at, |z| &z.id).map_or_else(
                     || first_row(new),
-                    |next| MainFocusTarget::Group(next, RowPart::Options),
+                    |next| MainFocusTarget::Zone(next, RowPart::Options),
                 )
             });
         }
         None
     }
+}
+
+/// A zone in the main window's lists: its ID and the member rows it shows
+/// (none while it is collapsed).
+#[derive(Debug, Default)]
+struct ZoneRows {
+    id: SharedString,
+    rows: Vec<SpeakerItem>,
 }
 
 /// The main window's lists that a refresh can rebuild.
@@ -530,7 +592,17 @@ struct MainLists {
     notices: Vec<NoticeItem>,
     this_pc: Vec<SpeakerItem>,
     connected: Vec<SpeakerItem>,
-    groups: Vec<GroupItem>,
+    zones: Vec<ZoneRows>,
+}
+
+impl MainLists {
+    /// Every speaker row, in zones or not.
+    fn rows(&self) -> impl Iterator<Item = &SpeakerItem> {
+        self.this_pc
+            .iter()
+            .chain(&self.connected)
+            .chain(self.zones.iter().flat_map(|zone| &zone.rows))
+    }
 }
 
 /// Runs after every refresh with the new state.
@@ -542,7 +614,7 @@ pub struct App {
     pub main: MainWindow,
     pub flyout: TrayFlyout,
     pub equalizer: EqualizerWindow,
-    group_dialog: GroupNameDialog,
+    zone_dialog: ZoneNameDialog,
     /// The PIN prompt of an Apple TV pairing.
     pin_dialog: PinDialog,
     /// The speaker the PIN dialog is open for, while it is.
@@ -607,6 +679,10 @@ pub struct App {
     poll_timer: Timer,
     /// Moves a microphone calibration on while one holds the outputs.
     calibration_timer: Timer,
+    /// Moves the input level meter while an input device is captured.
+    meter_timer: Timer,
+    /// The meter's length as last shown, 0 to 1.
+    meter_level: Cell<f32>,
     /// Launch at Sign-In and its notice, which the windows own: the
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
@@ -750,10 +826,13 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
+            input_pairs: Rc::new(VecModel::default()),
+            mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
             connected: Rc::new(VecModel::default()),
             all_speakers: Rc::new(VecModel::default()),
-            groups: Rc::new(VecModel::default()),
+            zones: Rc::new(VecModel::default()),
+            zone_models: RefCell::default(),
             notices: Rc::new(VecModel::default()),
             flyout_notices: Rc::new(VecModel::default()),
             gains: Rc::new(VecModel::default()),
@@ -766,7 +845,7 @@ impl App {
             main: MainWindow::new()?,
             flyout: TrayFlyout::new()?,
             equalizer: EqualizerWindow::new()?,
-            group_dialog: GroupNameDialog::new()?,
+            zone_dialog: ZoneNameDialog::new()?,
             pin_dialog: PinDialog::new()?,
             pin_for: RefCell::new(None),
             pin_preview: Cell::new(false),
@@ -800,6 +879,8 @@ impl App {
             announcement_timer: Timer::default(),
             poll_timer: Timer::default(),
             calibration_timer: Timer::default(),
+            meter_timer: Timer::default(),
+            meter_level: Cell::new(0.0),
             login: RefCell::new(LaunchAtLogin::new(
                 launch_at_login::system_store(),
                 std::env::current_exe().ok(),
@@ -824,7 +905,10 @@ impl App {
         let weak = Rc::downgrade(&app);
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
-                with_app(&weak, App::poll)
+                with_app(&weak, |app| {
+                    app.poll();
+                    app.follow_input_level(&weak);
+                })
             });
         let weak = Rc::downgrade(&app);
         app.login_timer
@@ -945,6 +1029,44 @@ impl App {
         if !self.snapshot().calibration.busy {
             self.calibration_timer.stop();
         }
+    }
+
+    /// Starts the input level meter once an input device is captured; it
+    /// stops itself when the capture ends or the source changes.
+    fn follow_input_level(&self, weak: &Weak<App>) {
+        if self.meter_timer.running() || !self.tick_input_level() {
+            return;
+        }
+        let weak = weak.clone();
+        self.meter_timer.start(
+            TimerMode::Repeated,
+            Duration::from_millis(u64::from(meter::METER_POLL_MS)),
+            move || {
+                with_app(&weak, |app| {
+                    app.tick_input_level();
+                })
+            },
+        );
+    }
+
+    /// Moves the meter to the peak captured since the last tick, or hides
+    /// it while no input device is captured. Returns whether it shows.
+    fn tick_input_level(&self) -> bool {
+        let Some(peak) = self.backend.borrow_mut().input_peak() else {
+            self.meter_timer.stop();
+            self.meter_level.set(0.0);
+            self.main.set_input_level(0.0);
+            self.main.set_input_level_spoken(0);
+            self.main.set_input_meter_shown(false);
+            return false;
+        };
+        let level = meter::meter_level(self.meter_level.get(), peak);
+        self.meter_level.set(level);
+        self.main.set_input_level(level);
+        self.main
+            .set_input_level_spoken(meter::meter_spoken_percent(level) as i32);
+        self.main.set_input_meter_shown(true);
+        true
     }
 
     /// Lets the backend take in what happened on its own, and shows it.
@@ -1079,7 +1201,7 @@ impl App {
         self.main.global::<Palette>().set_color_scheme(scheme);
         self.flyout.global::<Palette>().set_color_scheme(scheme);
         self.equalizer.global::<Palette>().set_color_scheme(scheme);
-        self.group_dialog
+        self.zone_dialog
             .global::<Palette>()
             .set_color_scheme(scheme);
         self.pin_dialog.global::<Palette>().set_color_scheme(scheme);
@@ -1099,7 +1221,7 @@ impl App {
             self.main.window(),
             self.flyout.window(),
             self.equalizer.window(),
-            self.group_dialog.window(),
+            self.zone_dialog.window(),
             self.pin_dialog.window(),
             self.password_dialog.window(),
             self.cast_address_dialog.window(),
@@ -1288,9 +1410,12 @@ impl App {
     fn attach_models(&self) {
         let m = &self.models;
         self.main.set_sources(ModelRc::from(m.sources.clone()));
+        self.main
+            .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
+        self.main.set_mix_apps(ModelRc::from(m.mix_apps.clone()));
         self.main.set_this_pc(ModelRc::from(m.this_pc.clone()));
         self.main.set_connected(ModelRc::from(m.connected.clone()));
-        self.main.set_groups(ModelRc::from(m.groups.clone()));
+        self.main.set_zones(ModelRc::from(m.zones.clone()));
         self.main.set_notices(ModelRc::from(m.notices.clone()));
         self.main
             .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
@@ -1298,8 +1423,10 @@ impl App {
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
         self.flyout.set_sources(ModelRc::from(m.sources.clone()));
         self.flyout
+            .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
+        self.flyout
             .set_speakers(ModelRc::from(m.all_speakers.clone()));
-        self.flyout.set_groups(ModelRc::from(m.groups.clone()));
+        self.flyout.set_zones(ModelRc::from(m.zones.clone()));
         self.flyout
             .set_notices(ModelRc::from(m.flyout_notices.clone()));
         self.equalizer.set_gains(ModelRc::from(m.gains.clone()));
@@ -1334,15 +1461,21 @@ impl App {
         }
         let state = self.snapshot();
         let strings = self.strings();
-        {
+        let became_mix = {
             let mut ui = self.ui.borrow_mut();
+            let is_mix = state.source_id.starts_with("mix:");
+            let became_mix = is_mix && !ui.source_was_mix;
+            ui.source_was_mix = is_mix;
             let show_virtual = ui.show_virtual;
             ui.listed_virtual.note(&state.speakers, show_virtual);
             // A speaker that went takes what was typed for it along: back,
             // it shows its saved delay.
             ui.delay_drafts
                 .retain(|id, _| state.speakers.iter().any(|s| s.id == *id));
-        }
+            ui.collapsed
+                .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
+            became_mix
+        };
         let ui = self.ui.borrow();
         let item = |speaker: &ui_model::Speaker, show_kind: bool| {
             let draft = ui
@@ -1382,6 +1515,8 @@ impl App {
             row.availability = with_switch(row.availability, ui.airplay2_experimental);
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
+            let zone = state.zone_of(&speaker.id);
+            row.zone_id = zone.map_or_else(SharedString::default, |zone| zone.id.as_str().into());
             row
         };
         let (this_pc, connected) = state.layout();
@@ -1396,27 +1531,93 @@ impl App {
         self.main.set_this_pc_all_hidden(state.hidden_in(true));
         self.main.set_connected_all_hidden(state.hidden_in(false));
         self.flyout.set_all_hidden(state.all_hidden());
+        self.flyout
+            .set_connected_all_hidden(state.connected_all_hidden());
         self.main
             .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
         let listed = |s: &&ui_model::Speaker| lists(s);
+        // A speaker in a zone is listed under it instead (spec S245).
+        let zoned = |s: &&ui_model::Speaker| state.zone_of(&s.id).is_some();
+        let this_pc: Vec<&ui_model::Speaker> = this_pc.into_iter().filter(listed).collect();
+        let connected: Vec<&ui_model::Speaker> = connected.into_iter().filter(listed).collect();
+        self.main
+            .set_this_pc_all_in_zones(!this_pc.is_empty() && this_pc.iter().all(zoned));
+        self.main
+            .set_connected_all_in_zones(!connected.is_empty() && connected.iter().all(zoned));
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
-            .filter(listed)
+            .filter(|s| !zoned(s))
             .map(|s| item(s, false))
             .collect();
         let connected: Vec<SpeakerItem> = connected
             .into_iter()
-            .filter(listed)
+            .filter(|s| !zoned(s))
             .map(|s| item(s, true))
             .collect();
-        let all: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
+        let zones: Vec<ZoneRowsBuilt> = state
+            .zones
+            .iter()
+            .map(|zone| {
+                let members: Vec<SpeakerItem> = state
+                    .zone_rows(zone)
+                    .into_iter()
+                    .map(|row| {
+                        let mut built = match row {
+                            ui_model::ZoneRow::Listed(s) => item(s, !s.kind.is_this_pc()),
+                            ui_model::ZoneRow::NotFound(id) => {
+                                missing_item(&strings, &state, &zone.id, id)
+                            }
+                        };
+                        if let Some(note) = state.zone_note(zone, row) {
+                            built.zone_note = zone_note(&strings, note);
+                            built.zone_dimmed = matches!(
+                                note,
+                                ui_model::ZoneNote::InTarget(_) | ui_model::ZoneNote::NotFound
+                            );
+                        }
+                        built
+                    })
+                    .collect();
+                let targets = state
+                    .zone_members(zone)
+                    .filter_map(|s| {
+                        Some(ZoneTarget {
+                            member_id: s.id.as_str().into(),
+                            target: s.in_target.as_ref()?.name.as_str().into(),
+                        })
+                    })
+                    .collect();
+                let counts = state.zone_counts(zone);
+                ZoneRowsBuilt {
+                    item: ZoneItem {
+                        id: zone.id.as_str().into(),
+                        name: zone.name.as_str().into(),
+                        state: row_state(state.zone_state(zone)),
+                        on: count(counts.on),
+                        total: count(counts.total),
+                        waiting: count(counts.waiting),
+                        present: count(counts.present),
+                        volume: zone.volume as f32,
+                        expanded: !ui.collapsed.contains(&zone.id),
+                        ..ZoneItem::default()
+                    },
+                    members,
+                    targets,
+                }
+            })
+            .collect();
+        let flyout_speakers: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
+        let all: Vec<SpeakerItem> = flyout_speakers
+            .iter()
+            .cloned()
+            .chain(zones.iter().flat_map(|zone| zone.members.iter().cloned()))
+            .collect();
         let rows_typed = all.iter().any(|row| row.delay_pending);
         let mut out_of_range: Vec<(String, SharedString)> = all
             .iter()
             .filter(|row| !row.delay_range_hint.is_empty())
             .map(|row| (row.id.to_string(), row.delay_range_hint.clone()))
             .collect();
-        let groups: Vec<GroupItem> = state.groups.iter().map(|g| group_item(&state, g)).collect();
         let notices: Vec<NoticeItem> = state
             .notices
             .iter()
@@ -1482,6 +1683,7 @@ impl App {
                 // The backend's name for it is English; the UI's is translated.
                 SourceKind::System => strings.get_source_system(),
                 SourceKind::App | SourceKind::Input => s.name.as_str().into(),
+                SourceKind::AppsExcept => strings.invoke_source_all_except(s.name.as_str().into()),
             })
             .collect();
         let source_index = state
@@ -1489,6 +1691,9 @@ impl App {
             .iter()
             .position(|s| s.id == state.source_id)
             .map_or(-1, |i| i as i32);
+        let (input_pairs, input_pair_index) = input_pair_choice(&state, |first, last| {
+            strings.invoke_input_channel_pair(first, last)
+        });
         let status = strings.invoke_status(state.running, count(state.active_speakers()));
         let flyout_notices = newest_notices(&notices, FLYOUT_NOTICE_LIMIT);
 
@@ -1496,33 +1701,65 @@ impl App {
         let flyout_shown = FlyoutCounts {
             notices: usize::try_from(self.flyout.get_notice_count()).unwrap_or(0),
             listed_notices: m.flyout_notices.row_count(),
-            groups: m.groups.row_count(),
+            zones: m.zones.row_count(),
             speakers: m.all_speakers.row_count(),
+            zone_members: self.zone_shape_shown(),
         };
         let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
             notices: notices.len(),
             listed_notices: flyout_notices.len(),
-            groups: groups.len(),
-            speakers: all.len(),
+            zones: zones.len(),
+            speakers: flyout_speakers.len(),
+            zone_members: zone_shape(zones.iter().map(|zone| zone.members.len())),
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
             this_pc,
             connected,
-            groups,
+            zones: zones
+                .iter()
+                .map(|zone| ZoneRows {
+                    id: zone.item.id.clone(),
+                    rows: if zone.item.expanded {
+                        zone.members.clone()
+                    } else {
+                        Vec::new()
+                    },
+                })
+                .collect(),
         };
         let main_focus = self.main_focus_target(&main_lists);
         let MainLists {
             notices: main_notices,
             this_pc,
             connected,
-            groups,
+            ..
         } = main_lists;
         sync_model(&m.sources, sources);
+        sync_model(&m.input_pairs, input_pairs);
+        self.main.set_input_pair_index(input_pair_index);
+        self.flyout.set_input_pair_index(input_pair_index);
+        sync_model(
+            &m.mix_apps,
+            state
+                .mix_apps
+                .iter()
+                .map(|app| MixAppItem {
+                    name: app.name.as_str().into(),
+                    checked: app.checked,
+                })
+                .collect(),
+        );
+        self.main.set_mix_all_except(state.mix_all_except);
+        // The list opens once as the source becomes a mix; folding it is
+        // the user's.
+        if became_mix {
+            self.main.set_mix_open(true);
+        }
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
-        sync_model(&m.all_speakers, all);
-        sync_model(&m.groups, groups);
+        sync_model(&m.all_speakers, flyout_speakers);
+        self.sync_zones(zones);
         sync_model(&m.notices, main_notices);
         sync_model(&m.flyout_notices, flyout_notices);
         self.flyout.set_notice_count(count(notices.len()));
@@ -1651,6 +1888,38 @@ impl App {
         clear_announcement(&self.main.as_weak(), &self.flyout.as_weak());
     }
 
+    /// Puts each zone's rows into its kept models, then the zones into theirs.
+    fn sync_zones(&self, zones: Vec<ZoneRowsBuilt>) {
+        let m = &self.models;
+        let items: Vec<ZoneItem> = {
+            let mut kept = m.zone_models.borrow_mut();
+            kept.retain(|id, _| zones.iter().any(|zone| zone.item.id == id.as_str()));
+            zones
+                .into_iter()
+                .map(|zone| {
+                    let models = kept.entry(zone.item.id.to_string()).or_default();
+                    sync_model(&models.members, zone.members);
+                    sync_model(&models.targets, zone.targets);
+                    ZoneItem {
+                        members: ModelRc::from(models.members.clone()),
+                        targets: ModelRc::from(models.targets.clone()),
+                        ..zone.item
+                    }
+                })
+                .collect()
+        };
+        sync_model(&m.zones, items);
+    }
+
+    /// The shape of the zones' member lists the windows show now.
+    fn zone_shape_shown(&self) -> u64 {
+        let kept = self.models.zone_models.borrow();
+        zone_shape(self.models.zones.iter().map(|zone| {
+            kept.get(zone.id.as_str())
+                .map_or(0, |models| models.members.row_count())
+        }))
+    }
+
     /// Gives the keyboard focus back to the open flyout when a refresh
     /// removed the control that had it (a notice dismissed with the
     /// keyboard, a speaker unplugged): Slint then leaves nothing focused,
@@ -1660,7 +1929,7 @@ impl App {
         let focused = FlyoutParts {
             notices: flyout.get_notice_focused(),
             more_notices: flyout.get_more_notices_focused(),
-            groups: flyout.get_group_focused(),
+            zones: flyout.get_zone_focused(),
             speakers: flyout.get_speaker_focused(),
         };
         if focused.overlaps(removed) && flyout.window().is_visible() {
@@ -1678,7 +1947,18 @@ impl App {
             notices: m.notices.iter().collect(),
             this_pc: m.this_pc.iter().collect(),
             connected: m.connected.iter().collect(),
-            groups: m.groups.iter().collect(),
+            zones: m
+                .zones
+                .iter()
+                .map(|zone| ZoneRows {
+                    rows: if zone.expanded {
+                        zone.members.iter().collect()
+                    } else {
+                        Vec::new()
+                    },
+                    id: zone.id,
+                })
+                .collect(),
         };
         let mut focus = self.main_focus.borrow_mut();
         let target = focus.target(&old, new)?;
@@ -1698,8 +1978,8 @@ impl App {
                 speaker: Some((id.clone(), *part)),
                 ..MainFocus::default()
             },
-            MainFocusTarget::Group(id, part) => MainFocus {
-                group: Some((id.clone(), *part)),
+            MainFocusTarget::Zone(id, part) => MainFocus {
+                zone: Some((id.clone(), *part)),
                 ..MainFocus::default()
             },
             MainFocusTarget::StreamingSwitch => MainFocus::default(),
@@ -1707,16 +1987,16 @@ impl App {
         drop(focus);
         main.set_focus_notice_index(-1);
         main.set_focus_speaker_id(SharedString::new());
-        main.set_focus_group_id(SharedString::new());
+        main.set_focus_zone_id(SharedString::new());
         match &target {
             MainFocusTarget::Notice(index) => main.set_focus_notice_index(count(*index)),
             MainFocusTarget::Speaker(id, part) => {
                 main.set_focus_speaker_part(*part);
                 main.set_focus_speaker_id(id.clone());
             }
-            MainFocusTarget::Group(id, part) => {
-                main.set_focus_group_part(*part);
-                main.set_focus_group_id(id.clone());
+            MainFocusTarget::Zone(id, part) => {
+                main.set_focus_zone_part(*part);
+                main.set_focus_zone_id(id.clone());
             }
             MainFocusTarget::StreamingSwitch => {}
         }
@@ -1765,6 +2045,16 @@ impl App {
         main.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
         main.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        let w = weak.clone();
+        main.on_input_pair_selected(move |index| {
+            with_app(&w, |app| app.select_input_pair(index));
+        });
+        let w = weak.clone();
+        main.on_mix_app_toggled(move |index| with_app(&w, |app| app.toggle_mix_app(index)));
+        let w = weak.clone();
+        main.on_mix_mode_selected(move |on| {
+            with_app(&w, |app| app.update(|b| b.set_mix_all_except(on)));
+        });
         let w = weak.clone();
         main.on_switch_source_on_quit_toggled(move |on| {
             let setting = if on {
@@ -1922,13 +2212,39 @@ impl App {
             with_app(&w, |app| app.update(|b| b.close_calibrate_all()))
         });
         let w = weak.clone();
-        main.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
+        main.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
         let w = weak.clone();
-        main.on_group_rename_requested(move |id| with_app(&w, |app| app.ask_rename(&id)));
+        main.on_zone_expanded_changed(move |id, open| {
+            with_app(&w, |app| app.set_zone_expanded(&id, open))
+        });
         let w = weak.clone();
-        main.on_group_deleted(move |id| with_app(&w, |app| app.update(|b| b.delete_group(&id))));
+        main.on_zone_volume_changed(move |id, volume| {
+            with_app(&w, |app| {
+                app.update(|b| b.set_zone_volume(&id, volume.into()))
+            })
+        });
         let w = weak.clone();
-        main.on_new_group_requested(move || with_app(&w, App::ask_new_group));
+        main.on_zone_rename_requested(move |id| with_app(&w, |app| app.ask_rename_zone(&id)));
+        let w = weak.clone();
+        main.on_zone_deleted(move |id| with_app(&w, |app| app.delete_zone(&id)));
+        let w = weak.clone();
+        main.on_zone_use_target_requested(move |member| {
+            with_app(&w, |app| app.update(|b| b.use_target_instead(&member)))
+        });
+        let w = weak.clone();
+        main.on_new_zone_requested(move || with_app(&w, App::ask_new_zone));
+        let w = weak.clone();
+        main.on_speaker_move_to_zone_requested(move |id, zone| {
+            with_app(&w, |app| app.move_to_zone(&id, &zone))
+        });
+        let w = weak.clone();
+        main.on_speaker_new_zone_requested(move |id| {
+            with_app(&w, |app| app.ask_new_zone_with(&id))
+        });
+        let w = weak.clone();
+        main.on_speaker_remove_from_zone_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.remove_from_zone(&id)))
+        });
         let w = weak.clone();
         main.on_refresh_devices(move || with_app(&w, |app| app.update(|b| b.refresh_devices())));
         let w = weak.clone();
@@ -1977,9 +2293,9 @@ impl App {
             apply_rename_left(&w);
         });
         let w = weak.clone();
-        main.on_group_focus_changed(move |id, part| {
+        main.on_zone_focus_changed(move |id, part| {
             with_app(&w, |app| {
-                note_row_focus(&mut app.main_focus.borrow_mut().group, id, part);
+                note_row_focus(&mut app.main_focus.borrow_mut().zone, id, part);
             });
             apply_rename_left(&w);
         });
@@ -2039,13 +2355,17 @@ impl App {
         let w = weak.clone();
         flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
         let w = weak.clone();
+        flyout.on_input_pair_selected(move |index| {
+            with_app(&w, |app| app.select_input_pair(index));
+        });
+        let w = weak.clone();
         flyout.on_master_volume_changed(move |volume| {
             with_app(&w, |app| app.update(|b| b.set_master_volume(volume.into())))
         });
         let w = weak.clone();
         flyout.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
-        flyout.on_group_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_group(&id))));
+        flyout.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
         let w = weak.clone();
         flyout.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
@@ -2145,16 +2465,16 @@ impl App {
     }
 
     fn connect_dialogs(self: &Rc<Self>) {
-        self.follow_dialog_frame(|app| app.group_dialog.window(), "group name dialog");
+        self.follow_dialog_frame(|app| app.zone_dialog.window(), "zone name dialog");
         self.follow_dialog_frame(|app| app.about.window(), "about dialog");
         let weak = Rc::downgrade(self);
         let w = weak.clone();
-        self.group_dialog
+        self.zone_dialog
             .on_confirmed(move |name| with_app(&w, |app| app.confirm_dialog(&name)));
         let w = weak.clone();
-        self.group_dialog.on_cancelled(move || {
+        self.zone_dialog.on_cancelled(move || {
             with_app(&w, |app| {
-                let _ = app.group_dialog.hide();
+                let _ = app.zone_dialog.hide();
             })
         });
 
@@ -2398,6 +2718,16 @@ impl App {
         true
     }
 
+    fn toggle_mix_app(&self, index: i32) {
+        let state = self.snapshot();
+        if let Some(app) = usize::try_from(index)
+            .ok()
+            .and_then(|i| state.mix_apps.get(i))
+        {
+            self.update(|b| b.toggle_mix_app(&app.id));
+        }
+    }
+
     fn select_source(&self, index: i32) {
         let state = self.snapshot();
         if let Some(source) = usize::try_from(index)
@@ -2405,6 +2735,13 @@ impl App {
             .and_then(|i| state.sources.get(i))
         {
             self.update(|b| b.select_source(&source.id));
+        }
+    }
+
+    /// `index` is the pair's place in the list, which is its stored index.
+    fn select_input_pair(&self, index: i32) {
+        if let Ok(pair) = u16::try_from(index) {
+            self.update(|b| b.select_input_pair(pair));
         }
     }
 
@@ -2759,7 +3096,7 @@ impl App {
             return None;
         }
         let elsewhere = focus.speaker.is_some()
-            || focus.group.is_some()
+            || focus.zone.is_some()
             || focus.notice.is_some()
             || focus.dismiss_all
             || focus.control.is_some();
@@ -2851,50 +3188,129 @@ impl App {
         crate::platform::bring_to_front(self.equalizer.window());
     }
 
-    fn ask_new_group(&self) {
+    /// Speakers > New Zone from Active Speakers… (Ctrl+N): a name for a
+    /// zone of the speakers that are on, or why none can be made yet.
+    fn ask_new_zone(&self) {
         let strings = self.strings();
-        let dialog = &self.group_dialog;
+        let dialog = &self.zone_dialog;
         if self.snapshot().active_speakers() == 0 {
             *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
-            dialog.set_heading(strings.get_new_group_title());
-            dialog.set_message(strings.get_new_group_needs_speakers());
+            dialog.set_heading(strings.get_new_zone_title());
+            dialog.set_message(strings.get_new_zone_needs_speakers());
             dialog.set_show_field(false);
             dialog.set_confirm_label(strings.get_ok());
         } else {
-            *self.dialog_purpose.borrow_mut() = DialogPurpose::NewGroup;
-            dialog.set_heading(strings.get_new_group_title());
-            dialog.set_message(strings.get_new_group_message());
-            dialog.set_placeholder(strings.get_new_group_placeholder());
-            dialog.set_field_label(strings.get_new_group_field_label());
-            dialog.set_name(SharedString::new());
-            dialog.set_show_field(true);
-            dialog.set_confirm_label(strings.get_create());
+            *self.dialog_purpose.borrow_mut() = DialogPurpose::NewZone;
+            dialog.set_heading(strings.get_new_zone_title());
+            dialog.set_message(strings.get_new_zone_message());
+            self.ask_zone_name(&strings);
         }
         self.open_dialog();
     }
 
-    fn ask_rename(&self, id: &str) {
-        let state = self.snapshot();
-        let Some(group) = state.groups.iter().find(|g| g.id == id) else {
+    /// New Zone… in a speaker's menu: a name for a zone of that speaker.
+    fn ask_new_zone_with(&self, speaker_id: &str) {
+        let Some(speaker) = self.snapshot().speaker(speaker_id).cloned() else {
             return;
         };
         let strings = self.strings();
-        let dialog = &self.group_dialog;
+        let dialog = &self.zone_dialog;
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::NewZoneWith(speaker_id.to_owned());
+        dialog.set_heading(strings.get_new_zone_title());
+        dialog.set_message(strings.invoke_new_zone_for_speaker(speaker.name.as_str().into()));
+        self.ask_zone_name(&strings);
+        self.open_dialog();
+    }
+
+    fn ask_zone_name(&self, strings: &Strings<'_>) {
+        let dialog = &self.zone_dialog;
+        dialog.set_placeholder(strings.get_new_zone_placeholder());
+        dialog.set_field_label(strings.get_new_zone_field_label());
+        dialog.set_name(SharedString::new());
+        dialog.set_show_field(true);
+        dialog.set_confirm_label(strings.get_create());
+    }
+
+    fn ask_rename_zone(&self, id: &str) {
+        let state = self.snapshot();
+        let Some(zone) = state.zones.iter().find(|z| z.id == id) else {
+            return;
+        };
+        let strings = self.strings();
+        let dialog = &self.zone_dialog;
         *self.dialog_purpose.borrow_mut() = DialogPurpose::Rename(id.to_string());
-        dialog.set_heading(strings.get_rename_group_title());
-        dialog.set_message(strings.invoke_rename_group_message(group.name.as_str().into()));
+        dialog.set_heading(strings.get_rename_zone_title());
+        dialog.set_message(strings.invoke_rename_message(zone.name.as_str().into()));
         dialog.set_placeholder(SharedString::new());
-        dialog.set_field_label(strings.get_new_group_field_label());
-        dialog.set_name(group.name.as_str().into());
+        dialog.set_field_label(strings.get_new_zone_field_label());
+        dialog.set_name(zone.name.as_str().into());
         dialog.set_show_field(true);
         dialog.set_confirm_label(strings.get_rename());
         self.open_dialog();
     }
 
+    /// A new zone's name: what was typed, else the first "Zone n" no zone
+    /// has, counting on from the zones there are.
+    fn new_zone_name(&self, typed: &str) -> String {
+        if !typed.trim().is_empty() {
+            return typed.to_owned();
+        }
+        let zones = self.snapshot().zones;
+        let strings = self.strings();
+        (zones.len() + 1..)
+            .map(|n| strings.invoke_numbered_zone(count(n)).to_string())
+            .find(|name| zones.iter().all(|zone| zone.name != *name))
+            .unwrap_or_default()
+    }
+
+    /// The arrow of zone `id`, or Left and Right on its header.
+    pub fn set_zone_expanded(&self, id: &str, open: bool) {
+        let changed = {
+            let mut ui = self.ui.borrow_mut();
+            if open {
+                ui.collapsed.remove(id)
+            } else {
+                ui.collapsed.insert(id.to_owned())
+            }
+        };
+        if changed {
+            self.refresh();
+        }
+    }
+
+    /// Delete Zone: its speakers go back to the plain lists; Narrator says
+    /// it went, since its header did.
+    fn delete_zone(&self, id: &str) {
+        let Some(zone) = self.snapshot().zones.into_iter().find(|z| z.id == id) else {
+            return;
+        };
+        self.update(|b| b.delete_zone(id));
+        let said = self
+            .strings()
+            .invoke_zone_deleted(zone.name.as_str().into());
+        self.announce(said);
+    }
+
+    /// Move to Zone in a speaker's menu; Narrator says where it went.
+    fn move_to_zone(&self, speaker_id: &str, zone_id: &str) {
+        let state = self.snapshot();
+        let (Some(speaker), Some(zone)) = (
+            state.speaker(speaker_id),
+            state.zones.iter().find(|z| z.id == zone_id),
+        ) else {
+            return;
+        };
+        let said = self
+            .strings()
+            .invoke_speaker_moved_to_zone(speaker.name.as_str().into(), zone.name.as_str().into());
+        self.update(|b| b.move_to_zone(speaker_id, zone_id));
+        self.announce(said);
+    }
+
     fn ask_save_curve(&self) {
         let state = self.snapshot();
         let strings = self.strings();
-        let dialog = &self.group_dialog;
+        let dialog = &self.zone_dialog;
         let shown = match ui_model::shown_curve(&state) {
             Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
             _ => None,
@@ -2929,10 +3345,10 @@ impl App {
         };
         let name = state.equalizer_curves[index].name.as_str();
         let strings = self.strings();
-        let dialog = &self.group_dialog;
+        let dialog = &self.zone_dialog;
         *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(index);
         dialog.set_heading(strings.get_rename_curve_title());
-        dialog.set_message(strings.invoke_rename_group_message(name.into()));
+        dialog.set_message(strings.invoke_rename_message(name.into()));
         dialog.set_placeholder(strings.get_curve_name_field_label());
         dialog.set_field_label(strings.get_curve_name_field_label());
         dialog.set_name(name.into());
@@ -2943,7 +3359,7 @@ impl App {
 
     /// Shows `message` in the name dialog, without a field.
     fn show_dialog_message(&self, heading: SharedString, message: SharedString) {
-        let dialog = &self.group_dialog;
+        let dialog = &self.zone_dialog;
         *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
         dialog.set_heading(heading);
         dialog.set_message(message);
@@ -2953,38 +3369,35 @@ impl App {
     }
 
     fn open_dialog(&self) {
-        if let Err(error) = self.group_dialog.show() {
+        if let Err(error) = self.zone_dialog.show() {
             self.show_window_error(&error);
             return;
         }
-        self.group_dialog.invoke_prepare();
-        crate::platform::bring_to_front(self.group_dialog.window());
+        self.zone_dialog.invoke_prepare();
+        crate::platform::bring_to_front(self.zone_dialog.window());
     }
 
     fn confirm_dialog(&self, name: &str) {
         let purpose = self.dialog_purpose.borrow().clone();
-        let _ = self.group_dialog.hide();
+        let _ = self.zone_dialog.hide();
         match purpose {
-            DialogPurpose::NewGroup => {
-                let name = if name.trim().is_empty() {
-                    let number = self.snapshot().groups.len() + 1;
-                    self.strings()
-                        .invoke_numbered_group(count(number))
-                        .to_string()
-                } else {
-                    name.to_string()
-                };
+            DialogPurpose::NewZone => {
+                let name = self.new_zone_name(name);
                 // The dialog only offers a name while a speaker is on; if the
                 // last one went off meanwhile, nothing is made.
-                let _ = self.backend.borrow_mut().new_group(&name);
+                let _ = self.backend.borrow_mut().new_zone(&name);
                 self.refresh();
             }
-            DialogPurpose::Rename(id) => self.update(|b| b.rename_group(&id, name)),
+            DialogPurpose::NewZoneWith(id) => {
+                let name = self.new_zone_name(name);
+                self.update(|b| b.new_zone_with(&id, &name));
+            }
+            DialogPurpose::Rename(id) => self.update(|b| b.rename_zone(&id, name)),
             DialogPurpose::Message => {}
             DialogPurpose::SaveCurve => {
                 let state = self.snapshot();
                 let mut curves = state.equalizer_curves;
-                // An empty name saves nothing (spec S242).
+                // An empty name saves nothing (spec S270).
                 if eq::curve_name(name).is_none() {
                     return;
                 }
@@ -3061,6 +3474,26 @@ impl WindowState for TrayFlyout {
         self.set_source_index(source_index);
         self.set_master_volume(state.master_volume as f32);
     }
+}
+
+/// The channel pairs the chosen input device offers, labeled by `label`
+/// (first and last channel, from 1), and the place of the one it plays: a
+/// saved pair the device no longer has plays 1-2, so 1-2 shows.
+fn input_pair_choice(
+    state: &AppState,
+    label: impl Fn(i32, i32) -> SharedString,
+) -> (Vec<SharedString>, i32) {
+    let channels = state
+        .sources
+        .iter()
+        .find(|source| source.id == state.source_id && source.kind == SourceKind::Input)
+        .map_or(0, |source| source.channels);
+    let labels = InputPair::offered(channels)
+        .into_iter()
+        .map(|pair| label(i32::from(pair.left) + 1, i32::from(pair.right) + 1))
+        .collect();
+    let (playing, _) = InputPair::resolve(state.input_pair, channels);
+    (labels, i32::from(playing.index))
 }
 
 /// The newest `limit` notices: what a window lists. A window that shows
@@ -3381,6 +3814,47 @@ pub fn speaker_item(
         // Needs the strings: set by the caller (`App::refresh`).
         cast_group_note: SharedString::default(),
         group_note: SharedString::default(),
+        zone_id: SharedString::default(),
+        zone_movable: speaker.in_target.is_none(),
+        // Needs the zone: set by the caller (`App::refresh`).
+        zone_note: SharedString::default(),
+        zone_dimmed: false,
+        missing: false,
+    }
+}
+
+/// The row of zone member `id` while it isn't listed: its name and kind as
+/// last known, and a menu that can still move it or take it out.
+fn missing_item(strings: &Strings<'_>, state: &AppState, zone_id: &str, id: &str) -> SpeakerItem {
+    let absent = state.absent_member(id);
+    let name = absent
+        .map(|member| member.name.as_str())
+        .filter(|name| !name.is_empty())
+        .map_or_else(|| strings.get_unknown_device(), SharedString::from);
+    let kind = absent.map_or(ui_model::SpeakerKind::Other, |member| member.kind);
+    SpeakerItem {
+        id: id.into(),
+        device_name: name.clone(),
+        name,
+        kind: speaker_kind(kind),
+        show_kind: !kind.is_this_pc(),
+        state: RowState::Off,
+        availability: Availability::Open,
+        volume_step: 1.0,
+        zone_id: zone_id.into(),
+        zone_movable: true,
+        missing: true,
+        ..SpeakerItem::default()
+    }
+}
+
+/// The words of a zone member's note.
+fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedString {
+    match note {
+        ui_model::ZoneNote::NeedsAirPlay2 => strings.get_needs_airplay2(),
+        ui_model::ZoneNote::InTarget(target) => strings.invoke_zone_member_in_target(target.into()),
+        ui_model::ZoneNote::NotFound => strings.get_zone_member_not_found(),
+        ui_model::ZoneNote::CastStayedOff => strings.get_cast_stayed_off(),
     }
 }
 
@@ -3672,9 +4146,6 @@ fn sheet_outcome(strings: &Strings<'_>, reference: &str, sheet: &SheetState) -> 
     if let Some(reason) = sheet.ended {
         return strings.invoke_calibrate_all_stopped(ended_text(strings, reason));
     }
-    if sheet.airplay_waits {
-        return strings.get_calibrate_all_airplay_waits();
-    }
     if sheet.undone {
         return strings.get_calibrate_all_undone();
     }
@@ -3802,16 +4273,6 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
     }
 }
 
-pub fn group_item(state: &AppState, group: &ui_model::Group) -> GroupItem {
-    GroupItem {
-        id: group.id.as_str().into(),
-        name: group.name.as_str().into(),
-        state: row_state(state.group_state(group)),
-        available: count(state.available_members(group).count()),
-        total: count(group.members.len()),
-    }
-}
-
 pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeItem {
     NoticeItem {
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
@@ -3834,6 +4295,18 @@ fn join_names(names: &[String], and: impl FnOnce(&str, &str) -> String) -> Strin
     }
 }
 
+/// A source in the UI's words: what the double-audio notice and its guide
+/// name it with.
+fn source_name(strings: &Strings<'_>, source: &SourceName) -> SharedString {
+    match source {
+        SourceName::Named(name) => name.as_str().into(),
+        SourceName::Apps(names) => joined(strings, names),
+        SourceName::AllAppsExcept(names) => {
+            strings.invoke_source_all_except(joined(strings, names))
+        }
+    }
+}
+
 /// Output names as one list in the UI's words: what every notice and the
 /// guide name outputs with.
 fn joined(strings: &Strings<'_>, names: &[String]) -> SharedString {
@@ -3849,7 +4322,7 @@ fn joined(strings: &Strings<'_>, names: &[String]) -> SharedString {
 fn guide_intro(strings: &Strings<'_>, guide: &Guide) -> SharedString {
     let outputs = joined(strings, &guide.outputs);
     match &guide.source {
-        Some(source) => strings.invoke_guide_intro_app(source.as_str().into(), outputs),
+        Some(source) => strings.invoke_guide_intro_app(source_name(strings, source), outputs),
         None => strings.invoke_guide_intro_system(outputs),
     }
 }
@@ -3857,7 +4330,10 @@ fn guide_intro(strings: &Strings<'_>, guide: &Guide) -> SharedString {
 /// A guide step in the UI's words.
 fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
     match step {
-        GuideStep::RouteApp { app } => strings.invoke_guide_route_app(app.as_str().into()),
+        GuideStep::RouteApp {
+            app: SourceName::AllAppsExcept(names),
+        } => strings.invoke_guide_route_all_except(joined(strings, names)),
+        GuideStep::RouteApp { app } => strings.invoke_guide_route_app(source_name(strings, app)),
         GuideStep::ChangeDefault { current } => {
             strings.invoke_guide_change_default(current.as_str().into())
         }
@@ -3870,8 +4346,11 @@ fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
         GuideStep::SharedOutputs { outputs } => {
             strings.invoke_guide_shared_outputs(joined(strings, outputs))
         }
+        GuideStep::KeepAppUnmuted {
+            app: SourceName::AllAppsExcept(names),
+        } => strings.invoke_guide_keep_all_except_unmuted(joined(strings, names)),
         GuideStep::KeepAppUnmuted { app } => {
-            strings.invoke_guide_keep_app_unmuted(app.as_str().into())
+            strings.invoke_guide_keep_app_unmuted(source_name(strings, app))
         }
     }
 }
@@ -3930,6 +4409,9 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SpeakerBusy { speaker } => {
             strings.invoke_notice_speaker_busy(speaker.as_str().into())
         }
+        NoticeMessage::PairFirst { speaker } => {
+            strings.invoke_notice_pair_first(speaker.as_str().into())
+        }
         NoticeMessage::AirPlayRetrying { speaker, problem }
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
@@ -3968,6 +4450,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.get_notice_airplay2_off_next_launch()
         }
         NoticeMessage::RemoteOnPublicNetwork => strings.get_remote_public_network(),
+        NoticeMessage::GroupsBecameZones => strings.get_notice_groups_became_zones(),
         NoticeMessage::HeardTwice {
             source,
             mute,
@@ -3977,9 +4460,11 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             let mute = joined(strings, mute);
             let shared = joined(strings, shared);
             match source {
-                Some(source) => {
-                    strings.invoke_notice_heard_twice_app(source.as_str().into(), mute, shared)
-                }
+                Some(source) => strings.invoke_notice_heard_twice_app(
+                    source_name(strings, source),
+                    mute,
+                    shared,
+                ),
                 None => strings.invoke_notice_heard_twice_system(mute, shared),
             }
         }
@@ -4008,6 +4493,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
         NoticeMessage::SpeakerLost { speaker } => (NoticeKind::SpeakerLost, speaker.as_str()),
         NoticeMessage::SpeakerBusy { speaker } => (NoticeKind::SpeakerBusy, speaker.as_str()),
+        NoticeMessage::PairFirst { speaker } => (NoticeKind::PairFirst, speaker.as_str()),
         NoticeMessage::AirPlayRetrying {
             speaker,
             problem: ui_model::AirPlayProblem::OneAirPlay2Speaker,
@@ -4040,6 +4526,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
         NoticeMessage::AirPlay2NextLaunch { .. } => (NoticeKind::Airplay2NextLaunch, ""),
         NoticeMessage::RemoteOnPublicNetwork => (NoticeKind::RemotePublicNetwork, ""),
+        NoticeMessage::GroupsBecameZones => (NoticeKind::GroupsBecameZones, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
@@ -4184,6 +4671,62 @@ mod tests {
             .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
         assert!(app.snapshot().notices.is_empty());
         assert_eq!(app.main.get_notices().row_count(), 0);
+    }
+
+    #[test]
+    fn an_input_device_with_more_than_two_channels_offers_its_pairs_in_both_windows() {
+        let app = app_over(MockBackend::new());
+        let labels = |model: ModelRc<SharedString>| -> Vec<String> {
+            (0..model.row_count())
+                .filter_map(|row| model.row_data(row))
+                .map(String::from)
+                .collect()
+        };
+        assert_eq!(
+            app.main.get_input_pairs().row_count(),
+            0,
+            "not for the whole system"
+        );
+
+        let line_in = app
+            .snapshot()
+            .sources
+            .iter()
+            .position(|source| source.id == "input:line")
+            .expect("listed");
+        app.main.invoke_source_selected(line_in as i32);
+        let offered = ["Channels 1-2", "Channels 3-4", "Channel 5"];
+        assert_eq!(labels(app.main.get_input_pairs()), offered);
+        assert_eq!(labels(app.flyout.get_input_pairs()), offered);
+        assert_eq!(app.main.get_input_pair_index(), 0);
+
+        app.flyout.invoke_input_pair_selected(2);
+        assert_eq!(app.snapshot().input_pair, 2);
+        assert_eq!(app.main.get_input_pair_index(), 2);
+        assert_eq!(app.flyout.get_input_pair_index(), 2);
+
+        app.main.invoke_source_selected(0);
+        assert_eq!(app.main.get_input_pairs().row_count(), 0);
+        assert_eq!(app.main.get_input_pair_index(), 0);
+    }
+
+    #[test]
+    fn a_saved_pair_the_device_no_longer_has_shows_channels_one_and_two() {
+        let mut state = MockBackend::new().snapshot();
+        state.source_id = "input:line".into();
+        state.input_pair = 7;
+        let (labels, index) =
+            input_pair_choice(&state, |first, last| format!("{first}-{last}").into());
+        assert_eq!(labels, ["1-2", "3-4", "5-5"]);
+        assert_eq!(index, 0);
+        state
+            .sources
+            .iter_mut()
+            .for_each(|source| source.channels = 2);
+        assert_eq!(
+            input_pair_choice(&state, |_, _| "x".into()),
+            (Vec::new(), 0)
+        );
     }
 
     #[test]
@@ -4694,7 +5237,6 @@ mod tests {
             failure: None,
             again_ended: None,
             can_apply: true,
-            airplay_waits: false,
             applied: false,
             can_undo: false,
             undone: false,
@@ -4722,15 +5264,6 @@ mod tests {
         let card = calibrate_all_card(&strings, &state);
         assert!(card.airplay.contains("4 ms apart"), "{}", card.airplay);
         assert!(!card.airplay.contains("differ by"));
-        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
-        sheet.airplay_waits = true;
-        sheet.can_apply = false;
-        let card = calibrate_all_card(&strings, &state);
-        assert_eq!(card.outcome, strings.get_calibrate_all_airplay_waits());
-        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
-        sheet.airplay_waits = false;
-        sheet.can_apply = true;
-        let card = calibrate_all_card(&strings, &state);
         assert_eq!(card.said, strings.invoke_calibrate_all_finished(1, 2));
 
         let sheet = state.calibrate_all.sheet.as_mut().unwrap();
@@ -4796,7 +5329,6 @@ mod tests {
             failure: None,
             again_ended: None,
             can_apply: false,
-            airplay_waits: false,
             applied: false,
             can_undo: false,
             undone: false,
@@ -4935,7 +5467,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 600.0, 625.0);
+        click(window, 600.0, 516.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -4948,7 +5480,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 600.0, 625.0);
+        click(window, 600.0, 516.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -4958,7 +5490,7 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 600.0, 625.0);
+        click(window, 600.0, 516.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
         click(window, 600.0, 190.0);
@@ -5534,7 +6066,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         draw_frames();
-        click(app.main.window(), 600.0, 625.0);
+        click(app.main.window(), 600.0, 516.0);
         assert_eq!(name_of(&app, "local:desk"), "Desk");
         assert!(app.ui.borrow().rename.is_none());
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
@@ -5593,8 +6125,8 @@ mod tests {
         draw_frames();
         let window = app.main.window();
         // The desk's name.
-        click(window, 420.0, 625.0);
-        click(window, 420.0, 625.0);
+        click(window, 420.0, 516.0);
+        click(window, 420.0, 516.0);
         assert!(
             row_of(&app, "local:desk").renaming,
             "the double-click renames"
@@ -5609,7 +6141,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_cancelled("local:desk".into());
         draw_frames();
-        click(window, 420.0, 625.0);
+        click(window, 420.0, 516.0);
         assert!(
             app.ui.borrow().sync_open.is_empty(),
             "one click waits for a second"
@@ -5687,8 +6219,9 @@ mod tests {
         };
 
         rename("Desk");
-        // The master volume's slider, in the left column.
-        click(window, 150.0, 275.0);
+        // The master volume's slider, in the left column, below the source
+        // card's level meter row.
+        click(window, 150.0, 289.0);
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::MasterVolume)
@@ -6261,11 +6794,231 @@ mod tests {
     }
 
     #[test]
-    fn groups_count_their_present_members() {
-        let state = MockBackend::new().snapshot();
-        let row = group_item(&state, &state.groups[0]);
-        assert_eq!((row.available, row.total), (2, 2));
-        assert_eq!(row.state, RowState::Off);
+    fn a_zone_lists_its_members_and_the_other_lists_only_the_rest() {
+        let app = app_over(MockBackend::zones_preview());
+        let ids = |model: &VecModel<SpeakerItem>| -> Vec<String> {
+            model.iter().map(|row| row.id.to_string()).collect()
+        };
+        let m = &app.models;
+        let zoned = [
+            "airplay:kitchen",
+            "airplay:pair",
+            "cc:attic",
+            "local:desk",
+            "airplay:bedroom",
+            "airplay:left",
+        ];
+        for list in [ids(&m.this_pc), ids(&m.connected)] {
+            assert!(
+                list.iter().all(|id| !zoned.contains(&id.as_str())),
+                "{list:?}"
+            );
+        }
+        assert!(ids(&m.this_pc).iter().any(|id| id == "local:speakers"));
+        assert!(ids(&m.connected).iter().any(|id| id == "airplay:living"));
+        assert_eq!(
+            ids(&m.all_speakers),
+            [ids(&m.this_pc), ids(&m.connected)].concat()
+        );
+        let living = m.zones.row_data(0).unwrap();
+        assert_eq!(
+            living
+                .members
+                .iter()
+                .map(|row| row.id.to_string())
+                .collect::<Vec<_>>(),
+            [
+                "airplay:kitchen",
+                "airplay:pair",
+                "cc:attic",
+                "local:desk",
+                "airplay:theater:4C2D"
+            ],
+            "in zone order, the one not found too; the hidden one has no row"
+        );
+        assert_eq!(
+            (living.on, living.total, living.waiting, living.present),
+            (2, 5, 1, 4)
+        );
+        let upstairs = m.zones.row_data(1).unwrap();
+        let left = upstairs.members.row_data(1).unwrap();
+        assert_eq!(left.zone_note, "Plays as part of Living Room Pair");
+        assert!(left.zone_dimmed);
+        assert!(!left.zone_movable);
+        assert_eq!(
+            upstairs.targets.row_data(0).unwrap().member_id,
+            "airplay:left"
+        );
+        assert_eq!(m.zones.row_data(2).unwrap().total, 0, "Office is empty");
+        assert!(!app.main.get_this_pc_all_in_zones());
+    }
+
+    // covers: S245 (a zone's rows and its count agree; a hidden member has
+    // neither, one not found has a row)
+    #[test]
+    fn every_zone_member_but_the_hidden_ones_has_a_row_that_its_count_counts() {
+        let app = app_over(MockBackend::zones_preview());
+        for zone in app.models.zones.iter() {
+            assert_eq!(
+                zone.members.row_count(),
+                zone.total as usize,
+                "{}",
+                zone.name
+            );
+            assert_eq!(
+                zone.members.iter().filter(|row| !row.missing).count(),
+                zone.present as usize,
+                "{}",
+                zone.name
+            );
+        }
+        let living = app.models.zones.row_data(0).unwrap();
+        assert!(living.members.iter().all(|row| row.id != "airplay:den"));
+        let theater = living.members.row_data(4).unwrap();
+        assert!(theater.missing && theater.zone_dimmed && theater.zone_movable);
+        assert_eq!(theater.name, "Home Theater");
+        assert_eq!(theater.zone_note, "Not found");
+        assert_eq!(theater.zone_id, "zone:living");
+
+        // Remove from Zone still reaches it.
+        app.main
+            .invoke_speaker_remove_from_zone_requested("airplay:theater:4C2D".into());
+        let living = app.models.zones.row_data(0).unwrap();
+        assert_eq!((living.members.row_count(), living.total), (4, 4));
+    }
+
+    // covers: S246 (a Cast member a zone click left off says why), S247 (a
+    // pair needs AirPlay 2)
+    #[test]
+    fn zone_member_rows_say_why_they_dont_play() {
+        let app = app_over(MockBackend::zones_preview());
+        let living = || app.models.zones.row_data(0).unwrap();
+        let attic = living().members.row_data(2).unwrap();
+        assert_eq!(attic.id, "cc:attic");
+        assert_eq!(
+            attic.zone_note, "Stayed off, since one Cast speaker plays at a time",
+            "another member is on"
+        );
+        assert!(!attic.zone_dimmed);
+        let pair = living().members.row_data(1).unwrap();
+        assert_eq!(pair.zone_note, "", "AirPlay 2 can play it");
+
+        let strings = app.strings();
+        assert_eq!(
+            zone_note(&strings, ui_model::ZoneNote::NeedsAirPlay2),
+            "Needs AirPlay 2 (Experimental)"
+        );
+        let mut state = app.snapshot();
+        let zone = state.zones[0].clone();
+        let pair = state
+            .speakers
+            .iter_mut()
+            .find(|s| s.id == "airplay:pair")
+            .unwrap();
+        pair.availability = ui_model::Availability::AirPlay2NotYet;
+        let pair = state.speaker("airplay:pair").unwrap();
+        assert_eq!(
+            state.zone_note(&zone, ui_model::ZoneRow::Listed(pair)),
+            Some(ui_model::ZoneNote::NeedsAirPlay2)
+        );
+        for speaker in &mut state.speakers {
+            if speaker.id != "cc:attic" {
+                speaker.enabled = false;
+            }
+        }
+        let attic = state.speaker("cc:attic").unwrap();
+        assert_eq!(
+            state.zone_note(&zone, ui_model::ZoneRow::Listed(attic)),
+            None,
+            "with nothing else on, a Cast speaker that is off is just off"
+        );
+    }
+
+    #[test]
+    fn a_zone_header_counts_its_speakers() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(
+            strings.invoke_zone_count(2, 5, 1, 4),
+            "2 of 5 on, 1 waiting"
+        );
+        assert_eq!(strings.invoke_zone_count(1, 3, 0, 2), "1 of 3 on");
+        assert_eq!(strings.invoke_zone_count(0, 3, 0, 0), "0 of 3 here");
+        assert_eq!(
+            strings.invoke_zone_value(2, 5, 1),
+            "2 of 5 speakers on, 1 waiting"
+        );
+        assert_eq!(
+            strings.invoke_zone_label("Living Room".into()),
+            "Living Room, zone"
+        );
+    }
+
+    #[test]
+    fn speakers_move_between_zones_and_back_from_their_menus() {
+        let app = app_over(MockBackend::zones_preview());
+        let main = &app.main;
+        main.invoke_speaker_move_to_zone_requested("local:speakers".into(), "zone:office".into());
+        let state = app.snapshot();
+        assert_eq!(
+            state.zone_of("local:speakers").map(|zone| zone.id.as_str()),
+            Some("zone:office")
+        );
+        assert!(
+            app.models
+                .this_pc
+                .iter()
+                .all(|row| row.id != "local:speakers")
+        );
+        let office = app.models.zones.row_data(2).unwrap();
+        assert_eq!(office.members.row_data(0).unwrap().zone_id, "zone:office");
+
+        main.invoke_zone_expanded_changed("zone:office".into(), false);
+        assert!(!app.models.zones.row_data(2).unwrap().expanded);
+        main.invoke_zone_expanded_changed("zone:office".into(), true);
+        assert!(app.models.zones.row_data(2).unwrap().expanded);
+
+        main.invoke_speaker_remove_from_zone_requested("local:speakers".into());
+        assert!(app.snapshot().zone_of("local:speakers").is_none());
+        assert!(
+            app.models
+                .this_pc
+                .iter()
+                .any(|row| row.id == "local:speakers")
+        );
+
+        main.invoke_speaker_new_zone_requested("local:headphones".into());
+        assert!(app.zone_dialog.window().is_visible());
+        app.confirm_dialog("  ");
+        let state = app.snapshot();
+        let zone = state
+            .zone_of("local:headphones")
+            .expect("a zone of its own");
+        assert_eq!(zone.name, "Zone 4", "named after the zones there are");
+
+        let id = zone.id.clone();
+        main.invoke_zone_deleted(id.as_str().into());
+        assert!(app.snapshot().zone_of("local:headphones").is_none());
+        assert_eq!(app.models.zones.row_count(), 3);
+    }
+
+    #[test]
+    fn a_zone_is_renamed_from_its_menu() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        assert_eq!(app.zone_dialog.get_name(), "Office");
+        app.confirm_dialog("Study");
+        assert_eq!(app.models.zones.row_data(2).unwrap().name, "Study");
+    }
+
+    #[test]
+    fn use_target_instead_swaps_the_member_for_its_pair() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main
+            .invoke_zone_use_target_requested("airplay:left".into());
+        let upstairs = app.models.zones.row_data(1).unwrap();
+        assert_eq!(upstairs.members.row_count(), 1);
+        assert_eq!(upstairs.targets.row_count(), 0);
     }
 
     #[test]
@@ -6343,13 +7096,14 @@ mod tests {
         assert_eq!(model.iter().collect::<Vec<_>>(), [4]);
     }
 
-    /// The flyout with two notices (it lists the newest), one group and
+    /// The flyout with two notices (it lists the newest), one zone and
     /// three speakers.
     const FLYOUT: FlyoutCounts = FlyoutCounts {
         notices: 2,
         listed_notices: 1,
-        groups: 1,
+        zones: 1,
         speakers: 3,
+        zone_members: 1,
     };
 
     #[test]
@@ -6366,11 +7120,16 @@ mod tests {
                 ..FlyoutParts::default()
             }
         );
-        let group_added = FlyoutCounts {
-            groups: 2,
+        let zone_added = FlyoutCounts { zones: 2, ..FLYOUT };
+        assert!(FLYOUT.removed_by(zone_added).zones, "rows are rebuilt");
+        let member_moved = FlyoutCounts {
+            zone_members: 2,
             ..FLYOUT
         };
-        assert!(FLYOUT.removed_by(group_added).groups, "rows are rebuilt");
+        assert!(
+            FLYOUT.removed_by(member_moved).speakers,
+            "a zone's member rows are rebuilt"
+        );
     }
 
     #[test]
@@ -6418,7 +7177,7 @@ mod tests {
             !speakers.overlaps(FlyoutParts {
                 notices: true,
                 more_notices: true,
-                groups: true,
+                zones: true,
                 speakers: false,
             }),
             "a focused speaker row keeps its focus when other parts change"
@@ -6703,25 +7462,27 @@ mod tests {
     }
 
     #[test]
-    fn escape_on_the_group_dialog_buttons_cancels() {
+    fn escape_on_the_zone_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
-        let groups = app.snapshot().groups.len();
-        app.ask_new_group();
-        let window = app.group_dialog.window();
+        let zones = app.snapshot().zones.len();
+        app.ask_new_zone();
+        let window = app.zone_dialog.window();
         assert!(window.is_visible());
-        assert!(app.group_dialog.get_show_field(), "a speaker is on");
+        assert!(app.zone_dialog.get_show_field(), "a speaker is on");
         // From the name field to Create.
         tab(window, 1);
         press(window, "x");
-        assert_eq!(app.group_dialog.get_name(), "", "the field lost the focus");
+        assert_eq!(app.zone_dialog.get_name(), "", "the field lost the focus");
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape on Create closed the dialog");
-        assert_eq!(app.snapshot().groups.len(), groups, "and made no group");
+        assert_eq!(app.snapshot().zones.len(), zones, "and made no zone");
     }
 
     #[test]
     fn curves_are_saved_picked_renamed_and_deleted_and_custom_is_no_entry() {
-        let app = app_over(MockBackend::new());
+        let mut mock = MockBackend::new();
+        mock.add_zone("zone:office", "Office", &[]);
+        let app = app_over(mock);
         let eq_window = &app.equalizer;
         let presets = eq::PRESETS.len();
         let names = || eq_window.get_preset_names().iter().collect::<Vec<_>>();
@@ -6736,9 +7497,9 @@ mod tests {
         assert!(!eq_window.get_saved_curve_shown());
 
         eq_window.invoke_save_curve();
-        assert!(app.group_dialog.window().is_visible());
-        assert_eq!(app.group_dialog.get_name(), "Curve 1");
-        app.group_dialog.invoke_confirmed("Desk".into());
+        assert!(app.zone_dialog.window().is_visible());
+        assert_eq!(app.zone_dialog.get_name(), "Curve 1");
+        app.zone_dialog.invoke_confirmed("Desk".into());
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), 1);
         assert_eq!(state.equalizer.preamp_db, -3.0, "a save leaves the preamp");
@@ -6758,21 +7519,20 @@ mod tests {
         assert!(state.equalizer.enabled, "picking a curve turns it on");
 
         eq_window.invoke_rename_curve();
-        assert_eq!(app.group_dialog.get_name(), "Desk");
-        assert_eq!(app.group_dialog.get_field_label(), "Curve name");
-        app.group_dialog.invoke_confirmed("Office".into());
+        assert_eq!(app.zone_dialog.get_name(), "Desk");
+        assert_eq!(app.zone_dialog.get_field_label(), "Curve name");
+        app.zone_dialog.invoke_confirmed("Office".into());
         assert_eq!(app.snapshot().equalizer_curves[0].name, "Office");
 
-        // The curve dialogs share the group name dialog.
-        app.ask_new_group();
-        assert_eq!(app.group_dialog.get_field_label(), "Group name");
-        app.group_dialog.invoke_cancelled();
+        // The curve dialogs share the zone name dialog.
+        app.ask_rename_zone("zone:office");
+        assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
+        app.zone_dialog.invoke_cancelled();
         eq_window.invoke_save_curve();
-        app.group_dialog.invoke_cancelled();
-        let group = app.snapshot().groups[0].id.clone();
-        app.ask_rename(&group);
-        assert_eq!(app.group_dialog.get_field_label(), "Group name");
-        app.group_dialog.invoke_cancelled();
+        app.zone_dialog.invoke_cancelled();
+        app.ask_new_zone_with(&app.snapshot().speakers[0].id);
+        assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
+        app.zone_dialog.invoke_cancelled();
 
         eq_window.invoke_delete_curve();
         assert!(app.snapshot().equalizer_curves.is_empty());
@@ -6792,26 +7552,26 @@ mod tests {
     }
 
     #[test]
-    fn a_group_name_longer_than_its_field_keeps_the_cursor_in_view() {
+    fn a_zone_name_longer_than_its_field_keeps_the_cursor_in_view() {
         let app = app_over(MockBackend::new());
-        app.ask_new_group();
-        let window = app.group_dialog.window();
+        app.ask_new_zone();
+        let window = app.zone_dialog.window();
         // Wider than the 1000 px the headless windows draw at.
         let name = "Living Room and Kitchen and Bedroom and Office Speakers, ".repeat(4);
         let name = name.trim_end();
         for character in name.chars() {
             press(window, character.to_string());
             assert!(
-                app.group_dialog.get_name_caret_in_view(),
+                app.zone_dialog.get_name_caret_in_view(),
                 "the cursor is in view after {:?}",
-                app.group_dialog.get_name()
+                app.zone_dialog.get_name()
             );
         }
-        assert_eq!(app.group_dialog.get_name(), name);
+        assert_eq!(app.zone_dialog.get_name(), name);
         press(window, Key::Home);
-        assert!(app.group_dialog.get_name_caret_in_view(), "at the start");
+        assert!(app.zone_dialog.get_name_caret_in_view(), "at the start");
         press(window, Key::End);
-        assert!(app.group_dialog.get_name_caret_in_view(), "at the end");
+        assert!(app.zone_dialog.get_name_caret_in_view(), "at the end");
     }
 
     #[test]
@@ -6921,6 +7681,57 @@ mod tests {
         }
     }
 
+    // covers: S242
+    #[test]
+    fn double_audio_from_all_apps_except_some_names_the_source_in_the_uis_words() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let source = SourceName::AllAppsExcept(vec!["Spotify".into(), "Chrome".into()]);
+        let text = notice_text(
+            &strings,
+            &NoticeMessage::HeardTwice {
+                source: Some(source.clone()),
+                mute: vec!["TV".into()],
+                shared: Vec::new(),
+                default_output: None,
+            },
+        );
+        let named = strings.invoke_source_all_except("Spotify and Chrome".into());
+        assert_eq!(named, "All apps except Spotify and Chrome");
+        assert!(text.contains(named.as_str()), "{text}");
+        let guide = Guide {
+            source: Some(source.clone()),
+            outputs: vec!["TV".into()],
+            steps: Vec::new(),
+        };
+        assert!(
+            guide_intro(&strings, &guide).contains(named.as_str()),
+            "the guide names it the same way"
+        );
+        // The steps say what the user does per app, not the menu's name.
+        let route = guide_step_text(
+            &strings,
+            &GuideStep::RouteApp {
+                app: source.clone(),
+            },
+        );
+        assert!(
+            route
+                .contains("find every app other than Spotify and Chrome and set each one's output"),
+            "{route}"
+        );
+        let unmuted = guide_step_text(&strings, &GuideStep::KeepAppUnmuted { app: source });
+        assert!(
+            unmuted.starts_with(
+                "Don't mute any app other than Spotify and Chrome in the Volume mixer"
+            ),
+            "{unmuted}"
+        );
+        let several = SourceName::Apps(vec!["Spotify".into(), "Chrome".into()]);
+        let route = guide_step_text(&strings, &GuideStep::RouteApp { app: several });
+        assert!(route.contains("find Spotify and Chrome and set"), "{route}");
+    }
+
     #[test]
     fn a_notices_dismiss_button_names_it_in_a_few_words() {
         let app = app_over(MockBackend::new());
@@ -6937,7 +7748,7 @@ mod tests {
         };
         assert_eq!(
             dismiss_label(NoticeMessage::HeardTwice {
-                source: Some("Music Player".into()),
+                source: Some(SourceName::Named("Music Player".into())),
                 mute: vec!["Speakers".into()],
                 shared: vec!["Headphones".into()],
                 default_output: None,
@@ -6992,6 +7803,9 @@ mod tests {
                 speaker: "A".into(),
             },
             NoticeMessage::SpeakerBusy {
+                speaker: "A".into(),
+            },
+            NoticeMessage::PairFirst {
                 speaker: "A".into(),
             },
             NoticeMessage::AirPlayCantPlay {
@@ -7080,9 +7894,9 @@ mod tests {
     fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_next_rows_options() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        // Switch, source, master volume, Equalizer, Calibrate All, then the
-        // rows: the group's, This PC's, then the connected speakers' by name.
-        tab(window, 17);
+        // Switch, Several apps, source, master volume, Equalizer, Calibrate
+        // All, then the rows: This PC's, then the connected speakers' by name.
+        tab(window, 16);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -7113,7 +7927,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 25);
+        tab(window, 24);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -7155,10 +7969,63 @@ mod tests {
     }
 
     #[test]
+    fn the_several_apps_list_opens_from_the_keyboard_and_checks_apps_and_the_mode() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        assert!(!app.main.get_mix_open(), "folded until asked for");
+        // The main switch, then Several apps.
+        tab(window, 2);
+        press(window, " ");
+        draw_frames();
+        assert!(app.main.get_mix_open());
+        assert_eq!(app.main.get_mix_apps().row_count(), 2);
+
+        app.main.invoke_mix_app_toggled(1);
+        app.main.invoke_mix_app_toggled(0);
+        let state = app.snapshot();
+        assert!(state.mix_apps.iter().all(|a| a.checked));
+        assert!(app.main.get_mix_apps().row_data(1).unwrap().checked);
+        app.main.invoke_mix_mode_selected(true);
+        assert!(app.snapshot().mix_all_except);
+        assert!(app.main.get_mix_all_except());
+
+        // Folded again by the user, it stays folded while the mix plays on.
+        press(window, " ");
+        draw_frames();
+        assert!(!app.main.get_mix_open());
+        app.refresh();
+        assert!(!app.main.get_mix_open(), "a refresh never reopens it");
+    }
+
+    #[test]
+    fn the_several_apps_list_opens_by_itself_once_as_the_source_becomes_a_mix() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        assert!(!app.main.get_mix_open());
+        app.main.invoke_mix_app_toggled(0);
+        assert!(!app.main.get_mix_open(), "one app is no mix yet");
+        app.main.invoke_mix_app_toggled(1);
+        assert!(app.main.get_mix_open());
+        app.main.set_mix_open(false);
+        app.main.invoke_mix_app_toggled(1);
+        app.main.invoke_mix_app_toggled(1);
+        assert!(
+            app.main.get_mix_open(),
+            "back to a mix after one app opens it again"
+        );
+        app.main.set_mix_open(false);
+        app.refresh();
+        assert!(!app.main.get_mix_open());
+    }
+
+    #[test]
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 15);
+        tab(window, 14);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -7190,17 +8057,17 @@ mod tests {
                 })
                 .collect()
         };
-        let groups = |ids: &[&str]| -> Vec<GroupItem> {
+        let zones = |ids: &[&str]| -> Vec<ZoneRows> {
             ids.iter()
-                .map(|&id| GroupItem {
+                .map(|&id| ZoneRows {
                     id: id.into(),
-                    ..GroupItem::default()
+                    ..ZoneRows::default()
                 })
                 .collect()
         };
         let lists = |n: &[i32], g: &[&str]| MainLists {
             notices: notices(n),
-            groups: groups(g),
+            zones: zones(g),
             ..MainLists::default()
         };
         let on_notice = |id| MainFocus {
@@ -7236,24 +8103,24 @@ mod tests {
             Some(MainFocusTarget::StreamingSwitch)
         );
 
-        let on_group = |id: &str, part| MainFocus {
-            group: Some((id.into(), part)),
+        let on_zone = |id: &str, part| MainFocus {
+            zone: Some((id.into(), part)),
             ..MainFocus::default()
         };
         assert_eq!(
-            on_group("a", RowPart::Options).target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
-            Some(MainFocusTarget::Group("a".into(), RowPart::Options)),
-            "the same group, on the same part"
+            on_zone("a", RowPart::Volume).target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            Some(MainFocusTarget::Zone("a".into(), RowPart::Volume)),
+            "the same zone, on the same part"
         );
         assert_eq!(
-            on_group("b", RowPart::Toggle).target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
-            Some(MainFocusTarget::Group("a".into(), RowPart::Options)),
-            "a deleted group: the options of the one before it"
+            on_zone("b", RowPart::Toggle).target(&lists(&[], &["a", "b"]), &lists(&[], &["a"])),
+            Some(MainFocusTarget::Zone("a".into(), RowPart::Options)),
+            "a deleted zone: the options of the one before it"
         );
         assert_eq!(
-            on_group("a", RowPart::Toggle).target(&lists(&[], &["a"]), &lists(&[], &[])),
+            on_zone("a", RowPart::Toggle).target(&lists(&[], &["a"]), &lists(&[], &[])),
             Some(MainFocusTarget::StreamingSwitch),
-            "the last group went"
+            "the last zone went"
         );
         assert_eq!(
             MainFocus::default().target(&lists(&[1], &["a"]), &lists(&[], &[])),
@@ -7332,17 +8199,34 @@ mod tests {
             options("pc"),
             "the same from the other list"
         );
-        let with_group = |this_pc: &[&str], connected: &[&str]| MainLists {
-            groups: vec![GroupItem {
+        let with_zone = |this_pc: &[&str], connected: &[&str], members: &[&str]| MainLists {
+            zones: vec![ZoneRows {
                 id: "g".into(),
-                ..GroupItem::default()
+                rows: speakers(members),
             }],
             ..lists(this_pc, connected)
         };
         assert_eq!(
-            on("pc", RowPart::Volume).target(&with_group(&["pc"], &[]), &with_group(&[], &[])),
-            Some(MainFocusTarget::Group("g".into(), RowPart::Options)),
-            "no speaker row left: the first group's options"
+            on("pc", RowPart::Volume)
+                .target(&with_zone(&["pc"], &[], &[]), &with_zone(&[], &[], &[])),
+            Some(MainFocusTarget::Zone("g".into(), RowPart::Options)),
+            "no speaker row left: the first zone's options"
+        );
+        assert_eq!(
+            on("b", RowPart::Options).target(
+                &with_zone(&["pc"], &["a", "b"], &[]),
+                &with_zone(&["pc"], &["a"], &["b"])
+            ),
+            Some(MainFocusTarget::Speaker("b".into(), RowPart::Options)),
+            "moved into a zone, the row there takes the focus"
+        );
+        assert_eq!(
+            on("b", RowPart::Toggle).target(
+                &with_zone(&["pc"], &["a"], &["b"]),
+                &with_zone(&["pc"], &["a"], &[])
+            ),
+            Some(MainFocusTarget::Zone("g".into(), RowPart::Options)),
+            "a collapsed zone: its header"
         );
         assert_eq!(
             on("pc", RowPart::Toggle).target(&lists(&["pc"], &[]), &lists(&[], &[])),
@@ -7358,7 +8242,6 @@ mod tests {
         // on.
         let mut backend = MockBackend::new();
         backend.retain_speakers(|s| s.kind.is_this_pc());
-        backend.delete_group("group:1");
         let mut cable = backend
             .snapshot()
             .speaker("local:headphones")
@@ -7374,9 +8257,9 @@ mod tests {
         app.main.show().expect("the main window shows headless");
         draw_frames();
         let window = app.main.window();
-        // As in the example's order without the group's row and Bedroom's:
+        // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 13);
+        tab(window, 14);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");

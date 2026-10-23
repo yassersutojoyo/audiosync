@@ -83,6 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     typealias Keys = AppSettings.Keys
     private let store: SettingsStore
 
+    /// The mode the several-apps menu shows while no mix is the source.
+    var rememberedMixMode: AppMixMode = .only
+
     var audioSource: AudioSource {
         didSet { if audioSource != oldValue { store.save(source: audioSource) } }
     }
@@ -164,6 +167,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var whenSourceQuits: WhenSourceQuits {
         didSet { if whenSourceQuits != oldValue { store.save(whenSourceQuits: whenSourceQuits) } }
     }
+    /// The channel pair each input device plays (`InputChannelPair.index`), by
+    /// device UID; a device without an entry plays channels 1-2.
+    var inputPairs: [String: Int] {
+        didSet { if inputPairs != oldValue { store.save(inputPairs: inputPairs) } }
+    }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
     let defaultVolume = AppSettings.defaultVolume
@@ -220,6 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The user switched streaming off: auto-connect doesn't start it again
     /// until they switch it on (S120).
     var userStopped = false
+    /// The microphone permission request a start has out, if any.
+    var microphoneRequest = MicrophoneRequestGate()
     /// An automatic start failed: no more automatic starts until the user acts.
     var autoStartFailed = false
     /// Counts successful starts, so a check scheduled for one session ignores the next.
@@ -240,6 +250,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Set by `runQuitSteps`, so Quit and an exit signal never run them twice.
     private var quitStepsRan = false
     private var deviceRescanPending = false
+    /// The source picker's input lines last written to the debug log (`pushSources`).
+    var loggedInputs: [String] = []
 
     override init() {
         store = .standard
@@ -264,6 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         showVirtualDevices = saved.showVirtualDevices
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits
+        inputPairs = saved.inputPairs
         airPlay2 = saved.airPlay2
         airPlay2AtLaunch = saved.airPlay2
         super.init()

@@ -17,6 +17,11 @@ final class CalibrationMicrophone {
         case unusable
         /// Core Audio wouldn't start the IOProc.
         case notStarted(OSStatus)
+        /// A Bluetooth headset's hands-free input (`CalibrationFlow.microphoneRefusal`).
+        case handsFree
+
+        /// What the calibration says about it.
+        var failure: CalibrationFailure { self == .handsFree ? .handsFreeMicrophone : .noMicrophone }
     }
 
     /// The device's nominal rate, whole Hz.
@@ -29,8 +34,10 @@ final class CalibrationMicrophone {
     /// Opens the default input and starts recording up to `seconds`.
     init(seconds: Double) throws {
         guard let device = MicrophoneHAL.defaultInput() else { throw StartError.noDevice }
+        if Self.refusal(of: device) != nil { throw StartError.handsFree }
+        let layout: CaptureChannels.Layout
         switch CaptureInputFormat.check(MicrophoneHAL.inputFormats(of: device)) {
-        case .usable: break
+        case .usable(let found): layout = found
         case .noChannels: throw StartError.noDevice
         case .unsupported: throw StartError.unusable
         }
@@ -38,7 +45,7 @@ final class CalibrationMicrophone {
         guard nominal.isFinite, nominal.rounded() == nominal, nominal >= 1, nominal <= Double(UInt32.max),
               asc_calibration_signal_frames(UInt32(nominal)) > 0
         else { throw StartError.unusable }
-        let sink = MicrophoneSink(capacity: Int((seconds * nominal).rounded(.up)))
+        let sink = MicrophoneSink(capacity: Int((seconds * nominal).rounded(.up)), layout: layout)
         var created: AudioDeviceIOProcID?
         let status = AudioDeviceCreateIOProcIDWithBlock(&created, device, nil) { _, input, inputTime, _, _ in
             sink.consume(input, at: inputTime)
@@ -66,6 +73,18 @@ final class CalibrationMicrophone {
               asc_calibration_signal_frames(UInt32(nominal)) > 0
         else { return nil }
         return UInt32(nominal)
+    }
+
+    /// Why calibration won't record from the default input
+    /// (`CalibrationFlow.microphoneRefusal`); nil without a default input.
+    static func defaultInputRefusal() -> CalibrationFailure? {
+        MicrophoneHAL.defaultInput().flatMap(refusal(of:))
+    }
+
+    private static func refusal(of device: AudioObjectID) -> CalibrationFailure? {
+        let read = AudioDevices.inputTransports(of: device)
+        return CalibrationFlow.microphoneRefusal(defaultInputTransport: read?.transport,
+                                                 inputSubTransports: read?.subDevices ?? [])
     }
 
     /// Host ticks of the first recorded frame; nil before the first buffer.
@@ -103,8 +122,10 @@ private final class MicrophoneSink {
     private let stereo: UnsafeMutablePointer<Float>
     let written = Atomic<Int>(0)
     let firstTicks = Atomic<UInt64>(0)
+    private let layout: CaptureChannels.Layout
 
-    init(capacity: Int) {
+    init(capacity: Int, layout: CaptureChannels.Layout) {
+        self.layout = layout
         self.capacity = max(capacity, 1)
         samples = .allocate(capacity: self.capacity)
         samples.initialize(repeating: 0, count: self.capacity)
@@ -120,7 +141,7 @@ private final class MicrophoneSink {
     /// IO thread: one input buffer list, its first two channels averaged to
     /// mono. Real-time safe: no allocation, no locks, no logging.
     func consume(_ input: UnsafePointer<AudioBufferList>, at time: UnsafePointer<AudioTimeStamp>) {
-        let channels = CaptureChannels(input)
+        let channels = CaptureChannels(input, layout: layout)
         guard channels.frames > 0 else { return }
         var count = written.load(ordering: .relaxed)
         if count == 0 && firstTicks.load(ordering: .relaxed) == 0 {

@@ -28,10 +28,13 @@ extension AppDelegate {
     /// Every recall's one entry point (S265): the core's plan carried out as
     /// a zone click carries out its own, then the master, the zone volumes,
     /// the own volumes and the ten gains. It opens, raises and focuses
-    /// nothing (S266), and no path raises an alert.
-    func recallPreset(_ id: String, from source: PresetRecallSource) {
+    /// nothing (S266), and no path raises an alert. The members in `keepOff`
+    /// (a phone's recall: they ask for a code) count as not found and get the
+    /// pair-first notice instead (S257).
+    func recallPreset(_ id: String, from source: PresetRecallSource, keepingOff keepOff: [String] = []) {
         guard let preset = presets.first(where: { $0.id == id }) else { return }
-        let states = preset.members.map { memberState($0.key) }
+        let states = preset.members.map { keepOff.contains($0.key) ? nil : memberState($0.key) }
+        postPairFirst(preset.members.map(\.key).filter { keepOff.contains($0) })
         let facts = zip(preset.members, states).map { member, state -> PresetRecall.Member in
             guard let state else { return PresetRecall.Member(kind: .local, found: false) }
             // A member a target holds leaves the rows but is still there (S247).
@@ -44,8 +47,9 @@ extension AppDelegate {
         let others = speakersOnNow().filter { !stored.contains($0.key) }
         let running = engine.isRunning
         let plan = PresetRecall.plan(facts, others: others.map { _ in true }, streaming: running)
-        let leftOff = zip(states, plan.steps).compactMap { state, step -> PresetNotice.LeftOff? in
-            guard case .leftOff(let reason) = step else { return nil }
+        let leftOff = zip(preset.members, zip(states, plan.steps)).compactMap { member, pair -> PresetNotice.LeftOff? in
+            let (state, step) = pair
+            guard case .leftOff(let reason) = step, !keepOff.contains(member.key) else { return nil }
             return PresetNotice.LeftOff(name: state.map(memberName) ?? text.unknownDevice, reason: reason,
                                         target: state?.target.map { shownName(airPlay: NativeAirPlayID.app($0)) })
         }

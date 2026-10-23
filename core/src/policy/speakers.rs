@@ -340,6 +340,8 @@ pub enum NoticeSubject {
     SoundOutput,
     /// One Google Cast speaker, by device ID (Windows).
     Cast(String),
+    /// The speaker zones: the saved groups became zones (S248).
+    Zones,
 }
 
 /// A privacy setting a notice can open (S153); the host maps it to its settings app.

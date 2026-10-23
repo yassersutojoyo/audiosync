@@ -58,9 +58,12 @@ struct AppSettings: Equatable {
         static let appearance = "appearance"
         /// `WhenSourceQuits.defaultsValue` (S227): "stop", or "system" to switch.
         static let whenSourceQuits = "whenSourceQuits"
+        /// The channel pair (`InputChannelPair.index`) each input device plays,
+        /// by device UID; devices on channels 1-2 are left out.
+        static let inputChannelPairs = "inputChannelPairByUID"
         /// `Equalizer.Settings` as JSON (S24, `StoredEqualizer`).
         static let equalizer = "equalizerSettings"
-        /// The saved equalizer curves (S242, `StoredCurves`).
+        /// The saved equalizer curves (S270, `StoredCurves`).
         static let equalizerCurves = "equalizerCurves"
         static let webRemote = "webRemoteEnabled"
         static let webRemotePort = "webRemotePort"
@@ -126,6 +129,7 @@ struct AppSettings: Equatable {
     var showVirtualDevices = false
     var appearance = AppAppearance.system
     var whenSourceQuits = WhenSourceQuits.stop
+    var inputPairs: [String: Int] = [:]
     var webRemote = false
     var webRemotePort = RemotePort.default
     var airPlay2 = false
@@ -171,6 +175,7 @@ struct AppSettings: Equatable {
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
+        s.inputPairs = channelPairs(read(Keys.inputChannelPairs))
         s.webRemote = read(Keys.webRemote) as? Bool ?? false
         s.webRemotePort = read(Keys.webRemotePort).flatMap(number).flatMap(RemotePort.stored) ?? RemotePort.default
         s.airPlay2 = read(Keys.airPlay2) as? Bool ?? false
@@ -215,6 +220,18 @@ struct AppSettings: Equatable {
         var out: [String: Double] = [:]
         for (id, raw) in dict {
             if let n = number(raw) { out[id] = clean(n) }
+        }
+        return out
+    }
+
+    /// The stored channel pairs by device UID: whole numbers above 0 only, as
+    /// a missing entry already means channels 1-2.
+    static func channelPairs(_ value: Any?) -> [String: Int] {
+        guard let dict = value as? [String: Any] else { return [:] }
+        var out: [String: Int] = [:]
+        for (uid, raw) in dict {
+            guard let n = number(raw), n.rounded() == n, n >= 1, n <= Double(InputChannelPair.maxStored) else { continue }
+            out[uid] = Int(n)
         }
         return out
     }
@@ -326,6 +343,11 @@ struct SettingsStore {
     func save(levels: [String: Double], forKey key: String) { write(levels, key) }
 
     func save(master: Double) { write(master, Keys.master) }
+
+    /// Removed once every input device is back on channels 1-2.
+    func save(inputPairs: [String: Int]) {
+        write(inputPairs.isEmpty ? nil : inputPairs, Keys.inputChannelPairs)
+    }
 
     func save(groups: [SpeakerGroup]) {
         guard let data = try? JSONEncoder().encode(groups) else { return }
