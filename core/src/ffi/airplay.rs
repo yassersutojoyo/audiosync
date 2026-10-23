@@ -5225,7 +5225,11 @@ mod tests {
         // SAFETY: a live handle, used by this thread only; a local out
         // struct, whose strings are read before the next call.
         while unsafe { asc_airplay_next_event(handle, &mut raw) } {
-            kinds.push((raw.kind, raw.warning, text(raw.id), text(raw.detail)));
+            // The live sender's timeline can post at any moment; only the
+            // speaker's own events are under test.
+            if raw.kind != AIRPLAY_EVENT_TIMELINE {
+                kinds.push((raw.kind, raw.warning, text(raw.id), text(raw.detail)));
+            }
         }
         let id = "02005E005363".to_owned();
         assert_eq!(
