@@ -351,7 +351,7 @@ component CalibrationCard inherits Card {
         HorizontalLayout {
             alignment: LayoutAlignment.start;
 
-            Button {
+            calibrate-button := Button {
                 changed has-focus => {
                     root.focus-changed(self.has-focus);
                 }
@@ -488,7 +488,11 @@ component CalibrationCard inherits Card {
                     enabled: !root.running;
                     accessible-label: Strings.calibrate-all-close-label;
                     accessible-description: root.outcome;
+                    // Close removes itself; the window places the focus when Calibrate All is disabled.
                     clicked => {
+                        if root.can-start {
+                            calibrate-button.focus();
+                        }
                         root.close();
                     }
                 }
@@ -1182,7 +1186,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    EqualizerCard {
+                    equalizer-card := EqualizerCard {
                         on: root.equalizer-on;
                         clicked => {
                             root.equalizer-requested();
@@ -1224,7 +1228,11 @@ export component MainWindow inherits Window {
                         undo => {
                             root.calibrate-all-undo-requested();
                         }
+                        // Close went away and Calibrate All is disabled: the card above takes the focus.
                         close => {
+                            if !root.calibrate-all-can-start {
+                                equalizer-card.focus();
+                            }
                             root.calibrate-all-close-requested();
                         }
                     }

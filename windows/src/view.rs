@@ -1567,7 +1567,6 @@ impl App {
         );
     }
 
-    /// Empties both live regions now.
     fn show_calibrate_all(&self, card: CalibrateAllCard) {
         let main = &self.main;
         main.set_calibrate_all_running(card.running);
@@ -1582,6 +1581,7 @@ impl App {
         sync_model(&self.models.calibration_rows, card.rows);
     }
 
+    /// Empties both live regions now.
     fn clear_announcement(&self) {
         self.announcement_timer.stop();
         clear_announcement(&self.main.as_weak(), &self.flyout.as_weak());
