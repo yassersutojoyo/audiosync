@@ -314,8 +314,9 @@ export component TrayFlyout inherits Window {
                             name: speaker.name;
                             label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                             description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
-                            caption: speaker.in-target != "" ? Strings.zone-member-in-target(speaker.in-target) : "";
+                            caption: speaker.zone-note;
                             state: speaker.state;
+                            enabled: !speaker.missing;
                             device-volume: speaker.device-volume;
                             toggled => {
                                 root.speaker-toggled(speaker.id);

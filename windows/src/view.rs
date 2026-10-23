@@ -1447,10 +1447,6 @@ impl App {
             row.group_note = group_note(&strings, speaker);
             let zone = state.zone_of(&speaker.id);
             row.zone_id = zone.map_or_else(SharedString::default, |zone| zone.id.as_str().into());
-            row.in_target = match (&speaker.in_target, zone) {
-                (Some(target), Some(_)) => target.name.as_str().into(),
-                _ => SharedString::default(),
-            };
             row
         };
         let (this_pc, connected) = state.layout();
@@ -1491,9 +1487,24 @@ impl App {
             .iter()
             .map(|zone| {
                 let members: Vec<SpeakerItem> = state
-                    .zone_members(zone)
-                    .filter(listed)
-                    .map(|s| item(s, !s.kind.is_this_pc()))
+                    .zone_rows(zone)
+                    .into_iter()
+                    .map(|row| {
+                        let mut built = match row {
+                            ui_model::ZoneRow::Listed(s) => item(s, !s.kind.is_this_pc()),
+                            ui_model::ZoneRow::NotFound(id) => {
+                                missing_item(&strings, &state, &zone.id, id)
+                            }
+                        };
+                        if let Some(note) = state.zone_note(zone, row) {
+                            built.zone_note = zone_note(&strings, note);
+                            built.zone_dimmed = matches!(
+                                note,
+                                ui_model::ZoneNote::InTarget(_) | ui_model::ZoneNote::NotFound
+                            );
+                        }
+                        built
+                    })
                     .collect();
                 let targets = state
                     .zone_members(zone)
@@ -3545,7 +3556,45 @@ pub fn speaker_item(
         group_note: SharedString::default(),
         zone_id: SharedString::default(),
         zone_movable: speaker.in_target.is_none(),
-        in_target: SharedString::default(),
+        // Needs the zone: set by the caller (`App::refresh`).
+        zone_note: SharedString::default(),
+        zone_dimmed: false,
+        missing: false,
+    }
+}
+
+/// The row of zone member `id` while it isn't listed: its name and kind as
+/// last known, and a menu that can still move it or take it out.
+fn missing_item(strings: &Strings<'_>, state: &AppState, zone_id: &str, id: &str) -> SpeakerItem {
+    let absent = state.absent_member(id);
+    let name = absent
+        .map(|member| member.name.as_str())
+        .filter(|name| !name.is_empty())
+        .map_or_else(|| strings.get_unknown_device(), SharedString::from);
+    let kind = absent.map_or(ui_model::SpeakerKind::Other, |member| member.kind);
+    SpeakerItem {
+        id: id.into(),
+        device_name: name.clone(),
+        name,
+        kind: speaker_kind(kind),
+        show_kind: !kind.is_this_pc(),
+        state: RowState::Off,
+        availability: Availability::Open,
+        volume_step: 1.0,
+        zone_id: zone_id.into(),
+        zone_movable: true,
+        missing: true,
+        ..SpeakerItem::default()
+    }
+}
+
+/// The words of a zone member's note.
+fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedString {
+    match note {
+        ui_model::ZoneNote::NeedsAirPlay2 => strings.get_needs_airplay2(),
+        ui_model::ZoneNote::InTarget(target) => strings.invoke_zone_member_in_target(target.into()),
+        ui_model::ZoneNote::NotFound => strings.get_zone_member_not_found(),
+        ui_model::ZoneNote::CastStayedOff => strings.get_cast_stayed_off(),
     }
 }
 
@@ -6451,8 +6500,14 @@ mod tests {
                 .iter()
                 .map(|row| row.id.to_string())
                 .collect::<Vec<_>>(),
-            ["airplay:kitchen", "airplay:pair", "cc:attic", "local:desk"],
-            "in zone order; the hidden one and the one not found yet have no row"
+            [
+                "airplay:kitchen",
+                "airplay:pair",
+                "cc:attic",
+                "local:desk",
+                "airplay:theater:4C2D"
+            ],
+            "in zone order, the one not found too; the hidden one has no row"
         );
         assert_eq!(
             (living.on, living.total, living.waiting, living.present),
@@ -6460,7 +6515,8 @@ mod tests {
         );
         let upstairs = m.zones.row_data(1).unwrap();
         let left = upstairs.members.row_data(1).unwrap();
-        assert_eq!(left.in_target, "Living Room Pair");
+        assert_eq!(left.zone_note, "Plays as part of Living Room Pair");
+        assert!(left.zone_dimmed);
         assert!(!left.zone_movable);
         assert_eq!(
             upstairs.targets.row_data(0).unwrap().member_id,
@@ -6468,6 +6524,87 @@ mod tests {
         );
         assert_eq!(m.zones.row_data(2).unwrap().total, 0, "Office is empty");
         assert!(!app.main.get_this_pc_all_in_zones());
+    }
+
+    // covers: S245 (a zone's rows and its count agree; a hidden member has
+    // neither, one not found has a row)
+    #[test]
+    fn every_zone_member_but_the_hidden_ones_has_a_row_that_its_count_counts() {
+        let app = app_over(MockBackend::zones_preview());
+        for zone in app.models.zones.iter() {
+            assert_eq!(
+                zone.members.row_count(),
+                zone.total as usize,
+                "{}",
+                zone.name
+            );
+            assert_eq!(
+                zone.members.iter().filter(|row| !row.missing).count(),
+                zone.present as usize,
+                "{}",
+                zone.name
+            );
+        }
+        let living = app.models.zones.row_data(0).unwrap();
+        assert!(living.members.iter().all(|row| row.id != "airplay:den"));
+        let theater = living.members.row_data(4).unwrap();
+        assert!(theater.missing && theater.zone_dimmed && theater.zone_movable);
+        assert_eq!(theater.name, "Home Theater");
+        assert_eq!(theater.zone_note, "Not found");
+        assert_eq!(theater.zone_id, "zone:living");
+
+        // Remove from Zone still reaches it.
+        app.main
+            .invoke_speaker_remove_from_zone_requested("airplay:theater:4C2D".into());
+        let living = app.models.zones.row_data(0).unwrap();
+        assert_eq!((living.members.row_count(), living.total), (4, 4));
+    }
+
+    // covers: S246 (a Cast member a zone click left off says why), S247 (a
+    // pair needs AirPlay 2)
+    #[test]
+    fn zone_member_rows_say_why_they_dont_play() {
+        let app = app_over(MockBackend::zones_preview());
+        let living = || app.models.zones.row_data(0).unwrap();
+        let attic = living().members.row_data(2).unwrap();
+        assert_eq!(attic.id, "cc:attic");
+        assert_eq!(
+            attic.zone_note, "Stayed off, since one Cast speaker plays at a time",
+            "another member is on"
+        );
+        assert!(!attic.zone_dimmed);
+        let pair = living().members.row_data(1).unwrap();
+        assert_eq!(pair.zone_note, "", "AirPlay 2 can play it");
+
+        let strings = app.strings();
+        assert_eq!(
+            zone_note(&strings, ui_model::ZoneNote::NeedsAirPlay2),
+            "Needs AirPlay 2 (Experimental)"
+        );
+        let mut state = app.snapshot();
+        let zone = state.zones[0].clone();
+        let pair = state
+            .speakers
+            .iter_mut()
+            .find(|s| s.id == "airplay:pair")
+            .unwrap();
+        pair.availability = ui_model::Availability::AirPlay2NotYet;
+        let pair = state.speaker("airplay:pair").unwrap();
+        assert_eq!(
+            state.zone_note(&zone, ui_model::ZoneRow::Listed(pair)),
+            Some(ui_model::ZoneNote::NeedsAirPlay2)
+        );
+        for speaker in &mut state.speakers {
+            if speaker.id != "cc:attic" {
+                speaker.enabled = false;
+            }
+        }
+        let attic = state.speaker("cc:attic").unwrap();
+        assert_eq!(
+            state.zone_note(&zone, ui_model::ZoneRow::Listed(attic)),
+            None,
+            "with nothing else on, a Cast speaker that is off is just off"
+        );
     }
 
     #[test]

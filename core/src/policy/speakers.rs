@@ -340,7 +340,7 @@ pub enum NoticeSubject {
     SoundOutput,
     /// One Google Cast speaker, by device ID (Windows).
     Cast(String),
-    /// The speaker zones: the saved groups became zones (S248, Windows).
+    /// The speaker zones: the saved groups became zones (S248).
     Zones,
 }
 

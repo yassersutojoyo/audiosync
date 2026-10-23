@@ -464,7 +464,8 @@ fn keyboard_shortcuts_are_declared() {
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
 /// The row note and notice for a speaker that plays only AirPlay 2 name
-/// that item, and show only for a receiver the sender found.
+/// that item, and show only for a receiver the sender found; so does the
+/// note on a zone's stereo pair or home theater that needs it.
 /// The calibration results' AirPlay lines show only when an AirPlay
 /// speaker took part, so the sender ran.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
@@ -506,6 +507,7 @@ fn no_text_promises_airplay() {
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
                 || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
+                || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
                 || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
                 || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
                 || line.contains("return @tr(\"AirPlay 2 after restart\");")

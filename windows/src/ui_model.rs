@@ -219,6 +219,40 @@ pub struct HiddenSpeaker {
     pub present: Option<SpeakerKind>,
 }
 
+/// A zone member that isn't listed and isn't hidden: its row says it isn't
+/// found and offers only Move to Zone and Remove from Zone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AbsentMember {
+    /// Its speaker key.
+    pub id: String,
+    /// The name the user gave it, else the one it had when last listed in
+    /// this run; empty when neither is known.
+    pub name: String,
+    pub kind: SpeakerKind,
+}
+
+/// A row under a zone's header (spec S245): every member but the hidden ones,
+/// so the rows and the header's count agree.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ZoneRow<'a> {
+    Listed(&'a Speaker),
+    /// Not listed right now, by speaker key.
+    NotFound(&'a str),
+}
+
+/// What a zone member's row says in place of its own note (spec S246, S247).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneNote<'a> {
+    /// A stereo pair or home theater while AirPlay 2 is off.
+    NeedsAirPlay2,
+    /// It plays only as part of this stereo pair or home theater, by name.
+    InTarget(&'a str),
+    NotFound,
+    /// A Cast speaker the zone's click left off: one Cast speaker plays at a
+    /// time.
+    CastStayedOff,
+}
+
 /// A Google Cast speaker's own state. Its delay is the measured offset the
 /// user sets, since Cast can't be kept in sync automatically.
 #[derive(Clone, Debug, PartialEq)]
@@ -565,6 +599,8 @@ pub struct AppState {
     pub hidden: Vec<HiddenSpeaker>,
     /// The zones (spec S245), in order.
     pub zones: Vec<Zone>,
+    /// The zone members that aren't listed and aren't hidden.
+    pub absent: Vec<AbsentMember>,
     pub equalizer: EqSettings,
     /// Newest first.
     pub notices: Vec<Notice>,
@@ -723,15 +759,36 @@ impl AppState {
         zone.members.iter().filter_map(|id| self.speaker(id))
     }
 
-    /// What a zone header counts: a hidden member is left out, as it has no
-    /// row; one not listed yet counts but isn't present.
+    /// The rows under `zone`'s header, in zone order: a listed member, the
+    /// virtual outputs View hides included, or one not found; a hidden
+    /// member has none.
+    pub fn zone_rows<'a>(&'a self, zone: &'a Zone) -> Vec<ZoneRow<'a>> {
+        zone.members
+            .iter()
+            .filter(|id| !self.hidden.iter().any(|hidden| hidden.id == **id))
+            .map(|id| {
+                self.speaker(id)
+                    .map_or(ZoneRow::NotFound(id.as_str()), ZoneRow::Listed)
+            })
+            .collect()
+    }
+
+    /// What a zone header counts, from its rows.
     pub fn zone_counts(&self, zone: &Zone) -> ZoneCounts {
-        let hidden = |id: &String| self.hidden.iter().any(|hidden| hidden.id == *id);
-        let present: Vec<&Speaker> = self.zone_members(zone).collect();
-        let on: Vec<&&Speaker> = present.iter().filter(|s| s.enabled).collect();
+        let rows = self.zone_rows(zone);
+        let on: Vec<&Speaker> = rows
+            .iter()
+            .filter_map(|row| match row {
+                ZoneRow::Listed(speaker) if speaker.enabled => Some(*speaker),
+                _ => None,
+            })
+            .collect();
         ZoneCounts {
-            total: zone.members.iter().filter(|id| !hidden(id)).count(),
-            present: present.len(),
+            total: rows.len(),
+            present: rows
+                .iter()
+                .filter(|row| matches!(row, ZoneRow::Listed(_)))
+                .count(),
             on: on.len(),
             waiting: if self.running {
                 on.iter().filter(|s| s.waiting.is_some()).count()
@@ -739,6 +796,35 @@ impl AppState {
                 0
             },
         }
+    }
+
+    /// The note on `row` under `zone`, if it has one. The Cast note needs
+    /// another member on: the click plan switches on one Cast member at most.
+    pub fn zone_note<'a>(&self, zone: &Zone, row: ZoneRow<'a>) -> Option<ZoneNote<'a>> {
+        let speaker = match row {
+            ZoneRow::NotFound(_) => return Some(ZoneNote::NotFound),
+            ZoneRow::Listed(speaker) => speaker,
+        };
+        if speaker.group.is_some() && speaker.availability == Availability::AirPlay2NotYet {
+            return Some(ZoneNote::NeedsAirPlay2);
+        }
+        if let Some(target) = &speaker.in_target {
+            return Some(ZoneNote::InTarget(&target.name));
+        }
+        let other_on = || {
+            self.zone_members(zone)
+                .any(|member| member.enabled && member.id != speaker.id)
+        };
+        (speaker.kind == SpeakerKind::Cast
+            && !speaker.enabled
+            && speaker.availability == Availability::Open
+            && other_on())
+        .then_some(ZoneNote::CastStayedOff)
+    }
+
+    /// The name and kind of zone member `id` while it isn't listed.
+    pub fn absent_member(&self, id: &str) -> Option<&AbsentMember> {
+        self.absent.iter().find(|member| member.id == id)
     }
 
     /// A zone is on when a click would switch it off (spec S246): each
@@ -1247,6 +1333,7 @@ impl MockBackend {
             speakers,
             hidden: Vec::new(),
             zones: Vec::new(),
+            absent: Vec::new(),
             equalizer: EqSettings::default(),
             notices: Vec::new(),
             pin_prompt: None,
@@ -1394,6 +1481,11 @@ impl MockBackend {
             name: "Den".into(),
             kind_text: "AirPlay".into(),
             present: None,
+        });
+        state.absent.push(AbsentMember {
+            id: "airplay:theater:4C2D".into(),
+            name: "Home Theater".into(),
+            kind: SpeakerKind::AirPlay2,
         });
         state.notices.push(Notice {
             id: 1,

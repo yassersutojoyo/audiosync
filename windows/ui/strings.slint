@@ -199,6 +199,13 @@ export global Strings {
     out property <string> delete-zone: @tr("Delete Zone");
     // In a zone without members.
     out property <string> zone-empty: @tr("No speakers");
+    // Notes on a zone member's row: a stereo pair or home theater while
+    // AirPlay 2 is off, a member that isn't listed (with its name when none
+    // is known), and a Cast member a zone click left off (S246).
+    out property <string> needs-airplay2: @tr("Needs AirPlay 2 (Experimental)");
+    out property <string> zone-member-not-found: @tr("Not found");
+    out property <string> unknown-device: @tr("Unknown device");
+    out property <string> cast-stayed-off: @tr("Stayed off, since one Cast speaker plays at a time");
     // This PC and Connected Speakers when each of their speakers is in a zone.
     out property <string> this-pc-all-in-zones: @tr("Every output on this PC is in a zone.");
     out property <string> connected-all-in-zones: @tr("Every connected speaker is in a zone.");
@@ -1417,7 +1424,7 @@ export global Strings {
         return @tr("{} volume", name);
     }
 
-    // What Narrator calls a zone's arrow.
+    // A zone's arrow: its tooltip and what Narrator calls it.
     public pure function show-zone-speakers(name: string) -> string {
         return @tr("Show speakers in {}", name);
     }

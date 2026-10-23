@@ -1219,7 +1219,7 @@ export component SpeakerRow inherits Rectangle {
     // ("Waiting for device", "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group-note);
     property <string> state-note: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
-    property <string> note: root.item.in-target != "" ? Strings.zone-member-in-target(root.item.in-target) : root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
+    property <string> note: root.item.zone-note != "" ? root.item.zone-note : root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
     property <string> caption: Strings.speaker-caption(root.item.show-kind && !root.item.cast-group ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     // A click on the row's box works like its delay button; a row without a
@@ -1260,7 +1260,7 @@ export component SpeakerRow inherits Rectangle {
         }
         menu := ContextMenuArea {
             Menu {
-                MenuItem {
+                if !root.item.missing: MenuItem {
                     title: Strings.rename-speaker;
                     activated => {
                         root.rename-requested();
@@ -1269,7 +1269,7 @@ export component SpeakerRow inherits Rectangle {
 
                 // Auto-connect is for local and AirPlay speakers; a Cast
                 // speaker's menu holds the controls under its volume.
-                if !root.item.cast: MenuItem {
+                if !root.item.cast && !root.item.missing: MenuItem {
                     title: Strings.auto-connect;
                     checkable: true;
                     checked: root.item.auto-connect;
@@ -1306,7 +1306,7 @@ export component SpeakerRow inherits Rectangle {
                     }
                 }
 
-                if root.item.zone-movable: MenuSeparator { }
+                if root.item.zone-movable && !root.item.missing: MenuSeparator { }
 
                 if root.item.zone-movable: Menu {
                     title: Strings.move-to-zone;
@@ -1368,6 +1368,7 @@ export component SpeakerRow inherits Rectangle {
                         badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
+                            enabled: !root.item.missing;
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
                             description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
                             toggled => {
@@ -1417,7 +1418,7 @@ export component SpeakerRow inherits Rectangle {
                                             text: root.item.name;
                                             font-size: Tokens.font-size-body;
                                             font-weight: root.item.state == RowState.playing ? 600 : 400;
-                                            color: root.item.in-target != "" ? Tokens.secondary-text : Tokens.text;
+                                            color: root.item.zone-dimmed ? Tokens.secondary-text : Tokens.text;
                                             vertical-alignment: center;
                                             overflow: elide;
                                             accessible-role: none;
@@ -1675,7 +1676,7 @@ export component SpeakerRow inherits Rectangle {
                                     step: root.item.cast ? root.item.volume-step : 1;
                                     label: Strings.volume-of(root.item.name);
                                     description: root.item.cast && root.item.volume-fixed ? Strings.cast-volume-fixed : "";
-                                    enabled: root.item.cast ? root.cast-live && !root.item.volume-fixed : root.item.state != RowState.off;
+                                    enabled: !root.item.missing && (root.item.cast ? root.cast-live && !root.item.volume-fixed : root.item.state != RowState.off);
                                     changed(value) => {
                                         root.volume-changed(value);
                                     }
@@ -2025,6 +2026,31 @@ export component ZoneHeader inherits Rectangle {
                         arrow := TouchArea {
                             clicked => {
                                 root.expanded-changed(!root.item.expanded);
+                            }
+
+                            // Narrator reads the same words from the arrow's label.
+                            Tooltip {
+                                Rectangle {
+                                    width: arrow-tip.preferred-width + 16px;
+                                    height: arrow-tip.preferred-height + 10px;
+                                    border-radius: Fluent.radius-control;
+                                    border-width: 1px;
+                                    border-color: Fluent.stroke;
+                                    background: Tokens.surface;
+                                    drop-shadow-blur: 8px;
+                                    drop-shadow-offset-y: 2px;
+                                    drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                    accessible-role: none;
+
+                                    arrow-tip := Text {
+                                        x: 8px;
+                                        text: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
+                                        font-size: Tokens.font-size-caption;
+                                        color: Tokens.text;
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+                                }
                             }
                         }
 

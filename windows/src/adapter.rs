@@ -98,7 +98,7 @@ use crate::settings::{
 };
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
-    self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
+    self, AbsentMember, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
     HiddenSpeaker, InTarget, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase,
     PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
@@ -1669,6 +1669,43 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// The zone members neither `speakers` nor `hidden` holds, by the name
+    /// the user gave them, else the one last listed.
+    fn absent_members(&self, speakers: &[Speaker], hidden: &[HiddenSpeaker]) -> Vec<AbsentMember> {
+        let known = |key: &String| {
+            speakers.iter().any(|speaker| speaker.id == *key)
+                || hidden.iter().any(|entry| entry.id == *key)
+        };
+        self.zones
+            .list()
+            .iter()
+            .flat_map(|zone| &zone.members)
+            .filter(|key| !known(key))
+            .map(|key| {
+                let (last, kind) = match SpeakerKey::parse(key) {
+                    Some(SpeakerKey::Local(id)) => (
+                        self.names.get(&id),
+                        self.kinds
+                            .get(&id)
+                            .map_or(SpeakerKind::Other, |kind| speaker_kind(*kind)),
+                    ),
+                    Some(SpeakerKey::AirPlay(id)) => {
+                        (self.airplay_names.get(&id), SpeakerKind::AirPlay)
+                    }
+                    Some(SpeakerKey::Cast(id)) => (self.cast_names.get(&id), SpeakerKind::Cast),
+                    None => (None, SpeakerKind::Other),
+                };
+                AbsentMember {
+                    id: key.clone(),
+                    name: self
+                        .custom_names
+                        .shown(key, last.map_or("", String::as_str)),
+                    kind,
+                }
+            })
+            .collect()
+    }
+
     /// Whether speaker `key` is hidden with Hide Speaker.
     fn is_hidden(&self, key: &str) -> bool {
         self.hidden.iter().any(|entry| entry.key == key)
@@ -2586,6 +2623,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 )
                 .collect(),
         );
+        let absent = self.absent_members(&speakers, &hidden);
         AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
@@ -2596,6 +2634,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             source_id: self.chosen.key(),
             master_volume: self.audio.master_volume(),
             speakers,
+            absent,
             hidden,
             zones: self.zones.list().to_vec(),
             equalizer: self.equalizer,
