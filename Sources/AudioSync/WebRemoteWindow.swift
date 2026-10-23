@@ -48,11 +48,18 @@ final class WebRemoteAnnouncer {
     }
 }
 
+/// The web remote's port field while it is being typed.
+final class PortDraft: ObservableObject {
+    @Published var text = ""
+}
+
 struct WebRemoteView: View {
     @ObservedObject var settings: WebRemoteSettings
     let text: UIStrings
     let announcer: WebRemoteAnnouncer
-    @State private var portText = ""
+    /// The port as typed. An object rather than @State: the Command Line Tools
+    /// toolchain ships without SwiftUI's macro plugins.
+    @StateObject private var port = PortDraft()
 
     var body: some View {
         let t = text
@@ -93,8 +100,8 @@ struct WebRemoteView: View {
         .padding(20)
         .frame(width: 460, alignment: .leading)
         .tint(Brand.teal)
-        .onAppear { portText = String(settings.port) }
-        .onChange(of: settings.port) { _, port in portText = String(port) }
+        .onAppear { port.text = String(settings.port) }
+        .onChange(of: settings.port) { _, newPort in port.text = String(newPort) }
         .onChange(of: settings.status) { _, now in
             if case .failed(let error, let port) = now { announcer.say(failure(error, port: port, t)) }
         }
@@ -107,7 +114,7 @@ struct WebRemoteView: View {
             guard isRunning, !settings.locked, now == nil || now != announcer.openedCode else { return }
             announcer.say(now.map { t.webRemoteCodeLabel($0) } ?? t.webRemoteCodeExpired)
         }
-        .onChange(of: RemotePort.parse(portText) == nil) { _, outOfRange in
+        .onChange(of: RemotePort.parse(port.text) == nil) { _, outOfRange in
             if outOfRange && settings.enabled { announcer.say(t.webRemotePortRange) }
         }
     }
@@ -223,12 +230,12 @@ struct WebRemoteView: View {
     }
 
     private func portSection(_ t: UIStrings) -> some View {
-        let typed = RemotePort.parse(portText)
+        let typed = RemotePort.parse(port.text)
         let failedOnPort: Bool = { if case .failed = settings.status { return true } else { return false } }()
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(t.webRemotePort)
-                TextField(t.webRemotePort, text: $portText)
+                TextField(t.webRemotePort, text: $port.text)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)
                     .accessibilityLabel(t.webRemotePort)
