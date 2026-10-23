@@ -83,6 +83,8 @@ capture_rt=$(awk '/^    final class CaptureSink/ { f = 1 } f { print } f && /^  
   awk '/^struct CaptureChannels/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CaptureSupport.swift"
   awk '/^enum CalibrationTap/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CalibrationTap.swift"
   awk '/MARK: Fill thread/ { f = 1 } f { print } f && /^    }$/ { exit }' "$SRC/CalibrationTap.swift"
+  awk '/^    func deliver/ { f = 1 } /^    \/\/\/ A local output reading/ { exit } f { print }' "$SRC/EngineParts.swift"
+  awk '/^final class BlockGate/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/EngineParts.swift"
   awk '/^private final class MicrophoneSink/ { f = 1 } f { print } f && /^}$/ { exit }' \
     "$SRC/CalibrationMicrophone.swift"
   awk '/AudioDeviceCreateIOProcIDWithBlock/ { f = 1 } f { print } f && /^        }$/ { exit }' \
@@ -94,6 +96,8 @@ io_only=$(awk '/^        func consume/ { f = 1 } f { print } f && /^        }$/ 
   awk '/^    func consume/ { f = 1 } f { print } f && /^    }$/ { exit }' "$SRC/CalibrationMicrophone.swift"
   awk '/MARK: Capture thread/ { f = 1 } /MARK: Main thread/ { exit } f { print }' "$SRC/CalibrationTap.swift"
   awk '/MARK: Fill thread/ { f = 1 } f { print } f && /^    }$/ { exit }' "$SRC/CalibrationTap.swift"
+  awk '/^    func deliver/ { f = 1 } /^    \/\/\/ A local output reading/ { exit } f { print }' "$SRC/EngineParts.swift"
+  awk '/^final class BlockGate/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/EngineParts.swift"
   awk '/^struct CaptureChannels/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CaptureSupport.swift"
   awk '/AudioDeviceCreateIOProcIDWithBlock/ { f = 1 } f { print } f && /^        }$/ { exit }' \
     "$SRC/CalibrationMicrophone.swift")
@@ -101,7 +105,9 @@ io_only=$(grep -vE '^[[:space:]]*//' <<< "$io_only" || true)
 if ! grep -q 'func copy' <<< "$capture_rt" || ! grep -q 'func addSignal' <<< "$capture_rt" \
     || [ "$(grep -c 'func consume' <<< "$capture_rt")" -lt 2 ] \
     || ! grep -q 'sink.consume(input, at:' <<< "$capture_rt" \
-    || [ "$(grep -c 'func consume' <<< "$io_only")" -lt 2 ] || ! grep -q 'func addSignal' <<< "$io_only"; then
+    || [ "$(grep -c 'func consume' <<< "$io_only")" -lt 2 ] || ! grep -q 'func addSignal' <<< "$io_only" \
+    || ! grep -q 'func fill' <<< "$io_only" || ! grep -q 'private func write' <<< "$io_only" \
+    || ! grep -q 'func enter' <<< "$io_only" || ! grep -q 'private func run' <<< "$io_only"; then
   echo "FAIL: the IOProcs' code (CaptureSink, CaptureChannels, CalibrationTap, MicrophoneSink) wasn't found"
   status=1
 elif grep -nE 'DebugTrace|print\(|NSLog|os_log|Logger|DispatchQueue|Lock|Mutex|pthread_|String\(|"' <<< "$capture_rt"; then

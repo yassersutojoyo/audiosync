@@ -40,6 +40,7 @@ struct EngineParts {
     /// senders (when they run) convert from.
     func prepare(captureRate: Double) {
         equalizer.setSampleRate(captureRate)
+        gate.prepare(captureRate: captureRate)
         NativeAirPlayTap.prepare(captureRate: captureRate)
         CastTap.prepare(captureRate: captureRate)
     }
@@ -57,7 +58,9 @@ struct EngineParts {
         let now = mach_absolute_time()
         gate.lastCaptureTicks.store(now, ordering: .releasing)
         guard gate.enter() else { return }
-        write(block, frames: frames, ticks: now)
+        // The block's first frame, as the fill stamps its own, so a run whose two
+        // recordings start on different writers lines up.
+        write(block, frames: frames, ticks: now &- gate.ticks(frames: frames))
         gate.leave()
     }
 
@@ -110,7 +113,25 @@ struct EngineParts {
 final class BlockGate {
     /// Host ticks of the capture's latest block; 0 before the first.
     let lastCaptureTicks = Atomic<UInt64>(0)
+    /// Frames in the capture's latest callback; 0 before the first.
+    let lastCallbackFrames = Atomic<Int>(0)
+    /// Host ticks per frame at the capture rate, as a `Double`'s bits; 0 until `prepare`.
+    private let ticksPerFrame = Atomic<UInt64>(0)
     private let busy = Atomic<Bool>(false)
+
+    /// Control thread, while capture is stopped.
+    func prepare(captureRate: Double) {
+        let perFrame = captureRate.isFinite && captureRate > 0
+            ? Double(HostClock.shared.ticks(nanoseconds: 1_000_000_000)) / captureRate : 0
+        ticksPerFrame.store(perFrame.bitPattern, ordering: .releasing)
+    }
+
+    /// How many host ticks `frames` frames last at the capture rate.
+    @inline(__always)
+    func ticks(frames: Int) -> UInt64 {
+        let perFrame = Double(bitPattern: ticksPerFrame.load(ordering: .acquiring))
+        return UInt64(max(0, Double(frames) * perFrame))
+    }
 
     @inline(__always)
     func enter() -> Bool {

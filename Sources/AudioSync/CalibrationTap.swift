@@ -159,12 +159,20 @@ enum CalibrationTap {
 
 /// How much silence the calibration's fill writes (`CalibrationFill`), from
 /// the host clock and the time of the capture's latest block. While the
-/// capture delivers, nothing; once it has given nothing for `idleNs`, the
+/// capture delivers, nothing; once it has given nothing for `idle(captureFrames:)`, the
 /// ring is kept in real time from that moment on, the gap included.
 struct CalibrationFillPace {
-    /// 40 ms: more than a capture block (1024 frames at 44.1 kHz last 23 ms)
+    /// 40 ms: more than a tap's block (1024 frames at 44.1 kHz last 23 ms)
     /// and inside the readers' 50 ms dead band (S50).
     static let idleNs: UInt64 = 40_000_000
+
+    /// How long the capture must give nothing to count as quiet: `idleNs`,
+    /// or two of its callback periods when its buffers are longer, as an
+    /// input device's can be when another app raised them (4096 frames).
+    func idle(captureFrames: Int) -> UInt64 {
+        let periods = (2 * Double(max(0, captureFrames)) * 1e9 / rate).rounded(.up)
+        return max(Self.idleNs, UInt64(min(periods, 1e12)))
+    }
     /// The most one step writes; a fill held up longer drops the rest.
     static let mostSeconds = 1.0
 
@@ -177,18 +185,20 @@ struct CalibrationFillPace {
     init(rate: Double) { self.rate = rate.isFinite && rate > 0 ? rate : 48_000 }
 
     /// The frames to write at `nowNs` and when the first of them is due.
-    /// `lastCaptureNs` is 0 before the capture's first block.
-    mutating func step(nowNs: UInt64, lastCaptureNs: UInt64) -> (frames: Int, firstNs: UInt64) {
-        if lastCaptureNs != 0, lastCaptureNs >= nowNs || nowNs - lastCaptureNs < Self.idleNs {
+    /// `lastCaptureNs` is 0 before the capture's first block; `captureFrames`
+    /// is the frame count of its latest callback, 0 before the first.
+    mutating func step(nowNs: UInt64, lastCaptureNs: UInt64, captureFrames: Int = 0) -> (frames: Int, firstNs: UInt64) {
+        let quiet = idle(captureFrames: captureFrames)
+        if lastCaptureNs != 0, lastCaptureNs >= nowNs || nowNs - lastCaptureNs < quiet {
             anchorNs = nil
             return (0, 0)
         }
-        guard nowNs >= Self.idleNs else { return (0, 0) }
+        guard nowNs >= quiet else { return (0, 0) }
         let anchor: UInt64
         if let anchorNs {
             anchor = anchorNs
         } else {
-            anchor = nowNs - Self.idleNs
+            anchor = nowNs - quiet
             anchorNs = anchor
             written = 0
         }
@@ -249,7 +259,8 @@ final class CalibrationFill {
     private func run() {
         while running.load(ordering: .acquiring) {
             let last = parts.gate.lastCaptureTicks.load(ordering: .acquiring)
-            let step = pace.step(nowNs: clock.nowNs(), lastCaptureNs: clock.nanoseconds(ticks: last))
+            let step = pace.step(nowNs: clock.nowNs(), lastCaptureNs: clock.nanoseconds(ticks: last),
+                                 captureFrames: parts.gate.lastCallbackFrames.load(ordering: .relaxed))
             var done = 0
             while done < step.frames {
                 let count = min(step.frames - done, Self.chunkFrames)

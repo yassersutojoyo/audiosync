@@ -448,6 +448,7 @@ private extension SourceCapture {
                 silentCallbacks.wrappingAdd(1, ordering: .relaxed)
                 return
             }
+            parts.gate.lastCallbackFrames.store(channels.frames, ordering: .relaxed)
             channels.forEachBlock(in: stereoBlock) { block, count in
                 self.parts.deliver(block, frames: count)
             }
