@@ -98,10 +98,10 @@ use crate::settings::{
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
-    CalibrationState, CastAddressError, CastGroup, CastList, CastRow, CastState, Group, GroupError,
-    HiddenSpeaker, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt,
-    SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting,
-    clamp_delay_ms,
+    CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
+    Group, GroupError, HiddenSpeaker, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase,
+    PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
+    Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -2690,13 +2690,24 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
-    fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
+    fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
         let Some(address) = CastAddress::parse(text) else {
             self.log
                 .log(|| "Cast: Add by Address turned down what was typed".to_owned());
             return Err(CastAddressError::Invalid);
         };
-        if !(self.cast_probe)(&address) {
+        Ok(CastAddressCheck {
+            address,
+            answers: self.cast_probe,
+        })
+    }
+
+    fn add_checked_cast_address(
+        &mut self,
+        address: CastAddress,
+        answered: bool,
+    ) -> Result<(), CastAddressError> {
+        if !answered {
             self.log
                 .log(|| format!("Cast: nothing answers at {}", address.text()));
             return Err(CastAddressError::NotFound);
@@ -7623,6 +7634,30 @@ mod tests {
         adapter.remove_cast_address(&id);
         assert!(adapter.snapshot().speaker(&id).is_none());
         assert!(adapter.current_settings().cast_addresses.is_empty());
+    }
+
+    #[test]
+    fn checking_an_address_leaves_the_wait_to_the_caller() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.set_cast_probe(|_| panic!("probed on the calling thread"));
+        let check = adapter.check_cast_address("192.0.2.20").expect("taken");
+        assert_eq!(check.address.text(), "192.0.2.20");
+        assert_eq!(
+            adapter.add_checked_cast_address(check.address.clone(), false),
+            Err(CastAddressError::NotFound)
+        );
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&cc_address("192.0.2.20"))
+                .is_none()
+        );
+        assert!(adapter.current_settings().cast_addresses.is_empty());
+        assert_eq!(
+            adapter.add_checked_cast_address(check.address, true),
+            Ok(())
+        );
+        assert_eq!(adapter.current_settings().cast_addresses, ["192.0.2.20"]);
     }
 
     #[test]
