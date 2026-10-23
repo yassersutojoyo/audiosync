@@ -1,7 +1,9 @@
 //! Parts of docs/AIRPLAY_SPEC.md clauses that the per-section suites name
 //! but don't reach: the keep-alive's idle clock, digest edge cases, header
-//! case, teardown behind an unanswered request, the `/feedback` miss count
-//! and the sync sequence across a flush.
+//! case, teardown behind an unanswered request, the `/feedback` miss count,
+//! the sync sequence across a flush, a volume answer after an empty line,
+//! `/info` values of an unexpected type, 512 KiB artwork with the progress
+//! RTP-Info and metadata queued before RECORD.
 
 mod common;
 
@@ -228,6 +230,14 @@ fn p35_a_challenged_teardown_still_closes_without_an_error() {
     let mut link = late_gate_link();
     link.session.teardown(link.now);
     link.pump();
+    // The 401 is TEARDOWN's answer (P35), so it closes before the 2 s timer
+    // and is not resent.
+    assert!(link.closed);
+    assert_eq!(link.keys()[5..], ["TEARDOWN"]);
+    let teardown = link.last("TEARDOWN");
+    assert!(teardown.headers.get("Authorization").is_none());
+    assert_eq!(teardown.headers.get("CSeq"), Some("5"));
+    assert_eq!(link.receiver.authorized, 0);
     link.advance(Duration::from_secs(2));
     assert!(link.closed);
     assert_eq!(link.events.last(), Some(&SessionEvent::Closed));
