@@ -858,6 +858,8 @@ fn opener(share: &MixShare, frequency: i64, captured: &Arc<AtomicU64>) {
     loop {
         MixShare::sweep(&share.retired);
         if share.quit.load(Ordering::Acquire) {
+            // The mix hands back its last streams just before it quits.
+            MixShare::sweep(&share.retired);
             MixShare::sweep(&share.ready);
             return;
         }
