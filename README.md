@@ -33,18 +33,9 @@ AirPlay speakers play about two seconds late. Local speakers don't. Play the sam
 
 AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, early alpha.
 
-## What's new in 0.6
+## What's new in 0.7
 
-- Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
-- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s.
-- On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
-- On the Mac, rename a speaker with a double-click on its name.
-- If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
-- Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
-- Diagrams in the Guide.
-- AirPlay 2 is in there, but experimental and off. See below.
-
-On `main` (coming in 0.7), in both the Mac and the Windows app:
+In both the Mac and the Windows app:
 
 - Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
 - Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
@@ -55,6 +46,17 @@ On `main` (coming in 0.7), in both the Mac and the Windows app:
 - Cast speakers show the track that's playing, with the title, artist, album and cover.
 - On Windows you can rename a speaker too, with a double-click on its name.
 - Hide Speaker takes a speaker you never use out of the list, and Hidden Speakers brings it back.
+
+New in 0.6:
+
+- Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
+- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s.
+- On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
+- On the Mac, rename a speaker with a double-click on its name.
+- If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
+- Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
+- Diagrams in the Guide.
+- AirPlay 2 is in there, but experimental and off. See below.
 
 The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
