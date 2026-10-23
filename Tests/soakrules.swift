@@ -21,7 +21,23 @@ struct MemoryGrowth {
     let warmUpSeconds: Double
 }
 
+/// Which logged windows a run's lag-error statistics count.
+struct LagWindows {
+    /// Indices of the counted windows, in time order.
+    let counted: [Int]
+    /// Windows left out because they end while the delay line is still filling.
+    let filling: Int
+    /// The window end, in seconds, from which windows count.
+    let countsFrom: Double
+}
+
 enum SoakRules {
+    /// The windows that count for lag error, from each window's end time in
+    /// seconds since the measured run started.
+    static func lagWindows(ends: [Double], delayMs: Double, intervalS: Double) -> LagWindows {
+        LagWindows(counted: Array(ends.indices), filling: 0, countsFrom: 0)
+    }
+
     /// How long the footprint may climb before growth counts. The first window
     /// is logged while the session's buffers are still getting their pages, so
     /// a healthy run climbs once in its first minute or two (by some 30 MB in

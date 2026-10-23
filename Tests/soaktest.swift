@@ -519,6 +519,8 @@ var metrics: [String: Any] = ["duration_s": r3(duration)]
 var outputDetails: [[String: Any]] = []
 var worstDropouts: Int64 = 0, worstStarved: Int64 = 0, worstCorrectionCount: Int64 = 0, worstLagAbs = 0.0
 var sanity: [(String, Bool, String)] = []
+let lagWindows = SoakRules.lagWindows(ends: windows.map(\.t), delayMs: opt.delayMs, intervalS: opt.interval)
+let lagCounted = lagWindows.counted.map { windows[$0] }
 for i in 0..<renderers.count {
     var c = CoreDelayReader.Counters()
     for w in windows {
@@ -528,7 +530,7 @@ for i in 0..<renderers.count {
         c.driftSilences += d.driftSilences; c.driftSilenceFrames += d.driftSilenceFrames
         c.starvedRenders += d.starvedRenders; c.starvedFrames += d.starvedFrames
     }
-    let means = total { $0.lagErrMean[i] }
+    let means = lagCounted.map { $0.lagErrMean[i] }
     let lagAbs = means.map(abs).max() ?? 0
     let rendered = total { $0.rendered[i] }.reduce(0, +)
     // Frames at the rate each output renders at, its device's (S62).
@@ -548,8 +550,8 @@ for i in 0..<renderers.count {
     o["drift_corrections_per_h"] = perHour(c.driftSkips + c.driftSilences)
     o["lag_err_ms_mean"] = r3(means.reduce(0, +) / Double(max(means.count, 1)))
     o["lag_err_ms_window_max_abs"] = r3(lagAbs)
-    o["lag_err_ms_min"] = total { $0.lagErrMin[i] }.min() ?? 0
-    o["lag_err_ms_max"] = total { $0.lagErrMax[i] }.max() ?? 0
+    o["lag_err_ms_min"] = lagCounted.map { $0.lagErrMin[i] }.min() ?? 0
+    o["lag_err_ms_max"] = lagCounted.map { $0.lagErrMax[i] }.max() ?? 0
     o["rendered_ratio"] = r3(renderedRatio)
     outputDetails.append(o)
     sanity.append(("\(chosen[i].name) renders in real time", renderedRatio > 0.95,

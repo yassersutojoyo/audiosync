@@ -112,5 +112,28 @@ check(approx(releaseLimit, 7.109, 1e-9), "limit: max(2 × 2.109, 2.109 + 5) = 7.
 check(SoakRules.memoryGrowthLimit(baseline: 10) == 20, "limit: twice a large baseline")
 check(SoakRules.memoryGrowthLimit(baseline: -1) == 5, "limit: a baseline that shrank counts as 0, so 5 MB")
 
+// MARK: Lag error leaves out the windows the delay line is still filling
+/// A Mac run at a 20 s delay and 10 s windows: -9939 ms at 10 s and -1205 ms
+/// at 20 s while the delay line filled, then -11.0 to -11.5 ms to the end.
+let longEnds = (1...360).map { Double($0 * 10) }
+let longLag: [Double] = longEnds.map { t -> Double in t <= 10 ? -9939 : t <= 20 ? -1205 : (Int(t / 10) % 2 == 0 ? -11.0 : -11.5) }
+let long = SoakRules.lagWindows(ends: longEnds, delayMs: 20000, intervalS: 10)
+let longMax = long.counted.map { abs(longLag[$0]) }.max() ?? 0
+check(long.filling == 2 && long.counted.first == 2 && long.counted.count == 358,
+      "a 20 s delay with 10 s windows leaves out the windows ending at 10 s and 20 s",
+      "filling \(long.filling), first counted \(long.counted.first ?? -1), counted \(long.counted.count)")
+check(approx(longMax, 11.5), "that run's window max |lag error| is 11.5 ms, not 9939 ms", "\(longMax) ms")
+check(approx(long.countsFrom, 30), "windows count from the delay plus one window, 30 s", "\(long.countsFrom) s")
+let short = SoakRules.lagWindows(ends: [10, 20, 30, 40], delayMs: 2000, intervalS: 10)
+check(short.filling == 1 && short.counted == [1, 2, 3], "a 2 s delay with 10 s windows leaves out the first window",
+      "filling \(short.filling), counted \(short.counted)")
+let late = SoakRules.lagWindows(ends: [10, 12.004, 22], delayMs: 2000, intervalS: 10)
+check(late.counted == [1, 2], "a window ending just after the delay plus one window counts", "counted \(late.counted)")
+let allFilling = SoakRules.lagWindows(ends: [10, 20], delayMs: 20000, intervalS: 10)
+check(allFilling.counted == [0, 1] && allFilling.filling == 0,
+      "a run that ends before the delay line filled counts every window rather than none",
+      "filling \(allFilling.filling), counted \(allFilling.counted)")
+check(SoakRules.lagWindows(ends: [], delayMs: 2000, intervalS: 10).counted.isEmpty, "no windows: none counted")
+
 print(failedChecks == 0 ? "\nALL SOAK RULE TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
