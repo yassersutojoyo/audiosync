@@ -544,6 +544,10 @@ pub struct App {
     password_for: RefCell<Option<String>>,
     /// Add by Address…, for a Google Cast speaker discovery can't find.
     cast_address_dialog: CastAddressDialog,
+    /// The answer of the address check Add by Address… is waiting for.
+    cast_check: RefCell<Option<std::sync::mpsc::Receiver<cast_address::CheckAnswer>>>,
+    /// Looks for that answer while the check runs.
+    cast_check_timer: Timer,
     about: AboutDialog,
     guide: GuideWindow,
     /// The paragraphs the guide shows.
@@ -757,6 +761,8 @@ impl App {
             password_dialog: PasswordDialog::new()?,
             password_for: RefCell::new(None),
             cast_address_dialog: CastAddressDialog::new()?,
+            cast_check: RefCell::default(),
+            cast_check_timer: Timer::default(),
             about: AboutDialog::new()?,
             guide: GuideWindow::new()?,
             guide_steps: Rc::new(VecModel::default()),
@@ -3863,7 +3869,8 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_model::MockBackend;
+    use crate::ui_model::{MOCK_CAST_HOLD, MockBackend};
+    use std::sync::PoisonError;
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
@@ -6266,6 +6273,7 @@ mod tests {
         // The field took the cursor back with its text selected.
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
+        settle_cast_check(&app);
         assert!(window.is_visible());
         assert_eq!(
             dialog.get_error(),
@@ -6274,11 +6282,23 @@ mod tests {
 
         type_text(window, "speaker.local");
         press(window, Key::Return);
+        settle_cast_check(&app);
         assert!(!window.is_visible(), "Enter added it");
         assert_eq!(dialog.get_address(), "", "the field is cleared");
         let state = app.snapshot();
         let row = state.speaker("cc:speaker.local").expect("listed");
         assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
+    }
+
+    /// Waits for the address check Add by Address… started, if any, and
+    /// takes its answer.
+    fn settle_cast_check(app: &App) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while app.cast_check.borrow().is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+            app.take_cast_check();
+        }
+        draw_frames();
     }
 
     /// What the dialog's two live regions hold, in order.
@@ -6315,6 +6335,7 @@ mod tests {
 
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
+        settle_cast_check(&app);
         assert_eq!(cast_address_said(&app), (String::new(), not_found));
 
         press(window, Key::Escape);
@@ -6345,8 +6366,58 @@ mod tests {
         type_text(window, "speaker.local");
         assert!(dialog.get_can_add());
         press(window, Key::Return);
+        settle_cast_check(&app);
         assert!(!window.is_visible(), "Enter added it");
         assert!(app.snapshot().speaker("cc:speaker.local").is_some());
+    }
+
+    #[test]
+    fn add_by_address_waits_for_the_check_off_the_ui_thread_and_cancel_drops_its_answer() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let speakers = app.snapshot().speakers.len();
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        let hold = || {
+            MOCK_CAST_HOLD
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+        };
+
+        let held = hold();
+        app.main.invoke_cast_add_address_requested();
+        type_text(window, "speaker.held");
+        press(window, Key::Return);
+        assert!(window.is_visible(), "open while the address is checked");
+        assert!(dialog.get_checking());
+        assert!(!dialog.get_can_add(), "Add is off during the check");
+        assert_eq!(strings.get_cast_address_checking(), "Checking…");
+        press(window, Key::Return);
+        assert!(app.snapshot().speaker("cc:speaker.held").is_none());
+        press(window, Key::Escape);
+        assert!(!window.is_visible(), "Escape closes it during the check");
+        assert!(!dialog.get_checking());
+        drop(held);
+        std::thread::sleep(Duration::from_millis(200));
+        draw_frames();
+        assert_eq!(
+            app.snapshot().speakers.len(),
+            speakers,
+            "the late answer is dropped"
+        );
+
+        let held = hold();
+        app.main.invoke_cast_add_address_requested();
+        assert!(!dialog.get_checking());
+        assert_eq!(dialog.get_error(), "");
+        type_text(window, "speaker.held");
+        press(window, Key::Return);
+        assert!(dialog.get_checking());
+        drop(held);
+        settle_cast_check(&app);
+        assert!(!window.is_visible(), "added once the check answered");
+        assert!(!dialog.get_checking());
+        assert!(app.snapshot().speaker("cc:speaker.held").is_some());
     }
 
     #[test]

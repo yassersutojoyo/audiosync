@@ -743,6 +743,21 @@ pub enum CastAddressError {
     NotFound,
 }
 
+/// An address Add by Address… took, with the check of whether something
+/// answers there, which can wait up to 3 s and so runs off the UI thread.
+#[derive(Clone, Debug)]
+pub struct CastAddressCheck {
+    pub address: crate::audio::cast_address::CastAddress,
+    pub answers: fn(&crate::audio::cast_address::CastAddress) -> bool,
+}
+
+impl CastAddressCheck {
+    /// Whether something answers at the address.
+    pub fn run(&self) -> bool {
+        (self.answers)(&self.address)
+    }
+}
+
 /// Why a new group wasn't made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupError {
@@ -771,12 +786,27 @@ pub trait Backend {
     /// The Resync button of a Google Cast speaker: it restarts its stream so
     /// it plays at its set offset again.
     fn resync_speaker(&mut self, _id: &str) {}
-    /// Add by Address…: lists the Google Cast speaker at `text`, a host
-    /// name or IPv4 address with an optional port, and keeps it for the
-    /// next launch (spec C18). Nothing changes when `text` isn't one, or
-    /// when nothing answers there; finding that out waits up to 3 s.
-    fn add_cast_address(&mut self, _text: &str) -> Result<(), CastAddressError> {
+    /// Add by Address…, first half: takes `text`, a host name or IPv4
+    /// address with an optional port (spec C18), and returns the check that
+    /// the caller runs off the UI thread.
+    fn check_cast_address(&mut self, _text: &str) -> Result<CastAddressCheck, CastAddressError> {
         Err(CastAddressError::NotFound)
+    }
+    /// Add by Address…, second half: once the check `answered`, lists the
+    /// Google Cast speaker at `address` and keeps it for the next launch.
+    fn add_checked_cast_address(
+        &mut self,
+        _address: crate::audio::cast_address::CastAddress,
+        _answered: bool,
+    ) -> Result<(), CastAddressError> {
+        Err(CastAddressError::NotFound)
+    }
+    /// Both halves of Add by Address… in a row, on the calling thread.
+    #[cfg(test)]
+    fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
+        let check = self.check_cast_address(text)?;
+        let answered = check.run();
+        self.add_checked_cast_address(check.address, answered)
     }
     /// Remove, on the row of a speaker added by address.
     fn remove_cast_address(&mut self, _id: &str) {}
@@ -979,6 +1009,20 @@ pub fn delay_field_text(typed: &str) -> String {
         })
         .map(|(_, c)| c)
         .collect()
+}
+
+/// While a test holds it, the check of a host under `.held` waits.
+#[cfg(test)]
+pub static MOCK_CAST_HOLD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A host under `.invalid` (RFC 6761) stands for one nothing answers.
+#[cfg(any(not(windows), test))]
+fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool {
+    #[cfg(test)]
+    if address.host().ends_with(".held") {
+        drop(MOCK_CAST_HOLD.lock());
+    }
+    !address.host().ends_with(".invalid")
 }
 
 /// Example data for UI work and tests: no device is opened, nothing plays.
@@ -1293,12 +1337,21 @@ impl Backend for MockBackend {
         self.state.groups.retain(|g| g.id != id);
     }
 
-    /// A host under `.invalid` (RFC 6761) stands for one nothing answers.
-    fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
-        let Some(address) = crate::audio::cast_address::CastAddress::parse(text) else {
-            return Err(CastAddressError::Invalid);
-        };
-        if address.host().ends_with(".invalid") {
+    fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
+        let address = crate::audio::cast_address::CastAddress::parse(text)
+            .ok_or(CastAddressError::Invalid)?;
+        Ok(CastAddressCheck {
+            address,
+            answers: mock_cast_answers,
+        })
+    }
+
+    fn add_checked_cast_address(
+        &mut self,
+        address: crate::audio::cast_address::CastAddress,
+        answered: bool,
+    ) -> Result<(), CastAddressError> {
+        if !answered {
             return Err(CastAddressError::NotFound);
         }
         let id = format!("cc:{}", address.text());
