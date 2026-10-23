@@ -352,7 +352,7 @@ S235 to S241 measure every speaker that is on in one run, local outputs, Cast sp
 - **S238** *Required.* The sheet, Apply and Undo. Nothing changes during the run. The sheet lists every speaker in the order given: the reference, the old value, the new value ± U, or the reason it was refused or not measured. Apply lists one change per certain local or Cast row and one for the AirPlay delay when an AirPlay row is certain, each with the value it replaces (none when the speaker had no stored value); it is refused while no row is certain. One Apply is one change with one Undo, which restores exactly those replaced values. An applied sheet is spent: a second Apply and Measure Again are refused, since its rows describe offsets that are no longer stored and measuring or applying again would undo the correction.
 - **S239** *Required.* Measure Again. Any row but the reference's can be measured again: a new run of the reference's sweep and that speaker's two, from the values the sheet started with, whose steps name the sheet's rows. Its result replaces that row alone, and the AirPlay delay is worked out again. A Measure Again run that is cancelled or ended by a change (S240) is dropped: the sheet and that row stay exactly as they were.
 - **S240** *Required.* Ending a run. A cancel, a change of the speaker list, a speaker taking part turned off or a switch of the source stops the run: no more steps, and its sheet ends with that reason, keeping the rows measured so far for display, with nothing to apply. A run finished with steps still waiting ends as cancelled.
-- **S241** *Required.* A Cast speaker's wait. The expected arrival the host gives a Cast speaker (S235), which is also how long the music already sent to it plays out before the first sweep, comes from one rule both hosts call: its stored offset, counted up to 20 000 ms, plus the Cast feed's hold-back plus 500 ms; with no stored offset (none, or 0 ms, which the sender keeps after Undo) the hold-back plus a starting guess by the format the session plays, 3000 ms for WAV and 6000 ms for FLAC or a format not reported yet (CAST_SPEC C77a; the FLAC figure is derived, not measured). The guess never delays another output. Reason: a guess too short lets music overlap the first sweep, one too long only costs time, and leaving the hold-back out made a host wait too little while AirPlay holds the Cast feed back.
+- **S241** *Required.* A Cast speaker's wait. The expected arrival the host gives a Cast speaker (S235), which is also how long the music already sent to it plays out before the first sweep, comes from one rule both hosts call: its stored offset, counted up to 20 000 ms, plus the Cast feed's hold-back plus 500 ms; with no stored offset (none, or 0 ms, which the sender keeps after Undo) the hold-back plus a starting guess by the format the session plays, 3000 ms for WAV and 6000 ms for FLAC or a format not reported yet (CAST_SPEC C77a; the FLAC figure is derived, not measured). A negative offset, or one that is not a number, also counts as no stored offset, here and for the searching window of S235. The guess never delays another output. Reason: a guess too short lets music overlap the first sweep, one too long only costs time, and leaving the hold-back out made a host wait too little while AirPlay holds the Cast feed back.
 
 ## 9. FIFO feed (PCM into the AirPlay engine)
 
@@ -1206,7 +1206,7 @@ Removed on 2026-10-20 with the bundled engine: it ran a private engine whose onl
 
 ### local delay model: core (`cargo test` in `core/`)
 
-The checks for S172 to S179 in the Rust core, test functions with `// covers:` markers (`core/tests/policy_local_delay.rs`, and the C interface's in `core/src/ffi/sync.rs`). Here and in the two tables below, every example uses the built-in speakers or the BuiltIn output as the reference R, a USB speaker at +150 ms, a Bluetooth speaker at −250 ms and, with AirPlay chosen, L = 2000 ms, as in S176, unless the name says otherwise; the first row of each table reproduces the reported bug.
+The checks for S172 to S179 in the Rust core, test functions with `// covers:` markers (`core/tests/policy_local_delay.rs`, the S176 table check in `core/tests/spec_tables.rs`, and the C interface's in `core/src/ffi/sync.rs`). Here and in the two tables below, every example uses the built-in speakers or the BuiltIn output as the reference R, a USB speaker at +150 ms, a Bluetooth speaker at −250 ms and, with AirPlay chosen, L = 2000 ms, as in S176, unless the name says otherwise; the first row of each table reproduces the reported bug.
 
 | Test | Clauses |
 |---|---|
@@ -1227,6 +1227,8 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | a_listed_set_kept_through_failed_polls_retimes_nothing | S81, S177 |
 | sanitized_offsets_are_finite_and_in_range | S175 |
 | hold_backs_are_in_range_and_keep_the_offsets_apart | S176 |
+| without_airplay_adding_the_same_number_to_every_offset_changes_nothing | S176 |
+| the_hold_back_table_matches_the_spec | S176 |
 | the_native_senders_l_is_its_latency_plus_the_adjustment_clamped | S178 |
 | an_entered_airplay_delay_stores_the_difference_to_the_senders_latency | S178 |
 | the_bundled_engines_airplay_delay_is_0_to_20000_ms_and_defaults_to_2000 | S178 |
@@ -1239,6 +1241,8 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | migration_small_values_keep_their_alignment_and_take_the_default_airplay_delay | S179 |
 | migration_an_offset_below_minus_2000_ms_is_clamped | S179 |
 | migration_reads_stored_delays_as_s77_kept_them | S179 |
+| migration_takes_a_reference_delay_of_1000_ms_as_tuned_for_airplay | S179 |
+| migration_counts_only_the_first_entry_marked_as_the_reference | S179 |
 | hold_backs_through_the_c_interface_match_the_rust_ones | S172, S176 |
 | offsets_and_airplay_settings_are_sanitized | S175, S178 |
 | the_mac_migration_through_the_c_interface_matches_the_rust_one | S179 |
@@ -1286,6 +1290,7 @@ The checks for S182 to S191 in the Rust core, test functions with `// covers:` m
 | an_endpoint_counts_as_faded_once_its_clock_passed_the_fade_or_by_padding_and_latency | S185 |
 | fades_follow_the_raised_cosine_over_20_ms_at_the_streams_rate | S182 |
 | a_fade_reversed_midway_never_jumps | S182 |
+| a_fade_of_half_a_frame_more_rounds_up | S182 |
 | the_fade_multiplies_after_the_gain_and_a_closed_output_is_exact_zeros_even_for_nan | S183 |
 | a_read_reports_its_leading_silence_and_its_copied_frames | S184 |
 | audio_after_a_masked_range_or_a_dry_read_fades_in | S184 |
@@ -1476,6 +1481,8 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | a_cast_speaker_without_an_offset_searches_the_longest_window_first | S235 |
 | a_run_needs_a_local_reference_and_something_to_measure | S235 |
 | a_window_the_recording_limit_would_cut_refuses_the_run | S235 |
+| an_expected_arrival_that_is_not_a_number_counts_as_0 | S235 |
+| a_cast_speaker_stored_at_0_ms_searches_like_one_without_an_offset | S235, S241 |
 | certain_rows_move_each_class_its_own_way | S236 |
 | a_cast_offset_past_the_range_counts_from_its_end_and_only_a_cut_value_is_clamped | S236 |
 | sweeps_too_far_apart_leave_the_row_uncertain_and_apply_is_refused | S236, S238 |
