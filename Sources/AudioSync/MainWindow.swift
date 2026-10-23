@@ -576,6 +576,9 @@ struct SpeakerRow: View {
                                 .font(.body.weight(state == .playing ? .semibold : .regular))
                                 .lineLimit(1)
                                 .help(t.speakerNameHelp(name: speaker.name, system: speaker.systemName, renamed: speaker.isRenamed))
+                                // The toggle's label already reads the name and device name,
+                                // and its Rename action replaces the double-click.
+                                .accessibilityHidden(true)
                                 // A double-click renames; a single click works like the
                                 // rest of the row, once it can't be a double-click.
                                 .gesture(TapGesture(count: 2).onEnded { model.startRename(speaker) }

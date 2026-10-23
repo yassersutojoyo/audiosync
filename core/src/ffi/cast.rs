@@ -47,7 +47,7 @@ use audiosync_cast::host::{
 };
 use audiosync_cast::media::{MediaError, Metadata, VolumeError};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
-use audiosync_cast::status::ControlType;
+use audiosync_cast::status::{self, ControlType};
 use audiosync_cast::stream::StreamError;
 
 use super::airplay::{LATEST_PANIC, PANICS, caught_panic_location, note_panic_locations};
@@ -716,6 +716,17 @@ impl AscCast {
                     if attempt.key == DeviceKey::Manual(from) {
                         attempt.key = DeviceKey::Id(id);
                     }
+                }
+                // Before CAST_APPEARED, which the host answers by reading the ID's offset.
+                // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
+                let memory = self.host.memory();
+                let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
+                if let (Some(offset), None) =
+                    (stored(&memory_id(DeviceKey::Manual(from))), stored(&id))
+                {
+                    self.host.set_offset(id, offset);
+                    self.events
+                        .push_back(Pending::new(CAST_EVENT_MEMORY_CHANGED));
                 }
                 self.change(CAST_GONE, DeviceKey::Manual(from));
                 self.change(CAST_APPEARED, DeviceKey::Id(id));
@@ -1439,6 +1450,41 @@ pub unsafe extern "C" fn asc_cast_set_muted(cast: *mut AscCast, muted: bool) -> 
 pub unsafe extern "C" fn asc_cast_step_volume(cast: *mut AscCast, up: bool) -> bool {
     // SAFETY: as the caller's.
     unsafe { with_session(cast, |host| host.step_volume(up)) }
+}
+
+/// The level to send for the host's master and the speaker's own level, all
+/// 0 to 1: their product, clamped; anything not finite counts as 0 (C104).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_device_level(master: f64, own: f64) -> f64 {
+    status::device_level(master, own)
+}
+
+/// The own level a reported device level means at `master` (C104):
+/// level ÷ master, clamped to 0 to 1; `own` as it is at master 0 or when a
+/// value isn't finite.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_own_level(reported: f64, master: f64, own: f64) -> f64 {
+    status::own_level(reported, master, own)
+}
+
+/// The own level a session starts from (C105): `own` when `has_own`, whatever
+/// the first status reports; else that status's level ÷ master, clamped, or
+/// the level itself at master 0.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_start_own_level(
+    master: f64,
+    has_own: bool,
+    own: f64,
+    reported: f64,
+) -> f64 {
+    status::start_own_level(master, has_own.then_some(own), reported)
+}
+
+/// Whether a reported level is the device's answer to the level `sent`
+/// (C104): within half a percent.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_level_answers(sent: f64, reported: f64) -> bool {
+    status::answers_level(sent, reported)
 }
 
 /// Sets the track's title, artist and album (UTF-8) for the next `LOAD`:
@@ -2392,6 +2438,78 @@ mod tests {
             (CAST_APPEARED, KITCHEN)
         );
         assert_eq!(seen[1].former, "manual:192.0.2.5:8009", "what it was");
+        destroy(handle);
+    }
+
+    // CAST_SPEC: C18, C77
+    #[test]
+    fn a_browse_that_identifies_a_device_added_by_address_keeps_its_offset() {
+        const LIVING: &str = "fedcba9876543210fedcba9876543210";
+        const PORCH: &str = "00112233445566778899aabbccddeeff";
+        let handle = create();
+        let kitchen_manual = add(handle, "192.0.2.5:8009");
+        let living_manual = add(handle, "192.0.2.6:8009");
+        let porch_manual = add(handle, "192.0.2.7:8009");
+        let offset = |id: &str| {
+            let id = CString::new(id).unwrap();
+            // SAFETY: a live handle, used by this thread only.
+            unsafe { asc_cast_offset_ms(handle, id.as_ptr()) }
+        };
+        let set = |id: &str, ms: f64| {
+            let id = CString::new(id).unwrap();
+            // SAFETY: a live handle, used by this thread only.
+            assert!(unsafe { asc_cast_set_offset(handle, id.as_ptr(), ms) });
+        };
+        set(&kitchen_manual, 240.0);
+        set(&living_manual, 300.0);
+        set(LIVING, 100.0);
+        set(&porch_manual, 240.0);
+        set(PORCH, 0.0);
+        devices(handle);
+        waiting(handle);
+        browse(
+            handle,
+            vec![
+                BrowseEvent::Resolved(record(
+                    KITCHEN,
+                    "Kitchen",
+                    DEVICE_PORT,
+                    Ipv4Addr::new(192, 0, 2, 5),
+                )),
+                BrowseEvent::Resolved(record(
+                    LIVING,
+                    "Living",
+                    DEVICE_PORT,
+                    Ipv4Addr::new(192, 0, 2, 6),
+                )),
+                BrowseEvent::Resolved(record(
+                    PORCH,
+                    "Porch",
+                    DEVICE_PORT,
+                    Ipv4Addr::new(192, 0, 2, 7),
+                )),
+            ],
+            false,
+        );
+        let seen = devices(handle);
+        assert!(
+            seen.iter()
+                .any(|change| change.id == KITCHEN && change.former == kitchen_manual),
+            "{seen:?}"
+        );
+        assert_eq!(offset(KITCHEN), 240.0, "moved to the ID");
+        assert_eq!(offset(LIVING), 100.0, "the ID's own offset stays");
+        assert_eq!(
+            offset(PORCH),
+            240.0,
+            "0 ms, left by an Undo, counts as none"
+        );
+        assert!(
+            waiting(handle)
+                .iter()
+                .any(|pending| pending.kind == CAST_EVENT_MEMORY_CHANGED),
+            "the host stores the moved offset"
+        );
         destroy(handle);
     }
 
