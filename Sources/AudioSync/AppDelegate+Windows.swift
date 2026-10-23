@@ -503,13 +503,17 @@ extension AppDelegate {
             menuItem.state = whenSourceQuits == .system ? .on : .off
         case #selector(toggleAirPlay2(_:)):
             menuItem.state = airPlay2 ? .on : .off
-            let note = text.airPlay2Note(on: airPlay2, onAtLaunch: airPlay2AtLaunch)
-            menuItem.subtitle = note
-            menuItem.toolTip = note
         default:
             break
         }
         return true
+    }
+
+    /// The AudioSync menu, before it opens: the AirPlay 2 note follows the
+    /// switch, which the gear menu may have changed.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        MenuNoteItem.refresh(menu, below: #selector(toggleAirPlay2(_:)),
+                             note: text.airPlay2Note(on: airPlay2, onAtLaunch: airPlay2AtLaunch))
     }
 }
 

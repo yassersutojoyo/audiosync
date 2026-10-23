@@ -107,6 +107,7 @@ private let accent = Brand.teal
 
 struct MainView: View {
     @ObservedObject var model: AppModel
+    @StateObject private var gearAnchor = MenuAnchor.Box()
 
     var body: some View {
         let t = model.text
@@ -201,36 +202,17 @@ struct MainView: View {
         .background(WindowDragArea { model.closeDelayPanels() }.accessibilityHidden(true))
     }
 
+    /// The gear's menu is AppKit's, so the AirPlay 2 note can sit under its
+    /// switch as a wrapping row (`MenuNoteItem`); it opens under the gear.
     private func gearMenu(_ t: UIStrings) -> some View {
-        Menu {
-            Button(t.newGroup) { model.actions.newGroup() }
-            Button(t.refreshDevices) { model.actions.refreshDevices() }
-            Toggle(t.showVirtualDevices, isOn: Binding(get: { model.showVirtualDevices },
-                                                       set: { model.actions.setShowVirtualDevices($0) }))
-            Divider()
-            Picker(t.appearance, selection: Binding(get: { model.appearance },
-                                                    set: { model.actions.setAppearance($0) })) {
-                ForEach(AppAppearance.allCases, id: \.self) { Text(t.appearanceName($0)).tag($0) }
-            }
-            Toggle(t.launchAtLogin, isOn: Binding(get: { model.launchAtLogin },
-                                                  set: { model.actions.setLaunchAtLogin($0) }))
-            Toggle(t.switchToSystemWhenSourceQuits,
-                   isOn: Binding(get: { model.switchWhenSourceQuits },
-                                 set: { model.actions.setSwitchWhenSourceQuits($0) }))
-            Button(t.webRemoteMenu) { model.actions.openWebRemote() }
-            Toggle(isOn: Binding(get: { model.airPlay2 },
-                                 set: { model.actions.setAirPlay2($0) })) {
-                Text(t.airPlay2Toggle)
-                Text(t.airPlay2Note(on: model.airPlay2, onAtLaunch: model.airPlay2AtLaunch))
-            }
-            Divider()
-            Button(t.guideTitle) { model.actions.openGuide() }
+        Button {
+            if let anchor = gearAnchor.view { GearMenu.make(model: model, text: t).popUp(under: anchor) }
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 15))
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .buttonStyle(.borderless)
+        .background(MenuAnchor(box: gearAnchor).accessibilityHidden(true))
         .fixedSize()
         .accessibilityLabel(t.moreOptions)
         .help(t.moreOptions)
@@ -1099,6 +1081,86 @@ private struct WindowDragArea: NSViewRepresentable {
             pressed()
             window?.performDrag(with: event)
         }
+    }
+}
+
+/// The gear button's menu, built at each click from the model.
+@MainActor
+private enum GearMenu {
+    static func make(model: AppModel, text t: UIStrings) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(item(t.newGroup) { model.actions.newGroup() })
+        menu.addItem(item(t.refreshDevices) { model.actions.refreshDevices() })
+        menu.addItem(item(t.showVirtualDevices, on: model.showVirtualDevices) {
+            model.actions.setShowVirtualDevices(!model.showVirtualDevices)
+        })
+        menu.addItem(.separator())
+        let appearance = NSMenu(title: t.appearance)
+        appearance.autoenablesItems = false
+        for choice in AppAppearance.allCases {
+            appearance.addItem(item(t.appearanceName(choice), on: model.appearance == choice) {
+                model.actions.setAppearance(choice)
+            })
+        }
+        menu.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
+        menu.addItem(item(t.launchAtLogin, on: model.launchAtLogin) {
+            model.actions.setLaunchAtLogin(!model.launchAtLogin)
+        })
+        menu.addItem(item(t.switchToSystemWhenSourceQuits, on: model.switchWhenSourceQuits) {
+            model.actions.setSwitchWhenSourceQuits(!model.switchWhenSourceQuits)
+        })
+        menu.addItem(item(t.webRemoteMenu) { model.actions.openWebRemote() })
+        let airPlay2 = MenuAction { model.actions.setAirPlay2(!model.airPlay2) }
+        for entry in MenuNoteItem.airPlay2Items(text: t, on: model.airPlay2, onAtLaunch: model.airPlay2AtLaunch,
+                                                action: #selector(MenuAction.perform(_:)), target: airPlay2) {
+            entry.representedObject = entry.target
+            menu.addItem(entry)
+        }
+        menu.addItem(.separator())
+        menu.addItem(item(t.guideTitle) { model.actions.openGuide() })
+        return menu
+    }
+
+    private static func item(_ title: String, on: Bool? = nil, _ run: @escaping () -> Void) -> NSMenuItem {
+        let action = MenuAction(run)
+        let item = NSMenuItem(title: title, action: #selector(MenuAction.perform(_:)), keyEquivalent: "")
+        item.target = action
+        item.representedObject = action   // the target is weak
+        if let on { item.state = on ? .on : .off }
+        return item
+    }
+}
+
+/// Runs a closure when its menu item is chosen.
+@MainActor
+private final class MenuAction: NSObject {
+    let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
+    @objc func perform(_ sender: Any?) { run() }
+}
+
+/// An empty view behind a button that a menu opens under.
+private struct MenuAnchor: NSViewRepresentable {
+    @MainActor final class Box: ObservableObject {
+        weak var view: NSView?
+    }
+
+    let box: Box
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        box.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) { box.view = view }
+}
+
+private extension NSMenu {
+    func popUp(under view: NSView) {
+        let below = view.isFlipped ? view.bounds.maxY + 4 : view.bounds.minY - 4
+        _ = popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
     }
 }
 

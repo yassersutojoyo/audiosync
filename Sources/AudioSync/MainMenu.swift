@@ -6,10 +6,13 @@ import AppKit
 @MainActor
 enum MainMenu {
 
-    static func make(text t: UIStrings) -> NSMenu {
+    /// `appMenuDelegate` keeps the AirPlay 2 note under its switch current.
+    static func make(text t: UIStrings, airPlay2: Bool, airPlay2AtLaunch: Bool,
+                     appMenuDelegate: NSMenuDelegate) -> NSMenu {
         let main = NSMenu()
 
         let app = submenu(of: main, title: t.appName)
+        app.delegate = appMenuDelegate
         app.addItem(AboutPanel.menuItem(text: t))
         app.addItem(.separator())
         let appearance = NSMenu(title: t.appearance)
@@ -21,7 +24,8 @@ enum MainMenu {
         app.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
         app.addItem(item(t.launchAtLogin, #selector(AppDelegate.toggleLaunchAtLogin(_:))))
         app.addItem(item(t.switchToSystemWhenSourceQuits, #selector(AppDelegate.toggleSwitchWhenSourceQuits(_:))))
-        app.addItem(item(t.airPlay2Toggle, #selector(AppDelegate.toggleAirPlay2(_:))))
+        MenuNoteItem.airPlay2Items(text: t, on: airPlay2, onAtLaunch: airPlay2AtLaunch,
+                                   action: #selector(AppDelegate.toggleAirPlay2(_:))).forEach(app.addItem)
         app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services
