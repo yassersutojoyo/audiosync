@@ -149,6 +149,28 @@ struct CalibrateAll {
 /// receivers' answers out, and the list would just stay empty.
 const NONE_FOUND_POLLS: u32 = 40;
 
+/// How long after a recall a member that fails to start goes into the
+/// preset notice (spec S266): 30 s of polls, past an AirPlay connect's
+/// retries.
+const RECALL_WATCH_POLLS: u32 = 60;
+
+/// The preset notice on screen: its preset and the speaker keys it names,
+/// so it goes once they are all on (spec S265).
+#[derive(Debug)]
+struct PresetNoticeCause {
+    id: String,
+    keys: Vec<String>,
+}
+
+/// A recall's members that are starting: one that fails to start goes into
+/// the preset notice as a line instead of a notice of its own (spec S266).
+#[derive(Debug)]
+struct RecallWatch {
+    preset: String,
+    keys: Vec<String>,
+    polls_left: u32,
+}
+
 /// The UI's ID of the whole-system source.
 const SYSTEM_KEY: &str = "system";
 
@@ -282,8 +304,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The speaker presets (spec S251), the overlapping groups among them
     /// once (S254).
     presets: Vec<Preset>,
-    /// The preset the preset notice is about (spec S265).
-    preset_notice: Option<String>,
+    /// What the preset notice says (spec S265).
+    preset_notice: Option<PresetNoticeCause>,
+    /// The members the latest recall switched on, while they start.
+    recall_watch: Option<RecallWatch>,
     gate: AutoStartGate,
     notices: Notices<NoticeSubject, Posted>,
     next_notice: u64,
@@ -402,6 +426,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             zones: Zones::default(),
             presets: Vec::new(),
             preset_notice: None,
+            recall_watch: None,
             gate: AutoStartGate::default(),
             notices: Notices::new(),
             next_notice: 1,
@@ -1175,6 +1200,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Posts a notice, replacing an older one about the same subject.
     fn post(&mut self, subject: NoticeSubject, message: NoticeMessage) {
+        if self.fold_into_preset_notice(&subject, &message) {
+            return;
+        }
         self.log
             .log(|| format!("notice about {subject:?}: {message:?}"));
         let id = self.next_notice;
@@ -1390,13 +1418,25 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
                 (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
             };
+            // A member its stereo pair or home theater holds has no row of
+            // its own, but is there (spec S247).
+            let in_target = matches!(&key, SpeakerKey::AirPlay(id)
+                if self.audio.airplay_holding_target(id).is_some());
             let name = listed
                 .map(|speaker| speaker.name.clone())
                 .or_else(|| hidden.map(|entry| entry.name.clone()))
-                .unwrap_or_else(|| self.custom_names.shown(&member.key, key.id()));
+                .unwrap_or_else(|| match &key {
+                    SpeakerKey::AirPlay(id) if in_target => {
+                        let system = self.audio.airplay_listed_name(id);
+                        self.custom_names
+                            .shown(&member.key, system.as_deref().unwrap_or(id))
+                    }
+                    SpeakerKey::AirPlay(id) => self.airplay_name(id),
+                    _ => self.custom_names.shown(&member.key, key.id()),
+                });
             let facts = RecallMember {
                 kind,
-                found: listed.is_some() || hidden.is_some(),
+                found: listed.is_some() || hidden.is_some() || in_target,
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
                 busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
@@ -1404,8 +1444,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     && hidden.is_none()
                     && !self.view.airplay2_experimental
                     && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
-                in_target: matches!(&key, SpeakerKey::AirPlay(id)
-                    if self.audio.airplay_holding_target(id).is_some()),
+                in_target,
                 fixed_volume: listed
                     .and_then(|speaker| speaker.cast.as_ref())
                     .is_some_and(|cast| cast.volume_fixed),
@@ -1445,14 +1484,33 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 _ => None,
             })
             .collect();
+        let keys_where = |wanted: fn(&RecallStep) -> bool| -> Vec<String> {
+            members
+                .iter()
+                .zip(&plan.steps)
+                .filter(|(_, step)| wanted(step))
+                .map(|((key, ..), _)| key.to_string())
+                .collect()
+        };
+        let left_keys = keys_where(|step| matches!(step, RecallStep::LeftOff(_)));
+        let starting = keys_where(|step| matches!(step, RecallStep::On | RecallStep::Waiting));
         let nothing_changed = plan.action == RecallAction::Nothing;
         match ui_model::preset_notice(&preset.name, shown, nothing_changed) {
             Some(message) => {
                 self.post(NoticeSubject::Presets, message);
-                self.preset_notice = Some(preset.id.clone());
+                self.preset_notice = Some(PresetNoticeCause {
+                    id: preset.id.clone(),
+                    keys: left_keys,
+                });
             }
             None => self.clear_preset_notice(),
         }
+        // Set before the members switch: a start can fail at once.
+        self.recall_watch = (!nothing_changed).then(|| RecallWatch {
+            preset: preset.id.clone(),
+            keys: starting,
+            polls_left: RECALL_WATCH_POLLS,
+        });
         if plan.action == RecallAction::Nothing {
             self.log.log(|| {
                 format!(
@@ -1522,21 +1580,92 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.preset_notice = None;
     }
 
-    /// The preset notice goes once its preset plays again (spec S265).
+    /// The preset notice goes once its preset is current again or every
+    /// member it names is on (spec S265); the recall's watch runs out.
     fn follow_preset_notice(&mut self) -> bool {
-        let Some(id) = self.preset_notice.clone() else {
+        if let Some(watch) = &mut self.recall_watch {
+            watch.polls_left = watch.polls_left.saturating_sub(1);
+            if watch.polls_left == 0 || watch.keys.is_empty() {
+                self.recall_watch = None;
+            }
+        }
+        let Some(cause) = &self.preset_notice else {
             return false;
         };
         if self.notices.get(&NoticeSubject::Presets).is_none() {
             self.preset_notice = None;
             return false;
         }
-        if ui_model::current_preset(&self.presets, &self.snapshot()).as_deref() == Some(id.as_str())
-        {
+        let state = self.snapshot();
+        let on = |key: &String| state.speaker(key).is_some_and(|speaker| speaker.enabled);
+        if state.current_preset.as_deref() == Some(cause.id.as_str()) || cause.keys.iter().all(on) {
             self.clear_preset_notice();
             return true;
         }
         false
+    }
+
+    /// A member the latest recall switched on that fails to start: its
+    /// line goes into the preset notice, and no notice of its own posts
+    /// (spec S266). Whether `message` about `subject` went there.
+    fn fold_into_preset_notice(
+        &mut self,
+        subject: &NoticeSubject,
+        message: &NoticeMessage,
+    ) -> bool {
+        let (name, reason) = match message {
+            NoticeMessage::CastCantPlay { speaker, problem } => (
+                speaker,
+                if *problem == ui_model::CastProblem::TakenOver {
+                    PresetLeftOff::Busy
+                } else {
+                    PresetLeftOff::CantPlay
+                },
+            ),
+            NoticeMessage::SpeakerFailed { speaker }
+            | NoticeMessage::AirPlayCantPlay { speaker, .. }
+            | NoticeMessage::AirPlayMemberNeedsPassword {
+                target: speaker, ..
+            } => (speaker, PresetLeftOff::CantPlay),
+            _ => return false,
+        };
+        let key = match subject {
+            NoticeSubject::Speaker(key) => key.to_string(),
+            NoticeSubject::Cast(id) => SpeakerKey::Cast(id.clone()).to_string(),
+            _ => return false,
+        };
+        let Some(watch) = &mut self.recall_watch else {
+            return false;
+        };
+        let Some(index) = watch.keys.iter().position(|watched| *watched == key) else {
+            return false;
+        };
+        watch.keys.remove(index);
+        let id = watch.preset.clone();
+        let Some(preset) = self.presets.iter().find(|preset| preset.id == id) else {
+            return false;
+        };
+        let mut notice = NoticeMessage::PresetLeftOff {
+            preset: preset.name.clone(),
+            left_off: Vec::new(),
+            nothing_changed: false,
+        };
+        let mut keys = Vec::new();
+        if let Some(cause) = self.preset_notice.take().filter(|cause| cause.id == id)
+            && let Some(posted) = self.notices.get(&NoticeSubject::Presets)
+        {
+            notice = posted.message.clone();
+            keys = cause.keys;
+        }
+        if let NoticeMessage::PresetLeftOff { left_off, .. } = &mut notice {
+            left_off.push((name.clone(), reason));
+        }
+        keys.push(key);
+        self.log
+            .log(|| format!("preset {id}: a member failed to start; the preset notice says so"));
+        self.post(NoticeSubject::Presets, notice);
+        self.preset_notice = Some(PresetNoticeCause { id, keys });
+        true
     }
 
     /// What plays now as preset `id` named `name`.
@@ -2950,6 +3079,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_enabled(&mut self, id: &str, on: bool) {
+        // The user switches it now: a failure is about that, not the recall.
+        if let Some(watch) = &mut self.recall_watch {
+            watch.keys.retain(|watched| watched != id);
+        }
         let endpoint_id = match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => endpoint_id,
             Some(SpeakerKey::AirPlay(airplay_id)) => {
@@ -3359,6 +3492,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn save_preset(&mut self, name: &str) -> Result<(), PresetError> {
+        if self.presets.len() >= ui_model::MAX_PRESETS {
+            return Err(PresetError::Full);
+        }
         let id = ui_model::new_preset_id(&self.presets);
         let preset = self.capture_preset(&id, name)?;
         self.log.log(|| {
@@ -3379,7 +3515,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         preset.name = presets::renamed_preset(&preset.name, name);
         let name = preset.name.clone();
         // The notice names the preset, so it follows the new name in place.
-        if self.preset_notice.as_deref() == Some(id)
+        if self
+            .preset_notice
+            .as_ref()
+            .is_some_and(|cause| cause.id == id)
             && let Some(posted) = self.notices.get_mut(&NoticeSubject::Presets)
             && let NoticeMessage::PresetLeftOff { preset, .. } = &mut posted.message
         {
@@ -3400,7 +3539,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn delete_preset(&mut self, id: &str) {
         self.presets.retain(|preset| preset.id != id);
         self.log.log(|| format!("preset {id} deleted"));
-        if self.preset_notice.as_deref() == Some(id) {
+        if self
+            .preset_notice
+            .as_ref()
+            .is_some_and(|cause| cause.id == id)
+        {
             self.clear_preset_notice();
         }
     }
@@ -8870,6 +9013,155 @@ mod tests {
         assert_eq!(adapter.presets[0].name, "Evening");
         assert_eq!(adapter.presets[0].members.len(), 2);
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
+    // covers: S251, S265
+    #[test]
+    fn a_hidden_speaker_is_never_saved_and_a_recall_names_it_hidden() {
+        let mut adapter = preset_adapter(vec![saved_preset(&[
+            (key(SPEAKERS), None),
+            (key(HEADPHONES), None),
+        ])]);
+        adapter.hide_speaker(&key(HEADPHONES), "Headphones");
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("Headphones", PresetLeftOff::Hidden)]
+            )]
+        );
+        assert!(!enabled(&adapter, HEADPHONES), "it stays hidden and off");
+
+        Backend::save_preset(&mut adapter, "Night").expect("saved");
+        let night = adapter.presets.last().expect("the new preset");
+        assert!(
+            night
+                .members
+                .iter()
+                .all(|member| member.key != key(HEADPHONES)),
+            "{night:?}"
+        );
+    }
+
+    // covers: S265
+    #[test]
+    fn a_member_another_app_casts_to_stays_off_as_in_use() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                (cc(CAST_KITCHEN), None),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(cast_ended(1, SessionEnd::TakenOver));
+        adapter.poll();
+
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("Kitchen", PresetLeftOff::Busy)]
+            )]
+        );
+    }
+
+    // covers: S265
+    #[test]
+    fn a_member_its_stereo_pair_holds_stays_off_and_names_the_pair() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None), (ap(&left), None)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("Left", PresetLeftOff::InTarget("Living Room".to_owned()))]
+            )]
+        );
+    }
+
+    // covers: S265, S266
+    #[test]
+    fn a_member_that_fails_to_start_after_a_recall_goes_into_the_preset_notice() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                (cc(CAST_KITCHEN), None),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.recall_preset("preset:1");
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        fake.report(cast_ended(
+            1,
+            SessionEnd::Failed(CastSessionError::Connect(ConnectError::NoAddress)),
+        ));
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("Kitchen", PresetLeftOff::CantPlay)]
+            )],
+            "one notice, and no Cast notice of its own"
+        );
+
+        // Switched on by the user, it is no longer the recall's: the preset
+        // notice goes, and a new failure has its own notice.
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        assert!(preset_notices(&adapter).is_empty());
+        fake.report(cast_ended(
+            2,
+            SessionEnd::Failed(CastSessionError::Connect(ConnectError::NoAddress)),
+        ));
+        adapter.poll();
+        assert!(
+            messages(&adapter).contains(&cast_cant_play("Kitchen", UiCastProblem::NotResponding))
+        );
+    }
+
+    // covers: S251
+    #[test]
+    fn save_as_preset_stops_at_the_most_presets_a_settings_file_keeps() {
+        let full: Vec<SavedPreset> = (1..=crate::settings::MAX_ENTRIES)
+            .map(|n| {
+                let mut preset = saved_preset(&[(key(SPEAKERS), None)]);
+                preset.id = format!("preset:{n}");
+                preset
+            })
+            .collect();
+        let mut adapter = preset_adapter(full);
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(adapter.presets.len(), ui_model::MAX_PRESETS);
+        assert_eq!(
+            Backend::save_preset(&mut adapter, "One more"),
+            Err(PresetError::Full)
+        );
+        assert_eq!(adapter.presets.len(), ui_model::MAX_PRESETS);
+
+        Backend::delete_preset(&mut adapter, "preset:3");
+        Backend::save_preset(&mut adapter, "One more").expect("room again");
     }
 
     #[test]

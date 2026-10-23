@@ -2980,7 +2980,7 @@ do {
                    PresetNotice.LeftOff(name: "Nest", reason: .busy)]
     let leftOffText = "“Evening” is on. Stayed off: Kitchen (\(presetText.zoneMemberNotFound)), Den (Hidden), "
         + "Left (\(presetText.zoneMemberInTarget("Living Room TV"))), Hub (\(presetText.needsAirPlay2)), "
-        + "Nest (In use by another app)"
+        + "Nest (In use by another app)."
     check(PresetNotice.message(preset: "Evening", leftOff: leftOff, nothingChanged: false, text: presetText)
             == leftOffText,
           "presets: the left-off notice names each member with its reason")
@@ -2994,12 +2994,20 @@ do {
 
     let noneHere = PresetRecall.plan([.init(kind: .local, found: false), .init(kind: .cast, found: true, busy: true)],
                                      others: [true], streaming: true)
-    let nothingText = "Nothing changed: no speaker in “Evening” can play now. Kitchen (\(presetText.zoneMemberNotFound))"
+    let nothingText = "Nothing changed: no speaker in “Evening” can play now. Kitchen (\(presetText.zoneMemberNotFound))."
     check(noneHere.action == .nothing && noneHere.steps == [.leftOff(.notFound), .leftOff(.busy)]
             && noneHere.switchOff == [false] && noneHere.setVolume == [false, false]
             && PresetNotice.message(preset: "Evening", leftOff: [leftOff[0]], nothingChanged: true, text: presetText)
                 == nothingText,
           "presets: with no member present nothing changes and only the notice posts", "\(noneHere)")
+
+    let cause = PresetNotice.Cause(presetID: "p1", leftOff: [
+        PresetNotice.LeftOff(name: "Kitchen", reason: .notFound, key: "lc:kitchen"),
+        PresetNotice.LeftOff(name: "Den", reason: .hidden, key: "ap:den"),
+    ], nothingChanged: false)
+    check(!cause.isGone(current: nil, onNow: ["lc:kitchen"]) && !cause.isGone(current: "p2", onNow: [])
+            && cause.isGone(current: "p1", onNow: []) && cause.isGone(current: nil, onNow: ["lc:kitchen", "ap:den"]),
+          "presets: the notice goes once its preset is current or every member it names is on")
 
     let appFailure = LocalOutputSync.report([LocalOutputSync.Failure(uid: "bt", deviceName: "Headphones")],
                                             enabled: ["bt"], origin: PresetRecallSource.app.origin)
@@ -3042,6 +3050,9 @@ do {
         (presetText.presetUpdated("Evening"), "Evening updated"),
         (presetText.presetDeleted("Evening"), "Evening deleted"),
         (presetText.presetLeftOffTitle, "Some speakers stayed off"),
+        (presetText.presetLeftOff("Evening", "Den (Hidden)"), "“Evening” is on. Stayed off: Den (Hidden)."),
+        (presetText.presetNothingChanged("Evening", "Den (Hidden)"),
+         "Nothing changed: no speaker in “Evening” can play now. Den (Hidden)."),
         (presetText.presetHidden, "Hidden"),
         (presetText.presetBusy, "In use by another app"),
     ]

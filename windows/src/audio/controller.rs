@@ -2211,6 +2211,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.airplay.as_ref()?.holding_target(id)
     }
 
+    fn airplay_listed_name(&self, id: &str) -> Option<String> {
+        Some(self.airplay.as_ref()?.listed_name(id)?.to_owned())
+    }
+
     fn set_airplay_volume(&mut self, id: &str, position: f64) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_volume(id, position);

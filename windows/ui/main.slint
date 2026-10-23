@@ -346,7 +346,6 @@ component SpeakerSection inherits VerticalLayout {
     }
 }
 
-// The Equalizer card: opens the equalizer window and says whether it is on.
 // One preset in the Presets card (spec S259, S267): a click, Space or
 // Return recalls it, F2 renames it, and its … button, a right-click, the
 // Menu key or Shift+F10 open its menu.
@@ -524,6 +523,8 @@ component PresetRow inherits Rectangle {
 // empty line, then Save as Preset….
 component PresetsCard inherits Card {
     in property <[PresetItem]> presets;
+    // False at the most presets the app keeps (spec S251).
+    in property <bool> can-save: true;
     // The app asks for the focus on this preset's row, or on Save as Preset…,
     // after a delete; whoever takes it clears the request.
     in-out property <string> focus-id;
@@ -593,6 +594,7 @@ component PresetsCard inherits Card {
             alignment: start;
             save := Button {
                 text: Strings.save-preset;
+                enabled: root.can-save;
                 accessible-label: Strings.save-preset;
                 clicked => {
                     root.save();
@@ -602,6 +604,7 @@ component PresetsCard inherits Card {
     }
 }
 
+// The Equalizer card: opens the equalizer window and says whether it is on.
 component EqualizerCard inherits Rectangle {
     in property <bool> on;
     // The picker's curve, or "Custom".
@@ -1086,6 +1089,7 @@ export component MainWindow inherits Window {
     in property <[ZoneItem]> zones;
     in property <[NoticeItem]> notices;
     in property <[PresetItem]> presets;
+    in property <bool> can-save-preset: true;
     // After a delete: the preset row, or Save as Preset…, that takes the focus.
     in-out property <string> focus-preset-id;
     in-out property <bool> focus-save-preset;
@@ -1448,6 +1452,7 @@ export component MainWindow inherits Window {
 
                 MenuItem {
                     title: Strings.save-preset;
+                    enabled: root.can-save-preset;
                     activated => {
                         root.save-preset-requested();
                     }
@@ -1709,6 +1714,7 @@ export component MainWindow inherits Window {
 
                     PresetsCard {
                         presets: root.presets;
+                        can-save: root.can-save-preset;
                         focus-id <=> root.focus-preset-id;
                         focus-save <=> root.focus-save-preset;
                         recall(id) => {

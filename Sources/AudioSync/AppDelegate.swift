@@ -133,8 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var presets: [SpeakerPreset] {
         didSet { if presets != oldValue { store.save(presets: presets) } }
     }
-    /// The preset the preset notice names, so deleting it clears the notice (S262).
-    var presetNoticeID: String?
+    /// What the preset notice says, so it follows its preset and members (S262, S265).
+    var presetNotice: PresetNotice.Cause?
     /// Speaker keys switched on as soon as they appear.
     var autoConnect: Set<String> {
         didSet { if autoConnect != oldValue { store.save(ids: autoConnect, forKey: Keys.autoConnect) } }

@@ -324,6 +324,21 @@ enum PresetNotice {
         var reason: PresetRecall.LeftOff
         /// The shown name of the stereo pair or home theater it plays in.
         var target: String? = nil
+        /// The member's speaker key, which tells when it is on again.
+        var key: String = ""
+    }
+
+    /// What the notice on screen says, kept so it follows its cause.
+    struct Cause: Equatable {
+        var presetID: String
+        var leftOff: [LeftOff]
+        var nothingChanged: Bool
+
+        /// The notice goes once its preset is current again or every member
+        /// it names is on now (S265).
+        func isGone(current: String?, onNow: Set<String>) -> Bool {
+            current == presetID || leftOff.allSatisfy { onNow.contains($0.key) }
+        }
     }
 
     /// The notice for a recall of `preset` that left `leftOff` off; nil when

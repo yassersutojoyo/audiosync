@@ -44,10 +44,12 @@ extension AppDelegate {
         let others = speakersOnNow().filter { !stored.contains($0.key) }
         let running = engine.isRunning
         let plan = PresetRecall.plan(facts, others: others.map { _ in true }, streaming: running)
-        let leftOff = zip(states, plan.steps).compactMap { state, step -> PresetNotice.LeftOff? in
+        let leftOff = zip(preset.members, zip(states, plan.steps)).compactMap { member, pair -> PresetNotice.LeftOff? in
+            let (state, step) = pair
             guard case .leftOff(let reason) = step else { return nil }
             return PresetNotice.LeftOff(name: state.map(memberName) ?? text.unknownDevice, reason: reason,
-                                        target: state?.target.map { shownName(airPlay: NativeAirPlayID.app($0)) })
+                                        target: state?.target.map { shownName(airPlay: NativeAirPlayID.app($0)) },
+                                        key: member.key)
         }
         DebugTrace.log("[AudioSync] preset \"\(preset.name)\" recalled (\(plan.action)), \(leftOff.count) left off")
         guard plan.action != .nothing else {
@@ -120,14 +122,29 @@ extension AppDelegate {
     private func showPresetNotice(_ preset: SpeakerPreset, leftOff: [PresetNotice.LeftOff], nothingChanged: Bool) {
         guard let message = PresetNotice.message(preset: preset.name, leftOff: leftOff,
                                                  nothingChanged: nothingChanged, text: text) else {
-            clearNotices([Notice.presets])
-            presetNoticeID = nil
+            clearPresetNotice()
             return
         }
         let repeated = appModel.notices.items.contains { $0.subject == Notice.presets && $0.text == message }
         postNotice(message, subject: Notice.presets, title: text.presetLeftOffTitle)
-        presetNoticeID = preset.id
+        presetNotice = PresetNotice.Cause(presetID: preset.id, leftOff: leftOff, nothingChanged: nothingChanged)
         if !repeated { AccessibilityNotification.Announcement(message).post() }
+    }
+
+    private func clearPresetNotice() {
+        clearNotices([Notice.presets])
+        presetNotice = nil
+    }
+
+    /// On every push: the notice goes once its cause is gone (S265), and a
+    /// notice the user dismissed is forgotten.
+    func followPresetNotice(current: String?) {
+        guard let cause = presetNotice else { return }
+        guard appModel.notices.items.contains(where: { $0.subject == Notice.presets }) else {
+            presetNotice = nil
+            return
+        }
+        if cause.isGone(current: current, onNow: Set(presetScene().on.map(\.key))) { clearPresetNotice() }
     }
 
     // MARK: - Save, Rename, Update, Delete
@@ -157,6 +174,12 @@ extension AppDelegate {
         let renamed = PresetEdit.renaming(id, to: typed, in: presets)
         guard renamed != presets else { return }
         presets = renamed
+        // The notice names the preset, so it takes the new name in place.
+        if let cause = presetNotice, cause.presetID == id, let preset = presets.first(where: { $0.id == id }),
+           let message = PresetNotice.message(preset: preset.name, leftOff: cause.leftOff,
+                                              nothingChanged: cause.nothingChanged, text: text) {
+            postNotice(message, subject: Notice.presets, title: text.presetLeftOffTitle)
+        }
         pushModel()
     }
 
@@ -179,10 +202,7 @@ extension AppDelegate {
     func deletePreset(_ id: String) {
         guard let name = presets.first(where: { $0.id == id })?.name else { return }
         presets = PresetEdit.deleting(id, from: presets)
-        if presetNoticeID == id {
-            clearNotices([Notice.presets])
-            presetNoticeID = nil
-        }
+        if presetNotice?.presetID == id { clearPresetNotice() }
         pushModel()
         AccessibilityNotification.Announcement(text.presetDeleted(name)).post()
     }

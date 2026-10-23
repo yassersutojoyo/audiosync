@@ -65,7 +65,9 @@ extension AppDelegate {
 
     /// After the speaker rows, which the current mark is worked out from.
     private func publishPresets() {
-        publish(\.presets, presetSnapshot())
+        let rows = presetSnapshot()
+        followPresetNotice(current: rows.first(where: \.current)?.id)
+        publish(\.presets, rows)
         PresetsMenu.update(appModel.presets)
     }
 

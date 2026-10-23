@@ -906,9 +906,9 @@ struct UIStrings {
     func presetDeleted(_ name: String) -> String { "\(name) deleted" }
     /// The notice after a recall that left stored speakers off (S265).
     let presetLeftOffTitle = "Some speakers stayed off"
-    func presetLeftOff(_ preset: String, _ list: String) -> String { "“\(preset)” is on. Stayed off: \(list)" }
+    func presetLeftOff(_ preset: String, _ list: String) -> String { "“\(preset)” is on. Stayed off: \(list)." }
     func presetNothingChanged(_ preset: String, _ list: String) -> String {
-        "Nothing changed: no speaker in “\(preset)” can play now. \(list)"
+        "Nothing changed: no speaker in “\(preset)” can play now. \(list)."
     }
     func presetMemberLeftOff(_ name: String, _ reason: String) -> String { "\(name) (\(reason))" }
     func presetMemberList(_ items: [String]) -> String { items.joined(separator: ", ") }

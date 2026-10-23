@@ -198,6 +198,8 @@ export component TrayFlyout inherits Window {
     callback speaker-toggled(string);
     callback zone-toggled(string);
     callback preset-recall-requested(string);
+    // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
+    callback preset-shortcut(int);
     callback notice-dismissed(int);
     callback notices-dismissed-all();
     // Show How on a notice: open its guide.
@@ -262,6 +264,10 @@ export component TrayFlyout inherits Window {
         key-pressed(event) => {
             if event.text == Key.Escape {
                 root.close-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {
+                root.preset-shortcut(event.text.to-float());
                 return accept;
             }
             return reject;

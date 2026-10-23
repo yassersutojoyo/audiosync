@@ -567,7 +567,12 @@ pub enum PresetLeftOff {
     InTarget(String),
     /// A Google Cast speaker another app casts to.
     Busy,
+    /// The recall switched it on, and it failed to start (spec S266).
+    CantPlay,
 }
+
+/// At most this many presets: the settings file keeps no more (spec S251).
+pub const MAX_PRESETS: usize = crate::settings::MAX_ENTRIES;
 
 /// A speaker preset as the windows list it (spec S259).
 #[derive(Clone, Debug, PartialEq)]
@@ -1060,6 +1065,8 @@ pub enum ZoneError {
 pub enum PresetError {
     /// No speaker is on, so the preset would hold none (spec S262).
     NoSpeakerOn,
+    /// There are [`MAX_PRESETS`] already (spec S251).
+    Full,
 }
 
 /// The audio side, as the UI sees it. Every method is called on the UI
@@ -1952,6 +1959,9 @@ impl Backend for MockBackend {
     }
 
     fn save_preset(&mut self, name: &str) -> Result<(), PresetError> {
+        if self.presets.len() >= MAX_PRESETS {
+            return Err(PresetError::Full);
+        }
         let id = new_preset_id(&self.presets);
         let preset = self.capture_preset(&id, name)?;
         self.presets.push(preset);

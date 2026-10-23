@@ -36,9 +36,9 @@ use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
-    self, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MainWindowShows, NoticeMessage,
-    PinPrompt, PresetLeftOff, SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings,
-    WindowFrame,
+    self, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS, MainWindowShows,
+    NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, SourceKind,
+    SpeakerState, ViewSettings, WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
@@ -1481,6 +1481,8 @@ impl App {
         self.main
             .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
         sync_model(&self.models.speaker_presets, preset_items(&state));
+        self.main
+            .set_can_save_preset(state.presets.len() < MAX_PRESETS);
         self.flyout
             .set_current_preset(current_preset_name(&state).into());
         let listed = |s: &&ui_model::Speaker| lists(s);
@@ -2167,6 +2169,9 @@ impl App {
         self.remote_window
             .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
         let w = weak.clone();
+        self.guide
+            .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
+        let w = weak.clone();
         main.on_speaker_move_to_zone_requested(move |id, zone| {
             with_app(&w, |app| app.move_to_zone(&id, &zone))
         });
@@ -2297,6 +2302,8 @@ impl App {
         flyout.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
         let w = weak.clone();
         flyout.on_preset_recall_requested(move |id| with_app(&w, |app| app.recall_preset(&id)));
+        let w = weak.clone();
+        flyout.on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
         let w = weak.clone();
         flyout.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
         let w = weak.clone();
@@ -3300,7 +3307,12 @@ impl App {
 
     fn ask_save_preset(&self) {
         let strings = self.strings();
-        if ui_model::speakers_on_now(&self.snapshot()).is_empty() {
+        let state = self.snapshot();
+        if state.presets.len() >= MAX_PRESETS {
+            self.show_dialog_message(strings.get_save_preset_title(), strings.get_presets_full());
+            return;
+        }
+        if ui_model::speakers_on_now(&state).is_empty() {
             self.show_dialog_message(
                 strings.get_save_preset_title(),
                 strings.get_save_preset_needs_speakers(),
@@ -3352,8 +3364,10 @@ impl App {
         self.refresh();
         match saved {
             Ok(()) => self.announce(strings.invoke_preset_saved(name.as_str().into())),
+            Err(PresetError::Full) => self
+                .show_dialog_message(strings.get_save_preset_title(), strings.get_presets_full()),
             // The last speaker went off while the dialog was open.
-            Err(_) => self.show_dialog_message(
+            Err(PresetError::NoSpeakerOn) => self.show_dialog_message(
                 strings.get_save_preset_title(),
                 strings.get_save_preset_needs_speakers(),
             ),
@@ -4499,6 +4513,7 @@ fn preset_left_off(strings: &Strings<'_>, reason: &PresetLeftOff) -> SharedStrin
             strings.invoke_zone_member_in_target(target.as_str().into())
         }
         PresetLeftOff::Busy => strings.get_preset_busy(),
+        PresetLeftOff::CantPlay => strings.get_preset_cant_play(),
     }
 }
 
@@ -8210,6 +8225,116 @@ mod tests {
             "No presets yet. Turn on the speakers you want, set the volumes and the curve, \
              then save them as a preset."
         );
+    }
+
+    // covers: S261
+    #[test]
+    fn ctrl_and_a_digit_recalls_from_the_guide_and_the_flyout_too() {
+        let app = app_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        app.save_preset("Party");
+        app.update(|b| b.set_master_volume(55.0));
+
+        app.guide.show().expect("the guide shows headless");
+        app.guide.invoke_take_focus();
+        draw_frames();
+        ctrl(app.guide.window(), "1");
+        assert_eq!(preset_rows(&app)[0], ("Evening".into(), true));
+
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        app.flyout.invoke_take_focus();
+        draw_frames();
+        ctrl(app.flyout.window(), "2");
+        assert_eq!(preset_rows(&app)[1], ("Party".into(), true));
+    }
+
+    // covers: S251
+    #[test]
+    fn save_as_preset_is_off_at_the_most_presets_the_app_keeps() {
+        let mut backend = MockBackend::new();
+        for n in 0..MAX_PRESETS {
+            Backend::save_preset(&mut backend, &format!("P{n}")).expect("room");
+        }
+        let app = main_window_over(backend);
+        assert!(!app.main.get_can_save_preset());
+        app.ask_save_preset();
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
+        assert_eq!(
+            app.zone_dialog.get_message(),
+            "AudioSync keeps 256 presets at most. Delete one to save another."
+        );
+
+        let first = preset_ids(&app)[0].clone();
+        app.zone_dialog.hide().unwrap();
+        app.delete_preset(&first);
+        assert!(app.main.get_can_save_preset());
+    }
+
+    // covers: S266
+    #[test]
+    fn a_recall_leaves_the_keyboard_focus_on_the_row_or_the_notice_that_had_it() {
+        let mut backend = MockBackend::new();
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        Backend::save_preset(&mut backend, "Evening").expect("saved");
+        Backend::set_master_volume(&mut backend, 30.0);
+        Backend::save_preset(&mut backend, "Party").expect("saved");
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        let ids = preset_ids(&app);
+
+        // The newest notice's dismiss button, as with no preset.
+        tab(window, 3);
+        app.recall_preset(&ids[0]);
+        press(window, " ");
+        assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
+
+        app.main.set_focus_preset_id(ids[1].clone().into());
+        draw_frames();
+        app.recall_preset(&ids[0]);
+        press(window, Key::F2);
+        assert_eq!(
+            *app.dialog_purpose.borrow(),
+            DialogPurpose::RenamePreset(ids[1].clone()),
+            "Party's row kept the focus"
+        );
+    }
+
+    // covers: S267
+    #[test]
+    fn the_menu_key_and_shift_f10_open_a_preset_rows_menu() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        draw_frames();
+        let id = preset_ids(&app)[0].clone();
+        let window = app.main.window();
+
+        for open in [&[Key::Menu][..], &[Key::Shift, Key::F10][..]] {
+            app.main.set_focus_preset_id(id.clone().into());
+            draw_frames();
+            for key in open {
+                window.dispatch_event(WindowEvent::KeyPressed {
+                    text: (*key).into(),
+                });
+            }
+            for key in open.iter().rev() {
+                window.dispatch_event(WindowEvent::KeyReleased {
+                    text: (*key).into(),
+                });
+            }
+            draw_frames();
+            press(window, Key::DownArrow);
+            press(window, Key::Return);
+            assert_eq!(
+                *app.dialog_purpose.borrow(),
+                DialogPurpose::RenamePreset(id.clone()),
+                "{open:?}: the menu opened, and its first item is Rename…"
+            );
+            app.zone_dialog.hide().unwrap();
+            *app.dialog_purpose.borrow_mut() = DialogPurpose::Message;
+        }
     }
 
     #[test]

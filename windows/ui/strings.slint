@@ -206,6 +206,10 @@ export global Strings {
     // Hidden and busy members in the preset notice.
     out property <string> preset-hidden: @tr("Hidden");
     out property <string> preset-busy: @tr("In use by another app");
+    // A member the recall switched on that failed to start (spec S266).
+    out property <string> preset-cant-play: @tr("Couldn't start");
+    // Save as Preset… at the most presets the app keeps (spec S251).
+    out property <string> presets-full: @tr("AudioSync keeps 256 presets at most. Delete one to save another.");
 
     // Zones
     out property <string> new-zone: @tr("New Zone from Active Speakers…");
