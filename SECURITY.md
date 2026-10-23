@@ -16,11 +16,11 @@ The native sender doesn't run a server or an API of its own, and it publishes no
 
 AudioSync sends no telemetry. Its network traffic is AirPlay and Google Cast discovery (mDNS browsing), streaming to the speakers you turn on, the web remote when you turn it on, and album artwork for Spotify's Now Playing, fetched from the https URL Spotify provides.
 
-Google Cast speakers get the audio over plain HTTP on your local network. For each stream AudioSync opens a server on a port the system picks, under a random path, and only answers the addresses of the Cast speaker or group it's streaming to.
+Google Cast speakers get the audio, and the cover art of what's playing, over plain HTTP on your local network. For each stream AudioSync opens a server on a port the system picks, under a random path, and only answers the addresses of the Cast speaker or group it's streaming to.
 
 ### Web remote
 
-The web remote is off until you turn it on. Then it serves plain HTTP on port 7655 (unless you pick another) and only lets in private, link-local and loopback addresses, plus IPv6 devices on the same network as your Mac. A phone pairs by entering the 6-digit code AudioSync shows; each code works once and expires after 10 minutes. AudioSync keeps at most 8 paired devices and stores only a SHA-256 hash of each device's token. There's no TLS, so the pairing code and the session cookie cross the network unencrypted. Someone on the same network who can watch the traffic could take over that session, see what's playing and turn your speakers on or off or change their volume and delay. Keep the web remote to a home network you trust.
+The web remote is off until you turn it on. Then it serves plain HTTP on port 7655 (unless you pick another) and only lets in private, link-local and loopback addresses, plus IPv6 devices on the same network as your Mac. A phone pairs by entering the 6-digit code AudioSync shows; each code works once and expires after 10 minutes. A device that sends 5 wrong codes within a minute has to wait, after 10 it can't try again until the code changes, and 40 wrong codes in total lock pairing for everyone until then. The server takes at most 32 connections at once and 8 from one device, and keeps some free for devices that are already paired. AudioSync keeps at most 8 paired devices and stores only a SHA-256 hash of each device's token. There's no TLS, so the pairing code and the session cookie cross the network unencrypted. Someone on the same network who can watch the traffic could take over that session, see what's playing and turn your speakers on or off or change their volume and delay. Keep the web remote to a home network you trust.
 
 ### Pairing
 
