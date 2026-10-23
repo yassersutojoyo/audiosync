@@ -143,11 +143,21 @@ struct PeekedTcp(TcpStream);
 
 impl Read for PeekedTcp {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.0.peek(buf)? == 0 {
+        if self.0.peek(buf).map_err(peek_error)? == 0 {
             return Ok(0);
         }
         self.0.read(buf)
     }
+}
+
+/// Windows can end a blocking peek with ERROR_IO_PENDING when its timeout
+/// races arriving bytes; the peek took nothing, so it counts as a timeout.
+fn peek_error(error: io::Error) -> io::Error {
+    const ERROR_IO_PENDING: i32 = 997;
+    if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) {
+        return io::Error::from(io::ErrorKind::TimedOut);
+    }
+    error
 }
 
 impl Write for PeekedTcp {
@@ -624,6 +634,19 @@ mod tests {
         }
         let _device = writer.join().expect("writer");
         assert_eq!(received, frame.repeat(3));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_peek_ending_with_io_pending_is_a_timeout() {
+        let error = peek_error(io::Error::from_raw_os_error(997));
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn other_peek_errors_stay_as_they_are() {
+        let error = peek_error(io::Error::from(io::ErrorKind::ConnectionReset));
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
     }
 
     // After the stop's shutdown the next read ends at once instead of
