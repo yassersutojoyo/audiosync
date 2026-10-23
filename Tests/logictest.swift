@@ -4278,6 +4278,15 @@ do {
             && measuring.following(streamingOff) == measuring && measuring.offsetChanged("usb") == measuring,
           "calibration: a result goes when its offset, streaming, the reference or the speaker's switch changes")
 
+    // The window's + step asks for 20 010 ms, the web remote for the 20 000 ms already set.
+    let stepped = { (raw: Double) in LocalDelay.sanitizedOffset(raw) ?? .nan }
+    check(!CalibrationStatus.offsetDiffers(stored: 20_000, clamped: stepped(20_010))
+            && !CalibrationStatus.offsetDiffers(stored: 20_000, clamped: stepped(20_000))
+            && !CalibrationStatus.offsetDiffers(stored: nil, clamped: 0)
+            && CalibrationStatus.offsetDiffers(stored: nil, clamped: 10)
+            && CalibrationStatus.offsetDiffers(stored: 19_990, clamped: stepped(20_000)),
+          "calibration: a delay step at the maximum leaves the offset, and its line, as they were")
+
     check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying
             && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying
             && CalibrationFlow.unavailable(streaming: true, hasReference: false, speakerOn: true) == .noReference
