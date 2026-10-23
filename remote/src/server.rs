@@ -47,6 +47,10 @@ const MAX_STREAMS_PER_DEVICE: usize = 2;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a stop waits for the connection threads.
 const STOP_GRACE: Duration = Duration::from_millis(500);
+/// How long a refused connection is drained before it is closed.
+const REFUSED_LINGER: Duration = Duration::from_secs(1);
+/// Refused connections drained at once; the oldest is closed for a new one.
+const MAX_REFUSED: usize = 16;
 /// Snapshots kept so a stream that fell a little behind still gets each one.
 const HISTORY: usize = 32;
 /// Server events kept for a host that doesn't poll.
@@ -366,29 +370,37 @@ enum Admission {
     PeerBusy,
 }
 
-/// Whether a connection from `peer` is let in beside `held`. Connections
-/// that haven't shown a paired device's token share all but the reserved
-/// slots, so slow unpaired clients can't keep a paired phone out.
+/// Whether a connection from `peer` is let in beside `held`, oldest first.
+/// Connections that haven't shown a paired device's token share all but the
+/// reserved slots, so slow unpaired clients can't keep a paired phone out.
 fn admission(held: &[Slot], peer: IpAddr, capacity: Capacity) -> Admission {
-    if held.len() >= capacity.connections {
-        return Admission::Busy;
-    }
+    let full = held.len() >= capacity.connections;
     if held.iter().filter(|slot| slot.peer == peer).count() >= capacity.per_peer {
-        return Admission::PeerBusy;
+        return if full {
+            Admission::Busy
+        } else {
+            Admission::PeerBusy
+        };
     }
     let unpaired = held.iter().filter(|slot| !slot.paired).count();
-    if unpaired < capacity.connections.saturating_sub(capacity.reserved) {
+    if !full && unpaired < capacity.connections.saturating_sub(capacity.reserved) {
         return Admission::Open;
     }
     let waiting = held
         .iter()
         .filter(|slot| slot.peer == peer && slot.reserved && !slot.paired)
         .count();
-    if waiting < capacity.reserved_per_peer {
-        Admission::Reserved
-    } else {
-        Admission::Busy
+    if waiting >= capacity.reserved_per_peer {
+        return Admission::Busy;
     }
+    if !full {
+        return Admission::Reserved;
+    }
+    // A host with many addresses is many peers; the oldest waiter makes room
+    // so such a host can't keep every reserved slot.
+    held.iter()
+        .position(|slot| slot.reserved && !slot.paired)
+        .map_or(Admission::Busy, Admission::Replace)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -738,11 +750,15 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
                 ..connection.slot
             })
             .collect();
-        admission(&held, peer, shared.capacity)
+        let admitted = admission(&held, peer, shared.capacity);
+        if let Admission::Replace(oldest) = admitted {
+            let _ = connections.remove(oldest).stream.shutdown(Shutdown::Both);
+        }
+        admitted
     };
     let refused = match admitted {
-        Admission::Open | Admission::Reserved => None,
-        Admission::Busy | Admission::Replace(_) => Some(ServerEvent::Busy { from }),
+        Admission::Open | Admission::Reserved | Admission::Replace(_) => None,
+        Admission::Busy => Some(ServerEvent::Busy { from }),
         Admission::PeerBusy => Some(ServerEvent::PeerBusy { from }),
     };
     if let Some(event) = refused {
@@ -761,7 +777,7 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
     };
     let slot = Slot {
         peer,
-        reserved: admitted == Admission::Reserved,
+        reserved: matches!(admitted, Admission::Reserved | Admission::Replace(_)),
         paired: false,
     };
     let paired = Arc::new(AtomicBool::new(false));
