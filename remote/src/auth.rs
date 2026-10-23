@@ -238,9 +238,15 @@ struct Device {
 }
 
 impl Device {
-    /// A clock that went back keeps the device; one that jumped ahead may drop it.
+    /// A clock that jumped ahead may drop the device: from here that reads
+    /// the same as a device left unused.
     fn idle_too_long(&self, now: u64) -> bool {
         now.saturating_sub(self.seen) >= DEVICE_IDLE_LIMIT.as_secs()
+    }
+
+    /// Whether the file's time for this device is a day or more off.
+    fn needs_saving(&self) -> bool {
+        self.seen.abs_diff(self.seen_saved) >= SEEN_SAVE_STEP
     }
 }
 
@@ -252,6 +258,9 @@ pub struct TokenStore {
     path: Option<PathBuf>,
     devices: Vec<Device>,
     generation: u64,
+    /// The file as read differs from the store: no last-seen times, idle
+    /// devices or times ahead of the clock.
+    rewrite: bool,
 }
 
 /// Why the paired-device file was not read at start; the store starts empty.
@@ -303,13 +312,15 @@ impl TokenStore {
         TokenStore::open_at(path, SystemTime::now())
     }
 
-    /// [`TokenStore::open`] at `now`: devices idle too long are left out, and
-    /// a file from before last-seen times were kept counts every device as seen now.
+    /// [`TokenStore::open`] at `now`: devices idle too long are left out, a
+    /// time ahead of the clock counts as now, and a file from before last-seen
+    /// times were kept counts every device as seen now.
     pub fn open_at(path: Option<PathBuf>, now: SystemTime) -> (TokenStore, Option<LoadProblem>) {
         let mut store = TokenStore {
             path,
             devices: Vec::new(),
             generation: 0,
+            rewrite: false,
         };
         let Some(path) = store.path.as_deref() else {
             return (store, None);
@@ -317,8 +328,17 @@ impl TokenStore {
         let now = unix_seconds(now);
         let problem = match fs::read(path) {
             Ok(bytes) => match parse_file(&bytes, now) {
-                Some(mut devices) => {
+                Some((mut devices, upgraded)) => {
+                    let read = devices.len();
                     devices.retain(|device| !device.idle_too_long(now));
+                    for device in &mut devices {
+                        device.seen = device.seen.min(now);
+                    }
+                    store.rewrite = upgraded
+                        || devices.len() != read
+                        || devices
+                            .iter()
+                            .any(|device| device.seen != device.seen_saved);
                     store.devices = devices;
                     None
                 }
@@ -328,6 +348,12 @@ impl TokenStore {
             Err(error) => Some(LoadProblem::Unreadable(error)),
         };
         (store, problem)
+    }
+
+    /// The snapshot that brings the file in line with what was loaded, once.
+    /// Without it, a file no device uses would never lose its idle devices.
+    pub fn take_rewrite(&mut self) -> Option<Snapshot> {
+        std::mem::take(&mut self.rewrite).then(|| self.snapshot())
     }
 
     /// The devices held, idle or not; [`TokenStore::count_at`] leaves the idle out.
@@ -374,19 +400,22 @@ impl TokenStore {
     }
 
     /// A request carrying `token` at `now`: forgets the devices idle too
-    /// long and marks this one seen. The snapshot comes when the file needs
-    /// writing: a device was forgotten, or this one's time moved a day.
+    /// long and marks this one seen. A time ahead of the clock counts as now,
+    /// so a clock that jumped ahead and back keeps no device longer. The
+    /// snapshot comes when the file needs writing: a device was forgotten, or
+    /// a time in the file is a day or more off.
     pub fn check(&mut self, token: &str, now: SystemTime) -> (bool, Option<Snapshot>) {
         let now = unix_seconds(now);
         let before = self.devices.len();
         self.devices.retain(|device| !device.idle_too_long(now));
-        let mut changed = self.devices.len() != before;
+        for device in &mut self.devices {
+            device.seen = device.seen.min(now);
+        }
         let found = self.position(token);
         if let Some(index) = found {
-            let device = &mut self.devices[index];
-            device.seen = device.seen.max(now);
-            changed |= device.seen.saturating_sub(device.seen_saved) >= SEEN_SAVE_STEP;
+            self.devices[index].seen = now;
         }
+        let changed = self.devices.len() != before || self.devices.iter().any(Device::needs_saving);
         (found.is_some(), changed.then(|| self.snapshot()))
     }
 
@@ -438,8 +467,9 @@ impl TokenStore {
     }
 }
 
-/// The devices in `bytes`; without a "seen" list every one counts as seen at `now`.
-fn parse_file(bytes: &[u8], now: u64) -> Option<Vec<Device>> {
+/// The devices in `bytes`, and whether the file had no "seen" list, in which
+/// case every one counts as seen at `now`.
+fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool)> {
     let value: Value = serde_json::from_slice(bytes).ok()?;
     if value.get("version")?.as_u64()? != FILE_VERSION {
         return None;
@@ -450,6 +480,7 @@ fn parse_file(bytes: &[u8], now: u64) -> Option<Vec<Device>> {
         .iter()
         .map(|item| item.as_str().and_then(from_hex))
         .collect::<Option<_>>()?;
+    let upgraded = value.get("seen").is_none();
     let seen: Vec<u64> = match value.get("seen") {
         None => vec![now; hashes.len()],
         Some(seen) => seen
@@ -473,7 +504,7 @@ fn parse_file(bytes: &[u8], now: u64) -> Option<Vec<Device>> {
     if devices.len() > MAX_DEVICES {
         devices.drain(..devices.len() - MAX_DEVICES);
     }
-    Some(devices)
+    Some((devices, upgraded))
 }
 
 /// Writes next to `path` and renames over it, so a crash leaves the old
@@ -933,10 +964,70 @@ mod tests {
         let text = json!({ "version": 1, "devices": [hex(&token_hash(&token))] }).to_string();
         fs::write(&path, text).unwrap();
         let opened = day_zero() + DAY * 400;
-        let (store, problem) = TokenStore::open_at(Some(path), opened);
+        let (mut store, problem) = TokenStore::open_at(Some(path.clone()), opened);
         assert!(problem.is_none());
         assert!(store.contains(&token, opened + DAY * 89));
         assert!(!store.contains(&token, opened + DAY * 90));
+
+        // Written once at load, so restarts without a request still let it expire.
+        DeviceFile::default()
+            .save(store.take_rewrite().expect("an upgraded file is written"))
+            .unwrap();
+        assert!(store.take_rewrite().is_none());
+        let (mut reopened, _) = TokenStore::open_at(Some(path.clone()), opened + DAY * 60);
+        assert!(reopened.take_rewrite().is_none());
+        let (reopened, _) = TokenStore::open_at(Some(path), opened + DAY * 90);
+        assert!(reopened.is_empty());
+    }
+
+    #[test]
+    fn a_clock_that_jumped_ahead_and_back_keeps_no_device_longer() {
+        let path = scratch("auth-clock-back");
+        let start = day_zero();
+        let ahead = start + DAY * 80;
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
+        let device_file = DeviceFile::default();
+        let token = random_token().unwrap();
+        device_file.save(store.add(&token, start)).unwrap();
+        device_file
+            .save(store.check(&token, ahead).1.expect("a year later"))
+            .unwrap();
+
+        let (paired, snapshot) = store.check(&token, start + DAY);
+        assert!(paired);
+        device_file
+            .save(snapshot.expect("a time ahead of the clock is written back"))
+            .unwrap();
+        assert!(!store.contains(&token, start + DAY * 91));
+
+        device_file
+            .save(store.check(&token, ahead).1.unwrap())
+            .unwrap();
+        let (mut reopened, _) = TokenStore::open_at(Some(path.clone()), start + DAY);
+        DeviceFile::default()
+            .save(
+                reopened
+                    .take_rewrite()
+                    .expect("a loaded time ahead of the clock"),
+            )
+            .unwrap();
+        assert!(reopened.contains(&token, start + DAY * 90));
+        let (reopened, _) = TokenStore::open_at(Some(path), start + DAY * 91);
+        assert!(reopened.is_empty());
+    }
+
+    #[test]
+    fn a_clock_that_jumps_ninety_days_ahead_forgets_every_device() {
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(None, start);
+        let token = random_token().unwrap();
+        let other = random_token().unwrap();
+        let _ = store.add(&token, start);
+        let _ = store.add(&other, start);
+        let (paired, snapshot) = store.check(&token, start + DAY * 90);
+        assert!(!paired, "the device sending the request goes too");
+        assert!(snapshot.is_some());
+        assert!(store.is_empty());
     }
 
     #[test]

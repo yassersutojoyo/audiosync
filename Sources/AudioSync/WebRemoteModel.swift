@@ -285,17 +285,35 @@ enum RemotePort {
 /// unpaired before the remote is turned on again.
 enum RemoteDevicesFile {
     static let maxDevices = 8
+    /// The core forgets a device after this long without a request.
+    static let idleLimit: TimeInterval = 90 * 24 * 60 * 60
 
-    /// The core starts empty from a file it can't read, so such a file counts as none.
-    static func count(_ data: Data?) -> Int {
+    /// The devices the core would load at `now`: the newest 8, less those idle
+    /// for 90 days. The core starts empty from a file it can't read, so such a
+    /// file counts as none; one without a "seen" list counts every device as seen now.
+    static func count(_ data: Data?, now: Date = Date()) -> Int {
         guard let data, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let version = object["version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(),
+              let version = object["version"] as? NSNumber, !isBool(version),
               version.doubleValue == 1, let devices = object["devices"] as? [Any],
               devices.allSatisfy({ ($0 as? String).map(isHash) ?? false }) else { return 0 }
-        return min(devices.count, maxDevices)
+        guard let listed = object["seen"] else { return min(devices.count, maxDevices) }
+        guard let seen = listed as? [Any], seen.count == devices.count else { return 0 }
+        let times = seen.compactMap(unixSeconds)
+        guard times.count == seen.count else { return 0 }
+        let cutoff = now.timeIntervalSince1970 - idleLimit
+        return times.suffix(maxDevices).filter { $0 > cutoff }.count
     }
 
     static func count(at url: URL) -> Int { count(try? Data(contentsOf: url)) }
+
+    private static func isBool(_ number: NSNumber) -> Bool { CFGetTypeID(number) == CFBooleanGetTypeID() }
+
+    /// A whole number of seconds that fits the core's u64, or nil as the core would reject it.
+    private static func unixSeconds(_ value: Any) -> Double? {
+        guard let number = value as? NSNumber, !isBool(number) else { return nil }
+        let seconds = number.doubleValue
+        return seconds >= 0 && seconds == seconds.rounded() && seconds < 0x1p64 ? seconds : nil
+    }
 
     /// A file that isn't there is already forgotten.
     static func forget(at url: URL) -> Bool {

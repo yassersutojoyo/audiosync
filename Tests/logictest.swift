@@ -5531,6 +5531,24 @@ do {
     check(twoDevices == 2 && tenDevices == RemoteDevicesFile.maxDevices && unreadable.allSatisfy { $0 == 0 },
           "web remote: the paired count comes from the devices file, capped at 8; a file the core can't read counts as none")
 
+    let day: TimeInterval = 24 * 60 * 60
+    let seenNow = Date(timeIntervalSince1970: 1_800_000_000)
+    let seenFile = { (seen: String) in
+        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"\(hashB)\"],\"seen\":\(seen)}"),
+                                now: seenNow)
+    }
+    let recent = Int(seenNow.timeIntervalSince1970 - 89 * day), idle = Int(seenNow.timeIntervalSince1970 - 90 * day)
+    let ahead = Int(seenNow.timeIntervalSince1970 + 400 * day)
+    let nineHashes = Array(repeating: "\"\(hashA)\"", count: 9).joined(separator: ",")
+    let eightIdle = Array(repeating: String(idle), count: 8).joined(separator: ",")
+    let newestEight = RemoteDevicesFile.count(
+        devicesJSON("{\"version\":1,\"devices\":[\(nineHashes)],\"seen\":[\(recent),\(eightIdle)]}"), now: seenNow)
+    let mismatched: [Int] = [seenFile("[\(recent)]"), seenFile("[\(recent),-1]"), seenFile("[\(recent),1.5]"),
+                             seenFile("[\(recent),true]"), seenFile("{}")]
+    check(seenFile("[\(recent),\(idle)]") == 1 && seenFile("[\(ahead),\(recent)]") == 2 && newestEight == 0
+            && mismatched.allSatisfy { $0 == 0 },
+          "web remote: a device idle for 90 days isn't counted, only the newest 8 are; a seen list that doesn't match the devices counts as none")
+
     let devicesFolder = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-remote-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: devicesFolder, withIntermediateDirectories: true)
     let devicesURL = devicesFolder.appendingPathComponent("RemoteDevices.json")

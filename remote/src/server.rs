@@ -573,6 +573,10 @@ impl RemoteServer {
             }
             None => {}
         }
+        let rewrite = lock(&shared.devices).take_rewrite();
+        if let Some(snapshot) = rewrite {
+            shared.save(snapshot);
+        }
         let accept = {
             let shared = Arc::clone(&shared);
             thread::Builder::new()
