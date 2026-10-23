@@ -55,6 +55,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
+use audiosync_core::lead::SourceKind;
 use audiosync_core::policy::delay::native_airplay_latency_ms;
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
@@ -1677,6 +1678,8 @@ impl<D: Driver> Controller<D> {
             airplay.restart_timeline();
         }
         self.sessions_started += 1;
+        self.policy.set_source_kind(lead_source(source));
+        self.log.log(|| self.policy.describe_lead());
         self.session = Some(Session {
             source: source.clone(),
             target,
@@ -2690,6 +2693,15 @@ fn describe_source(source: &SourceId) -> String {
         SourceId::WholeSystem => "the whole system".to_owned(),
         SourceId::App { root_pid } => format!("the app of process {root_pid}"),
         SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
+    }
+}
+
+/// A source as the lead choice tells sources apart.
+fn lead_source(source: &SourceId) -> SourceKind {
+    match source {
+        SourceId::WholeSystem => SourceKind::System,
+        SourceId::App { .. } => SourceKind::App,
+        SourceId::Input { .. } => SourceKind::Input,
     }
 }
 
