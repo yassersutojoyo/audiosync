@@ -357,6 +357,11 @@ double asc_volume_position(double gain);
 /* A local output's linear gain: asc_volume_gain(local) * asc_volume_gain(master). */
 double asc_output_gain(double local_position, double master_position);
 
+/* A local output's linear gain through its zone (100 outside a zone):
+ * asc_volume_gain(local) * asc_volume_gain(zone) * asc_volume_gain(master);
+ * at zone 100 bit-identical to asc_output_gain. */
+double asc_zone_output_gain(double local_position, double zone_position, double master_position);
+
 /*
  * Multiplies frames x 2 interleaved samples by gain, in place. Gain 0 (or a
  * negative or non-finite gain) gives exact zeros; any NaN or infinity in the
@@ -1475,6 +1480,15 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
 
 /*
+ * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
+ * plays at its own position times the zone's times the master, live once
+ * added and from its start when added later, and a level read back from it
+ * moves its own position by the zone and the master. Returns false, changing
+ * nothing, when the handle or id is NULL or zone isn't finite.
+ */
+bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zone);
+
+/*
  * Asks every speaker added for its own volume, which someone may have changed
  * on the speaker itself; a stereo pair or home theater group asks its leader.
  * Only playing sessions answer. A level that moves a slider comes as
@@ -1912,6 +1926,17 @@ bool asc_cast_step_volume(AscCast *cast, bool up);
 double asc_cast_device_level(double master, double own);
 double asc_cast_own_level(double reported, double master, double own);
 double asc_cast_start_own_level(double master, bool has_own, double own, double reported);
+
+/*
+ * The same three with the speaker's zone level (0 to 1, 1 outside a zone)
+ * as a stage between the master and the own level: the level to send is
+ * master * zone * own; a report means reported / (master * zone), and leaves
+ * `own` as it is when master * zone is 0. At zone 1 each is bit-identical to
+ * the function above without the zone.
+ */
+double asc_cast_zone_level(double master, double zone, double own);
+double asc_cast_zone_own_level(double reported, double master, double zone, double own);
+double asc_cast_zone_start_own_level(double master, double zone, bool has_own, double own, double reported);
 bool asc_cast_level_answers(double sent, double reported);
 
 /*

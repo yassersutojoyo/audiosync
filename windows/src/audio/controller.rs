@@ -70,7 +70,7 @@ use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedSlot, SenderStarter, Star
 use super::backend::{
     AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem, AudioBackend,
     BackendError, BackendEvent, CastDiscovery, CastInfo, CastProblem, OutputInfo, OutputKind,
-    SourceId, SourceInfo, StopReason, TIMED_OUT,
+    SourceId, SourceInfo, StopReason, TIMED_OUT, ZoneVolumes,
 };
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
@@ -447,6 +447,8 @@ pub struct Controller<D: Driver> {
     calibration_tap: Arc<CalibrationTap>,
     /// The one local output a calibration lets be heard.
     calibration_solo: Option<String>,
+    /// The zone volumes (S249), for the senders started later too.
+    zone_volumes: ZoneVolumes,
     /// Sessions started so far, captures started again included: a
     /// calibration tells by it that its session went on.
     sessions_started: u64,
@@ -493,6 +495,7 @@ impl<D: Driver> Controller<D> {
             track_source: None,
             calibration_tap: Arc::new(CalibrationTap::new()),
             calibration_solo: None,
+            zone_volumes: ZoneVolumes::default(),
             sessions_started: 0,
         }
     }
@@ -589,7 +592,8 @@ impl<D: Driver> Controller<D> {
         feed: Option<FeedSlot>,
         store: PairingStore,
     ) {
-        let airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
+        let mut airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
+        airplay.set_zones(self.zone_volumes.airplay.clone());
         self.log.log(|| {
             format!(
                 "AirPlay: the sender runs, L = {} ms; local outputs line up with each other \
@@ -613,6 +617,7 @@ impl<D: Driver> Controller<D> {
     pub fn set_cast(&mut self, link: Box<dyn CastLink>) {
         let mut cast = CastSpeakers::new(link, self.log.clone());
         cast.set_master(self.policy.master());
+        cast.set_zones(self.zone_volumes.cast.clone());
         cast.set_streaming(self.session.is_some());
         self.cast = Some(cast);
         self.sync_cast_rule();
@@ -2062,6 +2067,30 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 self.log.log(|| format!("master volume: {after}"));
             }
         }
+    }
+
+    fn set_zone_volumes(&mut self, zones: ZoneVolumes) {
+        if zones == self.zone_volumes {
+            return;
+        }
+        self.log.log(|| {
+            format!(
+                "zone volumes: {} local, {} AirPlay and {} Cast speaker(s) in a zone",
+                zones.outputs.len(),
+                zones.airplay.len(),
+                zones.cast.len()
+            )
+        });
+        for id in self.policy.set_zones(zones.outputs.clone()) {
+            self.apply_gain(&id);
+        }
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_zones(zones.airplay.clone());
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_zones(zones.cast.clone());
+        }
+        self.zone_volumes = zones;
     }
 
     fn master_volume(&self) -> f64 {

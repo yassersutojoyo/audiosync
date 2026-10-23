@@ -80,7 +80,7 @@ use audiosync_core::reader::DRIFT_TOLERANCE_MS;
 use crate::audio::backend::{
     AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
     CastDiscovery, CastInfo, CastProblem, CastStatus, OutputInfo, OutputKind, SourceId, SourceInfo,
-    StopReason,
+    StopReason, ZoneVolumes,
 };
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::cast_address::{self, CastAddress};
@@ -508,6 +508,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             volume: zone.volume,
         }));
         self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
+        self.push_zone_volumes();
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
         self.cast_addresses = saved.cast_addresses.clone();
@@ -1767,6 +1768,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for preset in &mut self.presets {
             preset.rename_key(&from_key, &to_key);
         }
+        self.push_zone_volumes();
         if self.saved.outputs.remove(from).is_some() {
             self.must_save = true;
         }
@@ -2672,6 +2674,25 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.must_save = true;
         self.persist();
     }
+
+    /// Hands every zone member's zone volume to the backend (S249), by kind
+    /// under the backend's own IDs; a key this build can't parse plays
+    /// nowhere and is left out.
+    fn push_zone_volumes(&mut self) {
+        let mut volumes = ZoneVolumes::default();
+        for zone in self.zones.list() {
+            for member in &zone.members {
+                let (map, id) = match SpeakerKey::parse(member) {
+                    Some(SpeakerKey::Local(id)) => (&mut volumes.outputs, id),
+                    Some(SpeakerKey::AirPlay(id)) => (&mut volumes.airplay, id),
+                    Some(SpeakerKey::Cast(id)) => (&mut volumes.cast, id),
+                    None => continue,
+                };
+                map.insert(id, zone.volume);
+            }
+        }
+        self.audio.set_zone_volumes(volumes);
+    }
 }
 
 impl<A: AudioBackend> Backend for AudioAdapter<A> {
@@ -3208,6 +3229,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
+    /// Sets zone `id`'s volume (S245), which its playing members hear at
+    /// once (S249).
+    fn set_zone_volume(&mut self, id: &str, position: f64) {
+        if self.zones.set_volume(id, position) {
+            self.push_zone_volumes();
+        }
+    }
+
     fn new_group(&mut self, name: &str) -> Result<(), GroupError> {
         let members: Vec<String> = self
             .audio
@@ -3705,13 +3734,13 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
     }
 }
 
-/// What a notice about one local output is about.
 /// Whether an AirPlay ID is a stereo pair's or home theater's, which plays
 /// over AirPlay 2 only (spec S149, P176).
 fn is_airplay_target(id: &str) -> bool {
     id.starts_with("pair:") || id.starts_with("theater:")
 }
 
+/// What a notice about one local output is about.
 fn speaker_subject(endpoint_id: &str) -> NoticeSubject {
     NoticeSubject::Speaker(SpeakerKey::Local(endpoint_id.to_owned()))
 }
@@ -3791,7 +3820,7 @@ mod device_volume_tests;
 
 #[cfg(test)]
 mod tests {
-    use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, output_gain};
+    use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, output_gain, zoned_output_gain};
 
     use audiosync_airplay::discovery::Device;
     use audiosync_airplay::error::{ErrorKind, SessionError};
@@ -8220,6 +8249,60 @@ mod tests {
             members,
             volume: 80.0,
         }
+    }
+
+    #[test]
+    fn a_zone_volume_change_reaches_the_playing_members_as_a_master_change_does() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), cc(CAST_KITCHEN)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.set_speaker_enabled(&key(HEADPHONES), true);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_KITCHEN),
+            event: SessionEvent::Playing,
+        });
+        adapter.poll();
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.set_speaker_volume(&cc(CAST_KITCHEN), 50.0);
+        adapter.set_master_volume(50.0);
+        let gain = |adapter: &AudioAdapter<MockBackend>, id| {
+            adapter.audio.playing_params(id).expect("playing").gain
+        };
+        assert_eq!(
+            gain(&adapter, SPEAKERS),
+            zoned_output_gain(30.0, 80.0, 50.0) as f32
+        );
+        assert_eq!(
+            gain(&adapter, HEADPHONES),
+            output_gain(DEFAULT_LOCAL_POSITION, 50.0) as f32,
+            "in no zone: the gain of before"
+        );
+        // Master × zone × own: 1 × 0.8 × 0.5, then the master at 0.5.
+        assert_eq!(fake.state().volumes, [0.4, 0.2]);
+
+        adapter.set_zone_volume("zone:1", 25.0);
+        assert_eq!(
+            gain(&adapter, SPEAKERS),
+            zoned_output_gain(30.0, 25.0, 50.0) as f32
+        );
+        assert_eq!(fake.state().volumes, [0.4, 0.2, 0.0625]);
+        assert_eq!(adapter.snapshot().zones[0].volume, 25.0);
+        let state = adapter.snapshot();
+        assert_eq!(
+            state.speaker(&key(SPEAKERS)).unwrap().volume,
+            30.0,
+            "own stays"
+        );
+        assert_eq!(state.master_volume, 50.0, "the master stays");
+
+        adapter.set_zone_volume("zone:9", 10.0);
+        assert_eq!(fake.state().volumes.len(), 3, "no such zone: nothing");
     }
 
     // covers: S246
