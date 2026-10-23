@@ -681,6 +681,15 @@ for o in outputDetails {
         + "(\(o["drift_corrections_per_h"] ?? 0)/h), resyncs \(o["resyncs"] ?? 0), "
         + "lag error mean \(o["lag_err_ms_mean"] ?? 0) ms (window max |\(o["lag_err_ms_window_max_abs"] ?? 0)| ms)\n"
 }
+if !renderers.isEmpty {
+    text += lagWindows.filling > 0
+        ? String(format: "Lag error counts the %d windows ending from %.0f s on (delay plus one interval); "
+                    + "%d windows ending sooner were skipped as filling\n",
+                 lagWindows.counted.count, lagWindows.countsFrom, lagWindows.filling)
+        : lagWindows.countsFrom == 0
+        ? "Lag error counts all \(lagWindows.counted.count) windows: the run ended before the delay plus one interval\n"
+        : "Lag error counts all \(lagWindows.counted.count) windows; none was skipped as filling\n"
+}
 if renderers.count == 2 {
     text += "Inter-output drift: mean \(metrics["inter_output_drift_ms_mean"] ?? 0) ms, "
         + "max |\(metrics["inter_output_drift_ms_max_abs"] ?? 0)| ms, change \(metrics["inter_output_drift_ms_change"] ?? 0) ms\n"
