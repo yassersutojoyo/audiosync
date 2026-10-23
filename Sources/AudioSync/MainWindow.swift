@@ -219,6 +219,7 @@ struct MainView: View {
         .background(MenuAnchor(box: gearAnchor).accessibilityHidden(true))
         .fixedSize()
         .accessibilityLabel(t.moreOptions)
+        .accessibilityHint(t.moreOptionsHint)
         .help(t.moreOptions)
     }
 
