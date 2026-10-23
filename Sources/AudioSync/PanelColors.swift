@@ -14,9 +14,7 @@ extension NSColor {
     /// deeper on light and lighter on dark than `systemBlue`, which falls
     /// below 3:1 on the panel over a black (light) or white (dark) window.
     static let audioSyncActiveBlue = appearanceColor(
-        "AudioSyncActiveBlue",
-        light: BrandRGB(red: 0 / 255, green: 98 / 255, blue: 204 / 255),
-        dark: BrandRGB(red: 94 / 255, green: 174 / 255, blue: 255 / 255))
+        "AudioSyncActiveBlue", light: BrandTokens.Light.activeBlue, dark: BrandTokens.Dark.activeBlue)
 
     /// "sync" in the wordmark: the darker text teal on light, since the brand
     /// teal keeps under 3:1 on the panel over a black window; mint on dark.

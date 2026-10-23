@@ -5505,6 +5505,7 @@ do {
             let panel = over(resolved(.audioSyncPanelBacking, dark: dark), backdrop)
             let row = over((ink.r, ink.g, ink.b, 0.07), panel)
             let pairs: [(String, RGBA, RGBA)] = [
+                // Brand.secondaryText is `.primary` at 70%, and the label color itself is the ink at 85%.
                 ("secondary text", (ink.r, ink.g, ink.b, BrandTokens.Opacity.secondaryText * 0.85), row),
                 ("wordmark sync", resolved(.audioSyncWordmarkSync, dark: dark), panel),
                 ("active blue", resolved(.audioSyncActiveBlue, dark: dark), row),
@@ -5518,6 +5519,7 @@ do {
     }
     let summary = worst.keys.sorted().map { String(format: "%@ %.2f", $0, worst[$0]!) }.joined(separator: ", ")
     check(worst["secondary text"]! >= 4.5, "panel colors: secondary text keeps 4.5:1 over any window", summary)
+    // The wordmark's "sync" and the BrandMark fill are logotypes, exempt from WCAG 1.4.3, so their floor is 3:1.
     check(worst["wordmark sync"]! >= 3 && worst["active blue"]! >= 3 && worst["teal icon"]! >= 3,
           "panel colors: the wordmark's sync and the type icons keep 3:1 over any window", summary)
     check(resolved(.audioSyncWordmarkSync, dark: false).g < resolved(.audioSyncWordmarkSync, dark: true).g,

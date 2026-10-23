@@ -10,6 +10,9 @@ enum Brand {
     /// Teal on light appearances, the brand mint (#63DAC2) on dark ones, as in the logo artwork.
     static let logo = dynamic("AudioSyncLogo", light: BrandTokens.Light.logo, dark: BrandTokens.Dark.logo)
 
+    /// "sync" in the wordmark: the darker text teal on light, the mint on dark (see PanelColors.swift).
+    static let wordmarkSync = Color(nsColor: .audioSyncWordmarkSync)
+
     /// Teal for small text (WCAG AA needs 4.5:1), same hue as the brand teal.
     /// #1C9F91 itself is only 3.27:1 on white and 3.92:1 on the dark window
     /// background (#323232), so each appearance gets its own shade:
@@ -78,7 +81,7 @@ struct Wordmark: View {
         var audio = AttributedString("audio")
         audio.foregroundColor = .primary
         var sync = AttributedString("sync")
-        sync.foregroundColor = Color(nsColor: .audioSyncWordmarkSync)
+        sync.foregroundColor = Brand.wordmarkSync
         return audio + sync
     }
 }
