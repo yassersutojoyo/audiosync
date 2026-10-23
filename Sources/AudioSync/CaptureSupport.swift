@@ -81,7 +81,7 @@ struct CaptureChannels {
             case .int24High:
                 return Float(p.loadUnaligned(as: Int32.self) >> 8) * (1 / 8_388_608)
             case .int24Low:
-                return Float(p.loadUnaligned(as: Int32.self) << 8 >> 8) * (1 / 8_388_608)
+                return Float((p.loadUnaligned(as: Int32.self) << 8) >> 8) * (1 / 8_388_608)
             case .int32:
                 return Float(p.loadUnaligned(as: Int32.self)) * (1 / 2_147_483_648)
             }
