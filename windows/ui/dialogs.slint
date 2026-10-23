@@ -397,8 +397,10 @@ export component CastAddressDialog inherits Dialog {
     callback cancelled();
     // Whether the text is empty once trimmed; Slint has no trim.
     pure callback blank(string) -> bool;
+    // Whether the address is being checked; Add waits for the answer.
+    in property <bool> checking;
     // Add waits for an address, as on the Mac.
-    out property <bool> can-add: !root.blank(root.address);
+    out property <bool> can-add: !root.checking && !root.blank(root.address);
 
     title: Strings.cast-add-address-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -430,6 +432,10 @@ export component CastAddressDialog inherits Dialog {
 
         Announcer {
             said: root.said-even;
+        }
+
+        Announcer {
+            said: root.checking ? Strings.cast-address-checking : "";
         }
 
         VerticalLayout {
@@ -470,6 +476,7 @@ export component CastAddressDialog inherits Dialog {
             TextField {
                 property <int> focus-request: root.focus-request;
                 text <=> root.address;
+                read-only: root.checking;
                 placeholder-text: Strings.cast-address-placeholder;
                 accessible-label: Strings.cast-address-label;
                 accessible-description: root.error != "" ? root.error : Strings.cast-add-address-message;
@@ -490,12 +497,14 @@ export component CastAddressDialog inherits Dialog {
     }
 
     DialogButton {
-        text: Strings.add;
+        text: root.checking ? Strings.cast-address-checking : Strings.add;
         primary: true;
         active: root.can-add;
         dialog-button-role: accept;
         clicked => {
-            root.confirmed(root.address);
+            if root.can-add {
+                root.confirmed(root.address);
+            }
         }
         escape-pressed => {
             root.cancelled();

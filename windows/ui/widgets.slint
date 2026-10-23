@@ -64,6 +64,7 @@ export global Glyphs {
     out property <string> dismiss: "\u{E711}";
     out property <string> warning: "\u{E7BA}";
     out property <string> chevron-right: "\u{E76C}";
+    out property <string> chevron-down: "\u{E70D}";
     out property <string> equalizer: "\u{E9E9}";
     out property <string> timer: "\u{E916}";
     out property <string> auto-connect: "\u{E945}";
@@ -321,6 +322,74 @@ export component LinkButton inherits Rectangle {
             vertical-alignment: center;
             opacity: touch.pressed ? 0.75 : 1;
             accessible-role: none;
+        }
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// A button that shows or hides the controls under it, with a chevron that
+// points down while they show.
+export component Disclosure inherits Rectangle {
+    in property <string> text;
+    in property <bool> expanded;
+    callback toggled();
+
+    min-width: content.min-width;
+    min-height: content.min-height;
+    preferred-width: content.preferred-width;
+    preferred-height: content.preferred-height;
+    border-radius: Fluent.radius-control;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-expandable: true;
+    accessible-expanded: root.expanded;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    content := HorizontalLayout {
+        padding-left: 2px;
+        padding-right: 2px;
+        spacing: 4px;
+
+        Text {
+            text: root.text;
+            font-size: Tokens.font-size-caption;
+            font-weight: 600;
+            color: Tokens.teal-text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        Glyph {
+            glyph: root.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
+            font-size: 10px;
+            color: Tokens.teal-text;
         }
     }
 

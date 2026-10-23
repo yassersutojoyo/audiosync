@@ -111,8 +111,9 @@ struct RemoteSource: Equatable {
         case system, app, input
     }
 
-    /// "system", "app:<bundle ID>" or "input:<uid>": the core takes no empty
-    /// ID, which is what the picker gives the whole system.
+    /// "system", "app:<bundle ID>", "input:<uid>" or a mix's own "apps:…" or
+    /// "except:…": the core takes no empty ID, which is what the picker gives
+    /// the whole system.
     var id: String
     var name: String
     var kind: Kind
@@ -123,7 +124,7 @@ struct RemoteSource: Equatable {
         self.name = name
         kind = switch AudioSource(defaultsValue: pickerID) {
         case .system: .system
-        case .app: .app
+        case .app, .mix: .app
         case .input: .input
         }
     }
@@ -132,7 +133,7 @@ struct RemoteSource: Equatable {
         switch AudioSource(defaultsValue: pickerID) {
         case .system: "system"
         case .app(let bundleID): "app:" + bundleID
-        case .input: pickerID
+        case .mix, .input: pickerID
         }
     }
 
@@ -140,7 +141,9 @@ struct RemoteSource: Equatable {
     static func pickerID(_ pageID: String) -> String? {
         if pageID == "system" { return AudioSource.system.defaultsValue }
         if pageID.hasPrefix("app:"), pageID.count > 4 { return String(pageID.dropFirst(4)) }
-        if pageID.hasPrefix("input:"), pageID.count > 6 { return pageID }
+        for tag in ["input:", "apps:", "except:"] where pageID.hasPrefix(tag) && pageID.count > tag.count {
+            return pageID
+        }
         return nil
     }
 

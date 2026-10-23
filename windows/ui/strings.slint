@@ -103,6 +103,14 @@ export global Strings {
     out property <string> airplay-delay-hint: @tr("While an AirPlay speaker is on, the speakers on this PC wait this long for it. Heard the AirPlay speakers late? Raise it.");
     out property <string> auto-connect: @tr("Auto-connect when available");
     out property <string> source-system: @tr("All System Audio");
+    // Several apps as the source: the list under the source menu.
+    out property <string> source-mix-title: @tr("Several apps");
+    out property <string> source-mix-only: @tr("Only the checked apps");
+    out property <string> source-mix-all-except: @tr("All apps except the checked ones");
+    out property <string> source-mix-mode: @tr("Which apps to send");
+    out property <string> source-mix-empty: @tr("Apps show up here once they play sound.");
+    // Windows' process loopback reaches apps only, never the system sounds session.
+    out property <string> source-mix-all-except-note: @tr("Windows system sounds, such as notification chimes, aren't included.");
 
     // Notices: what happened and what to do about it
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
@@ -217,6 +225,8 @@ export global Strings {
     // An example in the empty field; a name, never a private address.
     out property <string> cast-address-placeholder: "speaker.local";
     out property <string> cast-address-invalid: @tr("That isn't an IP address or host name. Check it and try again.");
+    // On the Add button and read out while the address is checked.
+    out property <string> cast-address-checking: @tr("Checking…");
     out property <string> cast-address-not-found: @tr("AudioSync couldn't find a speaker at that address. Check that it's on and try again.");
     out property <string> add: @tr("Add");
     // On the menu and under the name of a speaker added that way.
@@ -351,6 +361,11 @@ export global Strings {
     // `detail` is the system's reason.
     public pure function audio-failed(detail: string) -> string {
         return @tr("AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}", detail);
+    }
+
+    // The source menu's name for "all apps except" these, by name.
+    public pure function source-all-except(names: string) -> string {
+        return @tr("All apps except {}", names);
     }
 
     // The status under the wordmark (and the tray icon's tooltip).

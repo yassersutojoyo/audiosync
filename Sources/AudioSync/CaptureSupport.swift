@@ -134,6 +134,14 @@ enum AppTapFollow: Equatable {
     static func candidates(_ found: [AudioObjectID], own: AudioObjectID?) -> [AudioObjectID] {
         Set(found).subtracting(own.map { [$0] } ?? []).sorted()
     }
+
+    /// An "all except" tap leaves out `own` and the listed apps' audio
+    /// processes (`found`), sorted, once each. It never waits or is lost: an
+    /// excluded app quitting only shortens the list.
+    static func decideExcluding(tapped: [AudioObjectID], found: [AudioObjectID], own: AudioObjectID) -> AppTapFollow {
+        let excluded = Set(found).union([own])
+        return excluded == Set(tapped) ? .keep : .retap(excluded.sorted())
+    }
 }
 
 /// Moves an app tap to a new process list (`AppTapFollow.retap`) without

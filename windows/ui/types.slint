@@ -48,6 +48,13 @@ export enum PinPhase { starting, ready, checking }
 // or the hint under its volume slider (low, muted, or both).
 export enum DeviceVolumeHint { none, low, muted, muted-low }
 
+// An app of the several-apps list under the source menu.
+export struct MixAppItem {
+    name: string,
+    // Checked in the mode the list shows.
+    checked: bool,
+}
+
 // An output that is on but left out of Calibrate All by its kind.
 export struct LeftOutItem {
     name: string,
