@@ -323,6 +323,7 @@ fn the_airplay_delay_is_the_median_of_the_certain_airplay_rows() {
     assert_eq!(shared.new_ms, Some(2103.0));
     close(shared.spread_ms, 5.0);
     assert_eq!(shared.certain_rows, 3);
+    assert!(!shared.clamped);
     let applied = sheet.apply().unwrap();
     assert_eq!(applied.changes.len(), 1, "one change for every AirPlay row");
     assert_eq!(applied.changes[0].target, Target::AirPlay);
@@ -622,12 +623,11 @@ fn an_empty_speaker_list_has_no_reference() {
 
 // covers: S235
 #[test]
-fn a_latency_that_is_negative_infinite_or_huge_keeps_the_window_in_bounds() {
+fn a_latency_that_is_negative_or_infinite_keeps_the_shortest_window() {
     let speakers = vec![
         speaker("ref", Class::Local, None, 50.0),
         speaker("early", Class::Local, None, -500.0),
         speaker("inf", Class::Local, None, f64::INFINITY),
-        speaker("far", Class::Local, None, 1e9),
     ];
     let mut run = Run::new(RATE, "ref", speakers).unwrap();
     let steps = drive(&mut run, |_| Heard::At(50.0));
@@ -643,12 +643,72 @@ fn a_latency_that_is_negative_infinite_or_huge_keeps_the_window_in_bounds() {
     };
     assert_eq!(window(1), (1750.0 * 48.0) as usize);
     assert_eq!(window(2), (1750.0 * 48.0) as usize);
-    assert_eq!(window(3), MAX_RECORDING_FRAMES);
     assert!(
         run.finish().rows()[1..]
             .iter()
             .all(|r| r.state.is_certain())
     );
+}
+
+// covers: S235
+#[test]
+fn a_window_the_recording_limit_would_cut_refuses_the_run() {
+    // At 192 kHz 2^21 frames hold about 10.9 s: an arrival at 9100 ms plus
+    // the sweep and 1 s fits, one at 9200 ms doesn't.
+    const HIGH: u32 = 192_000;
+    let arriving = |latency_ms| {
+        vec![
+            speaker("ref", Class::Local, None, 50.0),
+            speaker("air", Class::AirPlay, Some(9000.0), latency_ms),
+        ]
+    };
+    assert!(Run::new(HIGH, "ref", arriving(9100.0)).is_ok());
+    assert_eq!(
+        Run::new(HIGH, "ref", arriving(9200.0)).err(),
+        Some(PlanError::TooLong)
+    );
+    assert!(Run::new(RATE, "ref", arriving(9200.0)).is_ok());
+    assert_eq!(
+        Run::new(RATE, "ref", arriving(1e9)).err(),
+        Some(PlanError::TooLong)
+    );
+    let late_reference = vec![
+        speaker("ref", Class::Local, None, 9200.0),
+        speaker("usb", Class::Local, None, 50.0),
+    ];
+    assert_eq!(
+        Run::new(HIGH, "ref", late_reference).err(),
+        Some(PlanError::TooLong)
+    );
+    // A Cast speaker without an offset searches the whole limit anyway.
+    let searching = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("tv", Class::Cast, None, 1e9),
+    ];
+    let mut run = Run::new(RATE, "ref", searching).unwrap();
+    let reference = run.step().unwrap();
+    assert!(run.record(&recording(reference.window_frames, Heard::At(50.0))));
+    assert_eq!(run.step().unwrap().window_frames, MAX_RECORDING_FRAMES);
+}
+
+// covers: S237
+#[test]
+fn a_shared_airplay_delay_the_range_cuts_says_it_was_clamped() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker("a", Class::AirPlay, Some(19_990.0), 50.0),
+        speaker("b", Class::AirPlay, Some(19_990.0), 50.0),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    // Both heard 40 ms after the reference: 20 030 ms is wanted.
+    drive(
+        &mut run,
+        arrivals(&[(1, [Heard::At(90.0); 2]), (2, [Heard::At(90.0); 2])]),
+    );
+    let sheet = run.finish();
+    let shared = *sheet.airplay().unwrap();
+    assert_eq!(shared.state, SharedState::Certain);
+    assert_eq!((shared.new_ms, shared.clamped), (Some(20_000.0), true));
 }
 
 // covers: S236
@@ -902,4 +962,46 @@ fn a_cancel_after_the_last_step_changes_nothing() {
     let mut sheet = run.finish();
     assert_eq!(sheet.ended(), None);
     assert!(sheet.apply().is_ok());
+}
+
+// covers: S241
+#[test]
+fn a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format() {
+    use audiosync_cast::audio::Codec;
+    use audiosync_core::calibrate_all::{
+        CAST_LATENCY_ALLOWANCE_MS, CAST_UNKNOWN_FLAC_MS, CAST_UNKNOWN_WAV_MS, cast_wait_ms,
+    };
+
+    assert_eq!(CAST_UNKNOWN_WAV_MS, 3000.0);
+    assert_eq!(CAST_UNKNOWN_FLAC_MS, 6000.0);
+    assert_eq!(
+        cast_wait_ms(Some(1000.0), 750.0, Some(Codec::Wav)),
+        1000.0 + 750.0 + CAST_LATENCY_ALLOWANCE_MS,
+        "a stored offset replaces the guess, whatever the format"
+    );
+    assert_eq!(
+        cast_wait_ms(Some(1000.0), 750.0, Some(Codec::Flac)),
+        1000.0 + 750.0 + CAST_LATENCY_ALLOWANCE_MS
+    );
+    for none in [None, Some(0.0), Some(-5.0), Some(f64::NAN)] {
+        assert_eq!(
+            cast_wait_ms(none, 1750.0, Some(Codec::Wav)),
+            1750.0 + 3000.0,
+            "{none:?} is no offset: the hold-back plus the WAV guess"
+        );
+        assert_eq!(
+            cast_wait_ms(none, 1750.0, Some(Codec::Flac)),
+            1750.0 + 6000.0
+        );
+    }
+    assert_eq!(
+        cast_wait_ms(None, 0.0, None),
+        6000.0,
+        "a format not reported yet takes the longer guess"
+    );
+    assert_eq!(
+        cast_wait_ms(Some(30_000.0), f64::NAN, Some(Codec::Wav)),
+        20_500.0
+    );
+    assert_eq!(cast_wait_ms(None, -100.0, Some(Codec::Wav)), 3000.0);
 }

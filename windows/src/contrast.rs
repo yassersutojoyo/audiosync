@@ -517,6 +517,7 @@ fn no_text_promises_airplay() {
                     "help-more",
                     "help-airplay-title",
                     "help-airplay",
+                    "help-calibration",
                 ]
                 .iter()
                 .any(|name| line.contains(&format!("out property <string> {name}: @tr("))),

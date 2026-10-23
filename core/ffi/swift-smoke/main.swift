@@ -250,6 +250,8 @@ func airPlaySender() {
           "nothing to forget, no file until a pairing")
     try? FileManager.default.removeItem(at: folder)
     asc_airplay_set_master(handle, 80)
+    asc_airplay_read_volumes(handle)   // nothing added: nothing asked
+    asc_airplay_read_volumes(nil)
     // The capture's input: handed over once, silent until it has a rate,
     // then 10 ms at 48 kHz become 441 frames at 44.1 kHz.
     var input: OpaquePointer? = asc_airplay_take_input(handle)
@@ -267,8 +269,12 @@ func airPlaySender() {
     asc_airplay_destroy(nil)
     check(Int(ASC_AIRPLAY_FLAG_AIRPLAY2) == 128 && Int(ASC_AIRPLAY_FLAG_OVER_AIRPLAY2) == 256 && Int(ASC_AIRPLAY_FLAG_PAIRED) == 512
               && ASC_AIRPLAY_GONE == 3 && ASC_AIRPLAY_EVENT_FAILED == 5
-              && ASC_AIRPLAY_EVENT_PAIRED == 9 && ASC_AIRPLAY_ERROR_WRONG_PIN == 10 && ASC_AIRPLAY_PAIRINGS_NEWER == -3,
+              && ASC_AIRPLAY_EVENT_PAIRED == 9 && ASC_AIRPLAY_ERROR_WRONG_PIN == 10 && ASC_AIRPLAY_PAIRINGS_NEWER == -3
+              && ASC_AIRPLAY_EVENT_VOLUME == 10 && ASC_AIRPLAY_EVENT_WARNING == 11
+              && ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN == 5 && ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY == 6,
           "the AirPlay constants cross the header")
+    // The Rust side checks the same size (`the_event_layout_matches_the_header`).
+    check(MemoryLayout<AscAirPlayEvent>.size == 88, "the event struct has the header's layout")
 }
 
 func castSender() {

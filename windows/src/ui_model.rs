@@ -474,6 +474,9 @@ pub enum NoticeMessage {
     /// File > AirPlay 2 (Experimental) was turned on (`on`) or off, which
     /// applies once AudioSync is quit and opened again.
     AirPlay2NextLaunch { on: bool },
+    /// The web remote listens while a connected network is Public, where
+    /// anyone on it can reach the pairing page.
+    RemoteOnPublicNetwork,
     /// A Google Cast speaker can't play, so it is off.
     CastCantPlay {
         speaker: String,

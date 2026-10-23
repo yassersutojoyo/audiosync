@@ -18,6 +18,9 @@ import SystemConfiguration
 final class NativeAirPlay {
     /// How often the queue asks the sender for discovery changes and events.
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
+    /// Every how many polls the speakers are asked for their own volume
+    /// (2 s), so a change made on a speaker reaches its slider.
+    static let volumeReadPolls = 8
     /// The receivers the debug hook AUDIOSYNC_AIRPLAY_PCM names; the core
     /// reads the same variable and lets them use PCM when they are added.
     static let pcmDebugIDs = NativeAirPlayID.pcmDebugIDs(ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY_PCM"])
@@ -38,6 +41,8 @@ final class NativeAirPlay {
     private var input: OpaquePointer?
     /// The poll timer (queue only).
     private var timer: DispatchSourceTimer?
+    /// Polls since the speakers were last asked for their volume (queue only).
+    private var pollsSinceVolumeRead = 0
     /// What the receivers that show it get as playing (queue only).
     private var nowPlaying = NativeNowPlaying()
     /// The hold-back last asked for (main queue), and the one the sender
@@ -379,6 +384,11 @@ final class NativeAirPlay {
     /// Takes every waiting change and event and hands them to the main queue at once.
     private func poll() {
         guard let handle else { return }
+        pollsSinceVolumeRead += 1
+        if pollsSinceVolumeRead >= Self.volumeReadPolls {
+            pollsSinceVolumeRead = 0
+            asc_airplay_read_volumes(handle)
+        }
         logStatusIfDue(handle)
         var changes: [NativeReceiverChange] = []
         var raw = AscAirPlayReceiver()
@@ -463,6 +473,11 @@ final class NativeAirPlay {
                                   Self.problem(raw.error), detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_PAIRED:
             return .paired(id: id, storeNote: text(raw.detail))
+        case ASC_AIRPLAY_EVENT_VOLUME:
+            return .volume(id: id, position: raw.volume)
+        case ASC_AIRPLAY_EVENT_WARNING:
+            return .warning(id: id, ptpPortsTaken: raw.warning == ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN,
+                            detail: text(raw.detail))
         default:
             return nil
         }

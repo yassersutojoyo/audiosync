@@ -293,6 +293,8 @@ pub enum Failure {
     /// The default input device is a Bluetooth headset's hands-free one,
     /// which opening would switch to call mode.
     HandsFreeMicrophone,
+    /// Another app holds the input device in exclusive mode.
+    MicrophoneInUse,
     /// The estimate couldn't run.
     Unfinished,
     /// Calibrate All found no speaker on besides the reference.
@@ -416,6 +418,7 @@ pub enum MicrophoneError {
     Denied,
     Missing,
     HandsFree,
+    InUse,
 }
 
 impl From<MicrophoneError> for Failure {
@@ -424,6 +427,7 @@ impl From<MicrophoneError> for Failure {
             MicrophoneError::Denied => Failure::MicrophoneDenied,
             MicrophoneError::Missing => Failure::NoMicrophone,
             MicrophoneError::HandsFree => Failure::HandsFreeMicrophone,
+            MicrophoneError::InUse => Failure::MicrophoneInUse,
         }
     }
 }
@@ -473,6 +477,9 @@ pub trait Microphone {
     fn frames_recorded(&self) -> usize;
     /// The frame where the recording first lost audio, if it did.
     fn gap_at(&self) -> Option<usize>;
+    /// The recording stopped on its own, as when the device is unplugged:
+    /// no more frames will come.
+    fn stopped(&self) -> bool;
     /// Stops recording and gives `count` frames from `start`, fewer when it
     /// recorded less.
     fn take(&mut self, start: usize, count: usize) -> Vec<f32>;
@@ -702,6 +709,20 @@ enum Stage {
     Over,
 }
 
+impl Stage {
+    /// The microphone stopped on its own before its recording was whole:
+    /// waiting for the deadline would only keep the music faded.
+    fn microphone_lost(&self) -> bool {
+        match self {
+            Stage::Warming { mic, .. } | Stage::Playing { mic, .. } => mic.stopped(),
+            Stage::Recording {
+                mic, start, frames, ..
+            } => mic.stopped() && mic.frames_recorded() < start + frames,
+            _ => false,
+        }
+    }
+}
+
 /// One calibration, from the music fading out to the new offset or the
 /// reason there is none. The UI thread ticks it every few tens of ms.
 pub struct CalibrationRun {
@@ -833,6 +854,9 @@ impl CalibrationRun {
         }
         if self.changed(&rig.engine()) {
             return self.fail(rig, Failure::Interrupted, now_ns);
+        }
+        if self.stage.microphone_lost() {
+            return self.fail(rig, Failure::NoMicrophone, now_ns);
         }
         match std::mem::replace(&mut self.stage, Stage::Over) {
             Stage::Quiet { until_ns } => {
@@ -1159,6 +1183,24 @@ mod tests {
         deaf: bool,
     }
 
+    /// What goes wrong with every recording the fake microphone opens.
+    #[derive(Default)]
+    struct MicFault {
+        /// No first frame ever comes.
+        cold: Cell<bool>,
+        /// No frame comes after this moment.
+        frozen_at: Cell<Option<u64>>,
+        /// It stopped on its own, as an unplugged device does.
+        stopped: Cell<bool>,
+    }
+
+    impl MicFault {
+        fn unplug(&self, now_ns: u64) {
+            self.frozen_at.set(Some(now_ns));
+            self.stopped.set(true);
+        }
+    }
+
     struct FakeMic {
         id: MicrophoneId,
         first_ns: u64,
@@ -1167,6 +1209,7 @@ mod tests {
         heard_after_ms: Option<f64>,
         deaf: bool,
         gap_at: Option<usize>,
+        fault: Rc<MicFault>,
     }
 
     impl Microphone for FakeMic {
@@ -1175,16 +1218,24 @@ mod tests {
         }
 
         fn first_frame_ns(&self) -> Option<u64> {
-            (self.now.get() > self.first_ns).then_some(self.first_ns)
+            (!self.fault.cold.get() && self.now.get() > self.first_ns).then_some(self.first_ns)
         }
 
         fn frames_recorded(&self) -> usize {
-            let since = self.now.get().saturating_sub(self.first_ns);
+            let now = self
+                .now
+                .get()
+                .min(self.fault.frozen_at.get().unwrap_or(u64::MAX));
+            let since = now.saturating_sub(self.first_ns);
             (since as f64 * f64::from(self.id.rate) / 1e9) as usize
         }
 
         fn gap_at(&self) -> Option<usize> {
             self.gap_at.filter(|gap| *gap < self.frames_recorded())
+        }
+
+        fn stopped(&self) -> bool {
+            self.fault.stopped.get()
         }
 
         fn take(&mut self, start: usize, count: usize) -> Vec<f32> {
@@ -1230,6 +1281,9 @@ mod tests {
         mic: Result<MicrophoneId, MicrophoneError>,
         /// Where each recording loses audio.
         mic_gap_at: Option<usize>,
+        mic_fault: Rc<MicFault>,
+        /// The capture writes no block, as when the source sends nothing.
+        capture_off: bool,
         set_offsets: RefCell<Vec<(String, f64)>>,
     }
 
@@ -1264,6 +1318,8 @@ mod tests {
                     rate: MIC_RATE,
                 }),
                 mic_gap_at: None,
+                mic_fault: Rc::default(),
+                capture_off: false,
                 set_offsets: RefCell::new(Vec::new()),
             }
         }
@@ -1271,6 +1327,9 @@ mod tests {
         /// One capture block of 10 ms through the tap, as the converter
         /// writes it.
         fn capture_block(&self) {
+            if self.capture_off {
+                return;
+            }
             let mut block = [0.0_f32; 960];
             let mut cursor = self.tap.block_cursor();
             let starts = cursor == 0;
@@ -1316,6 +1375,7 @@ mod tests {
                 heard_after_ms,
                 deaf: self.room.deaf,
                 gap_at: self.mic_gap_at,
+                fault: Rc::clone(&self.mic_fault),
             }))
         }
 
@@ -1507,7 +1567,85 @@ mod tests {
         rig.mic = Err(MicrophoneError::HandsFree);
         let refused = CalibrationRun::start(&mut rig, "usb", now, DebugLog::default());
         assert_eq!(refused.err(), Some(Failure::HandsFreeMicrophone));
+        rig.mic = Err(MicrophoneError::InUse);
+        let refused = CalibrationRun::start(&mut rig, "usb", now, DebugLog::default());
+        assert_eq!(refused.err(), Some(Failure::MicrophoneInUse));
         assert!(!rig.tap.engaged.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn an_unplugged_microphone_ends_the_run_at_once() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let mut unplugged_at = None;
+        let mut failed_at = None;
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            let recording = run.phase() == Phase::Running(Step::Measuring(Which::Reference))
+                && rig.tap.played_at_ns().is_some();
+            if recording && unplugged_at.is_none() {
+                unplugged_at = Some(rig.now.get());
+                rig.mic_fault.unplug(rig.now.get());
+            }
+            if failed_at.is_none() && matches!(run.phase(), Phase::Failed(_)) {
+                failed_at = Some(rig.now.get());
+            }
+        });
+        assert_eq!(run.phase(), Phase::Failed(Failure::NoMicrophone));
+        let took = failed_at.unwrap_or_else(|| rig.now.get()) - unplugged_at.expect("unplugged");
+        assert!(took <= TICK_NS, "failed {took} ns after the unplug");
+        assert!(rig.set_offsets.borrow().is_empty());
+        assert_eq!(rig.solo, None);
+    }
+
+    #[test]
+    fn a_microphone_that_stalls_is_waited_for_until_the_deadline() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let mut stalled_at = None;
+        let mut failed_at = None;
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            if rig.tap.played_at_ns().is_some() && stalled_at.is_none() {
+                stalled_at = Some(rig.now.get());
+                rig.mic_fault.frozen_at.set(Some(rig.now.get()));
+            }
+            if failed_at.is_none() && matches!(run.phase(), Phase::Failed(_)) {
+                failed_at = Some(rig.now.get());
+            }
+        });
+        assert!(matches!(run.phase(), Phase::Failed(Failure::TooShort(_))));
+        let failed_at = failed_at.unwrap_or_else(|| rig.now.get());
+        let waited = failed_at - stalled_at.expect("it stalled");
+        assert!(waited >= ns(STALL_S), "gave up after {waited} ns");
+        assert!(rig.set_offsets.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_microphone_that_never_delivers_a_frame_gives_up_after_the_warm_up_limit() {
+        let mut rig = FakeRig::new();
+        rig.mic_fault.cold.set(true);
+        let started = rig.now.get();
+        let mut run = start(&mut rig);
+        let mut failed_at = None;
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            if failed_at.is_none() && matches!(run.phase(), Phase::Failed(_)) {
+                failed_at = Some(rig.now.get());
+            }
+        });
+        assert_eq!(run.phase(), Phase::Failed(Failure::NoMicrophone));
+        assert_eq!(rig.tap.played_at_ns(), None, "no sweep played");
+        assert!(failed_at.unwrap_or_else(|| rig.now.get()) - started >= ns(WARM_UP_LIMIT_S));
+        assert_eq!(rig.solo, None);
+    }
+
+    #[test]
+    fn a_source_that_sends_nothing_fails_as_silent() {
+        let mut rig = FakeRig::new();
+        rig.capture_off = true;
+        let mut run = start(&mut rig);
+        run_to_end(&mut rig, &mut run, |_, _| {});
+        assert_eq!(run.phase(), Phase::Failed(Failure::SourceSilent));
+        assert!(rig.set_offsets.borrow().is_empty());
+        assert_eq!(rig.solo, None);
     }
 
     #[test]

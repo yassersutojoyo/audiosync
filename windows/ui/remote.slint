@@ -57,6 +57,8 @@ export component RemoteWindow inherits Window {
     // Forget All Remote Devices couldn't save the empty list.
     in property <bool> forget-failed;
     in property <bool> port-invalid;
+    // A network this PC is connected to has Windows' Public profile.
+    in property <bool> public-network;
 
     callback remote-toggled(bool);
     callback new-code-requested();
@@ -120,6 +122,8 @@ export component RemoteWindow inherits Window {
                             text: Strings.remote-switch;
                             checked: root.remote-on;
                             accessible-label: Strings.remote-switch;
+                            // Slint has no live region: the focused switch carries the failure.
+                            accessible-description: !root.remote-on ? "" : root.port-problem ? (root.port-in-use ? Strings.remote-port-in-use(root.port) : Strings.remote-port-unavailable(root.port)) : root.problem;
                             toggled => {
                                 root.remote-toggled(self.checked);
                                 // Show what the app did, even if it couldn't start.
@@ -147,6 +151,7 @@ export component RemoteWindow inherits Window {
                                 input-type: number;
                                 placeholder-text: Strings.remote-port-label;
                                 accessible-label: Strings.remote-port-label;
+                                accessible-description: root.port-invalid ? Strings.remote-port-invalid : "";
                                 accepted(text) => {
                                     root.port-submitted(text);
                                 }
@@ -154,6 +159,7 @@ export component RemoteWindow inherits Window {
 
                             Button {
                                 text: Strings.remote-use-port;
+                                accessible-description: root.port-invalid ? Strings.remote-port-invalid : "";
                                 clicked => {
                                     root.port-submitted(port-field.text);
                                 }
@@ -177,6 +183,13 @@ export component RemoteWindow inherits Window {
 
                     if root.listening: VerticalLayout {
                         spacing: 14px;
+
+                        if root.public-network: Text {
+                            text: Strings.remote-public-network;
+                            color: Tokens.error-text;
+                            wrap: word-wrap;
+                            min-height: self.preferred-height;
+                        }
 
                         VerticalLayout {
                             spacing: 8px;
@@ -302,6 +315,7 @@ export component RemoteWindow inherits Window {
                             Button {
                                 text: Strings.remote-forget-all;
                                 enabled: root.devices > 0 || root.forget-failed;
+                                accessible-description: root.forget-failed ? Strings.remote-forget-failed : "";
                                 clicked => {
                                     root.forget-all-requested();
                                 }

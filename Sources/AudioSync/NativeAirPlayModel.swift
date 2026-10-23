@@ -140,6 +140,14 @@ enum NativeSpeakerEvent: Equatable {
     /// A pairing succeeded and its credentials are stored; `storeNote` is
     /// empty, or why they last only until AudioSync quits.
     case paired(id: String, storeNote: String)
+    /// Someone changed its volume on the speaker itself: the slider position
+    /// (0 to 100) that plays at it, which the sender already counts as the
+    /// speaker's own (P122, P180).
+    case volume(id: String, position: Double)
+    /// Something about its session for the debug log; the session goes on.
+    /// `ptpPortsTaken`: PTP port 319 or 320 is taken, so speakers that need
+    /// PTP timing can't play (P158).
+    case warning(id: String, ptpPortsTaken: Bool, detail: String)
 
     /// The event as a debug log line; `name` gives a speaker's name. Never
     /// holds a PIN, password or credential (none crosses into the app).
@@ -169,6 +177,10 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)): pairing failed: " + (wrongPin ? "wrong PIN" : problem.rawValue) + " (\(detail))"
         case .paired(let id, let note):
             line = "\(label(id)): paired, credentials stored" + (note.isEmpty ? "" : " for this run only (\(note))")
+        case .volume(let id, let position):
+            line = "\(label(id)) volume changed on the speaker: slider at \(Int(position.rounded()))"
+        case .warning(let id, _, let detail):
+            line = "\(label(id)) warning: \(detail)"
         }
         return "[AudioSync] native AirPlay: " + line
     }
@@ -267,6 +279,10 @@ struct NativeAirPlayPlan: Equatable {
     var release: [String] = []
 
     var isEmpty: Bool { add.isEmpty && remove.isEmpty && turnOff.isEmpty && release.isEmpty }
+
+    /// Applying it changes the rows by itself: a target or lapsed receiver
+    /// shows only while in the sender, and its later Stopped event is passed over.
+    var changesRows: Bool { !remove.isEmpty }
 }
 
 /// What the app does about a speaker event (`NativeAirPlayModel.apply`).
@@ -292,6 +308,12 @@ enum NativeAirPlayOutcome: Equatable {
     /// false): it stays on, and the sender starts it once the slot frees
     /// (P169).
     case waiting(String, Bool)
+    /// Someone changed the speaker's volume on the speaker itself (app ID):
+    /// its slider follows, and nothing goes back to the sender.
+    case volumeChanged(String, Double)
+    /// PTP port 319 or 320 is taken, so speakers that need PTP timing
+    /// can't play (P158).
+    case ptpPortsTaken
 }
 
 /// The native sender's receivers and speakers as the app sees them (main
@@ -749,8 +771,50 @@ struct NativeAirPlayModel {
             return .senderFailed
         case .pinNeeded, .passwordNeeded, .pairingFailed, .paired:
             return pairingEvent(event)
+        case .volume(let id, let position):
+            guard states[id] != nil else { return nil }
+            return .volumeChanged(NativeAirPlayID.app(id), position)
+        case .warning(_, let ptpPortsTaken, _):
+            return ptpPortsTaken ? .ptpPortsTaken : nil
         }
     }
+}
+
+/// Whether the PTP port notice shows (P158, main queue). The sender reports
+/// the clash once, so the notice follows the rows instead: it stays while a
+/// row is off because it needs PTP timing, and comes back when one goes off
+/// for it. A speaker that plays clears it only when no row is, since a
+/// session on NTP timing binds no PTP port and proves nothing about them.
+struct PtpPortNotice: Equatable {
+    /// The sender reported port 319 or 320 taken.
+    private(set) var portsTaken = false
+    /// A speaker played since that report.
+    private(set) var played = false
+    /// The rows (app IDs) off because they need PTP timing.
+    private(set) var timingOff: Set<String> = []
+
+    var shown: Bool { Self.shown(portsTaken: portsTaken, played: played, timingRows: timingOff.count) }
+
+    /// With no row off for PTP timing, the report alone shows the notice
+    /// until a speaker plays.
+    static func shown(portsTaken: Bool, played: Bool, timingRows: Int) -> Bool {
+        portsTaken && (timingRows > 0 || !played)
+    }
+
+    mutating func reported() { portsTaken = true }
+
+    /// The row `id` went off; `timing`: because it needs PTP timing.
+    mutating func turnedOff(_ id: String, timing: Bool) {
+        if timing { timingOff.insert(id) } else { timingOff.remove(id) }
+    }
+
+    mutating func playing(_ id: String) {
+        timingOff.remove(id)
+        played = true
+    }
+
+    /// The rows the list shows now; one that left takes its reason along.
+    mutating func listed(_ rows: [String]) { timingOff.formIntersection(rows) }
 }
 
 /// When the app starts AudioSync's own sender again after a start failed
