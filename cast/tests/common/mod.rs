@@ -67,6 +67,8 @@ pub struct Behavior {
     pub on_load: OnLoad,
     /// A `LOAD` of this `contentType` is answered this way instead.
     pub on_load_of: Option<(&'static str, OnLoad)>,
+    /// The first `LOAD`s are answered in this order, later ones as above.
+    pub load_script: Vec<OnLoad>,
     pub answer_media_stop: bool,
     pub answer_stop: bool,
     /// Apps already running when the sender connects.
@@ -89,6 +91,7 @@ impl Default for Behavior {
             on_launch: OnLaunch::Start,
             on_load: OnLoad::Play,
             on_load_of: None,
+            load_script: Vec::new(),
             answer_media_stop: true,
             answer_stop: true,
             apps: Vec::new(),
@@ -453,6 +456,7 @@ impl Device {
         let transport = message.destination_id.clone();
         let content_type = payload["media"]["contentType"].as_str().unwrap_or("");
         let on_load = match &self.behavior.on_load_of {
+            _ if !self.behavior.load_script.is_empty() => self.behavior.load_script.remove(0),
             Some((kind, special)) if *kind == content_type => special.clone(),
             _ => self.behavior.on_load.clone(),
         };
