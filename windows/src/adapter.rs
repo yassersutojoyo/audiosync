@@ -3574,13 +3574,13 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
     }
 }
 
-/// What a notice about one local output is about.
 /// Whether an AirPlay ID is a stereo pair's or home theater's, which plays
 /// over AirPlay 2 only (spec S149, P176).
 fn is_airplay_target(id: &str) -> bool {
     id.starts_with("pair:") || id.starts_with("theater:")
 }
 
+/// What a notice about one local output is about.
 fn speaker_subject(endpoint_id: &str) -> NoticeSubject {
     NoticeSubject::Speaker(SpeakerKey::Local(endpoint_id.to_owned()))
 }
