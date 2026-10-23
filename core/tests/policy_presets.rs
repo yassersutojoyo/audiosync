@@ -531,6 +531,8 @@ fn an_overlapping_group_becomes_a_preset_with_its_full_members() {
         group("g1", "Downstairs", &first),
         group("g2", "Group 2", &second),
         group("g3", "Office", &alone),
+        group("g4", "Empty", &[]),
+        group("", "No zone", &[]),
     ];
     let zones = zones();
     let saved = Saved {
@@ -540,7 +542,11 @@ fn an_overlapping_group_becomes_a_preset_with_its_full_members() {
         gains_db: GAINS,
     };
     let presets = presets_from_groups(&groups, &saved);
-    assert_eq!(presets.len(), 1, "only the group that lost a member");
+    assert_eq!(
+        presets.len(),
+        1,
+        "only the group that lost a member, never an empty one"
+    );
     let preset = &presets[0];
     assert_eq!(
         (preset.id.as_str(), preset.name.as_str()),

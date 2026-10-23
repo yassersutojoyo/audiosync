@@ -1455,6 +1455,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.log
             .log(|| format!("the user recalled preset \"{}\"", preset.name));
+        // Before any member goes on, so a speaker that starts plays at its zone level.
+        for (zone, volume) in presets::recall_zone_volumes(&preset, &self.zones) {
+            self.zones.set_volume(zone, volume);
+        }
+        self.push_zone_volumes();
         for (speaker, off) in others.iter().zip(&plan.switch_off) {
             if let (true, Some(key)) = (*off, SpeakerKey::parse(&speaker.id)) {
                 self.switch_zone_member(&key, false);
@@ -1472,9 +1477,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
         }
         self.audio.set_master_volume(preset.master);
-        for (zone, volume) in presets::recall_zone_volumes(&preset, &self.zones) {
-            self.zones.set_volume(zone, volume);
-        }
         // The preamp and the equalizer switch are standing trims outside
         // every preset.
         self.equalizer.gains_db = preset.gains_db;
@@ -8485,6 +8487,48 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).volume, 40.0);
         assert_eq!(adapter.snapshot().master_volume, 70.0);
         assert_eq!(adapter.recall_preset("preset:9"), None);
+    }
+
+    // covers: S252
+    #[test]
+    fn a_recalled_zone_volume_reaches_the_playing_members() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), cc(CAST_KITCHEN)])],
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), Some(30.0)),
+                (cc(CAST_KITCHEN), Some(50.0)),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_KITCHEN),
+            event: SessionEvent::Playing,
+        });
+        adapter.poll();
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.set_speaker_volume(&cc(CAST_KITCHEN), 50.0);
+
+        let left = adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        assert!(left.is_empty(), "{left:?}");
+        assert_eq!(
+            adapter
+                .audio
+                .playing_params(SPEAKERS)
+                .expect("playing")
+                .gain,
+            zoned_output_gain(30.0, 45.0, 70.0) as f32
+        );
+        // Master × zone × own: 0.7 × 0.45 × 0.5.
+        let cast = *fake.state().volumes.last().expect("a Cast volume");
+        assert!((cast - 0.1575).abs() < 1e-9, "{cast}");
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
     // covers: S252, S253
