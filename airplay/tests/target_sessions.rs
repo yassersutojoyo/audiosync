@@ -22,9 +22,11 @@ use audiosync_airplay::discovery::{
     BrowseEvent, Browser, Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
+use audiosync_airplay::pairing::{Credentials, SECRET_BYTES};
 use audiosync_airplay::ptp::{PtpPorts, PtpService};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
+    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState, member_options,
 };
 use audiosync_airplay::targets::{Member, Target, TargetId, TargetKind};
 use audiosync_airplay::volume::Volume;
@@ -138,6 +140,48 @@ fn payloads_of(receiver: &NetReceiver) -> BTreeMap<u64, Vec<u8>> {
             Some((host_frame_of(first)?, p.clone()))
         })
         .collect()
+}
+
+// covers: P179, P180
+#[test]
+fn every_member_keeps_its_own_secrets_but_takes_the_targets_delay_volume_and_pcm() {
+    let target = pair(vec![member(None, 1), member(None, 2)], None);
+    for target_pcm in [false, true] {
+        let mut target_options = SpeakerOptions::new(Volume::Db(-20.0));
+        target_options.delay = Duration::from_millis(1200);
+        target_options.pcm = target_pcm;
+        let own_secrets = |key: &DeviceKey| {
+            let n = match key {
+                DeviceKey::Id(id) => id.0[5],
+                other => panic!("unexpected member key {other:?}"),
+            };
+            let password = Secret::new(format!("member-{n}"));
+            let credentials = Credentials::new(&format!("{n:016X}"), [n; SECRET_BYTES])
+                .expect("valid credentials");
+            (password, credentials)
+        };
+        let members = member_options(&target, &target_options, |key, own| {
+            let (password, credentials) = own_secrets(key);
+            own.password = Some(password);
+            own.credentials = Some(credentials);
+            own.delay = Duration::from_millis(300);
+            own.volume = Volume::Muted;
+            own.pcm = !target_pcm;
+        });
+        let keys: Vec<&DeviceKey> = members.iter().map(|(key, _)| key).collect();
+        assert_eq!(
+            keys,
+            target.members.iter().map(|m| &m.key).collect::<Vec<_>>()
+        );
+        for (key, own) in &members {
+            let (password, credentials) = own_secrets(key);
+            assert_eq!(own.password.as_ref(), Some(&password), "{key:?}");
+            assert_eq!(own.credentials.as_ref(), Some(&credentials), "{key:?}");
+            assert_eq!(own.delay, target_options.delay, "{key:?}");
+            assert_eq!(own.volume, target_options.volume, "{key:?}");
+            assert_eq!(own.pcm, target_pcm, "{key:?}");
+        }
+    }
 }
 
 // covers: P171, P177, P178, P179
