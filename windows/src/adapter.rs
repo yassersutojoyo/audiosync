@@ -85,10 +85,10 @@ use crate::audio::backend::{
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::cast_address::{self, CastAddress};
 use audiosync_core::calibrate_all::{
-    Applied, Change, Class, EndReason, RowState, Sheet, Take, Target,
+    Applied, Change, Class, EndReason, RowState, Sheet, Take, Target, airplay_moves,
 };
 
-use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress};
+use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress, ZoneScope};
 use crate::audio::calibration::{self, CalibrationRun, Failure};
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
 use crate::audio::outputs::MicKind;
@@ -105,7 +105,7 @@ use crate::ui_model::{
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
     Group, GroupError, HiddenSpeaker, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase,
     PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
-    Waiting, clamp_delay_ms,
+    Waiting, ZoneSheet, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -140,6 +140,17 @@ struct CalibrateAll {
     /// Outputs left out by kind that the user chose Include Anyway for,
     /// until the results close.
     included: BTreeSet<String>,
+    /// The zone Calibrate Zone measures, until the results close or a
+    /// whole run starts (spec S255).
+    zone: Option<MeasuredZone>,
+}
+
+/// The zone of a Calibrate Zone run as it was at the start.
+struct MeasuredZone {
+    id: String,
+    name: String,
+    /// Its member keys then: losing one ends the run (spec S240).
+    members: Vec<String>,
 }
 
 /// After this many polls, 20 seconds, of AirPlay discovery without a single
@@ -810,6 +821,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Moves a Calibrate All or Measure Again on, and takes in how it ended.
     /// Returns whether what the card shows changed.
     fn tick_calibrate_all(&mut self) -> bool {
+        self.stop_calibrate_all_for_zones(false);
         let Some(run) = self.calibrate_all.run.as_mut() else {
             return false;
         };
@@ -867,8 +879,35 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return;
         };
         let ended = sheet.ended();
-        if !kept.sheet.replace(sheet) && failure.is_none() {
+        if kept.sheet.replace(sheet) {
+            // An off row measured now keeps the values it was measured from (S255).
+            kept.members = members;
+        } else if failure.is_none() {
             kept.again_ended = Some(ended.unwrap_or(EndReason::Cancelled));
+        }
+    }
+
+    /// A zone click, or the measured zone losing a member or going, ends a
+    /// run as a change of the speakers (spec S240).
+    fn stop_calibrate_all_for_zones(&mut self, clicked: bool) {
+        let Some(run) = self
+            .calibrate_all
+            .run
+            .as_mut()
+            .filter(|run| run.is_running())
+        else {
+            return;
+        };
+        let zone_changed = self.calibrate_all.zone.as_ref().is_some_and(|measured| {
+            self.zones.get(&measured.id).is_none_or(|zone| {
+                measured
+                    .members
+                    .iter()
+                    .any(|key| !zone.members.contains(key))
+            })
+        });
+        if clicked || zone_changed {
+            run.stop(&mut self.audio, EndReason::SpeakersChanged, clock::now_ns());
         }
     }
 
@@ -1011,6 +1050,141 @@ impl<A: AudioBackend> AudioAdapter<A> {
             other_running: self.calibration_run.is_some(),
             sheet: all.sheet.as_ref().map(|kept| self.sheet_state(kept, busy)),
             endings: all.endings,
+            zone: all.zone.as_ref().map(|measured| self.zone_sheet(measured)),
+        }
+    }
+
+    fn zone_sheet(&self, measured: &MeasuredZone) -> ZoneSheet {
+        let off_rows = self
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .map(|kept| {
+                (0..kept.members.len())
+                    .filter(|row| kept.sheet.is_off(*row))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let listed: Vec<String> = self
+            .audio
+            .airplay_speakers()
+            .into_iter()
+            .map(|speaker| airplay_key(&speaker.id))
+            .filter(|key| !self.is_hidden(key))
+            .collect();
+        ZoneSheet {
+            name: measured.name.clone(),
+            off_rows,
+            airplay_moves: airplay_moves(
+                &self.zones,
+                &measured.id,
+                listed.iter().map(String::as_str),
+            ),
+        }
+    }
+
+    /// "Calibrate Zone…" in zone `id`'s Options menu (spec S255): Calibrate
+    /// All over the zone, every other speaker that plays silenced for the
+    /// run.
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+    pub(crate) fn start_calibrate_zone(&mut self, id: &str) {
+        if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
+            return;
+        }
+        let Some(zone) = self.zones.get(id).cloned() else {
+            return;
+        };
+        let scope = self.zone_scope(&zone);
+        self.log.log(|| {
+            format!(
+                "Calibrate Zone \"{}\": present {:?}, off {:?}",
+                zone.name,
+                scope.present,
+                scope.off.iter().map(Member::key).collect::<Vec<_>>()
+            )
+        });
+        let started = AllRun::start_zone(
+            &mut self.audio,
+            &self.calibrate_all.included,
+            &scope,
+            clock::now_ns(),
+            self.log.clone(),
+        );
+        let measured = MeasuredZone {
+            id: zone.id,
+            name: zone.name,
+            members: zone.members,
+        };
+        self.calibrate_all_started(started, Some(measured));
+    }
+
+    fn calibrate_all_started(
+        &mut self,
+        started: Result<AllRun, Failure>,
+        zone: Option<MeasuredZone>,
+    ) {
+        let all = &mut self.calibrate_all;
+        all.zone = zone;
+        match started {
+            Ok(run) => {
+                all.phase = AllPhase::Idle;
+                all.sheet = None;
+                all.run = Some(run);
+            }
+            Err(failure) => {
+                all.phase = AllPhase::Failed(failure);
+                all.endings += 1;
+            }
+        }
+    }
+
+    /// The zone `zone` as Calibrate Zone reads it now (spec S255): its
+    /// present members, and those that don't play with their stored delays.
+    fn zone_scope(&self, zone: &zones::Zone) -> ZoneScope {
+        let state = self.snapshot();
+        let playing: Vec<String> = calibrate_all::lineup(&self.audio)
+            .members
+            .iter()
+            .map(Member::speaker_key)
+            .collect();
+        let present: BTreeSet<String> = zone
+            .members
+            .iter()
+            .filter(|key| state.speaker(key).is_some())
+            .filter(|key| {
+                !matches!(SpeakerKey::parse(key), Some(SpeakerKey::AirPlay(id))
+                    if self.audio.airplay_holding_target(&id).is_some())
+            })
+            .cloned()
+            .collect();
+        let off = zone
+            .members
+            .iter()
+            .filter(|key| present.contains(*key) && !playing.contains(*key))
+            .filter_map(|key| {
+                let (class, id, offset_ms) = match SpeakerKey::parse(key)? {
+                    SpeakerKey::Local(id) => {
+                        let offset = self.calibrated_now(Class::Local, &id);
+                        (Class::Local, id, offset)
+                    }
+                    SpeakerKey::AirPlay(id) => (Class::AirPlay, id, self.airplay_delay_ms()),
+                    SpeakerKey::Cast(id) => {
+                        let offset = self.calibrated_now(Class::Cast, &id).filter(|ms| *ms > 0.0);
+                        (Class::Cast, id, offset)
+                    }
+                };
+                Some(Member {
+                    id,
+                    class,
+                    offset_ms,
+                    latency_ms: 0.0,
+                })
+            })
+            .collect();
+        ZoneScope {
+            members: zone.members.clone(),
+            present,
+            off,
         }
     }
 
@@ -3151,6 +3325,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// out: present members only, at most one Cast speaker, every AirPlay 2
     /// member on even when it waits for the AirPlay 2 place.
     fn toggle_zone(&mut self, id: &str) {
+        self.stop_calibrate_all_for_zones(true);
         let state = self.snapshot();
         let Some(zone) = self.zones.get(id).cloned() else {
             return;
@@ -3483,17 +3658,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             clock::now_ns(),
             self.log.clone(),
         );
-        match started {
-            Ok(run) => {
-                self.calibrate_all.phase = AllPhase::Idle;
-                self.calibrate_all.sheet = None;
-                self.calibrate_all.run = Some(run);
-            }
-            Err(failure) => {
-                self.calibrate_all.phase = AllPhase::Failed(failure);
-                self.calibrate_all.endings += 1;
-            }
-        }
+        self.calibrate_all_started(started, None);
     }
 
     fn cancel_calibrate_all(&mut self) {
@@ -8249,6 +8414,97 @@ mod tests {
             members,
             volume: 80.0,
         }
+    }
+
+    fn zone_adapter(members: &[&str]) -> AudioAdapter<MockBackend> {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(members.iter().map(|id| key(id)).collect())],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter
+    }
+
+    // covers: S255
+    #[test]
+    fn calibrate_zone_reads_the_zone_now_and_says_why_it_cant_start() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        let zone = adapter.zones.get("zone:1").cloned().expect("the zone");
+        let scope = adapter.zone_scope(&zone);
+        assert_eq!(scope.present, BTreeSet::from([key("bluetooth"), key("tv")]));
+        let off: Vec<String> = scope.off.iter().map(Member::key).collect();
+        assert_eq!(off, ["local:tv"], "listed, never switched on");
+        assert!(!speaker_of(&adapter, &key("tv")).enabled);
+
+        // The mock has no microphone: refused once the zone's plan holds.
+        adapter.start_calibrate_zone("zone:1");
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.phase, AllPhase::Failed(Failure::NoMicrophone));
+        assert_eq!(state.zone.expect("the zone's sheet").name, "Downstairs");
+
+        let mut adapter = zone_adapter(&["tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibrate_zone("zone:1");
+        assert_eq!(
+            adapter.snapshot().calibrate_all.phase,
+            AllPhase::Failed(Failure::NothingToMeasure),
+            "only the reference plays in the zone"
+        );
+    }
+
+    /// A Calibrate Zone run over zone:1 that has just started.
+    fn zone_running(adapter: &mut AudioAdapter<MockBackend>) {
+        adapter.calibrate_all.run = Some(crate::audio::calibrate_all::tests::zone_run());
+        adapter.calibrate_all.zone = Some(MeasuredZone {
+            id: "zone:1".to_owned(),
+            name: "Downstairs".to_owned(),
+            members: vec![key("bluetooth"), key("tv")],
+        });
+        adapter.stop_calibrate_all_for_zones(false);
+        assert!(
+            adapter.calibrate_all.run.as_ref().unwrap().is_running(),
+            "the zone as it was keeps the run going"
+        );
+    }
+
+    fn ended_as_a_change(adapter: &mut AudioAdapter<MockBackend>) {
+        let _ = adapter.tick_calibrate_all();
+        let all = &adapter.calibrate_all;
+        assert!(all.run.is_none(), "the outputs are given back");
+        let kept = all.sheet.as_ref().expect("the results so far");
+        assert_eq!(kept.sheet.ended(), Some(EndReason::SpeakersChanged));
+        assert_eq!(kept.applied, None);
+    }
+
+    // covers: S240, S255
+    #[test]
+    fn a_zone_click_ends_the_run_and_applies_nothing() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        zone_running(&mut adapter);
+        adapter.toggle_zone("zone:1");
+        ended_as_a_change(&mut adapter);
+    }
+
+    // covers: S240
+    #[test]
+    fn deleting_the_measured_zone_or_taking_a_member_out_ends_the_run() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        zone_running(&mut adapter);
+        assert!(adapter.zones.delete("zone:1"));
+        ended_as_a_change(&mut adapter);
+
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        zone_running(&mut adapter);
+        assert!(adapter.zones.remove_speaker(&key("tv")));
+        ended_as_a_change(&mut adapter);
     }
 
     #[test]

@@ -15,7 +15,7 @@ use audiosync_core::volume;
 
 #[cfg(any(not(windows), test))]
 use crate::speaker_names;
-use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
+use audiosync_core::calibrate_all::{AirPlayMoves, AirPlayShared, Class, EndReason, RowState};
 
 pub use crate::audio::backend::CastMembers;
 use crate::audio::calibration::{Failure, Phase};
@@ -617,6 +617,21 @@ pub struct CalibrateAllState {
     pub endings: u64,
     /// The outputs that are on but left out by their kind.
     pub left_out: Vec<LeftOutRow>,
+    /// The zone a Calibrate Zone run measures or measured (spec S255).
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+    pub zone: Option<ZoneSheet>,
+}
+
+/// What a Calibrate Zone sheet says besides Calibrate All's (spec S255).
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+pub struct ZoneSheet {
+    /// "Bring the computer into <name>".
+    pub name: String,
+    /// The sheet's rows that are members that were off: "Off".
+    pub off_rows: Vec<usize>,
+    /// Whom the shared AirPlay delay moves besides the zone.
+    pub airplay_moves: AirPlayMoves,
 }
 
 /// An output that is on, which Calibrate All leaves out by its kind unless
