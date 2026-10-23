@@ -5502,6 +5502,9 @@ do {
     check(RemotePort.parse(" 8080 ") == 8080 && RemotePort.parse("80") == nil && RemotePort.parse("70000") == nil
             && RemotePort.parse("abc") == nil && RemotePort.stored(1e30) == nil && RemotePort.stored(7655.5) == nil,
           "web remote: a port from 1024 to 65535 is taken")
+    check(RemoteDevicesFile.canForget(count: 0, failed: true) && RemoteDevicesFile.canForget(count: 2, failed: false)
+            && !RemoteDevicesFile.canForget(count: 0, failed: false),
+          "web remote: Forget All stays available after a failed save, when no device is left in memory")
     let fresh = AppSettings.load { _ in nil }
     let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
     let kept = AppSettings.load { stored[$0] }
