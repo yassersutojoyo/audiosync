@@ -969,11 +969,31 @@ check(!NativeReceiver.isThisMac("My Mac", computerName: nil), "own receiver: an 
 check(!NativeReceiver.isThisMac("", computerName: ""), "own receiver: an empty computer name hides nothing")
 
 // MARK: Capture check — "nothing yet" is not an error until the source is known to play
-check(CaptureCheck.verdict(framesCaptured: 1, knownPlayingFor: 60) == .flowing, "capture: frames → flowing")
-check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: nil) == .waiting, "capture: no frames, unknown source → waiting")
-check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: 2) == .waiting, "capture: playing only briefly → still waiting")
-check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: CaptureCheck.playingGrace) == .notWorking, "capture: playing for the grace period with no frames → not working")
-check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: nil) != .notWorking, "capture: a paused or unknown source never blames the permission")
+check(CaptureCheck.verdict(framesCaptured: 1, heardAudio: false, knownPlayingFor: 60) == .flowing, "capture: frames → flowing")
+check(CaptureCheck.verdict(framesCaptured: 0, heardAudio: false, knownPlayingFor: nil) == .waiting, "capture: no frames, unknown source → waiting")
+check(CaptureCheck.verdict(framesCaptured: 0, heardAudio: false, knownPlayingFor: 2) == .waiting, "capture: playing only briefly → still waiting")
+check(CaptureCheck.verdict(framesCaptured: 0, heardAudio: false, knownPlayingFor: CaptureCheck.playingGrace) == .notWorking, "capture: playing for the grace period with no frames → not working")
+check(CaptureCheck.verdict(framesCaptured: 0, heardAudio: false, knownPlayingFor: nil) != .notWorking, "capture: a paused or unknown source never blames the permission")
+check(CaptureCheck.verdict(framesCaptured: 0, heardAudio: true, knownPlayingFor: 60) == .waiting, "capture: sound captured earlier in this run → waiting, not the permission")
+do {
+    let old = NowPlayingMonitor.Position(elapsed: 10, length: 200, readAt: 50, playing: true)
+    let moved = NowPlayingMonitor.Position(elapsed: 12, length: 200, readAt: 52, playing: true)
+    let stuck = NowPlayingMonitor.Position(elapsed: 10, length: 200, readAt: 52, playing: true)
+    let paused = NowPlayingMonitor.Position(elapsed: 12, length: 200, readAt: 52, playing: false)
+    let otherTrack = NowPlayingMonitor.Position(elapsed: 12, length: 90, readAt: 52, playing: true)
+    check(NowPlayingMonitor.Position.advances(from: old, to: moved), "now playing: a position moving on with the clock advances")
+    check(!NowPlayingMonitor.Position.advances(from: old, to: stuck), "now playing: a position standing still does not advance")
+    check(!NowPlayingMonitor.Position.advances(from: old, to: paused), "now playing: a paused reading does not advance")
+    check(!NowPlayingMonitor.Position.advances(from: old, to: otherTrack), "now playing: another length is no advance")
+    check(!NowPlayingMonitor.Position.advances(from: old, to: old), "now playing: the same reading twice does not advance")
+}
+do {
+    var block: [Float] = Array(repeating: 0, count: 8)
+    check(!block.withUnsafeBufferPointer { CaptureChannels.hasSound($0.baseAddress!, frames: 4) }, "capture: zeros are silent")
+    block[7] = 0.001
+    check(block.withUnsafeBufferPointer { CaptureChannels.hasSound($0.baseAddress!, frames: 4) }, "capture: one sample above zero is sound")
+    check(!block.withUnsafeBufferPointer { CaptureChannels.hasSound($0.baseAddress!, frames: 3) }, "capture: only the given frames count")
+}
 do {
     // Seen on a Mac: right after launch, All System Audio silent, and Music
     // reporting a paused local file as playing, its position standing still.

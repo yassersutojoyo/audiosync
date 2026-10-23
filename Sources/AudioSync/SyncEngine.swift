@@ -80,6 +80,10 @@ final class StreamEngine {
     /// Frames captured in this session so far; 0 while stopped (S17).
     var framesCaptured: Int64 { parts?.ring.framesWritten ?? 0 }
 
+    /// Some frame captured in this app run was not silent; silent frames
+    /// count in `framesCaptured` too.
+    var heardAudio: Bool { SourceCapture.heardAudio }
+
     /// The rate the running capture delivers at, which the ring's frames are
     /// clocked at (S16).
     var captureRate: Double { capture.sampleRate }

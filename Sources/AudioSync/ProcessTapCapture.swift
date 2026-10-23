@@ -83,6 +83,9 @@ final class SourceCapture {
     /// tap or input format has been read.
     private(set) var sampleRate: Double = CaptureRate.fallback
 
+    /// Some frame captured in this app run, by any session, was not silent.
+    static var heardAudio: Bool { CaptureSink.heard.load(ordering: .relaxed) }
+
     private var source: AudioSource?
     private var parts: EngineParts?
     private var sink: CaptureSink?
@@ -430,6 +433,8 @@ private extension SourceCapture {
         let callbacks = Atomic<UInt64>(0)
         let frames = Atomic<UInt64>(0)
         let silentCallbacks = Atomic<UInt64>(0)
+        /// Some frame captured in this app run was not silent (`SourceCapture.heardAudio`).
+        static let heard = Atomic<Bool>(false)
 
         init(parts: EngineParts) {
             self.parts = parts
@@ -449,6 +454,9 @@ private extension SourceCapture {
                 return
             }
             channels.forEachBlock(in: stereoBlock) { block, count in
+                if !CaptureSink.heard.load(ordering: .relaxed), CaptureChannels.hasSound(block, frames: count) {
+                    CaptureSink.heard.store(true, ordering: .relaxed)
+                }
                 self.parts.deliver(block, frames: count)
             }
             frames.wrappingAdd(UInt64(channels.frames), ordering: .relaxed)

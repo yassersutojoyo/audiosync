@@ -92,6 +92,13 @@ struct CaptureChannels {
             done += count
         }
     }
+
+    /// Whether any of `frames` interleaved stereo frames in `block` is not
+    /// silent. Real-time safe.
+    static func hasSound(_ block: UnsafePointer<Float>, frames: Int) -> Bool {
+        for index in 0..<max(0, frames * 2) where block[index] != 0 { return true }
+        return false
+    }
 }
 
 /// What an app source's tap does when the app's audio processes change (S11).

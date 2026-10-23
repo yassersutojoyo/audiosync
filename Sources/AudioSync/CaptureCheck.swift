@@ -4,9 +4,11 @@ import Foundation
 ///
 /// A tap delivers nothing until the tapped app (or the system) actually plays
 /// something, so "no frames yet" on its own is normal: the user may simply
-/// start playback after switching streaming on. Only when Now Playing says the
-/// source is playing and still nothing arrives is a missing permission the
-/// likely cause.
+/// start playback after switching streaming on. A missing permission is the
+/// likely cause only when Now Playing shows the source playing (its position
+/// moving on), nothing arrives, and this app run has never captured sound: a
+/// denied tap and a silent source both deliver zeros, so once sound has been
+/// captured the permission is known to be there.
 enum CaptureCheck: Equatable {
     /// Audio arrives: nothing to say.
     case flowing
@@ -20,12 +22,13 @@ enum CaptureCheck: Equatable {
 
     /// - Parameters:
     ///   - framesCaptured: frames written since this session started.
-    ///   - knownPlayingFor: how long Now Playing has reported the source as
-    ///     playing, or nil when it can't tell (other apps, input devices) or
-    ///     reports it paused.
-    static func verdict(framesCaptured: Int64, knownPlayingFor: TimeInterval?) -> CaptureCheck {
+    ///   - heardAudio: some captured frame in this app run was not silent.
+    ///   - knownPlayingFor: how long Now Playing has shown the source playing,
+    ///     or nil when it can't tell (other apps, input devices, no position)
+    ///     or shows it paused or standing still.
+    static func verdict(framesCaptured: Int64, heardAudio: Bool, knownPlayingFor: TimeInterval?) -> CaptureCheck {
         if framesCaptured > 0 { return .flowing }
-        if let playing = knownPlayingFor, playing >= playingGrace { return .notWorking }
+        if !heardAudio, let playing = knownPlayingFor, playing >= playingGrace { return .notWorking }
         return .waiting
     }
 }
@@ -34,6 +37,9 @@ enum CaptureCheck: Equatable {
 /// readings and the capture counters into a `CaptureCheck`.
 struct CaptureWatch {
     private var playingSince: TimeInterval?
+    private var lastPosition: NowPlayingMonitor.Position?
+    /// The position moved on between the last two distinct readings.
+    private var live = false
 
     /// - Parameters:
     ///   - uptime: `ProcessInfo.systemUptime` of this check.
@@ -43,8 +49,22 @@ struct CaptureWatch {
     ///   - position: the latest Now Playing reading's position, if any.
     mutating func verdict(at uptime: TimeInterval, framesCaptured: Int64, heardAudio: Bool,
                           reportsPlaying: Bool, position: NowPlayingMonitor.Position?) -> CaptureCheck {
-        if reportsPlaying { playingSince = playingSince ?? uptime } else { playingSince = nil }
-        return CaptureCheck.verdict(framesCaptured: framesCaptured,
+        if reportsPlaying, let position {
+            // Checks can outpace the monitor's polls: only a new reading moves the verdict.
+            if let last = lastPosition {
+                if position.readAt > last.readAt {
+                    live = NowPlayingMonitor.Position.advances(from: last, to: position)
+                    lastPosition = position
+                }
+            } else {
+                lastPosition = position
+            }
+        } else {
+            lastPosition = nil
+            live = false
+        }
+        if live { playingSince = playingSince ?? uptime } else { playingSince = nil }
+        return CaptureCheck.verdict(framesCaptured: framesCaptured, heardAudio: heardAudio,
                                     knownPlayingFor: playingSince.map { uptime - $0 })
     }
 }

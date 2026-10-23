@@ -138,17 +138,18 @@ extension AppDelegate {
         // framesCaptured restarts at 0 for each session (the ring is reset), so
         // only judge the session this check was scheduled for. A tap delivers
         // nothing until the source plays, so "nothing yet" is a calm notice;
-        // only a source Now Playing reports as playing points at a problem.
+        // only a source Now Playing shows playing, while this app run never
+        // captured sound, points at a problem (`CaptureCheck`).
         // Never a modal alert: the user may simply not have pressed play yet.
         let scheduledFor = session
-        var playingSince: Date?
+        var watch = CaptureWatch()
         var said: CaptureCheck?   // post a notice only when the verdict changes, so a dismissed one stays dismissed
         func check() {
             guard session == scheduledFor, engine.isRunning else { return }
-            let now = Date()
-            if sourceKnownPlaying() { playingSince = playingSince ?? now } else { playingSince = nil }
-            let verdict = CaptureCheck.verdict(framesCaptured: engine.framesCaptured,
-                                               knownPlayingFor: playingSince.map { now.timeIntervalSince($0) })
+            let playing = sourcePlayingReading()
+            let verdict = watch.verdict(at: ProcessInfo.processInfo.systemUptime,
+                                        framesCaptured: engine.framesCaptured, heardAudio: engine.heardAudio,
+                                        reportsPlaying: playing != nil, position: playing?.position)
             if verdict == .flowing {
                 clearNotices([Notice.capture])
                 return
@@ -169,17 +170,18 @@ extension AppDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { check() }
     }
 
-    /// Whether Now Playing reports the selected source as playing. Only Spotify
-    /// and Music are known; for any other app or an input device this is false.
-    private func sourceKnownPlaying() -> Bool {
+    /// Now Playing's latest reading when it reports the selected source as
+    /// playing. Only Spotify and Music are known; for any other app or an
+    /// input device this is nil.
+    private func sourcePlayingReading() -> NowPlayingMonitor.Track? {
         // Only a live reading counts: the monitor polls while the window is
         // open or AirPlay receivers show the track, and a stopped monitor
         // keeps its last (possibly stale) track.
-        guard nowPlaying.isRunning, let track = appModel.nowPlaying, track.isPlaying else { return false }
+        guard nowPlaying.isRunning, let track = nowPlaying.reading, track.isPlaying else { return nil }
         switch audioSource {
-        case .system: return true
-        case .app(let bundleID): return track.bundleID == bundleID
-        case .input: return false
+        case .system: return track
+        case .app(let bundleID): return track.bundleID == bundleID ? track : nil
+        case .input: return nil
         }
     }
 
