@@ -46,6 +46,45 @@ jobs:
       - name: Tests
         run: cargo test --locked
 
+  # The same crate on Linux: the UI-only build without an audio backend, the
+  # mock-backend build, and the tests.
+  linux:
+    name: Linux (format, clippy and tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain (stable, with rustfmt and clippy)
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+
+      # Slint's fonts and windows, and the Cast sender's native-tls (OpenSSL).
+      - name: System libraries
+        run: >-
+          sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
+          libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # Every check reports, even after one failed.
+      - name: Clippy (mock-backend)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked --all-targets --features mock-backend -- -D warnings
+
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked
+
   build:
     name: Release build (${{ matrix.arch }})
     strategy:
