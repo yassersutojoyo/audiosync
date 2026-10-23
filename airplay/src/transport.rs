@@ -777,10 +777,20 @@ fn read_loop(
 /// or the end of the stream, so a timeout never cuts into a read (see the
 /// module notes).
 fn read_queued(stream: &mut TcpStream, buf: &mut [u8]) -> io::Result<usize> {
-    if stream.peek(buf)? == 0 {
+    if stream.peek(buf).map_err(peek_error)? == 0 {
         return Ok(0);
     }
     stream.read(buf)
+}
+
+/// Windows can end a blocking peek with ERROR_IO_PENDING when its timeout
+/// races arriving bytes; the peek took nothing, so it counts as a timeout.
+fn peek_error(error: io::Error) -> io::Error {
+    const ERROR_IO_PENDING: i32 = 997;
+    if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) {
+        return io::Error::from(io::ErrorKind::TimedOut);
+    }
+    error
 }
 
 /// Writes the session's requests in order until the session closes, in
@@ -871,6 +881,19 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_peek_ending_with_io_pending_is_a_timeout() {
+        let error = peek_error(io::Error::from_raw_os_error(997));
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn other_peek_errors_stay_as_they_are() {
+        let error = peek_error(io::Error::from(io::ErrorKind::ConnectionReset));
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
     }
 
     /// A driver that panics on the events `bug` picks, as a bug in a
