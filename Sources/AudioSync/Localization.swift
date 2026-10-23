@@ -875,6 +875,45 @@ struct UIStrings {
     func zoneDeleted(_ name: String) -> String { "\(name) deleted" }
     /// The notice at the first launch after the groups became zones (S248).
     let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it instead of in the speaker lists."
+
+    // MARK: Speaker presets (S259 to S269)
+
+    let presets = "Presets"
+    let savePreset = "Save as Preset…"
+    let savePresetTitle = "Save Preset"
+    let savePresetMessage = "The speakers that are on, their volumes, the zone volumes, the master volume and the curve are saved. Delays and the preamp are not."
+    let savePresetNeedsSpeakers = "Turn on the speakers you want in the preset first, then save it."
+    /// VoiceOver label of the name field in the Save Preset and Rename Preset alerts.
+    let presetFieldLabel = "Preset name"
+    let presetPlaceholder = "Evening, Party…"
+    /// A new preset's name when none was typed.
+    func numberedPreset(_ n: Int) -> String { "Preset \(n)" }
+    let renamePreset = "Rename…"
+    let renamePresetTitle = "Rename Preset"
+    let updatePreset = "Update to Current Settings"
+    let deletePreset = "Delete"
+    /// The Presets submenu while there is none.
+    let noPresets = "No Presets"
+    let presetsEmpty = "No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset."
+    /// The panel's preset row while no preset is current.
+    let choosePreset = "Choose a Preset"
+    /// The VoiceOver value of the current preset's row.
+    let presetCurrent = "Current"
+    let presetRecallHint = "Recalls this preset"
+    /// What VoiceOver says after Save, Update and Delete.
+    func presetSaved(_ name: String) -> String { "\(name) saved" }
+    func presetUpdated(_ name: String) -> String { "\(name) updated" }
+    func presetDeleted(_ name: String) -> String { "\(name) deleted" }
+    /// The notice after a recall that left stored speakers off (S265).
+    let presetLeftOffTitle = "Some speakers stayed off"
+    func presetLeftOff(_ preset: String, _ list: String) -> String { "“\(preset)” is on. Stayed off: \(list)" }
+    func presetNothingChanged(_ preset: String, _ list: String) -> String {
+        "Nothing changed: no speaker in “\(preset)” can play now. \(list)"
+    }
+    func presetMemberLeftOff(_ name: String, _ reason: String) -> String { "\(name) (\(reason))" }
+    func presetMemberList(_ items: [String]) -> String { items.joined(separator: ", ") }
+    let presetHidden = "Hidden"
+    let presetBusy = "In use by another app"
     let rename = "Rename"
     /// In a speaker's ⋯ menu and right-click menu: edits its name in the row.
     let renameSpeaker = "Rename…"

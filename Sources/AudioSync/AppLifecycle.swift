@@ -7,6 +7,9 @@ import CoreServices
 enum StartOrigin: Equatable {
     /// A click: the power switch, a speaker, a group, a source.
     case user
+    /// The phone, through the web remote (S266): acts as `user`, but the
+    /// user isn't looking at the Mac, so a failure is only a notice.
+    case remote
     /// AudioSync on its own: auto-connect, or a restart after the capture
     /// format changed.
     case automatic
