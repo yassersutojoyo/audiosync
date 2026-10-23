@@ -260,10 +260,14 @@ extension AppDelegate {
         guard let report else { return }
         if report.alertNames != nil {   // the failures' names, for a click of the user's
             let shown = applied.failures.map { shownName(local: $0.uid, system: $0.deviceName) }.joined(separator: ", ")
-            showAlert(text.outputCouldNotStart(names: shown), style: .warning)
+            // The rate reason only when it holds for every speaker the alert names.
+            let rates = applied.failures.compactMap(\.refusedCaptureRate)
+            let rate = rates.count == applied.failures.count ? rates.first : nil
+            showAlert(text.outputCouldNotStart(names: shown, refusedCaptureRate: rate), style: .warning)
         }
         for failure in report.notices {   // one notice per speaker, so each one clears by itself
-            postNotice(text.outputCouldNotStart(names: shownName(local: failure.uid, system: failure.deviceName)),
+            postNotice(text.outputCouldNotStart(names: shownName(local: failure.uid, system: failure.deviceName),
+                                                refusedCaptureRate: failure.refusedCaptureRate),
                        subject: SpeakerKey.make(id: failure.uid, airplay: false))
         }
         stopIfIdle()   // the failed speaker may have been the only output

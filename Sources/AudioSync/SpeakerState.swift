@@ -132,6 +132,9 @@ extension LocalOutputSync {
         var uid: String
         /// The name macOS shows for its device.
         var deviceName: String
+        /// The session's capture rate (Hz) when the core refused it as too
+        /// high for the ring; nil for any other failure.
+        var refusedCaptureRate: Double? = nil
     }
 
     /// What one sync did to the engine.
@@ -180,7 +183,11 @@ extension LocalOutputSync {
                 applied.devices[uid] = device.id
             } catch let startError {
                 DebugTrace.log("[AudioSync] local output \(uid) failed to start: \(startError)")
-                applied.failures.append(Failure(uid: uid, deviceName: device.name))
+                var failure = Failure(uid: uid, deviceName: device.name)
+                if case .captureRateTooHigh(let rate)? = startError as? OutputRenderer.StartFailure {
+                    failure.refusedCaptureRate = rate
+                }
+                applied.failures.append(failure)
             }
         }
         engine.detachOutputs(uids: steps.detach)   // together, so they fade out at once (S186)

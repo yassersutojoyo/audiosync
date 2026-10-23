@@ -22,9 +22,12 @@ struct EngineParts {
     let ring: CoreDelayRing
     let gate = BlockGate()
 
-    /// 24 s at 192 kHz, the highest capture rate the ring is sized for (S36):
-    /// the 20 s maximum delay plus headroom, whatever the session's rate.
-    static let ringCapacityFrames = 192_000 * 24
+    /// The highest capture rate (Hz) the ring is sized for (S36).
+    static let highestCaptureRate = 192_000
+
+    /// 24 s at `highestCaptureRate`: the 20 s maximum delay plus headroom,
+    /// whatever the session's rate.
+    static let ringCapacityFrames = highestCaptureRate * 24
 
     /// New parts with the equalizer set to `settings`. Nil when the core
     /// can't make one of them.

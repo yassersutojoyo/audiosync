@@ -41,6 +41,9 @@ final class OutputRenderer: FadingOutput {
         case deviceDidNotStart(OSStatus)
         /// The core could not make this output's renderer.
         case coreUnavailable
+        /// The ring holds 24 s only up to `EngineParts.highestCaptureRate`,
+        /// and the session captures at this rate (Hz) above it (S36).
+        case captureRateTooHigh(Double)
 
         /// For the debug log; users see `UIStrings`'s wording instead.
         var description: String {
@@ -54,6 +57,9 @@ final class OutputRenderer: FadingOutput {
             case .unitNotInitialized(let status): return "the output unit could not be initialized (\(Self.text(status)))"
             case .deviceDidNotStart(let status): return "the output unit did not start on the device (\(Self.text(status)))"
             case .coreUnavailable: return "the audio core could not make this output's renderer"
+            case .captureRateTooHigh(let rate):
+                return "the audio core refused the \(Int(rate.rounded())) Hz capture rate: "
+                    + "the delay ring holds 24 s only up to \(EngineParts.highestCaptureRate) Hz"
             }
         }
 
@@ -300,6 +306,7 @@ final class OutputRenderer: FadingOutput {
         guard CoreRate.hz(captureRate) != nil else {
             throw StartFailure.formatRefused(OSStatus(kAudioUnitErr_FormatNotSupported))
         }
+        guard delayRing.supports(captureRate: captureRate) else { throw StartFailure.captureRateTooHigh(captureRate) }
         // The output side of the unit's output element is the device's own
         // format; the callback fills as many channels at the device's rate,
         // or at the capture rate when the device's rate isn't one the core
