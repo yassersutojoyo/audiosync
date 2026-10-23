@@ -273,6 +273,7 @@ extension AppDelegate {
     func deleteZone(_ id: String) {
         guard zones.contains(where: { $0.id == id }) else { return }
         zones.removeAll { $0.id == id }
+        appModel.calibrateAll = CalibrateAllFlow.deletingZone(id, from: appModel.calibrateAll)
         pushModel()
     }
 

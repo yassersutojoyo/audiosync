@@ -373,6 +373,15 @@ enum CalibrateAllFlow {
         status.shown ? status.zone?.id : nil
     }
 
+    /// The status once zone `id` is deleted: a sheet that measured it reads
+    /// as Calibrate All's, since its button can't run the zone again.
+    static func deletingZone(_ id: String, from status: CalibrateAllStatus) -> CalibrateAllStatus {
+        guard status.zone?.id == id else { return status }
+        var kept = status
+        kept.zone = nil
+        return kept
+    }
+
     /// What the sheet says when a run over the speakers, or over zone
     /// `zone`, can't start; nil leaves the reason to the sheet's blocker.
     static func startFailure(_ blocker: CalibrateAllBlocker, zone: String?) -> CalibrationFailure? {

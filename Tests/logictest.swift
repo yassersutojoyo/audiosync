@@ -5465,6 +5465,13 @@ do {
           "calibrate zone: a zone with only the reference measurable says there is nothing to measure (S255)",
           "\(String(describing: nothing))")
 
+    let afterDelete = CalibrateAllFlow.deletingZone("z1", from: opened)
+    // covers: S255
+    check(afterDelete.zone == nil && afterDelete.shown && CalibrateAllFlow.startZone(afterDelete) == nil
+            && CalibrateAllFlow.deletingZone("z2", from: opened) == opened,
+          "calibrate zone: deleting the measured zone turns its sheet into Calibrate All's, whose button runs "
+            + "every speaker (S255)")
+
     let tv = CalibrateAllSpeaker(id: "tv", name: "TV", kind: .local, offsetMs: nil, latencyMs: 0)
     let offRow = CalibrateAllSheet.Row(index: 1, speaker: tv, oldMs: nil, result: .notMeasured, off: true)
     let skipped = CalibrateAllSheet.Row(index: 1, speaker: tv, oldMs: nil, result: .notMeasured)

@@ -1221,7 +1221,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             other_running: self.calibration_run.is_some(),
             sheet: all.sheet.as_ref().map(|kept| self.sheet_state(kept, busy)),
             endings: all.endings,
-            zone: all.zone.as_ref().map(|measured| self.zone_sheet(measured)),
+            // A deleted zone's results read as Calibrate All's, as its button then runs.
+            zone: all
+                .zone
+                .as_ref()
+                .filter(|measured| self.zones.get(&measured.id).is_some())
+                .map(|measured| self.zone_sheet(measured)),
         }
     }
 
@@ -9184,6 +9189,10 @@ mod tests {
         );
 
         adapter.delete_zone("zone:1");
+        assert!(
+            adapter.snapshot().calibrate_all.zone.is_none(),
+            "the card's button reads Calibrate All"
+        );
         adapter.start_calibrate_all();
         assert!(
             adapter.snapshot().calibrate_all.zone.is_none(),
