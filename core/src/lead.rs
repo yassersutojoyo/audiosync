@@ -111,9 +111,71 @@ impl SessionLeads {
     }
 }
 
+/// What a session captures, as far as the lead is concerned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceKind {
+    /// Everything the computer plays.
+    System,
+    /// One app, or several.
+    App,
+    /// An input device: a microphone or line in.
+    Input,
+}
+
+/// Where an output plays, as far as the lead is concerned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputKind {
+    /// A device the local renderer plays: built-in, wired, USB, HDMI or
+    /// Bluetooth.
+    Local,
+    /// An AirPlay speaker, through the native sender.
+    AirPlay,
+    /// A Google Cast speaker.
+    Cast,
+}
+
+/// The network wait an output of `output` plays at while the session
+/// captures `source`, in ms, on top of its device's start lead: `network_ms`
+/// is what the local delay model counts for the network speakers (L, the
+/// Cast offset, the longer of both), `None` while none plays.
+pub fn network_wait_ms(
+    source: SourceKind,
+    output: OutputKind,
+    network_ms: Option<f64>,
+) -> Option<f64> {
+    match (source, output) {
+        // Live input keeps a local output at its device's start lead (a callback plus at most 25 ms of
+        // capture block, one block more on Bluetooth): L only lines it up with network speakers.
+        (SourceKind::Input, OutputKind::Local) => None,
+        _ => network_ms,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_live_input_on_a_local_output_skips_the_network_wait() {
+        let sources = [SourceKind::System, SourceKind::App, SourceKind::Input];
+        let outputs = [OutputKind::Local, OutputKind::AirPlay, OutputKind::Cast];
+        for source in sources {
+            for output in outputs {
+                let live_local = source == SourceKind::Input && output == OutputKind::Local;
+                let expected = if live_local { None } else { Some(1750.0) };
+                assert_eq!(
+                    network_wait_ms(source, output, Some(1750.0)),
+                    expected,
+                    "{source:?} on {output:?}"
+                );
+                assert_eq!(
+                    network_wait_ms(source, output, None),
+                    None,
+                    "{source:?} on {output:?} without network speakers"
+                );
+            }
+        }
+    }
 
     // covers: S208
     #[test]
