@@ -4082,6 +4082,11 @@ do {
             && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "mac", playing: ["mac"]) == .notPlaying
             && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"]) == nil,
           "calibration: starts only while streaming with the chosen speaker and the reference playing")
+    check(CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"],
+                                  referenceLeftOut: .headphones) == .referenceHeadphones
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"],
+                                       referenceLeftOut: nil) == nil,
+          "calibration: with the built-in output on the headphone jack one speaker's calibration doesn't start")
 
     // Frame 0 is the moment the signal entered the outputs' paths, and each
     // recording covers the largest hold-back, latency, the signal and a margin.
@@ -4239,7 +4244,7 @@ do {
             && CalibrationFlow.leftOut(transport: bt, terminal: UInt32(kAudioStreamTerminalTypeHeadphones),
                                        dataSource: nil, name: "WH-1000XM5") == .headphones
             && CalibrationFlow.leftOut(transport: bt, terminal: nil, dataSource: nil,
-                                       name: "Yasser's AirPods Pro") == .headphones
+                                       name: "Living Room AirPods Pro") == .headphones
             && CalibrationFlow.leftOut(transport: kAudioDeviceTransportTypeBluetoothLE, terminal: 0, dataSource: nil,
                                        name: "Galaxy Buds2") == .headphones
             && CalibrationFlow.leftOut(transport: bt, terminal: nil, dataSource: nil, name: "JBL Flip 6") == nil
@@ -4250,6 +4255,15 @@ do {
             && CalibrationFlow.leftOut(transport: 0, terminal: nil, dataSource: nil, name: "Headset") == nil,
           "calibration: a virtual output, the headphone jack, a headphone or headset terminal, and a Bluetooth "
             + "output named as headphones sit out; speakers, Bluetooth speakers, aggregates and AirPlay stay in")
+
+    let watchList = [
+        AudioDevices.Device(id: 41, name: "Built-in Output", uid: "builtin", transport: builtIn),
+        AudioDevices.Device(id: 42, name: "Desk", uid: "usb", transport: usb),
+        AudioDevices.Device(id: 43, name: "AirPods", uid: "pods", transport: bt),
+        AudioDevices.Device(id: 44, name: "External Headphones", uid: "jack", transport: builtIn),
+    ]
+    check(DataSourceWatch.watched(watchList) == [41, 44],
+          "calibration: the built-in outputs' data source is watched, so plugging into the jack updates the window")
 
     var mixed = inputs
     mixed.localOutputs = [(id: "mac", name: "MacBook Speakers"), (id: "teams", name: "Microsoft Teams Audio"),
