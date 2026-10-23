@@ -57,6 +57,12 @@ pub fn parse_port(text: &str) -> Option<u16> {
         .filter(|port| *port >= MIN_PORT)
 }
 
+/// Whether Use Port takes `text`: a valid port other than `current`, or
+/// `current` again after listening on it failed.
+pub fn use_port_enabled(text: &str, current: u16, failed_on_port: bool) -> bool {
+    parse_port(text).is_some_and(|port| port != current || failed_on_port)
+}
+
 /// The words a speaker row shows, from the interface's strings.
 pub trait RowText {
     /// The speaker's kind ("AirPlay 2", "Bluetooth").
@@ -478,6 +484,16 @@ mod tests {
             id: id.to_owned(),
             change,
         }
+    }
+
+    #[test]
+    fn use_port_takes_only_a_valid_port_that_changes_or_retries() {
+        assert!(!use_port_enabled("", 8080, true));
+        assert!(!use_port_enabled("80", 8080, true));
+        assert!(!use_port_enabled("70000", 8080, true));
+        assert!(!use_port_enabled("8080", 8080, false));
+        assert!(use_port_enabled("8080", 8080, true));
+        assert!(use_port_enabled(" 8081 ", 8080, false));
     }
 
     #[test]
