@@ -5505,15 +5505,43 @@ mod tests {
         );
     }
 
+    /// A point on the name of speaker `id`, found by double-clicking around
+    /// where it sits: its place moves with the system font's line heights
+    /// and widths. Leaves no field open and no sync controls shown.
+    fn name_point(app: &App, id: &str) -> (f32, f32) {
+        let window = app.main.window();
+        let mut others = Vec::new();
+        // 12 px apart, so Slint never counts two tries as one double-click.
+        for x in (380..=476).step_by(12) {
+            for y in (400..=716).step_by(12) {
+                let (x, y) = (x as f32, y as f32);
+                click(window, x, y);
+                click(window, x, y);
+                let renamed = app.ui.borrow().rename.as_ref().map(|(id, _)| id.clone());
+                if let Some(renamed) = &renamed {
+                    app.main.invoke_speaker_rename_cancelled(renamed.into());
+                }
+                app.ui.borrow_mut().sync_open.clear();
+                app.refresh();
+                draw_frames();
+                match renamed {
+                    Some(renamed) if renamed == id => return (x, y),
+                    Some(renamed) => others.push((x, y, renamed)),
+                    None => {}
+                }
+            }
+        }
+        panic!("no double-click renames {id}; these rename others: {others:?}");
+    }
+
     #[test]
     fn a_double_click_on_a_name_renames_and_a_single_one_is_a_click_on_the_row() {
         let app = app_over(MockBackend::new());
         draw_frames();
         let window = app.main.window();
-        // Just inside the start of the desk's name, which stays put whatever
-        // the system font's widths.
-        click(window, 380.0, 625.0);
-        click(window, 380.0, 625.0);
+        let (x, y) = name_point(&app, "local:desk");
+        click(window, x, y);
+        click(window, x, y);
         assert!(
             row_of(&app, "local:desk").renaming,
             "the double-click renames"
@@ -5528,7 +5556,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_cancelled("local:desk".into());
         draw_frames();
-        click(window, 380.0, 625.0);
+        click(window, x, y);
         assert!(
             app.ui.borrow().sync_open.is_empty(),
             "one click waits for a second"
