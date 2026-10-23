@@ -285,6 +285,18 @@ pub unsafe extern "C" fn asc_ring_frames_written(ring: *const AscRing) -> u64 {
     unsafe { ring_of(ring) }.map_or(0, |ring| ring.frames_written())
 }
 
+/// Any thread: the largest sample magnitude written since the last call,
+/// for one level meter polling at its own pace; 0 for a null handle.
+///
+/// # Safety
+///
+/// `ring` is null or a live ring handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_ring_take_peak(ring: *const AscRing) -> f32 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { ring_of(ring) }.map_or(0.0, |ring| ring.take_peak())
+}
+
 /// Takes the ring's only writer; null while another one exists (S35).
 ///
 /// # Safety

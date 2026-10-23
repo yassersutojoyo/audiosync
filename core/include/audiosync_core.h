@@ -449,6 +449,13 @@ bool asc_ring_supports_rate(const AscRing *ring, uint32_t rate);
 /* Any thread: frames written since the last reset (the session's frames captured). */
 uint64_t asc_ring_frames_written(const AscRing *ring);
 
+/*
+ * Any thread: the largest sample magnitude written since the last call (1 is
+ * full scale; non-finite samples don't count), for one level meter polling at
+ * its own pace; 0 for NULL.
+ */
+float asc_ring_take_peak(const AscRing *ring);
+
 /* Takes the ring's only writer; NULL while another writer exists. */
 AscRingWriter *asc_ring_writer_create(AscRing *ring);
 
