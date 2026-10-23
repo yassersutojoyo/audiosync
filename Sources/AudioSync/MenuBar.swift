@@ -870,14 +870,18 @@ private struct CompactRow: View {
         Button(action: toggle) {
             HStack(spacing: 9) {
                 SpeakerBadge(symbol: symbol, state: state, size: 24)
+                // The name goes before the availability note when both don't fit.
                 Text(name)
                     .font(.callout.weight(state == .playing ? .semibold : .regular))
                     .lineLimit(1)
+                    .layoutPriority(2)
+                    .help(name)
                 if let kind {
                     SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2)
                 }
                 Spacer(minLength: 4)
-                AvailabilityNote(availability: availability, text: text)
+                AvailabilityNote(availability: availability, text: text, givesWay: true)
+                    .layoutPriority(1)
                 if let deviceVolume { DeviceVolumeBadge(glyph: deviceVolume) }
             }
             .padding(.horizontal, 6)
@@ -1053,6 +1057,9 @@ struct SpeakerTypeIcon: View {
 struct AvailabilityNote: View {
     let availability: SpeakerAvailability
     let text: UIStrings
+    /// Truncates instead of keeping its full width, so a long name next to
+    /// it stays readable.
+    var givesWay = false
 
     var body: some View {
         if let note = text.availability(availability) {
@@ -1063,7 +1070,7 @@ struct AvailabilityNote: View {
             }
             .font(.caption)
             .foregroundStyle(Brand.secondaryText)
-            .fixedSize()
+            .fixedSize(horizontal: !givesWay, vertical: true)
             .help(text.availabilityHelp(availability) ?? note)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(note)
@@ -1250,8 +1257,11 @@ struct PowerSwitch: View {
     var body: some View {
         Button(action: toggle) {
             ZStack(alignment: isOn ? .trailing : .leading) {
+                // The off track's edge in `.secondary` keeps 3:1 on the panel
+                // (3.89 light, 5.37 dark, measured in Brand.secondaryText).
                 Capsule()
                     .fill(isOn ? accent : Color.secondary.opacity(0.3))
+                    .overlay(Capsule().strokeBorder(isOn ? Color.clear : Color.secondary, lineWidth: 1))
                     .frame(width: 38, height: 22)
                 Circle()
                     .fill(Color.white)

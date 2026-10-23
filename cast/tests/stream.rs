@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -487,19 +488,39 @@ fn a_silent_input_keeps_the_response_open_with_silence() {
     let stop = Arc::new(AtomicBool::new(false));
     let feeder = feed(writer, 7, Arc::clone(&stop));
     let mut stream = get(&server, "GET", "");
-    let stopper = {
-        let stop = Arc::clone(&stop);
-        thread::spawn(move || {
-            thread::sleep(Duration::from_millis(200));
-            stop.store(true, Ordering::SeqCst);
-        })
+    let (_, mut body) = http::read_response(&mut stream, Duration::ZERO);
+    let silent_block = |chunk: &Vec<u8>| chunk.len() == 960 * 4 && chunk.iter().all(|b| *b == 0);
+    // Reads until `done` holds for the audio chunks; deadlines, not fixed
+    // sleeps, so a busy runner only makes the test slower.
+    let mut read_until = |body: &mut Vec<u8>, what: &str, done: &dyn Fn(&[Vec<u8>]) -> bool| {
+        let until = Instant::now() + Duration::from_secs(15);
+        let mut buffer = [0u8; 8192];
+        loop {
+            let chunks = http::chunks(body);
+            if chunks.len() > 1 && done(&chunks[1..]) {
+                return;
+            }
+            assert!(Instant::now() < until, "{what} within 15 s");
+            match stream.read(&mut buffer) {
+                Ok(0) => panic!("the response ended"),
+                Ok(count) => body.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
+                Err(error) => panic!("{error}"),
+            }
+        }
     };
-    let (_, body) = http::read_response(&mut stream, Duration::from_millis(900));
-    stopper.join().expect("stopper");
+    read_until(&mut body, "the input", &|audio| {
+        audio.iter().flatten().any(|byte| *byte != 0)
+    });
+    stop.store(true, Ordering::SeqCst);
     feeder.join().expect("feeder");
+    read_until(&mut body, "silence after the input", &|audio| {
+        audio.len() > 5 && audio[audio.len() - 5..].iter().all(silent_block)
+    });
     let chunks = http::chunks(&body);
     let audio = &chunks[1..];
-    assert!(audio.len() > 10, "{} chunks", audio.len());
+    assert!(audio.len() > 5, "{} chunks", audio.len());
     assert!(
         audio.iter().all(|chunk| !chunk.is_empty()),
         "the response ended"

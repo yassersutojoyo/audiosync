@@ -66,9 +66,9 @@ use std::net::{
     IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6, TcpStream, UdpSocket,
 };
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -478,12 +478,15 @@ impl Drop for RtspIo {
 
 /// The PTP service's sockets on ports 319 and 320 (P158), bound only while
 /// the AirPlay 2 switch is on and an AirPlay 2 session may need them. One
-/// thread reads the event socket and hands what may be a Delay_Req to the
-/// driver with its arrival time; nothing else is read.
+/// thread reads the event socket and hands what may be a Delay_Req from a
+/// peer to the driver with its arrival time; nothing else is read.
 #[derive(Debug)]
 pub(crate) struct PtpIo {
     event: Arc<UdpSocket>,
     general: UdpSocket,
+    /// The receivers the service serves, as [`PtpIo::set_peers`] last named
+    /// them; the thread drops datagrams from anyone else (P162).
+    peers: Arc<RwLock<Vec<IpAddr>>>,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
 }
@@ -509,16 +512,25 @@ impl PtpIo {
         let mut io = PtpIo {
             event: Arc::new(event),
             general,
+            peers: Arc::new(RwLock::new(Vec::new())),
             stop: Arc::new(AtomicBool::new(false)),
             threads: Vec::new(),
         };
         let thread = spawn(
             "airplay-ptp",
-            ptp_loop(io.event.clone(), io.stop.clone(), notify),
+            ptp_loop(io.event.clone(), io.peers.clone(), io.stop.clone(), notify),
             || {},
         )?;
         io.threads.push(thread);
         Ok(io)
+    }
+
+    /// Names the receivers whose datagrams the thread passes on, replacing
+    /// the earlier list.
+    pub(crate) fn set_peers(&self, peers: impl IntoIterator<Item = IpAddr>) {
+        let mut known = self.peers.write().unwrap_or_else(PoisonError::into_inner);
+        known.clear();
+        known.extend(peers.into_iter().map(|peer| peer.to_canonical()));
     }
 
     /// Sends one message; a failed send is dropped, since the next Sync
@@ -573,6 +585,7 @@ fn wake(socket: &UdpSocket) {
 
 fn ptp_loop(
     socket: Arc<UdpSocket>,
+    peers: Arc<RwLock<Vec<IpAddr>>>,
     stop: Arc<AtomicBool>,
     notify: impl Notify,
 ) -> impl FnOnce() + Send + 'static {
@@ -585,7 +598,12 @@ fn ptp_loop(
                 Ok((0, _)) => {}
                 Ok((len, source)) => {
                     let at = Instant::now();
-                    if !crate::ptp::may_be_delay_req(&buf[..len]) {
+                    let from_peer = peers
+                        .read()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .iter()
+                        .any(|&peer| from_receiver(source, peer));
+                    if !from_peer || !crate::ptp::may_be_delay_req(&buf[..len]) {
                         continue;
                     }
                     let bytes = buf[..len].to_vec();
@@ -1343,6 +1361,42 @@ mod tests {
         let threads = std::mem::take(&mut io.threads);
         drop(io);
         assert!(all_end(&threads), "dropping wakes the PTP thread");
+    }
+
+    // Port 319 listens on every address, so a LAN host could otherwise fill
+    // the driver's channel with Delay_Req-shaped datagrams.
+    // covers: P162
+    #[test]
+    fn the_ptp_thread_passes_on_datagrams_from_peers_only() {
+        let ports = crate::ptp::PtpPorts {
+            event: 0,
+            general: 0,
+        };
+        let (events, received) = mpsc::channel();
+        let notify = move |event: IoEvent| events.send(event).is_ok();
+        let io = PtpIo::open(IpAddr::from([127, 0, 0, 1]), ports, notify).expect("PTP I/O");
+        let port = io.event.local_addr().expect("event address").port();
+        let to = SocketAddr::from(([127, 0, 0, 1], port));
+        let mut delay_req = [0u8; 44];
+        delay_req[0] = 0x01;
+        delay_req[1] = 0x02;
+        assert!(crate::ptp::may_be_delay_req(&delay_req));
+        let stranger = UdpSocket::bind("127.0.0.1:0").expect("socket");
+        io.set_peers([IpAddr::from([192, 0, 2, 7])]);
+        stranger.send_to(&delay_req, to).expect("send");
+        assert!(
+            received.recv_timeout(Duration::from_millis(300)).is_err(),
+            "a datagram from a non-peer is dropped in the thread"
+        );
+        io.set_peers([IpAddr::from([127, 0, 0, 1])]);
+        stranger.send_to(&delay_req, to).expect("send");
+        match received.recv_timeout(WAIT) {
+            Ok(IoEvent::Ptp { source, .. }) => {
+                assert_eq!(source.ip(), IpAddr::from([127, 0, 0, 1]));
+            }
+            other => panic!("{other:?}"),
+        }
+        let _ = io.close();
     }
 
     // A close whose wake-up can't be sent, as when the session's local

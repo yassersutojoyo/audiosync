@@ -583,6 +583,9 @@ pub struct AppState {
     /// AirPlay discovery runs but has found no speaker for a while: the
     /// speaker list says to check the network and Windows Firewall.
     pub airplay_none_found: bool,
+    /// AirPlay discovery runs and has listed no speaker yet, short of
+    /// `airplay_none_found`: the flyout says it is looking.
+    pub airplay_searching: bool,
     /// What a session does when the app it captures quits (spec S227).
     pub when_source_quits: WhenSourceQuits,
     /// The speaker list's note about Google Cast discovery.
@@ -1148,6 +1151,7 @@ impl MockBackend {
             reference_name: Some("Speakers".into()),
             airplay_delay_ms: Some(1750.0),
             airplay_none_found: false,
+            airplay_searching: false,
             when_source_quits: WhenSourceQuits::Stop,
             cast_list: CastList::Quiet,
             cast_by_address: true,

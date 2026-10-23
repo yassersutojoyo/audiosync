@@ -17,7 +17,7 @@ use audiosync_cast::host::{
     OUTPUT_SYNC, OutputSync, StartRefused,
 };
 use audiosync_cast::media::Metadata;
-use audiosync_cast::message::NS_MEDIA;
+use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use common::{Behavior, Command, FakeDevice, OnLaunch, OnLoad};
 use serde_json::{Value, json};
@@ -710,4 +710,43 @@ fn connect_retries_follow_events_held_when_the_start_began() {
     wait_for(&host, Duration::from_secs(3), ended(B));
     assert!(host.shutdown());
     device.join();
+}
+
+/// The destinations of the sender's `CLOSE` messages, in order.
+fn closes(device: &FakeDevice) -> Vec<String> {
+    device
+        .received()
+        .into_iter()
+        .filter(|(_, namespace, payload)| namespace == NS_CONNECTION && payload["type"] == "CLOSE")
+        .map(|(destination, _, _)| destination)
+        .collect()
+}
+
+// covers: C87, C88
+#[test]
+fn a_stop_or_a_quit_during_a_launch_sends_no_stop_and_only_the_platform_close() {
+    let silent = FakeDevice::start(Behavior {
+        on_launch: OnLaunch::Ignore,
+        ..Behavior::default()
+    });
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &silent), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    assert!(silent.wait_for("LAUNCH", Duration::from_secs(10)));
+    host.stop();
+    wait_for(&host, Duration::from_secs(5), ended(A));
+    assert!(silent.wait_for("CLOSE", Duration::from_secs(3)));
+    assert_eq!(closes(&silent), [PLATFORM]);
+
+    let (_feed, reader) = ring();
+    host.start(target(A, &silent), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    assert!(silent.wait_for_count("LAUNCH", 2, Duration::from_secs(10)));
+    assert!(host.shutdown());
+    assert!(silent.wait_for_count("CLOSE", 2, Duration::from_secs(3)));
+    assert_eq!(closes(&silent), [PLATFORM, PLATFORM]);
+    assert!(silent.payloads(NS_RECEIVER, "STOP").is_empty());
+    assert!(silent.payloads(NS_MEDIA, "STOP").is_empty());
+    silent.join();
 }

@@ -13,7 +13,7 @@ use audiosync_remote::{Command, DEFAULT_PORT, NowPlaying, Speaker as RemoteSpeak
 use serde::{Deserialize, Serialize};
 
 use crate::now_playing_card::{CardTrack, app_name};
-use crate::ui_model::{AppState, Availability, MAX_DELAY_MS, MIN_DELAY_MS, Speaker};
+use crate::ui_model::{AppState, Availability, MAX_DELAY_MS, MIN_DELAY_MS, Speaker, SpeakerKind};
 
 /// The lowest port the setting takes: below it are the well-known services.
 pub const MIN_PORT: u16 = 1024;
@@ -63,28 +63,51 @@ pub trait RowText {
     fn kind(&self, speaker: &Speaker) -> String;
     /// The note under the row's name, as the window shows it; empty for none.
     fn note(&self, state: &AppState, speaker: &Speaker) -> String;
+    /// The note of a speaker that asks for a code, which the page can't turn on.
+    fn turn_on_at_pc(&self) -> String;
+}
+
+/// A speaker that would ask for a PIN or password when turned on: the prompt
+/// would open on the PC with nobody there, so the page can't turn it on.
+fn asks_for_code(state: &AppState, speaker: &Speaker) -> bool {
+    speaker.availability == Availability::NeedsCode
+        && !speaker.paired
+        && state.speaker_state(speaker).click_turns_on()
 }
 
 /// Whether the page may drive `speaker`: one that needs a kind of pairing
-/// or a protocol AudioSync lacks, or is pairing now, is shown without controls.
-pub fn can_drive(speaker: &Speaker) -> bool {
-    matches!(
-        speaker.availability,
-        Availability::Open | Availability::NeedsCode
-    )
+/// or a protocol AudioSync lacks, is pairing now, or would ask for a code
+/// is shown without controls.
+pub fn can_drive(state: &AppState, speaker: &Speaker) -> bool {
+    match speaker.availability {
+        Availability::Open => true,
+        Availability::NeedsCode => !asks_for_code(state, speaker),
+        _ => false,
+    }
 }
 
-/// The delay range of `speaker`'s offset field, in whole milliseconds; `None`
-/// for one without an offset (the reference output, AirPlay speakers).
-pub fn delay_range(speaker: &Speaker) -> Option<(i64, i64)> {
-    speaker.delay_ms?;
+fn is_airplay(speaker: &Speaker) -> bool {
+    matches!(speaker.kind, SpeakerKind::AirPlay | SpeakerKind::AirPlay2)
+}
+
+/// The delay `speaker`'s field shows and the range it takes, in whole
+/// milliseconds; `None` without a field (the reference output, an AirPlay
+/// speaker while no AirPlay sender runs).
+pub fn delay_field(state: &AppState, speaker: &Speaker) -> Option<(f64, i64, i64)> {
+    if is_airplay(speaker) {
+        // Every AirPlay speaker shares the window's AirPlay delay (spec S178).
+        return state
+            .airplay_delay_ms
+            .map(|ms| (ms, 0, MAX_DELAY_MS as i64));
+    }
+    let ms = speaker.delay_ms?;
     // A Cast speaker's offset only holds the others back (spec C77).
     let min = if speaker.cast.is_some() {
         0
     } else {
         MIN_DELAY_MS as i64
     };
-    Some((min, MAX_DELAY_MS as i64))
+    Some((ms, min, MAX_DELAY_MS as i64))
 }
 
 fn volume(position: f64) -> f64 {
@@ -118,8 +141,12 @@ pub fn snapshot(
     let speakers = listed(state, shown)
         .into_iter()
         .map(|speaker| {
-            let (min, max) = delay_range(speaker).unwrap_or((0, 0));
-            let note = text.note(state, speaker);
+            let (ms, min, max) = delay_field(state, speaker).unwrap_or((0.0, 0, 0));
+            let note = if asks_for_code(state, speaker) {
+                text.turn_on_at_pc()
+            } else {
+                text.note(state, speaker)
+            };
             RemoteSpeaker {
                 id: speaker.id.clone(),
                 name: speaker.name.clone(),
@@ -128,14 +155,10 @@ pub fn snapshot(
                 on: !state.speaker_state(speaker).click_turns_on(),
                 volume: volume(speaker.volume),
                 volume_step: speaker.cast.as_ref().map_or(1.0, |cast| cast.volume_step),
-                delay_ms: speaker
-                    .delay_ms
-                    .filter(|ms| ms.is_finite())
-                    .map_or(0, |ms| ms.round() as i64)
-                    .clamp(min, max),
+                delay_ms: if ms.is_finite() { ms.round() as i64 } else { 0 }.clamp(min, max),
                 delay_min_ms: min,
                 delay_max_ms: max,
-                available: can_drive(speaker),
+                available: can_drive(state, speaker),
                 notice: (!note.is_empty()).then_some(note),
             }
         })
@@ -155,10 +178,25 @@ pub fn snapshot(
 /// One change a command makes, as a control in the window would.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    Enable { id: String, on: bool },
-    Volume { id: String, volume: f64 },
-    Delay { id: String, ms: f64 },
-    Master { volume: f64 },
+    Enable {
+        id: String,
+        on: bool,
+    },
+    Volume {
+        id: String,
+        volume: f64,
+    },
+    Delay {
+        id: String,
+        ms: f64,
+    },
+    /// The AirPlay delay every AirPlay speaker shares.
+    AirPlayDelay {
+        ms: f64,
+    },
+    Master {
+        volume: f64,
+    },
 }
 
 /// Why a command changed nothing.
@@ -194,7 +232,7 @@ pub fn actions(
                 .speaker(id)
                 .filter(|speaker| shown(speaker))
                 .ok_or(Refusal::UnknownSpeaker)?;
-            if !can_drive(speaker) {
+            if !can_drive(state, speaker) {
                 return Err(Refusal::Unavailable);
             }
             let mut actions = Vec::new();
@@ -211,11 +249,15 @@ pub fn actions(
                 });
             }
             if let Some(ms) = change.delay_ms {
-                match delay_range(speaker) {
-                    Some((min, max)) if (min..=max).contains(&ms) => {
-                        actions.push(Action::Delay {
-                            id: id.clone(),
-                            ms: ms as f64,
+                match delay_field(state, speaker) {
+                    Some((_, min, max)) if (min..=max).contains(&ms) => {
+                        actions.push(if is_airplay(speaker) {
+                            Action::AirPlayDelay { ms: ms as f64 }
+                        } else {
+                            Action::Delay {
+                                id: id.clone(),
+                                ms: ms as f64,
+                            }
                         });
                     }
                     None if ms == 0 => {}
@@ -342,7 +384,7 @@ pub fn computer_name() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_model::{CastRow, CastState, SpeakerKind};
+    use crate::ui_model::{CastRow, CastState};
     use audiosync_remote::SpeakerChange;
 
     struct Text;
@@ -354,8 +396,12 @@ mod tests {
         fn note(&self, _state: &AppState, speaker: &Speaker) -> String {
             match speaker.availability {
                 Availability::AirPlay2NotYet => "AirPlay 2 not supported yet".to_owned(),
+                Availability::NeedsCode => "Asks for a code".to_owned(),
                 _ => String::new(),
             }
+        }
+        fn turn_on_at_pc(&self) -> String {
+            "Turn it on at the PC".to_owned()
         }
     }
 
@@ -414,6 +460,7 @@ mod tests {
             reference_name: Some("pc".to_owned()),
             airplay_delay_ms: Some(0.0),
             airplay_none_found: false,
+            airplay_searching: false,
             when_source_quits: Default::default(),
             cast_list: crate::ui_model::CastList::Quiet,
             cast_by_address: false,
@@ -586,6 +633,73 @@ mod tests {
             "the reference has no offset"
         );
         assert_eq!(delay("pc", 10), Err(Refusal::OutOfRange));
+    }
+
+    fn with_apple_tv(availability: Availability) -> AppState {
+        let mut state = state();
+        let mut tv = speaker("tv", SpeakerKind::AirPlay, None);
+        tv.availability = availability;
+        state.speakers.push(tv);
+        state.airplay_delay_ms = Some(1750.0);
+        state
+    }
+
+    #[test]
+    fn a_speaker_that_asks_for_a_code_is_turned_on_at_the_pc_not_from_the_page() {
+        let state = with_apple_tv(Availability::NeedsCode);
+        let on = SpeakerChange {
+            on: Some(true),
+            ..Default::default()
+        };
+        let tv = |state: &AppState| {
+            snapshot(state, not_virtual, None, "pc", &Text)
+                .speakers
+                .into_iter()
+                .find(|s| s.id == "tv")
+                .unwrap()
+        };
+        assert!(!tv(&state).available, "the prompt would open at the PC");
+        assert_eq!(tv(&state).notice.as_deref(), Some("Turn it on at the PC"));
+        assert_eq!(
+            actions(&speaker_command("tv", on.clone()), &state, not_virtual),
+            Err(Refusal::Unavailable)
+        );
+        let mut paired = state.clone();
+        paired.speakers.last_mut().unwrap().paired = true;
+        assert!(
+            tv(&paired).available,
+            "paired, it turns on without a prompt"
+        );
+        assert_eq!(tv(&paired).notice.as_deref(), Some("Asks for a code"));
+        let mut playing = state.clone();
+        playing.speakers.last_mut().unwrap().enabled = true;
+        assert!(tv(&playing).available, "on, it can be turned off");
+    }
+
+    #[test]
+    fn an_airplay_speaker_carries_the_shared_airplay_delay_and_sets_it() {
+        let state = with_apple_tv(Availability::Open);
+        let snapshot = snapshot(&state, not_virtual, None, "pc", &Text);
+        let tv = snapshot.speakers.iter().find(|s| s.id == "tv").unwrap();
+        assert_eq!(
+            (tv.delay_ms, tv.delay_min_ms, tv.delay_max_ms),
+            (1750, 0, 20_000)
+        );
+        let change = |ms| SpeakerChange {
+            delay_ms: Some(ms),
+            ..Default::default()
+        };
+        let delay = |ms| actions(&speaker_command("tv", change(ms)), &state, not_virtual);
+        assert_eq!(delay(2100), Ok(vec![Action::AirPlayDelay { ms: 2100.0 }]));
+        assert_eq!(delay(-1), Err(Refusal::OutOfRange));
+        assert_eq!(delay(20_001), Err(Refusal::OutOfRange));
+        let mut no_sender = state.clone();
+        no_sender.airplay_delay_ms = None;
+        assert_eq!(
+            actions(&speaker_command("tv", change(10)), &no_sender, not_virtual),
+            Err(Refusal::OutOfRange),
+            "no AirPlay sender, no delay field"
+        );
     }
 
     #[test]

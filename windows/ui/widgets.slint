@@ -1771,11 +1771,11 @@ export component SpeakerRow inherits Rectangle {
         tip-text := Text {
             x: 8px;
             width: parent.width - 16px;
-            text: Strings.speaker-name-tooltip(root.item.system-name);
+            text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
             font-size: Tokens.font-size-caption;
             color: Tokens.text;
             vertical-alignment: center;
-            overflow: elide;
+            wrap: word-wrap;
             accessible-role: none;
         }
     }

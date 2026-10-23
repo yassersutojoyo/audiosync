@@ -1,7 +1,9 @@
 //! The data tables in the code match the tables in `docs/ENGINE_SPEC.md`: the
-//! equalizer presets (S33) and the volume reference values (S70).
+//! equalizer presets (S33), the volume reference values (S70) and the
+//! hold-backs of the local delay model (S176).
 
 use audiosync_core::eq::{BAND_CENTERS_HZ, PRESETS};
+use audiosync_core::policy::delay::{Participant, hold_backs};
 use audiosync_core::volume::{gain_for_position, gain_to_db};
 
 fn spec() -> String {
@@ -103,5 +105,59 @@ fn the_volume_reference_values_match_the_spec() {
                 "dB at {position}: {computed_db}, spec {db}"
             );
         }
+    }
+}
+
+// covers: S176
+#[test]
+fn the_hold_back_table_matches_the_spec() {
+    // The table's outputs: the reference, a USB speaker at +150 ms and a
+    // Bluetooth speaker at −250 ms, with L = 2000 ms while AirPlay is chosen.
+    let outputs = [
+        ("R", 0.0, true),
+        ("USB", 150.0, false),
+        ("Bluetooth", -250.0, false),
+    ];
+    let spec = spec();
+    let rows = table(&spec, "Taking part");
+    assert_eq!(
+        rows[0][3..],
+        ["h(R)", "h(USB)", "h(Bluetooth)"],
+        "one column per output"
+    );
+    assert_eq!(rows.len(), 8, "seven cases");
+    for row in &rows[1..] {
+        let airplay = match row[1].as_str() {
+            "yes" => Some(2000.0),
+            "no" => None,
+            other => panic!("AirPlay chosen is yes or no, not {other:?}"),
+        };
+        let taking_part: Vec<Participant> = outputs
+            .iter()
+            .zip(&row[3..])
+            .filter(|(_, cell)| cell.as_str() != "–")
+            .map(|(&(id, offset_ms, is_reference), _)| Participant {
+                id,
+                offset_ms,
+                is_reference,
+            })
+            .collect();
+        let expected: Vec<f64> = row[3..]
+            .iter()
+            .filter(|cell| cell.as_str() != "–")
+            .map(|cell| number(cell))
+            .collect();
+        let held: Vec<f64> = hold_backs(&taking_part, airplay)
+            .iter()
+            .map(|(_, held)| *held)
+            .collect();
+        assert_eq!(held, expected, "{}", row[0]);
+        // h(x) = o′(x) − m, and every o′ in the table is its stored offset.
+        assert_eq!(
+            taking_part[0].offset_ms - held[0],
+            number(&row[2]),
+            "m for {}",
+            row[0]
+        );
     }
 }

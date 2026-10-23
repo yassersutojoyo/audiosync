@@ -7,8 +7,9 @@ on:
 
 # A newer push to a feature branch cancels that branch's older run; every
 # commit on main keeps its own group, so main's runs are never cancelled.
+# The group starts with the file name, which stays unique when a name: is copied.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  group: remote.yml-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:

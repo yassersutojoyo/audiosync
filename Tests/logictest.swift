@@ -1522,6 +1522,24 @@ do {
             && UIStrings().airPlay2Note(on: true, onAtLaunch: false) == lets
             && UIStrings().airPlay2Note(on: false, onAtLaunch: false) == lets,
           "AirPlay 2 switch: its note says AirPlay 2 stops only once turned off from a launch that runs it, as on Windows")
+    // The menu classes are main-actor bound; top-level code runs on the main thread.
+    MainActor.assumeIsolated {
+        let noteMenu = NSMenu()
+        MenuNoteItem.airPlay2Items(text: UIStrings(), on: true, onAtLaunch: true,
+                                   action: #selector(NSApplication.terminate(_:))).forEach(noteMenu.addItem)
+        let noteRow = noteMenu.items.last as? MenuNoteItem
+        check(noteMenu.items.count == 2 && noteMenu.items[0].title == "AirPlay 2 (Experimental)"
+                && noteMenu.items[0].state == .on && noteMenu.items[0].toolTip == lets
+                && noteRow?.note == lets && noteRow?.view != nil && !(noteRow?.isEnabled ?? true),
+              "AirPlay 2 switch: its note is a row of its own under it, not a subtitle the menus don't show")
+        let oneLine = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize).boundingRectForFont.height
+        check((noteRow?.view?.frame.height ?? 0) > oneLine * 1.5,
+              "AirPlay 2 switch: its note wraps onto more than one line instead of widening the menu",
+              "\(noteRow?.view?.frame.height ?? 0) vs one line \(oneLine)")
+        MenuNoteItem.refresh(noteMenu, below: #selector(NSApplication.terminate(_:)), note: stops)
+        check(noteRow?.note == stops && noteMenu.items[0].toolTip == stops,
+              "AirPlay 2 switch: turned off from a launch that runs it, the note under it says AirPlay 2 stops")
+    }
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting for the other AirPlay 2 speaker"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,
@@ -3324,6 +3342,28 @@ do {
           "delay panels: a click into another field applies the typing once, as the focus moves", "delays: \(delays)")
 }
 
+// MARK: Field editor — the click monitor finds the delay field being typed in (FieldEditor)
+// Final and without NSTextViewDelegate, as the main window's delay field is.
+final class EditedDelayField: NSTextField {
+    var rowID = ""
+}
+MainActor.assumeIsolated {
+    let field = EditedDelayField(frame: .zero)
+    field.rowID = "dock"
+    let editor = NSTextView(frame: .zero)
+    editor.isFieldEditor = true
+    // AppKit sets the delegate this way when the field starts editing.
+    editor.perform(Selector(("setDelegate:")), with: field)
+    check(FieldEditor.field(EditedDelayField.self, editedBy: editor)?.rowID == "dock",
+          "delay panels: the click monitor finds the delay field the field editor types for, so a click on its own step keeps the typing")
+    let otherField = NSTextField(frame: .zero)
+    let other = NSTextView(frame: .zero)
+    other.perform(Selector(("setDelegate:")), with: otherField)
+    check(FieldEditor.field(EditedDelayField.self, editedBy: NSTextView(frame: .zero)) == nil
+            && FieldEditor.field(EditedDelayField.self, editedBy: other) == nil,
+          "delay panels: an editor typing for no field, or for another kind of field, has no delay field")
+}
+
 // MARK: Delay value — a row's delay value follows every applied delay while its panel stays open (DelayBadge)
 do {
     let t = UIStrings()
@@ -3645,7 +3685,7 @@ do {
     // the first 448 of the next, so its last frame is at offset 447 there.
     do {
         let rate = 48_000.0, frames = 512, period: UInt64 = 10_666_667, latency: UInt64 = 5 * ms
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let renderer = CoreRenderer(ring: ring, captureRate: rate, deviceRate: rate, channels: 2, gain: 1) {
             let level = [Float](repeating: 0.5, count: 480 * 2)
             for _ in 0..<100 { level.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 480) } }
@@ -3685,7 +3725,7 @@ do {
     // 512 frames to its start lead, which its start line logs in ms.
     do {
         let name = "bluetooth lead: a Bluetooth output's start lead counts a capture block more"
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
            let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
             buds.setBluetooth(true)
@@ -3700,7 +3740,7 @@ do {
     // way to its latest plausible one, else 150 ms; any other stays as it is.
     do {
         let name = "bluetooth latency: a report outside the window gives way, any other output's stays"
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
            let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
             buds.setBluetooth(true)
@@ -4277,6 +4317,15 @@ do {
             && shown.offsetChanged("usb").phase(of: "usb") == .idle && shown.offsetChanged("bt") == shown
             && measuring.following(streamingOff) == measuring && measuring.offsetChanged("usb") == measuring,
           "calibration: a result goes when its offset, streaming, the reference or the speaker's switch changes")
+
+    // The window's + step asks for 20 010 ms, the web remote for the 20 000 ms already set.
+    let stepped = { (raw: Double) in LocalDelay.sanitizedOffset(raw) ?? .nan }
+    check(!CalibrationStatus.offsetDiffers(stored: 20_000, clamped: stepped(20_010))
+            && !CalibrationStatus.offsetDiffers(stored: 20_000, clamped: stepped(20_000))
+            && !CalibrationStatus.offsetDiffers(stored: nil, clamped: 0)
+            && CalibrationStatus.offsetDiffers(stored: nil, clamped: 10)
+            && CalibrationStatus.offsetDiffers(stored: 19_990, clamped: stepped(20_000)),
+          "calibration: a delay step at the maximum leaves the offset, and its line, as they were")
 
     check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying
             && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying

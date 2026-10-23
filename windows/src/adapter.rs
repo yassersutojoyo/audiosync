@@ -1172,6 +1172,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.airplay_quiet_polls >= NONE_FOUND_POLLS
     }
 
+    /// Whether AirPlay discovery runs with no speaker listed, short of the
+    /// 20 seconds after which [`Self::airplay_none_found`] holds.
+    fn airplay_searching(&self) -> bool {
+        (1..NONE_FOUND_POLLS).contains(&self.airplay_quiet_polls)
+    }
+
     /// The speaker list's note about Google Cast discovery.
     fn cast_list(&self) -> CastList {
         match self.audio.cast_discovery() {
@@ -1314,6 +1320,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// note that none was found showed or went.
     fn count_airplay_quiet(&mut self) -> bool {
         let shown = self.airplay_none_found();
+        let searched = self.airplay_searching();
         let browsing = self.audio.airplay_browsing();
         if browsing && self.airplay_listed.is_empty() {
             self.airplay_quiet_polls = self.airplay_quiet_polls.saturating_add(1);
@@ -1334,7 +1341,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             });
         }
-        shows != shown
+        shows != shown || self.airplay_searching() != searched
     }
 
     /// Lists the outputs and the sources again.
@@ -2480,6 +2487,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
             airplay_none_found: self.airplay_none_found(),
+            airplay_searching: self.airplay_searching(),
             running: self.running(),
             sources: self.source_rows(),
             source_id: self.chosen.key(),
@@ -6008,6 +6016,32 @@ mod tests {
             "an empty AirPlay list after 20 seconds needs a hint"
         );
         assert!(messages(&adapter).is_empty(), "a note, not a notice");
+    }
+
+    /// The flyout's empty list says it is looking until the none-found note
+    /// takes over, and stops once a speaker is listed.
+    #[test]
+    fn discovery_without_a_speaker_is_searching_until_the_none_found_hint() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        assert!(adapter.poll(), "the snapshot changes as the search shows");
+        assert!(adapter.snapshot().airplay_searching, "right after launch");
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        let snapshot = adapter.snapshot();
+        assert!(
+            !snapshot.airplay_searching,
+            "the none-found hint replaces it"
+        );
+        assert!(snapshot.airplay_none_found);
+
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        poll_times(&mut adapter, 2);
+        fake.appear(&device(2, "Study", PASSWORD_TXT));
+        adapter.poll();
+        assert!(!adapter.snapshot().airplay_searching, "a speaker was found");
     }
 
     #[test]

@@ -144,6 +144,10 @@ fn devices_path() -> Option<PathBuf> {
 struct StringsText<'a>(Strings<'a>);
 
 impl RowText for StringsText<'_> {
+    fn turn_on_at_pc(&self) -> String {
+        self.0.get_remote_turn_on_at_pc().into()
+    }
+
     fn kind(&self, speaker: &Speaker) -> String {
         self.0
             .invoke_speaker_kind(speaker_kind(speaker.kind))
@@ -420,6 +424,7 @@ impl App {
                                 backend.set_speaker_volume(&id, volume);
                             }
                             Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
+                            Action::AirPlayDelay { ms } => backend.set_airplay_delay(ms),
                             Action::Master { volume } => backend.set_master_volume(volume),
                         }
                     }
@@ -850,6 +855,55 @@ mod tests {
         assert_eq!(turned.volume, 20.0);
         assert!(state.running, "turning a speaker on starts streaming");
         assert_eq!(state.master_volume, 40.0);
+    }
+
+    #[test]
+    fn the_page_sets_the_airplay_delay_and_cant_turn_on_a_speaker_that_asks_for_a_code() {
+        let app = over_loopback(MockBackend::new());
+        let state = app.snapshot();
+        let airplay = |availability| {
+            state
+                .speakers
+                .iter()
+                .find(|speaker| {
+                    speaker.kind == crate::ui_model::SpeakerKind::AirPlay
+                        && speaker.availability == availability
+                        && !speaker.enabled
+                })
+                .expect("an AirPlay speaker")
+                .id
+                .clone()
+        };
+        let open = airplay(crate::ui_model::Availability::Open);
+        let asks = airplay(crate::ui_model::Availability::NeedsCode);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.remote.borrow_mut().commands = Some(receiver);
+        let send = |id: &str, change| {
+            sender
+                .send(audiosync_remote::Command::Speaker {
+                    id: id.to_owned(),
+                    change,
+                })
+                .expect("sent");
+        };
+        send(
+            &open,
+            audiosync_remote::SpeakerChange {
+                delay_ms: Some(2100),
+                ..Default::default()
+            },
+        );
+        send(
+            &asks,
+            audiosync_remote::SpeakerChange {
+                on: Some(true),
+                ..Default::default()
+            },
+        );
+        app.take_remote_commands();
+        let state = app.snapshot();
+        assert_eq!(state.airplay_delay_ms, Some(2100.0));
+        assert!(!state.speaker(&asks).expect("listed").enabled);
     }
 
     struct FakeProfiles(std::sync::Mutex<Vec<Category>>);

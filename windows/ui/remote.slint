@@ -31,6 +31,31 @@ component AddressLine inherits VerticalLayout {
     }
 }
 
+// One numbered step, read by Narrator as one line.
+component SetupStep inherits HorizontalLayout {
+    in property <int> number;
+    in property <string> step;
+
+    spacing: 6px;
+    accessible-role: text;
+    accessible-label: Strings.remote-step-number(root.number) + " " + root.step;
+
+    Text {
+        text: Strings.remote-step-number(root.number);
+        color: Tokens.text;
+        accessible-role: none;
+    }
+
+    Text {
+        horizontal-stretch: 1;
+        text: root.step;
+        color: Tokens.text;
+        wrap: word-wrap;
+        min-height: self.preferred-height;
+        accessible-role: none;
+    }
+}
+
 export component RemoteWindow inherits Window {
     // The setting: the remote serves the page while it is on.
     in property <bool> remote-on;
@@ -59,6 +84,9 @@ export component RemoteWindow inherits Window {
     in property <bool> port-invalid;
     // A network this PC is connected to has Windows' Public profile.
     in property <bool> public-network;
+
+    // The setup steps are for an iPhone, else for Android.
+    in-out property <bool> steps-for-iphone: true;
 
     callback remote-toggled(bool);
     callback new-code-requested();
@@ -236,6 +264,69 @@ export component RemoteWindow inherits Window {
                                         accessible-role: none;
                                     }
                                 }
+                            }
+                        }
+
+                        // Adding the page to the Home Screen comes before the code: on iPhone
+                        // the Home Screen app keeps its own cookies.
+                        VerticalLayout {
+                            spacing: 8px;
+                            accessible-role: groupbox;
+                            accessible-label: Strings.remote-setup-title;
+
+                            SectionTitle {
+                                text: Strings.remote-setup-title;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 4px;
+                                alignment: start;
+                                accessible-role: groupbox;
+                                accessible-label: Strings.remote-phone-picker;
+
+                                // Checkable buttons as a two-way choice; each click sets both,
+                                // since a click also flips the clicked one's own state.
+                                iphone-choice := Button {
+                                    text: Strings.remote-iphone;
+                                    checkable: true;
+                                    checked: true;
+                                    clicked => {
+                                        root.steps-for-iphone = true;
+                                        iphone-choice.checked = true;
+                                        android-choice.checked = false;
+                                    }
+                                }
+
+                                android-choice := Button {
+                                    text: Strings.remote-android;
+                                    checkable: true;
+                                    checked: false;
+                                    clicked => {
+                                        root.steps-for-iphone = false;
+                                        iphone-choice.checked = false;
+                                        android-choice.checked = true;
+                                    }
+                                }
+                            }
+
+                            SetupStep {
+                                number: 1;
+                                step: Strings.remote-step-scan;
+                            }
+
+                            SetupStep {
+                                number: 2;
+                                step: root.steps-for-iphone ? Strings.remote-step-home-iphone : Strings.remote-step-home-android;
+                            }
+
+                            SetupStep {
+                                number: 3;
+                                step: Strings.remote-step-open;
+                            }
+
+                            SecondaryText {
+                                text: root.steps-for-iphone ? Strings.remote-order-iphone : Strings.remote-order-android;
+                                min-height: self.preferred-height;
                             }
                         }
 

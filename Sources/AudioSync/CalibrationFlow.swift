@@ -113,6 +113,12 @@ struct CalibrationStatus: Equatable {
         next.context = nil
         return next
     }
+
+    /// Whether setting a stored offset (nil plays as 0 ms) to the clamped
+    /// `ms` changes it; a + step at the maximum doesn't, and keeps the line.
+    static func offsetDiffers(stored: Double?, clamped ms: Double) -> Bool {
+        (stored ?? 0) != ms
+    }
 }
 
 /// Why a local output sits out of microphone calibration, which measures
