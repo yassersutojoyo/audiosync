@@ -15,10 +15,11 @@
 //! ancestry can be captured. Where they can't be read, or AudioSync is
 //! missing from the snapshot, AudioSync refuses rather than capture itself.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use audiosync_core::channels::input_to_stereo;
+use audiosync_core::channels::{InputPair, pair_to_stereo};
 use audiosync_core::clock;
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::resample::Resampler;
@@ -62,26 +63,151 @@ pub struct Activation {
 pub enum CaptureTarget {
     /// A process loopback capture.
     Loopback(Activation),
+    /// Process loopback captures of several apps, each including one tree,
+    /// mixed into one stream; the set can change while it runs, and may be
+    /// empty (silence in real time).
+    Mix(Vec<Activation>),
     /// The capture endpoint of an input device, by endpoint ID.
     Input {
         /// The endpoint ID.
         endpoint_id: String,
+        /// The channel pair it plays ([`InputPair::index`]); 0 is channels
+        /// 1-2, captured as Windows mixes the device to stereo, as before
+        /// pairs could be chosen.
+        pair: u16,
     },
 }
 
-/// The capture for `source`: an input device's own endpoint, or the process
-/// loopback capture [`decide_activation`] decides on.
+/// The capture for `source`: an input device's own endpoint, playing the
+/// channel pair `input_pairs` keeps for it, or the process loopback capture
+/// [`decide_activation`] decides on. Several apps are decided from their top
+/// processes only; [`decide_apps_capture`] adds the instances that have an
+/// audio session.
 pub fn decide_capture(
     source: &SourceId,
     own_pid: u32,
     processes: &ProcessTable,
+    input_pairs: &BTreeMap<String, u16>,
 ) -> Result<CaptureTarget, BackendError> {
     match source {
         SourceId::Input { endpoint_id } => Ok(CaptureTarget::Input {
             endpoint_id: endpoint_id.clone(),
+            pair: input_pairs.get(endpoint_id).copied().unwrap_or(0),
         }),
+        SourceId::Apps { root_pids, .. } => decide_mix(root_pids, own_pid, processes),
         _ => decide_activation(source, own_pid, processes).map(CaptureTarget::Loopback),
     }
+}
+
+/// The most loopbacks one mix reads: one capture thread waits on them all,
+/// and Windows waits on at most 64 handles, one of them the stop event.
+pub const MAX_MIX_APPS: usize = 63;
+
+/// The loopbacks for several apps: each tree [`decide_activation`] accepts,
+/// once, the first [`MAX_MIX_APPS`]. A tree it refuses (one that quit, or
+/// holds or is held by AudioSync) is skipped, so AudioSync never captures
+/// itself; only none left fails, with the first tree's error.
+fn decide_mix(
+    root_pids: &[u32],
+    own_pid: u32,
+    processes: &ProcessTable,
+) -> Result<CaptureTarget, BackendError> {
+    let accepted = mix_trees(root_pids, own_pid, processes);
+    if accepted.is_empty() {
+        let first_error = root_pids.iter().find_map(|&root_pid| {
+            decide_activation(&SourceId::App { root_pid }, own_pid, processes).err()
+        });
+        return Err(first_error.unwrap_or(BackendError::SourceGone));
+    }
+    Ok(CaptureTarget::Mix(accepted))
+}
+
+/// The trees of `root_pids` that [`decide_activation`] accepts, each once,
+/// at most [`MAX_MIX_APPS`].
+fn mix_trees(root_pids: &[u32], own_pid: u32, processes: &ProcessTable) -> Vec<Activation> {
+    let mut accepted: Vec<Activation> = Vec::new();
+    for &root_pid in root_pids {
+        if let Ok(activation) = decide_activation(&SourceId::App { root_pid }, own_pid, processes)
+            && !accepted.contains(&activation)
+            && accepted.len() < MAX_MIX_APPS
+        {
+            accepted.push(activation);
+        }
+    }
+    accepted
+}
+
+/// The capture for an "only these" mix as it plays: its top processes
+/// `root_pids` that still run, and every app with an audio session running
+/// one of `executables` (an instance started later, or a second one). Fails
+/// as [`decide_capture`] does when none of them runs.
+pub fn decide_apps_capture(
+    processes: &ProcessTable,
+    session_pids: &[u32],
+    own_pid: u32,
+    root_pids: &[u32],
+    executables: &[String],
+) -> Result<CaptureTarget, BackendError> {
+    let mut roots = root_pids.to_vec();
+    roots.extend(session_apps(
+        processes,
+        session_pids,
+        own_pid,
+        |executable| {
+            executables
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(executable))
+        },
+    ));
+    decide_mix(&roots, own_pid, processes)
+}
+
+/// The capture for an "all except" source: the loopbacks of
+/// [`apps_except`], mixed. With no other app to capture it is a mix of
+/// none, which writes silence until one joins.
+pub fn decide_except_capture(
+    processes: &ProcessTable,
+    session_pids: &[u32],
+    own_pid: u32,
+    excluded: &[String],
+) -> CaptureTarget {
+    let roots = apps_except(processes, session_pids, own_pid, excluded);
+    CaptureTarget::Mix(mix_trees(&roots, own_pid, processes))
+}
+
+/// The apps an "all except" source mixes: one top process per app owning one
+/// of the audio sessions `session_pids`, as [`source_list`] offers them,
+/// except those running one of `excluded` (executable file names, compared
+/// without case). Windows' loopback can leave out only one process tree, so
+/// "all except" captures each other app with an audio session instead.
+pub fn apps_except(
+    processes: &ProcessTable,
+    session_pids: &[u32],
+    own_pid: u32,
+    excluded: &[String],
+) -> Vec<u32> {
+    session_apps(processes, session_pids, own_pid, |executable| {
+        !excluded
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(executable))
+    })
+}
+
+/// The top processes of the apps [`source_list`] offers whose executable
+/// `keep` accepts.
+fn session_apps(
+    processes: &ProcessTable,
+    session_pids: &[u32],
+    own_pid: u32,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<u32> {
+    source_list(processes, session_pids, own_pid)
+        .into_iter()
+        .filter_map(|source| match source.id {
+            SourceId::App { root_pid } if keep(&source.executable) => Some(root_pid),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The process loopback capture for `source`, with AudioSync running as
@@ -110,7 +236,10 @@ pub fn decide_activation(
             });
         }
         SourceId::App { root_pid } => *root_pid,
-        SourceId::Input { .. } => return Err(BackendError::NotAnApp),
+        // Several apps take several loopbacks: `decide_capture` decides each.
+        SourceId::Apps { .. } | SourceId::AppsExcept { .. } | SourceId::Input { .. } => {
+            return Err(BackendError::NotAnApp);
+        }
     };
     if root_pid == IDLE_PID || root_pid == SYSTEM_PID {
         return Err(BackendError::NotAnApp);
@@ -193,6 +322,7 @@ pub fn source_list(
             id: source,
             name: display_name(&executable),
             executable,
+            channels: 0,
         });
     }
     apps.sort_by(|a, b| {
@@ -206,6 +336,7 @@ pub fn source_list(
         id: SourceId::WholeSystem,
         name: WHOLE_SYSTEM_NAME.to_owned(),
         executable: String::new(),
+        channels: 0,
     });
     sources.extend(apps);
     sources
@@ -233,6 +364,7 @@ pub fn input_sources(readings: Vec<EndpointReading>) -> Vec<SourceInfo> {
                 id: SourceId::Input { endpoint_id },
                 name,
                 executable: String::new(),
+                channels: properties.channels.unwrap_or(0),
             })
         })
         .collect();
@@ -277,6 +409,7 @@ pub fn running_app(
         id: SourceId::App { root_pid },
         name: display_name(&executable),
         executable,
+        channels: 0,
     })
 }
 
@@ -324,6 +457,8 @@ pub struct CaptureAttempt {
     /// Whether to let Windows convert to that format
     /// (`AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`).
     pub autoconvert: bool,
+    /// The channels that play as L and R.
+    pub pair: InputPair,
 }
 
 /// The ways a capture is initialized, tried in order until Windows accepts
@@ -338,6 +473,7 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
             channels: 2,
         },
         autoconvert: true,
+        pair: InputPair::FIRST,
     },
     CaptureAttempt {
         format: StreamFormat {
@@ -346,6 +482,7 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
             channels: 2,
         },
         autoconvert: false,
+        pair: InputPair::FIRST,
     },
     CaptureAttempt {
         format: StreamFormat {
@@ -354,6 +491,7 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
             channels: 2,
         },
         autoconvert: false,
+        pair: InputPair::FIRST,
     },
     CaptureAttempt {
         format: StreamFormat {
@@ -362,11 +500,48 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
             channels: 2,
         },
         autoconvert: false,
+        pair: InputPair::FIRST,
     },
 ];
 
+/// The ways an input device's capture is tried before [`CAPTURE_ATTEMPTS`]
+/// when it plays a pair other than 1-2, on a device whose mix format has
+/// `channels` channels at `mix_rate`: all its channels as float, at the
+/// session rate converted by Windows, then at its own rate without
+/// conversion, since Windows' mix to stereo would lose the pair. None when
+/// `saved` resolves to 1-2, which keeps the stereo attempts and the
+/// stereo mix Windows has always made of such a device.
+pub fn pair_attempts(saved: u16, channels: u16, mix_rate: u32) -> Vec<CaptureAttempt> {
+    let (pair, _) = InputPair::resolve(saved, channels);
+    if pair.index == 0 {
+        return Vec::new();
+    }
+    [(SESSION_RATE, true), (mix_rate, false)]
+        .into_iter()
+        .filter(|&(rate, _)| is_supported_rate(rate))
+        .map(|(rate, autoconvert)| CaptureAttempt {
+            format: StreamFormat {
+                sample: SampleType::F32,
+                rate,
+                channels,
+            },
+            autoconvert,
+            pair,
+        })
+        .collect()
+}
+
+/// The channels of an input pair as the log shows them, numbered from 1.
+pub fn describe_pair(pair: InputPair) -> String {
+    if pair.is_mono() {
+        format!("channel {}", pair.left + 1)
+    } else {
+        format!("channels {}-{}", pair.left + 1, pair.right + 1)
+    }
+}
+
 /// Frames converted per step; bounds the converter's buffers.
-const CONVERT_CHUNK: usize = 1024;
+pub(crate) const CONVERT_CHUNK: usize = 1024;
 
 /// The network senders' feeds a capture is lent: each gets the same
 /// equalized audio as the ring. The calibration's tap rides along: it fades
@@ -455,9 +630,18 @@ pub struct CaptureConverter {
     stereo: Box<[f32]>,
     /// Resampler output, stereo.
     resampled: Box<[f32]>,
+    /// The channels that play as L and R.
+    pair: InputPair,
 }
 
 impl CaptureConverter {
+    /// The converter playing `pair`'s channels as L and R, instead of the
+    /// first two.
+    pub fn reading(mut self, pair: InputPair) -> CaptureConverter {
+        self.pair = pair;
+        self
+    }
+
     /// A converter for packets in `format`, writing through `writer` after
     /// `equalizer`, whose control half publishes settings designed for
     /// [`SESSION_RATE`], and handing the same audio to `feeds`.
@@ -490,6 +674,7 @@ impl CaptureConverter {
             decoded: vec![0.0; CONVERT_CHUNK * usize::from(format.channels)].into_boxed_slice(),
             stereo: vec![0.0; CONVERT_CHUNK * 2].into_boxed_slice(),
             resampled: vec![0.0; resampled_frames * 2].into_boxed_slice(),
+            pair: InputPair::FIRST,
         })
     }
 
@@ -523,11 +708,14 @@ impl CaptureConverter {
             } else {
                 let bytes = &data[done * block..(done + n) * block];
                 decode(self.format.sample, bytes, &mut self.decoded[..n * channels]);
-                input_to_stereo(
+                let converted = pair_to_stereo(
                     &self.decoded[..n * channels],
                     channels,
+                    self.pair,
                     &mut self.stereo[..n * 2],
                 );
+                // A pair beyond the format's channels converts nothing: silence, not stale samples.
+                self.stereo[converted * 2..n * 2].fill(0.0);
             }
             written += self.write_stereo(n, arrived, &mut signal);
             done += n;
@@ -611,7 +799,7 @@ const IDLE_AFTER_HNS: u64 = 250_000;
 /// In a gap, silence is written up to this long before now, 10 ms, so a
 /// packet that starts the audio again rarely finds its first frames filled
 /// already.
-const IDLE_LAG_HNS: u64 = 100_000;
+pub(crate) const IDLE_LAG_HNS: u64 = 100_000;
 
 /// The most silence one gap writes, 21 s: more than the longest delay (S77),
 /// so after a longer stall (a PC that slept) every reader finds silence.
@@ -652,6 +840,18 @@ impl GapFill {
             anchor: None,
             written: 0,
             filled: false,
+        }
+    }
+
+    /// A tracker for a capture at `rate` that started at `now`: silence is
+    /// written from then on while no packet comes, so a stream of a mix
+    /// that never delivers keeps pace instead of holding the mix back.
+    pub fn started(rate: u32, now: u64) -> GapFill {
+        GapFill {
+            rate,
+            anchor: Some(now),
+            written: 0,
+            filled: true,
         }
     }
 
@@ -752,7 +952,7 @@ impl GapFill {
 }
 
 /// Decodes little-endian samples into floats in -1.0..=1.0.
-fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
+pub(crate) fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
     match sample {
         SampleType::F32 => {
             for (value, raw) in out.iter_mut().zip(bytes.as_chunks::<4>().0) {
@@ -863,9 +1063,10 @@ mod tests {
             endpoint_id: "usb".to_owned(),
         };
         assert_eq!(
-            decide_capture(&source, OWN_PID, &ProcessTable::default()),
+            decide_capture(&source, OWN_PID, &ProcessTable::default(), &BTreeMap::new()),
             Ok(CaptureTarget::Input {
-                endpoint_id: "usb".to_owned()
+                endpoint_id: "usb".to_owned(),
+                pair: 0,
             })
         );
         assert_eq!(
@@ -873,12 +1074,100 @@ mod tests {
             Err(BackendError::NotAnApp)
         );
         assert_eq!(
-            decide_capture(&SourceId::WholeSystem, OWN_PID, &desktop()),
+            decide_capture(
+                &SourceId::WholeSystem,
+                OWN_PID,
+                &desktop(),
+                &BTreeMap::new()
+            ),
             Ok(CaptureTarget::Loopback(Activation {
                 mode: LoopbackMode::ExcludeTree,
                 target_pid: OWN_PID,
             }))
         );
+    }
+
+    #[test]
+    fn an_input_device_is_captured_with_the_pair_saved_for_it() {
+        let pairs = BTreeMap::from([("interface".to_owned(), 1)]);
+        let input = |id: &str| SourceId::Input {
+            endpoint_id: id.to_owned(),
+        };
+        assert_eq!(
+            decide_capture(&input("interface"), OWN_PID, &desktop(), &pairs),
+            Ok(CaptureTarget::Input {
+                endpoint_id: "interface".to_owned(),
+                pair: 1,
+            })
+        );
+        assert_eq!(
+            decide_capture(&input("usb"), OWN_PID, &desktop(), &pairs),
+            Ok(CaptureTarget::Input {
+                endpoint_id: "usb".to_owned(),
+                pair: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn pair_attempts_capture_every_channel_and_leave_one_two_to_the_stereo_mix() {
+        assert!(pair_attempts(0, 8, 48_000).is_empty());
+        assert!(
+            pair_attempts(4, 8, 48_000).is_empty(),
+            "8 channels have 4 pairs"
+        );
+        let attempts = pair_attempts(1, 8, 44_100);
+        let third_and_fourth = InputPair {
+            index: 1,
+            left: 2,
+            right: 3,
+        };
+        assert_eq!(
+            attempts,
+            [
+                CaptureAttempt {
+                    format: StreamFormat {
+                        sample: SampleType::F32,
+                        rate: SESSION_RATE,
+                        channels: 8,
+                    },
+                    autoconvert: true,
+                    pair: third_and_fourth,
+                },
+                CaptureAttempt {
+                    format: StreamFormat {
+                        sample: SampleType::F32,
+                        rate: 44_100,
+                        channels: 8,
+                    },
+                    autoconvert: false,
+                    pair: third_and_fourth,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_converter_reading_a_pair_plays_its_two_channels() {
+        let format = StreamFormat {
+            sample: SampleType::F32,
+            rate: SESSION_RATE,
+            channels: 4,
+        };
+        let (ring, writer) = session_ring_after_lead_in();
+        let mut converter = new_converter(format, writer)
+            .expect("float at the session rate is accepted")
+            .reading(InputPair {
+                index: 1,
+                left: 2,
+                right: 3,
+            });
+        converter.push(
+            &f32_bytes(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
+            2,
+            false,
+        );
+        assert_eq!(newest(&ring, 2), [0.3, 0.4, 0.7, 0.8]);
     }
 
     #[test]
@@ -1097,6 +1386,7 @@ mod tests {
                 id: SourceId::WholeSystem,
                 name: WHOLE_SYSTEM_NAME.to_owned(),
                 executable: String::new(),
+                channels: 0,
             }]
         );
     }
@@ -1122,6 +1412,120 @@ mod tests {
         assert_eq!(sources.len(), 1);
     }
 
+    fn mix_table() -> ProcessTable {
+        ProcessTable::new([
+            entry(10, 1, None, "player.exe"),
+            entry(11, 10, None, "player-helper.exe"),
+            entry(20, 1, None, "browser.exe"),
+            entry(30, 1, None, "game.exe"),
+            entry(99, 1, None, "audiosync.exe"),
+        ])
+    }
+
+    fn include(target_pid: u32) -> Activation {
+        Activation {
+            mode: LoopbackMode::IncludeTree,
+            target_pid,
+        }
+    }
+
+    #[test]
+    fn several_apps_are_one_loopback_each_and_audiosync_or_a_quit_app_is_skipped() {
+        let table = mix_table();
+        let mix = |root_pids: Vec<u32>| {
+            decide_capture(
+                &SourceId::Apps {
+                    root_pids,
+                    executables: Vec::new(),
+                },
+                99,
+                &table,
+                &BTreeMap::new(),
+            )
+        };
+        assert_eq!(
+            mix(vec![10, 20, 10]),
+            Ok(CaptureTarget::Mix(vec![include(10), include(20)]))
+        );
+        assert_eq!(
+            mix(vec![10, 99, 555]),
+            Ok(CaptureTarget::Mix(vec![include(10)])),
+            "AudioSync and an app that quit are left out; one app left is still a mix, which others can join"
+        );
+        assert_eq!(mix(vec![555]), Err(BackendError::SourceGone));
+        assert_eq!(mix(vec![99]), Err(BackendError::OwnProcess));
+        let many: Vec<u32> = (1000..1100).collect();
+        let table = ProcessTable::new(
+            many.iter()
+                .map(|&pid| entry(pid, 1, None, "app.exe"))
+                .chain([entry(99, 1, None, "audiosync.exe")]),
+        );
+        let Ok(CaptureTarget::Mix(activations)) = decide_capture(
+            &SourceId::Apps {
+                root_pids: many,
+                executables: Vec::new(),
+            },
+            99,
+            &table,
+            &BTreeMap::new(),
+        ) else {
+            panic!("a mix");
+        };
+        assert_eq!(activations.len(), MAX_MIX_APPS);
+    }
+
+    #[test]
+    fn an_only_these_mix_takes_in_later_instances_of_its_apps_with_a_session() {
+        let table = ProcessTable::new([
+            entry(10, 1, None, "player.exe"),
+            entry(12, 1, None, "Player.exe"),
+            entry(20, 1, None, "browser.exe"),
+            entry(99, 1, None, "audiosync.exe"),
+        ]);
+        let chosen = ["player.exe".to_owned()];
+        assert_eq!(
+            decide_apps_capture(&table, &[12, 20, 99], 99, &[10], &chosen),
+            Ok(CaptureTarget::Mix(vec![include(10), include(12)])),
+            "a second player with a session joins; the browser isn't chosen"
+        );
+        assert_eq!(
+            decide_apps_capture(&table, &[12], 99, &[555], &chosen),
+            Ok(CaptureTarget::Mix(vec![include(12)])),
+            "the first instance quit, a later one carries on"
+        );
+        assert_eq!(
+            decide_apps_capture(&table, &[20], 99, &[555], &chosen),
+            Err(BackendError::SourceGone)
+        );
+    }
+
+    #[test]
+    fn all_except_mixes_every_other_app_with_a_session_and_never_audiosync() {
+        let table = mix_table();
+        let sessions = [10, 20, 30, 99];
+        let excluded = ["BROWSER.exe".to_owned()];
+        assert_eq!(apps_except(&table, &sessions, 99, &excluded), vec![30, 10]);
+        assert_eq!(
+            decide_except_capture(&table, &sessions, 99, &excluded),
+            CaptureTarget::Mix(vec![include(30), include(10)])
+        );
+        assert_eq!(
+            decide_except_capture(&table, &[20], 99, &excluded),
+            CaptureTarget::Mix(Vec::new()),
+            "with no other app it is a mix of none, which writes silence"
+        );
+        assert_eq!(
+            decide_activation(
+                &SourceId::AppsExcept {
+                    executables: Vec::new()
+                },
+                99,
+                &table
+            ),
+            Err(BackendError::NotAnApp)
+        );
+    }
+
     #[test]
     fn apps_are_sorted_by_name() {
         let table = ProcessTable::new([
@@ -1143,6 +1547,7 @@ mod tests {
             id: app(200),
             name: "Browser".to_owned(),
             executable: "browser.exe".to_owned(),
+            channels: 0,
         };
         let table = desktop();
         assert_eq!(

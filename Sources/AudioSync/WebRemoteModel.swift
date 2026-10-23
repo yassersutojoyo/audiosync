@@ -153,6 +153,54 @@ struct RemotePresetRow: Equatable {
     var json: [String: Any] { ["id": id, "name": name, "current": current] }
 }
 
+/// One entry of the source picker as the page lists it.
+struct RemoteSource: Equatable {
+    enum Kind: String {
+        case system, app, input
+    }
+
+    /// "system", "app:<bundle ID>", "input:<uid>" or a mix's own "apps:…" or
+    /// "except:…": the core takes no empty ID, which is what the picker gives
+    /// the whole system.
+    var id: String
+    var name: String
+    var kind: Kind
+
+    /// `pickerID` is `AudioSource.defaultsValue`, as `SourceList.entries` gives it.
+    init(pickerID: String, name: String) {
+        id = Self.pageID(pickerID)
+        self.name = name
+        kind = switch AudioSource(defaultsValue: pickerID) {
+        case .system: .system
+        case .app, .mix: .app
+        case .input: .input
+        }
+    }
+
+    static func pageID(_ pickerID: String) -> String {
+        switch AudioSource(defaultsValue: pickerID) {
+        case .system: "system"
+        case .app(let bundleID): "app:" + bundleID
+        case .mix, .input: pickerID
+        }
+    }
+
+    /// The picker's ID for a page ID; nil for one that names no source.
+    static func pickerID(_ pageID: String) -> String? {
+        if pageID == "system" { return AudioSource.system.defaultsValue }
+        if pageID.hasPrefix("app:"), pageID.count > 4 { return String(pageID.dropFirst(4)) }
+        for tag in ["input:", "apps:", "except:"] where pageID.hasPrefix(tag) && pageID.count > tag.count {
+            return pageID
+        }
+        return nil
+    }
+
+    /// The picker refuses none of its entries.
+    var json: [String: Any] {
+        ["id": id, "name": name, "kind": kind.rawValue, "available": true, "notice": NSNull()]
+    }
+}
+
 /// Everything the page shows, as `asc_remote_publish` takes it.
 struct RemoteSnapshot: Equatable {
     struct Playing: Equatable {
@@ -167,6 +215,10 @@ struct RemoteSnapshot: Equatable {
     var presets: [RemotePresetRow] = []
     /// A microphone run holds the outputs (S258): the page takes no change.
     var calibrating = false
+    /// In the picker's order.
+    var sources: [RemoteSource] = []
+    /// The page ID of the source in use; nil when the picker doesn't list it.
+    var sourceID: String? = nil
 
     /// One line, keys sorted, so an unchanged snapshot gives the same text.
     var json: String {
@@ -179,6 +231,8 @@ struct RemoteSnapshot: Equatable {
             "zones": zones.map(\.json),
             "presets": presets.map(\.json),
             "calibrating": calibrating,
+            "sources": sources.map(\.json),
+            "source_id": sourceID.map { $0 as Any } ?? NSNull(),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) else { return "" }
         return String(decoding: data, as: UTF8.self)
@@ -200,6 +254,8 @@ enum RemoteCommand: Equatable {
     case master(volume: Double)
     case zone(id: String, toggle: Bool, volume: Double?)
     case preset(id: String)
+    /// `id` is the page's ID (`RemoteSource.id`).
+    case source(id: String)
 
     /// Nil for anything that doesn't read as one.
     init?(json: String) {
@@ -228,6 +284,9 @@ enum RemoteCommand: Equatable {
         case "preset":
             guard let id = object["id"] as? String, flag("recall") == true else { return nil }
             self = .preset(id: id)
+        case "source":
+            guard let id = object["id"] as? String else { return nil }
+            self = .source(id: id)
         default:
             return nil
         }
@@ -247,12 +306,16 @@ enum RemoteAction: Equatable {
     /// off with a notice, and the rest plays (S257).
     case toggleZone(id: String, keepOff: [String])
     case recallPreset(id: String, keepOff: [String])
+    /// A pick in the source picker, by its ID there.
+    case selectSource(pickerID: String)
 
     /// The switch first, then the slider (enabled or not by that switch),
-    /// then the delay; a value already in place changes nothing. Nothing
-    /// while calibrating: the page's snapshot can lag behind a run (S258).
+    /// then the delay; a value already in place changes nothing. A source
+    /// pick needs a listed source other than the current one. Nothing while
+    /// calibrating: the page's snapshot can lag behind a run (S258).
     static func plan(_ command: RemoteCommand, rows: [RemoteRow], zones: [RemoteZoneRow] = [],
-                     presets: [RemotePresetRow] = [], calibrating: Bool = false) -> [RemoteAction] {
+                     presets: [RemotePresetRow] = [], calibrating: Bool = false,
+                     sources: [RemoteSource] = [], sourceID: String? = nil) -> [RemoteAction] {
         guard !calibrating else { return [] }
         switch command {
         case .zone(let id, let toggle, let volume):
@@ -270,6 +333,10 @@ enum RemoteAction: Equatable {
             return [.recallPreset(id: id, keepOff: keepOff)]
         case .master(let volume):
             return [.setMaster(position: RemoteSnapshot.volume(volume))]
+        case .source(let id):
+            guard id != sourceID, sources.contains(where: { $0.id == id }),
+                  let pickerID = RemoteSource.pickerID(id) else { return [] }
+            return [.selectSource(pickerID: pickerID)]
         case .speaker(let id, let on, let volume, let delayMs):
             guard let row = rows.first(where: { $0.id == id }), row.available else { return [] }
             var actions: [RemoteAction] = []
@@ -311,22 +378,44 @@ enum RemotePort {
     }
 }
 
-/// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…]}`),
+/// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…], "seen": [Unix seconds…]}`),
 /// read and cleared here while the remote is off, so a lost phone can be
 /// unpaired before the remote is turned on again.
 enum RemoteDevicesFile {
     static let maxDevices = 8
+    /// The core forgets a device after this long without a request.
+    static let idleLimit: TimeInterval = 90 * 24 * 60 * 60
 
-    /// The core starts empty from a file it can't read, so such a file counts as none.
-    static func count(_ data: Data?) -> Int {
+    /// The devices the core would load at `now`: the newest 8, less those idle
+    /// for 90 days. The core starts empty from a file it can't read, so such a
+    /// file counts as none; one without a "seen" list counts every device as seen now.
+    static func count(_ data: Data?, now: Date = Date()) -> Int {
         guard let data, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let version = object["version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(),
+              let version = object["version"] as? NSNumber, !isBool(version),
               version.doubleValue == 1, let devices = object["devices"] as? [Any],
               devices.allSatisfy({ ($0 as? String).map(isHash) ?? false }) else { return 0 }
-        return min(devices.count, maxDevices)
+        guard let listed = object["seen"] else { return min(devices.count, maxDevices) }
+        guard let seen = listed as? [Any], seen.count == devices.count else { return 0 }
+        let times = seen.compactMap(unixSeconds)
+        guard times.count == seen.count else { return 0 }
+        let cutoff = now.timeIntervalSince1970 - idleLimit
+        return times.suffix(maxDevices).filter { $0 > cutoff }.count
     }
 
     static func count(at url: URL) -> Int { count(try? Data(contentsOf: url)) }
+
+    private static func isBool(_ number: NSNumber) -> Bool { CFGetTypeID(number) == CFBooleanGetTypeID() }
+
+    /// A whole number of seconds that fits the core's u64, or nil as the core would reject it.
+    private static func unixSeconds(_ value: Any) -> Double? {
+        guard let number = value as? NSNumber, !isBool(number) else { return nil }
+        let seconds = number.doubleValue
+        return seconds >= 0 && seconds == seconds.rounded() && seconds < 0x1p64 ? seconds : nil
+    }
+
+    /// The core empties its list before the save that failed, so the count reads 0 then;
+    /// Forget All stays available so the user can try again, as the failure text says.
+    static func canForget(count: Int, failed: Bool) -> Bool { count > 0 || failed }
 
     /// A file that isn't there is already forgotten.
     static func forget(at url: URL) -> Bool {

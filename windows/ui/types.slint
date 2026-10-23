@@ -1,19 +1,20 @@
 // The data the Rust side passes to the windows (see src/view.rs).
 
-// How a speaker or group row shows: playing only while streaming is on. A
-// speaker that is on while streaming is on but can't play right now waits
-// for its device (another app holds it), is reconnecting (AirPlay) or waits
-// for the one AirPlay 2 slot; a group waits when every present member does.
+// How a speaker row or zone header shows: playing only while streaming is
+// on. A speaker that is on while streaming is on but can't play right now
+// waits for its device (another app holds it), is reconnecting (AirPlay) or
+// waits for the one AirPlay 2 slot; a zone waits when every member it
+// switches on does.
 export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2 }
 
-// The part of a speaker or group row that has, or is to take, the keyboard
+// The part of a speaker row or zone header that has, or is to take, the keyboard
 // focus: its toggle, delay button, volume, sync controls, options or name
 // field. A row rebuilt under the focus takes it back on the same part.
 export enum RowPart { none, toggle, delay, volume, sync, options, name }
 
-// A main-window control outside the notices and the speaker and group rows;
+// A main-window control outside the notices, the speaker rows and the zone headers;
 // one taking the focus applies an open speaker rename.
-export enum MainControl { power, source, transport, master-volume, equalizer, calibration, airplay-delay }
+export enum MainControl { power, source, input-pair, transport, master-volume, equalizer, calibration, airplay-delay }
 
 // The kind of output: the icon in a speaker's toggle, and the line under a
 // connected speaker's name.
@@ -47,6 +48,13 @@ export enum PinPhase { starting, ready, checking }
 // What a switched-on local output's own volume in Windows calls for: none,
 // or the hint under its volume slider (low, muted, or both).
 export enum DeviceVolumeHint { none, low, muted, muted-low }
+
+// An app of the several-apps list under the source menu.
+export struct MixAppItem {
+    name: string,
+    // Checked in the mode the list shows.
+    checked: bool,
+}
 
 // An output that is on but left out of Calibrate All by its kind.
 export struct LeftOutItem {
@@ -158,18 +166,47 @@ export struct SpeakerItem {
     // A stereo pair or home theater group: what it is and its members, or
     // which member is missing (Strings.group-note); empty for any other row.
     group-note: string,
+    // The zone that holds it, by ID; empty when it is in none.
+    zone-id: string,
+    // Its menu offers Move to Zone and Remove from Zone: every row but one
+    // that plays as part of a stereo pair or home theater.
+    zone-movable: bool,
+    // In a zone: what its row says in place of its own note (it plays as
+    // part of a stereo pair, needs AirPlay 2, isn't found, stayed off);
+    // empty otherwise.
+    zone-note: string,
+    // In a zone, a row that doesn't play by itself: its name is dimmed.
+    zone-dimmed: bool,
+    // A zone member that isn't listed: only its menu does anything.
+    missing: bool,
 }
 
-export struct GroupItem {
+// A zone member that plays as part of a stereo pair or home theater: the
+// zone's menu offers Use <target> Instead.
+export struct ZoneTarget {
+    member-id: string,
+    target: string,
+}
+
+// A zone: its header and its members' rows. Hidden members are left out
+// of `total` and get no row; `present` counts the members listed now, `on`
+// those switched on and `waiting` those on that can't play right now.
+export struct ZoneItem {
     id: string,
     name: string,
     state: RowState,
-    available: int,
+    on: int,
     total: int,
+    waiting: int,
+    present: int,
+    volume: float,
+    expanded: bool,
+    members: [SpeakerItem],
+    targets: [ZoneTarget],
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network }
+export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones }
 
 export struct NoticeItem {
     id: int,

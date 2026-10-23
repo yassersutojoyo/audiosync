@@ -148,6 +148,14 @@ impl RowText for StringsText<'_> {
         self.0.get_remote_turn_on_at_pc().into()
     }
 
+    fn source_system(&self) -> String {
+        self.0.get_source_system().into()
+    }
+
+    fn source_all_except(&self, names: &str) -> String {
+        self.0.invoke_source_all_except(names.into()).into()
+    }
+
     fn kind(&self, speaker: &Speaker) -> String {
         self.0
             .invoke_speaker_kind(speaker_kind(speaker.kind))
@@ -203,6 +211,10 @@ impl App {
         let w = weak.clone();
         self.remote_window
             .on_forget_all_requested(move || with_app(&w, App::forget_remote_devices));
+        self.remote_window
+            .on_use_port_enabled(|text, port, failed| {
+                u16::try_from(port).is_ok_and(|port| remote::use_port_enabled(&text, port, failed))
+            });
         let w = weak.clone();
         self.remote_window.on_port_submitted(move |text| {
             with_app(&w, |app| app.use_remote_port(&text));
@@ -435,6 +447,7 @@ impl App {
                             Action::RecallPreset { id, keep_off } => {
                                 backend.recall_preset_from_phone(&id, &keep_off);
                             }
+                            Action::Source { id } => backend.select_source(&id),
                         }
                     }
                 }
@@ -734,8 +747,18 @@ mod tests {
         app.remote_window.invoke_port_submitted("80".into());
         assert!(app.remote_window.get_port_invalid());
         assert!(app.remote_window.get_port_in_use(), "nothing changed");
+        let use_port = |text: &str| {
+            app.remote_window.invoke_use_port_enabled(
+                text.into(),
+                app.remote_window.get_port(),
+                app.remote_window.get_port_problem(),
+            )
+        };
+        assert!(!use_port("80"));
+        assert!(use_port(&busy.to_string()), "the same port again retries");
 
         let free = free_port();
+        assert!(use_port(&free.to_string()));
         app.remote_window
             .invoke_port_submitted(free.to_string().into());
         assert!(!app.remote_window.get_port_in_use());
@@ -867,6 +890,21 @@ mod tests {
     }
 
     #[test]
+    fn a_source_picked_on_the_page_is_the_windows_pick() {
+        let app = over_loopback(MockBackend::new());
+        let sender = {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            app.remote.borrow_mut().commands = Some(receiver);
+            sender
+        };
+        let pick = |id: &str| audiosync_remote::Command::Source { id: id.to_owned() };
+        sender.send(pick("input:line")).expect("sent");
+        sender.send(pick("app:gone")).expect("sent");
+        app.poll_remote();
+        assert_eq!(app.snapshot().source_id, "input:line");
+    }
+
+    #[test]
     fn the_page_sets_the_airplay_delay_and_cant_turn_on_a_speaker_that_asks_for_a_code() {
         let app = over_loopback(MockBackend::new());
         let state = app.snapshot();
@@ -915,10 +953,21 @@ mod tests {
         assert!(!state.speaker(&asks).expect("listed").enabled);
     }
 
+    /// The mock with a zone of the kitchen and living room speakers.
+    fn downstairs() -> MockBackend {
+        let mut mock = MockBackend::new();
+        mock.add_zone(
+            "zone:1",
+            "Downstairs",
+            &["airplay:kitchen", "airplay:living"],
+        );
+        mock
+    }
+
     // covers: S257
     #[test]
     fn phone_zone_and_preset_commands_apply_without_showing_the_main_window() {
-        let app = over_loopback(MockBackend::new());
+        let app = over_loopback(downstairs());
         let main_shown = app.main.window().is_visible();
         let (sender, receiver) = std::sync::mpsc::channel();
         app.remote.borrow_mut().commands = Some(receiver);
@@ -956,7 +1005,7 @@ mod tests {
     // covers: S257
     #[test]
     fn a_phone_zone_toggle_or_recall_leaves_a_code_asking_member_off_and_opens_no_pin_dialog() {
-        let app = over_loopback(MockBackend::new());
+        let app = over_loopback(downstairs());
         app.backend
             .borrow_mut()
             .set_speaker_enabled("airplay:kitchen", false);

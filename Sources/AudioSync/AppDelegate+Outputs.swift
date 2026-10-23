@@ -137,13 +137,19 @@ extension AppDelegate {
     /// The hold-back of every local speaker taking part: switched on and
     /// listed now (S172, S176). They wait for L while an AirPlay speaker is
     /// chosen, for the Cast speaker's offset while one is, and for the
-    /// longer of the two when both are.
+    /// longer of the two when both are; an input device as the source keeps
+    /// them off that wait (live input).
     func localHoldBackTargets() -> [String: Double] {
-        let wait = CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil,
-                                           cast: castModel.anchorMs)
+        let wait = LocalDelay.networkWaitMs(source: audioSource, output: .local, networkMs: networkWaitMs)
         return LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
                                     offsets: localOffsetMs, airPlayChosen: wait != nil,
                                     latencyMs: wait ?? airPlayLatencyMs)
+    }
+
+    /// What the network speakers play at: L while an AirPlay speaker is
+    /// chosen, the Cast speaker's offset while one is on, the longer of both.
+    var networkWaitMs: Double? {
+        CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil, cast: castModel.anchorMs)
     }
 
     /// Holds the AirPlay speakers or the Cast feed back, live, so both play
@@ -208,6 +214,7 @@ extension AppDelegate {
         switch audioSource {
         case .system: nowPlaying.preferredBundleID = nil
         case .app(let bundleID): nowPlaying.preferredBundleID = bundleID
+        case .mix: nowPlaying.preferredBundleID = nil
         case .input: nowPlaying.preferredBundleID = ""
         }
         nowPlaying.refresh()
@@ -229,6 +236,29 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// The channel pair stored for the input source (`InputChannelPair.index`);
+    /// 0 for every other source.
+    var currentInputPair: Int {
+        guard case .input(let uid) = audioSource else { return 0 }
+        return inputPairs[uid] ?? 0
+    }
+
+    /// Chooses the channel pair the input source plays (S14). A running
+    /// session restarts on it, as for a source switch.
+    func setInputPair(_ index: Int) {
+        guard case .input(let uid) = audioSource else { return }
+        let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
+        guard change != .none else { return }
+        inputPairs[uid] = index == 0 ? nil : index
+        clearNotices([Notice.capture])   // about the old pair
+        autoStartFailed = false
+        if change == .restart {
+            stopEngine()
+            startEngine(origin: .user)
+        }
+        pushModel()
+    }
+
     // MARK: - List reconciliation (local outputs)
 
     /// `keepListed`: a virtual device already in the list stays there, so
@@ -239,9 +269,9 @@ extension AppDelegate {
         }
         migrateLocalDelays(listed: outputs)   // once, before auto-connect below (S179)
         // Virtual devices are hidden unless asked for, or the user chose them:
-        // on, auto-connect, or in a group.
+        // on, auto-connect, or in a zone.
         var chosen = enabledLocal
-        for key in autoConnect.union(groups.flatMap(\.members)) {
+        for key in autoConnect.union(zones.flatMap(\.members)) {
             if let (id, airplay) = SpeakerKey.parse(key), !airplay { chosen.insert(id) }
         }
         if keepListed { chosen.formUnion(localOrder) }

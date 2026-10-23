@@ -234,9 +234,18 @@ final class WebRemote {
             RemoteSnapshot.Playing(title: $0.title, artist: $0.artist, source: $0.appName)
         }
         let listed = rows()
+        let (sources, current) = sourceList()
         return RemoteSnapshot(computerName: computerName, master: model.master, nowPlaying: playing, rows: listed,
                               zones: host.zones().map { RemoteZoneRow($0, listed: listed) }, presets: host.presets(),
-                              calibrating: RemoteSnapshot.calibrating(model.calibration, model.calibrateAll))
+                              calibrating: RemoteSnapshot.calibrating(model.calibration, model.calibrateAll),
+                              sources: sources, sourceID: current)
+    }
+
+    /// The picker's entries and the page ID of the one in use, if it is listed.
+    private func sourceList() -> (sources: [RemoteSource], current: String?) {
+        let sources = model.sources.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+        let current = RemoteSource.pageID(model.sourceID)
+        return (sources, sources.contains { $0.id == current } ? current : nil)
     }
 
     /// The rows in the window's order (This Mac, then Connected Speakers).
@@ -278,8 +287,11 @@ final class WebRemote {
         } else if case .speaker(let id, _, _, _) = command, !now.rows.contains(where: { $0.id == id }) {
             DebugTrace.log("[AudioSync] web remote: ignored a command for \(id), which isn't listed (hidden or gone)")
         }
+        if case .source(let id) = command, !now.sources.contains(where: { $0.id == id }) {
+            DebugTrace.log("[AudioSync] web remote: ignored a pick of a source the picker no longer lists")
+        }
         let actions = RemoteAction.plan(command, rows: now.rows, zones: now.zones, presets: now.presets,
-                                        calibrating: now.calibrating)
+                                        calibrating: now.calibrating, sources: now.sources, sourceID: now.sourceID)
         DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
         actions.forEach(apply)
         schedulePublish()
@@ -299,6 +311,7 @@ final class WebRemote {
         case .setZoneVolume(let id, let position): host.setZoneVolume(id, position)
         case .toggleZone(let id, let keepOff): host.toggleZone(id, keepOff, .remote)
         case .recallPreset(let id, let keepOff): host.recallPreset(id, keepOff, .remote)
+        case .selectSource(let pickerID): model.actions.selectSource(pickerID)
         }
     }
 

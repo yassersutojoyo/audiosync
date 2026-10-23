@@ -92,3 +92,4 @@ S228 Mac host only: the names the user gives speakers and the inline rename; its
 S256 Web remote and hosts only: the snapshot's zones, presets and calibrating flag; the remote crate's, the Windows host's and the Mac logic suites check it.
 S257 Web remote and hosts only: the zone and preset routes and what the hosts apply; the remote crate's, the Windows host's and the Mac logic suites check it.
 S258 Web remote and hosts only: writes wait out a microphone run; the remote crate's, the Windows host's and the Mac logic suites check it.
+S242 Host only: the Mac process tap and the Windows per-app loopback mix pick and follow the apps; the Windows capture tests check the start decisions.

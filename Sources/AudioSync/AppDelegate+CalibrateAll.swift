@@ -9,25 +9,51 @@ import CAudioSyncCore
 extension AppDelegate {
 
     /// "Calibrate All Speakers": the sheet opens and the run starts, or the
-    /// sheet says why it can't.
+    /// sheet says why it can't. From an open Calibrate Zone sheet it runs
+    /// that zone again (S255).
     func startCalibrateAll() {
+        startCalibrateRun(zone: CalibrateAllFlow.startZone(appModel.calibrateAll))
+    }
+
+    /// "Calibrate Zone…" in zone `id`'s Options menu (S255): Calibrate All
+    /// over the zone, every other speaker that plays silenced for the run.
+    func calibrateZone(_ id: String) {
+        startCalibrateRun(zone: id)
+    }
+
+    /// A zone click ends a run as a change of the speakers (S240), even one
+    /// that switches nothing.
+    func calibrateZoneClicked() {
+        calibrateAllRun?.stop(.speakersChanged)
+    }
+
+    private func startCalibrateRun(zone zoneID: String?) {
         guard calibrateAllRun == nil, calibrationRun == nil, !appModel.calibration.holdsOutputs else { return }
         logCalibrationKinds(calibrateAllInputs().localOutputs.map(\.id))
-        if !appModel.calibrateAll.shown {
+        let scope = zoneID.flatMap(calibrateZoneScope)
+        if zoneID != nil, scope == nil { return }
+        if !appModel.calibrateAll.shown || appModel.calibrateAll.zone?.id != zoneID {
             calibrateAllSheet = nil
             calibrateAllUndo = nil
-            appModel.calibrateAll = CalibrateAllStatus(shown: true, blocker: appModel.calibrateAll.blocker)
+            appModel.calibrateAll = CalibrateAllStatus(shown: true, blocker: appModel.calibrateAll.blocker,
+                                                       zone: scope.map(calibrateZoneSheet))
             followCalibrateAll()
             // The sheet lists the outputs that sit out before any run, so one can be included anyway first.
-            if !appModel.calibrateAll.leftOut.isEmpty { return }
+            if CalibrateAllFlow.previewsLeftOut(appModel.calibrateAll.leftOut, zone: scope) { return }
         }
-        let speakers: [CalibrateAllSpeaker]
-        switch calibrateAllPlan() {
-        case .success(let planned): speakers = planned
+        let planned: Result<CalibrateZonePlan, CalibrateAllBlocker> = if let scope {
+            CalibrateAllFlow.zonePlan(calibrateAllInputs(), zone: scope)
+        } else {
+            calibrateAllPlan().map { CalibrateZonePlan(speakers: $0, off: $0.map { _ in false }, silenced: []) }
+        }
+        let plan: CalibrateZonePlan
+        switch planned {
+        case .success(let made): plan = made
         case .failure(.noReference): return calibrateAllFailed(.noReference)
         case .failure(.notPlaying), .failure(.noOtherSpeaker): return calibrateAllFailed(.notPlaying)
         case .failure: return followCalibrateAll()
         }
+        let speakers = plan.speakers
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             break
@@ -35,15 +61,19 @@ extension AppDelegate {
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 DispatchQueue.main.async {
                     guard let self, self.appModel.calibrateAll.shown else { return }
-                    if granted { self.startCalibrateAll() } else { self.calibrateAllFailed(.microphoneDenied) }
+                    guard granted else { return self.calibrateAllFailed(.microphoneDenied) }
+                    self.startCalibrateRun(zone: zoneID)
                 }
             }
             return
         default:
             return calibrateAllFailed(.microphoneDenied)
         }
+        if let refusal = CalibrationMicrophone.defaultInputRefusal() {
+            return calibrateAllFailed(refusal)
+        }
         guard let rate = CalibrationMicrophone.defaultInputRate() else { return calibrateAllFailed(.noMicrophone) }
-        guard let handle = CalibrateAllRunHandle(rate: rate, speakers: speakers) else {
+        guard let handle = CalibrateAllRunHandle(rate: rate, speakers: speakers, off: plan.off) else {
             // At a supported rate the core refuses only an arrival whose recording wouldn't fit there.
             return calibrateAllFailed(asc_calibration_signal_frames(rate) > 0 ? .tooLong(nil) : .unsupportedRate)
         }
@@ -51,11 +81,12 @@ extension AppDelegate {
         status.sheet = nil
         status.line = nil
         status.againRow = nil
+        status.canUndo = false
         appModel.calibrateAll = status
         calibrateAllSheet = nil
         calibrateAllUndo = nil
         let run = CalibrateAllRun(app: self, mode: .all, speakers: speakers, handle: handle, rate: rate,
-                                  microphone: nil, taking: speakers.map(\.id))
+                                  microphone: nil, taking: plan.taking, zone: zoneID, silenced: plan.silenced)
         calibrateAllRun = run
         run.start()
     }
@@ -65,22 +96,34 @@ extension AppDelegate {
         guard calibrateAllRun == nil, calibrationRun == nil, let sheet = calibrateAllSheet,
               index > 0, index < sheet.speakers.count, appModel.calibrateAll.sheet?.applied == false
         else { return }
-        let speaker = sheet.speakers[index]
+        var speaker = sheet.speakers[index]
         let taking = [sheet.speakers[0].id, speaker.id]
         let playing = calibratePlayingIDs()
-        guard engine.isRunning, taking.allSatisfy(playing.contains) else {
+        // An off row was read while it didn't play: its values come from the plan as it plays now (S255).
+        let now = sheet.isOff(index)
+            ? (try? calibrateAllPlan().get())?.first(where: { $0.id == speaker.id && $0.kind == speaker.kind })
+            : speaker
+        guard engine.isRunning, taking.allSatisfy(playing.contains), let now else {
             appModel.calibrateAll.line = .cannotMeasureAgain(name: speaker.name)
             return
         }
+        speaker = now
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             appModel.calibrateAll.line = .againEnded(name: speaker.name, .failed(.microphoneDenied))
             return
         }
-        guard let handle = sheet.measureAgain(index) else { return }
+        let off = sheet.isOff(index)
+        guard let handle = off ? sheet.measureAgainOff(index, now: speaker) : sheet.measureAgain(index) else { return }
         appModel.calibrateAll.line = nil
         appModel.calibrateAll.againRow = index
-        let run = CalibrateAllRun(app: self, mode: .again(row: index), speakers: sheet.speakers, handle: handle,
-                                  rate: sheet.rate, microphone: sheet.microphone, taking: taking)
+        var speakers = sheet.speakers
+        speakers[index] = speaker
+        // On a zone sheet every other speaker that plays is silenced, and its play-out is waited for (S255).
+        let outside: [CalibrateAllSpeaker] = appModel.calibrateAll.zone == nil
+            ? [] : ((try? calibrateAllPlan().get()) ?? []).filter { !taking.contains($0.id) }
+        let run = CalibrateAllRun(app: self, mode: .again(row: index), speakers: speakers, handle: handle,
+                                  rate: sheet.rate, microphone: sheet.microphone, taking: taking,
+                                  zone: appModel.calibrateAll.zone?.id, silenced: outside)
         calibrateAllRun = run
         run.start()
     }
@@ -102,7 +145,7 @@ extension AppDelegate {
         let answer = sheet.apply()
         guard answer.code == UInt32(ASC_CALIBRATION_APPLY_OK) else { return }
         let writes = CalibrateAllFlow.writes(answer.changes, speakers: sheet.speakers)
-        calibrateAllUndo = CalibrateAllUndo(writes: writes, previousAirPlay: airPlayDelay)
+        let previousAirPlay = airPlayDelay
         DebugTrace.log("[AudioSync] calibrate all: applied \(writes)")
         for write in writes {
             switch write {
@@ -111,15 +154,20 @@ extension AppDelegate {
             case .airPlay(let ms, _): setAirPlayDelay(ms)
             }
         }
+        // Kept only after every write, so the check that each write runs doesn't drop it halfway.
+        calibrateAllUndo = CalibrateAllUndo(writes: writes, previousAirPlay: previousAirPlay,
+                                            afterApply: writes.map(calibrateAllStored))
         shown.applied = true
         appModel.calibrateAll.sheet = shown
         appModel.calibrateAll.line = .applied
+        appModel.calibrateAll.canUndo = true
     }
 
     /// Undo after Apply: the replaced values come back in one step (S238).
     func undoCalibrateAll() {
         guard let undo = calibrateAllUndo else { return }
         calibrateAllUndo = nil
+        appModel.calibrateAll.canUndo = false
         for restore in CalibrateAllFlow.restores(undo) {
             switch restore {
             case .local(let id, let ms?):
@@ -191,6 +239,7 @@ extension AppDelegate {
                 status.line = .againEnded(name: name, ended)
             } else if let sheet, let handle = calibrateAllSheet {
                 if handle.replace(sheet) {
+                    handle.speakers = run.speakers
                     status.sheet = handle.read(ended: nil)
                     status.line = nil
                 } else {
@@ -224,6 +273,26 @@ extension AppDelegate {
         if appModel.calibrateAll.blocker != blocker { appModel.calibrateAll.blocker = blocker }
         let leftOut = CalibrateAllFlow.leftOut(inputs)
         if appModel.calibrateAll.leftOut != leftOut { appModel.calibrateAll.leftOut = leftOut }
+        followCalibrateAllUndo()
+    }
+
+    /// Undo goes once a value Apply wrote changed, so it can't overwrite that change (S238).
+    func followCalibrateAllUndo() {
+        guard let undo = calibrateAllUndo,
+              !CalibrateAllFlow.undoHolds(undo, now: undo.writes.map(calibrateAllStored))
+        else { return }
+        calibrateAllUndo = nil
+        appModel.calibrateAll.canUndo = false
+        DebugTrace.log("[AudioSync] calibrate all: a delay changed after Apply, Undo goes")
+    }
+
+    /// What is stored now for the speaker of `write`.
+    func calibrateAllStored(_ write: CalibrateAllWrite) -> CalibrateAllRestore {
+        switch write {
+        case .local(let id, _, _): .local(id: id, ms: localOffsetMs[id])
+        case .cast(let id, _, _): .cast(id: id, ms: CastID.device(id).flatMap { castModel.offsets[$0] })
+        case .airPlay: .airPlay(airPlayDelay)
+        }
     }
 
     /// "Include Anyway" or "Leave Out" on an output that sits out, for the
@@ -310,7 +379,7 @@ extension AppDelegate {
         calibratePlayingIDs().filter { NativeAirPlayID.receiver($0) != nil }
     }
 
-    func calibrateAllContext(taking: [String]) -> CalibrateAllContext {
+    func calibrateAllContext(taking: [String], zone: String? = nil) -> CalibrateAllContext {
         var delays: [String: Double] = [:]
         for id in taking {
             if let holdBack = localHoldBacks[id] { delays["hold-back " + id] = holdBack }
@@ -325,7 +394,55 @@ extension AppDelegate {
         var switchedOn = enabledLocal.union(enabledAirPlay)
         if let device = castModel.enabled { switchedOn.insert(CastID.app(device)) }
         return CalibrateAllContext(source: audioSource.defaultsValue, session: session, streaming: engine.isRunning,
-                                   switchedOn: switchedOn, playing: calibratePlayingIDs(), delays: delays)
+                                   switchedOn: switchedOn, playing: calibratePlayingIDs(), delays: delays,
+                                   zoneMembers: zone.flatMap { id in zones.first { $0.id == id }?.members })
+    }
+
+    /// Zone `id` as Calibrate Zone reads it now (S255): its present members,
+    /// and those that don't play with their stored delays.
+    func calibrateZoneScope(_ id: String) -> CalibrateZoneScope? {
+        guard let zone = zones.first(where: { $0.id == id }) else { return nil }
+        let present = zone.members.filter { key in
+            guard !hiddenSpeakers.contains(key), let (sid, kind) = SpeakerKey.parseAny(key) else { return false }
+            switch kind {
+            case .local: return isAvailable(key)
+            case .cast: return castModel.devices[sid] != nil
+            case .airplay:
+                guard isAvailable(key), let receiver = NativeAirPlayID.receiver(sid) else { return false }
+                return nativeAirPlay?.model.holdingTarget(receiver, on: enabledAirPlay.contains(sid)) == nil
+            }
+        }
+        let playing = Set(calibratePlayingIDs().map { (id: String) -> String in
+            if CastID.device(id) != nil { return CastID.key(appID: id) }
+            return SpeakerKey.make(id: id, kind: NativeAirPlayID.receiver(id) != nil ? .airplay : .local)
+        })
+        let off: [CalibrateAllSpeaker] = present.filter { !playing.contains($0) }.compactMap { (key: String) -> CalibrateAllSpeaker? in
+            guard let (sid, kind) = SpeakerKey.parseAny(key) else { return nil }
+            let speaker: CalibrateAllSpeaker
+            switch kind {
+            case .local:
+                let name = appModel.local.first { $0.id == sid }?.name ?? sid
+                speaker = CalibrateAllSpeaker(id: sid, name: name, kind: .local, offsetMs: nil, latencyMs: 0)
+            case .cast:
+                speaker = CalibrateAllSpeaker(id: CastID.app(sid), name: castName(sid), kind: .cast, offsetMs: nil,
+                                              latencyMs: 0)
+            case .airplay:
+                speaker = CalibrateAllSpeaker(id: sid, name: shownName(airPlay: sid), kind: .airPlay, offsetMs: nil,
+                                              latencyMs: 0)
+            }
+            return CalibrateAllSpeaker(id: speaker.id, name: speaker.name, kind: speaker.kind,
+                                       offsetMs: calibrateStoredValue(speaker), latencyMs: 0)
+        }
+        return CalibrateZoneScope(id: zone.id, name: zone.name, members: zone.members, present: Set(present), off: off)
+    }
+
+    /// The sheet's zone line: its name and whom the AirPlay delay moves (S255).
+    func calibrateZoneSheet(_ scope: CalibrateZoneScope) -> CalibrateZoneSheet {
+        let listed = airplayOrder.map { SpeakerKey.make(id: $0, kind: .airplay) }
+            .filter { !hiddenSpeakers.contains($0) }
+        return CalibrateZoneSheet(id: scope.id, name: scope.name,
+                                  airPlayMoves: CalibrateAllFlow.airPlayMoves(zones: zones, measured: scope.id,
+                                                                              listed: listed))
     }
 
     /// A speaker's stored value as a run starts from it.
@@ -372,6 +489,9 @@ final class CalibrateAllRun {
     private let handle: CalibrateAllRunHandle
     /// The IDs of the speakers that must keep playing.
     private let taking: [String]
+    /// For Calibrate Zone, the measured zone's ID and the speakers outside it that play silenced (S255).
+    private let zone: String?
+    private let outside: [CalibrateAllSpeaker]
     private let context: CalibrateAllContext
     private let captureRate: Double
 
@@ -398,7 +518,8 @@ final class CalibrateAllRun {
     private static let analysis = DispatchQueue(label: "AudioSync.calibrate-all", qos: .userInitiated)
 
     init(app: AppDelegate, mode: Mode, speakers: [CalibrateAllSpeaker], handle: CalibrateAllRunHandle, rate: UInt32,
-         microphone: CalibrationMicrophoneID?, taking: [String]) {
+         microphone: CalibrationMicrophoneID?, taking: [String], zone: String? = nil,
+         silenced: [CalibrateAllSpeaker] = []) {
         self.app = app
         self.mode = mode
         self.speakers = speakers
@@ -406,7 +527,9 @@ final class CalibrateAllRun {
         self.rate = rate
         self.microphone = microphone
         self.taking = taking
-        context = app.calibrateAllContext(taking: taking)
+        self.zone = zone
+        outside = silenced
+        context = app.calibrateAllContext(taking: taking, zone: zone)
         captureRate = app.engine.captureRate
     }
 
@@ -428,7 +551,7 @@ final class CalibrateAllRun {
         CalibrationTap.engage()
         app?.engine.holdCalibrationTime(true)
         let partOf = speakers.filter { taking.contains($0.id) }
-        stage = .quiet(untilNs: clock.nowNs() + seconds(CalibrateAllFlow.quietSeconds(partOf)))
+        stage = .quiet(untilNs: clock.nowNs() + seconds(CalibrateAllFlow.quietSeconds(partOf + outside)))
         app?.showCalibrateAll(.preparing)
         DebugTrace.log("[AudioSync] calibrate all (\(mode)) started at \(rate) Hz: "
             + speakers.map { "\($0.id) \($0.kind) offset \($0.offsetMs.map { "\($0)" } ?? "none") "
@@ -446,11 +569,18 @@ final class CalibrateAllRun {
         end(.cancelled)
     }
 
+    /// Ends the run with `reason`, as a change the app saw (S240).
+    func stop(_ reason: CalibrateAllEnd) {
+        guard !ended else { return }
+        end(reason)
+    }
+
     private func tick() {
         guard !ended else { return }
         guard let app else { return end(.cancelled) }
         if case .analyzing = stage { return }
-        if let change = CalibrateAllFlow.end(start: context, now: app.calibrateAllContext(taking: taking), taking: taking) {
+        if let change = CalibrateAllFlow.end(start: context, now: app.calibrateAllContext(taking: taking, zone: zone),
+                                             taking: taking) {
             return end(change)
         }
         guard app.engine.captureRate == captureRate else { return end(.rateChanged) }
@@ -499,7 +629,8 @@ final class CalibrateAllRun {
         stage = .quiet(untilNs: 0)
         if let pendingEnd { return end(pendingEnd) }
         guard let app else { return end(.cancelled) }
-        if let change = CalibrateAllFlow.end(start: context, now: app.calibrateAllContext(taking: taking), taking: taking) {
+        if let change = CalibrateAllFlow.end(start: context, now: app.calibrateAllContext(taking: taking, zone: zone),
+                                             taking: taking) {
             return end(change)
         }
         next()
@@ -525,7 +656,7 @@ final class CalibrateAllRun {
             app?.showCalibrateAll(CalibrateAllFlow.progress(step, speakers: speakers))
         } catch {
             DebugTrace.log("[AudioSync] calibrate all: the microphone didn't start: \(error)")
-            end(.failed(.noMicrophone))
+            end(.failed((error as? CalibrationMicrophone.StartError)?.failure ?? .noMicrophone))
         }
     }
 
@@ -582,7 +713,9 @@ final class CalibrateAllRun {
             mic.stop()
         case .playing(let step, let mic, _), .recording(let step, let mic, _, _, _):
             mic.stop()
-            if step.row < speakers.count { wait = CalibrateAllFlow.settleSeconds(speakers[step.row]) }
+            if step.row < speakers.count {
+                wait = CalibrateAllFlow.settleSeconds(speakers[step.row], silenced: outside)
+            }
         default:
             break
         }

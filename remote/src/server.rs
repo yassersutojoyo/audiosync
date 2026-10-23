@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::json;
 
@@ -484,9 +484,11 @@ impl Shared {
 
     fn paired(&self, request: &Request) -> Option<String> {
         let token = request.cookie(TOKEN_COOKIE)?;
-        lock(&self.devices)
-            .contains(token)
-            .then(|| token.to_owned())
+        let (paired, snapshot) = lock(&self.devices).check(token, SystemTime::now());
+        if let Some(snapshot) = snapshot {
+            self.save(snapshot);
+        }
+        paired.then(|| token.to_owned())
     }
 
     /// Hands `command` to the app; false once the server is stopping.
@@ -593,6 +595,10 @@ impl RemoteServer {
             }
             None => {}
         }
+        let rewrite = lock(&shared.devices).take_rewrite();
+        if let Some(snapshot) = rewrite {
+            shared.save(snapshot);
+        }
         let accept = {
             let shared = Arc::clone(&shared);
             thread::Builder::new()
@@ -668,7 +674,7 @@ impl RemoteServer {
     }
 
     pub fn device_count(&self) -> usize {
-        lock(&self.shared.devices).len()
+        lock(&self.shared.devices).count_at(SystemTime::now())
     }
 
     /// Forgets every paired device; their next request gets 401 and their
@@ -969,14 +975,20 @@ enum ApiRoute {
     Speaker(Option<String>),
     Zone(Option<String>),
     Preset(Option<String>),
+    Source,
 }
 
 impl ApiRoute {
-    /// A change to the speakers or the volumes, which waits out a microphone run (S258).
+    /// A change to the speakers, the volumes or the source, which waits out a
+    /// microphone run (S258).
     fn writes(&self) -> bool {
         matches!(
             self,
-            ApiRoute::Master | ApiRoute::Speaker(_) | ApiRoute::Zone(_) | ApiRoute::Preset(_)
+            ApiRoute::Master
+                | ApiRoute::Speaker(_)
+                | ApiRoute::Zone(_)
+                | ApiRoute::Preset(_)
+                | ApiRoute::Source
         )
     }
 }
@@ -1018,6 +1030,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         "/api/events" => ApiRoute::Events,
         "/api/master" => ApiRoute::Master,
         "/api/unpair" => ApiRoute::Unpair,
+        "/api/source" => ApiRoute::Source,
         _ => {
             if let Some(id) = path.strip_prefix("/api/speakers/") {
                 ApiRoute::Speaker(percent_decode(id))
@@ -1054,6 +1067,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         ApiRoute::Speaker(id) => speaker(request, id, shared),
         ApiRoute::Zone(id) => zone(request, id, shared),
         ApiRoute::Preset(id) => preset(request, id, shared),
+        ApiRoute::Source => source(request, shared),
     }
 }
 
@@ -1120,7 +1134,7 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
         shared.report(ServerEvent::PairFailed { from, why: outcome });
         return error(failure);
     }
-    let snapshot = lock(&shared.devices).add(&token);
+    let snapshot = lock(&shared.devices).add(&token, SystemTime::now());
     shared.save(snapshot);
     shared.report(ServerEvent::Paired { from });
     Response::json(200, json!({ "paired": true }).to_string())
@@ -1221,6 +1235,28 @@ fn zone(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
     }
 }
 
+/// `POST /api/source` `{id}`: a pick in the app's source picker. The app
+/// checks it again when it applies it.
+fn source(request: &Request, shared: &Shared) -> Answer {
+    let id = match state::source_id_from_body(&request.body) {
+        Ok(id) => id,
+        Err(problem) => return body_error(problem),
+    };
+    let checked = match lock(&shared.published)
+        .current
+        .as_ref()
+        .and_then(|state| state.source(&id))
+    {
+        None => Err(text::unknown_source()),
+        Some(source) if !source.available => Err(text::source_unavailable()),
+        Some(_) => Ok(()),
+    };
+    match checked {
+        Ok(()) => accepted(&Command::Source { id }, shared),
+        Err(problem) => error(problem),
+    }
+}
+
 fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
     if let Err(problem) = state::preset_recall_from_body(&request.body) {
         return body_error(problem);
@@ -1266,7 +1302,9 @@ fn send_events(mut stream: TcpStream, token: &str, id: u64, shared: &Shared) {
         let batch = {
             let mut published = lock(&shared.published);
             loop {
-                if shared.stopped.load(Ordering::SeqCst) || !lock(&shared.devices).contains(token) {
+                if shared.stopped.load(Ordering::SeqCst)
+                    || !lock(&shared.devices).contains(token, SystemTime::now())
+                {
                     return;
                 }
                 if !shared.stream_open(id) {

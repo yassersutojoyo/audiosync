@@ -3,6 +3,14 @@
 # space, what is missing. tests/spec_coverage.rs fails once a clause listed here
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
-S242 Placeholder for a clause of another branch; that branch's clause and coverage replace this line when it merges.
-S244 Placeholder for a clause of another branch; that branch's clause and coverage replace this line when it merges.
-S255 Placeholder for a clause of another branch; that branch's clause and coverage replace this line when it merges.
+S259 reserved number; the clause and its test arrive with another branch.
+S260 reserved number; the clause and its test arrive with another branch.
+S261 reserved number; the clause and its test arrive with another branch.
+S262 reserved number; the clause and its test arrive with another branch.
+S263 reserved number; the clause and its test arrive with another branch.
+S264 reserved number; the clause and its test arrive with another branch.
+S265 reserved number; the clause and its test arrive with another branch.
+S266 reserved number; the clause and its test arrive with another branch.
+S267 reserved number; the clause and its test arrive with another branch.
+S268 reserved number; the clause and its test arrive with another branch.
+S269 reserved number; the clause and its test arrive with another branch.

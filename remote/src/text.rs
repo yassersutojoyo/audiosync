@@ -103,6 +103,14 @@ pub fn unknown_preset() -> ApiError {
     )
 }
 
+pub fn unknown_source() -> ApiError {
+    ApiError::new(
+        404,
+        "unknown_source",
+        "AudioSync doesn't list this source anymore.",
+    )
+}
+
 pub fn method_not_allowed() -> ApiError {
     ApiError::new(
         405,
@@ -132,6 +140,14 @@ pub fn calibrating() -> ApiError {
         409,
         "calibrating",
         "AudioSync is calibrating. Try again when it's done.",
+    )
+}
+
+pub fn source_unavailable() -> ApiError {
+    ApiError::new(
+        409,
+        "source_unavailable",
+        "AudioSync can't switch to this source right now.",
     )
 }
 

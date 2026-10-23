@@ -1248,6 +1248,19 @@ mod tests {
                 "ASC_CALIBRATION_APPLY_ALREADY_APPLIED",
                 CALIBRATION_APPLY_ALREADY_APPLIED.to_string(),
             ),
+            ("ASC_CALIBRATION_ZONE_OK", CALIBRATION_ZONE_OK.to_string()),
+            (
+                "ASC_CALIBRATION_ZONE_NO_REFERENCE",
+                CALIBRATION_ZONE_NO_REFERENCE.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ZONE_NOTHING_TO_MEASURE",
+                CALIBRATION_ZONE_NOTHING_TO_MEASURE.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ZONE_INVALID",
+                CALIBRATION_ZONE_INVALID.to_string(),
+            ),
             ("ASC_SOURCE_QUIT_KEEP", SOURCE_QUIT_KEEP.to_string()),
             ("ASC_SOURCE_QUIT_STOP", SOURCE_QUIT_STOP.to_string()),
             (
@@ -1306,6 +1319,13 @@ mod tests {
             ),
             ("ASC_PRESET_STEP_BUSY", PRESET_STEP_BUSY.to_string()),
             ("ASC_PRESET_STEP_IGNORED", PRESET_STEP_IGNORED.to_string()),
+            ("ASC_METER_POLL_MS", crate::meter::METER_POLL_MS.to_string()),
+            ("ASC_LEAD_SOURCE_SYSTEM", LEAD_SOURCE_SYSTEM.to_string()),
+            ("ASC_LEAD_SOURCE_APP", LEAD_SOURCE_APP.to_string()),
+            ("ASC_LEAD_SOURCE_INPUT", LEAD_SOURCE_INPUT.to_string()),
+            ("ASC_LEAD_OUTPUT_LOCAL", LEAD_OUTPUT_LOCAL.to_string()),
+            ("ASC_LEAD_OUTPUT_AIRPLAY", LEAD_OUTPUT_AIRPLAY.to_string()),
+            ("ASC_LEAD_OUTPUT_CAST", LEAD_OUTPUT_CAST.to_string()),
             ("ASC_CAST_RATE", CAST_RATE.to_string()),
             ("ASC_CAST_APPEARED", CAST_APPEARED.to_string()),
             ("ASC_CAST_CHANGED", CAST_CHANGED.to_string()),
