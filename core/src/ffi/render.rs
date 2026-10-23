@@ -363,8 +363,8 @@ pub unsafe extern "C" fn asc_gain_stage_render(
 /// Control thread: a renderer reading `ring`, captured at `capture_rate`,
 /// for a device that runs at `device_rate` with `channels` interleaved
 /// channels, at linear gain `gain`. It starts closed, at a delay of 0 until
-/// one is set. Null for a null ring, no channels, or a rate outside 8000 to
-/// 384 000 Hz.
+/// one is set. Null for a null ring, no channels, a rate outside 8000 to
+/// 384 000 Hz, or a capture rate the ring is too small for (S36).
 ///
 /// # Safety
 ///
@@ -377,13 +377,17 @@ pub unsafe extern "C" fn asc_renderer_create(
     channels: usize,
     gain: f32,
 ) -> *mut AscRenderer {
-    if !ring::is_supported_rate(capture_rate) || !ring::is_supported_rate(device_rate) {
+    if !ring::is_supported_rate(device_rate) {
         return ptr::null_mut();
     }
     // SAFETY: by the caller's contract the handle is null or live.
     let Some(ring) = (unsafe { ring_of(ring) }) else {
         return ptr::null_mut();
     };
+    // A ring too short for the rate would cap the delay without a word.
+    if !ring.supports_rate(capture_rate) {
+        return ptr::null_mut();
+    }
     let reader = Reader::new(Arc::clone(ring), capture_rate);
     let control = RendererControl::new(&reader);
     let gain = Arc::new(SharedGain::new(gain));
@@ -893,8 +897,9 @@ pub unsafe extern "C" fn asc_renderer_time_steps(renderer: *const AscRenderer) -
 mod tests {
     use super::*;
     use crate::ffi::ring::{
-        AscRingWriter, asc_ring_capacity_for_rate, asc_ring_create, asc_ring_destroy,
-        asc_ring_write, asc_ring_writer_create, asc_ring_writer_destroy,
+        AscRingWriter, asc_reader_create, asc_reader_destroy, asc_ring_capacity_for_rate,
+        asc_ring_create, asc_ring_destroy, asc_ring_write, asc_ring_writer_create,
+        asc_ring_writer_destroy,
     };
 
     fn wave(frames: usize, seed: u32) -> Vec<f32> {
@@ -1223,6 +1228,30 @@ mod tests {
         let writer = unsafe { asc_ring_writer_create(ring) };
         assert!(!ring.is_null() && !writer.is_null());
         (ring, writer)
+    }
+
+    // covers: S36
+    #[test]
+    fn a_ring_sized_for_192_khz_refuses_readers_and_renderers_above_it() {
+        let ring = asc_ring_create(asc_ring_capacity_for_rate(192_000));
+        assert!(!ring.is_null());
+        // SAFETY: `ring` is live until destroyed last; every handle made from
+        // it is destroyed once.
+        unsafe {
+            for rate in [352_800, 384_000] {
+                assert!(asc_reader_create(ring, rate).is_null(), "reader at {rate}");
+                assert!(
+                    asc_renderer_create(ring, rate, 48_000, 2, 1.0).is_null(),
+                    "renderer at {rate}"
+                );
+            }
+            let reader = asc_reader_create(ring, 192_000);
+            let renderer = asc_renderer_create(ring, 192_000, 48_000, 2, 1.0);
+            assert!(!reader.is_null() && !renderer.is_null());
+            asc_reader_destroy(reader);
+            asc_renderer_destroy(renderer);
+            asc_ring_destroy(ring);
+        }
     }
 
     // covers: S183, S187
