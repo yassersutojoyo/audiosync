@@ -39,6 +39,10 @@ final class SourceCapture {
         case ioProcNotStarted(OSStatus)
         /// No input device has this UID, or it has no input channel.
         case inputNotFound(String)
+        /// The input device with this UID is a Bluetooth hands-free input
+        /// (`AudioDevices.isHandsFreeInput`), which the picker doesn't list
+        /// either: a source saved before it was left out.
+        case inputHandsFree(String)
         /// The input device went away while it was captured.
         case inputDisconnected
 
@@ -52,6 +56,7 @@ final class SourceCapture {
             case .aggregateDeviceFailed(let status): return "aggregate device failed (\(Self.describe(status)))"
             case .ioProcNotStarted(let status): return "capture IOProc failed (\(Self.describe(status)))"
             case .inputNotFound(let uid): return "input device not found (\(uid))"
+            case .inputHandsFree(let uid): return "input device is a Bluetooth hands-free input (\(uid))"
             case .inputDisconnected: return "input device disconnected"
             }
         }
@@ -222,6 +227,7 @@ final class SourceCapture {
     private func startInput(_ uid: String) throws {
         guard let parts, let sink else { return }
         guard let device = HAL.device(uid: uid) else { throw CaptureError.inputNotFound(uid) }
+        if AudioDevices.isHandsFreeInput(device) { throw CaptureError.inputHandsFree(uid) }
         switch CaptureInputFormat.check(try HAL.inputStreamFormats(of: device)) {
         case .usable: break
         case .noChannels: throw CaptureError.inputNotFound(uid)
@@ -507,12 +513,15 @@ private extension SourceCapture {
                 return
             }
             parts.gate.lastCallbackFrames.store(channels.frames, ordering: .relaxed)
+            let now = mach_absolute_time()
+            var offset = 0
             channels.forEachBlock(in: stereoBlock) { block, count in
                 if !self.heard.load(ordering: .relaxed), CaptureChannels.hasSound(block, frames: count) {
                     self.heard.store(true, ordering: .relaxed)
                     if self.provesPermission { CaptureSink.runHeard.store(true, ordering: .relaxed) }
                 }
-                self.parts.deliver(block, frames: count)
+                self.parts.deliver(block, frames: count, offset: offset, callbackFrames: channels.frames, now: now)
+                offset += count
             }
             frames.wrappingAdd(UInt64(channels.frames), ordering: .relaxed)
         }

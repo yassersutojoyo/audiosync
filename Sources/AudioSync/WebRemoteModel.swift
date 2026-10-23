@@ -318,6 +318,10 @@ enum RemoteDevicesFile {
         return seconds >= 0 && seconds == seconds.rounded() && seconds < 0x1p64 ? seconds : nil
     }
 
+    /// The core empties its list before the save that failed, so the count reads 0 then;
+    /// Forget All stays available so the user can try again, as the failure text says.
+    static func canForget(count: Int, failed: Bool) -> Bool { count > 0 || failed }
+
     /// A file that isn't there is already forgotten.
     static func forget(at url: URL) -> Bool {
         do {

@@ -55,15 +55,18 @@ struct EngineParts {
     /// on every path and the test signal goes into the one path it targets.
     /// A block that meets the calibration's fill writing is dropped: the fill
     /// writes only after the capture gave nothing for a while, while the
-    /// music is faded out. Real-time safe.
+    /// music is faded out. The block starts `offset` frames into a callback
+    /// of `callbackFrames` frames that ended at host time `now`. Real-time safe.
     @inline(__always)
-    func deliver(_ block: UnsafeMutablePointer<Float>, frames: Int) {
-        let now = mach_absolute_time()
+    func deliver(_ block: UnsafeMutablePointer<Float>, frames: Int, offset: Int = 0, callbackFrames: Int? = nil,
+                 now: UInt64 = mach_absolute_time()) {
         gate.lastCaptureTicks.store(now, ordering: .releasing)
         guard gate.enter() else { return }
         // The block's first frame, as the fill stamps its own, so a run whose two
         // recordings start on different writers lines up.
-        write(block, frames: frames, ticks: now &- gate.ticks(frames: frames))
+        write(block, frames: frames,
+              ticks: gate.blockStartTicks(callbackNow: now, callbackFrames: callbackFrames ?? offset + frames,
+                                          offset: offset))
         gate.leave()
     }
 
@@ -134,6 +137,13 @@ final class BlockGate {
     func ticks(frames: Int) -> UInt64 {
         let perFrame = Double(bitPattern: ticksPerFrame.load(ordering: .acquiring))
         return UInt64(max(0, Double(frames) * perFrame))
+    }
+
+    /// Host ticks of the first frame of the block `offset` frames into a
+    /// callback of `callbackFrames` frames whose last frame ends at `callbackNow`.
+    @inline(__always)
+    func blockStartTicks(callbackNow: UInt64, callbackFrames: Int, offset: Int) -> UInt64 {
+        callbackNow &- ticks(frames: callbackFrames - offset)
     }
 
     @inline(__always)

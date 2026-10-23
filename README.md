@@ -33,18 +33,9 @@ AirPlay speakers play about two seconds late. Local speakers don't. Play the sam
 
 AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, early alpha.
 
-## What's new in 0.6
+## What's new in 0.7
 
-- Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
-- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s.
-- On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
-- On the Mac, rename a speaker with a double-click on its name.
-- If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
-- Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
-- Diagrams in the Guide.
-- AirPlay 2 is in there, but experimental and off. See below.
-
-On `main` (coming in 0.7), in both the Mac and the Windows app:
+In the Mac app, and in the Windows build that's still in preview:
 
 - Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
 - Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
@@ -54,6 +45,18 @@ On `main` (coming in 0.7), in both the Mac and the Windows app:
 - A Cast speaker that doesn't show up can be added by its IP address or host name, with Add by Address… under Connected Speakers on the Mac or in the Speakers menu on Windows.
 - Cast speakers show the track that's playing, with the title, artist, album and cover.
 - On Windows you can rename a speaker too, with a double-click on its name.
+- Hide Speaker takes a speaker you never use out of the list, and Hidden Speakers brings it back.
+
+New in 0.6:
+
+- Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
+- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s.
+- On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
+- On the Mac, rename a speaker with a double-click on its name.
+- If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
+- Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
+- Diagrams in the Guide.
+- AirPlay 2 is in there, but experimental and off. See below.
 
 The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -66,7 +69,7 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
 Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
 
-Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. In 0.6, speaker groups made in the Google Home app can't play. On `main` (coming in 0.7) a group plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait so long: 3 s in 0.6, 20 s on `main`. Past that a notice tells you how far ahead AirPlay plays.
+Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. In 0.6, speaker groups made in the Google Home app can't play. Since 0.7 a group plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait so long: 3 s in 0.6, 20 s from 0.7. Past that a notice tells you how far ahead AirPlay plays.
 
 ## Install
 
@@ -90,7 +93,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 ## What doesn't work (yet)
 
 - Everything is about two seconds late. Fine for music, bad for video and games.
-- AirPlay 1 only by default. AirPlay 2 is experimental and off: to try it, turn on AirPlay 2 (Experimental) in the app menu or the gear menu, then quit and reopen AudioSync. It plays one AirPlay 2 speaker at a time and hasn't been tried on a real AirPlay 2 receiver yet. On `main` (coming in 0.7), with the switch on, a stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
+- AirPlay 1 only by default. AirPlay 2 is experimental and off: to try it, turn on AirPlay 2 (Experimental) in the app menu or the gear menu, then quit and reopen AudioSync. It plays one AirPlay 2 speaker at a time and hasn't been tried on a real AirPlay 2 receiver yet. Since 0.7, with the switch on, a stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
 - Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - Now Playing only works with Spotify and Music.

@@ -2309,6 +2309,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.policy.sender_latency_ms()
     }
 
+    fn airplay_adjustment_base_ms(&self) -> f64 {
+        self.policy.adjustment_base_ms()
+    }
+
     fn airplay_adjustment(&self) -> f64 {
         self.policy.airplay_adjustment_ms()
     }

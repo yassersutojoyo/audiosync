@@ -10,7 +10,7 @@ Build every release on the same Mac with the same identity, so updates keep the 
 
 ## Cutting a release
 
-First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`, move the Unreleased entries in `CHANGELOG.md` under the new version (and update the compare links at the bottom), and commit. Then:
+First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`, set the same version in `windows/Cargo.toml` and in the `audiosync-windows` entry of `windows/Cargo.lock`, move the Unreleased entries in `CHANGELOG.md` under the new version (and update the compare links at the bottom), and commit. Then:
 
 ```bash
 ./build.sh
