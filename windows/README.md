@@ -191,8 +191,9 @@ open, by its address or the QR code in the window. Add the page to the Home
 Screen first, then open it from there and enter the pairing code: on some
 phones a pairing made in the browser doesn't carry over. Each code works
 once and for 10 minutes, and New Code makes a fresh one. The phone can then
-switch speakers on and off and set their volume, their delay and Master
-Volume. The page is plain HTTP, so keep it to your home network. Forget All
+switch speakers on and off, set their volume, their delay and Master
+Volume, and pick the audio source from the same list as the main window.
+The page is plain HTTP, so keep it to your home network. Forget All
 Remote Devices unpairs every phone. If another app already uses the port,
 the window says so and lets you pick another one.
 

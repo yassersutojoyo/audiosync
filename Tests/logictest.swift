@@ -5428,11 +5428,40 @@ do {
     check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"source\":\"Music\",\"title\":\"Song\"}"),
           "web remote: Now Playing goes out with title, artist and source app", playing)
 
+    let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: "com.apple.Music", name: "Music")],
+                                     inputs: [(uid: "BuiltInMic", name: "MacBook Microphone")],
+                                     chosen: .app(bundleID: "com.apple.Music"), chosenAppName: { $0 })
+    let remoteSources = entries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    check(remoteSources.map(\.id) == ["system", "app:com.apple.Music", "input:BuiltInMic"]
+            && remoteSources.map(\.kind) == [.system, .app, .input] && remoteSources.map(\.name) == entries.map(\.name),
+          "web remote: the page lists the picker's entries in its order, each with an ID the core takes")
+    check(zip(remoteSources, entries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
+            && ["", "app:", "input:", "Music"].allSatisfy { RemoteSource.pickerID($0) == nil },
+          "web remote: a page ID maps back to the picker's ID; one that names no source maps to nothing")
+    let sourced = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows,
+                                 sources: remoteSources, sourceID: "app:com.apple.Music")
+    let sourcedObject = (try? JSONSerialization.jsonObject(with: Data(sourced.json.utf8))) as? [String: Any]
+    let sourceKinds = (sourcedObject?["sources"] as? [[String: Any]])?.compactMap { $0["kind"] as? String }
+    check(sourcedObject?["source_id"] as? String == "app:com.apple.Music" && sourceKinds == ["system", "app", "input"]
+            && snapshot.json.contains("\"source_id\":null"),
+          "web remote: the snapshot carries the sources and the one in use", sourced.json)
+    func pick(_ id: String) -> [RemoteAction] {
+        RemoteCommand(json: "{\"type\":\"source\",\"id\":\"\(id)\"}").map {
+            RemoteAction.plan($0, rows: rows, sources: remoteSources, sourceID: "app:com.apple.Music")
+        } ?? []
+    }
+    check(pick("input:BuiltInMic") == [.selectSource(pickerID: "input:BuiltInMic")]
+            && pick("system") == [.selectSource(pickerID: "")]
+            && pick("app:com.apple.Music").isEmpty && pick("app:gone").isEmpty
+            && RemoteCommand(json: "{\"type\":\"source\",\"id\":3}") == nil,
+          "web remote: a source pick is the picker's own; the one in use or one it doesn't list changes nothing")
+
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }
     var error: Int32 = 0
     var remote = asc_remote_start("{\"port\": 0, \"listen\": [\"127.0.0.1\"]}", noCommand, nil, &error)
-    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing),
+    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing)
+            && asc_remote_publish(remote, sourced.json),
           "web remote: the core accepts the snapshots", "start error \(error)")
     asc_remote_stop(&remote)
 

@@ -105,6 +105,51 @@ extension RemoteRow {
     }
 }
 
+/// One entry of the source picker as the page lists it.
+struct RemoteSource: Equatable {
+    enum Kind: String {
+        case system, app, input
+    }
+
+    /// "system", "app:<bundle ID>" or "input:<uid>": the core takes no empty
+    /// ID, which is what the picker gives the whole system.
+    var id: String
+    var name: String
+    var kind: Kind
+
+    /// `pickerID` is `AudioSource.defaultsValue`, as `SourceList.entries` gives it.
+    init(pickerID: String, name: String) {
+        id = Self.pageID(pickerID)
+        self.name = name
+        kind = switch AudioSource(defaultsValue: pickerID) {
+        case .system: .system
+        case .app: .app
+        case .input: .input
+        }
+    }
+
+    static func pageID(_ pickerID: String) -> String {
+        switch AudioSource(defaultsValue: pickerID) {
+        case .system: "system"
+        case .app(let bundleID): "app:" + bundleID
+        case .input: pickerID
+        }
+    }
+
+    /// The picker's ID for a page ID; nil for one that names no source.
+    static func pickerID(_ pageID: String) -> String? {
+        if pageID == "system" { return AudioSource.system.defaultsValue }
+        if pageID.hasPrefix("app:"), pageID.count > 4 { return String(pageID.dropFirst(4)) }
+        if pageID.hasPrefix("input:"), pageID.count > 6 { return pageID }
+        return nil
+    }
+
+    /// The picker refuses none of its entries.
+    var json: [String: Any] {
+        ["id": id, "name": name, "kind": kind.rawValue, "available": true, "notice": NSNull()]
+    }
+}
+
 /// Everything the page shows, as `asc_remote_publish` takes it.
 struct RemoteSnapshot: Equatable {
     struct Playing: Equatable {
@@ -115,6 +160,10 @@ struct RemoteSnapshot: Equatable {
     var master: Double
     var nowPlaying: Playing?
     var rows: [RemoteRow]
+    /// In the picker's order.
+    var sources: [RemoteSource] = []
+    /// The page ID of the source in use; nil when the picker doesn't list it.
+    var sourceID: String? = nil
 
     /// One line, keys sorted, so an unchanged snapshot gives the same text.
     var json: String {
@@ -124,6 +173,8 @@ struct RemoteSnapshot: Equatable {
             "master": ["volume": Self.volume(master)],
             "now_playing": playing,
             "speakers": rows.map(\.json),
+            "sources": sources.map(\.json),
+            "source_id": sourceID.map { $0 as Any } ?? NSNull(),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) else { return "" }
         return String(decoding: data, as: UTF8.self)
@@ -137,6 +188,8 @@ struct RemoteSnapshot: Equatable {
 enum RemoteCommand: Equatable {
     case speaker(id: String, on: Bool?, volume: Double?, delayMs: Double?)
     case master(volume: Double)
+    /// `id` is the page's ID (`RemoteSource.id`).
+    case source(id: String)
 
     /// Nil for anything that doesn't read as one.
     init?(json: String) {
@@ -154,6 +207,9 @@ enum RemoteCommand: Equatable {
         case "master":
             guard let volume = number("volume") else { return nil }
             self = .master(volume: volume)
+        case "source":
+            guard let id = object["id"] as? String else { return nil }
+            self = .source(id: id)
         default:
             return nil
         }
@@ -168,13 +224,21 @@ enum RemoteAction: Equatable {
     case setCastOffset(id: String, ms: Double)
     case setAirPlayDelay(ms: Double)
     case setMaster(position: Double)
+    /// A pick in the source picker, by its ID there.
+    case selectSource(pickerID: String)
 
     /// The switch first, then the slider (enabled or not by that switch),
-    /// then the delay; a value already in place changes nothing.
-    static func plan(_ command: RemoteCommand, rows: [RemoteRow]) -> [RemoteAction] {
+    /// then the delay; a value already in place changes nothing. A source
+    /// pick needs a listed source other than the current one.
+    static func plan(_ command: RemoteCommand, rows: [RemoteRow],
+                     sources: [RemoteSource] = [], sourceID: String? = nil) -> [RemoteAction] {
         switch command {
         case .master(let volume):
             return [.setMaster(position: RemoteSnapshot.volume(volume))]
+        case .source(let id):
+            guard id != sourceID, sources.contains(where: { $0.id == id }),
+                  let pickerID = RemoteSource.pickerID(id) else { return [] }
+            return [.selectSource(pickerID: pickerID)]
         case .speaker(let id, let on, let volume, let delayMs):
             guard let row = rows.first(where: { $0.id == id }), row.available else { return [] }
             var actions: [RemoteAction] = []
