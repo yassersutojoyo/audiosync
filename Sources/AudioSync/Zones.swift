@@ -57,3 +57,142 @@ enum ZoneMigration {
         }
     }
 }
+
+/// Changes to the zones the windows make, each keeping a speaker in at most
+/// one zone (S245).
+enum ZoneEdit {
+    /// `zones` with `key` in no zone; an emptied zone stays.
+    static func removing(_ key: String, from zones: [SpeakerZone]) -> [SpeakerZone] {
+        zones.map { zone in
+            var copy = zone
+            copy.members.removeAll { $0 == key }
+            return copy
+        }
+    }
+
+    /// `key` after the members of zone `id`, out of the zone that held it.
+    /// Nothing changes for a zone that isn't there.
+    static func moving(_ key: String, to id: String, in zones: [SpeakerZone]) -> [SpeakerZone] {
+        guard zones.contains(where: { $0.id == id }) else { return zones }
+        var out = removing(key, from: zones)
+        if let index = out.firstIndex(where: { $0.id == id }) { out[index].members.append(key) }
+        return out
+    }
+
+    /// `zones` with a new zone of `members` after them, at volume 100; each
+    /// member leaves the zone that held it.
+    static func adding(id: String, name: String, members: [String], to zones: [SpeakerZone]) -> [SpeakerZone] {
+        var out = zones
+        for key in members { out = removing(key, from: out) }
+        var seen = Set<String>()
+        out.append(SpeakerZone(id: id, name: name, members: members.filter { seen.insert($0).inserted },
+                               volume: SpeakerZone.defaultVolume))
+        return out
+    }
+
+    /// Use <target> Instead (S247): in zone `id`, `target` takes the place of
+    /// the first of `members` (the speakers that play as part of it) and the
+    /// rest of them leave; `target` leaves any other zone.
+    static func usingTarget(_ target: String, for members: Set<String>, in id: String,
+                            zones: [SpeakerZone]) -> [SpeakerZone] {
+        guard let index = zones.firstIndex(where: { $0.id == id }),
+              let first = zones[index].members.firstIndex(where: members.contains) else { return zones }
+        var out = zones
+        out[index].members[first] = target
+        out[index].members = out[index].members.enumerated().filter { offset, key in
+            offset == first || (key != target && !members.contains(key))
+        }.map(\.element)
+        for other in out.indices where other != index { out[other].members.removeAll { $0 == target } }
+        return out
+    }
+}
+
+/// A zone member as a click on its zone sees it (S246, S247).
+struct ZoneMemberFacts: Equatable {
+    enum Kind: Equatable { case local, airplay, airplay2, cast }
+    var kind: Kind
+    /// Listed now and not hidden.
+    var listed: Bool
+    var on: Bool
+    /// A Cast speaker that can't start now.
+    var busy = false
+    /// A stereo pair or home theater target while AirPlay 2 is off.
+    var needsAirPlay2 = false
+    /// Plays as part of a stereo pair or home theater target now.
+    var inTarget = false
+}
+
+/// The core's plan for a click on a zone (`asc_zone_click_plan`).
+enum ZoneClick {
+    enum Action: Equatable { case nothing, turnOn, start, turnOff }
+    enum Step: Equatable {
+        case absent, needsAirPlay2, inTarget, on, waiting, off
+        case castAnotherPlays, castOneAtATime, castBusy
+    }
+
+    static func plan(_ members: [ZoneMemberFacts], streaming: Bool, castOnElsewhere: Bool,
+                     airPlay2PlayingElsewhere: Bool) -> (action: Action, steps: [Step]) {
+        let raw = members.map { member in
+            AscZoneMember(kind: code(member.kind), listed: member.listed, on: member.on, busy: member.busy,
+                          needs_airplay2: member.needsAirPlay2, in_target: member.inTarget)
+        }
+        var steps = [UInt32](repeating: 0, count: members.count)
+        let action = raw.withUnsafeBufferPointer { list in
+            steps.withUnsafeMutableBufferPointer { out in
+                asc_zone_click_plan(list.baseAddress, list.count, streaming, castOnElsewhere,
+                                    airPlay2PlayingElsewhere, out.baseAddress)
+            }
+        }
+        return (Self.action(action), steps.map(step))
+    }
+
+    private static func code(_ kind: ZoneMemberFacts.Kind) -> UInt32 {
+        switch kind {
+        case .local: return UInt32(ASC_ZONE_MEMBER_LOCAL)
+        case .airplay: return UInt32(ASC_ZONE_MEMBER_AIRPLAY)
+        case .airplay2: return UInt32(ASC_ZONE_MEMBER_AIRPLAY2)
+        case .cast: return UInt32(ASC_ZONE_MEMBER_CAST)
+        }
+    }
+
+    private static func action(_ code: UInt32) -> Action {
+        switch code {
+        case UInt32(ASC_ZONE_CLICK_TURN_ON): return .turnOn
+        case UInt32(ASC_ZONE_CLICK_START): return .start
+        case UInt32(ASC_ZONE_CLICK_TURN_OFF): return .turnOff
+        default: return .nothing
+        }
+    }
+
+    private static func step(_ code: UInt32) -> Step {
+        switch code {
+        case UInt32(ASC_ZONE_STEP_NEEDS_AIRPLAY2): return .needsAirPlay2
+        case UInt32(ASC_ZONE_STEP_IN_TARGET): return .inTarget
+        case UInt32(ASC_ZONE_STEP_ON): return .on
+        case UInt32(ASC_ZONE_STEP_WAITING): return .waiting
+        case UInt32(ASC_ZONE_STEP_OFF): return .off
+        case UInt32(ASC_ZONE_STEP_CAST_ANOTHER_PLAYS): return .castAnotherPlays
+        case UInt32(ASC_ZONE_STEP_CAST_ONE_AT_A_TIME): return .castOneAtATime
+        case UInt32(ASC_ZONE_STEP_CAST_BUSY): return .castBusy
+        default: return .absent
+        }
+    }
+}
+
+/// How the windows show the zones: the speakers in no zone, and a zone
+/// header's count.
+enum ZoneLayout {
+    /// `speakers` without the ones whose key is in a zone, order kept.
+    static func zoneless<T>(_ speakers: [T], key: (T) -> String, zoned: Set<String>) -> [T] {
+        speakers.filter { !zoned.contains(key($0)) }
+    }
+
+    /// A zone header's count, `total` being its members that aren't hidden
+    /// (rows and count agree): "No speakers", "0 of 3 here" while none is
+    /// present, else "2 of 3 on" with ", 1 waiting" when one waits.
+    static func count(on: Int, waiting: Int, present: Int, total: Int, text: UIStrings) -> String {
+        if total == 0 { return text.zoneEmpty }
+        if present == 0 { return text.zoneNoneHere(total) }
+        return text.zoneCount(on: on, of: total) + (waiting > 0 ? text.zoneWaiting(waiting) : "")
+    }
+}

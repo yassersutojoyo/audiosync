@@ -38,6 +38,9 @@ struct AppSettings: Equatable {
         static let zones = "speakerZones"
         /// True once the groups were moved to `zones` (S248); written last.
         static let zonesMigrated = "speakerZonesMigrated"
+        /// True from a migration that made zones until the next launch says
+        /// so in a notice; removed once shown.
+        static let zonesNoticeDue = "speakerZonesNoticeDue"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
         static let autoConnect = "autoConnectSpeakers"
         /// The names the user gave speakers, by speaker key (`SpeakerNames`).
@@ -107,6 +110,8 @@ struct AppSettings: Equatable {
     var airplayVolumes: [String: Double] = [:]
     var groups: [SpeakerGroup] = []
     var zones: [SpeakerZone] = []
+    /// The groups became zones and no launch said so yet.
+    var zonesNoticeDue = false
     var autoConnect: Set<String> = []
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
@@ -153,6 +158,7 @@ struct AppSettings: Equatable {
         s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
         s.groups = decodeGroups(read(Keys.groups) as? Data)
         s.zones = decodeZones(read(Keys.zones) as? Data)
+        s.zonesNoticeDue = read(Keys.zonesNoticeDue) as? Bool ?? false
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
@@ -245,11 +251,17 @@ struct SettingsStore {
     /// stored groups become the stored zones, then the mark is written. The
     /// groups stay as they are. A run cut short before the mark runs again
     /// from the same groups, to the same zones; once marked, nothing changes.
+    /// Zones made this way leave the notice due.
     func migrateZones() {
         guard read(Keys.zonesMigrated) as? Bool != true else { return }
-        save(zones: ZoneMigration.zones(from: AppSettings.decodeGroups(read(Keys.groups) as? Data)))
+        let zones = ZoneMigration.zones(from: AppSettings.decodeGroups(read(Keys.groups) as? Data))
+        save(zones: zones)
+        if !zones.isEmpty { write(true, Keys.zonesNoticeDue) }
         write(true, Keys.zonesMigrated)
     }
+
+    /// The groups-became-zones notice was shown.
+    func zonesNoticeShown() { write(nil, Keys.zonesNoticeDue) }
 
     /// Local volumes stored as linear gain become slider positions under
     /// `Keys.localVolumes`, and the old key goes (S75). Positions already
