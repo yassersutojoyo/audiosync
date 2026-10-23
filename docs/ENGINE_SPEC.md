@@ -619,7 +619,7 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | zones: stored zones keep a speaker in its first zone, one zone per ID, volumes within 0…100 | S245 |
 | zones: unreadable zones read as none and never migrate again | S248 |
 | zones: a local speaker's gain goes through its zone, and no zone is the gain of before | S71, S249 |
-| zones: a zone volume change sends the playing AirPlay and Cast members their new levels | S249 |
+| zones: a zone volume change gives the Cast speaker in a session its new level, once | S249 |
 | zones: a Cast report in a zone moves the own level by master times zone | S249, S250 |
 | group name: trimmed | S150 |
 | group name: blank or whitespace-only is no name | S150 |

@@ -5230,6 +5230,61 @@ do {
           "cast master: the core's arithmetic")
 }
 
+// MARK: Zone volumes (S71, S249, S250, C104, C105)
+do {
+    let zones = [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:usb:out", "ap:AA", "cc:tv1"], volume: 50),
+                 SpeakerZone(id: "z2", name: "Den", members: ["ap:BB", "ap:AA"], volume: 25)]
+    check(SpeakerZone.volume(of: "lc:usb:out", in: zones) == 50 && SpeakerZone.volume(of: "ap:BB", in: zones) == 25
+            && SpeakerZone.volume(of: "lc:other", in: zones) == 100,
+          "zones: each speaker takes its zone's volume, 100 in no zone")
+    check(SpeakerZone.volumes(zones, kind: .airplay) == ["AA": 50, "BB": 25]
+            && SpeakerZone.volumes(zones, kind: .local) == ["usb:out": 50]
+            && SpeakerZone.volumes(zones, kind: .cast) == ["tv1": 50],
+          "zones: each kind's members get their zone's volume by ID")
+
+    var identical = true
+    for own in stride(from: 0.0, through: 100, by: 7.5) {
+        for master in stride(from: 0.0, through: 100, by: 12.5) {
+            identical = identical
+                && asc_zone_output_gain(own, 100, master).bitPattern == asc_output_gain(own, master).bitPattern
+                && asc_cast_zone_level(master / 100, 1, own / 100).bitPattern
+                    == asc_cast_device_level(master / 100, own / 100).bitPattern
+        }
+    }
+    check(identical && asc_zone_output_gain(50, 50, 100) == 0.125 * 0.125 && asc_zone_output_gain(80, 0, 100) == 0,
+          "zones: a local speaker's gain goes through its zone, and no zone is the gain of before")
+
+    let tv = "tv1"
+    func reported(_ level: Double) -> CastVolume { CastVolume(level: level, muted: false, fixed: false) }
+    func near(_ level: Double?, _ expected: Double) -> Bool { level.map { approx($0, expected, 1e-9) } == true }
+    func session(zone: Double, attempt: UInt64) -> CastModel {
+        var m = CastModel()
+        m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+        check(m.setZones([tv: zone]) == nil, "zones: nothing is sent to a Cast speaker while no session runs")
+        _ = m.turnOn(tv)
+        m.startSent(tv)
+        _ = m.started(tv, attempt: attempt, refusal: ASC_CAST_REFUSED_NONE)
+        return m
+    }
+
+    var m = session(zone: 50, attempt: 1)
+    check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
+          "zones: the Cast level is master × zone × own")
+    check(near(m.setZones([tv: 25]), 0.2) && m.setZones([tv: 25]) == nil,
+          "zones: a zone volume change gives the Cast speaker in a session its new level, once")
+    _ = m.apply(.volume(attempt: 1, reported(0.2)))
+    check(m.apply(.volume(attempt: 1, reported(0.1))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
+          "zones: a Cast report in a zone moves the own level by master times zone")
+    _ = m.setZones([tv: 0])
+    _ = m.apply(.volume(attempt: 1, reported(0)))
+    _ = m.apply(.volume(attempt: 1, reported(0.3)))
+    check(approx(m.volume(of: tv), 40, 1e-9), "zones: with the zone at 0 a Cast report leaves the own level")
+
+    var fresh = session(zone: 50, attempt: 2)
+    check(fresh.apply(.volume(attempt: 2, reported(0.2))) != .setVolume(0.2) && approx(fresh.volume(of: tv), 40, 1e-9),
+          "zones: a Cast session's first status divides by master times zone (C105)")
+}
+
 // MARK: Google Cast track info and volume steps (C53, C54, C69)
 do {
     let tv = "00112233445566778899aabbccddeeff"
