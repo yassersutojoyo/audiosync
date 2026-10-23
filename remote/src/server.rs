@@ -47,6 +47,10 @@ const MAX_STREAMS_PER_DEVICE: usize = 2;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a stop waits for the connection threads.
 const STOP_GRACE: Duration = Duration::from_millis(500);
+/// How long a refused connection is drained before it is closed.
+const REFUSED_LINGER: Duration = Duration::from_secs(1);
+/// Refused connections drained at once; the oldest is closed for a new one.
+const MAX_REFUSED: usize = 16;
 /// Snapshots kept so a stream that fell a little behind still gets each one.
 const HISTORY: usize = 32;
 /// Server events kept for a host that doesn't poll.
@@ -360,33 +364,43 @@ enum Admission {
     Open,
     /// Let in only to show a paired device's token (see [`Capacity::reserved`]).
     Reserved,
+    /// Let in as [`Admission::Reserved`] once the held connection at this index is closed.
+    Replace(usize),
     Busy,
     PeerBusy,
 }
 
-/// Whether a connection from `peer` is let in beside `held`. Connections
-/// that haven't shown a paired device's token share all but the reserved
-/// slots, so slow unpaired clients can't keep a paired phone out.
+/// Whether a connection from `peer` is let in beside `held`, oldest first.
+/// Connections that haven't shown a paired device's token share all but the
+/// reserved slots, so slow unpaired clients can't keep a paired phone out.
 fn admission(held: &[Slot], peer: IpAddr, capacity: Capacity) -> Admission {
-    if held.len() >= capacity.connections {
-        return Admission::Busy;
-    }
+    let full = held.len() >= capacity.connections;
     if held.iter().filter(|slot| slot.peer == peer).count() >= capacity.per_peer {
-        return Admission::PeerBusy;
+        return if full {
+            Admission::Busy
+        } else {
+            Admission::PeerBusy
+        };
     }
     let unpaired = held.iter().filter(|slot| !slot.paired).count();
-    if unpaired < capacity.connections.saturating_sub(capacity.reserved) {
+    if !full && unpaired < capacity.connections.saturating_sub(capacity.reserved) {
         return Admission::Open;
     }
     let waiting = held
         .iter()
         .filter(|slot| slot.peer == peer && slot.reserved && !slot.paired)
         .count();
-    if waiting < capacity.reserved_per_peer {
-        Admission::Reserved
-    } else {
-        Admission::Busy
+    if waiting >= capacity.reserved_per_peer {
+        return Admission::Busy;
     }
+    if !full {
+        return Admission::Reserved;
+    }
+    // A host with many addresses is many peers; the oldest waiter makes room
+    // so such a host can't keep every reserved slot.
+    held.iter()
+        .position(|slot| slot.reserved && !slot.paired)
+        .map_or(Admission::Busy, Admission::Replace)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -694,13 +708,20 @@ impl Drop for RemoteServer {
 }
 
 fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
+    let mut refused = VecDeque::new();
     while !shared.stopped.load(Ordering::SeqCst) {
+        drain_refused(&mut refused);
         let mut idle = true;
         for listener in listeners {
             match listener.accept() {
                 Ok((stream, peer)) => {
                     idle = false;
-                    admit(stream, peer, shared);
+                    if let Some(stream) = admit(stream, peer, shared) {
+                        if refused.len() >= MAX_REFUSED {
+                            refused.pop_front();
+                        }
+                        refused.push_back((stream, Instant::now() + REFUSED_LINGER));
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => idle = false,
@@ -713,7 +734,32 @@ fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
     }
 }
 
-fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
+/// Reads and drops what refused clients still send; closes each once the
+/// client closed its side or its time is up.
+fn drain_refused(refused: &mut VecDeque<(TcpStream, Instant)>) {
+    let now = Instant::now();
+    let mut buffer = [0u8; 1024];
+    refused.retain_mut(|(stream, until)| {
+        if now >= *until {
+            return false;
+        }
+        for _ in 0..8 {
+            match stream.read(&mut buffer) {
+                Ok(0) => return false,
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => return false,
+            }
+        }
+        true
+    });
+}
+
+/// Starts serving a connection, or answers 503 and hands the connection
+/// back to linger: closing with an unread request would reset it, and a
+/// reset can discard the answer before the client reads it.
+fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) -> Option<TcpStream> {
     let from = peer.ip().to_canonical();
     let admitted = stream
         .local_addr()
@@ -721,7 +767,7 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
     if !admitted {
         shared.report(ServerEvent::NotPrivate { from });
         let _ = stream.shutdown(Shutdown::Both);
-        return;
+        return None;
     }
     // Accepted sockets inherit the listener's non-blocking mode on WinSock and BSD.
     let _ = stream.set_nonblocking(false);
@@ -736,10 +782,14 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
                 ..connection.slot
             })
             .collect();
-        admission(&held, peer, shared.capacity)
+        let admitted = admission(&held, peer, shared.capacity);
+        if let Admission::Replace(oldest) = admitted {
+            let _ = connections.remove(oldest).stream.shutdown(Shutdown::Both);
+        }
+        admitted
     };
     let refused = match admitted {
-        Admission::Open | Admission::Reserved => None,
+        Admission::Open | Admission::Reserved | Admission::Replace(_) => None,
         Admission::Busy => Some(ServerEvent::Busy { from }),
         Admission::PeerBusy => Some(ServerEvent::PeerBusy { from }),
     };
@@ -752,14 +802,15 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
             &Response::error(&text::busy()),
             &shared.content_security_policy,
         );
-        return;
+        let _ = stream.shutdown(Shutdown::Write);
+        return stream.set_nonblocking(true).is_ok().then_some(stream);
     }
     let Ok(handle) = stream.try_clone() else {
-        return;
+        return None;
     };
     let slot = Slot {
         peer,
-        reserved: admitted == Admission::Reserved,
+        reserved: matches!(admitted, Admission::Reserved | Admission::Replace(_)),
         paired: false,
     };
     let paired = Arc::new(AtomicBool::new(false));
@@ -790,6 +841,7 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
             thread,
         });
     }
+    None
 }
 
 /// What a request gets: one response, or the event stream.
@@ -1239,6 +1291,32 @@ mod tests {
             })
             .collect();
         assert_eq!(admission(&full, paired_phone, capacity), Admission::Busy);
+    }
+
+    #[test]
+    fn a_host_with_many_addresses_cannot_hold_every_reserved_slot() {
+        let capacity = Capacity::default();
+        let mut slots: Vec<Slot> = (1..=3)
+            .flat_map(|host| held(home(0, host), MAX_CONNECTIONS_PER_PEER, false, false))
+            .collect();
+        let shared = slots.len();
+        // Link-local addresses are peers of their own, so one host can bring many.
+        for host in 1..=RESERVED_FOR_PAIRED / RESERVED_PER_PEER {
+            let peer = net::peer_group(address(&format!("fe80::{host}")));
+            for _ in 0..RESERVED_PER_PEER {
+                assert_eq!(admission(&slots, peer, capacity), Admission::Reserved);
+                slots.extend(held(peer, 1, true, false));
+            }
+        }
+        assert_eq!(slots.len(), MAX_CONNECTIONS);
+        let phone = home(0, 9);
+        assert_eq!(
+            admission(&slots, phone, capacity),
+            Admission::Replace(shared)
+        );
+        // A peer already waiting in its share of reserved slots gets no more.
+        let last = slots[MAX_CONNECTIONS - 1].peer;
+        assert_eq!(admission(&slots, last, capacity), Admission::Busy);
     }
 
     #[test]
