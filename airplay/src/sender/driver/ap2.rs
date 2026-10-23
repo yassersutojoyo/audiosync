@@ -38,6 +38,15 @@ pub(super) struct PtpRun {
     v6: bool,
 }
 
+impl PtpRun {
+    /// Hands the service's receivers to the socket thread, which drops
+    /// datagrams from anyone else (P162).
+    fn share_peers(&self) {
+        self.io
+            .set_peers(self.service.peers().iter().map(SocketAddr::ip));
+    }
+}
+
 /// An AirPlay 2 session that is starting, ready or closing.
 pub(super) struct Ap2Active {
     pub(super) key: SessionKey,
@@ -291,6 +300,7 @@ impl Driver {
         }
         if let (Some(run), Some(remote)) = (&mut self.ptp, remote) {
             run.service.stop_peer(remote.ip());
+            run.share_peers();
         }
     }
 
@@ -540,6 +550,7 @@ impl Driver {
                             if remote.ip().to_canonical().is_ipv6() == run.v6 =>
                         {
                             run.service.start(remote, now);
+                            run.share_peers();
                         }
                         // It fell back to an address outside the service's
                         // family, which no clock serves (P158, P179).
