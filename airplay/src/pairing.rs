@@ -740,6 +740,7 @@ impl Pairing {
                 method,
                 status: None,
                 fallback: None,
+                retry_after: None,
                 detail,
             },
             false,
@@ -989,6 +990,7 @@ impl Pairing {
             method: Some(method),
             status: Some(status),
             fallback: None,
+            retry_after: None,
             detail,
         };
         self.fail_with(error, wrong_pin);

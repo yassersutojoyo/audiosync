@@ -778,10 +778,26 @@ impl fmt::Debug for PairVerify {
     }
 }
 
-/// A failed verification: Busy for error 7, else the stored credentials
-/// are no longer accepted (P150, P154).
+/// A failed verification whose stored credentials are no longer accepted
+/// (P154).
 fn rejected(detail: &'static str) -> PairingFailure {
     PairingFailure::new(ErrorKind::PairingRequired, detail)
+}
+
+/// A pair-verify error item about the receiver's state rather than the
+/// credentials: PairingFailed, retried after item 8's wait (P150, P154).
+fn receiver_state(code: u8, reply: &Tlv8) -> PairingFailure {
+    let detail = match code {
+        3 => "back-off",
+        4 => "too many paired senders",
+        5 => "too many attempts",
+        6 => "unavailable",
+        _ => "unknown pairing error",
+    };
+    let mut failure = PairingFailure::new(ErrorKind::PairingFailed, detail);
+    failure.back_off = back_off(reply);
+    failure.error.retry_after = Some(failure.back_off.unwrap_or(Duration::ZERO));
+    failure
 }
 
 impl PairVerify {
@@ -859,9 +875,10 @@ impl PairVerify {
             return self.fail(rejected("malformed verification answer"));
         };
         if let Some(code) = reply.get(tlv8::ERROR) {
-            return self.fail(match code {
-                [7] => PairingFailure::new(ErrorKind::Busy, "busy"),
-                _ => rejected("verification refused"),
+            return self.fail(match code.first().copied().unwrap_or(1) {
+                2 => rejected("verification refused"),
+                7 => PairingFailure::new(ErrorKind::Busy, "busy"),
+                code => receiver_state(code, &reply),
             });
         }
         match self.stage {

@@ -27,7 +27,7 @@ use crate::audio::SAMPLE_RATE;
 use crate::discovery::{
     BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath,
 };
-use crate::error::{ErrorKind, SessionError};
+use crate::error::{ErrorKind, SessionError, UserReason};
 use crate::homekit::HomeKitCredentials;
 use crate::ids::{Entropy, OsEntropy, SessionIds};
 use crate::metadata::Metadata;
@@ -989,6 +989,8 @@ impl Driver {
             Some(now)
         } else if settling {
             speaker.backoff.on_failure(ErrorKind::Lost, now)
+        } else if let Some(wait) = error.retry_after {
+            Some(speaker.backoff.on_receiver_state(wait, now))
         } else {
             speaker.backoff.on_failure(error.kind, now)
         };
@@ -999,7 +1001,13 @@ impl Driver {
             None => Phase::Failed,
         };
         self.end_session(key, next);
-        let reason = error.kind.user_reason();
+        // A refusal for the receiver's state is retried, so the host must not
+        // read it as a request to pair again (P154).
+        let reason = if error.retry_after.is_some() {
+            UserReason::Refused
+        } else {
+            error.kind.user_reason()
+        };
         self.emit_speaker(
             key,
             SpeakerEvent::Error(SpeakerError {
