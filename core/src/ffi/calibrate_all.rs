@@ -8,15 +8,18 @@
 
 use std::ptr;
 
+use audiosync_cast::audio::Codec;
+
 use super::calibrate::{
     CALIBRATION_RECORDING_CHOSEN, CALIBRATION_RECORDING_NONE, CALIBRATION_RECORDING_REFERENCE,
     refusal_code,
 };
+use super::cast::{CAST_FORMAT_FLAC, CAST_FORMAT_WAV};
 use super::host_slice;
 use crate::calibrate::Recording;
 use crate::calibrate_all::{
-    ApplyRefusal, Class, EndReason, Measurement, RowState, Run, SharedState, Sheet, Speaker, Take,
-    Target,
+    self, ApplyRefusal, Class, EndReason, Measurement, RowState, Run, SharedState, Sheet, Speaker,
+    Take, Target,
 };
 
 /// [`Class::Local`].
@@ -159,6 +162,25 @@ fn end_reason(code: u32) -> EndReason {
 
 fn stored(value: Option<f64>) -> (bool, f64) {
     (value.is_some(), value.unwrap_or(0.0))
+}
+
+/// [`calibrate_all::cast_wait_ms`] (S241): a Cast speaker's expected
+/// arrival and play-out. No stored offset when `has_offset` is false or the
+/// offset is 0 or less; `format` is the session's [`CAST_FORMAT_WAV`] or
+/// [`CAST_FORMAT_FLAC`], any other value while none is reported.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_calibration_cast_wait_ms(
+    has_offset: bool,
+    offset_ms: f64,
+    hold_back_ms: f64,
+    format: i32,
+) -> f64 {
+    let codec = match format {
+        CAST_FORMAT_WAV => Some(Codec::Wav),
+        CAST_FORMAT_FLAC => Some(Codec::Flac),
+        _ => None,
+    };
+    calibrate_all::cast_wait_ms(has_offset.then_some(offset_ms), hold_back_ms, codec)
 }
 
 /// Starts a run over `count` speakers, `reference` the index of the
@@ -583,6 +605,23 @@ mod tests {
     use crate::ffi::{CALIBRATION_RECORDING_REFERENCE, CALIBRATION_TOO_QUIET};
 
     const RATE: u32 = 48_000;
+
+    #[test]
+    fn the_cast_wait_reads_the_format_code_and_a_missing_offset() {
+        assert_eq!(
+            asc_calibration_cast_wait_ms(true, 1000.0, 750.0, CAST_FORMAT_WAV),
+            2250.0
+        );
+        assert_eq!(
+            asc_calibration_cast_wait_ms(false, 1000.0, 750.0, CAST_FORMAT_WAV),
+            3750.0
+        );
+        assert_eq!(
+            asc_calibration_cast_wait_ms(true, 0.0, 0.0, CAST_FORMAT_FLAC),
+            6000.0
+        );
+        assert_eq!(asc_calibration_cast_wait_ms(false, 0.0, 0.0, 0), 6000.0);
+    }
 
     fn heard_at(frames: usize, at_ms: f64) -> Vec<f32> {
         let signal = calibrate::signal(RATE).unwrap();

@@ -1,4 +1,4 @@
-//! Calibrate All Speakers (spec S235 to S240): the reference and then every
+//! Calibrate All Speakers (spec S235 to S241): the reference and then every
 //! speaker that is on, local outputs, AirPlay speakers and the Cast speaker
 //! alike, each heard alone while the default input device records, in the
 //! order and for as long as the core's [`Run`] asks. Its [`Sheet`] is what
@@ -18,7 +18,7 @@ use std::thread;
 
 use audiosync_core::calibrate::{MAX_RATE, MIN_RATE, SIGNAL_SECONDS};
 use audiosync_core::calibrate_all::{
-    Class, EndReason, PlanError, RowState, Run, Sheet, Speaker, Step as RunStep, Take,
+    Class, EndReason, PlanError, RowState, Run, Sheet, Speaker, Step as RunStep, Take, cast_wait_ms,
 };
 use audiosync_core::policy::delay::{MAX_HOLD_BACK_MS, native_airplay_latency_ms};
 
@@ -28,9 +28,6 @@ use super::calibration::{
     SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, ns, trim_start,
 };
 use crate::debug_log::DebugLog;
-
-/// Allowance for a Cast speaker's own buffering on top of its offset.
-const CAST_ALLOWANCE_S: f64 = 3.0;
 
 /// A speaker that is on, as a run sees it.
 #[derive(Clone, Debug, PartialEq)]
@@ -145,21 +142,24 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
         .cast_speakers()
         .into_iter()
         .filter(|cast| cast.enabled && cast.status == CastStatus::Playing)
-        .map(|cast| Member {
-            offset_ms: (cast.offset_ms > 0.0).then_some(cast.offset_ms),
-            latency_ms: finite_ms(Some(cast.offset_ms)) + CAST_ALLOWANCE_S * 1000.0,
-            id: cast.id,
-            class: Class::Cast,
+        .map(|cast| {
+            let offset_ms = (cast.offset_ms > 0.0).then_some(cast.offset_ms);
+            Member {
+                offset_ms,
+                latency_ms: cast_wait_ms(offset_ms, cast.hold_back_ms, cast.format),
+                id: cast.id,
+                class: Class::Cast,
+            }
         })
         .collect();
-    let cast_wait_ms = casts
+    let cast_offset_ms = casts
         .iter()
         .filter_map(|cast| cast.offset_ms)
         .fold(0.0, f64::max);
     let mut airplay = Vec::new();
     if let Some(sender_ms) = audio.airplay_sender_latency_ms() {
         let shown_ms = native_airplay_latency_ms(sender_ms, audio.airplay_adjustment());
-        let base_ms = shown_ms.max(finite_ms(Some(sender_ms))).max(cast_wait_ms);
+        let base_ms = shown_ms.max(finite_ms(Some(sender_ms))).max(cast_offset_ms);
         airplay = audio
             .airplay_speakers()
             .into_iter()

@@ -963,3 +963,45 @@ fn a_cancel_after_the_last_step_changes_nothing() {
     assert_eq!(sheet.ended(), None);
     assert!(sheet.apply().is_ok());
 }
+
+// covers: S241
+#[test]
+fn a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format() {
+    use audiosync_cast::audio::Codec;
+    use audiosync_core::calibrate_all::{
+        CAST_LATENCY_ALLOWANCE_MS, CAST_UNKNOWN_FLAC_MS, CAST_UNKNOWN_WAV_MS, cast_wait_ms,
+    };
+
+    assert_eq!(CAST_UNKNOWN_WAV_MS, 3000.0);
+    assert_eq!(CAST_UNKNOWN_FLAC_MS, 6000.0);
+    assert_eq!(
+        cast_wait_ms(Some(1000.0), 750.0, Some(Codec::Wav)),
+        1000.0 + 750.0 + CAST_LATENCY_ALLOWANCE_MS,
+        "a stored offset replaces the guess, whatever the format"
+    );
+    assert_eq!(
+        cast_wait_ms(Some(1000.0), 750.0, Some(Codec::Flac)),
+        1000.0 + 750.0 + CAST_LATENCY_ALLOWANCE_MS
+    );
+    for none in [None, Some(0.0), Some(-5.0), Some(f64::NAN)] {
+        assert_eq!(
+            cast_wait_ms(none, 1750.0, Some(Codec::Wav)),
+            1750.0 + 3000.0,
+            "{none:?} is no offset: the hold-back plus the WAV guess"
+        );
+        assert_eq!(
+            cast_wait_ms(none, 1750.0, Some(Codec::Flac)),
+            1750.0 + 6000.0
+        );
+    }
+    assert_eq!(
+        cast_wait_ms(None, 0.0, None),
+        6000.0,
+        "a format not reported yet takes the longer guess"
+    );
+    assert_eq!(
+        cast_wait_ms(Some(30_000.0), f64::NAN, Some(Codec::Wav)),
+        20_500.0
+    );
+    assert_eq!(cast_wait_ms(None, -100.0, Some(Codec::Wav)), 3000.0);
+}
