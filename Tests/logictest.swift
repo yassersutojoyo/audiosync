@@ -5870,7 +5870,8 @@ do {
           "web remote: Now Playing goes out with title, artist and source app", playing)
 
     let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: "com.apple.Music", name: "Music")],
-                                     inputs: [(uid: "BuiltInMic", name: "MacBook Microphone")],
+                                     inputs: [SourceList.Input(uid: "BuiltInMic", name: "MacBook Microphone",
+                                                               transport: kAudioDeviceTransportTypeBuiltIn)],
                                      chosen: .app(bundleID: "com.apple.Music"), chosenAppName: { $0 })
     let remoteSources = entries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
     check(remoteSources.map(\.id) == ["system", "app:com.apple.Music", "input:BuiltInMic"]
