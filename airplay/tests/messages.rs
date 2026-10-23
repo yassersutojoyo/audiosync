@@ -402,6 +402,11 @@ fn host_volumes_are_clamped_and_nan_is_ignored() {
     assert_eq!(volume::parse_reported(b"Volume:-144.000000"), Some(-144.0));
     assert_eq!(volume::parse_reported(b"progress: 1/2/3\r\n"), None);
     assert_eq!(volume::parse_reported(b"volume: loud"), None);
+    // An empty line may come before the value (P122).
+    assert_eq!(
+        volume::parse_reported(b"\r\nvolume: -9.25\r\n"),
+        Some(-9.25)
+    );
 }
 
 // covers: P128

@@ -184,6 +184,49 @@ fn one_airplay2_session_at_a_time() {
     );
 }
 
+// covers: P169
+#[test]
+fn the_first_speaker_refused_gets_the_airplay2_place_next() {
+    let _serial = serial();
+    let running = Ap2Server::start(FakeAp2::new());
+    let early = Ap2Server::start(FakeAp2::new());
+    let late = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let playing = |events: &mut Events, key: &DeviceKey| {
+        events
+            .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some()
+    };
+
+    let a = airplay2_only(&running, 41);
+    let a_key = a.key.clone();
+    sender.add_speaker(a, options());
+    assert!(playing(&mut events, &a_key), "{:?}", events.of(&a_key));
+    // Refused first, though its key sorts after the one refused next.
+    let first = airplay2_only(&early, 50);
+    let second = airplay2_only(&late, 45);
+    let (first_key, second_key) = (first.key.clone(), second.key.clone());
+    for (device, key) in [(first, &first_key), (second, &second_key)] {
+        sender.add_speaker(device, options());
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Failed)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.remove_speaker(&a_key);
+    assert!(
+        playing(&mut events, &first_key),
+        "{:?}",
+        events.of(&first_key)
+    );
+    assert_eq!(late.fake().connections, 0);
+    sender.shutdown();
+}
+
 // covers: P2
 #[test]
 fn airplay1_refusal_moves_to_airplay2() {

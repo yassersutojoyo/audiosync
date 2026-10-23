@@ -12,6 +12,7 @@ use audiosync_airplay::ap2::{Ap2Event, PtpPeer, StreamPorts, Timing};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::rtsp::{Method, Request};
 use audiosync_airplay::secret::Secret;
+use audiosync_airplay::volume::Volume;
 use plist::Value;
 
 use common::ap2::{
@@ -715,4 +716,116 @@ fn stream_setup_refused_without_a_key_is_unsupported() {
     rig.session.handle_connection_closed(now);
     rig.pump();
     assert_eq!(kind(&rig), Some(ErrorKind::Lost));
+}
+
+// covers: P42
+#[test]
+fn volume_set_after_the_startup_volume_is_sent_once_ready() {
+    let mut fake = FakeAp2::new();
+    fake.hold = Some("SET_PARAMETER".to_owned());
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert_eq!(rig.keys().last(), Some(&"SET_PARAMETER"));
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-30.0), now);
+    rig.pump();
+    rig.release();
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    assert_eq!(
+        rig.keys()[rig.keys().len() - 3..],
+        ["SETUP stream", "FLUSH", "SET_PARAMETER"]
+    );
+    let volume = rig.fake.last("SET_PARAMETER").expect("volume");
+    assert_eq!(volume.body, b"volume: -30.000000\r\n");
+}
+
+// covers: P157, P153
+#[test]
+fn ptp_retry_after_a_password_pairing_verifies_instead_of_pairing_again() {
+    let mut fake = ptp_fake();
+    fake.info_body = plist(dict(&[
+        ("features", int((1 << 38) | (1 << 41) | (1 << 48))),
+        ("statusFlags", int(0x80)),
+    ]));
+    fake.status_once.insert("SETUP session".to_owned(), 501);
+    let mut config = ap2_config();
+    config.ptp = Some(ptp_peer());
+    config.password = Some(Secret::new("3939".to_owned()));
+    let rig = Ap2Rig::new(config, fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    assert_eq!(rig.connects.len(), 2);
+    let credentials = rig
+        .events
+        .iter()
+        .filter(|event| matches!(event, Ap2Event::Credentials(_)))
+        .count();
+    assert_eq!(credentials, 1);
+    let keys = rig.keys();
+    let second = keys
+        .iter()
+        .rposition(|key| *key == "SETUP session")
+        .expect("second session SETUP");
+    assert_eq!(
+        keys[second - 3..=second],
+        [
+            "GET /info",
+            "POST /pair-verify",
+            "POST /pair-verify",
+            "SETUP session"
+        ]
+    );
+}
+
+// covers: P42
+#[test]
+fn teardown_during_the_stream_setup_still_tears_the_stream_down() {
+    let mut fake = FakeAp2::new();
+    fake.hold = Some("SETUP stream".to_owned());
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert_eq!(rig.keys().last(), Some(&"SETUP stream"));
+    let now = rig.now;
+    rig.session.teardown(now);
+    rig.pump();
+    rig.release();
+    let keys = rig.keys();
+    assert_eq!(
+        keys[keys.len() - 3..],
+        ["SETUP stream", "TEARDOWN", "TEARDOWN"]
+    );
+    let n = rig.fake.requests.len();
+    assert_eq!(
+        read_value(&rig.fake.requests[n - 2].0.body),
+        Some(dict(&[(
+            "streams",
+            Value::Array(vec![dict(&[
+                ("type", int(96)),
+                ("streamID", int(STREAM_ID))
+            ])])
+        )]))
+    );
+    assert_eq!(rig.events.last(), Some(&Ap2Event::Closed));
+}
+
+// covers: P42, P106
+#[test]
+fn volume_set_before_the_startup_volume_goes_out_once() {
+    let mut fake = ptp_fake();
+    fake.status_once.insert("SETUP session".to_owned(), 501);
+    fake.hold = Some("SETPEERS".to_owned());
+    let mut config = ap2_config();
+    config.ptp = Some(ptp_peer());
+    let mut rig = Ap2Rig::new(config, fake);
+    assert_eq!(rig.keys().last(), Some(&"SETPEERS"));
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-30.0), now);
+    rig.pump();
+    rig.release();
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let volumes: Vec<&[u8]> = rig
+        .fake
+        .requests
+        .iter()
+        .filter(|(request, _)| request.method.as_str() == "SET_PARAMETER")
+        .map(|(request, _)| request.body.as_slice())
+        .collect();
+    assert_eq!(volumes, [b"volume: -30.000000\r\n".as_slice()]);
 }

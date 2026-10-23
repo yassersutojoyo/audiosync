@@ -126,6 +126,16 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_PASSWORD_NEEDED 7 /* a pairing needs the password (.error PASSWORD_REQUIRED) or got a wrong one (WRONG_PASSWORD, forgotten) */
 #define ASC_AIRPLAY_EVENT_PAIRING_FAILED 8  /* a pairing ended without credentials: .error (WRONG_PIN, NOT_RESPONDING, ...) */
 #define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only */
+#define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
+#define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
+
+/* What a warning reports (AscAirPlayEvent.warning). */
+#define ASC_AIRPLAY_WARNING_JACK_DISCONNECTED 1          /* nothing is plugged into its audio jack */
+#define ASC_AIRPLAY_WARNING_AUTH_SETUP_FAILED 2          /* POST /auth-setup failed */
+#define ASC_AIRPLAY_WARNING_REQUEST_FAILED 3             /* a volume, metadata, flush or keep-alive request failed */
+#define ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID 4 /* its pair-verify signature didn't check out */
+#define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
+#define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -1066,6 +1076,7 @@ typedef struct AscCalibrationAirPlay {
     double new_ms;       /* the median, whole ms; NONE_CERTAIN: old_ms */
     double spread_ms;    /* the largest minus the smallest difference among the certain rows */
     size_t certain_rows; /* how many AirPlay rows are certain */
+    bool clamped;        /* new_ms hit an end of its range */
 } AscCalibrationAirPlay;
 
 /* One change Apply lists; writing back old_ms, or removing the stored value when has_old is false, undoes it. */
@@ -1080,8 +1091,9 @@ typedef struct AscCalibrationChange {
 /*
  * A run over `count` speakers, `reference` the index of the reference, a
  * local output. NULL for an unsupported rate, a reference that isn't a
- * local output among them, only the reference, an unknown kind or a NULL
- * array with a nonzero count.
+ * local output among them, only the reference, an expected arrival whose
+ * recording wouldn't fit 2^21 frames at that rate, an unknown kind or a
+ * NULL array with a nonzero count.
  */
 AscCalibrationRun *asc_calibration_run_create(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference);
 
@@ -1146,6 +1158,19 @@ bool asc_calibration_sheet_replace(AscCalibrationSheet *sheet, AscCalibrationShe
 
 /* Frees a sheet. */
 void asc_calibration_sheet_destroy(AscCalibrationSheet *sheet);
+
+/*
+ * A Cast speaker's expected arrival (AscCalibrationSpeaker.latency_ms), which
+ * is also how long the music sent to it plays out, in ms: its stored offset
+ * plus hold_back_ms, the Cast feed's hold-back, plus 500 ms. With no stored
+ * offset (has_offset false, or an offset of 0 or less) it is hold_back_ms
+ * plus a guess by format, the session's ASC_CAST_FORMAT_: 3000 ms for WAV,
+ * 6000 ms for FLAC or a format not reported yet. The FLAC guess is derived,
+ * not measured. A stored offset counts up to 20 000 ms, hold_back_ms is
+ * clamped to 0 to 20 000 ms, and an offset that is not a number counts as
+ * none. Never a delay for another output.
+ */
+double asc_calibration_cast_wait_ms(bool has_offset, double offset_ms, double hold_back_ms, int32_t format);
 
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 
@@ -1218,7 +1243,9 @@ typedef struct AscAirPlayEvent {
     double latency_ms;               /* a latency event's L + d_s, a timeline event's L */
     int64_t receiver_latency_frames; /* a latency event's Audio-Latency; -1 when it sent none */
     bool restarted;                  /* a timeline event after a restart */
-    const char *detail;              /* an error event's error, a failure event's panic location; for a debug log (no secrets) */
+    const char *detail;              /* an error or warning event's text, a failure event's panic location; for a debug log (no secrets) */
+    double volume;                   /* a volume event's slider position, 0 to 100 */
+    int32_t warning;                 /* a warning event's ASC_AIRPLAY_WARNING_* */
 } AscAirPlayEvent;
 
 /*
@@ -1305,6 +1332,19 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
  * volume isn't finite.
  */
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
+
+/*
+ * Asks every speaker added for its own volume, which someone may have changed
+ * on the speaker itself; a stereo pair or home theater group asks its leader.
+ * Only playing sessions answer. A level that moves a slider comes as
+ * ASC_AIRPLAY_EVENT_VOLUME, already the speaker's level in the sender, so a
+ * reconnect or a member that starts late plays at it and the host doesn't
+ * set it again; a level read before the host last set the volume, or within
+ * 1 s of it, is dropped.
+ * Speakers that leave volume to the sender, and ones that turned a read down
+ * once, aren't asked.
+ */
+void asc_airplay_read_volumes(AscAirPlay *airplay);
 
 /*
  * Sets the master position (0 to 100), which scales every speaker's volume,

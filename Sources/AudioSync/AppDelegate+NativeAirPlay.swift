@@ -57,7 +57,8 @@ extension AppDelegate {
     private func nativeStartFinished(_ native: NativeAirPlay, started: Bool) {
         let news = nativeStarts.finished(started: started, at: Date())
         if started {
-            clearNotices([Notice.airplaySender])
+            clearNotices([Notice.airplaySender, Notice.airplayPtp])   // a new sender binds PTP anew
+            ptpPortNotice = PtpPortNotice()
             resendTrackInfo()   // a new sender knows nothing of what plays
             // Its discovery raised the Local Network prompt, if any: the
             // probe may ask now, and an empty list counts from here.
@@ -113,7 +114,9 @@ extension AppDelegate {
         switch outcome {
         case .playingChanged(let id, let playing):
             if playing {
-                clearNotices([SpeakerKey.make(id: id, airplay: true)])   // playing: whatever went wrong is over
+                // Playing: whatever went wrong is over.
+                clearNotices([SpeakerKey.make(id: id, airplay: true)])
+                updatePtpPortNotice { $0.playing(id) }
                 // It plays with credentials an earlier pairing stored: a
                 // pairing still under way for it is no longer needed.
                 if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.cancelPairing(receiver) }
@@ -146,6 +149,26 @@ extension AppDelegate {
                 clearNotices([SpeakerKey.make(id: id, airplay: true)])
             }
             pushModel()   // the row says it waits, or no longer
+        case .volumeChanged(let id, let position):
+            // Calibrate All Speakers keeps it silent and sets its volume back when the run ends.
+            guard calibrateAllRun?.silences(airPlay: id) != true else { return }
+            airplayVolume[id] = position
+            pushModel()
+        case .ptpPortsTaken:
+            updatePtpPortNotice { $0.reported() }
+        }
+    }
+
+    /// Posts or clears the PTP port notice when `change` flips whether it
+    /// shows; `again` posts it anew while it shows, in case it was dismissed.
+    private func updatePtpPortNotice(again: Bool = false, _ change: (inout PtpPortNotice) -> Void) {
+        let was = ptpPortNotice.shown
+        change(&ptpPortNotice)
+        let shown = ptpPortNotice.shown
+        if shown && (!was || again) {
+            postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp)
+        } else if was && !shown {
+            clearNotices([Notice.airplayPtp])
         }
     }
 
@@ -298,25 +321,27 @@ extension AppDelegate {
     /// speakers, local delays and auto-connect follow.
     func refreshNativeRows() {
         guard let native = nativeAirPlay else { return }
-        let model = native.model
+        let joinable = adoptNativeRows(native.model, stopped: false)
+        retimeLocalOutputs()   // also when only a speaker's playing state changed
+        syncNativeSpeakers()
+        autoConnect(joinable.map { SpeakerKey.make(id: $0, airplay: true) })
+        pushModel()
+    }
+
+    /// Sets the AirPlay rows, names and access from `model`; returns the
+    /// rows that appeared and can play, for auto-connect (none if `stopped`).
+    private func adoptNativeRows(_ model: NativeAirPlayModel, stopped: Bool) -> [String] {
         let rows = model.rows(enabled: enabledAirPlay)
-        let known = Set(airplayOrder)
         for id in rows {
             guard let receiver = NativeAirPlayID.receiver(id) else { continue }
             if let name = model.names[receiver] { airplayNames[id] = name }
             airplayAccess[id] = model.access(receiver) ?? .open
         }
-        let appeared = rows.filter { !known.contains($0) }
+        let joinable = model.joinable(rows, after: Set(airplayOrder), stopped: stopped)
         airplayOrder = rows
+        updatePtpPortNotice { $0.listed(rows) }
         airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
-        retimeLocalOutputs()   // also when only a speaker's playing state changed
-        syncNativeSpeakers()
-        let joinable = appeared.filter { id in
-            guard let receiver = NativeAirPlayID.receiver(id) else { return false }
-            return model.receivers[receiver]?.availability == .available
-        }
-        autoConnect(joinable.map { SpeakerKey.make(id: $0, airplay: true) })
-        pushModel()
+        return joinable
     }
 
     /// Makes the sender's speakers match the switches while streaming, and
@@ -337,6 +362,8 @@ extension AppDelegate {
             native.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
         }
+        // The plan's own streaming input: stopEngine stops the engine before it syncs.
+        let appeared = plan.changesRows ? adoptNativeRows(native.model, stopped: !engine.isRunning) : []
         for id in plan.add {
             let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume
             native.add(id, volume: volume)
@@ -346,6 +373,7 @@ extension AppDelegate {
         for off in plan.turnOff {
             turnOffNativeSpeaker(NativeAirPlayID.app(off.id), reason: off.reason, origin: .automatic)
         }
+        autoConnect(appeared.map { SpeakerKey.make(id: $0, airplay: true) })
     }
 
     /// The user's click on a native speaker: it is switched, and the
@@ -419,6 +447,8 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
         enabledAirPlay.remove(id)
         notify(nativeTurnOffText(id, reason), origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+        let timing = reason == .timingUnavailable
+        updatePtpPortNotice(again: timing) { $0.turnedOff(id, timing: timing) }
         syncNativeSpeakers()
         stopIfIdle()
         pushModel()

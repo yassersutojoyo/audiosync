@@ -37,6 +37,9 @@ pub const STOP_BUDGET: Duration = Duration::from_secs(5);
 pub const MAX_SESSION_EVENTS: usize = 64;
 const SLICE: Duration = Duration::from_millis(50);
 
+/// Takes a session event at once, or hands it back when it can't.
+pub type EventSink = Box<dyn FnMut(SessionEvent) -> Result<(), SessionEvent> + Send>;
+
 /// Why a session could not start or carry on.
 #[derive(Debug)]
 pub enum SessionError {
@@ -213,8 +216,9 @@ pub fn connect_retrying_with(
         if !selected.load(Ordering::SeqCst) {
             return Err(None);
         }
-        match CastClient::connect(&addresses(), RequestIds::random()) {
+        match CastClient::connect_while(&addresses(), RequestIds::random(), selected) {
             Ok(client) => return Ok(client),
+            Err(_) if !selected.load(Ordering::SeqCst) => return Err(None),
             Err(error @ ConnectError::NoAddress) => {
                 return Err(Some(error));
             }
@@ -243,6 +247,10 @@ pub struct CastSession {
     media_session_id: Option<i64>,
     selected: Arc<AtomicBool>,
     events: VecDeque<SessionEvent>,
+    /// Takes the events of a recovery as they happen (C80, C81), which
+    /// would otherwise wait in `events` until the recovery is over.
+    recovery_sink: Option<EventSink>,
+    recovering: bool,
     ended: bool,
     last_volume: Option<DeviceVolume>,
     last_media: Option<MediaStatus>,
@@ -378,6 +386,8 @@ impl CastSession {
             media_session_id: None,
             selected,
             events: VecDeque::new(),
+            recovery_sink: None,
+            recovering: false,
             ended: false,
             last_volume: None,
             last_media: None,
@@ -509,6 +519,16 @@ impl CastSession {
         self.load_until_playing()
     }
 
+    /// Sends the events of every later recovery to `sink` as they happen:
+    /// `Recovering`, each connect failure while the device stays
+    /// unreachable, and `Recovered`. An event the sink hands back stays
+    /// queued ahead of the later ones, which keeps the order; the sink gets
+    /// it again with the next event, or [`CastSession::poll_event`] does.
+    /// `Ended` always waits for `poll_event`.
+    pub fn set_recovery_sink(&mut self, sink: EventSink) {
+        self.recovery_sink = Some(sink);
+    }
+
     /// Drives the session for `duration`: the channel, recovery and the
     /// per-second diagnostics.
     pub fn run_for(&mut self, duration: Duration) {
@@ -561,21 +581,29 @@ impl CastSession {
     }
 
     fn report(&mut self, event: SessionEvent) {
-        if self.events.len() >= MAX_SESSION_EVENTS {
-            let routine = self.events.iter().position(|event| {
-                matches!(
-                    event,
-                    SessionEvent::Diagnostics(_)
-                        | SessionEvent::Stream(_)
-                        | SessionEvent::Volume(_)
-                        | SessionEvent::GroupMessage(_)
-                )
-            });
-            if let Some(index) = routine {
-                self.events.remove(index);
+        make_room(&mut self.events);
+        self.events.push_back(event);
+        if self.recovering {
+            self.send_live();
+        }
+    }
+
+    /// Hands the waiting events to the recovery sink in order, up to the
+    /// first it refuses or an `Ended`, which the host takes by polling.
+    fn send_live(&mut self) {
+        let Some(sink) = self.recovery_sink.as_mut() else {
+            return;
+        };
+        while let Some(event) = self.events.pop_front() {
+            if matches!(event, SessionEvent::Ended(_)) {
+                self.events.push_front(event);
+                return;
+            }
+            if let Err(back) = sink(event) {
+                self.events.push_front(back);
+                return;
             }
         }
-        self.events.push_back(event);
     }
 
     fn end(&mut self, end: SessionEnd) {
@@ -734,6 +762,14 @@ impl CastSession {
     /// the device stays selected. `reload` loads the stream again even when
     /// the app still runs, after a playback error (C86).
     fn recover(&mut self, reason: EndReason, reload: bool) {
+        // A recovery inside another's load must not end the outer one's
+        // live events.
+        let was = std::mem::replace(&mut self.recovering, true);
+        self.recover_now(reason, reload);
+        self.recovering = was;
+    }
+
+    fn recover_now(&mut self, reason: EndReason, reload: bool) {
         self.report(SessionEvent::Recovering(reason));
         self.playing = false;
         // One connection per device at a time; the first attempt of the
@@ -793,5 +829,77 @@ impl CastSession {
             Err(_) if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
             Err(error) => self.end(SessionEnd::Failed(error)),
         }
+    }
+}
+
+/// Frees a place in a full event queue: the oldest routine event goes
+/// first, then the oldest connect failure, which a long outage repeats.
+fn make_room(events: &mut VecDeque<SessionEvent>) {
+    if events.len() < MAX_SESSION_EVENTS {
+        return;
+    }
+    let routine = events.iter().position(|event| {
+        matches!(
+            event,
+            SessionEvent::Diagnostics(_)
+                | SessionEvent::Stream(_)
+                | SessionEvent::Volume(_)
+                | SessionEvent::GroupMessage(_)
+        )
+    });
+    let oldest = routine.or_else(|| {
+        events
+            .iter()
+            .position(|event| matches!(event, SessionEvent::ConnectFailed { .. }))
+    });
+    if let Some(index) = oldest {
+        events.remove(index);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failure() -> SessionEvent {
+        SessionEvent::ConnectFailed {
+            error: ConnectError::NoStatus,
+            retry_in: Duration::from_secs(30),
+        }
+    }
+
+    #[test]
+    fn a_long_outage_keeps_the_queue_bounded_and_its_other_events() {
+        let mut events = VecDeque::new();
+        events.push_back(SessionEvent::Recovering(EndReason::Silent));
+        for _ in 0..MAX_SESSION_EVENTS * 3 {
+            make_room(&mut events);
+            events.push_back(failure());
+        }
+        assert_eq!(events.len(), MAX_SESSION_EVENTS);
+        assert!(matches!(events.front(), Some(SessionEvent::Recovering(_))));
+
+        make_room(&mut events);
+        events.push_back(SessionEvent::Ended(SessionEnd::Deselected));
+        assert_eq!(events.len(), MAX_SESSION_EVENTS);
+        assert!(matches!(events.front(), Some(SessionEvent::Recovering(_))));
+        assert!(matches!(
+            events.back(),
+            Some(SessionEvent::Ended(SessionEnd::Deselected))
+        ));
+    }
+
+    #[test]
+    fn routine_events_make_room_before_connect_failures() {
+        let mut events: VecDeque<SessionEvent> =
+            (0..MAX_SESSION_EVENTS - 1).map(|_| failure()).collect();
+        events.insert(5, SessionEvent::GroupMessage("x".to_owned()));
+        make_room(&mut events);
+        assert_eq!(events.len(), MAX_SESSION_EVENTS - 1);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, SessionEvent::ConnectFailed { .. }))
+        );
     }
 }

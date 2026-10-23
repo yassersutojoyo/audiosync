@@ -307,6 +307,118 @@ fn devices_sharing_only_a_group_key_stay_separate() {
     assert_eq!(tracker.target_of(&a.key), None);
 }
 
+fn single_speaker(n: u8) -> Device {
+    device(
+        n,
+        &format!("HomePod {n}"),
+        &["model=AudioAccessory5,1", "flags=0x4"],
+    )
+}
+
+fn member_keys(tracker: &Targets, id: &TargetId) -> Vec<DeviceKey> {
+    let target = tracker.get(id).expect("target");
+    target.members.iter().map(|m| m.key.clone()).collect()
+}
+
+// covers: P176, P181
+#[test]
+fn a_former_member_in_view_on_its_own_is_never_named_missing() {
+    let tv = apple_tv(9);
+    let a_in_theater = device(
+        1,
+        "HomePod 1",
+        &[
+            "model=AudioAccessory5,1",
+            "flags=0x4",
+            "igl=0",
+            &format!("gid={OTHER_UUID}"),
+            &format!("pgid={TV_GROUP}"),
+            &format!("psgid={TV_GROUP}"),
+            "pgcgl=1",
+            "gpn=Living Room TV",
+        ],
+    );
+    let a_alone = single_speaker(1);
+    let b1 = theater_speaker(3, "0x22004");
+    let b2 = theater_speaker(4, "0x20004");
+    let mut tracker = Targets::new();
+    tracker.update([&tv, &a_in_theater]);
+    let id = tracker
+        .target_of(&key(1))
+        .cloned()
+        .expect("A plays for the TV");
+
+    // The TV's sound moves to the pair B1 and B2; B1's TXT changes first.
+    tracker.update([&tv, &a_alone, &b1, &single_speaker(4)]);
+    assert_eq!(member_keys(&tracker, &id), vec![key(3)]);
+    assert_eq!(tracker.target_of(&key(1)), None);
+    tracker.update([&tv, &a_alone, &b1, &b2]);
+    assert!(tracker.get(&id).expect("theater").complete());
+
+    // B2 is unplugged and B1 reports its partner unreachable.
+    let b1_unreachable = theater_speaker(3, "0x26004");
+    tracker.update([&tv, &a_alone, &b1_unreachable]);
+    let theater = tracker.get(&id).expect("theater");
+    assert!(!theater.complete());
+    assert_eq!(theater.missing().collect::<Vec<_>>(), vec![&key(4)]);
+    assert_eq!(member_keys(&tracker, &id), vec![key(3), key(4)]);
+    assert_eq!(tracker.target_of(&key(1)), None);
+}
+
+// covers: P176, P181
+#[test]
+fn a_missing_theater_member_is_named_until_it_is_in_view_without_the_group() {
+    let tv = apple_tv(9);
+    let b1 = theater_speaker(3, "0x22004");
+    let b2 = theater_speaker(4, "0x20004");
+    let mut tracker = Targets::new();
+    tracker.update([&tv, &b1, &b2]);
+    let id = tracker.target_of(&key(4)).cloned().expect("theater");
+
+    let changes = tracker.update([&tv, &b1]);
+    let [TargetChange::Updated(theater)] = changes.as_slice() else {
+        panic!("{changes:?}");
+    };
+    assert!(!theater.complete());
+    assert_eq!(theater.missing().collect::<Vec<_>>(), vec![&key(4)]);
+    assert_eq!(tracker.target_of(&key(4)), Some(&id));
+
+    // B2 comes back as a speaker of its own while B1 still sets bit 14.
+    let b1_unreachable = theater_speaker(3, "0x26004");
+    tracker.update([&tv, &b1_unreachable, &single_speaker(4)]);
+    let theater = tracker.get(&id).expect("theater");
+    assert!(!theater.complete());
+    assert_eq!(theater.missing().count(), 0);
+    assert_eq!(member_keys(&tracker, &id), vec![key(3)]);
+    assert_eq!(tracker.target_of(&key(4)), None);
+
+    // Out of view again, it is no longer taken for a member.
+    tracker.update([&tv, &b1_unreachable]);
+    assert_eq!(member_keys(&tracker, &id), vec![key(3)]);
+    assert_eq!(tracker.target_of(&key(4)), None);
+}
+
+// covers: P181
+#[test]
+fn without_a_group_size_a_vanished_member_is_still_named() {
+    let b1 = theater_speaker(3, "0x22004");
+    let b2 = theater_speaker(4, "0x20004");
+    let mut tracker = Targets::new();
+    tracker.update([&b1, &b2]);
+    let id = tracker.target_of(&key(3)).cloned().expect("theater");
+    let theater = tracker.get(&id).expect("theater");
+    assert_eq!(theater.expected_members, None);
+    assert!(theater.complete());
+
+    let changes = tracker.update([&b1]);
+    let [TargetChange::Updated(theater)] = changes.as_slice() else {
+        panic!("{changes:?}");
+    };
+    assert!(!theater.complete());
+    assert_eq!(theater.missing().collect::<Vec<_>>(), vec![&key(4)]);
+    assert_eq!(tracker.target_of(&key(4)), Some(&id));
+}
+
 struct Replay(Vec<BrowseEvent>);
 
 impl Browser for Replay {
