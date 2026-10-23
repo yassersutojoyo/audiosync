@@ -42,6 +42,9 @@ extension AppDelegate {
         default:
             return calibrateAllFailed(.microphoneDenied)
         }
+        if let refusal = CalibrationMicrophone.defaultInputRefusal() {
+            return calibrateAllFailed(refusal)
+        }
         guard let rate = CalibrationMicrophone.defaultInputRate() else { return calibrateAllFailed(.noMicrophone) }
         guard let handle = CalibrateAllRunHandle(rate: rate, speakers: speakers) else {
             // At a supported rate the core refuses only an arrival whose recording wouldn't fit there.
@@ -551,7 +554,7 @@ final class CalibrateAllRun {
             app?.showCalibrateAll(CalibrateAllFlow.progress(step, speakers: speakers))
         } catch {
             DebugTrace.log("[AudioSync] calibrate all: the microphone didn't start: \(error)")
-            end(.failed(.noMicrophone))
+            end(.failed((error as? CalibrationMicrophone.StartError)?.failure ?? .noMicrophone))
         }
     }
 

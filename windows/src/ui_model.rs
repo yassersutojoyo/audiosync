@@ -44,6 +44,17 @@ pub enum SourceKind {
     App,
     /// An input device (line in, microphone).
     Input,
+    /// Every app except those named; the UI words it around the names.
+    AppsExcept,
+}
+
+/// An app the several-apps list offers, by executable file name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MixApp {
+    pub id: String,
+    pub name: String,
+    /// Checked in the mode the list shows.
+    pub checked: bool,
 }
 
 /// Something AudioSync can capture.
@@ -394,6 +405,17 @@ pub struct Notice {
     pub time: String,
 }
 
+/// A source other than the whole system, as a notice names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceName {
+    /// An app or an input device, by the name shown for it.
+    Named(String),
+    /// Several apps, by name; the UI joins the list.
+    Apps(Vec<String>),
+    /// Every app except the listed ones; the UI words it around the list.
+    AllAppsExcept(Vec<String>),
+}
+
 /// What a notice says. The UI words it (the notice texts in
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -482,14 +504,14 @@ pub enum NoticeMessage {
     /// itself once an output is back or no AirPlay speaker is on.
     NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
-    /// is heard twice. `source` is the app's name, or `None` for the whole
+    /// is heard twice. `source` names the app, or is `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
     /// user may mute; `shared` the ones AudioSync plays to as well, where
     /// only sending the source elsewhere helps. `default_output` is the one
     /// of them that counts because it is Windows' default output (the whole
     /// system only); any other plays the source because an app plays there.
     HeardTwice {
-        source: Option<String>,
+        source: Option<SourceName>,
         mute: Vec<String>,
         shared: Vec<String>,
         default_output: Option<String>,
@@ -560,6 +582,10 @@ pub struct AppState {
     pub running: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
+    /// The several-apps list: the apps to check.
+    pub mix_apps: Vec<MixApp>,
+    /// The list shows "every app except the checked ones", not "only them".
+    pub mix_all_except: bool,
     /// 0 to 100.
     pub master_volume: f64,
     /// The speakers listed; a hidden one never is.
@@ -824,6 +850,10 @@ pub trait Backend {
     fn snapshot(&self) -> AppState;
     fn set_running(&mut self, on: bool);
     fn select_source(&mut self, id: &str);
+    /// Checks or unchecks an app of the several-apps list, by executable.
+    fn toggle_mix_app(&mut self, executable: &str);
+    /// Switches the several-apps list to "all except" (true) or "only" (false).
+    fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
@@ -1186,6 +1216,19 @@ impl MockBackend {
                 source("input:line", "Line In", SourceKind::Input),
             ],
             source_id: "system".into(),
+            mix_apps: vec![
+                MixApp {
+                    id: "player.exe".into(),
+                    name: "Music Player".into(),
+                    checked: false,
+                },
+                MixApp {
+                    id: "browser.exe".into(),
+                    name: "Web Browser".into(),
+                    checked: false,
+                },
+            ],
+            mix_all_except: false,
             master_volume: volume::DEFAULT_MASTER_POSITION,
             speakers,
             hidden: Vec::new(),
@@ -1294,6 +1337,34 @@ impl Backend for MockBackend {
         if self.state.sources.iter().any(|s| s.id == id) {
             self.state.source_id = id.into();
         }
+    }
+
+    fn toggle_mix_app(&mut self, executable: &str) {
+        if let Some(app) = self
+            .state
+            .mix_apps
+            .iter_mut()
+            .find(|app| app.id == executable)
+        {
+            app.checked = !app.checked;
+        }
+        let checked: Vec<&str> = self
+            .state
+            .mix_apps
+            .iter()
+            .filter(|app| app.checked)
+            .map(|app| app.id.as_str())
+            .collect();
+        // Two apps make a mix, as the real backend's source key shows it.
+        self.state.source_id = if checked.len() > 1 {
+            format!("mix:only:{}", checked.join(","))
+        } else {
+            "system".into()
+        };
+    }
+
+    fn set_mix_all_except(&mut self, on: bool) {
+        self.state.mix_all_except = on;
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {

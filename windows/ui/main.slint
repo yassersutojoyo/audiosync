@@ -5,11 +5,11 @@
 // The menu bar carries the Windows shortcuts. Tab order follows the reading
 // order.
 
-import { Button, ComboBox, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, GroupItem, HiddenItem, LeftOutItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Appearance, CalibrationRowItem, CastList, GroupItem, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Disclosure, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -24,7 +24,7 @@ export { NameField } from "widgets.slint";
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
-export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind } from "types.slint";
 
 // A titled card of speaker rows, with a note when it has none.
 component SpeakerSection inherits VerticalLayout {
@@ -671,11 +671,32 @@ component NowPlayingCard inherits Card {
     }
 }
 
+// An app's check box in the several-apps list: shows what the backend made
+// of a click, and follows the list when the source changes elsewhere.
+component MixAppBox inherits CheckBox {
+    in property <bool> on;
+    callback flip();
+    checked: root.on;
+    accessible-label: self.text;
+    changed on => {
+        self.checked = root.on;
+    }
+    toggled => {
+        root.flip();
+        self.checked = root.on;
+    }
+}
+
 export component MainWindow inherits Window {
     in property <bool> running;
     in property <string> status;
     in property <[string]> sources;
     in property <int> source-index;
+    // The several-apps list under the source menu.
+    in property <[MixAppItem]> mix-apps;
+    in property <bool> mix-all-except;
+    // The several-apps list stays folded so it adds one Tab stop until opened.
+    in-out property <bool> mix-open;
     in property <float> master-volume;
     in property <bool> equalizer-on;
     // The Now Playing card, while a media session counts for the source.
@@ -743,6 +764,8 @@ export component MainWindow inherits Window {
 
     callback power-toggled(bool);
     callback source-selected(int);
+    callback mix-app-toggled(int);
+    callback mix-mode-selected(bool);
     callback master-volume-changed(float);
     callback equalizer-requested();
     // A Now Playing button: 0 Previous, 1 Play or Pause, 2 Next.
@@ -1198,6 +1221,16 @@ export component MainWindow inherits Window {
                                 SectionTitle {
                                     text: Strings.source-label;
                                 }
+
+                                Rectangle { }
+
+                                Disclosure {
+                                    text: Strings.source-mix-title;
+                                    expanded: root.mix-open;
+                                    toggled => {
+                                        root.mix-open = !root.mix-open;
+                                    }
+                                }
                             }
 
                             source := ComboBox {
@@ -1210,6 +1243,36 @@ export component MainWindow inherits Window {
                                 selected => {
                                     root.source-selected(self.current-index);
                                     self.current-index = root.source-index;
+                                }
+                            }
+
+                            if root.mix-open: VerticalLayout {
+                                spacing: 6px;
+
+                                if root.mix-apps.length == 0: SecondaryText {
+                                    text: Strings.source-mix-empty;
+                                }
+
+                                if root.mix-apps.length > 0: ComboBox {
+                                    model: [Strings.source-mix-only, Strings.source-mix-all-except];
+                                    current-index: root.mix-all-except ? 1 : 0;
+                                    accessible-label: Strings.source-mix-mode;
+                                    selected => {
+                                        root.mix-mode-selected(self.current-index == 1);
+                                        self.current-index = root.mix-all-except ? 1 : 0;
+                                    }
+                                }
+
+                                for app[index] in root.mix-apps: MixAppBox {
+                                    text: app.name;
+                                    on: app.checked;
+                                    flip => {
+                                        root.mix-app-toggled(index);
+                                    }
+                                }
+
+                                if root.mix-apps.length > 0 && root.mix-all-except: SecondaryText {
+                                    text: Strings.source-mix-all-except-note;
                                 }
                             }
                         }

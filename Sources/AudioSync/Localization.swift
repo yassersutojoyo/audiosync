@@ -224,6 +224,10 @@ struct UIStrings {
                 + "Privacy & Security → Microphone."
         case .noMicrophone:
             return "AudioSync couldn't record from the microphone. Check the input in System Settings → Sound."
+        case .handsFreeMicrophone:
+            return "The default input is a Bluetooth headset's hands-free microphone, and recording from it "
+                + "would switch the headset to call mode. Choose another input in System Settings → Sound, "
+                + "and try again."
         case .unsupportedRate:
             return "The audio source runs at a sample rate calibration can't use."
         case .sourceSilent:
@@ -475,6 +479,16 @@ struct UIStrings {
     let sourceLabel = "Audio Source"
     let sourceSystem = "All System Audio"
     let sourceInputsHeader = "Input Devices"
+    let sourceSeveralApps = "Several Apps"
+    let sourceMixOnly = "Only the Checked Apps"
+    let sourceMixAllExcept = "All Apps Except the Checked Ones"
+    let sourceMixEmpty = "No other apps are running."
+    /// The picker's name for a mix source, from its apps' names; the Windows
+    /// app words "all except" the same way.
+    func sourceMixName(_ mode: AppMixMode, _ names: [String]) -> String {
+        let list = names.joined(separator: ", ")
+        return mode == .only ? list : "All Apps Except \(list)"
+    }
     let microphoneDenied = """
         AudioSync is not allowed to use input devices.
         Open System Settings → Privacy & Security → Microphone and turn on AudioSync.
@@ -638,6 +652,8 @@ struct UIStrings {
         case .inputDisconnected, .inputNotFound:
             return "The input device was disconnected, so streaming has stopped. "
                 + "Plug it in again, or pick another source."
+        case .inputHandsFree:
+            return inputHandsFree
         case .appNotRunning(let bundleID):
             return sourceTerminated(name: SourceApps.name(for: bundleID))
         case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted:
@@ -701,6 +717,9 @@ struct UIStrings {
     let engineSetupFailed = "AudioSync couldn't set up its audio engine, so streaming can't start. "
         + "Quit AudioSync and open it again. If it keeps happening, restart your Mac."
 
+    private let inputHandsFree = "The selected input is a Bluetooth headset's hands-free microphone, "
+        + "which AudioSync doesn't record from. Pick another source."
+
     private let captureFailed = "AudioSync couldn't capture audio from the selected source. "
         + "Turn streaming off and on again, or pick another source. If it keeps happening, restart your Mac."
 
@@ -715,6 +734,8 @@ struct UIStrings {
             return captureFailed
         case .inputNotFound, .inputDisconnected:
             return "The selected input device is not connected. Plug it in, or pick another source."
+        case .inputHandsFree:
+            return inputHandsFree
         }
     }
 
@@ -977,8 +998,8 @@ struct UIStrings {
     let castAddField = "Address"
     let castAddInvalid = "That isn't an IP address or host name. Check it and try again."
     let castAddNotFound = "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
-    /// What VoiceOver reads for the spinner while the address is tried.
-    let castAddLooking = "Looking for the speaker…"
+    /// The Add button and its spinner while the address is tried.
+    let castAddChecking = "Checking…"
     func castAddProblem(_ problem: CastAddProblem) -> String {
         switch problem {
         case .unreadable: return castAddInvalid
@@ -1106,7 +1127,7 @@ struct UIStrings {
 
     let webRemoteMenu = "Web Remote…"
     let webRemoteTitle = "Web Remote"
-    let webRemoteSummary = "Control the speakers from a phone or tablet on the same network."
+    let webRemoteSummary = "Control your speakers from a phone on the same network as this Mac."
     let webRemoteAddressTitle = "Address"
     /// Above the first address, then above the IP address after the Bonjour one.
     let webRemoteAddressLabel = "On the phone, open"
@@ -1342,7 +1363,8 @@ struct UIStrings {
         - Then tune each other local speaker against the built-in speakers: if it
           plays first, raise its delay; if it plays late, lower it.
         - Bluetooth speakers and headphones add their own lag; they usually need
-          about −150 to −300 ms.
+          about −150 to −300 ms. A Bluetooth headset's hands-free microphone
+          carries call audio, so it isn't offered as a source.
         - Add multiple local speakers one by one and tune each separately.
 
         Volume

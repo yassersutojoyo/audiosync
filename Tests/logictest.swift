@@ -53,6 +53,66 @@ check(AudioSource.app(bundleID: "com.spotify.client").defaultsValue == "com.spot
       "source: an app is stored as its plain bundle ID, as earlier versions stored it")
 check(AudioSource.system.bundleID == nil, "source: the whole system has no bundle ID")
 
+// MARK: Several apps as one source
+do {
+    let music = "com.apple.Music", safari = "com.apple.Safari", own = "com.example.audiosync"
+    let both = AudioSource.mixed(.only, bundleIDs: [music, safari])
+    let except = AudioSource.mixed(.allExcept, bundleIDs: [music])
+    check(both == .mix(.only, bundleIDs: [music, safari]) && both.defaultsValue == "apps:com.apple.Music,com.apple.Safari"
+            && AudioSource(defaultsValue: both.defaultsValue) == both,
+          "mix: several apps are stored under an apps: tag and read back", both.defaultsValue)
+    check(except.defaultsValue == "except:com.apple.Music" && AudioSource(defaultsValue: except.defaultsValue) == except,
+          "mix: all except is stored under an except: tag and read back", except.defaultsValue)
+    check(AudioSource(defaultsValue: music) == .app(bundleID: music) && AudioSource.app(bundleID: music).defaultsValue == music,
+          "mix: an old single-app value still loads as that app, and saves unchanged")
+    check(AudioSource.mixed(.only, bundleIDs: [music, own, music, " ", "a,b", "x:y"], ownBundleID: own) == .app(bundleID: music),
+          "mix: one app left after dropping AudioSync, repeats, blanks and unstorable IDs is a plain app source")
+    check(AudioSource.mixed(.only, bundleIDs: []) == .system && AudioSource.mixed(.allExcept, bundleIDs: [own], ownBundleID: own) == .system
+            && AudioSource(defaultsValue: "apps:") == .system && AudioSource(defaultsValue: "except:,") == .system,
+          "mix: no app left is the whole system, so AudioSync never names itself in a stored mix")
+    check(both.bundleID == nil && both.capturedApps == [music, safari] && except.capturedApps.isEmpty,
+          "mix: a mix has no single bundle ID; only an only-mix captures its apps")
+
+    check(SourceMix.toggle(safari, in: .app(bundleID: music), mode: .only) == both
+            && SourceMix.toggle(safari, in: both, mode: .only) == .app(bundleID: music)
+            && SourceMix.toggle(music, in: .app(bundleID: music), mode: .only) == .system,
+          "mix: checking an app adds it to the mix, unchecking takes it out")
+    check(SourceMix.toggle(music, in: .system, mode: .allExcept) == except
+            && SourceMix.toggle(music, in: .app(bundleID: safari), mode: .allExcept) == except
+            && SourceMix.toggle(own, in: .system, mode: .allExcept, ownBundleID: own) == .system,
+          "mix: in all-except mode a check starts a new exclusion list; AudioSync can't be checked")
+    check(SourceMix.setMode(.allExcept, from: .only, of: both) == .mix(.allExcept, bundleIDs: [music, safari])
+            && SourceMix.setMode(.only, from: .allExcept, of: except) == .app(bundleID: music),
+          "mix: switching the mode keeps the checked apps")
+    check(SourceMix.mode(of: .system, remembered: .allExcept) == .allExcept && SourceMix.mode(of: .app(bundleID: music), remembered: .allExcept) == .only
+            && SourceMix.mode(of: except, remembered: .only) == .allExcept && SourceMix.checked(.app(bundleID: music), mode: .allExcept).isEmpty,
+          "mix: the menu shows the mix's own mode, else the one last shown")
+
+    func judged(_ source: AudioSource, _ quit: String?, running: Set<String>) -> AudioSource {
+        SourceQuit.judged(source, quitBundleID: quit, isRunning: { running.contains($0) })
+    }
+    check(judged(both, music, running: [safari]) == .system && judged(both, music, running: []) == .app(bundleID: music)
+            && judged(both, "com.other", running: []) == .system && judged(except, music, running: []) == .system,
+          "mix: a mix ends only with its last app; all except outlives every app")
+    check(SourceQuit.decide(setting: .stop, source: both, quitBundleID: music, streaming: .running, isRunning: { $0 == safari }) == .keep
+            && SourceQuit.decide(setting: .stop, source: both, quitBundleID: music, streaming: .running, isRunning: { _ in false }) == .stop
+            && SourceQuit.decide(setting: .system, source: both, quitBundleID: safari, streaming: .running, isRunning: { _ in false })
+                == .switchToSystem,
+          "mix: an app of a mix quitting keeps streaming while another runs, and acts as set once none does")
+
+    check(AppTapFollow.decideExcluding(tapped: [3], found: [], own: 3) == .keep
+            && AppTapFollow.decideExcluding(tapped: [3], found: [9, 5], own: 3) == .retap([3, 5, 9])
+            && AppTapFollow.decideExcluding(tapped: [3, 5, 9], found: [9], own: 3) == .retap([3, 9]),
+          "mix: an all-except tap follows the excluded apps' processes and always leaves AudioSync out")
+
+    let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: music, name: "Music")], inputs: [],
+                                     chosen: both, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") })
+    check(entries.map(\.id) == ["", both.defaultsValue, music] && entries[1].name == "Music + Safari",
+          "mix: the picker lists the chosen mix under the whole system, named by its apps", "\(entries)")
+    let offered = SourceList.mixApps([(bundleID: music, name: "Music")], checked: [safari], chosenAppName: { _ in "Safari" })
+    check(offered.map(\.id) == [music, safari], "mix: a checked app that isn't running stays in the menu to be unchecked")
+}
+
 // MARK: Source apps — display names and the picker's app list
 check(SourceApps.displayName(running: "Music", installed: "Apple Music", bundleID: "com.apple.Music") == "Music",
       "source apps: a running app's name comes first")
@@ -1189,6 +1249,20 @@ do {
           "capture channels: a long callback is delivered in order, in blocks of at most 4096 frames",
           "\(blocked.blocks)")
     check(CaptureChannels.blockFrames <= 8192, "capture channels: a block never exceeds the ring's write margin")
+    // 8 kHz keeps the host ticks per frame whole on both Apple silicon and Intel timebases.
+    let stampGate = BlockGate()
+    stampGate.prepare(captureRate: 8000)
+    let callbackNow: UInt64 = 1_000_000_000_000
+    let starts = blocked.blocks.indices.map { index in
+        stampGate.blockStartTicks(callbackNow: callbackNow, callbackFrames: 10_000,
+                                  offset: blocked.blocks[..<index].reduce(0, +))
+    }
+    let step = stampGate.ticks(frames: 4096)
+    check(step > 0 && starts.count == 3 && starts[1] &- starts[0] == step && starts[2] &- starts[1] == step
+            && starts[2] &+ stampGate.ticks(frames: 1808) == callbackNow
+            && starts[0] == callbackNow &- stampGate.ticks(frames: 10_000),
+          "capture channels: each block of a long callback is stamped at its own place in the callback",
+          "\(starts) step \(step)")
 
     check(CaptureRate.session(reported: 0) == 48000 && CaptureRate.session(reported: .nan) == 48000,
           "capture rate: a rate that reads 0 counts as 48 kHz")
@@ -2653,7 +2727,8 @@ do {
           "prompt withdrawal: no prompt open, nothing to close")
 
     let apps = [(bundleID: "com.apple.Music", name: "Music"), (bundleID: "com.spotify.client", name: "Spotify")]
-    let inputs = [(uid: "mic-1", name: "MacBook Pro Microphone"), (uid: "", name: "No UID")]
+    let inputs = [SourceList.Input(uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+                  SourceList.Input(uid: "", name: "No UID", transport: kAudioDeviceTransportTypeUSB)]
     func list(_ chosen: AudioSource) -> [SourceList.Entry] {
         SourceList.entries(systemName: "All System Audio", apps: apps, inputs: inputs, chosen: chosen,
                            chosenAppName: { $0 == "com.apple.Safari" ? "Safari" : $0 })
@@ -2670,6 +2745,58 @@ do {
           "sources: a chosen input device that is unplugged is not listed")
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
+
+    // A Bluetooth headset's hands-free input switches it to call mode, so the
+    // picker leaves it out; a Bluetooth LE, USB or built-in input stays.
+    let headsetInputs = [
+        SourceList.Input(uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+        SourceList.Input(uid: "buds:input", name: "Example Buds", transport: kAudioDeviceTransportTypeBluetooth),
+        SourceList.Input(uid: "hearing:input", name: "Example LE Mic", transport: kAudioDeviceTransportTypeBluetoothLE),
+        SourceList.Input(uid: "usb-mic", name: "USB Mic", transport: kAudioDeviceTransportTypeUSB),
+        // An aggregate that records from a hands-free input opens it too.
+        SourceList.Input(uid: "agg-buds", name: "Buds Aggregate", transport: kAudioDeviceTransportTypeAggregate,
+                         inputSubTransports: [kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeBluetooth]),
+        SourceList.Input(uid: "agg-wired", name: "Wired Aggregate", transport: kAudioDeviceTransportTypeAggregate,
+                         inputSubTransports: [kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeUSB]),
+    ]
+    func headsetList(_ chosen: AudioSource) -> [SourceList.Entry] {
+        SourceList.entries(systemName: "All System Audio", apps: [], inputs: headsetInputs, chosen: chosen,
+                           chosenAppName: { $0 })
+    }
+    check(headsetList(.system).map(\.id) == ["", "input:mic-1", "input:hearing:input", "input:usb-mic", "input:agg-wired"],
+          "sources: a Bluetooth hands-free input, or an aggregate with one, is left out; "
+            + "Bluetooth LE, built-in, USB and other aggregate inputs stay",
+          "\(headsetList(.system).map(\.id))")
+    check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id),
+          "sources: a saved source that is a hands-free input isn't listed, like an unplugged one")
+    check(AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetooth)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetoothLE)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeUSB)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBuiltIn)
+            && !AudioDevices.isHandsFreeInput(transport: 0)
+            && AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate,
+                                             inputSubTransports: [kAudioDeviceTransportTypeBluetooth])
+            && AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAutoAggregate,
+                                             inputSubTransports: [kAudioDeviceTransportTypeUSB, kAudioDeviceTransportTypeBluetooth])
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate,
+                                              inputSubTransports: [kAudioDeviceTransportTypeBluetoothLE, kAudioDeviceTransportTypeUSB])
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate),
+          "sources: a classic Bluetooth input, or an aggregate recording from one, counts as hands-free")
+    let inputLog = SourceList.logLines(headsetInputs)
+    check(inputLog.count == 6 && inputLog[1].contains("transport blue: left out: a Bluetooth hands-free input")
+            && inputLog[4].contains("transport grup (sub-device inputs bltn, blue): left out")
+            && inputLog[0].hasSuffix("transport bltn: listed") && inputLog[3].hasSuffix("transport usb : listed"),
+          "sources: the debug log names each input's transport and whether it was left out", "\(inputLog)")
+    check(AudioDevices.transportCode(0) == "0",
+          "sources: a transport that isn't four printable characters logs as a number")
+    // A saved hands-free source doesn't start, and says why rather than "not connected".
+    let handsFreeStart = UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputHandsFree("buds:input"))
+    let handsFreeStop = UIStrings().sourceStopped(.inputHandsFree("buds:input"))
+    check(handsFreeStart.contains("hands-free microphone") && handsFreeStart.hasSuffix("Pick another source.")
+            && !handsFreeStart.contains("not connected") && handsFreeStop == handsFreeStart
+            && handsFreeStart != UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputNotFound("buds:input"))
+            && !handsFreeStart.contains("\u{2014}"),
+          "capture: a saved source that is a hands-free input has its own reason", handsFreeStart)
 
     let present: Set<String> = ["ap:a", "lc:b"]
     func summary(_ members: [String], on: Set<String>) -> (available: Int, allOn: Bool) {
@@ -4220,13 +4347,34 @@ do {
     }
 
     // Refusals the host makes before the estimate say why and that nothing changed.
-    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .sourceSilent, .interrupted,
-                                              .notPlaying, .noReference, .unsupportedRate]
+    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
+                                              .interrupted, .notPlaying, .noReference, .unsupportedRate]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
         check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
               "calibration: a refusal (\(failure)) says why and that the delay wasn't changed", message)
     }
+
+    // A hands-free default input is refused with its own reason, for one
+    // speaker and for Calibrate All (both ask microphoneRefusal first).
+    check(CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBluetooth) == .handsFreeMicrophone
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBuiltIn) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeUSB) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBluetoothLE) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: nil) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeAggregate,
+                                                 inputSubTransports: [kAudioDeviceTransportTypeBluetooth]) == .handsFreeMicrophone
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeAggregate,
+                                                 inputSubTransports: [kAudioDeviceTransportTypeUSB]) == nil,
+          "calibration: only a Bluetooth hands-free default input, or an aggregate with one, is refused")
+    let handsFreeText = t.calibrationMessage(.failed(.handsFreeMicrophone)) ?? ""
+    let handsFreeAll = t.calibrateAllLine(.ended(.failed(.handsFreeMicrophone)))
+    check(handsFreeText.contains("hands-free") && handsFreeText.contains("Choose another input")
+            && handsFreeText != t.calibrationMessage(.failed(.noMicrophone))
+            && handsFreeAll.contains("hands-free") && handsFreeAll.hasSuffix(" No delay was changed.")
+            && !handsFreeText.contains("\u{2014}"),
+          "calibration: a hands-free microphone has its own reason, for one speaker and for Calibrate All",
+          "\(handsFreeText) | \(handsFreeAll)")
 
     // Both runs record with one input: a switch to another device, even at
     // the same rate, would change the input latency between them (S232).
@@ -5378,6 +5526,35 @@ do {
           "guide: the illustrations carry no text and differ between light and dark")
 }
 
+// MARK: Guide text: hand-wrapped lines join into paragraphs the window wraps (GuideLayout)
+do {
+    let t = UIStrings()
+    let paragraphs = GuideLayout.paragraphs(of: t.helpText)
+    let texts = paragraphs.map(\.text)
+    let titles = t.helpText.split(separator: "\n").prefix(2).map(String.init)
+    let topics = ["First Steps", "More Controls", "Calibration", "Speaker Notes", "AirPlay", "Google Cast",
+                  "Notices", "Web Remote", "Tips", "Volume", "Notes"]
+    let unfinished = texts.filter { text in !text.isEmpty && !(text.last.map { ".:!?".contains($0) } ?? false) }
+    check(unfinished == titles + topics,
+          "guide: only the title and topic headings end without punctuation, so no paragraph breaks inside a sentence",
+          unfinished.joined(separator: " | "))
+    check(!texts.contains { $0.contains("\n") || $0.contains("  ") }
+            && texts.joined(separator: " ").split(separator: " ") == t.helpText.split { $0 == " " || $0 == "\n" },
+          "guide: no paragraph keeps a hard break or a wrap's indent, and every word stays in order")
+    let steps = paragraphs.filter { $0.text.first?.isNumber == true }
+    check(steps.map(\.hang) == ["1. ", "2. ", "3. ", "4. ", "5. "]
+            && paragraphs.filter { $0.text.hasPrefix("- ") }.allSatisfy { $0.hang == "- " }
+            && texts.filter(\.isEmpty).count == t.helpText.components(separatedBy: "\n").filter(\.isEmpty).count,
+          "guide: steps and list items indent past their marker, and the blank lines between topics stay",
+          "\(steps.map(\.hang))")
+
+    let made = GuideLayout.paragraphs(of: "Topic\nOne two\nthree.\n\n1. Step one\n   wraps\n- Item\n  goes on\nAfter")
+    check(made == [.init(text: "Topic", hang: ""), .init(text: "One two three.", hang: ""), .init(text: "", hang: ""),
+                   .init(text: "1. Step one wraps", hang: "1. "), .init(text: "- Item goes on", hang: "- "),
+                   .init(text: "After", hang: "")],
+          "guide: a heading stands alone, wrapped lines join, and a line back at the margin leaves the list", "\(made)")
+}
+
 // MARK: Guide topics: Calibration has its own topic, with the actions it names
 do {
     let t = UIStrings()
@@ -5454,11 +5631,54 @@ do {
     check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"source\":\"Music\",\"title\":\"Song\"}"),
           "web remote: Now Playing goes out with title, artist and source app", playing)
 
+    let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: "com.apple.Music", name: "Music")],
+                                     inputs: [(uid: "BuiltInMic", name: "MacBook Microphone")],
+                                     chosen: .app(bundleID: "com.apple.Music"), chosenAppName: { $0 })
+    let remoteSources = entries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    check(remoteSources.map(\.id) == ["system", "app:com.apple.Music", "input:BuiltInMic"]
+            && remoteSources.map(\.kind) == [.system, .app, .input] && remoteSources.map(\.name) == entries.map(\.name),
+          "web remote: the page lists the picker's entries in its order, each with an ID the core takes")
+    check(zip(remoteSources, entries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
+            && ["", "app:", "input:", "Music"].allSatisfy { RemoteSource.pickerID($0) == nil },
+          "web remote: a page ID maps back to the picker's ID; one that names no source maps to nothing")
+    let sourced = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows,
+                                 sources: remoteSources, sourceID: "app:com.apple.Music")
+    let sourcedObject = (try? JSONSerialization.jsonObject(with: Data(sourced.json.utf8))) as? [String: Any]
+    let sourceKinds = (sourcedObject?["sources"] as? [[String: Any]])?.compactMap { $0["kind"] as? String }
+    check(sourcedObject?["source_id"] as? String == "app:com.apple.Music" && sourceKinds == ["system", "app", "input"]
+            && snapshot.json.contains("\"source_id\":null"),
+          "web remote: the snapshot carries the sources and the one in use", sourced.json)
+    func pick(_ id: String) -> [RemoteAction] {
+        RemoteCommand(json: "{\"type\":\"source\",\"id\":\"\(id)\"}").map {
+            RemoteAction.plan($0, rows: rows, sources: remoteSources, sourceID: "app:com.apple.Music")
+        } ?? []
+    }
+    check(pick("input:BuiltInMic") == [.selectSource(pickerID: "input:BuiltInMic")]
+            && pick("system") == [.selectSource(pickerID: "")]
+            && pick("app:com.apple.Music").isEmpty && pick("app:gone").isEmpty
+            && RemoteCommand(json: "{\"type\":\"source\",\"id\":3}") == nil,
+          "web remote: a source pick is the picker's own; the one in use or one it doesn't list changes nothing")
+    let except = AudioSource.mixed(.allExcept, bundleIDs: ["com.spotify.client", "com.google.Chrome"])
+    let mixEntries = SourceList.entries(systemName: "All System Audio",
+                                        apps: [(bundleID: "com.spotify.client", name: "Spotify")], inputs: [],
+                                        chosen: except, chosenAppName: { _ in "Chrome" },
+                                        mixName: { "All apps except " + $1.joined(separator: " and ") })
+    let mixSources = mixEntries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    let mixSource = mixSources.first { $0.id == except.defaultsValue }
+    let onlyID = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.google.Chrome"]).defaultsValue
+    check(mixSource?.kind == .app && mixSource?.name == "All apps except Spotify and Chrome"
+            && zip(mixSources, mixEntries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
+            && RemoteSource.pickerID(RemoteSource.pageID(onlyID)) == onlyID
+            && ["apps:", "except:"].allSatisfy { RemoteSource.pickerID($0) == nil },
+          "web remote: a several-apps source in use is listed under apps with the picker's name and maps back",
+          mixSources.map(\.id).joined(separator: " "))
+
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }
     var error: Int32 = 0
     var remote = asc_remote_start("{\"port\": 0, \"listen\": [\"127.0.0.1\"]}", noCommand, nil, &error)
-    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing),
+    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing)
+            && asc_remote_publish(remote, sourced.json),
           "web remote: the core accepts the snapshots", "start error \(error)")
     asc_remote_stop(&remote)
 
@@ -5499,6 +5719,9 @@ do {
     check(RemotePort.parse(" 8080 ") == 8080 && RemotePort.parse("80") == nil && RemotePort.parse("70000") == nil
             && RemotePort.parse("abc") == nil && RemotePort.stored(1e30) == nil && RemotePort.stored(7655.5) == nil,
           "web remote: a port from 1024 to 65535 is taken")
+    check(RemoteDevicesFile.canForget(count: 0, failed: true) && RemoteDevicesFile.canForget(count: 2, failed: false)
+            && !RemoteDevicesFile.canForget(count: 0, failed: false),
+          "web remote: Forget All stays available after a failed save, when no device is left in memory")
     let fresh = AppSettings.load { _ in nil }
     let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
     let kept = AppSettings.load { stored[$0] }
@@ -5527,6 +5750,24 @@ do {
     ]
     check(twoDevices == 2 && tenDevices == RemoteDevicesFile.maxDevices && unreadable.allSatisfy { $0 == 0 },
           "web remote: the paired count comes from the devices file, capped at 8; a file the core can't read counts as none")
+
+    let day: TimeInterval = 24 * 60 * 60
+    let seenNow = Date(timeIntervalSince1970: 1_800_000_000)
+    let seenFile = { (seen: String) in
+        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"\(hashB)\"],\"seen\":\(seen)}"),
+                                now: seenNow)
+    }
+    let recent = Int(seenNow.timeIntervalSince1970 - 89 * day), idle = Int(seenNow.timeIntervalSince1970 - 90 * day)
+    let ahead = Int(seenNow.timeIntervalSince1970 + 400 * day)
+    let nineHashes = Array(repeating: "\"\(hashA)\"", count: 9).joined(separator: ",")
+    let eightIdle = Array(repeating: String(idle), count: 8).joined(separator: ",")
+    let newestEight = RemoteDevicesFile.count(
+        devicesJSON("{\"version\":1,\"devices\":[\(nineHashes)],\"seen\":[\(recent),\(eightIdle)]}"), now: seenNow)
+    let mismatched: [Int] = [seenFile("[\(recent)]"), seenFile("[\(recent),-1]"), seenFile("[\(recent),1.5]"),
+                             seenFile("[\(recent),true]"), seenFile("{}")]
+    check(seenFile("[\(recent),\(idle)]") == 1 && seenFile("[\(ahead),\(recent)]") == 2 && newestEight == 0
+            && mismatched.allSatisfy { $0 == 0 },
+          "web remote: a device idle for 90 days isn't counted, only the newest 8 are; a seen list that doesn't match the devices counts as none")
 
     let devicesFolder = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-remote-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: devicesFolder, withIntermediateDirectories: true)
@@ -5822,6 +6063,20 @@ do {
     moved.migrate(airPlay: ["123456789": "native:00075BCD15"])
     check(moved.contains("ap:native:00075BCD15") && !moved.contains("ap:123456789") && moved.contains("lc:usb"),
           "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
+}
+
+// MARK: Microphone permission request (MicrophoneRequestGate.swift)
+do {
+    var gate = MicrophoneRequestGate()
+    let first = gate.begin(origin: .user)
+    let second = gate.begin(origin: .automatic)
+    check(first && !second, "microphone: a start behind an open prompt sends no second request")
+    check(gate.answer() == .automatic && gate.answer() == nil,
+          "microphone: the one answer runs exactly one start, with the latest origin")
+    check(gate.begin(origin: .user) && gate.answer() == .user,
+          "microphone: after the answer, a new start may ask again")
+    var unasked = MicrophoneRequestGate()
+    check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
