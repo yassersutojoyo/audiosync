@@ -29,7 +29,7 @@ pub fn normalized(typed: &str) -> String {
 
 /// The name a speaker shows once `typed` applies: the typed name, or the
 /// system name when it is empty. The mock backend's rename.
-#[cfg(any(not(windows), test))]
+#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 pub fn shown_after(typed: &str, system: &str) -> String {
     let name = normalized(typed);
     if name.is_empty() {

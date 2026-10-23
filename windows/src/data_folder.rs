@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// The app's data folder under `%LOCALAPPDATA%`.
+#[cfg(os_backend)]
 pub const FOLDER_NAME: &str = "AudioSync";
 
 /// How long a read that failed waits before its second try.
@@ -148,6 +149,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// The app's data folder, `%LOCALAPPDATA%\AudioSync`, or `None` when the
 /// system names no folder for it (`crate::os::data_base`). The folder may
 /// not exist yet.
+#[cfg(os_backend)]
 pub fn folder() -> Option<PathBuf> {
     crate::os::data_base().map(|base| base.join(FOLDER_NAME))
 }

@@ -55,6 +55,7 @@ use crate::remote::RemoteSettings;
 use crate::ui_model::WindowFrame;
 
 /// The file's name in the app's data folder.
+#[cfg(any(os_backend, test))]
 pub const FILE_NAME: &str = "settings.json";
 
 /// What the copy of a newer AudioSync's settings file is named after
@@ -734,11 +735,13 @@ pub struct SettingsFile {
 impl SettingsFile {
     /// Where the app keeps the file: in `%LOCALAPPDATA%\AudioSync`, or
     /// `None` when Windows names no such folder.
+    #[cfg(os_backend)]
     pub fn default_path() -> Option<PathBuf> {
         data_folder::folder().map(|folder| folder.join(FILE_NAME))
     }
 
     /// The file at `path`.
+    #[cfg(any(os_backend, test))]
     pub fn at(path: PathBuf) -> SettingsFile {
         SettingsFile {
             path: Some(path),
@@ -748,6 +751,7 @@ impl SettingsFile {
     }
 
     /// No file: the settings last until the app quits.
+    #[cfg(any(os_backend, test))]
     pub fn in_memory() -> SettingsFile {
         SettingsFile::default()
     }

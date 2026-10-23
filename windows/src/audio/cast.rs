@@ -408,6 +408,10 @@ pub trait CastLink: Send {
 }
 
 /// The real sender: [`CastHost`] and a live mDNS browser.
+#[cfg_attr(
+    not(os_backend),
+    expect(dead_code, reason = "the OS backend's startup starts it")
+)]
 pub struct HostLink {
     host: CastHost,
     browser: Option<MdnsBrowser>,
@@ -417,6 +421,10 @@ impl HostLink {
     /// Starts the sender's worker with `memory`, and discovery. A browser
     /// that can't start leaves the sender running with nothing listed; the
     /// reason comes back for the log.
+    #[cfg_attr(
+        not(os_backend),
+        expect(dead_code, reason = "the OS backend's startup starts it")
+    )]
     pub fn start(memory: DeviceMemory) -> io::Result<(HostLink, Option<String>)> {
         let host = CastHost::new(memory)?;
         let (browser, error) = match MdnsBrowser::new() {

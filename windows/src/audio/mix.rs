@@ -399,6 +399,7 @@ impl<S: LaneStream> MixLanes<S> {
     }
 
     /// The open streams, in lane order.
+    #[cfg(windows)]
     pub fn streams(&self) -> impl Iterator<Item = &S> {
         self.slots.iter().flatten().map(|slot| &slot.opened.stream)
     }

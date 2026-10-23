@@ -15,15 +15,25 @@
 // Test builds keep the console so their output stays visible.
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
-// Off a backend the UI-only build uses only part of these.
-#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
+#[cfg_attr(
+    not(any(os_backend, test)),
+    expect(
+        dead_code,
+        reason = "without an audio backend nothing drives the adapter"
+    )
+)]
 mod adapter;
-#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
+#[cfg_attr(
+    not(any(os_backend, test)),
+    expect(
+        dead_code,
+        reason = "without an audio backend the UI uses only its types"
+    )
+)]
 mod audio;
 mod backdrop;
 #[cfg(test)]
 mod contrast;
-#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
 mod data_folder;
 mod debug_log;
 mod guide;
@@ -32,11 +42,9 @@ mod network_profile;
 mod now_playing_card;
 mod os;
 mod os_version;
-#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
 mod placement;
 mod platform;
 mod remote;
-#[cfg_attr(not(any(os_backend, test)), allow(dead_code))]
 mod settings;
 #[cfg(any(os_backend, test))]
 mod single_instance;
@@ -126,6 +134,10 @@ fn stop_with_error(log: &DebugLog, message: &str) {
 enum StartError {
     Window(slint::PlatformError),
     /// The audio backend couldn't open, for the system's reason.
+    #[cfg_attr(
+        all(not(os_backend), feature = "mock-backend"),
+        expect(dead_code, reason = "the mock backend always opens")
+    )]
     Audio(String),
 }
 

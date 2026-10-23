@@ -9,6 +9,10 @@ use std::time::Duration;
 
 /// A network's profile, as Windows' Network List Manager names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only Windows reports a network's profile")
+)]
 pub enum Category {
     Public,
     Private,

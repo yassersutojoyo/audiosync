@@ -65,6 +65,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+#[cfg(os_backend)]
 use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ProtocolPath, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
@@ -250,6 +251,7 @@ impl SenderLink {
     }
 
     /// Starts browsing for receivers.
+    #[cfg(os_backend)]
     pub fn start_discovery(&self) -> Result<(), DiscoveryError> {
         self.sender.start_discovery()
     }

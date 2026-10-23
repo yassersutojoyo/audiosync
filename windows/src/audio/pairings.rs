@@ -180,6 +180,7 @@ impl PairingStore {
 
     /// Where the app keeps the file: in `%LOCALAPPDATA%\AudioSync`, or
     /// `None` when Windows names no such folder.
+    #[cfg(os_backend)]
     pub fn default_path() -> Option<PathBuf> {
         data_folder::folder().map(|folder| folder.join(FILE_NAME))
     }

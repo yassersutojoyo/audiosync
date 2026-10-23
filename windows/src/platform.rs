@@ -216,6 +216,7 @@ pub use crate::os::notice_time;
 /// The smallest outer size, in physical pixels, of a window whose inner size
 /// may not go below `min` logical pixels at `dpi`, with a frame (borders,
 /// title and menu bar) of `frame` physical pixels.
+#[cfg(any(windows, test))]
 pub fn min_track_size(min: (f64, f64), dpi: u32, frame: (i32, i32)) -> (i32, i32) {
     let scale = f64::from(dpi) / 96.0;
     let side = |logical: f64, frame: i32| (logical * scale).ceil() as i32 + frame;
@@ -224,11 +225,13 @@ pub fn min_track_size(min: (f64, f64), dpi: u32, frame: (i32, i32)) -> (i32, i32
 
 /// `min` (logical pixels, each below 65 536) in the one number a window
 /// subclass carries, and back.
+#[cfg(any(windows, test))]
 fn pack_min_size(min: (f64, f64)) -> usize {
     let side = |logical: f64| logical.round().clamp(0.0, 65_535.0) as usize;
     (side(min.0) << 16) | side(min.1)
 }
 
+#[cfg(any(windows, test))]
 fn unpack_min_size(packed: usize) -> (f64, f64) {
     ((packed >> 16) as f64, (packed & 0xffff) as f64)
 }
@@ -290,6 +293,7 @@ pub fn set_min_size_log(log: DebugLog) {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(windows)]
 enum MinSizeEvent {
     Installed = 1,
     MinMaxInfo = 2,
@@ -303,6 +307,7 @@ thread_local! {
 }
 
 /// Logs `event` the first time it happens on this thread.
+#[cfg(windows)]
 fn log_min_size_once(event: MinSizeEvent, message: impl FnOnce() -> String) {
     let bit = event as u8;
     if MIN_SIZE_LOGGED.with(|logged| logged.replace(logged.get() | bit)) & bit != 0 {
@@ -493,6 +498,7 @@ pub fn native_id(_window: &slint::Window) -> Option<isize> {
 
 /// Whether a WM_SETTINGCHANGE names `area` "ImmersiveColorSet", the one
 /// Windows sends when it switches between light and dark.
+#[cfg(any(windows, test))]
 pub fn names_color_set(area: &[u16]) -> bool {
     area.iter().copied().eq("ImmersiveColorSet".encode_utf16())
 }

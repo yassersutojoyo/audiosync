@@ -14,6 +14,7 @@
 //! attribute, the window keeps the plain system frame or, for the flyout, its
 //! own drawn edge, so nothing looks broken.
 
+#[cfg(any(windows, test))]
 use crate::os_version::{FIRST_WINDOWS_11_BUILD, OsVersion};
 
 /// How a window's frame looks.
@@ -24,12 +25,18 @@ pub enum Frame {
     Titled,
     /// The frameless tray flyout: rounded corners with the system border and
     /// shadow, like the Windows 11 flyouts.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "only the Windows tray has a flyout")
+    )]
     Flyout,
 }
 
 /// The first build with `DWMWA_SYSTEMBACKDROP_TYPE` (Windows 11 22H2).
+#[cfg(any(windows, test))]
 pub const FIRST_BACKDROP_BUILD: u32 = 22621;
 
+#[cfg(any(windows, test))]
 fn windows_build(build: u32) -> OsVersion {
     OsVersion {
         major: 10,
@@ -39,11 +46,13 @@ fn windows_build(build: u32) -> OsVersion {
 }
 
 /// Whether `version` offers the system backdrop attribute.
+#[cfg(any(windows, test))]
 pub fn supports_backdrop(version: OsVersion) -> bool {
     version >= windows_build(FIRST_BACKDROP_BUILD)
 }
 
 /// Whether `version` offers the corner preference attribute.
+#[cfg(any(windows, test))]
 pub fn supports_corners(version: OsVersion) -> bool {
     version >= windows_build(FIRST_WINDOWS_11_BUILD)
 }

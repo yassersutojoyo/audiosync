@@ -17,9 +17,10 @@ use self::other as imp;
 #[cfg(windows)]
 use self::windows as imp;
 
+#[cfg(os_backend)]
+pub use imp::data_base;
 pub use imp::{
-    Instance, Media, claim_instance, computer_name, create_tray, data_base, notice_time, sealer,
-    start,
+    Instance, Media, claim_instance, computer_name, create_tray, notice_time, sealer, start,
 };
 
 /// What [`start`] opened.

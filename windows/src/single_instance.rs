@@ -159,6 +159,7 @@ impl HandOver {
 
     /// The debug line of a launch that became the first copy after the
     /// running one went away.
+    #[cfg(windows)]
     pub fn took_over_line(self) -> String {
         format!(
             "single instance: another copy was quitting when this launch asked it to show \

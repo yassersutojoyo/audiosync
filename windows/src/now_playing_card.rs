@@ -14,6 +14,7 @@
 //! The card keeps the last track while the window is hidden, so it shows at
 //! once when the window comes back, and changes with the first new reading.
 
+#[cfg(any(windows, test))]
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -60,10 +61,12 @@ pub struct CardArtwork {
 }
 
 /// How many pixels a side the card's artwork has: its 56 px tile at 200 %.
+#[cfg(windows)]
 pub const ARTWORK_SIDE: u32 = 112;
 
 /// The size an image of `width` × `height` is scaled to so that it covers a
 /// `side` × `side` square, the rest cropped evenly, as the Mac's tile fills.
+#[cfg(any(windows, test))]
 pub fn cover_size(width: u32, height: u32, side: u32) -> (u32, u32) {
     let shorter = width.min(height).max(1);
     let scaled = |length: u32| {
@@ -74,17 +77,20 @@ pub fn cover_size(width: u32, height: u32, side: u32) -> (u32, u32) {
 }
 
 /// Artwork kept for at most this many tracks.
+#[cfg(any(windows, test))]
 const ARTWORK_CACHE: usize = 32;
 
 /// The card's artwork, made once per track by key. A failed attempt isn't
 /// kept, so the next reading tries again; only a track's first failure is
 /// handed back to be logged.
 #[derive(Default)]
+#[cfg(any(windows, test))]
 pub struct ArtworkCache {
     made: HashMap<String, Option<CardArtwork>>,
     failed: HashSet<String>,
 }
 
+#[cfg(any(windows, test))]
 impl ArtworkCache {
     /// What was made for `key`, if an attempt worked.
     pub fn get(&self, key: &str) -> Option<Option<CardArtwork>> {

@@ -128,6 +128,7 @@ pub fn opens_main_window(background: bool, tray_available: bool) -> bool {
 /// Whether a launch while another copy runs asks that copy to show its main
 /// window. One in the background (Windows starting the Run key's entry, or
 /// reopening apps after a restart) leaves it as it is.
+#[cfg(any(windows, test))]
 pub fn hands_over_to_running_copy(background: bool) -> bool {
     !background
 }
@@ -294,6 +295,7 @@ pub struct MemoryEntry {
 
 #[cfg(any(not(windows), test))]
 impl MemoryStore {
+    #[cfg(test)]
     pub fn entry(&self) -> std::cell::RefMut<'_, MemoryEntry> {
         self.0.borrow_mut()
     }

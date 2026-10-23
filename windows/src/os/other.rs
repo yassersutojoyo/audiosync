@@ -1,9 +1,9 @@
 //! Hosts without an audio backend yet, where the UI is worked on. With the
 //! `mock-backend` feature the windows show example speakers and nothing
 //! plays; without it the app says it can't start. There is no
-//! single-instance lock, tray icon, data folder or pairing sealer here.
+//! single-instance lock, tray icon or pairing sealer here, and no data
+//! folder: settings and pairings last until AudioSync quits.
 
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use super::Started;
@@ -54,11 +54,6 @@ impl Instance {
 pub enum Tray {}
 
 pub fn create_tray(_app: &Rc<App>, _log: &DebugLog) -> Option<Tray> {
-    None
-}
-
-/// No data folder: settings and pairings last until AudioSync quits.
-pub fn data_base() -> Option<PathBuf> {
     None
 }
 

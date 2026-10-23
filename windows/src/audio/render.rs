@@ -92,7 +92,7 @@ impl RenderPipeline {
     /// when it is on time, which the output's lead counts rather than a late
     /// wake's larger fill (S206). Call it before the first render.
     #[cfg_attr(
-        not(windows),
+        all(not(windows), not(test)),
         expect(dead_code, reason = "the WASAPI render loop sets it")
     )]
     pub fn set_period_frames(&mut self, frames: usize) {
@@ -117,7 +117,7 @@ impl RenderPipeline {
     /// frames written after its last frame cover what `queue` says is still
     /// queued ([`fade_tail_frames`]).
     #[cfg_attr(
-        not(windows),
+        all(not(windows), not(test)),
         expect(dead_code, reason = "the WASAPI render loop asks it")
     )]
     pub fn has_played_its_fade(&self, queue: EndpointQueue) -> bool {
@@ -134,7 +134,7 @@ impl RenderPipeline {
 
     /// Marks the output as faded for the control thread (a release store).
     #[cfg_attr(
-        not(windows),
+        all(not(windows), not(test)),
         expect(dead_code, reason = "the WASAPI render loop calls it")
     )]
     pub fn mark_faded(&self) {

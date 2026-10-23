@@ -1395,7 +1395,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Keeps the Cast speakers' offsets and formats in `path` from now on.
     #[cfg_attr(
-        not(windows),
+        all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows app keeps a file")
     )]
     pub fn set_cast_file(&mut self, path: Option<PathBuf>) {

@@ -23,6 +23,7 @@ impl Bounds {
 /// The flyout's top-left corner for a flyout of `width` x `height` next to
 /// `icon`, in `work_area` (the monitor minus the taskbar), `gap` away from
 /// the taskbar and the screen edges. All in physical pixels.
+#[cfg(any(windows, test))]
 pub fn flyout_origin(
     icon: Bounds,
     width: f64,

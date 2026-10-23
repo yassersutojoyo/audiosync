@@ -348,6 +348,13 @@ pub enum CastDiscovery {
     Off,
     Browsing,
     /// Discovery couldn't start or stopped, so no Cast speaker is listed.
+    #[cfg_attr(
+        all(not(os_backend), test),
+        expect(
+            dead_code,
+            reason = "only the real Cast host, which no test starts, browses"
+        )
+    )]
     Failed,
 }
 
