@@ -73,7 +73,8 @@ fi
 echo "▶ capture IOProc stays real-time safe"
 # The capture IOProc runs CaptureSink (ProcessTapCapture.swift), the
 # CaptureChannels it builds (CaptureSupport.swift) and, during a calibration,
-# CalibrationTap; the calibration's microphone IOProc runs MicrophoneSink. None
+# CalibrationTap, which CalibrationFill's thread also writes through while the
+# capture is quiet; the calibration's microphone IOProc runs MicrophoneSink. None
 # may log, lock, dispatch or build strings; the debug log is written from the
 # main thread only.
 # Comment lines are dropped first; an empty extract means the check lost track.
@@ -81,6 +82,7 @@ capture_rt=$(awk '/^    final class CaptureSink/ { f = 1 } f { print } f && /^  
     "$SRC/ProcessTapCapture.swift"
   awk '/^struct CaptureChannels/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CaptureSupport.swift"
   awk '/^enum CalibrationTap/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CalibrationTap.swift"
+  awk '/MARK: Fill thread/ { f = 1 } f { print } f && /^    }$/ { exit }' "$SRC/CalibrationTap.swift"
   awk '/^private final class MicrophoneSink/ { f = 1 } f { print } f && /^}$/ { exit }' \
     "$SRC/CalibrationMicrophone.swift"
   awk '/AudioDeviceCreateIOProcIDWithBlock/ { f = 1 } f { print } f && /^        }$/ { exit }' \
@@ -91,6 +93,7 @@ capture_rt=$(grep -vE '^[[:space:]]*//' <<< "$capture_rt" || true)
 io_only=$(awk '/^        func consume/ { f = 1 } f { print } f && /^        }$/ { exit }' "$SRC/ProcessTapCapture.swift"
   awk '/^    func consume/ { f = 1 } f { print } f && /^    }$/ { exit }' "$SRC/CalibrationMicrophone.swift"
   awk '/MARK: Capture thread/ { f = 1 } /MARK: Main thread/ { exit } f { print }' "$SRC/CalibrationTap.swift"
+  awk '/MARK: Fill thread/ { f = 1 } f { print } f && /^    }$/ { exit }' "$SRC/CalibrationTap.swift"
   awk '/^struct CaptureChannels/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/CaptureSupport.swift"
   awk '/AudioDeviceCreateIOProcIDWithBlock/ { f = 1 } f { print } f && /^        }$/ { exit }' \
     "$SRC/CalibrationMicrophone.swift")

@@ -975,6 +975,31 @@ check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: 2) == .waiting, "
 check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: CaptureCheck.playingGrace) == .notWorking, "capture: playing for the grace period with no frames → not working")
 check(CaptureCheck.verdict(framesCaptured: 0, knownPlayingFor: nil) != .notWorking, "capture: a paused or unknown source never blames the permission")
 
+// MARK: Calibration fill: a quiet tap still carries the test signal (CalibrationTap.swift)
+do {
+    // Calibrate All on All System Audio with nothing playing failed every time: the
+    // signal rides on captured blocks, and a tap whose source is silent delivers none.
+    var pace = CalibrationFillPace(rate: 48_000)
+    let s: UInt64 = 1_000_000_000
+    let first = pace.step(nowNs: 10 * s, lastCaptureNs: 0)
+    check(first.frames == 1920 && first.firstNs == 10 * s - 40_000_000,
+          "calibration fill: a capture that never delivered gets silence, from 40 ms back, for the signal to ride on",
+          "\(first)")
+    let next = pace.step(nowNs: 10 * s + 2_000_000, lastCaptureNs: 0)
+    check(next.frames == 96 && next.firstNs == 10 * s,
+          "calibration fill: each step goes on where the last one ended, in real time", "\(next)")
+    let flowing = pace.step(nowNs: 11 * s, lastCaptureNs: 11 * s - 5_000_000)
+    let racing = pace.step(nowNs: 11 * s, lastCaptureNs: 11 * s + 1000)
+    check(flowing.frames == 0 && racing.frames == 0,
+          "calibration fill: nothing while the capture delivers", "\(flowing) \(racing)")
+    let quietAgain = pace.step(nowNs: 12 * s, lastCaptureNs: 11 * s)
+    check(quietAgain.frames == 1920 && quietAgain.firstNs == 12 * s - 40_000_000,
+          "calibration fill: a capture gone quiet again starts a new stretch", "\(quietAgain)")
+    let late = pace.step(nowNs: 15 * s, lastCaptureNs: 11 * s)
+    check(late.frames == 48_000 && late.firstNs == 14 * s,
+          "calibration fill: a fill held up for seconds writes the last second only", "\(late)")
+}
+
 // MARK: Capture stage — stereo from any input layout, a rate for every session, an app tap that follows the app
 do {
     // One IOProc input as Core Audio hands it over: buffers of interleaved
@@ -4184,6 +4209,25 @@ do {
             && CalibrateAllFlow.plan(noReference) == .failure(.noReference)
             && CalibrateAllFlow.plan(referenceOff) == .failure(.notPlaying),
           "calibrate all: starts only while streaming with the built-in speakers and another speaker playing")
+
+    // A software device such as Teams Audio or BlackHole read as "barely heard".
+    var software = inputs
+    software.localOutputs = [(id: "mac", name: "MacBook Speakers"), (id: "teams", name: "Microsoft Teams Audio"),
+                             (id: "usb", name: "Desk")]
+    software.softwareOutputs = ["teams"]
+    var onlySoftware = alone
+    onlySoftware.localOutputs = [(id: "mac", name: "MacBook Speakers"), (id: "blackhole", name: "BlackHole 2ch")]
+    onlySoftware.softwareOutputs = ["blackhole"]
+    let softwarePlan = (try? CalibrateAllFlow.plan(software).get()) ?? []
+    check(softwarePlan.map(\.id) == ["mac", "usb", "cast:tv", "native:a", "native:b"]
+            && CalibrateAllFlow.plan(onlySoftware) == .failure(.noOtherSpeaker),
+          "calibrate all: a local output with no hardware behind it isn't measured", "\(softwarePlan.map(\.id))")
+    check(AudioDevices.isSoftwareOnly(transport: kAudioDeviceTransportTypeVirtual)
+            && !AudioDevices.isSoftwareOnly(transport: kAudioDeviceTransportTypeAggregate)
+            && !AudioDevices.isSoftwareOnly(transport: kAudioDeviceTransportTypeAirPlay)
+            && !AudioDevices.isSoftwareOnly(transport: kAudioDeviceTransportTypeUSB)
+            && !AudioDevices.isSoftwareOnly(transport: 0),
+          "calibrate all: only a virtual transport counts as software, not an aggregate or macOS's AirPlay output")
 
     // Any mid-run change stops the run (S240).
     let taking = ["mac", "usb", "native:a"]

@@ -236,7 +236,8 @@ extension AppDelegate {
             localOutputs: appModel.local.filter { $0.enabled && playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
             localOffsets: localOffsetMs, holdBacks: localHoldBacks, cast: cast,
             airPlay: appModel.airplay.filter { playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
-            airPlayDelayMs: airPlayLatencyMs, airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted))
+            airPlayDelayMs: airPlayLatencyMs, airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),
+            softwareOutputs: Set(localDevices.filter { AudioDevices.isSoftwareOnly(transport: $0.value.transport) }.keys))
         return CalibrateAllFlow.plan(inputs)
     }
 
@@ -375,6 +376,7 @@ final class CalibrateAllRun {
         signal = buffer
         CalibrationTap.install(buffer, frames: samples.count)
         CalibrationTap.engage()
+        app?.engine.holdCalibrationTime(true)
         let partOf = speakers.filter { taking.contains($0.id) }
         stage = .quiet(untilNs: clock.nowNs() + seconds(CalibrateAllFlow.quietSeconds(partOf)))
         app?.showCalibrateAll(.preparing)
@@ -577,6 +579,7 @@ final class CalibrateAllRun {
         }
         silenced = []
         CalibrationTap.disengage()
+        app?.engine.holdCalibrationTime(false)
         if let signal {
             CalibrationTap.uninstall()
             signal.deallocate()

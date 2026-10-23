@@ -228,6 +228,9 @@ enum CalibrateAllFlow {
         var airPlayDelayMs: Double
         /// How much longer than L the AirPlay sender holds its speakers back.
         var airPlayHoldBackMs: Double
+        /// Local outputs with no hardware behind them (BlackHole, Teams
+        /// Audio), which no microphone can hear: they are left out of a run.
+        var softwareOutputs: Set<String> = []
     }
 
     /// The speakers of a run, the reference first, then the other local
@@ -243,7 +246,7 @@ enum CalibrateAllFlow {
                                        latencyMs: holdBack + latencyAllowanceMs)
         }
         var speakers = [local(reference, first.name, offset: nil)]
-        for output in inputs.localOutputs where output.id != reference {
+        for output in inputs.localOutputs where output.id != reference && !inputs.softwareOutputs.contains(output.id) {
             speakers.append(local(output.id, output.name, offset: inputs.localOffsets[output.id]))
         }
         if let cast = inputs.cast {

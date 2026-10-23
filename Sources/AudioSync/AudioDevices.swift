@@ -50,6 +50,11 @@ struct AudioDevices: Sendable {
     /// replaces. Hardware transports and unknown ones are always shown.
     static func isVirtual(transport: UInt32) -> Bool { hiddenTransports.contains(transport) }
 
+    /// A device with no hardware of its own (BlackHole, Teams Audio). Unlike
+    /// `isVirtual` this leaves out aggregates and macOS's AirPlay output,
+    /// which do play through speakers.
+    static func isSoftwareOnly(transport: UInt32) -> Bool { transport == kAudioDeviceTransportTypeVirtual }
+
     private static let hiddenTransports: Set<UInt32> = [
         kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate,
         kAudioDeviceTransportTypeAutoAggregate, kAudioDeviceTransportTypeAirPlay,

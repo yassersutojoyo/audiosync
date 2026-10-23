@@ -24,8 +24,8 @@ enum CalibrationFailure: Equatable {
     case noMicrophone
     /// The capture's rate is outside the test signal's range (S233).
     case unsupportedRate
-    /// The capture delivered no block to carry the signal: an app source
-    /// that plays nothing.
+    /// No block carried the signal: neither the capture nor the fill that
+    /// stands in for a quiet capture (`CalibrationFill`) wrote one.
     case sourceSilent
     /// Streaming stopped, or the speakers or their delays changed, during
     /// the measurement.
