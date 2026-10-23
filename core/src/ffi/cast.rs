@@ -1467,8 +1467,8 @@ pub extern "C" fn asc_cast_own_level(reported: f64, master: f64, own: f64) -> f6
     status::own_level(reported, master, own)
 }
 
-/// The own level a session starts from (C105): `own` when `has_own`, whatever
-/// the first status reports; else that status's level ÷ master, clamped, or
+/// The own level a session starts from (C105): `own` when `has_own` and it is
+/// finite, whatever the first status reports; else that status's level ÷ master, clamped, or
 /// the level itself at master 0.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_cast_start_own_level(
