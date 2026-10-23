@@ -7,16 +7,19 @@ mod common;
 
 use std::time::Duration;
 
+use audiosync_airplay::ap2::bodies::{InfoAnswer, read_info};
 use audiosync_airplay::error::ErrorKind;
+use audiosync_airplay::metadata::{MAX_ARTWORK_BYTES, Metadata, MetadataSupport, TrackInfo};
 use audiosync_airplay::rtp::SyncPacket;
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::session::{SessionConfig, SessionEvent, State};
 use audiosync_airplay::stream::PacketKind;
 use audiosync_airplay::volume::Volume;
-use common::ap2::{Ap2Rig, FakeAp2, ap2_config};
+use common::ap2::{Ap2Rig, FakeAp2, ap2_config, dict, int, plist};
 use common::rig::{Rig, speaker};
 use common::{FakeReceiver, Link, PasswordGate, START, config, digest_params};
+use plist::Value;
 
 fn playing() -> Link {
     let mut link = Link::new(config(), FakeReceiver::new());
@@ -39,6 +42,10 @@ fn kinds(link: &Link) -> Vec<ErrorKind> {
             _ => None,
         })
         .collect()
+}
+
+fn text(value: &str) -> Value {
+    Value::String(value.to_owned())
 }
 
 fn count(link: &Link, key: &str) -> usize {
@@ -268,4 +275,113 @@ fn p93_the_sync_sequence_counts_on_across_a_flush() {
     let firsts = syncs.iter().filter(|sync| sync.first).count();
     assert!(syncs[0].first);
     assert_eq!(firsts, 2, "after RECORD and after the flush");
+}
+
+// covers: P41
+#[test]
+fn p41_info_values_of_an_unexpected_type_are_ignored() {
+    let answer = read_info(&plist(dict(&[
+        ("features", text("0x40000")),
+        ("statusFlags", Value::Real(4.0)),
+        ("name", int(7)),
+        ("model", Value::Boolean(true)),
+        ("sourceVersion", Value::Array(Vec::new())),
+        ("initialVolume", text("-20")),
+    ])));
+    assert_eq!(answer, InfoAnswer::default());
+
+    // A value of the wrong type is absent, so the TXT record fills it.
+    let mut wire = Vec::new();
+    for string in ["features=0x0,0x10040", "model=AudioAccessory5,1"] {
+        wire.push(u8::try_from(string.len()).expect("short"));
+        wire.extend_from_slice(string.as_bytes());
+    }
+    let answer = read_info(&plist(dict(&[
+        ("features", text("not a number")),
+        ("model", int(1)),
+        ("initialVolume", int(-30)),
+        ("txtAirPlay", Value::Data(wire)),
+    ])));
+    assert!(answer.features.is_some_and(|features| features.has(38)));
+    assert_eq!(answer.model.as_deref(), Some("AudioAccessory5,1"));
+    assert_eq!(answer.initial_volume, Some(-30.0));
+
+    // A TXT entry that isn't data is ignored too.
+    let answer = read_info(&plist(dict(&[("txtAirPlay", text("features=0x1"))])));
+    assert_eq!(answer, InfoAnswer::default());
+}
+
+// covers: P33, P125, P126
+#[test]
+fn p125_artwork_of_exactly_512_kib_goes_and_progress_names_its_rtptime() {
+    let mut config = config();
+    config.metadata = MetadataSupport {
+        text: false,
+        artwork: true,
+        progress: true,
+    };
+    let mut link = Link::new(config, FakeReceiver::new());
+    link.connect();
+    let mut jpeg = vec![0u8; MAX_ARTWORK_BYTES];
+    jpeg[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
+    link.session
+        .send_metadata(
+            Metadata::Artwork {
+                jpeg: jpeg.clone(),
+                rtptime: 9,
+            },
+            link.now,
+        )
+        .expect("512 KiB is allowed");
+    link.pump();
+    assert_eq!(link.last("SET_PARAMETER").body, jpeg);
+    link.session
+        .send_metadata(
+            Metadata::Progress {
+                start: 100,
+                current: 200,
+                end: 300,
+            },
+            link.now,
+        )
+        .expect("listed");
+    link.pump();
+    let progress = link.last("SET_PARAMETER");
+    assert_eq!(progress.headers.get("RTP-Info"), Some("rtptime=200"));
+    assert_eq!(progress.body, b"progress: 100/200/300\r\n");
+}
+
+// covers: P26, P127
+#[test]
+fn p127_metadata_queued_before_record_follows_the_initial_volume() {
+    let mut config = config();
+    config.metadata.text = true;
+    let mut receiver = FakeReceiver::new();
+    receiver.hold = Some("SETUP".to_owned());
+    let mut link = Link::new(config, receiver);
+    link.connect();
+    let track = Metadata::Track {
+        info: TrackInfo {
+            title: "Song".to_owned(),
+            artist: "Band".to_owned(),
+            album: "Record".to_owned(),
+        },
+        rtptime: 5,
+    };
+    link.session
+        .send_metadata(track.clone(), link.now)
+        .expect("listed");
+    link.pump();
+    assert_eq!(link.keys(), ["OPTIONS", "ANNOUNCE", "SETUP"]);
+    link.receiver.hold = None;
+    link.release();
+    let keys = link.keys();
+    assert_eq!(keys[..5], START);
+    assert_eq!(keys[5..], ["SET_PARAMETER"]);
+    let bodies: Vec<&[u8]> = link.receiver.requests[4..]
+        .iter()
+        .map(|request| request.body.as_slice())
+        .collect();
+    assert!(bodies[0].starts_with(b"volume: "));
+    assert_eq!(bodies[1], track.body());
 }
