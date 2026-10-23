@@ -47,7 +47,7 @@ AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay s
 On `main` (coming in 0.7), in both the Mac and the Windows app:
 
 - Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
-- Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. On the Mac it leaves out headphones and virtual outputs, since the microphone can't hear them.
+- Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
 - Calibrate with Microphone works on Windows too.
 - AirPlay can wait up to 20 s for a Cast speaker instead of 3.
 
