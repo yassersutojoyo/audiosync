@@ -3,8 +3,8 @@
 use std::f64::consts::PI;
 
 use audiosync_core::eq::{
-    BAND_CENTERS_HZ, BAND_COUNT, BAND_Q, Biquad, DEFAULT_SAMPLE_RATE, EqControl, EqProcessor,
-    CurveMatch, EqSettings, MAX_CENTER_RATIO, MAX_CURVE_NAME_CHARS, MAX_USER_CURVES, PRESETS,
+    BAND_CENTERS_HZ, BAND_COUNT, BAND_Q, Biquad, CurveMatch, DEFAULT_SAMPLE_RATE, EqControl,
+    EqProcessor, EqSettings, MAX_CENTER_RATIO, MAX_CURVE_NAME_CHARS, MAX_USER_CURVES, PRESETS,
     UserCurve, delete_curve, design_bands, equalizer, matching_curve, preset, quantize_gain_db,
     rename_curve, sanitized_curves, save_curve,
 };
@@ -568,7 +568,10 @@ fn reset_reads_flat_and_zeroes_the_preamp() {
     assert_eq!(settings.matching_preset().map(|p| p.id), Some("flat"));
     let mut flat = enabled([2.0; BAND_COUNT], 0.0);
     flat.apply_preset(preset("flat").unwrap());
-    assert_eq!(flat, settings, "Flat and Reset agree once the preamp is 0 dB");
+    assert_eq!(
+        flat, settings,
+        "Flat and Reset agree once the preamp is 0 dB"
+    );
 }
 
 // covers: S242
@@ -602,20 +605,32 @@ fn a_saved_curve_keeps_its_gains_and_matches_after_the_presets() {
 fn saving_under_a_taken_name_replaces_that_curve_and_names_are_checked() {
     let mut curves = Vec::new();
     assert_eq!(save_curve(&mut curves, "Desk", &[1.0; BAND_COUNT]), Some(0));
-    assert_eq!(save_curve(&mut curves, "Couch", &[2.0; BAND_COUNT]), Some(1));
+    assert_eq!(
+        save_curve(&mut curves, "Couch", &[2.0; BAND_COUNT]),
+        Some(1)
+    );
     assert_eq!(save_curve(&mut curves, "desk", &[3.3; BAND_COUNT]), Some(0));
     assert_eq!(curves.len(), 2);
     assert_eq!(curves[0].name, "desk");
-    assert_eq!(curves[0].gains_db, [3.5; BAND_COUNT], "on the controls' steps");
+    assert_eq!(
+        curves[0].gains_db, [3.5; BAND_COUNT],
+        "on the controls' steps"
+    );
     assert_eq!(save_curve(&mut curves, "   ", &[0.0; BAND_COUNT]), None);
     let long = "x".repeat(MAX_CURVE_NAME_CHARS + 5);
     let index = save_curve(&mut curves, &long, &[0.0; BAND_COUNT]).unwrap();
     assert_eq!(curves[index].name.chars().count(), MAX_CURVE_NAME_CHARS);
 
-    assert!(!rename_curve(&mut curves, 1, "DESK"), "another curve has it");
+    assert!(
+        !rename_curve(&mut curves, 1, "DESK"),
+        "another curve has it"
+    );
     assert!(!rename_curve(&mut curves, 1, " "));
     assert!(!rename_curve(&mut curves, 9, "Attic"));
-    assert!(rename_curve(&mut curves, 1, "COUCH"), "its own name in other case");
+    assert!(
+        rename_curve(&mut curves, 1, "COUCH"),
+        "its own name in other case"
+    );
     assert!(rename_curve(&mut curves, 1, "Attic"));
     assert_eq!(curves[1].name, "Attic");
 
@@ -631,7 +646,10 @@ fn the_list_is_capped_and_stored_curves_are_cleaned_on_reading() {
     for n in 0..MAX_USER_CURVES {
         assert!(save_curve(&mut curves, &format!("c{n}"), &[0.0; BAND_COUNT]).is_some());
     }
-    assert_eq!(save_curve(&mut curves, "one more", &[0.0; BAND_COUNT]), None);
+    assert_eq!(
+        save_curve(&mut curves, "one more", &[0.0; BAND_COUNT]),
+        None
+    );
     assert_eq!(
         save_curve(&mut curves, "C3", &[1.0; BAND_COUNT]),
         Some(3),
@@ -642,10 +660,22 @@ fn the_list_is_capped_and_stored_curves_are_cleaned_on_reading() {
     odd[0] = f64::NAN;
     odd[1] = 30.0;
     let read = sanitized_curves([
-        UserCurve { name: " A ".into(), gains_db: odd },
-        UserCurve { name: "".into(), gains_db: [1.0; BAND_COUNT] },
-        UserCurve { name: "a".into(), gains_db: [2.0; BAND_COUNT] },
-        UserCurve { name: "B".into(), gains_db: [0.25; BAND_COUNT] },
+        UserCurve {
+            name: " A ".into(),
+            gains_db: odd,
+        },
+        UserCurve {
+            name: "".into(),
+            gains_db: [1.0; BAND_COUNT],
+        },
+        UserCurve {
+            name: "a".into(),
+            gains_db: [2.0; BAND_COUNT],
+        },
+        UserCurve {
+            name: "B".into(),
+            gains_db: [0.25; BAND_COUNT],
+        },
     ]);
     assert_eq!(read.len(), 2);
     assert_eq!(read[0].name, "A");
