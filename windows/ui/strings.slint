@@ -29,6 +29,8 @@ export global Strings {
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no group.
     out property <string> no-speakers: @tr("No speakers found");
+    // The flyout's empty speaker list while AirPlay discovery runs.
+    out property <string> looking-for-speakers: @tr("Looking for speakers…");
     // Connected Speakers when its only outputs are virtual ones, hidden.
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
@@ -650,7 +652,7 @@ export global Strings {
     out property <string> help-calibration-title: @tr("Calibration");
     out property <string> help-calibration: @tr("A microphone can measure delays for you. Put it where you listen and keep the room quiet. Each measurement compares a speaker with the PC's own speakers, so they have to be on and playing, and streaming has to be on too.\n\nTo measure one local speaker, turn it on, select its row or its delay, and select Calibrate with Microphone under the delay controls. Headphones and virtual outputs don't have that button. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets its delay from the difference. Cancel stops it and leaves the delay as it was.\n\nCalibrate All Speakers, on the Calibration card under Equalizer, measures every speaker that is on, AirPlay and Google Cast included. Headphones, headsets, earbuds and virtual outputs are left out, since the microphone can't hear them, and their delay stays yours to set; the card lists them with the reason. If a speaker reports itself as headphones or a virtual output, Include Anyway measures it with the others until you close the results. AudioSync fades the music out, plays a sweep on each speaker in turn, twice each, and fades the music back in. The results show each speaker's old and new delay; the AirPlay speakers share one AirPlay delay, the middle of their values. Nothing changes until you choose Apply. Undo puts the old delays back, and Measure Again repeats one speaker.\n\nIf Windows blocks microphone access for desktop apps, AudioSync says so and where to allow it.");
     out property <string> help-volume-title: @tr("Volume");
-    out property <string> help-volume: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay speakers included. A Google Cast speaker's slider sets the speaker's own volume, which Master Volume leaves alone, and Mute under it mutes the speaker itself.\n\nWhen a local speaker that is on is turned down low or muted in Windows, a line under its slider says so, with a button that fixes it. AudioSync changes the Windows volume only when you select that button.");
+    out property <string> help-volume: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay and Google Cast speakers included. A Google Cast speaker's slider sets the speaker's own volume, and Master Volume scales it like every other speaker. Mute under it mutes the speaker itself.\n\nWhen a local speaker that is on is turned down low or muted in Windows, a line under its slider says so, with a button that fixes it. AudioSync changes the Windows volume only when you select that button.");
     out property <string> help-bluetooth-title: @tr("Bluetooth");
     out property <string> help-bluetooth: @tr("Bluetooth speakers and headphones add a lag of their own, so they often need a delay below 0. They also take a little longer to start playing.\n\nFor a headset, AudioSync lists its stereo output and leaves out its Hands-Free output and microphone, which carry call audio.");
     out property <string> help-double-title: @tr("Hearing Sound Twice");
@@ -948,12 +950,13 @@ export global Strings {
     // What the name field says about its keys.
     out property <string> speaker-name-field-hint: @tr("Press Enter to apply or Escape to cancel. Leave it empty for the device's own name.");
 
-    // The tooltip on a speaker's name; `system` is empty unless renamed.
-    public pure function speaker-name-tooltip(system: string) -> string {
+    // The tooltip on a speaker's name: the full name, which the row may
+    // elide, then how to rename it. `system` is empty unless renamed.
+    public pure function speaker-name-tooltip(name: string, system: string) -> string {
         if system != "" {
-            return @tr("Device name: {}. Double-click to rename.", system);
+            return @tr("{}\nDevice name: {}. Double-click to rename.", name, system);
         }
-        return @tr("Double-click to rename.");
+        return @tr("{}\nDouble-click to rename.", name);
     }
 
     // What a stereo pair or home theater group row says after its kind:

@@ -3685,7 +3685,7 @@ do {
     // the first 448 of the next, so its last frame is at offset 447 there.
     do {
         let rate = 48_000.0, frames = 512, period: UInt64 = 10_666_667, latency: UInt64 = 5 * ms
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let renderer = CoreRenderer(ring: ring, captureRate: rate, deviceRate: rate, channels: 2, gain: 1) {
             let level = [Float](repeating: 0.5, count: 480 * 2)
             for _ in 0..<100 { level.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 480) } }
@@ -3725,7 +3725,7 @@ do {
     // 512 frames to its start lead, which its start line logs in ms.
     do {
         let name = "bluetooth lead: a Bluetooth output's start lead counts a capture block more"
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
            let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
             buds.setBluetooth(true)
@@ -3740,7 +3740,7 @@ do {
     // way to its latest plausible one, else 150 ms; any other stays as it is.
     do {
         let name = "bluetooth latency: a report outside the window gives way, any other output's stays"
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
            let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
             buds.setBluetooth(true)
@@ -3838,13 +3838,15 @@ do {
         var gains: [String: Double] = [:]
         /// The UIDs given a new gain after their attach, in call order.
         var regained: [String] = []
-        init(active: [String], refusing: Set<String>) {
+        let refusal: Error
+        init(active: [String], refusing: Set<String>, refusal: Error = NSError(domain: "logictest", code: -1)) {
             activeOutputUIDs = active
             self.refusing = refusing
+            self.refusal = refusal
         }
         func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
             tried.append(uid)
-            if refusing.contains(uid) { throw NSError(domain: "logictest", code: -1) }
+            if refusing.contains(uid) { throw refusal }
             activeOutputUIDs.append(uid)
             deviceIDs[uid] = device
             delays[uid] = delayMs
@@ -3915,6 +3917,35 @@ do {
             && twice?.notices.map(\.uid) == ["bt", "usb"],
           "S69 start failure: two failures share one alert and get a notice each",
           "\(String(describing: twice))")
+
+    // S36: a capture rate the ring can't hold names the rate and Audio MIDI Setup, not exclusive use.
+    let tooFast = LocalOutputSync.apply(
+        enabled: ["usb", "bt"], listing: [usb, bt],
+        to: RefusingEngine(active: [], refusing: ["usb"],
+                           refusal: OutputRenderer.StartFailure.captureRateTooHigh(352_800)),
+        holdBacks: [:], gain: { _ in 1 })
+    let strings = UIStrings()
+    let generic = strings.outputCouldNotStart(names: "USB DAC")
+    let rateText = strings.outputCouldNotStart(names: "USB DAC", refusedCaptureRate: 352_800)
+    let rateText384 = strings.outputCouldNotStart(names: "USB DAC", refusedCaptureRate: 384_000)
+    check(tooFast.failures == [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 352_800)]
+            && applied.failures.allSatisfy { $0.refusedCaptureRate == nil },
+          "S36 start failure: a refused capture rate comes back with the failure, any other failure without one",
+          "\(tooFast.failures)")
+    check(rateText.contains("USB DAC") && rateText.contains("352.8 kHz") && rateText.contains("192 kHz")
+            && rateText.contains("Audio MIDI Setup") && !rateText.contains("exclusively")
+            && rateText384.contains("384 kHz") && generic.contains("exclusively"),
+          "S36 start failure: the text names the capture rate, the 192 kHz limit and Audio MIDI Setup", rateText)
+    check(OutputRenderer.StartFailure.captureRateTooHigh(384_000).description.contains("384000 Hz"),
+          "S36 start failure: the debug log names the refused rate")
+    let rateFailures = [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 384_000),
+                        F(uid: "bt", deviceName: "Headphones", refusedCaptureRate: 384_000)]
+    let mixedFailures = [rateFailures[0], F(uid: "bt", deviceName: "Headphones")]
+    check(LocalOutputSync.sharedRefusedRate(rateFailures) == 384_000
+            && LocalOutputSync.sharedRefusedRate(mixedFailures) == nil
+            && LocalOutputSync.sharedRefusedRate([]) == nil,
+          "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
+          "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
 
     // S72: a master change gives each running local speaker its gain again;
     // one switched on but not running (here "tv") gets no call.
@@ -5016,6 +5047,94 @@ do {
     check(CastID.device(castRows.first?.id ?? "").flatMap { measured.setOffset($0, ms: 720) } == 720
             && measured.offset(of: home) == 720 && measured.offset(of: kitchen) == 120 && measured.offset(of: den) == 0,
           "cast group: the measured offset is stored under the group's id, the members' stay as they were")
+}
+
+// MARK: Google Cast and the master volume (C104)
+do {
+    let tv = "00112233445566778899aabbccddeeff"
+    func reported(_ level: Double, fixed: Bool = false) -> CastVolume {
+        CastVolume(level: level, muted: false, fixed: fixed)
+    }
+    func near(_ level: Double?, _ expected: Double) -> Bool { level.map { approx($0, expected, 1e-9) } == true }
+    func session(master: Double, attempt: UInt64) -> CastModel {
+        var m = CastModel()
+        m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+        check(m.setMaster(master) == nil, "cast master: nothing is sent while no session runs")
+        _ = m.turnOn(tv)
+        m.startSent(tv)
+        _ = m.started(tv, attempt: attempt, refusal: ASC_CAST_REFUSED_NONE)
+        return m
+    }
+
+    var m = session(master: 50, attempt: 1)
+    check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
+          "cast master: master 50 with the speaker at 80 sends level 0.4 and the slider shows 80")
+    check(m.setMaster(0) == 0 && approx(m.volume(of: tv), 80, 1e-9),
+          "cast master: master 0 sends level 0, the speaker keeps 80")
+    _ = m.apply(.volume(attempt: 1, reported(0)))
+    check(approx(m.volume(of: tv), 80, 1e-9), "cast master: the device answering level 0 leaves the speaker at 80")
+    check(near(m.setMaster(50), 0.4), "cast master: a master change resends master × speaker")
+    _ = m.apply(.volume(attempt: 1, reported(0.4)))
+    check(m.apply(.volume(attempt: 1, reported(0.2))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
+          "cast master: level 0.2 set elsewhere at master 50 moves the speaker to 40, nothing sent back")
+    _ = m.setMaster(0)
+    _ = m.apply(.volume(attempt: 1, reported(0)))
+    check(m.apply(.volume(attempt: 1, reported(0.3))) != .setVolume(0) && approx(m.volume(of: tv), 40, 1e-9),
+          "cast master: at master 0 a level set elsewhere leaves the speaker's level and isn't fought")
+    check(m.stepVolume(tv, up: true) == .level(0), "cast master: a step at master 0 sends level 0")
+
+    var off = session(master: 0, attempt: 2)
+    check(off.apply(.volume(attempt: 2, reported(0.7))) == .setVolume(0) && approx(off.volume(of: tv), 70, 1e-9),
+          "cast master: a speaker turned on at master 0 is sent level 0 at its first status")
+    _ = off.apply(.volume(attempt: 2, reported(0)))
+    check(off.apply(.volume(attempt: 2, reported(0.5))) != .setVolume(0),
+          "cast master: only the first status of a session is answered")
+
+    var loud = session(master: 50, attempt: 3)
+    check(loud.apply(.volume(attempt: 3, reported(0.8))) == .setVolume(0.5) && approx(loud.volume(of: tv), 100, 1e-9),
+          "cast master: a device louder than the master allows comes down once at the start")
+    _ = loud.apply(.volume(attempt: 3, reported(0.5, fixed: true)))
+    check(loud.setMaster(20) == nil, "cast master: a fixed volume gets nothing (C68)")
+
+    var still = session(master: 100, attempt: 8)
+    _ = still.apply(.volume(attempt: 8, reported(0.5)))
+    _ = still.setVolume(tv, position: 0)
+    _ = still.apply(.volume(attempt: 8, reported(0)))
+    for position in [60.0, 50, 40] { _ = still.setMaster(position) }
+    _ = still.apply(.volume(attempt: 8, reported(0.3)))
+    _ = still.apply(.volume(attempt: 8, reported(0)))
+    check(still.volume(of: tv) == 0 && still.setMaster(100) == 0,
+          "cast master: a level the device already has is not waited for, so its buttons' 0 is read back and a muted speaker stays silent")
+
+    var quiet = session(master: 100, attempt: 5)
+    _ = quiet.apply(.volume(attempt: 5, reported(0.5)))
+    _ = quiet.setVolume(tv, position: 80)
+    _ = quiet.apply(.volume(attempt: 5, reported(0.8)))
+    quiet.stopSent()
+    quiet.startSent(tv)
+    _ = quiet.started(tv, attempt: 6, refusal: ASC_CAST_REFUSED_NONE)
+    check(quiet.apply(.volume(attempt: 6, reported(0.1))) == .setVolume(0.8) && approx(quiet.volume(of: tv), 80, 1e-9),
+          "cast master: a session starts at master × own level when the device is quieter, not read back (C105)")
+    quiet.stopSent()
+    quiet.startSent(tv)
+    _ = quiet.started(tv, attempt: 7, refusal: ASC_CAST_REFUSED_NONE)
+    check(quiet.apply(.volume(attempt: 7, reported(0.1, fixed: true))) != .setVolume(0.8),
+          "cast master: a fixed volume is not set at the start (C68)")
+
+    var group = CastModel()
+    group.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
+    _ = group.setMaster(50)
+    _ = group.turnOn("group1")
+    group.startSent("group1")
+    _ = group.started("group1", attempt: 4, refusal: ASC_CAST_REFUSED_NONE)
+    check(near(group.setVolume("group1", position: 80), 0.4) && near(group.setMaster(100), 0.8),
+          "cast master: a group follows the master like a device")
+
+    check(approx(asc_cast_device_level(0.5, 0.8), 0.4, 1e-12) && asc_cast_device_level(0, 0.8) == 0
+            && approx(asc_cast_own_level(0.2, 0.5, 0.9), 0.4, 1e-12) && asc_cast_own_level(0.2, 0, 0.7) == 0.7
+            && asc_cast_start_own_level(1, true, 0.8, 0.1) == 0.8 && approx(asc_cast_start_own_level(0.5, false, 0, 0.2), 0.4, 1e-12)
+            && asc_cast_level_answers(0.4, 0.404) && !asc_cast_level_answers(0.4, 0.41),
+          "cast master: the core's arithmetic")
 }
 
 // MARK: Google Cast track info and volume steps (C53, C54, C69)

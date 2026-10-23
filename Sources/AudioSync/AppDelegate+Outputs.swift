@@ -50,12 +50,13 @@ extension AppDelegate {
     }
 
     /// The master scales every speaker AudioSync plays: a local speaker's
-    /// gain, and each AirPlay speaker's volume, which AudioSync's own sender
-    /// scales by it.
+    /// gain, each AirPlay speaker's volume, which AudioSync's own sender
+    /// scales by it, and the Cast speaker's device volume (C104).
     func setMasterVolume(_ position: Double) {
         masterVolume = max(0, min(100, position))
         LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
         nativeAirPlay?.setMaster(masterVolume)
+        if let level = castModel.setMaster(masterVolume) { castSender?.setVolume(level) }
         pushModel()
     }
 
@@ -263,10 +264,12 @@ extension AppDelegate {
         guard let report else { return }
         if report.alertNames != nil {   // the failures' names, for a click of the user's
             let shown = applied.failures.map { shownName(local: $0.uid, system: $0.deviceName) }.joined(separator: ", ")
-            showAlert(text.outputCouldNotStart(names: shown), style: .warning)
+            let rate = LocalOutputSync.sharedRefusedRate(applied.failures)
+            showAlert(text.outputCouldNotStart(names: shown, refusedCaptureRate: rate), style: .warning)
         }
         for failure in report.notices {   // one notice per speaker, so each one clears by itself
-            postNotice(text.outputCouldNotStart(names: shownName(local: failure.uid, system: failure.deviceName)),
+            postNotice(text.outputCouldNotStart(names: shownName(local: failure.uid, system: failure.deviceName),
+                                                refusedCaptureRate: failure.refusedCaptureRate),
                        subject: SpeakerKey.make(id: failure.uid, airplay: false))
         }
         stopIfIdle()   // the failed speaker may have been the only output

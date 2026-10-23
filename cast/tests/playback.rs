@@ -764,25 +764,92 @@ fn device_volume_changes_never_touch_the_samples() {
         |event| matches!(event, SessionEvent::Volume(volume) if (volume.level - 0.2).abs() < 1e-9),
     );
     assert!(!seen.is_empty());
-    // A slow runner can stream less than a second in a fixed wait, so wait for the samples.
+    // A starved feed thread falls behind real time and the stream fills in silence (C52),
+    // so wait for a second of samples that ends in captured audio, not for a fixed time.
+    let tail_is_audio = |samples: &[i16]| {
+        samples.len() > 48_000 && samples[samples.len() - 100..].iter().all(|s| *s == 9)
+    };
     let settled = Instant::now() + Duration::from_millis(500);
-    let until = Instant::now() + Duration::from_secs(5);
+    let until = Instant::now() + Duration::from_secs(10);
     let mut samples = fetched_samples(&device);
-    while Instant::now() < until && (Instant::now() < settled || samples.len() <= 48_000) {
+    while Instant::now() < settled || !tail_is_audio(&samples) {
+        assert!(
+            Instant::now() < until,
+            "no captured audio at the end of the stream in 10 s: {} samples, {} silent, last 8 {:?}",
+            samples.len(),
+            samples.iter().filter(|s| **s == 0).count(),
+            &samples[samples.len().saturating_sub(8)..],
+        );
         session.run_for(Duration::from_millis(50));
         samples = fetched_samples(&device);
     }
     assert_eq!(count(&device, NS_RECEIVER, "SET_VOLUME"), 1, "no echo");
-    assert!(samples.len() > 48_000, "{} samples", samples.len());
     assert!(
         samples.iter().all(|sample| *sample == 9 || *sample == 0),
         "samples as captured, or the silence of a gap"
     );
+    session.stop();
+    device.join();
+}
+
+// covers: C25, C81
+#[test]
+fn an_oversized_frame_from_the_device_is_a_fault_the_session_recovers_from() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::SendRaw(70_000u32.to_be_bytes().to_vec()));
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
     assert!(
-        samples[samples.len() - 100..]
-            .iter()
-            .all(|sample| *sample == 9)
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: false })),
+        "{seen:?}"
     );
+    assert_eq!(device.connection_count(), 2, "the channel was closed");
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1);
+    assert!(!session.is_ended());
+    session.stop();
+    device.join();
+}
+
+// covers: C82
+#[test]
+fn a_close_from_the_running_app_reconnects_its_virtual_connection_and_plays_on() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::Send(json_message(
+        "transport-1",
+        "sender-0",
+        NS_CONNECTION,
+        json!({"type": "CLOSE"}),
+    )));
+    let app_connects = |device: &FakeDevice| {
+        device
+            .received()
+            .into_iter()
+            .filter(|(destination, ns, payload)| {
+                destination == "transport-1" && ns == NS_CONNECTION && payload["type"] == "CONNECT"
+            })
+            .count()
+    };
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until && app_connects(&device) < 2 {
+        session.run_for(Duration::from_millis(50));
+    }
+    assert_eq!(app_connects(&device), 2, "the app's CONNECT once more");
+    session.run_for(Duration::from_millis(500));
+    let seen: Vec<SessionEvent> = std::iter::from_fn(|| session.poll_event()).collect();
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Ended(_) | SessionEvent::Recovering(_))),
+        "{seen:?}"
+    );
+    assert_eq!(device.connection_count(), 1, "the same channel");
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1);
     session.stop();
     device.join();
 }

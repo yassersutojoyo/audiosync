@@ -24,6 +24,10 @@ pub const RETRY_DELAYS: [Duration; 5] = [
 /// The wait between retries once [`RETRY_DELAYS`] are used up (P142).
 pub const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
+/// The longest back-off a receiver's pair-verify answer can impose before
+/// a retry (P154).
+pub const MAX_BACK_OFF: Duration = Duration::from_secs(600);
+
 /// The wait before retry number `attempt`, counted from 0 since the last
 /// time the speaker played (P142).
 pub fn retry_delay(attempt: u32) -> Duration {
@@ -55,6 +59,15 @@ impl Backoff {
         let wait = retry_delay(self.failures);
         self.failures = self.failures.saturating_add(1);
         Some(now + wait)
+    }
+
+    /// A pair-verify refused for the receiver's state (P154) at `now`: the
+    /// next session starts on the usual schedule, but no sooner than
+    /// `wait`, which is capped at [`MAX_BACK_OFF`].
+    pub fn on_receiver_state(&mut self, wait: Duration, now: Instant) -> Instant {
+        let at = now + retry_delay(self.failures).max(wait.min(MAX_BACK_OFF));
+        self.failures = self.failures.saturating_add(1);
+        at
     }
 
     /// A session reached playing: the next loss starts the schedule again

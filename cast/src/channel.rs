@@ -856,6 +856,11 @@ impl Channel {
             Some(_) => self.take_pending(id),
             None => None,
         };
+        if status.volume.control_type == ControlType::Fixed {
+            // A drag value still waiting for its interval must not reach a
+            // control that turned fixed meanwhile (C68).
+            self.volume_queued = None;
+        }
         self.status = Some(status.clone());
         self.volume_unconfirmed = None;
         self.events.push_back(Event::Status(status.clone()));

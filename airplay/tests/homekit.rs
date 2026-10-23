@@ -572,13 +572,20 @@ fn pair_verify_checks_m2_and_ends_with_the_x25519_secret() {
         "{end:?}"
     );
 
-    // Error 7 is Busy, any other error item, a 470 or another 4xx means
-    // rejected credentials, 409 is Busy, 401 a challenge (P58), and a 5xx
-    // is a passing fault that keeps them (P154).
+    // Error 2, a 470 or another 4xx means rejected credentials; error 7 and
+    // 409 are Busy; any other error item describes the receiver's state
+    // (P150); 401 is a challenge (P58), and a 5xx is a passing fault that
+    // keeps them (P154).
     for (answer, expected) in [
         (Answer::Error(7), Some(ErrorKind::Busy)),
         (Answer::Error(2), Some(ErrorKind::PairingRequired)),
-        (Answer::Error(1), Some(ErrorKind::PairingRequired)),
+        (Answer::Error(1), Some(ErrorKind::PairingFailed)),
+        (Answer::Error(3), Some(ErrorKind::PairingFailed)),
+        (Answer::Error(4), Some(ErrorKind::PairingFailed)),
+        (Answer::Error(5), Some(ErrorKind::PairingFailed)),
+        (Answer::Error(6), Some(ErrorKind::PairingFailed)),
+        (Answer::Error(9), Some(ErrorKind::PairingFailed)),
+        (Answer::EmptyError, Some(ErrorKind::PairingFailed)),
         (Answer::Status(470), Some(ErrorKind::PairingRequired)),
         (Answer::Status(403), Some(ErrorKind::PairingRequired)),
         (Answer::Status(500), Some(ErrorKind::Refused)),
@@ -604,6 +611,70 @@ fn pair_verify_checks_m2_and_ends_with_the_x25519_secret() {
             }
         }
     }
+}
+
+// A malformed M2 fails P66's checks and rejects the credentials; a malformed
+// M4 comes after the receiver proved itself, so it is a protocol error that
+// keeps them.
+// covers: P66, P154
+#[test]
+fn a_malformed_verify_answer_rejects_the_credentials_only_at_m2() {
+    let mut entropy = TestEntropy::new();
+    for (state, expected) in [
+        (1, ErrorKind::PairingRequired),
+        (3, ErrorKind::ProtocolError),
+    ] {
+        let mut fake = FakeHomeKit::new(PIN);
+        let credentials = paired(&mut fake, &mut entropy);
+        fake.answers
+            .push((("/pair-verify", state), Answer::Malformed));
+        let mut verify = PairVerify::new(credentials, &mut entropy).expect("entropy");
+        let VerifyStep::Failed(failure) = run_verify(&mut verify, &mut fake) else {
+            panic!("a failure at {state}");
+        };
+        assert_eq!(failure.error.kind, expected, "{state}");
+    }
+}
+
+// Only error 2 speaks about the credentials; a back-off, a full peer list,
+// too many tries or an unavailable receiver is retried with them kept.
+// covers: P150, P154
+#[test]
+fn pair_verify_errors_about_the_receivers_state_are_retried() {
+    let mut entropy = TestEntropy::new();
+    let mut fake = FakeHomeKit::new(PIN);
+    let credentials = paired(&mut fake, &mut entropy);
+    fake.answers.push((("/pair-verify", 1), Answer::Error(3)));
+    fake.back_off = Some(30);
+    let mut verify = PairVerify::new(credentials, &mut entropy).expect("entropy");
+    let VerifyStep::Failed(failure) = run_verify(&mut verify, &mut fake) else {
+        panic!("a failure");
+    };
+    assert_eq!(failure.error.kind, ErrorKind::PairingFailed);
+    assert_eq!(failure.back_off, Some(Duration::from_secs(30)));
+    assert_eq!(failure.error.retry_after, Some(Duration::from_secs(30)));
+    for code in [1, 4, 5, 6] {
+        let mut fake = FakeHomeKit::new(PIN);
+        let credentials = paired(&mut fake, &mut entropy);
+        fake.answers
+            .push((("/pair-verify", 3), Answer::Error(code)));
+        let mut verify = PairVerify::new(credentials, &mut entropy).expect("entropy");
+        let VerifyStep::Failed(failure) = run_verify(&mut verify, &mut fake) else {
+            panic!("a failure for {code}");
+        };
+        assert_eq!(failure.error.kind, ErrorKind::PairingFailed, "{code}");
+        assert_eq!(failure.error.retry_after, Some(Duration::ZERO), "{code}");
+    }
+    let mut fake = FakeHomeKit::new(PIN);
+    let credentials = paired(&mut fake, &mut entropy);
+    fake.answers.push((("/pair-verify", 1), Answer::Error(2)));
+    fake.back_off = Some(30);
+    let mut verify = PairVerify::new(credentials, &mut entropy).expect("entropy");
+    let VerifyStep::Failed(failure) = run_verify(&mut verify, &mut fake) else {
+        panic!("a failure");
+    };
+    assert_eq!(failure.error.kind, ErrorKind::PairingRequired);
+    assert_eq!(failure.error.retry_after, None);
 }
 
 // covers: P150

@@ -890,6 +890,7 @@ impl Ap2Session {
             method,
             status,
             fallback: None,
+            retry_after: None,
             detail,
         });
     }

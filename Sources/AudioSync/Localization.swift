@@ -666,10 +666,22 @@ struct UIStrings {
     /// A device's name, or a placeholder when Core Audio can't read it.
     func deviceName(_ name: String) -> String { name.isEmpty ? unknownDevice : name }
 
-    func outputCouldNotStart(names: String) -> String {
+    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason.
+    func outputCouldNotStart(names: String, refusedCaptureRate: Double? = nil) -> String {
         let deviceName = names.isEmpty ? unknownDevice : names
-        return "Could not start output for this speaker, so it's off: \(deviceName)\n"
-            + "Another app may be using it exclusively, or the format may be incompatible."
+        let first = "Could not start output for this speaker, so it's off: \(deviceName)\n"
+        guard let rate = refusedCaptureRate else {
+            return first + "Another app may be using it exclusively, or the format may be incompatible."
+        }
+        let highest = kiloHertz(Double(EngineParts.highestCaptureRate))
+        return first + "AudioSync captures the audio at \(kiloHertz(rate)), but plays it on local speakers "
+            + "only up to \(highest). In Audio MIDI Setup, set your Mac's output device, or the input device "
+            + "you stream from, to \(highest) or lower, then turn this speaker on again."
+    }
+
+    /// "384 kHz", "352.8 kHz".
+    private func kiloHertz(_ hz: Double) -> String {
+        String(format: "%g kHz", (hz / 100).rounded() / 10)
     }
 
     func streamingStartMessage(for error: Error) -> String {
@@ -828,9 +840,10 @@ struct UIStrings {
     /// The name field's VoiceOver label; the field's placeholder is the
     /// system name, which an empty field brings back.
     func speakerNameField(system: String) -> String { "Name for \(system)" }
-    /// The tooltip on a speaker's name.
-    func speakerNameHelp(system: String, renamed: Bool) -> String {
-        renamed ? "Device name: \(system). Double-click to rename." : "Double-click to rename."
+    /// The tooltip on a speaker's name: the full name, which the row may
+    /// truncate, then how to rename it.
+    func speakerNameHelp(name: String, system: String, renamed: Bool) -> String {
+        renamed ? "\(name)\nDevice name: \(system). Double-click to rename." : "\(name)\nDouble-click to rename."
     }
     /// What VoiceOver adds after a renamed speaker's label.
     func renamedSpeaker(system: String) -> String { "device name \(system)" }
@@ -1311,8 +1324,9 @@ struct UIStrings {
         Volume
         Local speakers' sliders follow how loudness is heard: halfway is about −18 dB.
         AirPlay speakers use the AirPlay volume scale.
-        A Google Cast speaker's slider sets the speaker's own volume, which
-        Master Volume leaves alone, and Mute under it mutes the speaker itself.
+        A Google Cast speaker's slider sets the speaker's own volume, and Master
+        Volume scales it like every other speaker. Mute under it mutes the
+        speaker itself.
 
         Notes
         - AirPlay speakers are kept in step with each other by AudioSync's AirPlay

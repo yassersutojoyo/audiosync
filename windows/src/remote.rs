@@ -459,6 +459,7 @@ mod tests {
             reference_name: Some("pc".to_owned()),
             airplay_delay_ms: Some(0.0),
             airplay_none_found: false,
+            airplay_searching: false,
             when_source_quits: Default::default(),
             cast_list: crate::ui_model::CastList::Quiet,
             cast_by_address: false,

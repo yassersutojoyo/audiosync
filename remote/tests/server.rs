@@ -964,6 +964,74 @@ fn reserved_slots_let_in_only_a_paired_device() {
 }
 
 #[test]
+fn a_full_server_makes_room_by_closing_the_oldest_reserved_waiter() {
+    let config = config("reserved-evict", Timing::default());
+    // Paired on a first server, so no pairing connection is still held by the second.
+    let first = start_with(config.clone());
+    let token = pair(&first);
+    first.server.stop();
+    let capacity = Capacity {
+        connections: 2,
+        per_peer: 3,
+        reserved: 1,
+        reserved_per_peer: 2,
+    };
+    for round in 1.. {
+        let remote = start_with(Config {
+            capacity,
+            ..config.clone()
+        });
+        remote.server.publish(sample());
+        // Accepted in order: the first takes the shared slot, the second the reserved one.
+        let _shared = idle_connection(&remote);
+        let opened = Instant::now();
+        let mut waiter = idle_connection(&remote);
+        let reply = get(&remote, "/api/state", Some(&token));
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        // Closed unanswered; a waiter left in place would get a 503 after 1 s.
+        let answer = read_all(&mut waiter);
+        if answer.is_empty() {
+            break;
+        }
+        // On a starved run the waiter's 1 s ran out before the paired request came.
+        assert!(opened.elapsed() >= Duration::from_secs(1), "{answer:?}");
+        assert!(round < 5, "every round outlasted the waiter's time");
+    }
+}
+
+#[test]
+fn a_busy_answer_arrives_after_a_request_the_server_never_read() {
+    let timing = Timing {
+        // The idle connections must outlast every round on a slow run.
+        request: Duration::from_secs(60),
+        ..Timing::default()
+    };
+    let remote = start_with(config("busy-linger", timing));
+    let _idle: Vec<TcpStream> = (0..8).map(|_| idle_connection(&remote)).collect();
+    let raw = format!(
+        "GET /api/state HTTP/1.1\r\nHost: {}\r\nX-Padding: {}\r\n\r\n",
+        host(&remote),
+        "a".repeat(4096)
+    );
+    for round in 0..10 {
+        let mut ninth = idle_connection(&remote);
+        ninth.write_all(raw.as_bytes()).unwrap();
+        ninth
+            .set_read_timeout(Some(Duration::from_secs(20)))
+            .unwrap();
+        let mut answer = Vec::new();
+        // A reset instead of a close can cost a browser the answer.
+        let ended = ninth.read_to_end(&mut answer);
+        let answer = String::from_utf8_lossy(&answer);
+        assert!(ended.is_ok(), "round {round}: {ended:?} after {answer:?}");
+        assert!(
+            answer.starts_with("HTTP/1.1 503 "),
+            "round {round}: {answer:?}"
+        );
+    }
+}
+
+#[test]
 fn a_request_that_takes_too_long_is_closed_unanswered() {
     let timing = Timing {
         request: Duration::from_millis(300),
