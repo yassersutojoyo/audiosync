@@ -47,7 +47,7 @@ final class EqualizerWindowController {
         let text = UIStrings()
         guard model.curves.indices.contains(index) else { return }
         let current = model.curves[index].name
-        guard let typed = promptName(title: text.renameCurveTitle, message: text.renameGroupMessage(current),
+        guard let typed = promptName(title: text.renameCurveTitle, message: text.renameMessage(current),
                                      name: current, confirm: text.rename) else { return }
         if !model.renameCurve(index, to: typed), let name = Equalizer.curveName(typed) {
             inform(text.renameCurveTitle, text.curveNameTaken(name))
