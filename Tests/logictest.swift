@@ -4334,7 +4334,7 @@ do {
             && CalibrationFlow.leftOut(transport: usb, terminal: 0x0301, dataSource: nil, name: "USB Audio") == nil
             && CalibrationFlow.leftOut(transport: usb, terminal: nil, dataSource: nil, name: "Desk Headphones") == nil
             && CalibrationFlow.leftOut(transport: bt, terminal: UInt32(kAudioStreamTerminalTypeHeadphones),
-                                       dataSource: nil, name: "WH-1000XM5") == .headphones
+                                       dataSource: nil, name: "WH-1000XM5 Headphones") == .headphones
             && CalibrationFlow.leftOut(transport: bt, terminal: nil, dataSource: nil,
                                        name: "Living Room AirPods Pro") == .headphones
             && CalibrationFlow.leftOut(transport: kAudioDeviceTransportTypeBluetoothLE, terminal: 0, dataSource: nil,
@@ -4347,6 +4347,27 @@ do {
             && CalibrationFlow.leftOut(transport: 0, terminal: nil, dataSource: nil, name: "Headset") == nil,
           "calibration: a virtual output, the headphone jack, a headphone or headset terminal, and a Bluetooth "
             + "output named as headphones sit out; speakers, Bluetooth speakers, aggregates and AirPlay stay in")
+
+    // A real soundcore Select 4 Go over A2DP reported the headphones terminal ('hdph') and no data source.
+    let ble = kAudioDeviceTransportTypeBluetoothLE, hdph = UInt32(kAudioStreamTerminalTypeHeadphones)
+    check(CalibrationFlow.leftOut(transport: 0x626C_7565, terminal: 0x6864_7068, dataSource: nil,
+                                  name: "soundcore Select 4 Go") == nil
+            && CalibrationFlow.leftOut(transport: ble, terminal: hdph, dataSource: nil,
+                                       name: "soundcore Select 4 Go") == nil,
+          "calibration: a Bluetooth speaker reporting the headphones terminal takes part")
+    check(CalibrationFlow.leftOut(transport: bt, terminal: nil, dataSource: hdpn, name: "soundcore Select 4 Go") == nil
+            && CalibrationFlow.leftOut(transport: ble, terminal: nil, dataSource: hdpn,
+                                       name: "soundcore Select 4 Go") == nil
+            && CalibrationFlow.leftOut(transport: bt, terminal: hdph, dataSource: hdpn, name: "AirPods Pro") == .headphones
+            && CalibrationFlow.leftOut(transport: ble, terminal: hdph, dataSource: hdpn,
+                                       name: "WH-1000XM5 Headphones") == .headphones
+            && CalibrationFlow.leftOut(transport: builtIn, terminal: nil, dataSource: hdpn,
+                                       name: "MacBook Pro Speakers") == .headphones
+            && CalibrationFlow.leftOut(transport: usb, terminal: hdph, dataSource: nil, name: "USB Audio") == .headphones
+            && CalibrationFlow.leftOut(transport: usb, terminal: 0x0402, dataSource: hdpn,
+                                       name: "USB Audio") == .headphones,
+          "calibration: over Bluetooth only the name decides, so a speaker reporting the headphone data source "
+            + "takes part; elsewhere the jack and headphone terminals still sit out")
 
     let watchList = [
         AudioDevices.Device(id: 41, name: "Built-in Output", uid: "builtin", transport: builtIn),
@@ -5154,8 +5175,9 @@ do {
     check(!topic.isEmpty && named.allSatisfy(topic.contains),
           "guide: a Calibration topic before Speaker Notes names Calibrate All Speakers, Include Anyway and the rest",
           named.filter { !topic.contains($0) }.joined(separator: ", "))
-    check(topic.contains("Headphones") && topic.contains("virtual outputs"),
-          "guide: the Calibration topic says headphones and virtual outputs are left out")
+    check(topic.contains("Headphones") && topic.contains("virtual outputs")
+            && topic.contains("Bluetooth speakers take part"),
+          "guide: the Calibration topic says headphones and virtual outputs are left out and Bluetooth speakers stay in")
 }
 
 // MARK: Web remote: the snapshot the page gets, and what a phone's change does

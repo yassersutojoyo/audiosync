@@ -1212,10 +1212,13 @@ struct UIStrings {
 
         Headphones, headsets, earbuds and virtual outputs are left out, since
         the microphone can't hear them: their rows say so, and their delay
-        stays yours to set. If one of them does play through a speaker in the
-        room, such as a speaker that reports itself as headphones or a virtual
-        output that passes the sound on, click '\(includeAnyway)' next to it
-        in the \(calibrateAll) window. That holds until you close the window.
+        stays yours to set. If one of them does play through a speaker in
+        the room, such as a speaker that reports itself as headphones or a
+        virtual output that passes the sound on, click '\(includeAnyway)'
+        next to it in the \(calibrateAll) window. That holds until you close
+        the window. Bluetooth speakers take part; a Bluetooth device counts
+        as headphones only when its name says headphones, earbuds or
+        AirPods.
         While headphones are plugged into the Mac, its built-in speakers are
         silent, so calibration can't start until you unplug them.
 
