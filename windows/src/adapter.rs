@@ -65,6 +65,9 @@ use std::path::PathBuf;
 use audiosync_core::clock;
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
+use audiosync_core::policy::presets::{
+    self, LeftOff, Preset, RecallAction, RecallMember, RecallOther, RecallStep, Scene, SpeakerNow,
+};
 use audiosync_core::policy::session::{
     AutoStartGate, DropReason, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start,
     reaction, source_switch, streaming_after,
@@ -93,7 +96,7 @@ use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, KeptAside, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedSource,
+    self, KeptAside, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedPreset, SavedSource,
     SavedSpeaker, SavedZone, Settings, SettingsFile,
 };
 use crate::speaker_names::SpeakerNames;
@@ -276,6 +279,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     next_group: u64,
     /// The zones (spec S245), migrated from the groups once (S248).
     zones: Zones,
+    /// The speaker presets (spec S251), the overlapping groups among them
+    /// once (S254).
+    presets: Vec<Preset>,
     gate: AutoStartGate,
     notices: Notices<NoticeSubject, Posted>,
     next_notice: u64,
@@ -391,6 +397,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             groups: Vec::new(),
             next_group: 1,
             zones: Zones::default(),
+            presets: Vec::new(),
             gate: AutoStartGate::default(),
             notices: Notices::new(),
             next_notice: 1,
@@ -439,7 +446,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// them when it appears. Nothing starts streaming here; auto-connect
     /// speakers do once the first listing finds them.
     fn restore(&mut self, saved: Settings) {
-        let saved = saved.with_zones_migrated();
+        let saved = saved.with_zones_migrated().with_presets_migrated();
         self.audio.set_master_volume(saved.master_volume);
         // A hidden speaker is never switched on, not even by the saved on-state.
         self.hidden = saved.hidden_speakers.clone();
@@ -500,6 +507,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             members: zone.members.clone(),
             volume: zone.volume,
         }));
+        self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
         self.cast_addresses = saved.cast_addresses.clone();
@@ -637,6 +645,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .map(SavedZone::from)
                 .collect(),
             speaker_zones_migrated: true,
+            speaker_presets: self
+                .presets
+                .iter()
+                .cloned()
+                .map(SavedPreset::from)
+                .collect(),
+            speaker_presets_migrated: true,
             equalizer: SavedEqualizer::from(self.equalizer),
             show_virtual_devices: self.view.show_virtual_devices,
             appearance: self.view.appearance,
@@ -1326,6 +1341,148 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// The speakers on now as a preset sees them (spec S251, S253): list
+    /// order, the reference output left out, no own volume for a
+    /// fixed-volume Cast speaker.
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
+    fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
+        state
+            .speakers
+            .iter()
+            .filter(|speaker| speaker.enabled && !speaker.is_reference())
+            .map(|speaker| SpeakerNow {
+                key: speaker.id.clone(),
+                volume: (!speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed))
+                    .then_some(speaker.volume),
+            })
+            .collect()
+    }
+
+    /// The ID of the preset the speakers play exactly now, the first in
+    /// list order (spec S253).
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
+    pub(crate) fn current_preset(&self) -> Option<String> {
+        let state = self.snapshot();
+        let on = Self::speakers_on_now(&state);
+        let scene = Scene {
+            on: &on,
+            zones: &self.zones,
+            master: state.master_volume,
+            gains_db: self.equalizer.gains_db,
+        };
+        presets::current(&self.presets, &scene).map(|preset| preset.id.clone())
+    }
+
+    /// Recalls preset `id` as the core's plan says (spec S252), a full
+    /// scene. Returns each stored member left off, by its shown name, with
+    /// the reason, for the notice the windows will post; `None` for an ID no
+    /// preset has.
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows presets yet"))]
+    pub(crate) fn recall_preset(&mut self, id: &str) -> Option<Vec<(String, LeftOff)>> {
+        let preset = self.presets.iter().find(|preset| preset.id == id)?.clone();
+        let state = self.snapshot();
+        let mut members: Vec<(SpeakerKey, Option<f64>, String, RecallMember)> = Vec::new();
+        for member in &preset.members {
+            let Some(key) = SpeakerKey::parse(&member.key) else {
+                continue;
+            };
+            let listed = state.speaker(&member.key);
+            let hidden = state
+                .hidden
+                .iter()
+                .find(|entry| entry.id == member.key && entry.present.is_some());
+            let kind = match (&key, listed.map(|speaker| speaker.kind)) {
+                (SpeakerKey::Local(_), _) => MemberKind::Local,
+                (SpeakerKey::Cast(_), _) => MemberKind::Cast,
+                (SpeakerKey::AirPlay(_), Some(SpeakerKind::AirPlay2)) => MemberKind::AirPlay2,
+                (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
+                (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
+            };
+            let name = listed
+                .map(|speaker| speaker.name.clone())
+                .or_else(|| hidden.map(|entry| entry.name.clone()))
+                .unwrap_or_else(|| self.custom_names.shown(&member.key, key.id()));
+            let facts = RecallMember {
+                kind,
+                found: listed.is_some() || hidden.is_some(),
+                hidden: hidden.is_some(),
+                on: listed.is_some_and(|speaker| speaker.enabled),
+                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                needs_airplay2: listed.is_none()
+                    && hidden.is_none()
+                    && !self.view.airplay2_experimental
+                    && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
+                in_target: matches!(&key, SpeakerKey::AirPlay(id)
+                    if self.audio.airplay_holding_target(id).is_some()),
+                fixed_volume: listed
+                    .and_then(|speaker| speaker.cast.as_ref())
+                    .is_some_and(|cast| cast.volume_fixed),
+                has_volume: member.volume.is_some(),
+            };
+            members.push((key, member.volume, name, facts));
+        }
+        let others: Vec<&Speaker> = state
+            .speakers
+            .iter()
+            .filter(|speaker| !preset.members.iter().any(|member| member.key == speaker.id))
+            .collect();
+        let other_facts: Vec<RecallOther> = others
+            .iter()
+            .map(|speaker| RecallOther {
+                on: speaker.enabled,
+                reference: speaker.is_reference(),
+            })
+            .collect();
+        let facts: Vec<RecallMember> = members.iter().map(|(.., facts)| *facts).collect();
+        let plan = presets::recall_plan(&facts, &other_facts, state.running);
+        let left_off: Vec<(String, LeftOff)> = members
+            .iter()
+            .zip(&plan.steps)
+            .filter_map(|((_, _, name, _), step)| match step {
+                RecallStep::LeftOff(reason) => Some((name.clone(), *reason)),
+                _ => None,
+            })
+            .collect();
+        if plan.action == RecallAction::Nothing {
+            self.log.log(|| {
+                format!(
+                    "preset \"{}\": no stored speaker can play, nothing changes",
+                    preset.name
+                )
+            });
+            return Some(left_off);
+        }
+        self.log
+            .log(|| format!("the user recalled preset \"{}\"", preset.name));
+        for (speaker, off) in others.iter().zip(&plan.switch_off) {
+            if let (true, Some(key)) = (*off, SpeakerKey::parse(&speaker.id)) {
+                self.switch_zone_member(&key, false);
+            }
+        }
+        let running = self.running();
+        for ((key, volume, _, facts), (step, set_volume)) in
+            members.iter().zip(plan.steps.iter().zip(&plan.set_volume))
+        {
+            if matches!(step, RecallStep::On | RecallStep::Waiting) && (!running || !facts.on) {
+                self.switch_zone_member(key, true);
+            }
+            if let (true, Some(volume)) = (*set_volume, volume) {
+                self.set_speaker_volume(&key.to_string(), *volume);
+            }
+        }
+        self.audio.set_master_volume(preset.master);
+        for (zone, volume) in presets::recall_zone_volumes(&preset, &self.zones) {
+            self.zones.set_volume(zone, volume);
+        }
+        // The preamp and the equalizer switch are standing trims outside
+        // every preset.
+        self.equalizer.gains_db = preset.gains_db;
+        self.audio.set_equalizer(self.equalizer);
+        self.start_if_switched_on();
+        self.take_events();
+        Some(left_off)
+    }
+
     /// Tells why a Cast speaker can't play; it is off.
     fn cast_cant_play(&mut self, id: &str, problem: CastProblem) {
         let speaker = self.cast_name(id);
@@ -1607,6 +1764,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
         }
         self.zones.rename_key(&from_key, &to_key);
+        for preset in &mut self.presets {
+            preset.rename_key(&from_key, &to_key);
+        }
         if self.saved.outputs.remove(from).is_some() {
             self.must_save = true;
         }
@@ -8170,6 +8330,141 @@ mod tests {
         later.groups.clear();
         adapter.restore(later);
         assert_eq!(adapter.snapshot().zones.len(), 2);
+    }
+
+    fn saved_preset(members: &[(String, Option<f64>)]) -> SavedPreset {
+        SavedPreset {
+            id: "preset:1".to_owned(),
+            name: "Evening".to_owned(),
+            members: members
+                .iter()
+                .map(|(key, volume)| settings::SavedPresetMember {
+                    key: key.clone(),
+                    volume: *volume,
+                })
+                .collect(),
+            zones: vec![settings::SavedPresetZone {
+                id: "zone:1".to_owned(),
+                volume: 45.0,
+            }],
+            master_volume: 70.0,
+            gains_db: [2.0; audiosync_core::eq::BAND_COUNT],
+        }
+    }
+
+    // covers: S252
+    #[test]
+    fn recall_leaves_delays_offsets_and_zone_members_untouched() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output_as("builtin", "Built-in", OutputKind::BuiltIn);
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_output(HEADPHONES, "Headphones");
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS)])],
+            speaker_presets: vec![saved_preset(&[
+                (key(HEADPHONES), Some(40.0)),
+                (key("gone"), Some(10.0)),
+            ])],
+            auto_connect: BTreeSet::from([key(SPEAKERS)]),
+            ..Settings::default()
+        });
+        adapter.poll();
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_delay(&key(SPEAKERS), 120.0);
+        adapter.set_speaker_delay(&key(HEADPHONES), -40.0);
+        let delays = |adapter: &AudioAdapter<MockBackend>| -> Vec<(String, Option<f64>, bool)> {
+            adapter
+                .snapshot()
+                .speakers
+                .into_iter()
+                .map(|speaker| (speaker.id, speaker.delay_ms, speaker.auto_connect))
+                .collect()
+        };
+        let before = delays(&adapter);
+        let zones_before = adapter.snapshot().zones;
+
+        let left = adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        assert_eq!(left, [("gone".to_owned(), LeftOff::NotFound)]);
+        assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
+        assert!(
+            enabled(&adapter, "builtin"),
+            "the reference output stays on"
+        );
+        assert!(adapter.snapshot().running);
+        assert_eq!(delays(&adapter), before);
+        let zones_after = adapter.snapshot().zones;
+        assert_eq!(zones_after[0].members, zones_before[0].members);
+        assert_eq!(zones_after[0].volume, 45.0);
+        assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).volume, 40.0);
+        assert_eq!(adapter.snapshot().master_volume, 70.0);
+        assert_eq!(adapter.recall_preset("preset:9"), None);
+    }
+
+    // covers: S252, S253
+    #[test]
+    fn a_recalled_preset_is_current() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS)])],
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), Some(35.0)),
+                (cc(CAST_KITCHEN), None),
+            ])],
+            equalizer: SavedEqualizer {
+                enabled: true,
+                preamp_db: -3.0,
+                gains_db: vec![0.0; audiosync_core::eq::BAND_COUNT],
+            },
+            ..Settings::default()
+        });
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        assert_eq!(adapter.current_preset(), None);
+
+        let left = adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        assert!(left.is_empty(), "{left:?}");
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert!(enabled(&adapter, SPEAKERS) && !enabled(&adapter, HEADPHONES));
+        assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert!(
+            !state.speaker(&cc(CAST_LIVING)).unwrap().enabled,
+            "a Cast speaker outside the preset goes off"
+        );
+        assert_eq!(
+            (
+                state.equalizer.enabled,
+                state.equalizer.preamp_db,
+                state.equalizer.gains_db
+            ),
+            (true, -3.0, [2.0; audiosync_core::eq::BAND_COUNT]),
+            "the preamp and the switch stay"
+        );
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+
+        adapter.set_equalizer(EqSettings {
+            enabled: false,
+            preamp_db: 4.0,
+            gains_db: [2.0; audiosync_core::eq::BAND_COUNT],
+        });
+        assert_eq!(
+            adapter.current_preset().as_deref(),
+            Some("preset:1"),
+            "the preamp and the switch never break the match"
+        );
+        adapter.set_speaker_volume(&key(SPEAKERS), 36.0);
+        assert_eq!(adapter.current_preset(), None, "a slider breaks it");
+        adapter.set_speaker_volume(&key(SPEAKERS), 35.0);
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(adapter.current_preset(), None, "a switch breaks it");
     }
 
     #[test]
