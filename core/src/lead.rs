@@ -186,6 +186,7 @@ mod tests {
         assert_eq!(leads.published_session_lead(), None, "none counts");
     }
 
+    // covers: S244
     #[test]
     fn only_live_input_on_a_local_output_skips_the_network_wait() {
         let sources = [SourceKind::System, SourceKind::App, SourceKind::Input];
