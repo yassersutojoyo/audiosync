@@ -89,3 +89,14 @@ S223 Mac host only: pairing and password prompts for the native AirPlay sender; 
 S224 Mac host only: the folder of the native AirPlay sender's stored pairings; its logic suite checks it.
 S225 Test harness only: the soak run's memory rule; the soak rules suite checks it.
 S228 Mac host only: the names the user gives speakers and the inline rename; its logic suite checks it.
+S259 Hosts only: the Presets card in the main window; the Mac logic suite and the Windows tests check it.
+S260 Hosts only: the preset row of the menu bar panel and the tray flyout; the Mac logic suite and the Windows tests check it.
+S261 Hosts only: the Presets submenu and its shortcuts; the Mac logic suite and the Windows tests check it.
+S262 Hosts only: saving, renaming, updating and deleting presets; the Mac logic suite and the Windows tests check it.
+S263 Hosts only: the presets' empty state; the Mac logic suite and the Windows tests check it.
+S264 Hosts only: where the current-preset mark shows; its rule is S253's, which the core covers.
+S265 Hosts only: carrying out a recall and its notice; the plan is S252's, which the core covers.
+S266 Hosts only: a recall's focus and the phone's start origin; the Mac logic suite and the Windows tests check it.
+S267 Hosts only: keyboard reach and focus of the preset controls; the Windows tests check it, the Mac by hand.
+S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests check it, the Mac by screenshot.
+S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Windows).
