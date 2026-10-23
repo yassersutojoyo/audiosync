@@ -144,6 +144,10 @@ fn devices_path() -> Option<PathBuf> {
 struct StringsText<'a>(Strings<'a>);
 
 impl RowText for StringsText<'_> {
+    fn turn_on_at_pc(&self) -> String {
+        self.0.get_remote_turn_on_at_pc().into()
+    }
+
     fn kind(&self, speaker: &Speaker) -> String {
         self.0
             .invoke_speaker_kind(speaker_kind(speaker.kind))
@@ -420,6 +424,7 @@ impl App {
                                 backend.set_speaker_volume(&id, volume);
                             }
                             Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
+                            Action::AirPlayDelay { ms } => backend.set_airplay_delay(ms),
                             Action::Master { volume } => backend.set_master_volume(volume),
                         }
                     }
