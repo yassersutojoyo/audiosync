@@ -371,6 +371,14 @@ pub struct CastGroup {
     pub members: CastMembers,
 }
 
+/// A stereo pair or home theater group that holds an AirPlay speaker: its
+/// AirPlay ID (`pair:` or `theater:` and more) and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InTarget {
+    pub id: String,
+    pub name: String,
+}
+
 /// What a Cast group's row knows of its members (spec C94).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum CastMembers {
@@ -762,9 +770,9 @@ pub trait AudioBackend {
     /// The password prompt to show, if one waits and no PIN prompt is open.
     fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
 
-    /// The name of the stereo pair or home theater group that holds the
-    /// AirPlay speaker `id` (see [`AirPlayProblem::PlaysInGroup`]).
-    fn airplay_holding_target(&self, _id: &str) -> Option<String> {
+    /// The stereo pair or home theater group that holds the AirPlay speaker
+    /// `id` (see [`AirPlayProblem::PlaysInGroup`]).
+    fn airplay_holding_target(&self, _id: &str) -> Option<InTarget> {
         None
     }
 

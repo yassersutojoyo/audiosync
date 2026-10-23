@@ -89,7 +89,7 @@ use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, sanitize_position};
 use super::SESSION_RATE;
 use super::backend::{
     AirPlayAvailability, AirPlayGroup, AirPlayGroupKind, AirPlayInfo, AirPlayPasswordPrompt,
-    AirPlayPinPrompt, AirPlayProblem, BackendEvent, PairingPhase,
+    AirPlayPinPrompt, AirPlayProblem, BackendEvent, InTarget, PairingPhase,
 };
 use super::pairings::PairingStore;
 use crate::debug_log::DebugLog;
@@ -1249,17 +1249,17 @@ impl AirPlaySpeakers {
             || (self.target_of(id).is_some() && !self.settings(id).enabled)
     }
 
-    /// The name of the stereo pair or home theater group that holds the
-    /// speaker `id`, which then stays off by itself
-    /// ([`AirPlayProblem::PlaysInGroup`]).
-    pub fn holding_target(&self, id: &str) -> Option<String> {
+    /// The stereo pair or home theater group that holds the speaker `id`,
+    /// which then stays off by itself ([`AirPlayProblem::PlaysInGroup`]).
+    pub fn holding_target(&self, id: &str) -> Option<InTarget> {
         if !self.held_by_target(id) {
             return None;
         }
         let target = self
             .added_target_of(id)
             .or_else(|| self.target_of(id).map(|target| target.id.to_string()))?;
-        self.targets.get(&target).map(|target| target.name.clone())
+        let name = self.targets.get(&target)?.name.clone();
+        Some(InTarget { id: target, name })
     }
 
     /// The listed stereo pair or home theater group that the listed speaker
@@ -5984,7 +5984,10 @@ pub mod tests {
             Err(AirPlayProblem::PlaysInGroup)
         );
         assert_eq!(
-            airplay.holding_target(&id_of(&left)).as_deref(),
+            airplay
+                .holding_target(&id_of(&left))
+                .map(|target| target.name)
+                .as_deref(),
             Some("Living Room")
         );
 

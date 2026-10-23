@@ -533,7 +533,7 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
         "the empty Connected Speakers list uses the plain note"
     );
     assert!(
@@ -989,7 +989,8 @@ fn the_flyout_row_shows_the_glyph_and_the_hint_in_its_description() {
 }
 
 /// A tray flyout row shows its speaker's note under the name (a waiting
-/// speaker's reason, for one), as a main window row does. The source is read
+/// speaker's reason, for one, after a zone's count), as a main window row
+/// does. The source is read
 /// line by line: Windows CI checks it out with CRLF line endings.
 #[test]
 fn a_flyout_row_shows_the_speakers_note() {
@@ -997,11 +998,14 @@ fn a_flyout_row_shows_the_speakers_note() {
     let lines: Vec<&str> = row.lines().map(str::trim).collect();
     let note = lines
         .iter()
-        .position(|line| *line == "if Strings.row-note(root.state) != \"\": QuietText {")
+        .position(|line| {
+            *line
+                == "if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != \"\": QuietText {"
+        })
         .expect("FlyoutRow shows a QuietText while its state has a note");
     assert_eq!(
         lines.get(note + 1).copied(),
-        Some("text: Strings.row-note(root.state);"),
+        Some("text: Strings.speaker-caption(root.caption, Strings.row-note(root.state));"),
         "the QuietText shows the note"
     );
 }

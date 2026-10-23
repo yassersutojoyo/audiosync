@@ -1,20 +1,20 @@
 // The main window: the same sections as the macOS app's main window, in the
 // same order. Header (mark, wordmark, status, streaming switch), notices,
 // then a left column (audio source, Now Playing, master volume, equalizer,
-// calibration) and the speaker list (This PC, Groups, Connected Speakers).
+// calibration) and the speaker list (This PC, Zones, Connected Speakers).
 // The menu bar carries the Windows shortcuts. Tab order follows the reading
 // order.
 
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, GroupItem, HiddenItem, LeftOutItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Appearance, CalibrationRowItem, CastList, HiddenItem, LeftOutItem, MainControl, NoticeItem, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
 export { TrayFlyout } from "flyout.slint";
-export { CastAddressDialog, GroupNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
+export { CastAddressDialog, ZoneNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
 export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
@@ -24,17 +24,16 @@ export { NameField } from "widgets.slint";
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
-export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GroupItem, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind } from "types.slint";
+export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneItem, ZoneTarget } from "types.slint";
 
-// A titled card of speaker rows, with a note when it has none.
-component SpeakerSection inherits VerticalLayout {
-    in property <string> title;
+// Speaker rows with a line between them, in a section's or a zone's card.
+component SpeakerRows inherits VerticalLayout {
     in property <[SpeakerItem]> speakers;
-    in property <string> note;
+    // The zones a row's Move to Zone submenu lists.
+    in property <[ZoneItem]> zones;
     callback toggled(string);
     callback volume-changed(string, float);
     callback sync-toggled(string);
-    callback blank-clicked();
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
     callback delay-committed(string);
@@ -50,19 +49,244 @@ component SpeakerSection inherits VerticalLayout {
     callback cast-resync(string);
     callback cast-remove(string);
     callback hide-requested(string);
-    // Add by Address…, under the note while no Google Cast speaker is found.
-    in property <bool> show-add-address;
-    callback add-address();
     callback calibrate(string);
+    callback move-to-zone(string, string);
+    callback new-zone(string);
+    callback remove-from-zone(string);
+    callback focus-changed(string, RowPart);
+    callback blank-clicked();
     callback cancel-calibration();
     callback calibration-privacy();
-    // The part of a row with the keyboard focus changed; none: it lost it.
-    callback focus-changed(string, RowPart);
     // A row built while this is its speaker's ID, or already built when it
     // becomes it, takes the keyboard focus on focus-part and clears the ID
     // (see MainWindow).
     in-out property <string> focus-id;
     in-out property <RowPart> focus-part;
+
+    for speaker[index] in root.speakers: VerticalLayout {
+        if index > 0: HorizontalLayout {
+            padding-left: Fluent.name-inset;
+            padding-right: 8px;
+            Divider { }
+        }
+
+        SpeakerRow {
+            item: speaker;
+            zones: root.zones;
+            init => {
+                if speaker.id == root.focus-id {
+                    root.focus-id = "";
+                    self.take-focus(root.focus-part);
+                }
+            }
+            property <bool> focus-asked: speaker.id == root.focus-id;
+            changed focus-asked => {
+                if self.focus-asked {
+                    root.focus-id = "";
+                    self.take-focus(root.focus-part);
+                }
+            }
+            toggled => {
+                root.toggled(speaker.id);
+            }
+            volume-changed(value) => {
+                root.volume-changed(speaker.id, value);
+            }
+            sync-toggled => {
+                root.sync-toggled(speaker.id);
+            }
+            delay-stepped(delta) => {
+                root.delay-stepped(speaker.id, delta);
+            }
+            delay-edited(text) => {
+                root.delay-edited(speaker.id, text);
+            }
+            delay-committed => {
+                root.delay-committed(speaker.id);
+            }
+            delay-cancelled => {
+                root.delay-cancelled(speaker.id);
+            }
+            auto-connect-toggled(on) => {
+                root.auto-connect-toggled(speaker.id, on);
+            }
+            forget-pairing => {
+                root.forget-pairing(speaker.id);
+            }
+            device-volume-fix => {
+                root.device-volume-fix(speaker.id);
+            }
+            rename-requested => {
+                root.rename-requested(speaker.id);
+            }
+            rename-edited(text) => {
+                root.rename-edited(speaker.id, text);
+            }
+            rename-committed => {
+                root.rename-committed(speaker.id);
+            }
+            rename-cancelled => {
+                root.rename-cancelled(speaker.id);
+            }
+            cast-muted(muted) => {
+                root.cast-muted(speaker.id, muted);
+            }
+            cast-resync => {
+                root.cast-resync(speaker.id);
+            }
+            cast-remove => {
+                root.cast-remove(speaker.id);
+            }
+            hide-requested => {
+                root.hide-requested(speaker.id);
+            }
+            calibrate => {
+                root.calibrate(speaker.id);
+            }
+            move-to-zone(zone) => {
+                root.move-to-zone(speaker.id, zone);
+            }
+            new-zone => {
+                root.new-zone(speaker.id);
+            }
+            remove-from-zone => {
+                root.remove-from-zone(speaker.id);
+            }
+            focus-changed(part) => {
+                root.focus-changed(speaker.id, part);
+            }
+            blank-clicked => {
+                root.blank-clicked();
+            }
+            cancel-calibration => {
+                root.cancel-calibration();
+            }
+            calibration-privacy => {
+                root.calibration-privacy();
+            }
+        }
+    }
+}
+
+// A zone in a card Narrator names after it: its header, then its members'
+// rows while it is expanded.
+component ZoneCard inherits VerticalLayout {
+    in property <ZoneItem> item;
+    in property <[ZoneItem]> zones;
+    callback zone-toggled <=> header.toggled;
+    callback zone-expanded-changed <=> header.expanded-changed;
+    callback zone-volume-changed <=> header.volume-changed;
+    callback zone-rename <=> header.rename;
+    callback zone-delete <=> header.delete;
+    callback zone-use-target <=> header.use-target;
+    callback zone-focus-changed <=> header.focus-changed;
+    callback toggled <=> rows.toggled;
+    callback volume-changed <=> rows.volume-changed;
+    callback sync-toggled <=> rows.sync-toggled;
+    callback delay-stepped <=> rows.delay-stepped;
+    callback delay-edited <=> rows.delay-edited;
+    callback delay-committed <=> rows.delay-committed;
+    callback delay-cancelled <=> rows.delay-cancelled;
+    callback auto-connect-toggled <=> rows.auto-connect-toggled;
+    callback forget-pairing <=> rows.forget-pairing;
+    callback device-volume-fix <=> rows.device-volume-fix;
+    callback rename-requested <=> rows.rename-requested;
+    callback rename-edited <=> rows.rename-edited;
+    callback rename-committed <=> rows.rename-committed;
+    callback rename-cancelled <=> rows.rename-cancelled;
+    callback cast-muted <=> rows.cast-muted;
+    callback cast-resync <=> rows.cast-resync;
+    callback cast-remove <=> rows.cast-remove;
+    callback hide-requested <=> rows.hide-requested;
+    callback calibrate <=> rows.calibrate;
+    callback move-to-zone <=> rows.move-to-zone;
+    callback new-zone <=> rows.new-zone;
+    callback remove-from-zone <=> rows.remove-from-zone;
+    callback focus-changed <=> rows.focus-changed;
+    callback blank-clicked <=> rows.blank-clicked;
+    callback cancel-calibration <=> rows.cancel-calibration;
+    callback calibration-privacy <=> rows.calibration-privacy;
+    // The header takes the keyboard focus on focus-zone-part while
+    // focus-zone-id is its zone's ID, and clears it; the rows as in
+    // SpeakerRows.
+    in-out property <string> focus-zone-id;
+    in-out property <RowPart> focus-zone-part;
+    in-out property <string> focus-id <=> rows.focus-id;
+    in-out property <RowPart> focus-part <=> rows.focus-part;
+
+    accessible-role: groupbox;
+    accessible-label: root.item.name;
+
+    Card {
+        inner-padding: 4px;
+
+        header := ZoneHeader {
+            item: root.item;
+            init => {
+                if root.item.id == root.focus-zone-id {
+                    root.focus-zone-id = "";
+                    self.take-focus(root.focus-zone-part);
+                }
+            }
+            property <bool> focus-asked: root.item.id == root.focus-zone-id;
+            changed focus-asked => {
+                if self.focus-asked {
+                    root.focus-zone-id = "";
+                    self.take-focus(root.focus-zone-part);
+                }
+            }
+        }
+
+        if root.item.expanded && root.item.members.length > 0: HorizontalLayout {
+            padding-left: Fluent.name-inset;
+            padding-right: 8px;
+            Divider { }
+        }
+
+        rows := SpeakerRows {
+            speakers: root.item.expanded ? root.item.members : [];
+            zones: root.zones;
+        }
+    }
+}
+
+// A titled card of speaker rows, with a note when it has none.
+component SpeakerSection inherits VerticalLayout {
+    in property <string> title;
+    in property <[SpeakerItem]> speakers;
+    in property <[ZoneItem]> zones;
+    in property <string> note;
+    callback toggled <=> rows.toggled;
+    callback volume-changed <=> rows.volume-changed;
+    callback sync-toggled <=> rows.sync-toggled;
+    callback delay-stepped <=> rows.delay-stepped;
+    callback delay-edited <=> rows.delay-edited;
+    callback delay-committed <=> rows.delay-committed;
+    callback delay-cancelled <=> rows.delay-cancelled;
+    callback auto-connect-toggled <=> rows.auto-connect-toggled;
+    callback forget-pairing <=> rows.forget-pairing;
+    callback device-volume-fix <=> rows.device-volume-fix;
+    callback rename-requested <=> rows.rename-requested;
+    callback rename-edited <=> rows.rename-edited;
+    callback rename-committed <=> rows.rename-committed;
+    callback rename-cancelled <=> rows.rename-cancelled;
+    callback cast-muted <=> rows.cast-muted;
+    callback cast-resync <=> rows.cast-resync;
+    callback cast-remove <=> rows.cast-remove;
+    callback hide-requested <=> rows.hide-requested;
+    callback calibrate <=> rows.calibrate;
+    callback move-to-zone <=> rows.move-to-zone;
+    callback new-zone <=> rows.new-zone;
+    callback remove-from-zone <=> rows.remove-from-zone;
+    callback focus-changed <=> rows.focus-changed;
+    callback blank-clicked <=> rows.blank-clicked;
+    callback cancel-calibration <=> rows.cancel-calibration;
+    callback calibration-privacy <=> rows.calibration-privacy;
+    // Add by Address…, under the note while no Google Cast speaker is found.
+    in property <bool> show-add-address;
+    callback add-address();
+    in-out property <string> focus-id <=> rows.focus-id;
+    in-out property <RowPart> focus-part <=> rows.focus-part;
 
     spacing: 8px;
     accessible-role: groupbox;
@@ -75,98 +299,9 @@ component SpeakerSection inherits VerticalLayout {
     Card {
         inner-padding: 4px;
 
-        for speaker[index] in root.speakers: VerticalLayout {
-            if index > 0: HorizontalLayout {
-                padding-left: Fluent.name-inset;
-                padding-right: 8px;
-                Divider { }
-            }
-
-            SpeakerRow {
-                item: speaker;
-                init => {
-                    if speaker.id == root.focus-id {
-                        root.focus-id = "";
-                        self.take-focus(root.focus-part);
-                    }
-                }
-                property <bool> focus-asked: speaker.id == root.focus-id;
-                changed focus-asked => {
-                    if self.focus-asked {
-                        root.focus-id = "";
-                        self.take-focus(root.focus-part);
-                    }
-                }
-                focus-changed(part) => {
-                    root.focus-changed(speaker.id, part);
-                }
-                toggled => {
-                    root.toggled(speaker.id);
-                }
-                volume-changed(value) => {
-                    root.volume-changed(speaker.id, value);
-                }
-                sync-toggled => {
-                    root.sync-toggled(speaker.id);
-                }
-                blank-clicked => {
-                    root.blank-clicked();
-                }
-                delay-stepped(delta) => {
-                    root.delay-stepped(speaker.id, delta);
-                }
-                delay-edited(text) => {
-                    root.delay-edited(speaker.id, text);
-                }
-                delay-committed => {
-                    root.delay-committed(speaker.id);
-                }
-                delay-cancelled => {
-                    root.delay-cancelled(speaker.id);
-                }
-                auto-connect-toggled(on) => {
-                    root.auto-connect-toggled(speaker.id, on);
-                }
-                forget-pairing => {
-                    root.forget-pairing(speaker.id);
-                }
-                device-volume-fix => {
-                    root.device-volume-fix(speaker.id);
-                }
-                rename-requested => {
-                    root.rename-requested(speaker.id);
-                }
-                rename-edited(text) => {
-                    root.rename-edited(speaker.id, text);
-                }
-                rename-committed => {
-                    root.rename-committed(speaker.id);
-                }
-                rename-cancelled => {
-                    root.rename-cancelled(speaker.id);
-                }
-                cast-muted(muted) => {
-                    root.cast-muted(speaker.id, muted);
-                }
-                cast-resync => {
-                    root.cast-resync(speaker.id);
-                }
-                cast-remove => {
-                    root.cast-remove(speaker.id);
-                }
-                hide-requested => {
-                    root.hide-requested(speaker.id);
-                }
-                calibrate => {
-                    root.calibrate(speaker.id);
-                }
-                cancel-calibration => {
-                    root.cancel-calibration();
-                }
-                calibration-privacy => {
-                    root.calibration-privacy();
-                }
-            }
+        rows := SpeakerRows {
+            speakers: root.speakers;
+            zones: root.zones;
         }
 
         if root.note != "": VerticalLayout {
@@ -688,7 +823,7 @@ export component MainWindow inherits Window {
     in-out property <int> now-playing-focused-button: -1;
     in property <[SpeakerItem]> this-pc;
     in property <[SpeakerItem]> connected;
-    in property <[GroupItem]> groups;
+    in property <[ZoneItem]> zones;
     in property <[NoticeItem]> notices;
     // What Narrator says about a new notice, while the app wants it said
     // here (empty otherwise).
@@ -711,6 +846,9 @@ export component MainWindow inherits Window {
     // nothing, its note says its speakers are hidden.
     in property <bool> this-pc-all-hidden;
     in property <bool> connected-all-hidden;
+    // A section lists nothing because each of its speakers is in a zone.
+    in property <bool> this-pc-all-in-zones;
+    in property <bool> connected-all-in-zones;
     // Speakers > Hidden Speakers.
     in property <[HiddenItem]> hidden-speakers;
     // AirPlay discovery runs but has found no speaker for 20 seconds.
@@ -797,11 +935,19 @@ export component MainWindow inherits Window {
     callback calibrate-all-apply-requested();
     callback calibrate-all-undo-requested();
     callback calibrate-all-close-requested();
-    callback group-toggled(string);
-
-    callback group-rename-requested(string);
-    callback group-deleted(string);
-    callback new-group-requested();
+    callback zone-toggled(string);
+    callback zone-expanded-changed(string, bool);
+    callback zone-volume-changed(string, float);
+    callback zone-rename-requested(string);
+    callback zone-deleted(string);
+    // Use <target> Instead in a zone's menu, by the member's ID.
+    callback zone-use-target-requested(string);
+    // Speakers > New Zone from Active Speakers… (Ctrl+N).
+    callback new-zone-requested();
+    // Move to Zone, New Zone… and Remove from Zone in a speaker's menu.
+    callback speaker-move-to-zone-requested(string, string);
+    callback speaker-new-zone-requested(string);
+    callback speaker-remove-from-zone-requested(string);
     callback refresh-devices();
     callback show-virtual-devices-toggled(bool);
     callback appearance-chosen(Appearance);
@@ -829,7 +975,7 @@ export component MainWindow inherits Window {
     // Narrator goes quiet and Tab starts over. So the rows report their
     // keyboard focus, and when a refresh rebuilds the list that has it, the
     // app (src/view.rs) asks for the focus back: on the notice at this
-    // index, or the speaker or group row with this ID (the same row, or its
+    // index, or the speaker row or zone header with this ID (the same row, or its
     // neighbour when it went), which takes it on the given part as it is
     // built and clears the request. A row of another list, which isn't
     // rebuilt, takes it when the request names it (a list's last row went:
@@ -837,13 +983,13 @@ export component MainWindow inherits Window {
     callback notice-focus-changed(int, bool);
     callback dismiss-all-focus-changed(bool);
     callback speaker-focus-changed(string, RowPart);
-    callback group-focus-changed(string, RowPart);
+    callback zone-focus-changed(string, RowPart);
     callback control-focus-changed(MainControl, bool);
     in-out property <int> focus-notice-index: -1;
     in-out property <string> focus-speaker-id;
     in-out property <RowPart> focus-speaker-part;
-    in-out property <string> focus-group-id;
-    in-out property <RowPart> focus-group-part;
+    in-out property <string> focus-zone-id;
+    in-out property <RowPart> focus-zone-part;
 
     public function focus-streaming-switch() {
         power.focus();
@@ -957,10 +1103,10 @@ export component MainWindow inherits Window {
             MenuSeparator { }
 
             MenuItem {
-                title: Strings.new-group;
+                title: Strings.new-zone;
                 shortcut: @keys(Control + N);
                 activated => {
-                    root.new-group-requested();
+                    root.new-zone-requested();
                 }
             }
 
@@ -1318,8 +1464,8 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Speakers: this PC first (few, stable rows), then groups, then
-            // every connected speaker by name.
+            // Speakers: this PC first (few, stable rows), then zones, then
+            // every connected speaker in no zone by name.
             scroll := ScrollView {
                 horizontal-stretch: 1;
 
@@ -1333,22 +1479,11 @@ export component MainWindow inherits Window {
 
                     SpeakerSection {
                         title: Strings.this-pc-section;
+                        zones: root.zones;
                         speakers: root.this-pc;
-                        forget-pairing(id) => {
-                            root.forget-pairing-requested(id);
-                        }
-                        hide-requested(id) => {
-                            root.speaker-hide-requested(id);
-                        }
-                        device-volume-fix(id) => {
-                            root.device-volume-fix-requested(id);
-                        }
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
-                        focus-changed(id, part) => {
-                            root.speaker-focus-changed(id, part);
-                        }
-                        note: root.this-pc.length > 0 ? "" : root.this-pc-all-hidden ? Strings.all-speakers-hidden : Strings.this-pc-none;
+                        note: root.this-pc.length > 0 ? "" : root.this-pc-all-hidden ? Strings.all-speakers-hidden : root.this-pc-all-in-zones ? Strings.this-pc-all-in-zones : Strings.this-pc-none;
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }
@@ -1357,9 +1492,6 @@ export component MainWindow inherits Window {
                         }
                         sync-toggled(id) => {
                             root.sync-toggled(id);
-                        }
-                        blank-clicked => {
-                            root.blank-clicked();
                         }
                         delay-stepped(id, delta) => {
                             root.delay-stepped(id, delta);
@@ -1373,17 +1505,14 @@ export component MainWindow inherits Window {
                         delay-cancelled(id) => {
                             root.delay-cancelled(id);
                         }
-                        calibrate(id) => {
-                            root.calibrate-requested(id);
-                        }
-                        cancel-calibration => {
-                            root.cancel-calibration-requested();
-                        }
-                        calibration-privacy => {
-                            root.calibration-privacy-requested();
-                        }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
+                        }
+                        forget-pairing(id) => {
+                            root.forget-pairing-requested(id);
+                        }
+                        device-volume-fix(id) => {
+                            root.device-volume-fix-requested(id);
                         }
                         rename-requested(id) => {
                             root.speaker-rename-requested(id);
@@ -1397,79 +1526,6 @@ export component MainWindow inherits Window {
                         rename-cancelled(id) => {
                             root.speaker-rename-cancelled(id);
                         }
-                    }
-
-                    if root.groups.length > 0: VerticalLayout {
-                        spacing: 8px;
-                        accessible-role: groupbox;
-                        accessible-label: Strings.groups;
-
-                        SectionTitle {
-                            text: Strings.groups;
-                        }
-
-                        Card {
-                            inner-padding: 4px;
-
-                            for group[index] in root.groups: VerticalLayout {
-                                if index > 0: HorizontalLayout {
-                                    padding-left: Fluent.name-inset;
-                                    padding-right: 8px;
-                                    Divider { }
-                                }
-
-                                GroupRow {
-                                    item: group;
-                                    blank-clicked => {
-                                        root.blank-clicked();
-                                    }
-                                    init => {
-                                        if group.id == root.focus-group-id {
-                                            root.focus-group-id = "";
-                                            self.take-focus(root.focus-group-part);
-                                        }
-                                    }
-                                    property <bool> focus-asked: group.id == root.focus-group-id;
-                                    changed focus-asked => {
-                                        if self.focus-asked {
-                                            root.focus-group-id = "";
-                                            self.take-focus(root.focus-group-part);
-                                        }
-                                    }
-                                    focus-changed(part) => {
-                                        root.group-focus-changed(group.id, part);
-                                    }
-                                    toggled => {
-                                        root.group-toggled(group.id);
-                                    }
-                                    rename => {
-                                        root.group-rename-requested(group.id);
-                                    }
-                                    delete => {
-                                        root.group-deleted(group.id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    SpeakerSection {
-                        title: Strings.connected-section;
-                        speakers: root.connected;
-                        forget-pairing(id) => {
-                            root.forget-pairing-requested(id);
-                        }
-                        hide-requested(id) => {
-                            root.speaker-hide-requested(id);
-                        }
-                        device-volume-fix(id) => {
-                            root.device-volume-fix-requested(id);
-                        }
-                        focus-id <=> root.focus-speaker-id;
-                        focus-part <=> root.focus-speaker-part;
-                        focus-changed(id, part) => {
-                            root.speaker-focus-changed(id, part);
-                        }
                         cast-muted(id, muted) => {
                             root.cast-muted-requested(id, muted);
                         }
@@ -1479,6 +1535,159 @@ export component MainWindow inherits Window {
                         cast-remove(id) => {
                             root.cast-remove-requested(id);
                         }
+                        hide-requested(id) => {
+                            root.speaker-hide-requested(id);
+                        }
+                        calibrate(id) => {
+                            root.calibrate-requested(id);
+                        }
+                        move-to-zone(id, zone) => {
+                            root.speaker-move-to-zone-requested(id, zone);
+                        }
+                        new-zone(id) => {
+                            root.speaker-new-zone-requested(id);
+                        }
+                        remove-from-zone(id) => {
+                            root.speaker-remove-from-zone-requested(id);
+                        }
+                        focus-changed(id, part) => {
+                            root.speaker-focus-changed(id, part);
+                        }
+                        blank-clicked => {
+                            root.blank-clicked();
+                        }
+                        cancel-calibration => {
+                            root.cancel-calibration-requested();
+                        }
+                        calibration-privacy => {
+                            root.calibration-privacy-requested();
+                        }
+                    }
+
+                    if root.zones.length > 0: VerticalLayout {
+                        spacing: 8px;
+                        accessible-role: groupbox;
+                        accessible-label: Strings.zones;
+
+                        SectionTitle {
+                            text: Strings.zones;
+                        }
+
+                        for zone in root.zones: ZoneCard {
+                            item: zone;
+                            zones: root.zones;
+                            focus-zone-id <=> root.focus-zone-id;
+                            focus-zone-part <=> root.focus-zone-part;
+                            focus-id <=> root.focus-speaker-id;
+                            focus-part <=> root.focus-speaker-part;
+                            zone-toggled => {
+                                root.zone-toggled(zone.id);
+                            }
+                            zone-expanded-changed(open) => {
+                                root.zone-expanded-changed(zone.id, open);
+                            }
+                            zone-volume-changed(value) => {
+                                root.zone-volume-changed(zone.id, value);
+                            }
+                            zone-rename => {
+                                root.zone-rename-requested(zone.id);
+                            }
+                            zone-delete => {
+                                root.zone-deleted(zone.id);
+                            }
+                            zone-use-target(member) => {
+                                root.zone-use-target-requested(member);
+                            }
+                            zone-focus-changed(part) => {
+                                root.zone-focus-changed(zone.id, part);
+                            }
+                            toggled(id) => {
+                                root.speaker-toggled(id);
+                            }
+                            volume-changed(id, value) => {
+                                root.speaker-volume-changed(id, value);
+                            }
+                            sync-toggled(id) => {
+                                root.sync-toggled(id);
+                            }
+                            delay-stepped(id, delta) => {
+                                root.delay-stepped(id, delta);
+                            }
+                            delay-edited(id, text) => {
+                                root.delay-edited(id, text);
+                            }
+                            delay-committed(id) => {
+                                root.delay-committed(id);
+                            }
+                            delay-cancelled(id) => {
+                                root.delay-cancelled(id);
+                            }
+                            auto-connect-toggled(id, on) => {
+                                root.auto-connect-toggled(id, on);
+                            }
+                            forget-pairing(id) => {
+                                root.forget-pairing-requested(id);
+                            }
+                            device-volume-fix(id) => {
+                                root.device-volume-fix-requested(id);
+                            }
+                            rename-requested(id) => {
+                                root.speaker-rename-requested(id);
+                            }
+                            rename-edited(id, text) => {
+                                root.speaker-rename-edited(id, text);
+                            }
+                            rename-committed(id) => {
+                                root.speaker-rename-committed(id);
+                            }
+                            rename-cancelled(id) => {
+                                root.speaker-rename-cancelled(id);
+                            }
+                            cast-muted(id, muted) => {
+                                root.cast-muted-requested(id, muted);
+                            }
+                            cast-resync(id) => {
+                                root.cast-resync-requested(id);
+                            }
+                            cast-remove(id) => {
+                                root.cast-remove-requested(id);
+                            }
+                            hide-requested(id) => {
+                                root.speaker-hide-requested(id);
+                            }
+                            calibrate(id) => {
+                                root.calibrate-requested(id);
+                            }
+                            move-to-zone(id, zone) => {
+                                root.speaker-move-to-zone-requested(id, zone);
+                            }
+                            new-zone(id) => {
+                                root.speaker-new-zone-requested(id);
+                            }
+                            remove-from-zone(id) => {
+                                root.speaker-remove-from-zone-requested(id);
+                            }
+                            focus-changed(id, part) => {
+                                root.speaker-focus-changed(id, part);
+                            }
+                            blank-clicked => {
+                                root.blank-clicked();
+                            }
+                            cancel-calibration => {
+                                root.cancel-calibration-requested();
+                            }
+                            calibration-privacy => {
+                                root.calibration-privacy-requested();
+                            }
+                        }
+                    }
+
+                    SpeakerSection {
+                        title: Strings.connected-section;
+                        zones: root.zones;
+                        speakers: root.connected;
+                        focus-id <=> root.focus-speaker-id;
+                        focus-part <=> root.focus-speaker-part;
                         show-add-address: root.cast-by-address && root.cast-list == CastList.none-found;
                         add-address => {
                             root.cast-add-address-requested();
@@ -1489,7 +1698,7 @@ export component MainWindow inherits Window {
                         // when neither finds a speaker.
                         property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                         property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
-                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
                         property <string> cast-note: self.both-none ? "" : Strings.cast-list(root.cast-list);
                         note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
@@ -1501,9 +1710,6 @@ export component MainWindow inherits Window {
                         sync-toggled(id) => {
                             root.sync-toggled(id);
                         }
-                        blank-clicked => {
-                            root.blank-clicked();
-                        }
                         delay-stepped(id, delta) => {
                             root.delay-stepped(id, delta);
                         }
@@ -1516,17 +1722,14 @@ export component MainWindow inherits Window {
                         delay-cancelled(id) => {
                             root.delay-cancelled(id);
                         }
-                        calibrate(id) => {
-                            root.calibrate-requested(id);
-                        }
-                        cancel-calibration => {
-                            root.cancel-calibration-requested();
-                        }
-                        calibration-privacy => {
-                            root.calibration-privacy-requested();
-                        }
                         auto-connect-toggled(id, on) => {
                             root.auto-connect-toggled(id, on);
+                        }
+                        forget-pairing(id) => {
+                            root.forget-pairing-requested(id);
+                        }
+                        device-volume-fix(id) => {
+                            root.device-volume-fix-requested(id);
                         }
                         rename-requested(id) => {
                             root.speaker-rename-requested(id);
@@ -1539,6 +1742,42 @@ export component MainWindow inherits Window {
                         }
                         rename-cancelled(id) => {
                             root.speaker-rename-cancelled(id);
+                        }
+                        cast-muted(id, muted) => {
+                            root.cast-muted-requested(id, muted);
+                        }
+                        cast-resync(id) => {
+                            root.cast-resync-requested(id);
+                        }
+                        cast-remove(id) => {
+                            root.cast-remove-requested(id);
+                        }
+                        hide-requested(id) => {
+                            root.speaker-hide-requested(id);
+                        }
+                        calibrate(id) => {
+                            root.calibrate-requested(id);
+                        }
+                        move-to-zone(id, zone) => {
+                            root.speaker-move-to-zone-requested(id, zone);
+                        }
+                        new-zone(id) => {
+                            root.speaker-new-zone-requested(id);
+                        }
+                        remove-from-zone(id) => {
+                            root.speaker-remove-from-zone-requested(id);
+                        }
+                        focus-changed(id, part) => {
+                            root.speaker-focus-changed(id, part);
+                        }
+                        blank-clicked => {
+                            root.blank-clicked();
+                        }
+                        cancel-calibration => {
+                            root.cancel-calibration-requested();
+                        }
+                        calibration-privacy => {
+                            root.calibration-privacy-requested();
                         }
                     }
 

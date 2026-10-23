@@ -69,8 +69,8 @@ use super::SESSION_RATE;
 use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedSlot, SenderStarter, StartedSender};
 use super::backend::{
     AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem, AudioBackend,
-    BackendError, BackendEvent, CastDiscovery, CastInfo, CastProblem, OutputInfo, OutputKind,
-    SourceId, SourceInfo, StopReason, TIMED_OUT,
+    BackendError, BackendEvent, CastDiscovery, CastInfo, CastProblem, InTarget, OutputInfo,
+    OutputKind, SourceId, SourceInfo, StopReason, TIMED_OUT,
 };
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
@@ -2178,7 +2178,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .and_then(AirPlaySpeakers::password_prompt)
     }
 
-    fn airplay_holding_target(&self, id: &str) -> Option<String> {
+    fn airplay_holding_target(&self, id: &str) -> Option<InTarget> {
         self.airplay.as_ref()?.holding_target(id)
     }
 
