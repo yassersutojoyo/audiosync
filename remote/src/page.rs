@@ -193,7 +193,8 @@ mod tests {
         let condition = &visible[..visible.find('{').unwrap()];
         assert!(condition.contains("!streamReplaced"), "{condition}");
         let connect = &script[script.find("function connect() {").unwrap()..];
-        let connect = &connect[..connect.find("\n}\n").unwrap()];
+        // A Windows checkout may end lines with CRLF, so match the closing brace without its newline.
+        let connect = &connect[..connect.find("\n}").unwrap()];
         assert!(connect.contains("streamReplaced = false;"));
     }
 
