@@ -20,6 +20,8 @@ impl App {
         let w = weak.clone();
         self.cast_address_dialog
             .on_confirmed(move |text| with_app(&w, |app| app.confirm_cast_address(&text)));
+        self.cast_address_dialog
+            .on_blank(|text| text.trim().is_empty());
         let w = weak.clone();
         self.cast_address_dialog
             .on_cancelled(move || with_app(&w, App::close_cast_address));

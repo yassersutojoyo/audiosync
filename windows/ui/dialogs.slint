@@ -395,6 +395,10 @@ export component CastAddressDialog inherits Dialog {
     out property <string> said-even: root.refusals > 0 && Math.mod(root.refusals, 2) == 0 ? root.error : "";
     callback confirmed(string);
     callback cancelled();
+    // Whether the text is empty once trimmed; Slint has no trim.
+    pure callback blank(string) -> bool;
+    // Add waits for an address, as on the Mac.
+    out property <bool> can-add: !root.blank(root.address);
 
     title: Strings.cast-add-address-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -477,7 +481,9 @@ export component CastAddressDialog inherits Dialog {
                     self.select-all();
                 }
                 accepted => {
-                    root.confirmed(root.address);
+                    if root.can-add {
+                        root.confirmed(root.address);
+                    }
                 }
             }
         }
@@ -486,6 +492,7 @@ export component CastAddressDialog inherits Dialog {
     DialogButton {
         text: Strings.add;
         primary: true;
+        active: root.can-add;
         dialog-button-role: accept;
         clicked => {
             root.confirmed(root.address);

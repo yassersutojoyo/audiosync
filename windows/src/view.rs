@@ -3325,8 +3325,7 @@ fn calibration_left_out(strings: &Strings<'_>, kind: ui_model::MicKind) -> Share
 fn left_out_reason(strings: &Strings<'_>, row: &LeftOutRow) -> SharedString {
     match (row.included, row.kind) {
         (true, _) => strings.get_calibrate_all_included(),
-        (false, ui_model::MicKind::Virtual) => strings.get_calibrate_all_left_out_virtual(),
-        (false, _) => strings.get_calibrate_all_left_out_headphones(),
+        (false, kind) => calibration_left_out(strings, kind),
     }
 }
 
@@ -4423,7 +4422,7 @@ mod tests {
         assert_eq!(card.left_out.len(), 2);
         assert_eq!(
             card.left_out[0].reason,
-            "Headphones are left out: the microphone can't hear them."
+            "Left out of microphone calibration: the microphone can't hear headphones."
         );
         assert!(!card.left_out[0].included);
         assert_eq!(
@@ -6325,6 +6324,28 @@ mod tests {
             (String::new(), String::new()),
             "reopened with nothing to say"
         );
+    }
+
+    #[test]
+    fn add_waits_for_an_address_and_enter_on_a_blank_field_does_nothing() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_cast_add_address_requested();
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        assert!(!dialog.get_can_add(), "Add is off on an empty field");
+        press(window, Key::Return);
+        type_text(window, "   ");
+        assert!(!dialog.get_can_add(), "spaces alone are no address");
+        press(window, Key::Return);
+        assert!(window.is_visible(), "Enter didn't add or close");
+        assert_eq!(dialog.get_error(), "", "no reason for an empty field");
+        assert_eq!(cast_address_said(&app), (String::new(), String::new()));
+
+        type_text(window, "speaker.local");
+        assert!(dialog.get_can_add());
+        press(window, Key::Return);
+        assert!(!window.is_visible(), "Enter added it");
+        assert!(app.snapshot().speaker("cc:speaker.local").is_some());
     }
 
     #[test]
