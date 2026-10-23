@@ -211,6 +211,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The user switched streaming off: auto-connect doesn't start it again
     /// until they switch it on (S120).
     var userStopped = false
+    /// The microphone permission request a start has out, if any.
+    var microphoneRequest = MicrophoneRequestGate()
     /// An automatic start failed: no more automatic starts until the user acts.
     var autoStartFailed = false
     /// Counts successful starts, so a check scheduled for one session ignores the next.
