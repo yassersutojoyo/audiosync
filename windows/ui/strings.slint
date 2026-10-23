@@ -29,6 +29,8 @@ export global Strings {
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no group.
     out property <string> no-speakers: @tr("No speakers found");
+    // The flyout's empty speaker list while AirPlay discovery runs.
+    out property <string> looking-for-speakers: @tr("Looking for speakers…");
     // Connected Speakers when its only outputs are virtual ones, hidden.
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
@@ -239,7 +241,21 @@ export global Strings {
     out property <string> menu-remote: @tr("Web Remote…");
     out property <string> remote-title: @tr("Web Remote");
     out property <string> remote-switch: @tr("Web Remote");
-    out property <string> remote-intro: @tr("Control your speakers from a phone on the same network as this PC. Open the address below on the phone or scan the QR code, add the page to the Home Screen, then open it from there and enter the pairing code.");
+    out property <string> remote-intro: @tr("Control your speakers from a phone on the same network as this PC.");
+    out property <string> remote-setup-title: @tr("Set Up the Phone");
+    // The accessible name of the iPhone and Android choice above the steps.
+    out property <string> remote-phone-picker: @tr("Phone");
+    out property <string> remote-iphone: @tr("iPhone");
+    out property <string> remote-android: @tr("Android");
+    public pure function remote-step-number(number: int) -> string {
+        @tr("{}.", number)
+    }
+    out property <string> remote-step-scan: @tr("Scan the QR code with your phone's camera.");
+    out property <string> remote-step-home-iphone: @tr("Add the page to your Home Screen: tap the options button left of Safari's address bar, then Share, View More and Add to Home Screen.");
+    out property <string> remote-step-home-android: @tr("Add the page to your Home screen: in Chrome's menu, tap Add to Home screen or Install app.");
+    out property <string> remote-step-open: @tr("Open AudioSync from the new icon and enter the pairing code.");
+    out property <string> remote-order-iphone: @tr("Do step 2 before you enter the code: a pairing made in Safari doesn't carry over to the Home Screen app, so you would pair again there.");
+    out property <string> remote-order-android: @tr("Do step 2 before you enter the code, so you pair in the app you'll use.");
     out property <string> remote-address-title: @tr("Address");
     out property <string> remote-address-label: @tr("On the phone, open");
     out property <string> remote-ip-label: @tr("If that doesn't open, use");
@@ -281,6 +297,9 @@ export global Strings {
     out property <string> remote-port-label: @tr("Port");
     out property <string> remote-use-port: @tr("Use Port");
     out property <string> remote-port-invalid: @tr("Enter a port from 1024 to 65535.");
+    // On the page, a speaker that asks for a PIN or password: turning it on
+    // from the phone would open the prompt here with nobody at the PC.
+    out property <string> remote-turn-on-at-pc: @tr("Asks for a code: turn it on in AudioSync on the PC");
     out property <string> remote-failed: @tr("The web remote couldn't start. Turn it off and on again.");
     out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices, so they are paired again after AudioSync restarts. Select Forget All Remote Devices again.");
     // A check item in File: on, the captured app quitting moves streaming to
@@ -631,7 +650,7 @@ export global Strings {
     out property <string> help-art-delay: @tr("Two speakers playing the same sound toward a listener. The second starts later, held back by its delay, so their waves line up.");
     out property <string> help-art-classes: @tr("Left: local and AirPlay speakers playing in step. Right: a Google Cast speaker starting after an offset you set by ear.");
     out property <string> help-calibration-title: @tr("Calibration");
-    out property <string> help-calibration: @tr("A microphone can measure delays for you. Put it where you listen and keep the room quiet. Each measurement compares a speaker with the PC's own speakers, so they have to be on and playing, and streaming has to be on too.\n\nTo measure one local speaker, turn it on, select its row or its delay, and select Calibrate with Microphone under the delay controls. Headphones and virtual outputs don't have that button. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets its delay from the difference. Cancel stops it and leaves the delay as it was.\n\nCalibrate All Speakers, on the Calibration card under Equalizer, measures every speaker that is on, AirPlay and Google Cast included. Headphones and virtual outputs are left out, since the microphone can't hear them, and their delay stays yours to set; the card lists them with the reason. If a speaker reports itself as headphones or a virtual output, Include Anyway measures it with the others until you close the results. AudioSync fades the music out, plays a sweep on each speaker in turn, twice each, and fades the music back in. The results show each speaker's old and new delay; the AirPlay speakers share one AirPlay delay, the middle of their values. Nothing changes until you choose Apply. Undo puts the old delays back, and Measure Again repeats one speaker.\n\nIf Windows blocks microphone access for desktop apps, AudioSync says so and where to allow it.");
+    out property <string> help-calibration: @tr("A microphone can measure delays for you. Put it where you listen and keep the room quiet. Each measurement compares a speaker with the PC's own speakers, so they have to be on and playing, and streaming has to be on too.\n\nTo measure one local speaker, turn it on, select its row or its delay, and select Calibrate with Microphone under the delay controls. Headphones and virtual outputs don't have that button. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets its delay from the difference. Cancel stops it and leaves the delay as it was.\n\nCalibrate All Speakers, on the Calibration card under Equalizer, measures every speaker that is on, AirPlay and Google Cast included. Headphones, headsets, earbuds and virtual outputs are left out, since the microphone can't hear them, and their delay stays yours to set; the card lists them with the reason. If a speaker reports itself as headphones or a virtual output, Include Anyway measures it with the others until you close the results. AudioSync fades the music out, plays a sweep on each speaker in turn, twice each, and fades the music back in. The results show each speaker's old and new delay; the AirPlay speakers share one AirPlay delay, the middle of their values. Nothing changes until you choose Apply. Undo puts the old delays back, and Measure Again repeats one speaker.\n\nIf Windows blocks microphone access for desktop apps, AudioSync says so and where to allow it.");
     out property <string> help-volume-title: @tr("Volume");
     out property <string> help-volume: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay speakers included. A Google Cast speaker's slider sets the speaker's own volume, which Master Volume leaves alone, and Mute under it mutes the speaker itself.\n\nWhen a local speaker that is on is turned down low or muted in Windows, a line under its slider says so, with a button that fixes it. AudioSync changes the Windows volume only when you select that button.");
     out property <string> help-bluetooth-title: @tr("Bluetooth");
@@ -643,7 +662,7 @@ export global Strings {
     out property <string> help-airplay-title: @tr("AirPlay");
     out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows \"Asks for a code\". When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead.\n\nA speaker protected by a password shows \"Asks for a code\" too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\n'AirPlay 2 (Experimental)', in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync. With it on, a stereo pair or home theater group shows as one row, and its note names the speakers in it.");
     out property <string> help-remote-title: @tr("Web Remote");
-    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off and set their volume and delay and the master volume, and it shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen first, then open it from there and enter the code: on some phones, a pairing made in the browser doesn't carry over to the Home Screen. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. On a network Windows calls Public, the window and a notice say so. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
+    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off and set their volume and delay and the master volume, and it shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. On a network Windows calls Public, the window and a notice say so. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-notices-title: @tr("Notices");
     out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in quick settings. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on File > Switch to All System Audio When the Source App Quits: AudioSync then moves to All System Audio, and stays there when the app opens again.");
 
@@ -931,12 +950,13 @@ export global Strings {
     // What the name field says about its keys.
     out property <string> speaker-name-field-hint: @tr("Press Enter to apply or Escape to cancel. Leave it empty for the device's own name.");
 
-    // The tooltip on a speaker's name; `system` is empty unless renamed.
-    public pure function speaker-name-tooltip(system: string) -> string {
+    // The tooltip on a speaker's name: the full name, which the row may
+    // elide, then how to rename it. `system` is empty unless renamed.
+    public pure function speaker-name-tooltip(name: string, system: string) -> string {
         if system != "" {
-            return @tr("Device name: {}. Double-click to rename.", system);
+            return @tr("{}\nDevice name: {}. Double-click to rename.", name, system);
         }
-        return @tr("Double-click to rename.");
+        return @tr("{}\nDouble-click to rename.", name);
     }
 
     // What a stereo pair or home theater group row says after its kind:
@@ -1228,9 +1248,6 @@ export global Strings {
 
     // Every other speaker that is on is left out by its kind.
     out property <string> calibrate-all-only-left-out: @tr("The other speakers that are on are headphones or virtual outputs, which the microphone can't hear. Turn on another speaker, or choose Include Anyway for one below.");
-    // Why an output that is on sits out of Calibrate All, under its name.
-    out property <string> calibrate-all-left-out-headphones: @tr("Headphones are left out: the microphone can't hear them.");
-    out property <string> calibrate-all-left-out-virtual: @tr("Virtual output: there's nothing for the microphone to hear.");
     out property <string> calibrate-all-included: @tr("Included anyway: measured in this run.");
     out property <string> calibrate-all-left-out-title: @tr("Left out");
     out property <string> include-anyway: @tr("Include Anyway");
@@ -1247,7 +1264,7 @@ export global Strings {
     }
 
     // In a left-out output's delay controls, instead of Calibrate with
-    // Microphone; its delay stays the user's to set.
+    // Microphone, and under its name in Calibrate All's left-out list.
     out property <string> calibration-left-out-headphones: @tr("Left out of microphone calibration: the microphone can't hear headphones.");
     out property <string> calibration-left-out-virtual: @tr("Left out of microphone calibration: a virtual output has nothing for the microphone to hear.");
 

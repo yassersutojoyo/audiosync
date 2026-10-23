@@ -111,6 +111,69 @@ mod tests {
     }
 
     #[test]
+    fn quick_taps_dont_zoom_and_pinch_zoom_stays() {
+        let style = only_element(PAGE, "style").unwrap();
+        let rule = style
+            .lines()
+            .find(|line| line.contains("touch-action"))
+            .expect("a touch-action rule");
+        assert!(rule.contains("touch-action: manipulation;"));
+        for selector in ["html", "button", "input"] {
+            assert!(
+                rule.split('{').next().unwrap().contains(selector),
+                "{selector}"
+            );
+        }
+        let viewport = PAGE
+            .lines()
+            .find(|line| line.contains("name=\"viewport\""))
+            .unwrap();
+        for zoom_lock in ["maximum-scale", "user-scalable", "minimum-scale"] {
+            assert!(!PAGE.contains(zoom_lock), "{zoom_lock}");
+        }
+        assert!(viewport.contains("width=device-width"));
+        assert!(style.contains("font-size: max(16px, 1rem);"));
+    }
+
+    #[test]
+    fn the_home_screen_steps_start_hidden_and_name_the_order() {
+        // Hidden in the markup, so a Home Screen app never flashes them before the script runs.
+        let card = PAGE
+            .lines()
+            .find(|line| line.contains("id=\"setup\""))
+            .unwrap();
+        assert!(card.ends_with(" hidden>"));
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("(display-mode: standalone)"));
+        assert!(script.contains("localStorage.setItem(SETUP_HIDDEN_KEY"));
+        assert!(script.contains("Do step 2 before you enter the code"));
+    }
+
+    #[test]
+    fn a_fixed_delay_hides_its_row_and_an_unpair_error_shows_under_the_button() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(
+            script.contains("const fixedDelay = speaker.delay_min_ms === speaker.delay_max_ms;")
+        );
+        assert!(script.contains("row.delayLine.hidden = fixedDelay;"));
+        let button = PAGE
+            .lines()
+            .position(|line| line.contains("id=\"unpair\""))
+            .unwrap();
+        let error = PAGE.lines().nth(button + 1).unwrap();
+        assert!(error.contains("id=\"unpair-error\"") && error.ends_with(" hidden></p>"));
+        assert!(script.contains("showError(ui.unpairError, problem.message);"));
+    }
+
+    #[test]
+    fn focus_moves_to_the_master_volume_when_retry_or_the_pairing_form_hides() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("focusAfterPair = true;"));
+        assert!(script.contains("ui.banner.contains(focused)"));
+        assert!(script.contains("ui.master.focus();"));
+    }
+
+    #[test]
     fn the_icons_are_png_of_their_size() {
         for (icon, size) in [(ICON_180, 180u32), (ICON_512, 512)] {
             assert_eq!(&icon[..8], b"\x89PNG\r\n\x1a\n");

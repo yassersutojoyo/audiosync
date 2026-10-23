@@ -66,9 +66,12 @@ extension AppDelegate {
     /// lowest (S177).
     func setLocalOffset(_ uid: String, _ rawMs: Double) {
         guard let ms = LocalDelay.sanitizedOffset(rawMs) else { return }   // not finite: ignored
+        let differs = CalibrationStatus.offsetDiffers(stored: localOffsetMs[uid], clamped: ms)
         localOffsetMs[uid] = ms
-        calibrationOffsetChanged(uid)
-        retimeLocalOutputs()
+        if differs {
+            calibrationOffsetChanged(uid)
+            retimeLocalOutputs()
+        }
         pushModel()
     }
 

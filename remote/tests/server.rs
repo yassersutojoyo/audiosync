@@ -94,13 +94,24 @@ impl Reply {
 }
 
 fn exchange(port: u16, raw: &[u8]) -> Reply {
+    let started = Instant::now();
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    // A low-priority test run on a saturated PC can wait seconds for each of
+    // the accept and connection threads; 5 s ran out there with no answer yet.
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(20)))
         .unwrap();
     stream.write_all(raw).unwrap();
     let mut data = Vec::new();
-    stream.read_to_end(&mut data).unwrap();
+    if let Err(error) = stream.read_to_end(&mut data) {
+        let request = String::from_utf8_lossy(raw);
+        panic!(
+            "{}: {error:?} after {:?}, {} bytes read",
+            request.lines().next().unwrap_or_default(),
+            started.elapsed(),
+            data.len()
+        );
+    }
     let text = String::from_utf8_lossy(&data).into_owned();
     let (head, body) = text.split_once("\r\n\r\n").expect("a response head");
     let status = head.split(' ').nth(1).unwrap().parse().unwrap();
@@ -381,32 +392,48 @@ fn a_code_expires() {
 
 #[test]
 fn wrong_codes_are_limited_then_refused_for_that_address_only() {
+    let window = Duration::from_secs(1);
     let timing = Timing {
-        wrong_code_window: Duration::from_secs(1),
+        wrong_code_window: window,
         ..Timing::default()
     };
     let remote = start_with(config("limits", timing));
-    let code = remote.server.pairing_code().unwrap();
+    // The five wrong codes and the right one must land inside the window. A
+    // starved run can take longer, so it starts over: a new code clears the counts.
+    let mut rounds = 0;
+    let code = loop {
+        rounds += 1;
+        let code = remote.server.rotate_code().unwrap();
+        let wrong = json!({ "code": wrong(&code) }).to_string();
+        let started = Instant::now();
+        for _ in 0..5 {
+            assert_eq!(post(&remote, "/api/pair", None, &wrong).status, 401);
+        }
+        let limited = post(
+            &remote,
+            "/api/pair",
+            None,
+            &json!({ "code": code }).to_string(),
+        );
+        if limited.status == 429 {
+            assert_eq!(limited.error(), "too_many_tries");
+            break code;
+        }
+        let took = started.elapsed();
+        assert!(took >= window, "{} after {took:?}", limited.status);
+        assert!(rounds < 10, "every round outlasted the window");
+    };
+    thread::sleep(window + Duration::from_millis(100));
     let right = json!({ "code": code }).to_string();
     let wrong = json!({ "code": wrong(&code) }).to_string();
-    for round in 0..2 {
-        for _ in 0..5 {
-            assert_eq!(
-                post(&remote, "/api/pair", None, &wrong).status,
-                401,
-                "round {round}"
-            );
-        }
-        let limited = post(&remote, "/api/pair", None, &right);
-        assert_eq!(limited.status, 429);
-        let expected = if round == 1 {
-            "pairing_locked"
-        } else {
-            "too_many_tries"
-        };
-        assert_eq!(limited.error(), expected);
-        thread::sleep(Duration::from_millis(1100));
+    // Past the window five more wrong codes are let in; the tenth blocks this peer.
+    for _ in 0..5 {
+        assert_eq!(post(&remote, "/api/pair", None, &wrong).status, 401);
     }
+    let blocked = post(&remote, "/api/pair", None, &right);
+    assert_eq!(blocked.status, 429);
+    assert_eq!(blocked.error(), "pairing_locked");
+    thread::sleep(window + Duration::from_millis(100));
     let refused = post(&remote, "/api/pair", None, &right);
     assert_eq!(refused.status, 429);
     assert_eq!(refused.error(), "pairing_locked");

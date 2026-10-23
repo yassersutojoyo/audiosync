@@ -20,6 +20,8 @@ impl App {
         let w = weak.clone();
         self.cast_address_dialog
             .on_confirmed(move |text| with_app(&w, |app| app.confirm_cast_address(&text)));
+        self.cast_address_dialog
+            .on_blank(|text| text.trim().is_empty());
         let w = weak.clone();
         self.cast_address_dialog
             .on_cancelled(move || with_app(&w, App::close_cast_address));
@@ -38,6 +40,7 @@ impl App {
         let dialog = &self.cast_address_dialog;
         dialog.set_address(SharedString::new());
         dialog.set_error(SharedString::new());
+        dialog.set_refusals(0);
         if let Err(error) = dialog.show() {
             self.show_window_error(&error);
             return;
@@ -60,13 +63,16 @@ impl App {
             CastAddressError::Invalid => strings.get_cast_address_invalid(),
             CastAddressError::NotFound => strings.get_cast_address_not_found(),
         };
-        self.cast_address_dialog.set_error(reason);
-        self.cast_address_dialog.invoke_prepare();
+        let dialog = &self.cast_address_dialog;
+        dialog.set_error(reason);
+        dialog.set_refusals(dialog.get_refusals() % 2 + 1);
+        dialog.invoke_prepare();
     }
 
     fn close_cast_address(&self) {
         let _ = self.cast_address_dialog.hide();
         self.cast_address_dialog.set_address(SharedString::new());
         self.cast_address_dialog.set_error(SharedString::new());
+        self.cast_address_dialog.set_refusals(0);
     }
 }

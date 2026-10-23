@@ -82,6 +82,20 @@ else
   echo "PASSED"
 fi
 
+echo "▶ one concurrency group per workflow file"
+# Two workflows sharing a group cancel each other's runs, so each group starts
+# with its own file name rather than the copyable display name.
+workflow_groups_ok=1
+for wf in .github/workflows/*.yml; do
+  base=${wf##*/}
+  groups=$(grep -cE '^[[:space:]]+group:' "$wf")
+  if [ "$groups" -ne 1 ] || ! grep -qE "^[[:space:]]+group: ${base//./\\.}-" "$wf"; then
+    echo "FAIL: $wf needs exactly one concurrency group starting with '$base-'"
+    workflow_groups_ok=0
+  fi
+done
+if [ "$workflow_groups_ok" -eq 1 ]; then echo "PASSED"; else status=1; fi
+
 echo "▶ capture IOProc stays real-time safe"
 # The capture IOProc runs CaptureSink (ProcessTapCapture.swift), the
 # CaptureChannels it builds (CaptureSupport.swift) and, during a calibration,
@@ -146,8 +160,8 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
     AirPlayPairing.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
     AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
-    NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift AppSettings.swift SpeakerNames.swift AppLifecycle.swift LocalDelay.swift DeviceVolume.swift \
-    Localization.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+    NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift FieldEditor.swift AppSettings.swift SpeakerNames.swift AppLifecycle.swift LocalDelay.swift DeviceVolume.swift \
+    Localization.swift MenuNote.swift BrandTokens.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"
   build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"

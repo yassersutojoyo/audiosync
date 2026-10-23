@@ -51,6 +51,8 @@ struct UIStrings {
     }
     let masterVolumeTitle = "Master Volume"
     let moreOptions = "Options"
+    /// VoiceOver hint of the gear, a plain button that opens an AppKit menu.
+    let moreOptionsHint = "Opens a menu of options"
     let dismissNotice = "Dismiss Notice"
     let dismissAllNotices = "Dismiss All"
     let previousTrack = "Previous Track"
@@ -826,9 +828,10 @@ struct UIStrings {
     /// The name field's VoiceOver label; the field's placeholder is the
     /// system name, which an empty field brings back.
     func speakerNameField(system: String) -> String { "Name for \(system)" }
-    /// The tooltip on a speaker's name.
-    func speakerNameHelp(system: String, renamed: Bool) -> String {
-        renamed ? "Device name: \(system). Double-click to rename." : "Double-click to rename."
+    /// The tooltip on a speaker's name: the full name, which the row may
+    /// truncate, then how to rename it.
+    func speakerNameHelp(name: String, system: String, renamed: Bool) -> String {
+        renamed ? "\(name)\nDevice name: \(system). Double-click to rename." : "\(name)\nDouble-click to rename."
     }
     /// What VoiceOver adds after a renamed speaker's label.
     func renamedSpeaker(system: String) -> String { "device name \(system)" }
@@ -1076,8 +1079,20 @@ struct UIStrings {
     /// Above the first address, then above the IP address after the Bonjour one.
     let webRemoteAddressLabel = "On the phone, open"
     let webRemoteIPLabel = "If that doesn't open, use"
-    let webRemoteSteps = "On the phone, open the address or scan the QR code, add the page to the Home Screen, "
-        + "then open it from there and enter the pairing code."
+    let webRemoteSetupTitle = "Set Up the Phone"
+    /// The accessibility name of the iPhone and Android choice above the steps.
+    let webRemotePhonePicker = "Phone"
+    let webRemoteIPhone = "iPhone"
+    let webRemoteAndroid = "Android"
+    func webRemoteStepNumber(_ number: Int) -> String { "\(number)." }
+    let webRemoteStepScan = "Scan the QR code with your phone's camera."
+    let webRemoteStepHomeIPhone = "Add the page to your Home Screen: tap the options button left of Safari's address bar, "
+        + "then Share, View More and Add to Home Screen."
+    let webRemoteStepHomeAndroid = "Add the page to your Home screen: in Chrome's menu, tap Add to Home screen or Install app."
+    let webRemoteStepOpen = "Open AudioSync from the new icon and enter the pairing code."
+    let webRemoteOrderIPhone = "Do step 2 before you enter the code: a pairing made in Safari doesn't carry over "
+        + "to the Home Screen app, so you would pair again there."
+    let webRemoteOrderAndroid = "Do step 2 before you enter the code, so you pair in the app you'll use."
     func webRemoteQRLabel(_ address: String) -> String { "QR code for \(address)" }
     let webRemoteNoAddress = "This Mac has no address on a home network right now. Connect it to your Wi-Fi or Ethernet network."
     let webRemoteCodeTitle = "Pairing Code"
@@ -1270,10 +1285,11 @@ struct UIStrings {
         Choose 'Web Remote…' in the gear menu or the Window menu and turn it
         on to control the speakers from a phone on the same network: each
         speaker's switch, volume and delay, Master Volume, and what's playing.
-        On the phone, open the address it shows or scan its QR code, and add
-        the page to the Home Screen first. Then open it from there and enter
-        the pairing code: on some phones, a pairing made in the browser
-        doesn't carry over to the Home Screen. Each code works once and for
+        On the phone, open the address it shows or scan its QR code, add the
+        page to the Home Screen before you enter the code, then open
+        AudioSync from the new icon and pair there: on iPhone, a pairing made
+        in Safari doesn't carry over to the Home Screen app. The window shows
+        these steps for iPhone and Android. Each code works once and for
         10 minutes; the window shows the next one, and 'New Code' makes a
         fresh one. The page uses plain HTTP, so use the web remote only on
         your home network. 'Forget All Remote Devices' unpairs every phone,

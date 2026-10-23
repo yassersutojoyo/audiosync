@@ -7,7 +7,7 @@
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { PinPhase } from "types.slint";
-import { Card, DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
+import { Announcer, Card, DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
 
 export component GroupNameDialog inherits Dialog {
     in property <string> heading;
@@ -387,8 +387,18 @@ export component CastAddressDialog inherits Dialog {
     in-out property <string> address;
     // Why the last address was turned down; "" while there is none.
     in property <string> error;
+    // 0 until an address is turned down, then 1 and 2 by turns: it picks
+    // the live region that says the reason, so the same reason twice in a
+    // row lands in a new region, which Narrator reads again.
+    in property <int> refusals;
+    out property <string> said-odd: Math.mod(root.refusals, 2) == 1 ? root.error : "";
+    out property <string> said-even: root.refusals > 0 && Math.mod(root.refusals, 2) == 0 ? root.error : "";
     callback confirmed(string);
     callback cancelled();
+    // Whether the text is empty once trimmed; Slint has no trim.
+    pure callback blank(string) -> bool;
+    // Add waits for an address, as on the Mac.
+    out property <bool> can-add: !root.blank(root.address);
 
     title: Strings.cast-add-address-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -412,6 +422,14 @@ export component CastAddressDialog inherits Dialog {
                 return accept;
             }
             return reject;
+        }
+
+        Announcer {
+            said: root.said-odd;
+        }
+
+        Announcer {
+            said: root.said-even;
         }
 
         VerticalLayout {
@@ -463,7 +481,9 @@ export component CastAddressDialog inherits Dialog {
                     self.select-all();
                 }
                 accepted => {
-                    root.confirmed(root.address);
+                    if root.can-add {
+                        root.confirmed(root.address);
+                    }
                 }
             }
         }
@@ -472,6 +492,7 @@ export component CastAddressDialog inherits Dialog {
     DialogButton {
         text: Strings.add;
         primary: true;
+        active: root.can-add;
         dialog-button-role: accept;
         clicked => {
             root.confirmed(root.address);
