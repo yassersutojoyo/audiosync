@@ -39,6 +39,7 @@ extension AppDelegate {
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
+        native.setZones(nativeZoneVolumes())
         let airPlay2On = AppSettings.airPlay2On(setting: airPlay2AtLaunch,
                                                 environment: ProcessInfo.processInfo.environment)
         native.start(master: masterVolume, airPlay2: airPlay2AtLaunch) { [weak self] started in
@@ -84,12 +85,12 @@ extension AppDelegate {
     }
 
     /// What was saved under the bundled engine's output ID of `receiver`
-    /// (switched on, its volume, its groups, auto-connect) moves to its
+    /// (switched on, its volume, its groups and zones, auto-connect) moves to its
     /// native ID, before its row appears (S204). Nothing is left to move
     /// afterwards, so this runs for every receiver discovery reports.
     private func migrateSavedSpeakerIDs(to receiver: NativeReceiver) {
         let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
-                                             groups: groups, autoConnect: autoConnect)
+                                             groups: groups, autoConnect: autoConnect, zones: zones)
         let renames = SpeakerIDMigration.renames(saved, receivers: [receiver.id])
         guard !renames.isEmpty else { return }
         for old in renames.keys.sorted() {
@@ -99,6 +100,7 @@ extension AppDelegate {
         hiddenSpeakers.migrate(airPlay: renames)
         airplayVolume = migrated.airplayVolumes
         groups = migrated.groups
+        zones = migrated.zones
         autoConnect = migrated.autoConnect
         enabledAirPlay = migrated.enabledAirPlay
     }

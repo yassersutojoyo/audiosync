@@ -9,7 +9,7 @@
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
 //! auto-connect marks, the names the user gave speakers, the groups, the
-//! equalizer, View > Show Virtual Devices, View > Appearance, the main
+//! zones, the equalizer, View > Show Virtual Devices, View > Appearance, the main
 //! window's place and size, and File > Web Remote with its port.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
@@ -46,6 +46,7 @@ use audiosync_core::policy::delay::{
 };
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::SpeakerKey;
+use audiosync_core::policy::zones::{self, DEFAULT_ZONE_VOLUME, Zone, Zones};
 use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_position};
 use serde::{Deserialize, Serialize};
 
@@ -75,7 +76,11 @@ pub const IGNORED_FILE_NAME: &str = "settings.ignored.json";
 /// `airplay_adjustment_ms` is the AirPlay delay adjustment. In version 1 an
 /// output's `delay_ms` was its own trim, 0 to 20 000 ms, and
 /// [`migrate_delays`] turns it into an offset once.
-pub const VERSION: u32 = 2;
+///
+/// Version 3 (zones, spec S248) adds `speaker_zones` and
+/// `speaker_zones_migrated`. A version 2 file reads as version 3, its groups
+/// becoming zones once ([`Settings::with_zones_migrated`]); the groups stay.
+pub const VERSION: u32 = 3;
 
 /// The first format version with offsets relative to the reference.
 pub const OFFSETS_VERSION: u32 = 2;
@@ -154,6 +159,34 @@ pub struct SavedInput {
     pub name: String,
 }
 
+/// How a source of several apps uses its list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MixMode {
+    /// Only these apps, mixed.
+    #[default]
+    Only,
+    /// Every app except these.
+    AllExcept,
+}
+
+/// One app of a mix: its executable's file name and the name it showed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedMixApp {
+    pub executable: String,
+    pub name: String,
+}
+
+/// Several apps chosen as the source, kept beside [`Settings::source`] for
+/// the reason [`SavedInput`] is.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedMix {
+    pub mode: MixMode,
+    pub apps: Vec<SavedMixApp>,
+}
+
 /// An output's or AirPlay speaker's settings.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -204,6 +237,55 @@ pub struct SavedGroup {
     pub id: String,
     pub name: String,
     pub members: Vec<String>,
+}
+
+/// A zone (spec S245): its members by speaker key, a Cast speaker's
+/// included, and its volume slider position, 0 to 100.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedZone {
+    pub id: String,
+    pub name: String,
+    pub members: Vec<String>,
+    pub volume: f64,
+}
+
+impl Default for SavedZone {
+    fn default() -> SavedZone {
+        SavedZone {
+            id: String::new(),
+            name: String::new(),
+            members: Vec::new(),
+            volume: DEFAULT_ZONE_VOLUME,
+        }
+    }
+}
+
+impl From<Zone> for SavedZone {
+    fn from(zone: Zone) -> SavedZone {
+        SavedZone {
+            id: zone.id,
+            name: zone.name,
+            members: zone.members,
+            volume: zone.volume,
+        }
+    }
+}
+
+/// The zones as stored, read leniently: an entry that isn't one is skipped,
+/// and so is anything that isn't a list.
+fn zones_that_read<'de, D>(deserializer: D) -> Result<Vec<SavedZone>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(entries) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
 }
 
 /// The equalizer.
@@ -312,7 +394,7 @@ where
 }
 
 /// A curve the user saved in the equalizer: a name and ten band gains in dB,
-/// band 0 (32 Hz) first (spec S242).
+/// band 0 (32 Hz) first (spec S270).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedCurve {
     pub name: String,
@@ -368,7 +450,32 @@ where
         .collect())
 }
 
-/// The saved curves cleaned as the core reads them back (spec S242).
+/// The largest input pair index kept: a device with 1024 channels.
+const MAX_INPUT_PAIR: u64 = 511;
+
+/// The input channel pairs as stored, read leniently: an entry whose pair
+/// isn't a whole number from 1 to [`MAX_INPUT_PAIR`] is skipped, and so is
+/// anything that isn't a map.
+fn pairs_that_read<'de, D>(deserializer: D) -> Result<BTreeMap<String, u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(entries) = value else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(id, pair)| {
+            let pair = pair
+                .as_u64()
+                .filter(|pair| (1..=MAX_INPUT_PAIR).contains(pair))?;
+            Some((id, u16::try_from(pair).ok()?))
+        })
+        .collect())
+}
+
+/// The saved curves cleaned as the core reads them back (spec S270).
 pub fn clamp_curves(saved: &[SavedCurve]) -> Vec<UserCurve> {
     sanitized_curves(saved.iter().map(SavedCurve::curve))
 }
@@ -385,6 +492,17 @@ pub struct Settings {
     /// The input device chosen as the source, if one is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_device: Option<SavedInput>,
+    /// The channel pair each input device plays, by endpoint ID, as an
+    /// index (1 for channels 3-4); a device without an entry plays 1-2.
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "pairs_that_read"
+    )]
+    pub input_pairs: BTreeMap<String, u16>,
+    /// Several apps chosen as the source, if they are; the source above is
+    /// the whole system meanwhile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_mix: Option<SavedMix>,
     /// The master volume slider position, 0 to 100.
     pub master_volume: f64,
     /// The local outputs, by endpoint ID.
@@ -407,9 +525,17 @@ pub struct Settings {
     )]
     pub hidden_speakers: Vec<SavedHidden>,
     pub groups: Vec<SavedGroup>,
+    /// The zones, in order, each speaker in at most one (spec S245).
+    #[serde(deserialize_with = "zones_that_read")]
+    pub speaker_zones: Vec<SavedZone>,
+    /// The groups were moved to zones (spec S248). A file without it, as
+    /// every version 2 file, has not been migrated; the defaults have, since
+    /// there are no groups to move.
+    #[serde(default)]
+    pub speaker_zones_migrated: bool,
     pub equalizer: SavedEqualizer,
     /// The equalizer curves the user saved, in the picker's order (spec
-    /// S242); left out of the file while there are none.
+    /// S270); left out of the file while there are none.
     #[serde(
         skip_serializing_if = "Vec::is_empty",
         deserialize_with = "curves_that_read"
@@ -443,6 +569,8 @@ impl Default for Settings {
             version: VERSION,
             source: SavedSource::System,
             input_device: None,
+            input_pairs: BTreeMap::new(),
+            source_mix: None,
             master_volume: DEFAULT_MASTER_POSITION,
             outputs: BTreeMap::new(),
             airplay: BTreeMap::new(),
@@ -450,6 +578,8 @@ impl Default for Settings {
             speaker_names: BTreeMap::new(),
             hidden_speakers: Vec::new(),
             groups: Vec::new(),
+            speaker_zones: Vec::new(),
+            speaker_zones_migrated: true,
             equalizer: SavedEqualizer::default(),
             equalizer_curves: Vec::new(),
             show_virtual_devices: false,
@@ -507,19 +637,16 @@ fn usable_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_TEXT
 }
 
-/// Whether `key` is a speaker key the app can use (`lc:` or `ap:` and an ID).
+/// Whether `key` is a key a group or the auto-connect list can hold: `lc:`
+/// or `ap:` and an ID. Neither switches a Cast speaker yet.
 fn usable_key(key: &str) -> bool {
-    key.len() <= MAX_TEXT && SpeakerKey::parse(key).is_some_and(|key| !key.id().is_empty())
+    usable_name_key(key) && !matches!(SpeakerKey::parse(key), Some(SpeakerKey::Cast(_)))
 }
 
-/// A key a speaker's name may be saved under: a Google Cast speaker can be
-/// renamed too, though the core's keys don't know it.
+/// A key a speaker's name or hidden entry may be saved under: any speaker
+/// key with an ID, a Google Cast speaker's included.
 fn usable_name_key(key: &str) -> bool {
-    usable_key(key)
-        || key.len() <= MAX_TEXT
-            && key
-                .strip_prefix(crate::adapter::CAST_PREFIX)
-                .is_some_and(|id| !id.is_empty())
+    key.len() <= MAX_TEXT && SpeakerKey::parse(key).is_some_and(|key| !key.id().is_empty())
 }
 
 /// The first [`MAX_ENTRIES`] hidden speakers with a usable key, one entry
@@ -590,6 +717,27 @@ impl Settings {
             })
             .take(MAX_ENTRIES)
             .collect();
+        let speaker_zones = Zones::from_stored(
+            self.speaker_zones
+                .into_iter()
+                .filter(|zone| usable_id(&zone.id))
+                .take(MAX_ENTRIES)
+                .map(|zone| Zone {
+                    id: zone.id,
+                    name: cut(zone.name),
+                    members: zone
+                        .members
+                        .into_iter()
+                        .filter(|key| usable_name_key(key))
+                        .take(MAX_ENTRIES)
+                        .collect(),
+                    volume: zone.volume,
+                }),
+        )
+        .into_list()
+        .into_iter()
+        .map(SavedZone::from)
+        .collect();
         // A format 1 file kept trims, 0 to 20 000 ms; [`migrate_delays`]
         // turns them into offsets.
         let output_delays = if self.version < OFFSETS_VERSION {
@@ -597,10 +745,39 @@ impl Settings {
         } else {
             (MIN_OFFSET_MS, MAX_OFFSET_MS)
         };
+        let source_mix = self.source_mix.and_then(|mix| {
+            let mut apps: Vec<SavedMixApp> = Vec::new();
+            for app in mix.apps {
+                if usable_id(&app.executable)
+                    && !apps
+                        .iter()
+                        .any(|kept| kept.executable.eq_ignore_ascii_case(&app.executable))
+                    && apps.len() < MAX_ENTRIES
+                {
+                    apps.push(SavedMixApp {
+                        executable: app.executable,
+                        name: cut(app.name),
+                    });
+                }
+            }
+            (!apps.is_empty()).then_some(SavedMix {
+                mode: mix.mode,
+                apps,
+            })
+        });
         Settings {
             version: VERSION,
             source,
             input_device,
+            input_pairs: self
+                .input_pairs
+                .into_iter()
+                .filter(|(id, pair)| {
+                    usable_id(id) && (1..=MAX_INPUT_PAIR).contains(&u64::from(*pair))
+                })
+                .take(MAX_ENTRIES)
+                .collect(),
+            source_mix,
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
             outputs: clamp_speakers(self.outputs, output_delays),
             airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS)),
@@ -621,6 +798,8 @@ impl Settings {
             .saved(),
             hidden_speakers: clamp_hidden(self.hidden_speakers),
             groups,
+            speaker_zones,
+            speaker_zones_migrated: self.speaker_zones_migrated,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             equalizer_curves: clamp_curves(&self.equalizer_curves)
                 .iter()
@@ -637,6 +816,30 @@ impl Settings {
             remote: self.remote.clamped(),
             cast_addresses: cast_address::clamped(self.cast_addresses),
             airplay2_experimental: self.airplay2_experimental,
+        }
+    }
+
+    /// The one-time move of the groups to zones (spec S248): without the
+    /// mark, the zones become the groups' ([`zones::zones_from_groups`]) and
+    /// the mark is set; the groups stay. With it, nothing changes.
+    pub fn with_zones_migrated(self) -> Settings {
+        if self.speaker_zones_migrated {
+            return self;
+        }
+        let speaker_zones =
+            zones::zones_from_groups(self.groups.iter().map(|group| zones::SavedGroup {
+                id: &group.id,
+                name: &group.name,
+                members: &group.members,
+            }))
+            .into_list()
+            .into_iter()
+            .map(SavedZone::from)
+            .collect();
+        Settings {
+            speaker_zones,
+            speaker_zones_migrated: true,
+            ..self
         }
     }
 
@@ -676,7 +879,10 @@ impl Settings {
                 version: VERSION,
                 ..read
             };
-        Ok((clamped, Loaded::Read { version, adjusted }))
+        Ok((
+            clamped.with_zones_migrated(),
+            Loaded::Read { version, adjusted },
+        ))
     }
 }
 
@@ -1109,6 +1315,105 @@ mod tests {
     }
 
     #[test]
+    fn groups_and_auto_connect_keep_leaving_cast_keys_out() {
+        let text = r#"{"version": 2,
+            "groups": [{"id": "g1", "name": "Den", "members": ["cc:attic", "lc:desk"]}],
+            "auto_connect": ["cc:attic", "ap:pair:5A1B"]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(read.groups.len(), 1);
+        assert_eq!(read.groups[0].members, ["lc:desk"]);
+        assert_eq!(
+            read.auto_connect,
+            BTreeSet::from(["ap:pair:5A1B".to_owned()])
+        );
+    }
+
+    // covers: S245, S248
+    #[test]
+    fn a_v2_settings_file_is_read_as_v3_with_its_groups_as_zones() {
+        let text = r#"{"version": 2,
+            "groups": [
+                {"id": "g1", "name": "Living Room", "members": ["lc:desk", "ap:pair:5A1B"]},
+                {"id": "g2", "name": "Group 2", "members": ["ap:pair:5A1B", "ap:kitchen"]}
+            ]
+        }"#;
+        let (read, found) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            found,
+            Loaded::Read {
+                version: 2,
+                adjusted: false
+            }
+        );
+        assert_eq!(read.version, VERSION);
+        assert!(read.speaker_zones_migrated);
+        assert_eq!(read.groups.len(), 2, "the groups stay");
+        let zone = |id: &str, name: &str, members: &[&str]| SavedZone {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            members: members.iter().map(|key| (*key).to_owned()).collect(),
+            volume: 100.0,
+        };
+        assert_eq!(
+            read.speaker_zones,
+            [
+                zone("g1", "Living Room", &["lc:desk", "ap:pair:5A1B"]),
+                zone("g2", "Group 2", &["ap:kitchen"]),
+            ]
+        );
+        // Written as version 3 with the mark, it reads back the same, and the
+        // groups never migrate again.
+        let json = read.to_json();
+        assert!(
+            json.contains("\"version\": 3") && json.contains("\"speaker_zones_migrated\": true")
+        );
+        let (again, _) = Settings::from_json(&json).expect("read");
+        assert_eq!(again, read);
+        let mut changed = read.clone();
+        changed.groups.clear();
+        let (later, _) = Settings::from_json(&changed.to_json()).expect("read");
+        assert_eq!(later.speaker_zones, read.speaker_zones);
+    }
+
+    // covers: S245
+    #[test]
+    fn zones_keep_cast_keys_and_empty_zones_and_each_speaker_once() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true,
+            "speaker_zones": [
+                {"id": "z1", "name": "Den", "members": ["cc:attic", "lc:desk", "lc:desk"], "volume": 140},
+                {"id": "z2", "name": "Empty", "members": [], "volume": -4},
+                {"id": "z3", "name": "Kitchen", "members": ["lc:desk", "bt:x", "ap:kitchen"]},
+                {"id": "z1", "name": "Again", "members": ["ap:other"]},
+                {"id": "", "name": "No ID", "members": ["ap:third"]},
+                {"id": "z4", "volume": "loud"},
+                7
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        let shape: Vec<(&str, Vec<&str>, f64)> = read
+            .speaker_zones
+            .iter()
+            .map(|zone| {
+                (
+                    zone.id.as_str(),
+                    zone.members.iter().map(String::as_str).collect(),
+                    zone.volume,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("z1", vec!["cc:attic", "lc:desk"], 100.0),
+                ("z2", vec![], 0.0),
+                ("z3", vec!["ap:kitchen"], 100.0),
+            ]
+        );
+        assert!(Settings::default().speaker_zones_migrated);
+    }
+
+    #[test]
     fn settings_survive_a_save_and_a_load() {
         let file = SettingsFile::at(test_dir("settings-roundtrip").join(FILE_NAME));
         assert_eq!(file.load(), (Settings::default(), Loaded::NoFile));
@@ -1266,6 +1571,62 @@ mod tests {
     }
 
     #[test]
+    fn a_mix_of_apps_survives_a_round_trip_and_an_old_single_app_source_loads_unchanged() {
+        let app = |executable: &str| SavedMixApp {
+            executable: executable.to_owned(),
+            name: String::new(),
+        };
+        let chosen = Settings {
+            source_mix: Some(SavedMix {
+                mode: MixMode::AllExcept,
+                apps: vec![app("spotify.exe"), app("chrome.exe")],
+            }),
+            ..Settings::default()
+        };
+        let json: serde_json::Value = serde_json::from_str(&chosen.to_json()).expect("JSON");
+        assert_eq!(json["source_mix"]["mode"], "all_except");
+        assert_eq!(
+            json["source"]["kind"], "system",
+            "what an older build reads"
+        );
+        let (loaded, _) = Settings::from_json(&chosen.to_json()).expect("read");
+        assert_eq!(loaded.source_mix, chosen.source_mix);
+
+        let (old, _) = Settings::from_json(
+            r#"{"version": 2, "source": {"kind": "app", "executable": "spotify.exe", "name": "Spotify"}}"#,
+        )
+        .expect("read");
+        assert_eq!(
+            old.source,
+            SavedSource::App {
+                executable: "spotify.exe".to_owned(),
+                name: "Spotify".to_owned()
+            }
+        );
+        assert_eq!(old.source_mix, None);
+
+        // Repeats (in any case) and unusable names go; an empty mix is none.
+        let messy = Settings {
+            source_mix: Some(SavedMix {
+                mode: MixMode::Only,
+                apps: vec![app("a.exe"), app("A.EXE"), app("")],
+            }),
+            ..Settings::default()
+        }
+        .clamped();
+        assert_eq!(
+            messy.source_mix.map(|mix| mix.apps),
+            Some(vec![app("a.exe")])
+        );
+        let empty = Settings {
+            source_mix: Some(SavedMix::default()),
+            ..Settings::default()
+        }
+        .clamped();
+        assert_eq!(empty.source_mix, None);
+    }
+
+    #[test]
     fn an_input_device_choice_survives_a_round_trip_and_older_builds_read_the_whole_system() {
         let path = test_dir("settings-input").join(FILE_NAME);
         let file = SettingsFile::at(path.clone());
@@ -1311,6 +1672,42 @@ mod tests {
             }
         );
         assert!(!Settings::default().to_json().contains("input_device"));
+    }
+
+    #[test]
+    fn input_channel_pairs_survive_a_round_trip_and_odd_entries_are_skipped() {
+        let path = test_dir("settings-input-pairs").join(FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        let chosen = Settings {
+            input_pairs: BTreeMap::from([
+                ("{0.0.1.00000000}.{interface}".to_owned(), 1),
+                ("{0.0.1.00000000}.{mixer}".to_owned(), 3),
+            ]),
+            ..sample()
+        };
+        file.save(&chosen).expect("saved");
+        assert_eq!(file.load().0, chosen);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("JSON");
+        assert_eq!(json["input_pairs"]["{0.0.1.00000000}.{interface}"], 1);
+
+        let text = r#"{"version": 2, "master_volume": 40, "input_pairs": {
+            "kept": 2, "first": 0, "negative": -1, "text": "3", "half": 1.5,
+            "beyond": 512, "": 1
+        }}"#;
+        let (read, found) = Settings::from_json(text).expect("one odd entry spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        assert_eq!(read.input_pairs, BTreeMap::from([("kept".to_owned(), 2)]));
+        assert_eq!(
+            found,
+            Loaded::Read {
+                version: 2,
+                adjusted: true
+            }
+        );
+        let (read, _) = Settings::from_json(r#"{"version": 2, "input_pairs": [1]}"#).expect("read");
+        assert!(read.input_pairs.is_empty());
+        assert!(!Settings::default().to_json().contains("input_pairs"));
     }
 
     #[test]

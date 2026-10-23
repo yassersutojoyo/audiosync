@@ -1,14 +1,42 @@
 import Foundation
 
-/// One namespace for AirPlay and local speakers, so a group or the
-/// auto-connect list can hold both: "ap:<AirPlay app ID>" / "lc:<device UID>" (`NativeAirPlayID`).
+/// One namespace for every speaker, the core's keys (S149, S243):
+/// "ap:<AirPlay app ID>" (`NativeAirPlayID`), "lc:<device UID>" and
+/// "cc:<Cast device ID>" (`CastID`). The ID after the prefix may hold colons.
 enum SpeakerKey {
-    static func make(id: String, airplay: Bool) -> String { (airplay ? "ap:" : "lc:") + id }
+    enum Kind: Equatable { case airplay, local, cast }
 
+    static func make(id: String, kind: Kind) -> String {
+        switch kind {
+        case .airplay: return "ap:" + id
+        case .local: return "lc:" + id
+        case .cast: return "cc:" + id
+        }
+    }
+
+    static func make(id: String, airplay: Bool) -> String { make(id: id, kind: airplay ? .airplay : .local) }
+
+    /// Any speaker's key; nil for any other prefix.
+    static func parseAny(_ key: String) -> (id: String, kind: Kind)? {
+        let kinds: [(String, Kind)] = [("ap:", .airplay), ("lc:", .local), ("cc:", .cast)]
+        guard let (prefix, kind) = kinds.first(where: { key.hasPrefix($0.0) }) else { return nil }
+        return (String(key.dropFirst(prefix.count)), kind)
+    }
+
+    /// An AirPlay or local speaker's key, the two kinds groups and auto-connect
+    /// switch; nil for a Cast key and anything else.
     static func parse(_ key: String) -> (id: String, airplay: Bool)? {
-        if key.hasPrefix("ap:") { return (String(key.dropFirst(3)), true) }
-        if key.hasPrefix("lc:") { return (String(key.dropFirst(3)), false) }
-        return nil
+        guard let (id, kind) = parseAny(key), kind != .cast else { return nil }
+        return (id, kind == .airplay)
+    }
+
+    /// The key of a row by its app ID: a Cast row's "cast:<device ID>" becomes "cc:<device ID>".
+    static func of(id: String, tag: SpeakerTag) -> String {
+        switch tag {
+        case .cast: return CastID.key(appID: id)
+        case .airplay: return make(id: id, kind: .airplay)
+        default: return make(id: id, kind: .local)
+        }
     }
 }
 
@@ -61,12 +89,13 @@ enum GroupName {
 /// so running the migration again changes nothing.
 enum SpeakerIDMigration {
     /// What is saved by AirPlay speaker ID: the speakers switched on, their
-    /// volumes, the groups and the auto-connect list.
+    /// volumes, the groups, the auto-connect list and the zones (S248).
     struct Saved: Equatable {
         var enabledAirPlay: Set<String>
         var airplayVolumes: [String: Double]
         var groups: [SpeakerGroup]
         var autoConnect: Set<String>
+        var zones: [SpeakerZone] = []
     }
 
     /// The largest device ID: six bytes.
@@ -99,7 +128,7 @@ enum SpeakerIDMigration {
         }
         guard !byDevice.isEmpty else { return [:] }
         var ids = saved.enabledAirPlay.union(saved.airplayVolumes.keys)
-        let keys = saved.autoConnect.union(saved.groups.flatMap(\.members))
+        let keys = saved.autoConnect.union(saved.groups.flatMap(\.members)).union(saved.zones.flatMap(\.members))
         for key in keys {
             if let (id, airplay) = SpeakerKey.parse(key), airplay { ids.insert(id) }
         }
@@ -114,8 +143,9 @@ enum SpeakerIDMigration {
 
     /// `saved` with every ID in `renames` replaced, as an ID and inside
     /// AirPlay speaker keys. A volume already saved under the new ID wins
-    /// over the old one, and a group that already lists the new key drops
-    /// the old one; the groups keep their order.
+    /// over the old one, a group that already lists the new key drops the
+    /// old one, and so does every zone once any zone holds the new key
+    /// (one zone per speaker, S245); groups and zones keep their order.
     static func apply(_ renames: [String: String], to saved: Saved) -> Saved {
         guard !renames.isEmpty else { return saved }
         func renamed(_ id: String) -> String { renames[id] ?? id }
@@ -139,6 +169,18 @@ enum SpeakerIDMigration {
                 // Already listed under the new key: the old one goes.
                 if key != member, group.members.contains(key) || copy.members.contains(key) { continue }
                 copy.members.append(key)
+            }
+            return copy
+        }
+        let zoneKeys = Set(saved.zones.flatMap(\.members))
+        var taken = Set<String>()
+        out.zones = saved.zones.map { zone in
+            var copy = zone
+            copy.members = []
+            for member in zone.members {
+                let key = renamedKey(member)
+                if key != member, zoneKeys.contains(key) { continue }
+                if taken.insert(key).inserted { copy.members.append(key) }
             }
             return copy
         }

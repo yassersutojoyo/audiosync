@@ -6,7 +6,7 @@
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, Slider, Switch } from "std-widgets.slint";
+import { Button, ComboBox, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Availability, CastState, DeviceVolumeHint, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
@@ -64,6 +64,7 @@ export global Glyphs {
     out property <string> dismiss: "\u{E711}";
     out property <string> warning: "\u{E7BA}";
     out property <string> chevron-right: "\u{E76C}";
+    out property <string> chevron-down: "\u{E70D}";
     out property <string> equalizer: "\u{E9E9}";
     out property <string> timer: "\u{E916}";
     out property <string> auto-connect: "\u{E945}";
@@ -330,6 +331,74 @@ export component LinkButton inherits Rectangle {
     }
 }
 
+// A button that shows or hides the controls under it, with a chevron that
+// points down while they show.
+export component Disclosure inherits Rectangle {
+    in property <string> text;
+    in property <bool> expanded;
+    callback toggled();
+
+    min-width: content.min-width;
+    min-height: content.min-height;
+    preferred-width: content.preferred-width;
+    preferred-height: content.preferred-height;
+    border-radius: Fluent.radius-control;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-expandable: true;
+    accessible-expanded: root.expanded;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    content := HorizontalLayout {
+        padding-left: 2px;
+        padding-right: 2px;
+        spacing: 4px;
+
+        Text {
+            text: root.text;
+            font-size: Tokens.font-size-caption;
+            font-weight: 600;
+            color: Tokens.teal-text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        Glyph {
+            glyph: root.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
+            font-size: 10px;
+            color: Tokens.teal-text;
+        }
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
 // A dialog's button that passes Escape on. A Dialog lays its buttons out
 // beside its one content element, so a key scope around the content never
 // sees a key pressed on a button; this scope around the button does. It
@@ -492,6 +561,22 @@ export component ToggleSwitch inherits Switch {
     accessible-role: button;
 }
 
+// An input device's channel pair choice. It shows `chosen` again after a
+// pick, so it only moves once the backend took the pick.
+export component PairPicker inherits ComboBox {
+    in property <int> chosen;
+    callback picked(int);
+    current-index: root.chosen;
+    accessible-label: Strings.input-channels-label;
+    changed chosen => {
+        self.current-index = root.chosen;
+    }
+    selected => {
+        root.picked(self.current-index);
+        self.current-index = root.chosen;
+    }
+}
+
 // A volume slider with its value. `changed` reports every move.
 export component VolumeSlider inherits HorizontalLayout {
     in property <float> volume;
@@ -538,6 +623,33 @@ export component VolumeSlider inherits HorizontalLayout {
         vertical-alignment: center;
         wrap: no-wrap;
         font-size: Tokens.font-size-caption;
+    }
+}
+
+// The input level meter: a bar that only reads out, never takes the focus.
+// The fill against its track measures above 3:1 in both themes (contrast.rs).
+export component LevelMeter inherits Rectangle {
+    // 0 to 1.
+    in property <float> level;
+    // The level as Narrator reads it, in steps of 10 percent.
+    in property <int> spoken-percent;
+    in property <string> label;
+
+    height: 4px;
+    border-radius: self.height / 2;
+    background: Tokens.separator;
+    accessible-role: progress-indicator;
+    accessible-label: root.label;
+    accessible-value: Strings.input-level-value(root.spoken-percent);
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 100;
+
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.level, 0, 1);
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: Tokens.teal-text;
     }
 }
 

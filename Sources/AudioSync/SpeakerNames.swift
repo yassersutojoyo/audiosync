@@ -41,6 +41,21 @@ struct SpeakerNames: Equatable {
         return custom[key] != before
     }
 
+    /// The Cast names kept under "lc:cast:<device ID>" before Cast speakers
+    /// had a key of their own, moved to "cc:<device ID>" (S243). A name
+    /// already under the new key wins; run again, it changes nothing.
+    func castKeysMoved() -> SpeakerNames {
+        let old = SpeakerKey.make(id: CastID.prefix, kind: .local)
+        var moved = custom.filter { !$0.key.hasPrefix(old) }
+        for (key, name) in custom where key.hasPrefix(old) {
+            let device = String(key.dropFirst(old.count))
+            guard !device.isEmpty else { continue }
+            let new = CastID.key(device)
+            if moved[new] == nil { moved[new] = name }
+        }
+        return SpeakerNames(custom: moved)
+    }
+
     /// A typed name without the spaces and line breaks around it, line breaks
     /// inside it as spaces, and at most `maxLength` characters.
     static func clean(_ typed: String) -> String {

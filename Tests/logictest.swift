@@ -53,6 +53,66 @@ check(AudioSource.app(bundleID: "com.spotify.client").defaultsValue == "com.spot
       "source: an app is stored as its plain bundle ID, as earlier versions stored it")
 check(AudioSource.system.bundleID == nil, "source: the whole system has no bundle ID")
 
+// MARK: Several apps as one source
+do {
+    let music = "com.apple.Music", safari = "com.apple.Safari", own = "com.example.audiosync"
+    let both = AudioSource.mixed(.only, bundleIDs: [music, safari])
+    let except = AudioSource.mixed(.allExcept, bundleIDs: [music])
+    check(both == .mix(.only, bundleIDs: [music, safari]) && both.defaultsValue == "apps:com.apple.Music,com.apple.Safari"
+            && AudioSource(defaultsValue: both.defaultsValue) == both,
+          "mix: several apps are stored under an apps: tag and read back", both.defaultsValue)
+    check(except.defaultsValue == "except:com.apple.Music" && AudioSource(defaultsValue: except.defaultsValue) == except,
+          "mix: all except is stored under an except: tag and read back", except.defaultsValue)
+    check(AudioSource(defaultsValue: music) == .app(bundleID: music) && AudioSource.app(bundleID: music).defaultsValue == music,
+          "mix: an old single-app value still loads as that app, and saves unchanged")
+    check(AudioSource.mixed(.only, bundleIDs: [music, own, music, " ", "a,b", "x:y"], ownBundleID: own) == .app(bundleID: music),
+          "mix: one app left after dropping AudioSync, repeats, blanks and unstorable IDs is a plain app source")
+    check(AudioSource.mixed(.only, bundleIDs: []) == .system && AudioSource.mixed(.allExcept, bundleIDs: [own], ownBundleID: own) == .system
+            && AudioSource(defaultsValue: "apps:") == .system && AudioSource(defaultsValue: "except:,") == .system,
+          "mix: no app left is the whole system, so AudioSync never names itself in a stored mix")
+    check(both.bundleID == nil && both.capturedApps == [music, safari] && except.capturedApps.isEmpty,
+          "mix: a mix has no single bundle ID; only an only-mix captures its apps")
+
+    check(SourceMix.toggle(safari, in: .app(bundleID: music), mode: .only) == both
+            && SourceMix.toggle(safari, in: both, mode: .only) == .app(bundleID: music)
+            && SourceMix.toggle(music, in: .app(bundleID: music), mode: .only) == .system,
+          "mix: checking an app adds it to the mix, unchecking takes it out")
+    check(SourceMix.toggle(music, in: .system, mode: .allExcept) == except
+            && SourceMix.toggle(music, in: .app(bundleID: safari), mode: .allExcept) == except
+            && SourceMix.toggle(own, in: .system, mode: .allExcept, ownBundleID: own) == .system,
+          "mix: in all-except mode a check starts a new exclusion list; AudioSync can't be checked")
+    check(SourceMix.setMode(.allExcept, from: .only, of: both) == .mix(.allExcept, bundleIDs: [music, safari])
+            && SourceMix.setMode(.only, from: .allExcept, of: except) == .app(bundleID: music),
+          "mix: switching the mode keeps the checked apps")
+    check(SourceMix.mode(of: .system, remembered: .allExcept) == .allExcept && SourceMix.mode(of: .app(bundleID: music), remembered: .allExcept) == .only
+            && SourceMix.mode(of: except, remembered: .only) == .allExcept && SourceMix.checked(.app(bundleID: music), mode: .allExcept).isEmpty,
+          "mix: the menu shows the mix's own mode, else the one last shown")
+
+    func judged(_ source: AudioSource, _ quit: String?, running: Set<String>) -> AudioSource {
+        SourceQuit.judged(source, quitBundleID: quit, isRunning: { running.contains($0) })
+    }
+    check(judged(both, music, running: [safari]) == .system && judged(both, music, running: []) == .app(bundleID: music)
+            && judged(both, "com.other", running: []) == .system && judged(except, music, running: []) == .system,
+          "mix: a mix ends only with its last app; all except outlives every app")
+    check(SourceQuit.decide(setting: .stop, source: both, quitBundleID: music, streaming: .running, isRunning: { $0 == safari }) == .keep
+            && SourceQuit.decide(setting: .stop, source: both, quitBundleID: music, streaming: .running, isRunning: { _ in false }) == .stop
+            && SourceQuit.decide(setting: .system, source: both, quitBundleID: safari, streaming: .running, isRunning: { _ in false })
+                == .switchToSystem,
+          "mix: an app of a mix quitting keeps streaming while another runs, and acts as set once none does")
+
+    check(AppTapFollow.decideExcluding(tapped: [3], found: [], own: 3) == .keep
+            && AppTapFollow.decideExcluding(tapped: [3], found: [9, 5], own: 3) == .retap([3, 5, 9])
+            && AppTapFollow.decideExcluding(tapped: [3, 5, 9], found: [9], own: 3) == .retap([3, 9]),
+          "mix: an all-except tap follows the excluded apps' processes and always leaves AudioSync out")
+
+    let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: music, name: "Music")], inputs: [],
+                                     chosen: both, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") })
+    check(entries.map(\.id) == ["", both.defaultsValue, music] && entries[1].name == "Music + Safari",
+          "mix: the picker lists the chosen mix under the whole system, named by its apps", "\(entries)")
+    let offered = SourceList.mixApps([(bundleID: music, name: "Music")], checked: [safari], chosenAppName: { _ in "Safari" })
+    check(offered.map(\.id) == [music, safari], "mix: a checked app that isn't running stays in the menu to be unchecked")
+}
+
 // MARK: Source apps — display names and the picker's app list
 check(SourceApps.displayName(running: "Music", installed: "Apple Music", bundleID: "com.apple.Music") == "Music",
       "source apps: a running app's name comes first")
@@ -131,6 +191,20 @@ check(AppAppearance.light.appearanceName == .aqua && AppAppearance.dark.appearan
 check(SpeakerKey.make(id: "123", airplay: true) == "ap:123", "speaker key: AirPlay prefix")
 check(SpeakerKey.parse("lc:58-18:output").map { $0.id == "58-18:output" && !$0.airplay } == true, "speaker key: local parse keeps colons")
 check(SpeakerKey.parse("zz:1") == nil, "speaker key: unknown prefix rejected")
+check(SpeakerKey.parseAny("CC:tv") == nil && SpeakerKey.parseAny("cast:tv") == nil && SpeakerKey.parseAny("tv") == nil
+      && SpeakerKey.make(id: "manual:203.0.113.20:8009", kind: .cast) == "cc:manual:203.0.113.20:8009"
+      && SpeakerKey.parseAny("cc:manual:203.0.113.20:8009").map { $0.id == "manual:203.0.113.20:8009" && $0.kind == .cast } == true
+      && SpeakerKey.parse("cc:tv") == nil,
+      "speaker key: Cast prefix, colons kept")
+check(CastID.key(appID: CastID.app("nest-1")) == "cc:nest-1" && CastID.app(key: "cc:nest-1") == "cast:nest-1"
+      && CastID.device(key: "cc:nest-1") == "nest-1" && CastID.device(key: "lc:cast:nest-1") == nil
+      && SpeakerKey.of(id: "cast:nest-1", tag: .cast) == "cc:nest-1"
+      && SpeakerKey.of(id: "native:A1", tag: .airplay) == "ap:native:A1" && SpeakerKey.of(id: "usb-1", tag: .usb) == "lc:usb-1",
+      "speaker key: Cast app ID maps to its key and back")
+check(["ap:native:pair:5A1B-77", "ap:pair:5A1B-77", "ap:native:theater:9F00", "ap:theater:9F00"].allSatisfy { key in
+          SpeakerKey.parseAny(key).map { SpeakerKey.make(id: $0.id, kind: $0.kind) == key && $0.kind == .airplay } == true
+      } && SpeakerKey.parse("ap:native:pair:5A1B-77").map { $0.id == "native:pair:5A1B-77" && $0.airplay } == true,
+      "speaker key: pair and theater targets round-trip")
 let g = SpeakerGroup(id: "g", name: "Room", members: ["ap:1", "lc:2"])
 let decoded = try! JSONDecoder().decode(SpeakerGroup.self, from: try! JSONEncoder().encode(g))
 check(decoded == g, "groups: JSON round-trip")
@@ -208,6 +282,76 @@ do {
     check(Migration.migrate(edge, receivers: ["FFFFFFFFFFFF", "000000000001"]).enabledAirPlay
             == ["native:FFFFFFFFFFFF", "native:000000000001"],
           "speaker IDs: the largest and smallest device IDs move too")
+    // Zones: one zone per speaker, so a zone holding the new key keeps it and the old key goes everywhere.
+    let zoned = Migration.Saved(
+        enabledAirPlay: [], airplayVolumes: [:], groups: [], autoConnect: [],
+        zones: [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:\(tvOld)", "lc:usb:out", "ap:\(gone)"], volume: 40),
+                SpeakerZone(id: "z2", name: "Den", members: ["ap:\(denOld)"], volume: 100),
+                SpeakerZone(id: "z3", name: "Office", members: ["ap:\(denNew)"], volume: 100)])
+    check(Migration.renames(zoned, receivers: receivers) == [tvOld: tvNew, denOld: denNew],
+          "speaker IDs: a bundled-engine ID kept only in a zone moves too", "\(Migration.renames(zoned, receivers: receivers))")
+    let movedZones = Migration.migrate(zoned, receivers: receivers).zones
+    check(movedZones == [
+            SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:\(tvNew)", "lc:usb:out", "ap:\(gone)"], volume: 40),
+            SpeakerZone(id: "z2", name: "Den", members: [], volume: 100),
+            SpeakerZone(id: "z3", name: "Office", members: ["ap:\(denNew)"], volume: 100)],
+          "speaker IDs: zone members are renamed in place, and a zone already holding the new key keeps it",
+          "\(movedZones)")
+}
+
+// MARK: Zones — the groups become zones once (Zones.swift, AppSettings.swift, S245, S248)
+do {
+    typealias Keys = AppSettings.Keys
+    final class Stored { var values: [String: Any] = [:]; var order: [String] = [] }
+    let stored = Stored()
+    let store = SettingsStore(read: { stored.values[$0] },
+                              write: { value, key in stored.values[key] = value; stored.order.append(key) })
+    let groups = [
+        SpeakerGroup(id: "g1", name: "Living Room", members: ["lc:BuiltInSpeakerDevice", "ap:native:AABBCCDDEE01"]),
+        SpeakerGroup(id: "g2", name: "Group 2", members: ["ap:native:AABBCCDDEE01", "cc:Chromecast-1"]),
+        SpeakerGroup(id: "g3", name: "Den", members: ["lc:BuiltInSpeakerDevice"]),
+    ]
+    let expected = [
+        SpeakerZone(id: "g1", name: "Living Room", members: ["lc:BuiltInSpeakerDevice", "ap:native:AABBCCDDEE01"], volume: 100),
+        SpeakerZone(id: "g2", name: "Group 2", members: ["cc:Chromecast-1"], volume: 100),
+        SpeakerZone(id: "g3", name: "Den", members: [], volume: 100),
+    ]
+    check(ZoneMigration.zones(from: Array(groups.prefix(1))) == Array(expected.prefix(1))
+            && ZoneMigration.zones(from: []).isEmpty,
+          "zones: disjoint groups become zones unchanged, at volume 100")
+    check(ZoneMigration.zones(from: groups) == expected,
+          "zones: overlapping groups keep each speaker in its first zone, and a group left empty is an empty zone",
+          "\(ZoneMigration.zones(from: groups))")
+
+    store.save(groups: groups)
+    stored.order = []
+    let first = store.load()
+    check(first.zones == expected && first.groups == groups,
+          "zones: the first launch moves the groups to zones and leaves the saved groups as they are", "\(first.zones)")
+    check(stored.order.last == Keys.zonesMigrated && stored.values[Keys.zonesMigrated] as? Bool == true,
+          "zones: the migrated mark is written last", "\(stored.order)")
+    stored.values[Keys.zonesMigrated] = nil
+    stored.values[Keys.zones] = nil
+    check(store.load().zones == expected, "zones: a migration cut short before its mark runs again to the same zones")
+    store.save(groups: [SpeakerGroup(id: "g9", name: "Later", members: ["lc:usb:out"])])
+    stored.order = []
+    check(store.load().zones == expected && stored.order.isEmpty,
+          "zones: migrating twice changes nothing: once marked, a launch writes nothing")
+
+    let edited = [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:usb:out", "cc:Group-7"], volume: 35.5),
+                  SpeakerZone(id: "z2", name: "Empty", members: [], volume: 0)]
+    store.save(zones: edited)
+    check(store.load().zones == edited, "zones: zones round-trip through the user defaults, an empty one included")
+    let messy = [SpeakerZone(id: "z1", name: "A", members: ["lc:a", "lc:a", "ap:b"], volume: 140),
+                 SpeakerZone(id: "z2", name: "B", members: ["ap:b", "cc:c"], volume: -3),
+                 SpeakerZone(id: "z1", name: "A again", members: ["lc:d"], volume: 50)]
+    store.save(zones: messy)
+    check(store.load().zones == [SpeakerZone(id: "z1", name: "A", members: ["lc:a", "ap:b"], volume: 100),
+                                 SpeakerZone(id: "z2", name: "B", members: ["cc:c"], volume: 0)],
+          "zones: stored zones keep a speaker in its first zone, one zone per ID, volumes within 0…100")
+    stored.values[Keys.zones] = Data("not json".utf8)
+    check(store.load().zones.isEmpty && stored.values[Keys.zonesMigrated] as? Bool == true,
+          "zones: unreadable zones read as none and never migrate again")
 }
 
 // MARK: Output devices — virtual ones hidden unless asked for or chosen
@@ -1193,13 +1337,14 @@ do {
         free(list.unsafeMutablePointer)
     }
     // What the capture IOProc hands to the engine parts: the blocks, joined.
-    func stereo(_ buffers: [Buffer], blockFrames: Int = CaptureChannels.blockFrames) -> (samples: [Float], blocks: [Int]) {
+    func stereo(_ buffers: [Buffer], blockFrames: Int = CaptureChannels.blockFrames,
+                layout: CaptureChannels.Layout = .stereoFloat) -> (samples: [Float], blocks: [Int]) {
         var samples: [Float] = []
         var blocks: [Int] = []
         withInput(buffers) { list in
             let scratch = UnsafeMutablePointer<Float>.allocate(capacity: blockFrames * 2)
             defer { scratch.deallocate() }
-            CaptureChannels(list).forEachBlock(in: scratch, blockFrames: blockFrames) { block, count in
+            CaptureChannels(list, layout: layout).forEachBlock(in: scratch, blockFrames: blockFrames) { block, count in
                 samples += Array(UnsafeBufferPointer(start: block, count: count * 2))
                 blocks.append(count)
             }
@@ -1233,6 +1378,20 @@ do {
           "capture channels: a long callback is delivered in order, in blocks of at most 4096 frames",
           "\(blocked.blocks)")
     check(CaptureChannels.blockFrames <= 8192, "capture channels: a block never exceeds the ring's write margin")
+    // 8 kHz keeps the host ticks per frame whole on both Apple silicon and Intel timebases.
+    let stampGate = BlockGate()
+    stampGate.prepare(captureRate: 8000)
+    let callbackNow: UInt64 = 1_000_000_000_000
+    let starts = blocked.blocks.indices.map { index in
+        stampGate.blockStartTicks(callbackNow: callbackNow, callbackFrames: 10_000,
+                                  offset: blocked.blocks[..<index].reduce(0, +))
+    }
+    let step = stampGate.ticks(frames: 4096)
+    check(step > 0 && starts.count == 3 && starts[1] &- starts[0] == step && starts[2] &- starts[1] == step
+            && starts[2] &+ stampGate.ticks(frames: 1808) == callbackNow
+            && starts[0] == callbackNow &- stampGate.ticks(frames: 10_000),
+          "capture channels: each block of a long callback is stamped at its own place in the callback",
+          "\(starts) step \(step)")
 
     check(CaptureRate.session(reported: 0) == 48000 && CaptureRate.session(reported: .nan) == 48000,
           "capture rate: a rate that reads 0 counts as 48 kHz")
@@ -1253,17 +1412,161 @@ do {
                                     mBitsPerChannel: bits, mReserved: 0)
     }
     let float32 = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked
-    check(CaptureInputFormat.check([format(flags: float32)]) == .usable,
+    let signed = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked
+    check(CaptureInputFormat.check([format(flags: float32)]) == .usable(.stereoFloat),
           "input format: native 32-bit float is read as it is")
-    check(CaptureInputFormat.check([format(flags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked, bits: 16)]) == .unsupported
-            && CaptureInputFormat.check([format(flags: float32 | kAudioFormatFlagIsBigEndian)]) == .unsupported
-            && CaptureInputFormat.check([format(flags: float32, bits: 64)]) == .unsupported,
-          "input format: integer, big-endian or 64-bit samples aren't read")
+    check(CaptureInputFormat.check([format(flags: float32 | kAudioFormatFlagIsBigEndian)]) == .unsupported
+            && CaptureInputFormat.check([format(flags: float32, bits: 64)]) == .unsupported
+            && CaptureInputFormat.check([format(flags: kAudioFormatFlagIsPacked, bits: 16)]) == .unsupported
+            && CaptureInputFormat.check([format(flags: signed | (8 << kLinearPCMFormatFlagsSampleFractionShift))]) == .unsupported,
+          "input format: big-endian, 64-bit, unsigned and fixed-point samples aren't read")
     check(CaptureInputFormat.check([]) == .noChannels
             && CaptureInputFormat.check([format(flags: float32, channels: 0)]) == .noChannels,
           "input format: a device without input channels has nothing to capture")
-    check(CaptureInputFormat.check([format(flags: float32), format(flags: kAudioFormatFlagIsSignedInteger, bits: 16, channels: 0)]) == .usable,
+    check(CaptureInputFormat.check([format(flags: float32), format(flags: signed, bits: 16, channels: 0)]) == .usable(.stereoFloat),
           "input format: a stream without channels doesn't count")
+
+    // Integer streams: which sample type each format is.
+    var packed24 = format(flags: signed, bits: 24)
+    packed24.mBytesPerFrame = 6
+    var high24 = format(flags: signed | kAudioFormatFlagIsAlignedHigh, bits: 24)
+    high24.mBytesPerFrame = 8
+    high24.mFormatFlags &= ~kAudioFormatFlagIsPacked
+    var low24 = high24
+    low24.mFormatFlags &= ~kAudioFormatFlagIsAlignedHigh
+    var nonInterleaved16 = format(flags: signed | kAudioFormatFlagIsNonInterleaved, bits: 16)
+    nonInterleaved16.mBytesPerFrame = 2
+    check(CaptureChannels.Sample.of(format(flags: signed, bits: 16)) == .int16
+            && CaptureChannels.Sample.of(packed24) == .int24
+            && CaptureChannels.Sample.of(high24) == .int24High
+            && CaptureChannels.Sample.of(low24) == .int24Low
+            && CaptureChannels.Sample.of(format(flags: signed, bits: 32)) == .int32
+            && CaptureChannels.Sample.of(nonInterleaved16) == .int16,
+          "input format: 16-bit, 24-bit (packed and in 32) and 32-bit signed integers are read")
+    check(CaptureInputFormat.check([format(flags: signed, bits: 16)])
+            == .usable(CaptureChannels.Layout(left: 0, right: 1, leftSample: .int16, rightSample: .int16)),
+          "input format: an integer device is captured without changing its format")
+
+    // Integer to float: full scale, zero and the sign of the smallest step.
+    func converted<T>(_ value: T, _ sample: CaptureChannels.Sample) -> Float {
+        withUnsafeBytes(of: value) { sample.value(at: $0.baseAddress!) }
+    }
+    func converted(bytes: [UInt8], _ sample: CaptureChannels.Sample) -> Float {
+        bytes.withUnsafeBytes { sample.value(at: $0.baseAddress!) }
+    }
+    check(converted(Int16.min, .int16) == -1 && converted(Int16.max, .int16) == 32_767 / 32_768
+            && converted(Int16(0), .int16) == 0 && converted(Int16(-1), .int16) == -1 / 32_768,
+          "integer input: 16-bit min, max, zero and sign")
+    check(converted(bytes: [0x00, 0x00, 0x80], .int24) == -1
+            && converted(bytes: [0xFF, 0xFF, 0x7F], .int24) == 8_388_607 / 8_388_608
+            && converted(bytes: [0, 0, 0], .int24) == 0
+            && converted(bytes: [0xFF, 0xFF, 0xFF], .int24) == -1 / 8_388_608
+            && converted(bytes: [0x01, 0x00, 0x00], .int24) == 1 / 8_388_608,
+          "integer input: packed 24-bit min, max, zero and sign")
+    check(converted(Int32(bitPattern: 0x8000_0000), .int24High) == -1
+            && converted(Int32(0x7FFF_FF00), .int24High) == 8_388_607 / 8_388_608
+            && converted(Int32(0x0000_00FF), .int24High) == 0
+            && converted(Int32(bitPattern: 0xFFFF_FF00), .int24High) == -1 / 8_388_608,
+          "integer input: 24-bit high in 32 min, max, zero and sign; the low byte is ignored")
+    check(converted(Int32(0x0080_0000), .int24Low) == -1
+            && converted(Int32(0x007F_FFFF), .int24Low) == 8_388_607 / 8_388_608
+            && converted(Int32(0), .int24Low) == 0
+            && converted(Int32(0x00FF_FFFF), .int24Low) == -1 / 8_388_608
+            && converted(Int32(bitPattern: 0xAB80_0000), .int24Low) == -1,
+          "integer input: 24-bit low in 32 min, max, zero and sign; the high byte is ignored")
+    check(converted(Int32.min, .int32) == -1 && converted(Int32.max, .int32) <= 1
+            && converted(Int32.max, .int32) > 0.999_999 && converted(Int32(0), .int32) == 0
+            && converted(Int32(-1), .int32) == -1 / 2_147_483_648,
+          "integer input: 32-bit min, max, zero and sign")
+
+    // Channel pairs on devices with more than two channels.
+    check(InputChannelPair.offered(channels: 1).isEmpty && InputChannelPair.offered(channels: 2).isEmpty,
+          "channel pairs: a mono or stereo device offers no choice")
+    let four = InputChannelPair.offered(channels: 4)
+    check(four.map { [$0.index, $0.left, $0.right] } == [[0, 0, 1], [1, 2, 3]],
+          "channel pairs: four channels offer 1-2 and 3-4", "\(four)")
+    let five = InputChannelPair.offered(channels: 5)
+    check(five.map { [$0.left, $0.right] } == [[0, 1], [2, 3], [4, 4]] && five[2].isMono && !five[1].isMono,
+          "channel pairs: an odd last channel is a pair of its own", "\(five)")
+    func resolves(_ saved: Int, on channels: Int, to pair: InputChannelPair, fellBack: Bool) -> Bool {
+        let found = InputChannelPair.resolve(saved: saved, channels: channels)
+        return found.pair == pair && found.fellBack == fellBack
+    }
+    check(resolves(0, on: 8, to: .first, fellBack: false) && resolves(0, on: 1, to: .first, fellBack: false),
+          "channel pairs: nothing saved reads channels 1-2, on a mono device too")
+    check(resolves(1, on: 4, to: four[1], fellBack: false) && resolves(2, on: 5, to: five[2], fellBack: false),
+          "channel pairs: a saved pair the device has is read")
+    check(resolves(2, on: 4, to: .first, fellBack: true) && resolves(1, on: 2, to: .first, fellBack: true)
+            && resolves(-1, on: 8, to: .first, fellBack: true),
+          "channel pairs: a saved pair the device no longer has falls back to 1-2 and says so")
+    check(InputChannelPair.change(from: 0, to: 1, streaming: true) == .restart
+            && InputChannelPair.change(from: 0, to: 1, streaming: false) == .remember
+            && InputChannelPair.change(from: 1, to: 1, streaming: true) == .none
+            && InputChannelPair.change(from: 1, to: -1, streaming: true) == .none,
+          "channel pairs: choosing another pair restarts a running session, the same one does nothing")
+    check(UIStrings().inputChannelPair(four[1]) == "Channels 3-4" && UIStrings().inputChannelPair(five[2]) == "Channel 5",
+          "channel pairs: shown as the device counts its channels")
+
+    // The pair's channels reach L and R, wherever they sit.
+    func pairLayout(_ pair: InputChannelPair) -> CaptureChannels.Layout {
+        CaptureChannels.Layout(left: pair.left, right: pair.right, leftSample: .float32, rightSample: .float32)
+    }
+    check(stereo([(4, [1, 2, 3, 4, 5, 6, 7, 8])], layout: pairLayout(four[1])).samples == [3, 4, 7, 8],
+          "channel pairs: pair 3-4 of an interleaved input plays its channels 3 and 4")
+    check(stereo([(1, [1, 2]), (1, [3, 4]), (1, [5, 6]), (1, [7, 8])], layout: pairLayout(four[1])).samples == [5, 7, 6, 8],
+          "channel pairs: pair 3-4 of one buffer per channel plays the third and fourth buffers")
+    check(stereo([(2, [1, 2, 3, 4]), (3, [10, 20, 30, 40, 50, 60])], layout: pairLayout(five[2])).samples == [30, 30, 60, 60],
+          "channel pairs: a lone fifth channel plays on both sides")
+    check(stereo([(1, [1, 2, 3])], layout: pairLayout(.first)).samples == [1, 1, 2, 2, 3, 3],
+          "channel pairs: a mono device on 1-2 still plays its channel on both sides")
+    let twoStreams = [format(flags: float32), format(flags: signed, bits: 16)]
+    check(CaptureInputFormat.check(twoStreams, pair: four[1])
+            == .usable(CaptureChannels.Layout(left: 2, right: 3, leftSample: .int16, rightSample: .int16)),
+          "channel pairs: the pair's stream decides its sample type")
+    check(CaptureInputFormat.check([format(flags: float32), format(flags: kAudioFormatFlagIsPacked, bits: 16)]) == .usable(.stereoFloat)
+            && CaptureInputFormat.check([format(flags: float32), format(flags: kAudioFormatFlagIsPacked, bits: 16)],
+                                        pair: four[1]) == .unsupported,
+          "channel pairs: only the streams holding the pair have to be readable")
+    let int16Pair = CaptureChannels.Layout(left: 2, right: 3, leftSample: .int16, rightSample: .int16)
+    let int16Bytes: [Int16] = [0, 0, Int16.min, 16_384, 0, 0, Int16.max, -1]
+    let int16Stereo: [Float] = int16Bytes.withUnsafeBytes { raw in
+        var list = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(
+            mNumberChannels: 4, mDataByteSize: UInt32(raw.count), mData: UnsafeMutableRawPointer(mutating: raw.baseAddress)))
+        var out = [Float](repeating: 9, count: 4)
+        withUnsafePointer(to: &list) { CaptureChannels($0, layout: int16Pair).copy(from: 0, frames: 2, into: &out) }
+        return out
+    }
+    check(int16Stereo == [-1, 0.5, 32_767 / 32_768, -1 / 32_768],
+          "channel pairs: a 16-bit input's pair 3-4 is converted to float", "\(int16Stereo)")
+
+    let started = [format(flags: float32), format(flags: signed, bits: 16)]
+    check(!CaptureInputFormat.needsRestart(started: started, now: started)
+            && !CaptureInputFormat.needsRestart(started: started, now: nil),
+          "input format: the same formats, or none readable, keep the capture running")
+    check(CaptureInputFormat.needsRestart(started: started, now: [format(flags: float32), format(flags: signed, bits: 24)])
+            && CaptureInputFormat.needsRestart(started: started,
+                                               now: [format(flags: float32), format(flags: signed, bits: 16, channels: 4)])
+            && CaptureInputFormat.needsRestart(started: started, now: [format(flags: float32)]),
+          "input format: a new bit depth, channel count or stream list restarts the capture")
+    var otherRate = started
+    otherRate[0].mSampleRate = 44_100
+    check(!CaptureInputFormat.needsRestart(started: started, now: otherRate),
+          "input format: a rate change is left to the rate listener")
+
+    let storedPairs: [String: Any] = ["a": 1, "b": 2.0, "c": 0, "d": -1, "e": 1.5, "f": "x", "g": Double.nan,
+                                      "h": 511, "i": 512]
+    check(AppSettings.channelPairs(storedPairs) == ["a": 1, "b": 2, "h": 511] && AppSettings.channelPairs("x").isEmpty
+            && InputChannelPair.maxStored == 511,
+          "channel pairs: only whole stored pairs from 1 to 511 are read back, as on Windows")
+    final class PairStore { var values: [String: Any] = [:] }
+    let pairStore = PairStore()
+    let pairSettings = SettingsStore(read: { pairStore.values[$0] }, write: { value, key in pairStore.values[key] = value })
+    check(pairSettings.load().inputPairs.isEmpty, "channel pairs: a new install reads every device on 1-2")
+    pairSettings.save(inputPairs: ["mic-uid": 1])
+    let pairsBack = pairSettings.load().inputPairs
+    pairSettings.save(inputPairs: [:])
+    check(pairsBack == ["mic-uid": 1] && pairStore.values[AppSettings.Keys.inputChannelPairs] == nil,
+          "channel pairs: a pair is kept per device UID, and the key goes once all are on 1-2")
 
     check(AppTapFollow.decide(tapped: [5, 7], found: [7, 5], appRunning: true) == .keep,
           "app tap: the same processes in another order keep the tap")
@@ -2697,7 +3000,8 @@ do {
           "prompt withdrawal: no prompt open, nothing to close")
 
     let apps = [(bundleID: "com.apple.Music", name: "Music"), (bundleID: "com.spotify.client", name: "Spotify")]
-    let inputs = [(uid: "mic-1", name: "MacBook Pro Microphone"), (uid: "", name: "No UID")]
+    let inputs = [SourceList.Input(uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+                  SourceList.Input(uid: "", name: "No UID", transport: kAudioDeviceTransportTypeUSB)]
     func list(_ chosen: AudioSource) -> [SourceList.Entry] {
         SourceList.entries(systemName: "All System Audio", apps: apps, inputs: inputs, chosen: chosen,
                            chosenAppName: { $0 == "com.apple.Safari" ? "Safari" : $0 })
@@ -2714,6 +3018,58 @@ do {
           "sources: a chosen input device that is unplugged is not listed")
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
+
+    // A Bluetooth headset's hands-free input switches it to call mode, so the
+    // picker leaves it out; a Bluetooth LE, USB or built-in input stays.
+    let headsetInputs = [
+        SourceList.Input(uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+        SourceList.Input(uid: "buds:input", name: "Example Buds", transport: kAudioDeviceTransportTypeBluetooth),
+        SourceList.Input(uid: "hearing:input", name: "Example LE Mic", transport: kAudioDeviceTransportTypeBluetoothLE),
+        SourceList.Input(uid: "usb-mic", name: "USB Mic", transport: kAudioDeviceTransportTypeUSB),
+        // An aggregate that records from a hands-free input opens it too.
+        SourceList.Input(uid: "agg-buds", name: "Buds Aggregate", transport: kAudioDeviceTransportTypeAggregate,
+                         inputSubTransports: [kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeBluetooth]),
+        SourceList.Input(uid: "agg-wired", name: "Wired Aggregate", transport: kAudioDeviceTransportTypeAggregate,
+                         inputSubTransports: [kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeUSB]),
+    ]
+    func headsetList(_ chosen: AudioSource) -> [SourceList.Entry] {
+        SourceList.entries(systemName: "All System Audio", apps: [], inputs: headsetInputs, chosen: chosen,
+                           chosenAppName: { $0 })
+    }
+    check(headsetList(.system).map(\.id) == ["", "input:mic-1", "input:hearing:input", "input:usb-mic", "input:agg-wired"],
+          "sources: a Bluetooth hands-free input, or an aggregate with one, is left out; "
+            + "Bluetooth LE, built-in, USB and other aggregate inputs stay",
+          "\(headsetList(.system).map(\.id))")
+    check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id),
+          "sources: a saved source that is a hands-free input isn't listed, like an unplugged one")
+    check(AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetooth)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetoothLE)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeUSB)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBuiltIn)
+            && !AudioDevices.isHandsFreeInput(transport: 0)
+            && AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate,
+                                             inputSubTransports: [kAudioDeviceTransportTypeBluetooth])
+            && AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAutoAggregate,
+                                             inputSubTransports: [kAudioDeviceTransportTypeUSB, kAudioDeviceTransportTypeBluetooth])
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate,
+                                              inputSubTransports: [kAudioDeviceTransportTypeBluetoothLE, kAudioDeviceTransportTypeUSB])
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate),
+          "sources: a classic Bluetooth input, or an aggregate recording from one, counts as hands-free")
+    let inputLog = SourceList.logLines(headsetInputs)
+    check(inputLog.count == 6 && inputLog[1].contains("transport blue: left out: a Bluetooth hands-free input")
+            && inputLog[4].contains("transport grup (sub-device inputs bltn, blue): left out")
+            && inputLog[0].hasSuffix("transport bltn: listed") && inputLog[3].hasSuffix("transport usb : listed"),
+          "sources: the debug log names each input's transport and whether it was left out", "\(inputLog)")
+    check(AudioDevices.transportCode(0) == "0",
+          "sources: a transport that isn't four printable characters logs as a number")
+    // A saved hands-free source doesn't start, and says why rather than "not connected".
+    let handsFreeStart = UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputHandsFree("buds:input"))
+    let handsFreeStop = UIStrings().sourceStopped(.inputHandsFree("buds:input"))
+    check(handsFreeStart.contains("hands-free microphone") && handsFreeStart.hasSuffix("Pick another source.")
+            && !handsFreeStart.contains("not connected") && handsFreeStop == handsFreeStart
+            && handsFreeStart != UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputNotFound("buds:input"))
+            && !handsFreeStart.contains("\u{2014}"),
+          "capture: a saved source that is a hands-free input has its own reason", handsFreeStart)
 
     let present: Set<String> = ["ap:a", "lc:b"]
     func summary(_ members: [String], on: Set<String>) -> (available: Int, allOn: Bool) {
@@ -2848,7 +3204,8 @@ do {
         (Keys.localOffsets, "localOffsetMsByUID"),
         (Keys.airPlayDelay, "airPlayDelayMs"), (Keys.nativeAirPlayAdjustment, "nativeAirPlayAdjustmentMs"),
         (Keys.localDelaysMigrated, "localDelayModelMigrated"), (Keys.speakerNames, "speakerNamesByKey"),
-        (Keys.airPlay2, "airPlay2Enabled"),
+        (Keys.airPlay2, "airPlay2Enabled"), (Keys.zones, "speakerZones"),
+        (Keys.zonesMigrated, "speakerZonesMigrated"),
     ]
     let renamed = pinned.filter { $0.0 != $0.1 }.map(\.1)
     check(renamed.isEmpty, "settings: every UserDefaults key keeps the name existing installs use",
@@ -3097,6 +3454,14 @@ do {
     stored.values[AppSettings.Keys.speakerNames] = ["a": 5, "b": "  ", "c": "Den"] as [String: Any]
     check(store.load().speakerNames.custom == ["c": "Den"],
           "speaker names: a stored entry that isn't a name is skipped")
+
+    let before = SpeakerNames(custom: ["lc:cast:nest-1": "Den", "lc:cast:tv": "Old", "cc:tv": "Lounge",
+                                       "lc:cast:": "Blank ID", "lc:usb-uid": "Desk"])
+    let moved = before.castKeysMoved()
+    check(moved.custom == ["cc:nest-1": "Den", "cc:tv": "Lounge", "lc:usb-uid": "Desk"]
+              && moved.castKeysMoved() == moved && SpeakerNames().castKeysMoved() == SpeakerNames()
+              && moved.shown(key: CastID.key("nest-1"), system: "Nest") == "Den",
+          "speaker names: Cast names move from lc:cast: once", "moved: \(moved.custom)")
 
     let deskTarget = SpeakerRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
     let kitchenTarget = SpeakerRename.Target(id: "hp-1", key: homePod, system: "HomePod")
@@ -4264,13 +4629,34 @@ do {
     }
 
     // Refusals the host makes before the estimate say why and that nothing changed.
-    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .sourceSilent, .interrupted,
-                                              .notPlaying, .noReference, .unsupportedRate]
+    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
+                                              .interrupted, .notPlaying, .noReference, .unsupportedRate]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
         check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
               "calibration: a refusal (\(failure)) says why and that the delay wasn't changed", message)
     }
+
+    // A hands-free default input is refused with its own reason, for one
+    // speaker and for Calibrate All (both ask microphoneRefusal first).
+    check(CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBluetooth) == .handsFreeMicrophone
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBuiltIn) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeUSB) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBluetoothLE) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: nil) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeAggregate,
+                                                 inputSubTransports: [kAudioDeviceTransportTypeBluetooth]) == .handsFreeMicrophone
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeAggregate,
+                                                 inputSubTransports: [kAudioDeviceTransportTypeUSB]) == nil,
+          "calibration: only a Bluetooth hands-free default input, or an aggregate with one, is refused")
+    let handsFreeText = t.calibrationMessage(.failed(.handsFreeMicrophone)) ?? ""
+    let handsFreeAll = t.calibrateAllLine(.ended(.failed(.handsFreeMicrophone)))
+    check(handsFreeText.contains("hands-free") && handsFreeText.contains("Choose another input")
+            && handsFreeText != t.calibrationMessage(.failed(.noMicrophone))
+            && handsFreeAll.contains("hands-free") && handsFreeAll.hasSuffix(" No delay was changed.")
+            && !handsFreeText.contains("\u{2014}"),
+          "calibration: a hands-free microphone has its own reason, for one speaker and for Calibrate All",
+          "\(handsFreeText) | \(handsFreeAll)")
 
     // Both runs record with one input: a switch to another device, even at
     // the same rate, would change the input latency between them (S232).
@@ -4743,6 +5129,32 @@ do {
                        .local(id: "hdmi", ms: nil), .local(id: "usb", ms: 150)],
           "calibrate all: Undo restores each replaced delay and the AirPlay delay, and forgets one that wasn't stored",
           "\(restores)")
+
+    // Undo lasts only while every value Apply wrote is still stored (S238).
+    var appliedUndo = undo
+    appliedUndo.afterApply = [.local(id: "usb", ms: 100), .local(id: "hdmi", ms: 40), .cast(id: "cast:tv", ms: 900),
+                              .cast(id: "cast:hall", ms: 300), .airPlay(AirPlayDelay(adjustmentMs: 215))]
+    var manual = appliedUndo.afterApply
+    manual[0] = .local(id: "usb", ms: 120)
+    var cleared = appliedUndo.afterApply
+    cleared[2] = .cast(id: "cast:tv", ms: nil)
+    var nudged = appliedUndo.afterApply
+    nudged[4] = .airPlay(AirPlayDelay(adjustmentMs: 240))
+    check(CalibrateAllFlow.undoHolds(appliedUndo, now: appliedUndo.afterApply)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: manual)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: cleared)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: nudged),
+          "calibrate all: a delay changed by hand after Apply drops Undo")
+    var written = AirPlayDelay(), senderMoved = AirPlayDelay(), sameField = AirPlayDelay()
+    let entered = written.enter(1965, senderMs: 1750) && senderMoved.enter(2215, senderMs: 2000)
+        && sameField.enter(1965, senderMs: 2000)
+    var airPlayUndo = undo
+    airPlayUndo.afterApply = [.airPlay(written)]
+    check(entered && senderMoved.latencyMs(senderMs: 2000) != written.latencyMs(senderMs: 1750)
+            && CalibrateAllFlow.undoHolds(airPlayUndo, now: [.airPlay(senderMoved)])
+            && !CalibrateAllFlow.undoHolds(airPlayUndo, now: [.airPlay(sameField)]),
+          "calibrate all: a new AirPlay sender latency alone keeps Undo; the same field value typed at it drops Undo",
+          "\(written) \(senderMoved) \(sameField)")
     var castMemory = CastModel()
     _ = castMemory.setOffset("tv", ms: 900)
     for case .cast(let id, .none) in restores where id == "cast:tv" { _ = castMemory.clearOffset("tv") }
@@ -5181,6 +5593,61 @@ do {
           "cast master: the core's arithmetic")
 }
 
+// MARK: Zone volumes (S71, S249, S250, C104, C105)
+do {
+    let zones = [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:usb:out", "ap:AA", "cc:tv1"], volume: 50),
+                 SpeakerZone(id: "z2", name: "Den", members: ["ap:BB", "ap:AA"], volume: 25)]
+    check(SpeakerZone.volume(of: "lc:usb:out", in: zones) == 50 && SpeakerZone.volume(of: "ap:BB", in: zones) == 25
+            && SpeakerZone.volume(of: "lc:other", in: zones) == 100,
+          "zones: each speaker takes its zone's volume, 100 in no zone")
+    check(SpeakerZone.volumes(zones, kind: .airplay) == ["AA": 50, "BB": 25]
+            && SpeakerZone.volumes(zones, kind: .local) == ["usb:out": 50]
+            && SpeakerZone.volumes(zones, kind: .cast) == ["tv1": 50],
+          "zones: each kind's members get their zone's volume by ID")
+
+    var identical = true
+    for own in stride(from: 0.0, through: 100, by: 7.5) {
+        for master in stride(from: 0.0, through: 100, by: 12.5) {
+            identical = identical
+                && asc_zone_output_gain(own, 100, master).bitPattern == asc_output_gain(own, master).bitPattern
+                && asc_cast_zone_level(master / 100, 1, own / 100).bitPattern
+                    == asc_cast_device_level(master / 100, own / 100).bitPattern
+        }
+    }
+    check(identical && asc_zone_output_gain(50, 50, 100) == 0.125 * 0.125 && asc_zone_output_gain(80, 0, 100) == 0,
+          "zones: a local speaker's gain goes through its zone, and no zone is the gain of before")
+
+    let tv = "tv1"
+    func reported(_ level: Double) -> CastVolume { CastVolume(level: level, muted: false, fixed: false) }
+    func near(_ level: Double?, _ expected: Double) -> Bool { level.map { approx($0, expected, 1e-9) } == true }
+    func session(zone: Double, attempt: UInt64) -> CastModel {
+        var m = CastModel()
+        m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+        check(m.setZones([tv: zone]) == nil, "zones: nothing is sent to a Cast speaker while no session runs")
+        _ = m.turnOn(tv)
+        m.startSent(tv)
+        _ = m.started(tv, attempt: attempt, refusal: ASC_CAST_REFUSED_NONE)
+        return m
+    }
+
+    var m = session(zone: 50, attempt: 1)
+    check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
+          "zones: the Cast level is master × zone × own")
+    check(near(m.setZones([tv: 25]), 0.2) && m.setZones([tv: 25]) == nil,
+          "zones: a zone volume change gives the Cast speaker in a session its new level, once")
+    _ = m.apply(.volume(attempt: 1, reported(0.2)))
+    check(m.apply(.volume(attempt: 1, reported(0.1))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
+          "zones: a Cast report in a zone moves the own level by master times zone")
+    _ = m.setZones([tv: 0])
+    _ = m.apply(.volume(attempt: 1, reported(0)))
+    _ = m.apply(.volume(attempt: 1, reported(0.3)))
+    check(approx(m.volume(of: tv), 40, 1e-9), "zones: with the zone at 0 a Cast report leaves the own level")
+
+    var fresh = session(zone: 50, attempt: 2)
+    check(fresh.apply(.volume(attempt: 2, reported(0.2))) != .setVolume(0.2) && approx(fresh.volume(of: tv), 40, 1e-9),
+          "zones: a Cast session's first status divides by master times zone (C105)")
+}
+
 // MARK: Google Cast track info and volume steps (C53, C54, C69)
 do {
     let tv = "00112233445566778899aabbccddeeff"
@@ -5396,6 +5863,35 @@ do {
           "guide: the illustrations carry no text and differ between light and dark")
 }
 
+// MARK: Guide text: hand-wrapped lines join into paragraphs the window wraps (GuideLayout)
+do {
+    let t = UIStrings()
+    let paragraphs = GuideLayout.paragraphs(of: t.helpText)
+    let texts = paragraphs.map(\.text)
+    let titles = t.helpText.split(separator: "\n").prefix(2).map(String.init)
+    let topics = ["First Steps", "More Controls", "Calibration", "Speaker Notes", "AirPlay", "Google Cast",
+                  "Notices", "Web Remote", "Tips", "Volume", "Notes"]
+    let unfinished = texts.filter { text in !text.isEmpty && !(text.last.map { ".:!?".contains($0) } ?? false) }
+    check(unfinished == titles + topics,
+          "guide: only the title and topic headings end without punctuation, so no paragraph breaks inside a sentence",
+          unfinished.joined(separator: " | "))
+    check(!texts.contains { $0.contains("\n") || $0.contains("  ") }
+            && texts.joined(separator: " ").split(separator: " ") == t.helpText.split { $0 == " " || $0 == "\n" },
+          "guide: no paragraph keeps a hard break or a wrap's indent, and every word stays in order")
+    let steps = paragraphs.filter { $0.text.first?.isNumber == true }
+    check(steps.map(\.hang) == ["1. ", "2. ", "3. ", "4. ", "5. "]
+            && paragraphs.filter { $0.text.hasPrefix("- ") }.allSatisfy { $0.hang == "- " }
+            && texts.filter(\.isEmpty).count == t.helpText.components(separatedBy: "\n").filter(\.isEmpty).count,
+          "guide: steps and list items indent past their marker, and the blank lines between topics stay",
+          "\(steps.map(\.hang))")
+
+    let made = GuideLayout.paragraphs(of: "Topic\nOne two\nthree.\n\n1. Step one\n   wraps\n- Item\n  goes on\nAfter")
+    check(made == [.init(text: "Topic", hang: ""), .init(text: "One two three.", hang: ""), .init(text: "", hang: ""),
+                   .init(text: "1. Step one wraps", hang: "1. "), .init(text: "- Item goes on", hang: "- "),
+                   .init(text: "After", hang: "")],
+          "guide: a heading stands alone, wrapped lines join, and a line back at the margin leaves the list", "\(made)")
+}
+
 // MARK: Guide topics: Calibration has its own topic, with the actions it names
 do {
     let t = UIStrings()
@@ -5472,11 +5968,54 @@ do {
     check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"source\":\"Music\",\"title\":\"Song\"}"),
           "web remote: Now Playing goes out with title, artist and source app", playing)
 
+    let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: "com.apple.Music", name: "Music")],
+                                     inputs: [(uid: "BuiltInMic", name: "MacBook Microphone")],
+                                     chosen: .app(bundleID: "com.apple.Music"), chosenAppName: { $0 })
+    let remoteSources = entries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    check(remoteSources.map(\.id) == ["system", "app:com.apple.Music", "input:BuiltInMic"]
+            && remoteSources.map(\.kind) == [.system, .app, .input] && remoteSources.map(\.name) == entries.map(\.name),
+          "web remote: the page lists the picker's entries in its order, each with an ID the core takes")
+    check(zip(remoteSources, entries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
+            && ["", "app:", "input:", "Music"].allSatisfy { RemoteSource.pickerID($0) == nil },
+          "web remote: a page ID maps back to the picker's ID; one that names no source maps to nothing")
+    let sourced = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows,
+                                 sources: remoteSources, sourceID: "app:com.apple.Music")
+    let sourcedObject = (try? JSONSerialization.jsonObject(with: Data(sourced.json.utf8))) as? [String: Any]
+    let sourceKinds = (sourcedObject?["sources"] as? [[String: Any]])?.compactMap { $0["kind"] as? String }
+    check(sourcedObject?["source_id"] as? String == "app:com.apple.Music" && sourceKinds == ["system", "app", "input"]
+            && snapshot.json.contains("\"source_id\":null"),
+          "web remote: the snapshot carries the sources and the one in use", sourced.json)
+    func pick(_ id: String) -> [RemoteAction] {
+        RemoteCommand(json: "{\"type\":\"source\",\"id\":\"\(id)\"}").map {
+            RemoteAction.plan($0, rows: rows, sources: remoteSources, sourceID: "app:com.apple.Music")
+        } ?? []
+    }
+    check(pick("input:BuiltInMic") == [.selectSource(pickerID: "input:BuiltInMic")]
+            && pick("system") == [.selectSource(pickerID: "")]
+            && pick("app:com.apple.Music").isEmpty && pick("app:gone").isEmpty
+            && RemoteCommand(json: "{\"type\":\"source\",\"id\":3}") == nil,
+          "web remote: a source pick is the picker's own; the one in use or one it doesn't list changes nothing")
+    let except = AudioSource.mixed(.allExcept, bundleIDs: ["com.spotify.client", "com.google.Chrome"])
+    let mixEntries = SourceList.entries(systemName: "All System Audio",
+                                        apps: [(bundleID: "com.spotify.client", name: "Spotify")], inputs: [],
+                                        chosen: except, chosenAppName: { _ in "Chrome" },
+                                        mixName: { "All apps except " + $1.joined(separator: " and ") })
+    let mixSources = mixEntries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    let mixSource = mixSources.first { $0.id == except.defaultsValue }
+    let onlyID = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.google.Chrome"]).defaultsValue
+    check(mixSource?.kind == .app && mixSource?.name == "All apps except Spotify and Chrome"
+            && zip(mixSources, mixEntries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
+            && RemoteSource.pickerID(RemoteSource.pageID(onlyID)) == onlyID
+            && ["apps:", "except:"].allSatisfy { RemoteSource.pickerID($0) == nil },
+          "web remote: a several-apps source in use is listed under apps with the picker's name and maps back",
+          mixSources.map(\.id).joined(separator: " "))
+
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }
     var error: Int32 = 0
     var remote = asc_remote_start("{\"port\": 0, \"listen\": [\"127.0.0.1\"]}", noCommand, nil, &error)
-    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing),
+    check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing)
+            && asc_remote_publish(remote, sourced.json),
           "web remote: the core accepts the snapshots", "start error \(error)")
     asc_remote_stop(&remote)
 
@@ -5517,6 +6056,9 @@ do {
     check(RemotePort.parse(" 8080 ") == 8080 && RemotePort.parse("80") == nil && RemotePort.parse("70000") == nil
             && RemotePort.parse("abc") == nil && RemotePort.stored(1e30) == nil && RemotePort.stored(7655.5) == nil,
           "web remote: a port from 1024 to 65535 is taken")
+    check(RemoteDevicesFile.canForget(count: 0, failed: true) && RemoteDevicesFile.canForget(count: 2, failed: false)
+            && !RemoteDevicesFile.canForget(count: 0, failed: false),
+          "web remote: Forget All stays available after a failed save, when no device is left in memory")
     let fresh = AppSettings.load { _ in nil }
     let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
     let kept = AppSettings.load { stored[$0] }
@@ -5545,6 +6087,24 @@ do {
     ]
     check(twoDevices == 2 && tenDevices == RemoteDevicesFile.maxDevices && unreadable.allSatisfy { $0 == 0 },
           "web remote: the paired count comes from the devices file, capped at 8; a file the core can't read counts as none")
+
+    let day: TimeInterval = 24 * 60 * 60
+    let seenNow = Date(timeIntervalSince1970: 1_800_000_000)
+    let seenFile = { (seen: String) in
+        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"\(hashB)\"],\"seen\":\(seen)}"),
+                                now: seenNow)
+    }
+    let recent = Int(seenNow.timeIntervalSince1970 - 89 * day), idle = Int(seenNow.timeIntervalSince1970 - 90 * day)
+    let ahead = Int(seenNow.timeIntervalSince1970 + 400 * day)
+    let nineHashes = Array(repeating: "\"\(hashA)\"", count: 9).joined(separator: ",")
+    let eightIdle = Array(repeating: String(idle), count: 8).joined(separator: ",")
+    let newestEight = RemoteDevicesFile.count(
+        devicesJSON("{\"version\":1,\"devices\":[\(nineHashes)],\"seen\":[\(recent),\(eightIdle)]}"), now: seenNow)
+    let mismatched: [Int] = [seenFile("[\(recent)]"), seenFile("[\(recent),-1]"), seenFile("[\(recent),1.5]"),
+                             seenFile("[\(recent),true]"), seenFile("{}")]
+    check(seenFile("[\(recent),\(idle)]") == 1 && seenFile("[\(ahead),\(recent)]") == 2 && newestEight == 0
+            && mismatched.allSatisfy { $0 == 0 },
+          "web remote: a device idle for 90 days isn't counted, only the newest 8 are; a seen list that doesn't match the devices counts as none")
 
     let devicesFolder = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-remote-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: devicesFolder, withIntermediateDirectories: true)
@@ -5840,6 +6400,66 @@ do {
     moved.migrate(airPlay: ["123456789": "native:00075BCD15"])
     check(moved.contains("ap:native:00075BCD15") && !moved.contains("ap:123456789") && moved.contains("lc:usb"),
           "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
+}
+
+// MARK: Live input: the lead per source and output, and the input level meter (LocalDelay.swift, InputLevel.swift)
+do {
+    let sources: [AudioSource] = [.system, .app(bundleID: "com.example.player"), .input(uid: "mic")]
+    let outputs: [LocalDelay.LeadOutput] = [.local, .airPlay, .cast]
+    for source in sources {
+        for output in outputs {
+            let liveLocal = source == .input(uid: "mic") && output == .local
+            let wait = LocalDelay.networkWaitMs(source: source, output: output, networkMs: 1750)
+            check(wait == (liveLocal ? nil : 1750), "lead: \(source) on \(output) waits \(String(describing: wait)) ms")
+            check(LocalDelay.networkWaitMs(source: source, output: output, networkMs: nil) == nil,
+                  "lead: \(source) on \(output) waits for nothing without network speakers")
+        }
+    }
+    let live = LocalDelay.leadDescription(source: .input(uid: "mic"), networkMs: 2000)
+    let recorded = LocalDelay.leadDescription(source: .system, networkMs: 2000)
+    check(live.contains("live input") && live.contains("start lead") && live.contains("2000 ms"),
+          "lead: the debug log says live input skips the wait: \(live)")
+    check(recorded == "lead: local speakers wait 2000 ms for the network speakers", "lead: \(recorded)")
+
+    let meter = InputLevel()
+    check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden without an input")
+    check(meter.update(peak: 1) && meter.shown && meter.level == 1, "input level: full scale fills it")
+    meter.update(peak: 0)
+    check(abs(meter.level - 0.85) < 1e-5, "input level: it falls back a step, \(meter.level)")
+    check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden again, emptied")
+    check(meter.spokenPercent == 0 && asc_meter_spoken_percent(0.42) == 40 && asc_meter_spoken_percent(0.66) == 70
+            && asc_meter_spoken_percent(1.4) == 100 && asc_meter_spoken_percent(.nan) == 0,
+          "input level: VoiceOver hears it in steps of 10 percent")
+    check(UIStrings(locale: Locale(identifier: "en_US")).inputLevelValue(40) == "40%",
+          "input level: VoiceOver reads a percent")
+
+    func luminance(_ c: BrandRGB) -> Double {
+        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue)
+    }
+    func contrast(_ a: BrandRGB, _ b: BrandRGB) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    for (name, fill, track) in [("light", BrandTokens.Light.tealText, BrandTokens.Light.separator),
+                                ("dark", BrandTokens.Dark.tealText, BrandTokens.Dark.separator)] {
+        let ratio = contrast(fill, track)
+        check(ratio >= 3, "input level: the fill on its track reaches 3:1 in \(name) appearance (\(ratio))")
+    }
+}
+
+// MARK: Microphone permission request (MicrophoneRequestGate.swift)
+do {
+    var gate = MicrophoneRequestGate()
+    let first = gate.begin(origin: .user)
+    let second = gate.begin(origin: .automatic)
+    check(first && !second, "microphone: a start behind an open prompt sends no second request")
+    check(gate.answer() == .automatic && gate.answer() == nil,
+          "microphone: the one answer runs exactly one start, with the latest origin")
+    check(gate.begin(origin: .user) && gate.answer() == .user,
+          "microphone: after the answer, a new start may ask again")
+    var unasked = MicrophoneRequestGate()
+    check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

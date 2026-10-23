@@ -8,31 +8,44 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-/// A speaker's stable key (S149): `ap:<engine output id>` or `lc:<device UID>`.
+/// A speaker's stable key (S149, S243): `ap:<engine output id>`,
+/// `lc:<device UID>` or `cc:<Cast device ID>`, what a group, the auto-connect
+/// list and a speaker's name are kept by.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SpeakerKey {
-    /// An AirPlay speaker of the engine, by output ID.
+    /// An AirPlay speaker of the engine, by output ID; a stereo pair or home
+    /// theater target is one too, its ID keeping its `pair:` or `theater:`.
     AirPlay(String),
     /// A local output device, by UID.
     Local(String),
+    /// A Google Cast speaker or Cast group, by device ID.
+    Cast(String),
 }
 
 impl SpeakerKey {
-    /// Parses a key, splitting at the first colon only (device UIDs may contain
-    /// colons); any prefix other than `ap` or `lc` is rejected (S149).
+    /// Parses a key, splitting at the first colon only (device UIDs, target
+    /// IDs and Cast device IDs may contain colons); any prefix other than
+    /// `ap`, `lc` or `cc` is rejected (S149, S243).
     pub fn parse(text: &str) -> Option<SpeakerKey> {
         let (prefix, id) = text.split_once(':')?;
         match prefix {
             "ap" => Some(SpeakerKey::AirPlay(id.to_owned())),
             "lc" => Some(SpeakerKey::Local(id.to_owned())),
+            "cc" => Some(SpeakerKey::Cast(id.to_owned())),
             _ => None,
         }
     }
 
-    /// The engine output ID or device UID.
+    /// The device ID of a Cast speaker's key, borrowed from `text`; `None`
+    /// for any other key.
+    pub fn cast_id(text: &str) -> Option<&str> {
+        text.strip_prefix("cc:")
+    }
+
+    /// The engine output ID, device UID or Cast device ID.
     pub fn id(&self) -> &str {
         match self {
-            SpeakerKey::AirPlay(id) | SpeakerKey::Local(id) => id,
+            SpeakerKey::AirPlay(id) | SpeakerKey::Local(id) | SpeakerKey::Cast(id) => id,
         }
     }
 }
@@ -42,6 +55,7 @@ impl fmt::Display for SpeakerKey {
         match self {
             SpeakerKey::AirPlay(id) => write!(f, "ap:{id}"),
             SpeakerKey::Local(uid) => write!(f, "lc:{uid}"),
+            SpeakerKey::Cast(id) => write!(f, "cc:{id}"),
         }
     }
 }

@@ -11,7 +11,7 @@
 //!
 //! The steps carry names only; the UI words them (`ui/strings.slint`).
 
-use crate::ui_model::{Notice, NoticeMessage};
+use crate::ui_model::{Notice, NoticeMessage, SourceName};
 
 /// A Settings page a step opens, by its documented `ms-settings:` URI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,7 +39,7 @@ impl SettingsPage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GuideStep {
     /// Send `app` to an output the user doesn't listen to.
-    RouteApp { app: String },
+    RouteApp { app: SourceName },
     /// Make an output the user doesn't listen to the Windows default,
     /// instead of `current`.
     ChangeDefault { current: String },
@@ -53,7 +53,7 @@ pub enum GuideStep {
     SharedOutputs { outputs: Vec<String> },
     /// Don't mute `app` itself in the Volume mixer: AudioSync would capture
     /// silence.
-    KeepAppUnmuted { app: String },
+    KeepAppUnmuted { app: SourceName },
 }
 
 impl GuideStep {
@@ -74,8 +74,8 @@ impl GuideStep {
 /// What the guide shows for one double-audio notice.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Guide {
-    /// The app's name, or `None` for the whole system.
-    pub source: Option<String>,
+    /// The app, or `None` for the whole system.
+    pub source: Option<SourceName>,
     /// Every output the source is heard from straight, for the intro.
     pub outputs: Vec<String>,
     pub steps: Vec<GuideStep>,
@@ -157,7 +157,7 @@ pub fn preview(kind: &str) -> Option<NoticeMessage> {
     let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect();
     match kind {
         "app" => Some(NoticeMessage::HeardTwice {
-            source: Some("Music Player".to_owned()),
+            source: Some(SourceName::Named("Music Player".to_owned())),
             mute: names(&["TV", "Monitor"]),
             shared: Vec::new(),
             default_output: None,
@@ -187,7 +187,7 @@ mod tests {
         default_output: Option<&str>,
     ) -> NoticeMessage {
         NoticeMessage::HeardTwice {
-            source: source.map(str::to_owned),
+            source: source.map(|name| SourceName::Named(name.to_owned())),
             mute: names(mute),
             shared: names(shared),
             default_output: default_output.map(str::to_owned),
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn an_app_heard_where_audiosync_doesnt_play_can_be_moved_or_muted() {
         let message = twice(Some("Player"), &["TV"], &[], None);
-        let app = "Player".to_owned();
+        let app = SourceName::Named("Player".to_owned());
         assert_eq!(
             steps(&message),
             [
@@ -219,14 +219,14 @@ mod tests {
             ]
         );
         let guide = guide(&message).unwrap();
-        assert_eq!(guide.source.as_deref(), Some("Player"));
+        assert_eq!(guide.source, Some(SourceName::Named("Player".to_owned())));
         assert_eq!(guide.outputs, names(&["TV"]));
     }
 
     #[test]
     fn an_app_heard_where_audiosync_plays_too_gets_no_mute_advice() {
         let message = twice(Some("Player"), &["TV"], &["Speakers"], None);
-        let app = "Player".to_owned();
+        let app = SourceName::Named("Player".to_owned());
         assert_eq!(
             steps(&message),
             [
@@ -238,6 +238,28 @@ mod tests {
             ]
         );
         assert_eq!(guide(&message).unwrap().outputs, names(&["TV", "Speakers"]));
+    }
+
+    // covers: S242
+    #[test]
+    fn every_app_but_some_is_moved_and_kept_unmuted_like_one_app() {
+        let app = SourceName::AllAppsExcept(names(&["game", "chat"]));
+        let message = NoticeMessage::HeardTwice {
+            source: Some(app.clone()),
+            mute: names(&["TV"]),
+            shared: Vec::new(),
+            default_output: None,
+        };
+        assert_eq!(
+            steps(&message),
+            [
+                GuideStep::RouteApp { app: app.clone() },
+                GuideStep::MuteOutputs {
+                    outputs: names(&["TV"])
+                },
+                GuideStep::KeepAppUnmuted { app },
+            ]
+        );
     }
 
     #[test]

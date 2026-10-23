@@ -326,7 +326,7 @@ extension AppDelegate {
     func castName(_ id: String) -> String {
         let announced = castModel.devices[id]?.name ?? ""
         let shown = announced.isEmpty ? castModel.manualAddresses[id]?.text ?? "" : announced
-        return speakerNames.shown(key: SpeakerKey.make(id: CastID.app(id), airplay: false),
+        return speakerNames.shown(key: CastID.key(id),
                                   system: text.deviceName(shown))
     }
 

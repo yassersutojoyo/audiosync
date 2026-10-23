@@ -18,6 +18,8 @@
 //!   (S232-S234).
 //! - [`calibrate_all`]: Calibrate All Speakers, a run the host drives step
 //!   by step and its results sheet.
+//! - [`zones`]: a zone click's plan and the migration of groups to zones
+//!   (S246-S248).
 //! - [`airplay`]: AudioSync's own AirPlay sender: discovery, speakers, their
 //!   events and the capture's input.
 //! - [`cast`]: AudioSync's own Google Cast sender: discovery, one device's
@@ -58,6 +60,7 @@ pub mod render;
 pub mod ring;
 pub mod source_quit;
 pub mod sync;
+pub mod zones;
 
 pub use self::airplay::*;
 pub use self::calibrate::*;
@@ -69,6 +72,7 @@ pub use self::render::*;
 pub use self::ring::*;
 pub use self::source_quit::*;
 pub use self::sync::*;
+pub use self::zones::*;
 
 /// Version of this C interface, bumped on any incompatible change; the header's
 /// `ASC_ABI_VERSION`. Adding functions is compatible.
@@ -185,6 +189,17 @@ pub extern "C" fn asc_volume_position(gain: f64) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_output_gain(local_position: f64, master_position: f64) -> f64 {
     volume::output_gain(local_position, master_position)
+}
+
+/// [`volume::zoned_output_gain`]: a local output's gain through its zone,
+/// 100 outside a zone (S71, S249).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_zone_output_gain(
+    local_position: f64,
+    zone_position: f64,
+    master_position: f64,
+) -> f64 {
+    volume::zoned_output_gain(local_position, zone_position, master_position)
 }
 
 /// [`volume::apply_gain`] on `frames` interleaved stereo frames, in place (S64, S65).
@@ -388,7 +403,7 @@ mod tests {
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 
     /// Every source file of the C interface, by its path under `src/`.
-    const SOURCES: [(&str, &str); 11] = [
+    const SOURCES: [(&str, &str); 12] = [
         ("ffi.rs", include_str!("ffi.rs")),
         ("ffi/airplay.rs", include_str!("ffi/airplay.rs")),
         ("ffi/calibrate.rs", include_str!("ffi/calibrate.rs")),
@@ -400,6 +415,7 @@ mod tests {
         ("ffi/ring.rs", include_str!("ffi/ring.rs")),
         ("ffi/source_quit.rs", include_str!("ffi/source_quit.rs")),
         ("ffi/sync.rs", include_str!("ffi/sync.rs")),
+        ("ffi/zones.rs", include_str!("ffi/zones.rs")),
     ];
 
     fn sine_block(frames: usize, start: usize) -> Vec<f32> {
@@ -1236,6 +1252,39 @@ mod tests {
             ("ASC_STREAMING_OFF", STREAMING_OFF.to_string()),
             ("ASC_STREAMING_RUNNING", STREAMING_RUNNING.to_string()),
             ("ASC_STREAMING_REBUILDING", STREAMING_REBUILDING.to_string()),
+            ("ASC_ZONE_MEMBER_LOCAL", ZONE_MEMBER_LOCAL.to_string()),
+            ("ASC_ZONE_MEMBER_AIRPLAY", ZONE_MEMBER_AIRPLAY.to_string()),
+            ("ASC_ZONE_MEMBER_AIRPLAY2", ZONE_MEMBER_AIRPLAY2.to_string()),
+            ("ASC_ZONE_MEMBER_CAST", ZONE_MEMBER_CAST.to_string()),
+            ("ASC_ZONE_CLICK_NOTHING", ZONE_CLICK_NOTHING.to_string()),
+            ("ASC_ZONE_CLICK_TURN_ON", ZONE_CLICK_TURN_ON.to_string()),
+            ("ASC_ZONE_CLICK_START", ZONE_CLICK_START.to_string()),
+            ("ASC_ZONE_CLICK_TURN_OFF", ZONE_CLICK_TURN_OFF.to_string()),
+            ("ASC_ZONE_STEP_ABSENT", ZONE_STEP_ABSENT.to_string()),
+            (
+                "ASC_ZONE_STEP_NEEDS_AIRPLAY2",
+                ZONE_STEP_NEEDS_AIRPLAY2.to_string(),
+            ),
+            ("ASC_ZONE_STEP_IN_TARGET", ZONE_STEP_IN_TARGET.to_string()),
+            ("ASC_ZONE_STEP_ON", ZONE_STEP_ON.to_string()),
+            ("ASC_ZONE_STEP_WAITING", ZONE_STEP_WAITING.to_string()),
+            ("ASC_ZONE_STEP_OFF", ZONE_STEP_OFF.to_string()),
+            (
+                "ASC_ZONE_STEP_CAST_ANOTHER_PLAYS",
+                ZONE_STEP_CAST_ANOTHER_PLAYS.to_string(),
+            ),
+            (
+                "ASC_ZONE_STEP_CAST_ONE_AT_A_TIME",
+                ZONE_STEP_CAST_ONE_AT_A_TIME.to_string(),
+            ),
+            ("ASC_ZONE_STEP_CAST_BUSY", ZONE_STEP_CAST_BUSY.to_string()),
+            ("ASC_METER_POLL_MS", crate::meter::METER_POLL_MS.to_string()),
+            ("ASC_LEAD_SOURCE_SYSTEM", LEAD_SOURCE_SYSTEM.to_string()),
+            ("ASC_LEAD_SOURCE_APP", LEAD_SOURCE_APP.to_string()),
+            ("ASC_LEAD_SOURCE_INPUT", LEAD_SOURCE_INPUT.to_string()),
+            ("ASC_LEAD_OUTPUT_LOCAL", LEAD_OUTPUT_LOCAL.to_string()),
+            ("ASC_LEAD_OUTPUT_AIRPLAY", LEAD_OUTPUT_AIRPLAY.to_string()),
+            ("ASC_LEAD_OUTPUT_CAST", LEAD_OUTPUT_CAST.to_string()),
             ("ASC_CAST_RATE", CAST_RATE.to_string()),
             ("ASC_CAST_APPEARED", CAST_APPEARED.to_string()),
             ("ASC_CAST_CHANGED", CAST_CHANGED.to_string()),
@@ -1359,6 +1408,20 @@ mod tests {
         );
         assert_eq!(asc_output_gain(f64::NAN, 100.0), 0.0);
         assert_eq!(asc_output_gain(150.0, 100.0), 1.0);
+    }
+
+    // covers: S71, S249
+    #[test]
+    fn a_zoned_gain_crosses_the_boundary_as_the_core_makes_it() {
+        assert_eq!(asc_zone_output_gain(50.0, 50.0, 100.0), 0.125 * 0.125);
+        for (local, master) in [(60.0, 50.0), (37.0, 81.0), (0.0, 100.0)] {
+            assert_eq!(
+                asc_zone_output_gain(local, 100.0, master).to_bits(),
+                asc_output_gain(local, master).to_bits(),
+                "zone 100 is no zone"
+            );
+        }
+        assert_eq!(asc_zone_output_gain(100.0, 0.0, 100.0), 0.0);
     }
 
     // covers: S70

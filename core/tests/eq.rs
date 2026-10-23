@@ -574,7 +574,7 @@ fn reset_reads_flat_and_zeroes_the_preamp() {
     );
 }
 
-// covers: S242
+// covers: S270
 #[test]
 fn a_saved_curve_keeps_its_gains_and_matches_after_the_presets() {
     let mut curves = Vec::new();
@@ -600,7 +600,7 @@ fn a_saved_curve_keeps_its_gains_and_matches_after_the_presets() {
     );
 }
 
-// covers: S242
+// covers: S270
 #[test]
 fn saving_under_a_taken_name_replaces_that_curve_and_names_are_checked() {
     let mut curves = Vec::new();
@@ -639,7 +639,7 @@ fn saving_under_a_taken_name_replaces_that_curve_and_names_are_checked() {
     assert!(!delete_curve(&mut curves, 5));
 }
 
-// covers: S242
+// covers: S270
 #[test]
 fn the_list_is_capped_and_stored_curves_are_cleaned_on_reading() {
     let mut curves = Vec::new();

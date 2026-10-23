@@ -31,8 +31,13 @@ struct AppSettings: Equatable {
         static let localDelays = "localDelayMsByUID"
         /// Each AirPlay speaker's own slider position (0…100), by output ID (S73).
         static let airplayVolumes = "airPlayVolumeByID"
-        /// `[SpeakerGroup]` as JSON (S149).
+        /// `[SpeakerGroup]` as JSON (S149). Left as it is when the groups
+        /// become zones, for older builds (S248).
         static let groups = "speakerGroups"
+        /// `[SpeakerZone]` as JSON (S245).
+        static let zones = "speakerZones"
+        /// True once the groups were moved to `zones` (S248); written last.
+        static let zonesMigrated = "speakerZonesMigrated"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
         static let autoConnect = "autoConnectSpeakers"
         /// The names the user gave speakers, by speaker key (`SpeakerNames`).
@@ -45,9 +50,12 @@ struct AppSettings: Equatable {
         static let appearance = "appearance"
         /// `WhenSourceQuits.defaultsValue` (S227): "stop", or "system" to switch.
         static let whenSourceQuits = "whenSourceQuits"
+        /// The channel pair (`InputChannelPair.index`) each input device plays,
+        /// by device UID; devices on channels 1-2 are left out.
+        static let inputChannelPairs = "inputChannelPairByUID"
         /// `Equalizer.Settings` as JSON (S24, `StoredEqualizer`).
         static let equalizer = "equalizerSettings"
-        /// The saved equalizer curves (S242, `StoredCurves`).
+        /// The saved equalizer curves (S270, `StoredCurves`).
         static let equalizerCurves = "equalizerCurves"
         static let webRemote = "webRemoteEnabled"
         static let webRemotePort = "webRemotePort"
@@ -103,12 +111,14 @@ struct AppSettings: Equatable {
     var localDelays: [String: Double] = [:]
     var airplayVolumes: [String: Double] = [:]
     var groups: [SpeakerGroup] = []
+    var zones: [SpeakerZone] = []
     var autoConnect: Set<String> = []
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
     var showVirtualDevices = false
     var appearance = AppAppearance.system
     var whenSourceQuits = WhenSourceQuits.stop
+    var inputPairs: [String: Int] = [:]
     var webRemote = false
     var webRemotePort = RemotePort.default
     var airPlay2 = false
@@ -148,9 +158,11 @@ struct AppSettings: Equatable {
         s.localDelaysMigrated = read(Keys.localDelaysMigrated) as? Bool ?? false
         s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
         s.groups = decodeGroups(read(Keys.groups) as? Data)
+        s.zones = decodeZones(read(Keys.zones) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
+        s.inputPairs = channelPairs(read(Keys.inputChannelPairs))
         s.webRemote = read(Keys.webRemote) as? Bool ?? false
         s.webRemotePort = read(Keys.webRemotePort).flatMap(number).flatMap(RemotePort.stored) ?? RemotePort.default
         s.airPlay2 = read(Keys.airPlay2) as? Bool ?? false
@@ -199,10 +211,29 @@ struct AppSettings: Equatable {
         return out
     }
 
+    /// The stored channel pairs by device UID: whole numbers above 0 only, as
+    /// a missing entry already means channels 1-2.
+    static func channelPairs(_ value: Any?) -> [String: Int] {
+        guard let dict = value as? [String: Any] else { return [:] }
+        var out: [String: Int] = [:]
+        for (uid, raw) in dict {
+            guard let n = number(raw), n.rounded() == n, n >= 1, n <= Double(InputChannelPair.maxStored) else { continue }
+            out[uid] = Int(n)
+        }
+        return out
+    }
+
     /// The stored groups; none when the data is missing or can't be read.
     static func decodeGroups(_ data: Data?) -> [SpeakerGroup] {
         guard let data, let list = try? JSONDecoder().decode([SpeakerGroup].self, from: data) else { return [] }
         return list
+    }
+
+    /// The stored zones as S245 keeps them; none when the data is missing or
+    /// can't be read.
+    static func decodeZones(_ data: Data?) -> [SpeakerZone] {
+        guard let data, let list = try? JSONDecoder().decode([SpeakerZone].self, from: data) else { return [] }
+        return SpeakerZone.normalized(list)
     }
 }
 
@@ -221,10 +252,22 @@ struct SettingsStore {
                       write: { UserDefaults.standard.set($0, forKey: $1) })
     }
 
-    /// Brings older forms up to date (`migrate`), then reads every setting.
+    /// Brings older forms up to date (`migrate`, `migrateZones`), then reads
+    /// every setting.
     func load() -> AppSettings {
         migrate()
+        migrateZones()
         return AppSettings.load(read)
+    }
+
+    /// The one-time move of the groups to zones (S248): without the mark, the
+    /// stored groups become the stored zones, then the mark is written. The
+    /// groups stay as they are. A run cut short before the mark runs again
+    /// from the same groups, to the same zones; once marked, nothing changes.
+    func migrateZones() {
+        guard read(Keys.zonesMigrated) as? Bool != true else { return }
+        save(zones: ZoneMigration.zones(from: AppSettings.decodeGroups(read(Keys.groups) as? Data)))
+        write(true, Keys.zonesMigrated)
     }
 
     /// Local volumes stored as linear gain become slider positions under
@@ -247,9 +290,19 @@ struct SettingsStore {
 
     func save(master: Double) { write(master, Keys.master) }
 
+    /// Removed once every input device is back on channels 1-2.
+    func save(inputPairs: [String: Int]) {
+        write(inputPairs.isEmpty ? nil : inputPairs, Keys.inputChannelPairs)
+    }
+
     func save(groups: [SpeakerGroup]) {
         guard let data = try? JSONEncoder().encode(groups) else { return }
         write(data, Keys.groups)
+    }
+
+    func save(zones: [SpeakerZone]) {
+        guard let data = try? JSONEncoder().encode(zones) else { return }
+        write(data, Keys.zones)
     }
 
     /// Removed once no speaker has a name of the user's.

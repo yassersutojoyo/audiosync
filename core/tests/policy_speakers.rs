@@ -51,6 +51,53 @@ fn speaker_keys_have_an_airplay_or_local_prefix() {
     assert_eq!(SpeakerKey::parse("42"), None);
 }
 
+// covers: S149, S243
+#[test]
+fn a_cast_speaker_has_a_cc_key() {
+    assert_eq!(
+        SpeakerKey::parse("cc:Chromecast-8c3f"),
+        Some(SpeakerKey::Cast("Chromecast-8c3f".to_owned()))
+    );
+    assert_eq!(SpeakerKey::Cast("tv".to_owned()).to_string(), "cc:tv");
+    assert_eq!(SpeakerKey::Cast("tv".to_owned()).id(), "tv");
+    assert_eq!(SpeakerKey::cast_id("cc:tv"), Some("tv"));
+    assert_eq!(SpeakerKey::cast_id("lc:tv"), None);
+    assert_eq!(SpeakerKey::cast_id("CC:tv"), None);
+    // The Mac's old name key of a Cast row is a local key, not a Cast one.
+    assert_eq!(
+        SpeakerKey::parse("lc:cast:tv"),
+        Some(SpeakerKey::Local("cast:tv".to_owned()))
+    );
+    assert_eq!(SpeakerKey::parse("CC:tv"), None);
+    assert_eq!(SpeakerKey::parse("cast:tv"), None);
+}
+
+// covers: S149, S243
+#[test]
+fn pair_theater_and_cast_keys_keep_the_colons_of_their_ids() {
+    for text in [
+        "ap:native:pair:5A1B-77",
+        "ap:pair:5A1B-77",
+        "ap:native:theater:9F00",
+        "ap:theater:9F00",
+        "cc:manual:203.0.113.20:8009",
+    ] {
+        let key = SpeakerKey::parse(text).expect(text);
+        assert_eq!(key.to_string(), text);
+        assert_eq!(SpeakerKey::parse(&key.to_string()), Some(key));
+    }
+    assert_eq!(
+        SpeakerKey::parse("ap:native:pair:5A1B-77"),
+        Some(SpeakerKey::AirPlay("native:pair:5A1B-77".to_owned()))
+    );
+    assert_eq!(
+        SpeakerKey::parse("cc:manual:203.0.113.20:8009").map(|key| key.id().to_owned()),
+        Some("manual:203.0.113.20:8009".to_owned())
+    );
+    assert_eq!(SpeakerKey::parse("pair:5A1B-77"), None);
+    assert_eq!(SpeakerKey::parse("theater:9F00"), None);
+}
+
 // covers: S150
 #[test]
 fn group_names_are_trimmed_and_blank_is_no_name() {
@@ -403,11 +450,15 @@ fn automation_notices_are_per_player_and_carry_their_pane() {
 }
 
 proptest! {
-    // covers: S149
+    // covers: S149, S243
     #[test]
-    fn speaker_keys_round_trip(id in proptest::collection::vec(any::<char>(), 0..40), airplay_key in any::<bool>()) {
+    fn speaker_keys_round_trip(id in proptest::collection::vec(any::<char>(), 0..40), kind in 0..3u8) {
         let id: String = id.into_iter().collect();
-        let key = if airplay_key { SpeakerKey::AirPlay(id) } else { SpeakerKey::Local(id) };
+        let key = match kind {
+            0 => SpeakerKey::AirPlay(id),
+            1 => SpeakerKey::Local(id),
+            _ => SpeakerKey::Cast(id),
+        };
         prop_assert_eq!(SpeakerKey::parse(&key.to_string()), Some(key));
     }
 
