@@ -48,6 +48,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the menu bar panel keeps its text readable over any window behind it, light or dark.
 - On the Mac, the Calibrate All list scrolls when you have many speakers, so Apply and Close stay on screen.
 - On the Mac, a local speaker that can't start because the source's sample rate is higher than AudioSync can hold now says so, instead of blaming another app or the format.
+- On the Mac, a Google Cast offset you set by hand, or with Apply or Undo in Calibrate All, stays put. Before, a late update from the speaker could put the old offset back.
+- With AirPlay 2 on, a speaker that answers with an error about its own state, or a server error, keeps its HomeKit pairing and AudioSync tries again later. Only a rejected pairing asks you to pair again.
 
 ### Windows (preview, not released yet)
 
