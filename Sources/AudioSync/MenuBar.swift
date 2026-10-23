@@ -837,6 +837,8 @@ private struct CompactRow: View {
                     .lineLimit(1)
                     .layoutPriority(2)
                     .help(name)
+                    // The button's own label reads the name; the tooltip would repeat it.
+                    .accessibilityHidden(true)
                 if let kind {
                     SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2)
                 }

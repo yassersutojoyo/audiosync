@@ -1202,16 +1202,8 @@ export component SpeakerRow inherits Rectangle {
         }
     }
 
-    // Where the name's tooltip goes, in the row.
-    property <length> tip-x;
-    property <length> tip-y;
-    property <bool> name-hovered;
-    property <bool> tip-shown;
-    changed name-hovered => {
-        if !self.name-hovered {
-            root.tip-shown = false;
-        }
-    }
+    // A press on the name hides its tooltip until the pointer leaves the name.
+    property <bool> tip-allowed: true;
 
     // A click on the name waits for a second one: two make a double-click,
     // which renames, and one alone is a click on the row's box.
@@ -1221,14 +1213,6 @@ export component SpeakerRow inherits Rectangle {
         triggered => {
             self.running = false;
             root.box-clicked();
-        }
-    }
-
-    Timer {
-        interval: 700ms;
-        running: root.name-hovered && !root.tip-shown;
-        triggered => {
-            root.tip-shown = true;
         }
     }
 
@@ -1366,13 +1350,43 @@ export component SpeakerRow inherits Rectangle {
 
                                         TouchArea {
                                             changed has-hover => {
-                                                root.tip-x = self.absolute-position.x - root.absolute-position.x;
-                                                root.tip-y = self.absolute-position.y - root.absolute-position.y + self.height + 4px;
-                                                root.name-hovered = self.has-hover;
+                                                if !self.has-hover {
+                                                    root.tip-allowed = true;
+                                                }
                                             }
                                             pointer-event(event) => {
                                                 if event.kind == PointerEventKind.down {
-                                                    root.tip-shown = false;
+                                                    root.tip-allowed = false;
+                                                }
+                                            }
+
+                                            // A popup overlay, so a name that wraps to
+                                            // several lines draws over the rows below
+                                            // instead of under them. Narrator reads the
+                                            // device name from the toggle instead.
+                                            if root.tip-allowed: Tooltip {
+                                                Rectangle {
+                                                    width: min(tip-text.preferred-width + 16px, root.width);
+                                                    height: tip-text.preferred-height + 10px;
+                                                    border-radius: Fluent.radius-control;
+                                                    border-width: 1px;
+                                                    border-color: Fluent.stroke;
+                                                    background: Tokens.surface;
+                                                    drop-shadow-blur: 8px;
+                                                    drop-shadow-offset-y: 2px;
+                                                    drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                                    accessible-role: none;
+
+                                                    tip-text := Text {
+                                                        x: 8px;
+                                                        width: parent.width - 16px;
+                                                        text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
+                                                        font-size: Tokens.font-size-caption;
+                                                        color: Tokens.text;
+                                                        vertical-alignment: center;
+                                                        wrap: word-wrap;
+                                                        accessible-role: none;
+                                                    }
                                                 }
                                             }
                                             clicked => {
@@ -1739,34 +1753,6 @@ export component SpeakerRow inherits Rectangle {
                     }
                 }
             }
-        }
-    }
-
-    // The name's tooltip, over the row's own content so the next row can't
-    // cover it. Narrator reads the device name from the toggle instead.
-    if root.tip-shown && !root.item.renaming: Rectangle {
-        x: min(root.tip-x, max(0px, root.width - self.width));
-        y: min(root.tip-y, max(0px, root.height - self.height));
-        width: min(tip-text.preferred-width + 16px, root.width);
-        height: tip-text.preferred-height + 10px;
-        border-radius: Fluent.radius-control;
-        border-width: 1px;
-        border-color: Fluent.stroke;
-        background: Tokens.surface;
-        drop-shadow-blur: 8px;
-        drop-shadow-offset-y: 2px;
-        drop-shadow-color: Tokens.text.with-alpha(0.18);
-        accessible-role: none;
-
-        tip-text := Text {
-            x: 8px;
-            width: parent.width - 16px;
-            text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
-            font-size: Tokens.font-size-caption;
-            color: Tokens.text;
-            vertical-alignment: center;
-            wrap: word-wrap;
-            accessible-role: none;
         }
     }
 }
