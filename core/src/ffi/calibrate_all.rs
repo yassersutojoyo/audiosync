@@ -205,6 +205,47 @@ pub unsafe extern "C" fn asc_calibration_run_create(
     let Some(speakers) = (unsafe { host_slice(speakers, count) }) else {
         return ptr::null_mut();
     };
+    create(rate, speakers, reference, &[])
+}
+
+/// [`asc_calibration_run_create`] for Calibrate Zone (S255): each speaker
+/// whose `off` entry is true is a zone member that is off, listed on the
+/// sheet and never swept ([`Run::listing`]); `off` null means none. Null
+/// too when no speaker is left besides the reference and the off ones.
+///
+/// # Safety
+///
+/// `speakers` is null or holds `count` aligned speakers, and `off` is null
+/// or holds `count` bools, both unchanged during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_calibration_run_create_listing(
+    rate: u32,
+    speakers: *const AscCalibrationSpeaker,
+    count: usize,
+    reference: usize,
+    off: *const bool,
+) -> *mut AscCalibrationRun {
+    // SAFETY: by the caller's contract null or `count` speakers nothing
+    // writes during the call.
+    let Some(speakers) = (unsafe { host_slice(speakers, count) }) else {
+        return ptr::null_mut();
+    };
+    if off.is_null() {
+        return create(rate, speakers, reference, &[]);
+    }
+    // SAFETY: non-null, so by the caller's contract `count` bools.
+    let Some(off) = (unsafe { host_slice(off, count) }) else {
+        return ptr::null_mut();
+    };
+    create(rate, speakers, reference, off)
+}
+
+fn create(
+    rate: u32,
+    speakers: &[AscCalibrationSpeaker],
+    reference: usize,
+    off: &[bool],
+) -> *mut AscCalibrationRun {
     let mut given = Vec::with_capacity(speakers.len());
     for (index, speaker) in speakers.iter().enumerate() {
         let class = match speaker.kind {
@@ -220,7 +261,7 @@ pub unsafe extern "C" fn asc_calibration_run_create(
             latency_ms: speaker.latency_ms,
         });
     }
-    match Run::new(rate, &reference.to_string(), given) {
+    match Run::listing(rate, &reference.to_string(), given, off) {
         Ok(run) => Box::into_raw(Box::new(AscCalibrationRun { run })),
         Err(_) => ptr::null_mut(),
     }
@@ -559,6 +600,52 @@ pub unsafe extern "C" fn asc_calibration_sheet_measure_again(
     }
 }
 
+/// Whether row `index` is a zone member that was off (S255), listed and
+/// not measured until [`asc_calibration_sheet_measure_again_off`] measures
+/// it; false for a row out of range or a null sheet.
+///
+/// # Safety
+///
+/// `sheet` is null or a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_calibration_sheet_row_off(
+    sheet: *const AscCalibrationSheet,
+    index: usize,
+) -> bool {
+    if sheet.is_null() {
+        return false;
+    }
+    // SAFETY: a live handle, by the caller's contract.
+    unsafe { &(*sheet).sheet }.is_off(index)
+}
+
+/// Measure Again on an off row (S255), with the speaker's stored delay
+/// (none when `has_offset` is false) and expected arrival as the host reads
+/// them now. Null for a row that isn't off and as
+/// [`asc_calibration_sheet_measure_again`].
+///
+/// # Safety
+///
+/// `sheet` is null or a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_calibration_sheet_measure_again_off(
+    sheet: *const AscCalibrationSheet,
+    index: usize,
+    has_offset: bool,
+    offset_ms: f64,
+    latency_ms: f64,
+) -> *mut AscCalibrationRun {
+    if sheet.is_null() {
+        return ptr::null_mut();
+    }
+    let offset = has_offset.then_some(offset_ms);
+    // SAFETY: a live handle, by the caller's contract.
+    match unsafe { &(*sheet).sheet }.measure_again_off(index, offset, latency_ms) {
+        Some(run) => Box::into_raw(Box::new(AscCalibrationRun { run })),
+        None => ptr::null_mut(),
+    }
+}
+
 /// Puts the row a Measure Again run's sheet holds in place of the old one,
 /// and frees `again`. False, changing nothing in `sheet`, for an `again`
 /// that was cancelled or ended by a change, one that doesn't come from this
@@ -779,6 +866,73 @@ mod tests {
         assert!(unsafe { asc_calibration_sheet_measure_again(sheet, 0) }.is_null());
         // SAFETY: a live sheet nothing uses afterwards.
         unsafe { asc_calibration_sheet_destroy(sheet) };
+    }
+
+    // covers: S255
+    #[test]
+    fn a_zone_run_lists_an_off_member_that_measure_again_measures_once_on() {
+        let local = |offset: Option<f64>, latency_ms: f64| AscCalibrationSpeaker {
+            kind: CALIBRATION_KIND_LOCAL,
+            has_offset: offset.is_some(),
+            offset_ms: offset.unwrap_or(0.0),
+            latency_ms,
+        };
+        let speakers = [
+            local(None, 50.0),
+            local(Some(10.0), 200.0),
+            local(None, 0.0),
+        ];
+        let off = [false, false, true];
+        // SAFETY: live arrays of three speakers and three bools.
+        let only_off = unsafe {
+            asc_calibration_run_create_listing(
+                RATE,
+                speakers.as_ptr(),
+                3,
+                0,
+                [false, true, true].as_ptr(),
+            )
+        };
+        assert!(only_off.is_null(), "nothing to measure");
+        // SAFETY: as above.
+        let run = unsafe {
+            asc_calibration_run_create_listing(RATE, speakers.as_ptr(), 3, 0, off.as_ptr())
+        };
+        assert!(!run.is_null());
+        // SAFETY: a live run, then freed by finish; row 2 is never asked for.
+        let sheet = unsafe {
+            drive(run, 0, &[0.0, 250.0, f64::NAN]);
+            asc_calibration_run_finish(run)
+        };
+        assert_eq!(row(sheet, 2).state, CALIBRATION_ROW_NOT_MEASURED);
+        // SAFETY: a live sheet.
+        unsafe {
+            assert!(asc_calibration_sheet_row_off(sheet, 2));
+            assert!(!asc_calibration_sheet_row_off(sheet, 1));
+            assert!(!asc_calibration_sheet_row_off(sheet, 9));
+            assert!(asc_calibration_sheet_measure_again(sheet, 2).is_null());
+            assert!(asc_calibration_sheet_measure_again_off(sheet, 1, false, 0.0, 0.0).is_null());
+        }
+        // SAFETY: a live sheet.
+        let again = unsafe { asc_calibration_sheet_measure_again_off(sheet, 2, true, 30.0, 100.0) };
+        assert!(!again.is_null());
+        // SAFETY: a live run, then freed by finish; replace frees the second sheet.
+        let replaced = unsafe {
+            drive(again, 0, &[0.0, 0.0, 90.0]);
+            asc_calibration_sheet_replace(sheet, asc_calibration_run_finish(again))
+        };
+        assert!(replaced);
+        let measured = row(sheet, 2);
+        assert_eq!(measured.state, CALIBRATION_ROW_CERTAIN);
+        assert_eq!(
+            (measured.has_old, measured.old_ms, measured.new_ms),
+            (true, 30.0, -10.0)
+        );
+        // SAFETY: a live sheet nothing uses afterwards.
+        unsafe {
+            assert!(!asc_calibration_sheet_row_off(sheet, 2));
+            asc_calibration_sheet_destroy(sheet);
+        }
     }
 
     // covers: S236

@@ -1242,6 +1242,14 @@ typedef struct AscCalibrationChange {
  */
 AscCalibrationRun *asc_calibration_run_create(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference);
 
+/*
+ * asc_calibration_run_create for Calibrate Zone: each speaker whose `off`
+ * entry is true is a zone member that is off, listed on the sheet and never
+ * swept; `off` NULL means none. NULL too when no speaker is left besides
+ * the reference and the off ones.
+ */
+AscCalibrationRun *asc_calibration_run_create_listing(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference, const bool *off);
+
 /* The next step into *step; false, writing nothing, once the run is over or for a NULL argument. */
 bool asc_calibration_run_step(const AscCalibrationRun *run, AscCalibrationStep *step);
 
@@ -1292,6 +1300,17 @@ uint32_t asc_calibration_sheet_apply(AscCalibrationSheet *sheet, AscCalibrationC
  * NULL sheet. Finish it and pass its sheet to asc_calibration_sheet_replace.
  */
 AscCalibrationRun *asc_calibration_sheet_measure_again(const AscCalibrationSheet *sheet, size_t index);
+
+/* Whether row `index` is a zone member that was off, listed and not measured; false out of range or for NULL. */
+bool asc_calibration_sheet_row_off(const AscCalibrationSheet *sheet, size_t index);
+
+/*
+ * Measure Again on an off row, with the speaker's stored delay (none when
+ * has_offset is false) and expected arrival as the host reads them now.
+ * NULL for a row that isn't off and as asc_calibration_sheet_measure_again;
+ * asc_calibration_sheet_measure_again refuses an off row.
+ */
+AscCalibrationRun *asc_calibration_sheet_measure_again_off(const AscCalibrationSheet *sheet, size_t index, bool has_offset, double offset_ms, double latency_ms);
 
 /*
  * Puts the row of a Measure Again sheet in place of the old one and frees
