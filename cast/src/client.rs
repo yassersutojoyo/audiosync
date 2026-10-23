@@ -27,8 +27,8 @@ use crate::status::{AppSession, ReceiverStatus};
 
 /// TCP connect and TLS handshake limit per address.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// The longest one write waits on a device that stopped reading, once
-/// connected: short enough that a quit's teardown fits its margin (C88).
+/// The longest one frame or TLS close waits on a device that stopped
+/// reading: short enough that a quit's teardown fits its margin (C88).
 const WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 /// The longest a read waits before timers run again.
 const READ_SLICE: Duration = Duration::from_millis(50);
@@ -142,14 +142,29 @@ pub fn tls_connector() -> Result<TlsConnector, native_tls::Error> {
 /// The TCP connection under the TLS stream: a read first peeks within the
 /// socket's read timeout, so a timeout only ever ends a peek.
 #[derive(Debug)]
-struct PeekedTcp(TcpStream);
+struct PeekedTcp {
+    tcp: TcpStream,
+    /// When the write in progress gives up. The socket's timeout counts per
+    /// send, and Linux ends a blocked send with the part it got out, so one
+    /// TLS record could otherwise wait several timeouts in a row.
+    write_until: Option<Instant>,
+}
+
+impl PeekedTcp {
+    fn new(tcp: TcpStream) -> PeekedTcp {
+        PeekedTcp {
+            tcp,
+            write_until: None,
+        }
+    }
+}
 
 impl Read for PeekedTcp {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.0.peek(buf).map_err(peek_error)? == 0 {
+        if self.tcp.peek(buf).map_err(peek_error)? == 0 {
             return Ok(0);
         }
-        self.0.read(buf)
+        self.tcp.read(buf)
     }
 }
 
@@ -165,11 +180,18 @@ fn peek_error(error: io::Error) -> io::Error {
 
 impl Write for PeekedTcp {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.write(buf)
+        if let Some(until) = self.write_until {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::Error::from(io::ErrorKind::TimedOut));
+            }
+            self.tcp.set_write_timeout(Some(left))?;
+        }
+        self.tcp.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.0.flush()
+        self.tcp.flush()
     }
 }
 
@@ -192,7 +214,7 @@ pub struct CastClient {
     /// waits give up with it (C80).
     selected: Option<Arc<AtomicBool>>,
     /// The end of a running teardown's budget, which every write keeps to.
-    write_until: Option<Instant>,
+    teardown_until: Option<Instant>,
 }
 
 impl fmt::Debug for CastClient {
@@ -275,7 +297,7 @@ impl CastClient {
         // deselect waiting longer than one poll step (C88).
         tcp.set_nonblocking(true).map_err(tcp_error)?;
         let deadline = Instant::now() + CONNECT_TIMEOUT;
-        let mut handshake = connector.connect(&address.ip().to_string(), PeekedTcp(tcp));
+        let mut handshake = connector.connect(&address.ip().to_string(), PeekedTcp::new(tcp));
         let stream = loop {
             match handshake {
                 Ok(stream) => break stream,
@@ -292,7 +314,7 @@ impl CastClient {
                 }
             }
         };
-        let tcp = &stream.get_ref().0;
+        let tcp = &stream.get_ref().tcp;
         tcp.set_nonblocking(false).map_err(tcp_error)?;
         tcp.set_write_timeout(Some(WRITE_TIMEOUT))
             .map_err(tcp_error)?;
@@ -304,7 +326,7 @@ impl CastClient {
             .map(|der| Fingerprint::of(&der));
         stream
             .get_ref()
-            .0
+            .tcp
             .set_read_timeout(Some(READ_SLICE))
             .map_err(tcp_error)?;
         let mut client = CastClient {
@@ -319,7 +341,7 @@ impl CastClient {
             buffer: vec![0; 16 * 1024],
             ended: None,
             selected: None,
-            write_until: None,
+            teardown_until: None,
         };
         loop {
             client.step(READ_SLICE);
@@ -503,22 +525,21 @@ impl CastClient {
 
     /// Drops the connection without a teardown, before a reconnect (C81).
     pub fn disconnect(&mut self) {
-        let _ = self.stream.shutdown();
-        let _ = self.stream.get_ref().0.shutdown(std::net::Shutdown::Both);
+        let _ = self.timed_write(|stream| stream.shutdown());
+        let _ = self.stream.get_ref().tcp.shutdown(std::net::Shutdown::Both);
         self.channel.end(EndReason::ClosedByDevice);
     }
 
     /// [`CastClient::stop`] for an owner that keeps the client.
     pub fn stop_in_place(&mut self, budget: Duration) -> EndReason {
         let until = Instant::now() + budget;
-        self.write_until = Some(until);
+        self.teardown_until = Some(until);
         self.channel.stop(Instant::now());
         while !self.channel.is_ended() && Instant::now() < until {
             self.step(READ_SLICE.min(STOP_STEP_TIMEOUT));
         }
         self.flush();
-        self.cap_write();
-        let _ = self.stream.shutdown();
+        let _ = self.timed_write(|stream| stream.shutdown());
         self.end_reason().unwrap_or(EndReason::Stopped)
     }
 
@@ -527,7 +548,7 @@ impl CastClient {
         let _ = self
             .stream
             .get_ref()
-            .0
+            .tcp
             .set_read_timeout(Some(wait.max(Duration::from_millis(1))));
         match self.stream.read(&mut self.buffer) {
             Ok(0) => self.channel.end(EndReason::ClosedByDevice),
@@ -577,27 +598,42 @@ impl CastClient {
 
     fn flush(&mut self) {
         while let Some(message) = self.channel.poll_outbound() {
-            self.cap_write();
-            let result = match encode_frame(&message) {
-                Ok(frame) => self.stream.write_all(&frame),
+            let frame = match encode_frame(&message) {
+                Ok(frame) => frame,
                 Err(fault) => {
                     self.channel.end(EndReason::Fault(fault));
                     return;
                 }
             };
-            if let Err(error) = result.and_then(|()| self.stream.flush()) {
+            let result = self.timed_write(|stream| {
+                stream.write_all(&frame)?;
+                stream.flush()
+            });
+            if let Err(error) = result {
                 self.channel.end(EndReason::Io(error.to_string()));
                 return;
             }
         }
     }
 
-    fn cap_write(&self) {
-        if let Some(until) = self.write_until {
-            let left = until.saturating_duration_since(Instant::now());
-            let timeout = left.clamp(Duration::from_millis(1), WRITE_TIMEOUT);
-            let _ = self.stream.get_ref().0.set_write_timeout(Some(timeout));
+    /// Gives one frame or TLS close [`WRITE_TIMEOUT`] in all, or what is
+    /// left of a teardown's budget when that is less. Writes the TLS stack
+    /// makes on its own during a read keep the per-send timeout only.
+    fn timed_write(
+        &mut self,
+        write: impl FnOnce(&mut TlsStream<PeekedTcp>) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let now = Instant::now();
+        let mut until = now + WRITE_TIMEOUT;
+        if let Some(end) = self.teardown_until {
+            until = until.min(end.max(now + Duration::from_millis(1)));
         }
+        self.stream.get_mut().write_until = Some(until);
+        let result = write(&mut self.stream);
+        let tcp = self.stream.get_mut();
+        tcp.write_until = None;
+        let _ = tcp.tcp.set_write_timeout(Some(WRITE_TIMEOUT));
+        result
     }
 }
 
@@ -614,7 +650,7 @@ mod tests {
         let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
         let (device, _) = listener.accept().expect("accept");
         tcp.set_read_timeout(Some(SLICE)).expect("timeout");
-        (PeekedTcp(tcp), device)
+        (PeekedTcp::new(tcp), device)
     }
 
     // A frame whose halves straddle the read slice arrives whole, however
@@ -670,13 +706,29 @@ mod tests {
     #[test]
     fn a_read_after_the_shutdown_ends_at_once() {
         let (mut tcp, _device) = connected();
-        tcp.0
+        tcp.tcp
             .set_read_timeout(Some(Duration::from_secs(5)))
             .expect("timeout");
-        tcp.0.shutdown(Shutdown::Both).expect("shutdown");
+        tcp.tcp.shutdown(Shutdown::Both).expect("shutdown");
         let started = Instant::now();
         let mut buffer = [0u8; 16];
         assert!(!matches!(tcp.read(&mut buffer), Ok(count) if count > 0));
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    // Linux ends a blocked send with the part it got out, and the retry
+    // waits again; the deadline holds across every send until it passes.
+    #[test]
+    fn a_write_keeps_to_its_deadline_across_partial_sends() {
+        let (mut tcp, _device) = connected();
+        let limit = Duration::from_millis(200);
+        tcp.write_until = Some(Instant::now() + limit);
+        let started = Instant::now();
+        let chunk = vec![0u8; 1 << 16];
+        while tcp.write_all(&chunk).is_ok() {
+            assert!(started.elapsed() < Duration::from_secs(5), "never blocked");
+        }
+        let took = started.elapsed();
+        assert!(took < limit + limit / 2, "the write took {took:?}");
     }
 }
