@@ -28,7 +28,7 @@ extension AppDelegate {
     /// Every recall's one entry point (S265): the core's plan carried out as
     /// a zone click carries out its own, then the master, the zone volumes,
     /// the own volumes and the ten gains. It opens, raises and focuses
-    /// nothing (S266); `.phone` starts streaming with the remote origin.
+    /// nothing (S266), and no path raises an alert.
     func recallPreset(_ id: String, from source: PresetRecallSource) {
         guard let preset = presets.first(where: { $0.id == id }) else { return }
         let states = preset.members.map { memberState($0.key) }

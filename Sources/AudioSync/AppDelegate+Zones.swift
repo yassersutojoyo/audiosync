@@ -282,13 +282,6 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// The zone slider; R3 makes it scale its members' gains.
-    func setZoneVolume(_ id: String, _ position: Double) {
-        guard let index = zones.firstIndex(where: { $0.id == id }) else { return }
-        zones[index].volume = min(max(position, 0), 100)
-        pushModel()
-    }
-
     func moveToZone(_ key: String, _ id: String) {
         zones = ZoneEdit.moving(key, to: id, in: zones)
         pushModel()
