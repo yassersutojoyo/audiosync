@@ -4220,24 +4220,70 @@ do {
             && CalibrateAllFlow.plan(referenceOff) == .failure(.notPlaying),
           "calibrate all: starts only while streaming with the built-in speakers and another speaker playing")
 
-    // A software device such as Teams Audio or BlackHole read as "barely heard".
-    var software = inputs
-    software.localOutputs = [(id: "mac", name: "MacBook Speakers"), (id: "teams", name: "Microsoft Teams Audio"),
-                             (id: "usb", name: "Desk")]
-    software.softwareOutputs = ["teams"]
-    var onlySoftware = alone
-    onlySoftware.localOutputs = [(id: "mac", name: "MacBook Speakers"), (id: "blackhole", name: "BlackHole 2ch")]
-    onlySoftware.softwareOutputs = ["blackhole"]
-    let softwarePlan = (try? CalibrateAllFlow.plan(software).get()) ?? []
-    check(softwarePlan.map(\.id) == ["mac", "usb", "cast:tv", "native:a", "native:b"]
-            && CalibrateAllFlow.plan(onlySoftware) == .failure(.noOtherSpeaker),
-          "calibrate all: a local output with no hardware behind it isn't measured", "\(softwarePlan.map(\.id))")
-    check(AudioDevices.isSoftwareOnly(transport: kAudioDeviceTransportTypeVirtual)
-            && !AudioDevices.isSoftwareOnly(transport: kAudioDeviceTransportTypeAggregate)
-            && !AudioDevices.isSoftwareOnly(transport: kAudioDeviceTransportTypeAirPlay)
-            && !AudioDevices.isSoftwareOnly(transport: kAudioDeviceTransportTypeUSB)
-            && !AudioDevices.isSoftwareOnly(transport: 0),
-          "calibrate all: only a virtual transport counts as software, not an aggregate or macOS's AirPlay output")
+    // Mic calibration is for external speakers only (decision 2026-10-23): headphones and virtual outputs sit out.
+    let hdpn: UInt32 = 0x6864_706E, ispk: UInt32 = 0x6973_706B
+    let bt = kAudioDeviceTransportTypeBluetooth, usb = kAudioDeviceTransportTypeUSB
+    let builtIn = kAudioDeviceTransportTypeBuiltIn
+    check(CalibrationFlow.leftOut(transport: kAudioDeviceTransportTypeVirtual, terminal: nil, dataSource: nil,
+                                  name: "Microsoft Teams Audio") == .virtual
+            && CalibrationFlow.leftOut(transport: builtIn, terminal: kAudioStreamTerminalTypeSpeaker,
+                                       dataSource: hdpn, name: "Built-in Output") == .headphones
+            && CalibrationFlow.leftOut(transport: builtIn, terminal: kAudioStreamTerminalTypeSpeaker,
+                                       dataSource: ispk, name: "Built-in Output") == nil
+            && CalibrationFlow.leftOut(transport: builtIn, terminal: kAudioStreamTerminalTypeHeadphones,
+                                       dataSource: nil, name: "External Headphones") == .headphones
+            && CalibrationFlow.leftOut(transport: usb, terminal: 0x0302, dataSource: nil, name: "USB Audio") == .headphones
+            && CalibrationFlow.leftOut(transport: usb, terminal: 0x0402, dataSource: nil, name: "USB Audio") == .headphones
+            && CalibrationFlow.leftOut(transport: usb, terminal: 0x0301, dataSource: nil, name: "USB Audio") == nil
+            && CalibrationFlow.leftOut(transport: usb, terminal: nil, dataSource: nil, name: "Desk Headphones") == nil
+            && CalibrationFlow.leftOut(transport: bt, terminal: kAudioStreamTerminalTypeHeadphones, dataSource: nil,
+                                       name: "WH-1000XM5") == .headphones
+            && CalibrationFlow.leftOut(transport: bt, terminal: nil, dataSource: nil,
+                                       name: "Yasser's AirPods Pro") == .headphones
+            && CalibrationFlow.leftOut(transport: kAudioDeviceTransportTypeBluetoothLE, terminal: 0, dataSource: nil,
+                                       name: "Galaxy Buds2") == .headphones
+            && CalibrationFlow.leftOut(transport: bt, terminal: nil, dataSource: nil, name: "JBL Flip 6") == nil
+            && CalibrationFlow.leftOut(transport: kAudioDeviceTransportTypeAggregate, terminal: nil, dataSource: nil,
+                                       name: "Multi-Output Device") == nil
+            && CalibrationFlow.leftOut(transport: kAudioDeviceTransportTypeAirPlay, terminal: nil, dataSource: nil,
+                                       name: "AirPlay") == nil
+            && CalibrationFlow.leftOut(transport: 0, terminal: nil, dataSource: nil, name: "Headset") == nil,
+          "calibration: a virtual output, the headphone jack, a headphone or headset terminal, and a Bluetooth "
+            + "output named as headphones sit out; speakers, Bluetooth speakers, aggregates and AirPlay stay in")
+
+    var mixed = inputs
+    mixed.localOutputs = [(id: "mac", name: "MacBook Speakers"), (id: "teams", name: "Microsoft Teams Audio"),
+                          (id: "pods", name: "AirPods"), (id: "usb", name: "Desk")]
+    mixed.leftOut = ["teams": .virtual, "pods": .headphones]
+    let mixedPlan = (try? CalibrateAllFlow.plan(mixed).get()) ?? []
+    check(mixedPlan.map(\.id) == ["mac", "usb", "cast:tv", "native:a", "native:b"]
+            && CalibrateAllFlow.leftOut(mixed) == [
+                CalibrateAllLeftOut(id: "teams", name: "Microsoft Teams Audio", reason: .virtual, included: false),
+                CalibrateAllLeftOut(id: "pods", name: "AirPods", reason: .headphones, included: false)],
+          "calibrate all: headphones and virtual outputs are listed with their reason and never swept",
+          "\(mixedPlan.map(\.id)) \(CalibrateAllFlow.leftOut(mixed))")
+    var anyway = mixed
+    anyway.includedAnyway = ["pods"]
+    let anywayPlan = (try? CalibrateAllFlow.plan(anyway).get()) ?? []
+    check(anywayPlan.map(\.id) == ["mac", "pods", "usb", "cast:tv", "native:a", "native:b"]
+            && CalibrateAllFlow.leftOut(anyway).map(\.included) == [false, true],
+          "calibrate all: a row included anyway is measured like any other, in the window's order",
+          "\(anywayPlan.map(\.id))")
+    var onlyLeftOut = alone
+    onlyLeftOut.localOutputs = [(id: "mac", name: "MacBook Speakers"), (id: "blackhole", name: "BlackHole 2ch"),
+                                (id: "pods", name: "AirPods")]
+    onlyLeftOut.leftOut = ["blackhole": .virtual, "pods": .headphones]
+    var onlyLeftOutIncluded = onlyLeftOut
+    onlyLeftOutIncluded.includedAnyway = ["pods"]
+    var jack = inputs
+    jack.leftOut = ["mac": .headphones]
+    check(CalibrateAllFlow.plan(onlyLeftOut) == .failure(.onlyLeftOut)
+            && (try? CalibrateAllFlow.plan(onlyLeftOutIncluded).get())?.map(\.id) == ["mac", "pods"]
+            && CalibrateAllFlow.plan(alone) == .failure(.noOtherSpeaker)
+            && CalibrateAllFlow.plan(jack) == .failure(.referenceHeadphones)
+            && CalibrateAllFlow.leftOut(jack).isEmpty,
+          "calibrate all: when every other speaker on sits out the blocker says so, not that only the built-in "
+            + "speakers are on; with the headphone jack in use the reference itself is silent")
 
     // Any mid-run change stops the run (S240).
     let taking = ["mac", "usb", "native:a"]
