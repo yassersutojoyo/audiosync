@@ -2523,7 +2523,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for zone in self.zones.list() {
             for member in &zone.members {
                 let (map, id) = match SpeakerKey::parse(member) {
-                    Some(SpeakerKey::Local(id)) => (&mut volumes.local, id),
+                    Some(SpeakerKey::Local(id)) => (&mut volumes.outputs, id),
                     Some(SpeakerKey::AirPlay(id)) => (&mut volumes.airplay, id),
                     Some(SpeakerKey::Cast(id)) => (&mut volumes.cast, id),
                     None => continue,

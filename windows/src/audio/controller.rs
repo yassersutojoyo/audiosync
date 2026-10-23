@@ -2076,12 +2076,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.log.log(|| {
             format!(
                 "zone volumes: {} local, {} AirPlay and {} Cast speaker(s) in a zone",
-                zones.local.len(),
+                zones.outputs.len(),
                 zones.airplay.len(),
                 zones.cast.len()
             )
         });
-        for id in self.policy.set_zones(zones.local.clone()) {
+        for id in self.policy.set_zones(zones.outputs.clone()) {
             self.apply_gain(&id);
         }
         if let Some(airplay) = self.airplay.as_mut() {

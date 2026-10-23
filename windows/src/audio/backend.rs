@@ -25,7 +25,7 @@ use super::routing::DirectPath;
 /// A speaker not listed is in no zone.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ZoneVolumes {
-    pub local: BTreeMap<String, f64>,
+    pub outputs: BTreeMap<String, f64>,
     pub airplay: BTreeMap<String, f64>,
     pub cast: BTreeMap<String, f64>,
 }
