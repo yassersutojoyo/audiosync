@@ -5706,13 +5706,19 @@ mod tests {
             state: ui_model::CastState::Connecting,
             muted: true,
             volume_fixed: false,
-            volume_step: 1.0,
+            volume_step: crate::audio::cast::volume_step(Some(
+                &audiosync_cast::status::DeviceVolume {
+                    step_interval: Some(0.05),
+                    ..Default::default()
+                },
+            )),
             group: None,
             added_by_address: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert_eq!(row.kind, SpeakerKind::Cast);
         assert!(row.cast && row.muted && !row.volume_fixed);
+        assert_eq!(row.volume_step, 5.0);
         assert_eq!(row.cast_state, CastState::Connecting);
         let strings = app.strings();
         assert_eq!(
@@ -5753,7 +5759,9 @@ mod tests {
         );
 
         speaker.cast = None;
-        assert!(!speaker_item(&state, &speaker, true, false, None).cast);
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert!(!row.cast);
+        assert_eq!(row.volume_step, 1.0);
     }
 
     #[test]
