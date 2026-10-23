@@ -37,6 +37,10 @@ final class SourceCapture {
         case ioProcNotStarted(OSStatus)
         /// No input device has this UID, or it has no input channel.
         case inputNotFound(String)
+        /// The input device with this UID is a Bluetooth hands-free input
+        /// (`AudioDevices.isHandsFreeInput`), which the picker doesn't list
+        /// either: a source saved before it was left out.
+        case inputHandsFree(String)
         /// The input device went away while it was captured.
         case inputDisconnected
 
@@ -50,6 +54,7 @@ final class SourceCapture {
             case .aggregateDeviceFailed(let status): return "aggregate device failed (\(Self.describe(status)))"
             case .ioProcNotStarted(let status): return "capture IOProc failed (\(Self.describe(status)))"
             case .inputNotFound(let uid): return "input device not found (\(uid))"
+            case .inputHandsFree(let uid): return "input device is a Bluetooth hands-free input (\(uid))"
             case .inputDisconnected: return "input device disconnected"
             }
         }
@@ -189,11 +194,8 @@ final class SourceCapture {
     /// An input device, read directly (S13, S14).
     private func startInput(_ uid: String) throws {
         guard let parts, let sink else { return }
-        let found = HAL.device(uid: uid)
-        guard let device = CaptureInputDevice.choose(found, transport: found.flatMap(HAL.transport(of:))) else {
-            if found != nil { DebugTrace.log("[AudioSync] capture: input device \(uid) is a Bluetooth hands-free input") }
-            throw CaptureError.inputNotFound(uid)
-        }
+        guard let device = HAL.device(uid: uid) else { throw CaptureError.inputNotFound(uid) }
+        if AudioDevices.isHandsFreeInput(device) { throw CaptureError.inputHandsFree(uid) }
         switch CaptureInputFormat.check(try HAL.inputStreamFormats(of: device)) {
         case .usable: break
         case .noChannels: throw CaptureError.inputNotFound(uid)
@@ -640,12 +642,6 @@ private extension SourceCapture {
         static func tapRate(of tap: AudioObjectID) -> Double {
             var format = AudioStreamBasicDescription()
             return read(tap, kAudioTapPropertyFormat, into: &format) == noErr ? format.mSampleRate : 0
-        }
-
-        /// A device's `kAudioDevicePropertyTransportType`, nil when it can't be read.
-        static func transport(of device: AudioObjectID) -> UInt32? {
-            var transport: UInt32 = 0
-            return read(device, kAudioDevicePropertyTransportType, into: &transport) == noErr ? transport : nil
         }
 
         /// False for a dead device, and for one whose state can't be read any more.

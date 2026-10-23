@@ -274,7 +274,10 @@ extension AppDelegate {
     /// plugged in and out.
     func pushSources() {
         let running = SourceApps.running()
-        let inputs = devices.allInputDevices().map { (uid: $0.uid, name: text.deviceName($0.name), transport: $0.transport) }
+        let inputs = devices.allInputDevices().map {
+            SourceList.Input(uid: $0.uid, name: text.deviceName($0.name), transport: $0.transport,
+                             inputSubTransports: $0.inputSubTransports)
+        }
         let inputLog = SourceList.logLines(inputs)
         if inputLog != loggedInputs {   // the picker is refreshed often; the log hears only of changes
             loggedInputs = inputLog

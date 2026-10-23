@@ -42,7 +42,7 @@ extension AppDelegate {
         default:
             return calibrateAllFailed(.microphoneDenied)
         }
-        if let refusal = CalibrationFlow.microphoneRefusal(defaultInputTransport: CalibrationMicrophone.defaultInputTransport()) {
+        if let refusal = CalibrationMicrophone.defaultInputRefusal() {
             return calibrateAllFailed(refusal)
         }
         guard let rate = CalibrationMicrophone.defaultInputRate() else { return calibrateAllFailed(.noMicrophone) }

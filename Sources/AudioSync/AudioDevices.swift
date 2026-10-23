@@ -25,6 +25,9 @@ struct AudioDevices: Sendable {
         /// from the headphone jack (S173) and headphones from speakers for
         /// calibration; nil when it couldn't be read and for input devices.
         var outputTerminal: UInt32? = nil
+        /// For an aggregate input device, the transports of its active
+        /// sub-devices that have input channels; empty otherwise.
+        var inputSubTransports: [UInt32] = []
     }
 
     /// Devices with at least one output channel, in Core Audio's order.
@@ -62,10 +65,33 @@ struct AudioDevices: Sendable {
     /// which AudioSync neither offers as a source nor records from: opening
     /// it switches the headset to call mode, which interrupts its stereo
     /// sound. A Bluetooth LE input and every wired or built-in one are fine.
-    static func isHandsFreeInput(transport: UInt32) -> Bool {
+    /// An aggregate counts as one when an input among its sub-devices
+    /// (`inputSubTransports`) does, since recording opens that input too.
+    static func isHandsFreeInput(transport: UInt32, inputSubTransports: [UInt32] = []) -> Bool {
         // Core Audio names no hands-free kind, but classic Bluetooth carries a microphone only over HFP or HSP.
-        transport == kAudioDeviceTransportTypeBluetooth
+        if aggregateTransports.contains(transport) {
+            return inputSubTransports.contains(kAudioDeviceTransportTypeBluetooth)
+        }
+        return transport == kAudioDeviceTransportTypeBluetooth
     }
+
+    /// Whether the input device `id` is a hands-free one (`isHandsFreeInput`),
+    /// read from Core Audio; false when its transport can't be read.
+    static func isHandsFreeInput(_ id: AudioDeviceID) -> Bool {
+        guard let read = inputTransports(of: id) else { return false }
+        return isHandsFreeInput(transport: read.transport, inputSubTransports: read.subDevices)
+    }
+
+    /// Device `id`'s transport and, for an aggregate, its `inputSubTransports`;
+    /// nil when the transport can't be read.
+    static func inputTransports(of id: AudioDeviceID) -> (transport: UInt32, subDevices: [UInt32])? {
+        guard let transport = HALProperty.uint32(of: id, kAudioDevicePropertyTransportType) else { return nil }
+        return (transport, inputSubTransports(of: id, transport: transport))
+    }
+
+    private static let aggregateTransports: Set<UInt32> = [
+        kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAutoAggregate,
+    ]
 
     /// A transport as its four-character code ("blue", "usb ", "bltn") for
     /// the debug log, or its number when it isn't printable.
@@ -142,8 +168,19 @@ struct AudioDevices: Sendable {
                                 name: HALProperty.string(of: id, kAudioObjectPropertyName))
         if scope == kAudioObjectPropertyScopeOutput {
             device?.outputTerminal = HALProperty.firstStreamTerminal(of: id, in: scope)
+        } else if let kind = transport, device != nil {
+            device?.inputSubTransports = Self.inputSubTransports(of: id, transport: kind)
         }
         return device
+    }
+
+    /// The transports of an aggregate's active sub-devices that have input
+    /// channels (0 for one that doesn't say); empty for any other device.
+    private static func inputSubTransports(of id: AudioDeviceID, transport: UInt32) -> [UInt32] {
+        guard aggregateTransports.contains(transport) else { return [] }
+        return HALProperty.objectIDs(of: id, kAudioAggregateDevicePropertyActiveSubDeviceList)
+            .filter { HALProperty.channelCount(of: $0, in: kAudioObjectPropertyScopeInput) > 0 }
+            .map { HALProperty.uint32(of: $0, kAudioDevicePropertyTransportType) ?? 0 }
     }
 }
 

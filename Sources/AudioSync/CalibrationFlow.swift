@@ -135,8 +135,11 @@ enum CalibrationFlow {
     /// Why calibration won't record from the default input, nil when it may:
     /// a Bluetooth hands-free input is refused before anything plays, for one
     /// speaker and for Calibrate All. No default input is the start's to report.
-    static func microphoneRefusal(defaultInputTransport: UInt32?) -> CalibrationFailure? {
-        guard let transport = defaultInputTransport, AudioDevices.isHandsFreeInput(transport: transport)
+    /// `inputSubTransports` are an aggregate's (`AudioDevices.Device`).
+    static func microphoneRefusal(defaultInputTransport: UInt32?,
+                                  inputSubTransports: [UInt32] = []) -> CalibrationFailure? {
+        guard let transport = defaultInputTransport,
+              AudioDevices.isHandsFreeInput(transport: transport, inputSubTransports: inputSubTransports)
         else { return nil }
         return .handsFreeMicrophone
     }

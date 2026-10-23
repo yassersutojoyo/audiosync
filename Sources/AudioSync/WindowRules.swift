@@ -56,13 +56,18 @@ enum SourceList {
     }
 
     /// An input device as Core Audio lists it; `transport` is
-    /// `kAudioDeviceTransportType…`, 0 when the device doesn't say.
-    typealias Input = (uid: String, name: String, transport: UInt32)
+    /// `kAudioDeviceTransportType…`, 0 when the device doesn't say, and
+    /// `inputSubTransports` an aggregate's (`AudioDevices.Device`).
+    struct Input {
+        let uid, name: String
+        let transport: UInt32
+        var inputSubTransports: [UInt32] = []
+    }
 
     /// Why the picker leaves an input out, for the debug log; nil when it lists it.
     static func leftOut(_ input: Input) -> String? {
         if input.uid.isEmpty { return "no UID" }
-        if AudioDevices.isHandsFreeInput(transport: input.transport) {
+        if AudioDevices.isHandsFreeInput(transport: input.transport, inputSubTransports: input.inputSubTransports) {
             return "a Bluetooth hands-free input, which would switch the headset to call mode"
         }
         return nil
@@ -73,8 +78,10 @@ enum SourceList {
     static func logLines(_ inputs: [Input]) -> [String] {
         inputs.map { input in
             let verdict = leftOut(input).map { "left out: \($0)" } ?? "listed"
+            let subs = input.inputSubTransports.isEmpty ? ""
+                : " (sub-device inputs \(input.inputSubTransports.map(AudioDevices.transportCode).joined(separator: ", ")))"
             return "[AudioSync] source picker: input \"\(input.name)\" (\(input.uid)), "
-                + "transport \(AudioDevices.transportCode(input.transport)): \(verdict)"
+                + "transport \(AudioDevices.transportCode(input.transport))\(subs): \(verdict)"
         }
     }
 }
