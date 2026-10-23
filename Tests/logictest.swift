@@ -998,6 +998,16 @@ do {
     let late = pace.step(nowNs: 15 * s, lastCaptureNs: 11 * s)
     check(late.frames == 48_000 && late.firstNs == 14 * s,
           "calibration fill: a fill held up for seconds writes the last second only", "\(late)")
+
+    // An input device another app set to 4096-frame buffers calls back every
+    // 85 ms: a 40 ms limit would fill spans the next block writes too.
+    var input = CalibrationFillPace(rate: 48_000)
+    let between = input.step(nowNs: 20 * s, lastCaptureNs: 20 * s - 100_000_000, captureFrames: 4096)
+    let stalled = input.step(nowNs: 20 * s + 80_000_000, lastCaptureNs: 20 * s - 100_000_000, captureFrames: 4096)
+    let idle = UInt64((2 * 4096 * 1e9 / 48_000).rounded(.up))
+    check(between.frames == 0 && stalled.frames > 0 && stalled.firstNs == 20 * s + 80_000_000 - idle,
+          "calibration fill: a capture with long buffers counts as quiet only after two of its periods",
+          "\(between) \(stalled)")
 }
 
 // MARK: Capture stage — stereo from any input layout, a rate for every session, an app tap that follows the app
