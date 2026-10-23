@@ -431,10 +431,8 @@ extension AppDelegate {
     /// The Guide's text with its illustrations, in the light variant until the
     /// text view picks the one for its appearance.
     private func guideText() -> NSAttributedString {
-        // The text is wrapped by hand with indented continuation lines, which
-        // line up only in a fixed-width face.
         let body: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
             .foregroundColor: NSColor.labelColor,
         ]
         let artParagraph = NSMutableParagraphStyle()
@@ -445,7 +443,15 @@ extension AppDelegate {
 
         let guide = NSMutableAttributedString()
         for piece in GuideLayout.pieces(of: text.helpText, anchor: text.guideArtAnchor) {
-            guide.append(NSAttributedString(string: piece.text, attributes: body))
+            let paragraphs = GuideLayout.paragraphs(of: piece.text)
+            for (index, paragraph) in paragraphs.enumerated() {
+                let style = NSMutableParagraphStyle()
+                style.headIndent = (paragraph.hang as NSString).size(withAttributes: body).width
+                var attributes = body
+                attributes[.paragraphStyle] = style
+                let end = index < paragraphs.count - 1 ? "\n" : ""
+                guide.append(NSAttributedString(string: paragraph.text + end, attributes: attributes))
+            }
             guard let art = piece.art else { continue }
             let attachment = GuideArtAttachment(art: art, label: text.guideArtDescription(art), dark: false)
             let image = NSMutableAttributedString(attachment: attachment)
