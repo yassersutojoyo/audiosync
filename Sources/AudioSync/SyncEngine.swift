@@ -77,12 +77,12 @@ final class StreamEngine {
         fadeTimer?.cancel()
     }
 
-    /// Frames captured in this session so far; 0 while stopped (S17).
-    var framesCaptured: Int64 { parts?.ring.framesWritten ?? 0 }
+    /// Some frame this session captured was not silent; false while stopped.
+    /// A frame count can't tell: a denied tap delivers zeros (S17).
+    var sessionHeard: Bool { capture.sessionHeard }
 
-    /// Some frame captured in this app run was not silent; silent frames
-    /// count in `framesCaptured` too.
-    var heardAudio: Bool { SourceCapture.heardAudio }
+    /// Some frame a system or app tap captured in this app run was not silent.
+    var runHeard: Bool { SourceCapture.runHeard }
 
     /// The rate the running capture delivers at, which the ring's frames are
     /// clocked at (S16).

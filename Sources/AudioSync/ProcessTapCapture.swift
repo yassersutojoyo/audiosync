@@ -83,8 +83,11 @@ final class SourceCapture {
     /// tap or input format has been read.
     private(set) var sampleRate: Double = CaptureRate.fallback
 
-    /// Some frame captured in this app run, by any session, was not silent.
-    static var heardAudio: Bool { CaptureSink.heard.load(ordering: .relaxed) }
+    /// Some frame a system or app tap captured in this app run was not silent.
+    static var runHeard: Bool { CaptureSink.runHeard.load(ordering: .relaxed) }
+
+    /// Some frame this session captured was not silent; false while stopped.
+    var sessionHeard: Bool { sink?.heard.load(ordering: .relaxed) ?? false }
 
     private var source: AudioSource?
     private var parts: EngineParts?
@@ -119,7 +122,8 @@ final class SourceCapture {
         sessionMark &+= 1
         self.source = source
         self.parts = parts
-        sink = CaptureSink(parts: parts)
+        _ = Self.runHeard   // the static's lazy init runs here, never on the IO thread
+        sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(source))
         sampleRate = CaptureRate.fallback
         do { try startSource(source) } catch { halt(); throw error }
     }
@@ -433,11 +437,16 @@ private extension SourceCapture {
         let callbacks = Atomic<UInt64>(0)
         let frames = Atomic<UInt64>(0)
         let silentCallbacks = Atomic<UInt64>(0)
-        /// Some frame captured in this app run was not silent (`SourceCapture.heardAudio`).
-        static let heard = Atomic<Bool>(false)
+        /// Some frame this session captured was not silent (`SourceCapture.sessionHeard`).
+        let heard = Atomic<Bool>(false)
+        /// Some frame a tap captured in this app run was not silent (`SourceCapture.runHeard`).
+        static let runHeard = Atomic<Bool>(false)
+        /// This session reads a tap, so its sound proves the permission (`CaptureCheck.provesPermission`).
+        private let provesPermission: Bool
 
-        init(parts: EngineParts) {
+        init(parts: EngineParts, provesPermission: Bool) {
             self.parts = parts
+            self.provesPermission = provesPermission
             stereoBlock = .allocate(capacity: CaptureChannels.blockFrames * 2)
             stereoBlock.initialize(repeating: 0, count: CaptureChannels.blockFrames * 2)
         }
@@ -454,8 +463,9 @@ private extension SourceCapture {
                 return
             }
             channels.forEachBlock(in: stereoBlock) { block, count in
-                if !CaptureSink.heard.load(ordering: .relaxed), CaptureChannels.hasSound(block, frames: count) {
-                    CaptureSink.heard.store(true, ordering: .relaxed)
+                if !self.heard.load(ordering: .relaxed), CaptureChannels.hasSound(block, frames: count) {
+                    self.heard.store(true, ordering: .relaxed)
+                    if self.provesPermission { CaptureSink.runHeard.store(true, ordering: .relaxed) }
                 }
                 self.parts.deliver(block, frames: count)
             }

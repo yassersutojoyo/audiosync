@@ -135,11 +135,11 @@ extension AppDelegate {
     }
 
     private func verifyAudioFlowing(origin: StartOrigin) {
-        // framesCaptured restarts at 0 for each session (the ring is reset), so
-        // only judge the session this check was scheduled for. A tap delivers
-        // nothing until the source plays, so "nothing yet" is a calm notice;
-        // only a source Now Playing shows playing, while this app run never
-        // captured sound, points at a problem (`CaptureCheck`).
+        // The heard flag restarts with each session, so only judge the session
+        // this check was scheduled for. A tap delivers nothing until the
+        // source plays, so "nothing yet" is a calm notice;
+        // only a source Now Playing shows playing, while no tap in this app
+        // run ever captured sound, points at a problem (`CaptureCheck`).
         // Never a modal alert: the user may simply not have pressed play yet.
         let scheduledFor = session
         var watch = CaptureWatch()
@@ -148,7 +148,7 @@ extension AppDelegate {
             guard session == scheduledFor, engine.isRunning else { return }
             let playing = sourcePlayingReading()
             let verdict = watch.verdict(at: ProcessInfo.processInfo.systemUptime,
-                                        framesCaptured: engine.framesCaptured, heardAudio: engine.heardAudio,
+                                        sessionHeard: engine.sessionHeard, runHeard: engine.runHeard,
                                         reportsPlaying: playing != nil, position: playing?.position)
             if verdict == .flowing {
                 clearNotices([Notice.capture])

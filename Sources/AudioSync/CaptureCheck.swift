@@ -6,9 +6,9 @@ import Foundation
 /// something, so "no frames yet" on its own is normal: the user may simply
 /// start playback after switching streaming on. A missing permission is the
 /// likely cause only when Now Playing shows the source playing (its position
-/// moving on), nothing arrives, and this app run has never captured sound: a
-/// denied tap and a silent source both deliver zeros, so once sound has been
-/// captured the permission is known to be there.
+/// moving on), no sound arrives, and this app run has never captured sound
+/// from a tap: a denied tap and a silent source both deliver zeros, so frames
+/// prove nothing, and once a tap has captured sound the permission is there.
 enum CaptureCheck: Equatable {
     /// Audio arrives: nothing to say.
     case flowing
@@ -21,15 +21,25 @@ enum CaptureCheck: Equatable {
     static let playingGrace: TimeInterval = 6
 
     /// - Parameters:
-    ///   - framesCaptured: frames written since this session started.
-    ///   - heardAudio: some captured frame in this app run was not silent.
+    ///   - sessionHeard: some frame this session captured was not silent.
+    ///   - runHeard: some frame a system or app tap captured in this app run
+    ///     was not silent.
     ///   - knownPlayingFor: how long Now Playing has shown the source playing,
     ///     or nil when it can't tell (other apps, input devices, no position)
     ///     or shows it paused or standing still.
-    static func verdict(framesCaptured: Int64, heardAudio: Bool, knownPlayingFor: TimeInterval?) -> CaptureCheck {
-        if framesCaptured > 0 { return .flowing }
-        if !heardAudio, let playing = knownPlayingFor, playing >= playingGrace { return .notWorking }
+    static func verdict(sessionHeard: Bool, runHeard: Bool, knownPlayingFor: TimeInterval?) -> CaptureCheck {
+        if sessionHeard { return .flowing }
+        if !runHeard, let playing = knownPlayingFor, playing >= playingGrace { return .notWorking }
         return .waiting
+    }
+
+    /// Whether sound captured from `source` proves the capture permission: only
+    /// a tap needs it, so a microphone or line-in heard says nothing about it.
+    static func provesPermission(_ source: AudioSource) -> Bool {
+        switch source {
+        case .system, .app: return true
+        case .input: return false
+        }
     }
 }
 
@@ -43,11 +53,11 @@ struct CaptureWatch {
 
     /// - Parameters:
     ///   - uptime: `ProcessInfo.systemUptime` of this check.
-    ///   - framesCaptured: frames written since this session started.
-    ///   - heardAudio: some captured frame in this app run was not silent.
+    ///   - sessionHeard: some frame this session captured was not silent.
+    ///   - runHeard: some frame a tap captured in this app run was not silent.
     ///   - reportsPlaying: Now Playing reports the source as playing.
     ///   - position: the latest Now Playing reading's position, if any.
-    mutating func verdict(at uptime: TimeInterval, framesCaptured: Int64, heardAudio: Bool,
+    mutating func verdict(at uptime: TimeInterval, sessionHeard: Bool, runHeard: Bool,
                           reportsPlaying: Bool, position: NowPlayingMonitor.Position?) -> CaptureCheck {
         if reportsPlaying, let position {
             // Checks can outpace the monitor's polls: only a new reading moves the verdict.
@@ -64,7 +74,7 @@ struct CaptureWatch {
             live = false
         }
         if live { playingSince = playingSince ?? uptime } else { playingSince = nil }
-        return CaptureCheck.verdict(framesCaptured: framesCaptured, heardAudio: heardAudio,
+        return CaptureCheck.verdict(sessionHeard: sessionHeard, runHeard: runHeard,
                                     knownPlayingFor: playingSince.map { uptime - $0 })
     }
 }
