@@ -28,8 +28,9 @@ extension AppDelegate {
             case .authorized:
                 break
             case .notDetermined:
+                guard microphoneRequest.begin(origin: origin) else { return }
                 AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                    DispatchQueue.main.async { self?.microphoneAnswered(granted, origin: origin) }
+                    DispatchQueue.main.async { self?.microphoneAnswered(granted) }
                 }
                 return
             default:
@@ -63,7 +64,8 @@ extension AppDelegate {
 
     /// macOS answered the microphone request a start made: start again, or
     /// say the source can't be captured.
-    private func microphoneAnswered(_ granted: Bool, origin: StartOrigin) {
+    private func microphoneAnswered(_ granted: Bool) {
+        guard let origin = microphoneRequest.answer() else { return }
         if granted { startEngine(origin: origin) } else { failStart(text.microphoneDenied, origin: origin) }
     }
 

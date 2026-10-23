@@ -276,7 +276,15 @@ extension AppDelegate {
     /// plugged in and out.
     func pushSources() {
         let running = SourceApps.running()
-        let inputs = devices.allInputDevices().map { (uid: $0.uid, name: text.deviceName($0.name)) }
+        let inputs = devices.allInputDevices().map {
+            SourceList.Input(uid: $0.uid, name: text.deviceName($0.name), transport: $0.transport,
+                             inputSubTransports: $0.inputSubTransports)
+        }
+        let inputLog = SourceList.logLines(inputs)
+        if inputLog != loggedInputs {   // the picker is refreshed often; the log hears only of changes
+            loggedInputs = inputLog
+            inputLog.forEach { DebugTrace.log($0) }
+        }
         let entries = SourceList.entries(systemName: text.sourceSystem,
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
@@ -459,10 +467,8 @@ extension AppDelegate {
     /// The Guide's text with its illustrations, in the light variant until the
     /// text view picks the one for its appearance.
     private func guideText() -> NSAttributedString {
-        // The text is wrapped by hand with indented continuation lines, which
-        // line up only in a fixed-width face.
         let body: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
             .foregroundColor: NSColor.labelColor,
         ]
         let artParagraph = NSMutableParagraphStyle()
@@ -473,7 +479,15 @@ extension AppDelegate {
 
         let guide = NSMutableAttributedString()
         for piece in GuideLayout.pieces(of: text.helpText, anchor: text.guideArtAnchor) {
-            guide.append(NSAttributedString(string: piece.text, attributes: body))
+            let paragraphs = GuideLayout.paragraphs(of: piece.text)
+            for (index, paragraph) in paragraphs.enumerated() {
+                let style = NSMutableParagraphStyle()
+                style.headIndent = (paragraph.hang as NSString).size(withAttributes: body).width
+                var attributes = body
+                attributes[.paragraphStyle] = style
+                let end = index < paragraphs.count - 1 ? "\n" : ""
+                guide.append(NSAttributedString(string: paragraph.text + end, attributes: attributes))
+            }
             guard let art = piece.art else { continue }
             let attachment = GuideArtAttachment(art: art, label: text.guideArtDescription(art), dark: false)
             let image = NSMutableAttributedString(attachment: attachment)

@@ -1249,6 +1249,20 @@ do {
           "capture channels: a long callback is delivered in order, in blocks of at most 4096 frames",
           "\(blocked.blocks)")
     check(CaptureChannels.blockFrames <= 8192, "capture channels: a block never exceeds the ring's write margin")
+    // 8 kHz keeps the host ticks per frame whole on both Apple silicon and Intel timebases.
+    let stampGate = BlockGate()
+    stampGate.prepare(captureRate: 8000)
+    let callbackNow: UInt64 = 1_000_000_000_000
+    let starts = blocked.blocks.indices.map { index in
+        stampGate.blockStartTicks(callbackNow: callbackNow, callbackFrames: 10_000,
+                                  offset: blocked.blocks[..<index].reduce(0, +))
+    }
+    let step = stampGate.ticks(frames: 4096)
+    check(step > 0 && starts.count == 3 && starts[1] &- starts[0] == step && starts[2] &- starts[1] == step
+            && starts[2] &+ stampGate.ticks(frames: 1808) == callbackNow
+            && starts[0] == callbackNow &- stampGate.ticks(frames: 10_000),
+          "capture channels: each block of a long callback is stamped at its own place in the callback",
+          "\(starts) step \(step)")
 
     check(CaptureRate.session(reported: 0) == 48000 && CaptureRate.session(reported: .nan) == 48000,
           "capture rate: a rate that reads 0 counts as 48 kHz")
@@ -2713,7 +2727,8 @@ do {
           "prompt withdrawal: no prompt open, nothing to close")
 
     let apps = [(bundleID: "com.apple.Music", name: "Music"), (bundleID: "com.spotify.client", name: "Spotify")]
-    let inputs = [(uid: "mic-1", name: "MacBook Pro Microphone"), (uid: "", name: "No UID")]
+    let inputs = [SourceList.Input(uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+                  SourceList.Input(uid: "", name: "No UID", transport: kAudioDeviceTransportTypeUSB)]
     func list(_ chosen: AudioSource) -> [SourceList.Entry] {
         SourceList.entries(systemName: "All System Audio", apps: apps, inputs: inputs, chosen: chosen,
                            chosenAppName: { $0 == "com.apple.Safari" ? "Safari" : $0 })
@@ -2730,6 +2745,58 @@ do {
           "sources: a chosen input device that is unplugged is not listed")
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
+
+    // A Bluetooth headset's hands-free input switches it to call mode, so the
+    // picker leaves it out; a Bluetooth LE, USB or built-in input stays.
+    let headsetInputs = [
+        SourceList.Input(uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+        SourceList.Input(uid: "buds:input", name: "Example Buds", transport: kAudioDeviceTransportTypeBluetooth),
+        SourceList.Input(uid: "hearing:input", name: "Example LE Mic", transport: kAudioDeviceTransportTypeBluetoothLE),
+        SourceList.Input(uid: "usb-mic", name: "USB Mic", transport: kAudioDeviceTransportTypeUSB),
+        // An aggregate that records from a hands-free input opens it too.
+        SourceList.Input(uid: "agg-buds", name: "Buds Aggregate", transport: kAudioDeviceTransportTypeAggregate,
+                         inputSubTransports: [kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeBluetooth]),
+        SourceList.Input(uid: "agg-wired", name: "Wired Aggregate", transport: kAudioDeviceTransportTypeAggregate,
+                         inputSubTransports: [kAudioDeviceTransportTypeBuiltIn, kAudioDeviceTransportTypeUSB]),
+    ]
+    func headsetList(_ chosen: AudioSource) -> [SourceList.Entry] {
+        SourceList.entries(systemName: "All System Audio", apps: [], inputs: headsetInputs, chosen: chosen,
+                           chosenAppName: { $0 })
+    }
+    check(headsetList(.system).map(\.id) == ["", "input:mic-1", "input:hearing:input", "input:usb-mic", "input:agg-wired"],
+          "sources: a Bluetooth hands-free input, or an aggregate with one, is left out; "
+            + "Bluetooth LE, built-in, USB and other aggregate inputs stay",
+          "\(headsetList(.system).map(\.id))")
+    check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id),
+          "sources: a saved source that is a hands-free input isn't listed, like an unplugged one")
+    check(AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetooth)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetoothLE)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeUSB)
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBuiltIn)
+            && !AudioDevices.isHandsFreeInput(transport: 0)
+            && AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate,
+                                             inputSubTransports: [kAudioDeviceTransportTypeBluetooth])
+            && AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAutoAggregate,
+                                             inputSubTransports: [kAudioDeviceTransportTypeUSB, kAudioDeviceTransportTypeBluetooth])
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate,
+                                              inputSubTransports: [kAudioDeviceTransportTypeBluetoothLE, kAudioDeviceTransportTypeUSB])
+            && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate),
+          "sources: a classic Bluetooth input, or an aggregate recording from one, counts as hands-free")
+    let inputLog = SourceList.logLines(headsetInputs)
+    check(inputLog.count == 6 && inputLog[1].contains("transport blue: left out: a Bluetooth hands-free input")
+            && inputLog[4].contains("transport grup (sub-device inputs bltn, blue): left out")
+            && inputLog[0].hasSuffix("transport bltn: listed") && inputLog[3].hasSuffix("transport usb : listed"),
+          "sources: the debug log names each input's transport and whether it was left out", "\(inputLog)")
+    check(AudioDevices.transportCode(0) == "0",
+          "sources: a transport that isn't four printable characters logs as a number")
+    // A saved hands-free source doesn't start, and says why rather than "not connected".
+    let handsFreeStart = UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputHandsFree("buds:input"))
+    let handsFreeStop = UIStrings().sourceStopped(.inputHandsFree("buds:input"))
+    check(handsFreeStart.contains("hands-free microphone") && handsFreeStart.hasSuffix("Pick another source.")
+            && !handsFreeStart.contains("not connected") && handsFreeStop == handsFreeStart
+            && handsFreeStart != UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputNotFound("buds:input"))
+            && !handsFreeStart.contains("\u{2014}"),
+          "capture: a saved source that is a hands-free input has its own reason", handsFreeStart)
 
     let present: Set<String> = ["ap:a", "lc:b"]
     func summary(_ members: [String], on: Set<String>) -> (available: Int, allOn: Bool) {
@@ -4280,13 +4347,34 @@ do {
     }
 
     // Refusals the host makes before the estimate say why and that nothing changed.
-    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .sourceSilent, .interrupted,
-                                              .notPlaying, .noReference, .unsupportedRate]
+    let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
+                                              .interrupted, .notPlaying, .noReference, .unsupportedRate]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
         check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
               "calibration: a refusal (\(failure)) says why and that the delay wasn't changed", message)
     }
+
+    // A hands-free default input is refused with its own reason, for one
+    // speaker and for Calibrate All (both ask microphoneRefusal first).
+    check(CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBluetooth) == .handsFreeMicrophone
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBuiltIn) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeUSB) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeBluetoothLE) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: nil) == nil
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeAggregate,
+                                                 inputSubTransports: [kAudioDeviceTransportTypeBluetooth]) == .handsFreeMicrophone
+            && CalibrationFlow.microphoneRefusal(defaultInputTransport: kAudioDeviceTransportTypeAggregate,
+                                                 inputSubTransports: [kAudioDeviceTransportTypeUSB]) == nil,
+          "calibration: only a Bluetooth hands-free default input, or an aggregate with one, is refused")
+    let handsFreeText = t.calibrationMessage(.failed(.handsFreeMicrophone)) ?? ""
+    let handsFreeAll = t.calibrateAllLine(.ended(.failed(.handsFreeMicrophone)))
+    check(handsFreeText.contains("hands-free") && handsFreeText.contains("Choose another input")
+            && handsFreeText != t.calibrationMessage(.failed(.noMicrophone))
+            && handsFreeAll.contains("hands-free") && handsFreeAll.hasSuffix(" No delay was changed.")
+            && !handsFreeText.contains("\u{2014}"),
+          "calibration: a hands-free microphone has its own reason, for one speaker and for Calibrate All",
+          "\(handsFreeText) | \(handsFreeAll)")
 
     // Both runs record with one input: a switch to another device, even at
     // the same rate, would change the input latency between them (S232).
@@ -5412,6 +5500,35 @@ do {
           "guide: the illustrations carry no text and differ between light and dark")
 }
 
+// MARK: Guide text: hand-wrapped lines join into paragraphs the window wraps (GuideLayout)
+do {
+    let t = UIStrings()
+    let paragraphs = GuideLayout.paragraphs(of: t.helpText)
+    let texts = paragraphs.map(\.text)
+    let titles = t.helpText.split(separator: "\n").prefix(2).map(String.init)
+    let topics = ["First Steps", "More Controls", "Calibration", "Speaker Notes", "AirPlay", "Google Cast",
+                  "Notices", "Web Remote", "Tips", "Volume", "Notes"]
+    let unfinished = texts.filter { text in !text.isEmpty && !(text.last.map { ".:!?".contains($0) } ?? false) }
+    check(unfinished == titles + topics,
+          "guide: only the title and topic headings end without punctuation, so no paragraph breaks inside a sentence",
+          unfinished.joined(separator: " | "))
+    check(!texts.contains { $0.contains("\n") || $0.contains("  ") }
+            && texts.joined(separator: " ").split(separator: " ") == t.helpText.split { $0 == " " || $0 == "\n" },
+          "guide: no paragraph keeps a hard break or a wrap's indent, and every word stays in order")
+    let steps = paragraphs.filter { $0.text.first?.isNumber == true }
+    check(steps.map(\.hang) == ["1. ", "2. ", "3. ", "4. ", "5. "]
+            && paragraphs.filter { $0.text.hasPrefix("- ") }.allSatisfy { $0.hang == "- " }
+            && texts.filter(\.isEmpty).count == t.helpText.components(separatedBy: "\n").filter(\.isEmpty).count,
+          "guide: steps and list items indent past their marker, and the blank lines between topics stay",
+          "\(steps.map(\.hang))")
+
+    let made = GuideLayout.paragraphs(of: "Topic\nOne two\nthree.\n\n1. Step one\n   wraps\n- Item\n  goes on\nAfter")
+    check(made == [.init(text: "Topic", hang: ""), .init(text: "One two three.", hang: ""), .init(text: "", hang: ""),
+                   .init(text: "1. Step one wraps", hang: "1. "), .init(text: "- Item goes on", hang: "- "),
+                   .init(text: "After", hang: "")],
+          "guide: a heading stands alone, wrapped lines join, and a line back at the margin leaves the list", "\(made)")
+}
+
 // MARK: Guide topics: Calibration has its own topic, with the actions it names
 do {
     let t = UIStrings()
@@ -5576,6 +5693,9 @@ do {
     check(RemotePort.parse(" 8080 ") == 8080 && RemotePort.parse("80") == nil && RemotePort.parse("70000") == nil
             && RemotePort.parse("abc") == nil && RemotePort.stored(1e30) == nil && RemotePort.stored(7655.5) == nil,
           "web remote: a port from 1024 to 65535 is taken")
+    check(RemoteDevicesFile.canForget(count: 0, failed: true) && RemoteDevicesFile.canForget(count: 2, failed: false)
+            && !RemoteDevicesFile.canForget(count: 0, failed: false),
+          "web remote: Forget All stays available after a failed save, when no device is left in memory")
     let fresh = AppSettings.load { _ in nil }
     let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
     let kept = AppSettings.load { stored[$0] }
@@ -5766,6 +5886,61 @@ do {
           "cast address: a name that doesn't resolve or an address where nothing answers is not found, with its own text")
 }
 
+// MARK: Menu bar panel colors: contrast with the material counted as clear
+do {
+    typealias RGBA = (r: Double, g: Double, b: Double, a: Double)
+    func resolved(_ color: NSColor, dark: Bool) -> RGBA {
+        var out: RGBA = (0, 0, 0, 0)
+        NSAppearance(named: dark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
+            let c = color.usingColorSpace(.sRGB)!
+            out = (Double(c.redComponent), Double(c.greenComponent), Double(c.blueComponent), Double(c.alphaComponent))
+        }
+        return out
+    }
+    func over(_ top: RGBA, _ bottom: RGBA) -> RGBA {
+        (top.r * top.a + bottom.r * (1 - top.a), top.g * top.a + bottom.g * (1 - top.a),
+         top.b * top.a + bottom.b * (1 - top.a), 1)
+    }
+    func luminance(_ c: RGBA) -> Double {
+        func channel(_ v: Double) -> Double { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+    func ratio(_ a: RGBA, _ b: RGBA) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    func rgb(_ c: BrandRGB) -> RGBA { (c.red, c.green, c.blue, 1) }
+
+    // Worst case: the material adds nothing, so only the backing (and a row's
+    // 7% hover fill) stands between the content and a black or white window.
+    var worst: [String: Double] = [:]
+    for dark in [false, true] {
+        let ink: RGBA = dark ? (1, 1, 1, 1) : (0, 0, 0, 1)
+        for backdrop in [(0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0, 1.0)] as [RGBA] {
+            let panel = over(resolved(.audioSyncPanelBacking, dark: dark), backdrop)
+            let row = over((ink.r, ink.g, ink.b, 0.07), panel)
+            let pairs: [(String, RGBA, RGBA)] = [
+                // Brand.secondaryText is `.primary` at 70%, and the label color itself is the ink at 85%.
+                ("secondary text", (ink.r, ink.g, ink.b, BrandTokens.Opacity.secondaryText * 0.85), row),
+                ("wordmark sync", resolved(.audioSyncWordmarkSync, dark: dark), panel),
+                ("active blue", resolved(.audioSyncActiveBlue, dark: dark), row),
+                ("teal icon", rgb(dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText), row),
+            ]
+            for (name, color, background) in pairs {
+                let r = ratio(over(color, background), background)
+                worst[name] = min(worst[name] ?? .infinity, r)
+            }
+        }
+    }
+    let summary = worst.keys.sorted().map { String(format: "%@ %.2f", $0, worst[$0]!) }.joined(separator: ", ")
+    check(worst["secondary text"]! >= 4.5, "panel colors: secondary text keeps 4.5:1 over any window", summary)
+    // The wordmark's "sync" and the BrandMark fill are logotypes, exempt from WCAG 1.4.3, so their floor is 3:1.
+    check(worst["wordmark sync"]! >= 3 && worst["active blue"]! >= 3 && worst["teal icon"]! >= 3,
+          "panel colors: the wordmark's sync and the type icons keep 3:1 over any window", summary)
+    check(resolved(.audioSyncWordmarkSync, dark: false).g < resolved(.audioSyncWordmarkSync, dark: true).g,
+          "panel colors: sync is the darker teal on light and the mint on dark")
+}
+
 // MARK: Hidden speakers — out of every list by key, settings kept, back off when shown
 do {
     let t = UIStrings()
@@ -5844,6 +6019,20 @@ do {
     moved.migrate(airPlay: ["123456789": "native:00075BCD15"])
     check(moved.contains("ap:native:00075BCD15") && !moved.contains("ap:123456789") && moved.contains("lc:usb"),
           "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
+}
+
+// MARK: Microphone permission request (MicrophoneRequestGate.swift)
+do {
+    var gate = MicrophoneRequestGate()
+    let first = gate.begin(origin: .user)
+    let second = gate.begin(origin: .automatic)
+    check(first && !second, "microphone: a start behind an open prompt sends no second request")
+    check(gate.answer() == .automatic && gate.answer() == nil,
+          "microphone: the one answer runs exactly one start, with the latest origin")
+    check(gate.begin(origin: .user) && gate.answer() == .user,
+          "microphone: after the answer, a new start may ask again")
+    var unasked = MicrophoneRequestGate()
+    check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

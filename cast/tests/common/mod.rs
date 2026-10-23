@@ -58,6 +58,16 @@ pub enum OnLoad {
     Ignore,
 }
 
+/// How the fake device answers a media `GET_STATUS`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OnMediaStatus {
+    /// One `PLAYING` entry for the current media session.
+    Playing,
+    /// A `MEDIA_STATUS` with an empty `status` list.
+    Empty,
+    Ignore,
+}
+
 /// The fake device's switches.
 #[derive(Clone, Debug)]
 pub struct Behavior {
@@ -69,6 +79,7 @@ pub struct Behavior {
     pub on_load_of: Option<(&'static str, OnLoad)>,
     /// The first `LOAD`s are answered in this order, later ones as above.
     pub load_script: Vec<OnLoad>,
+    pub on_media_status: OnMediaStatus,
     pub answer_media_stop: bool,
     pub answer_stop: bool,
     /// Apps already running when the sender connects.
@@ -92,6 +103,7 @@ impl Default for Behavior {
             on_load: OnLoad::Play,
             on_load_of: None,
             load_script: Vec::new(),
+            on_media_status: OnMediaStatus::Playing,
             answer_media_stop: true,
             answer_stop: true,
             apps: Vec::new(),
@@ -150,6 +162,9 @@ pub enum Command {
     DropConnection,
     /// Forget the running apps without telling anyone.
     ClearApps,
+    /// Stop reading the current connection, so the sender's writes fill
+    /// the socket buffers and then block.
+    Stall,
     Disconnect,
 }
 
@@ -431,13 +446,22 @@ impl Device {
                     Some("CANCELLED"),
                 )]
             }
-            (NS_MEDIA, "GET_STATUS") => vec![media_status(
-                &message.destination_id,
-                id,
-                self.media_session,
-                "PLAYING",
-                None,
-            )],
+            (NS_MEDIA, "GET_STATUS") => match self.behavior.on_media_status {
+                OnMediaStatus::Playing => vec![media_status(
+                    &message.destination_id,
+                    id,
+                    self.media_session,
+                    "PLAYING",
+                    None,
+                )],
+                OnMediaStatus::Empty => vec![json_message(
+                    &message.destination_id,
+                    &message.source_id,
+                    NS_MEDIA,
+                    json!({"type": "MEDIA_STATUS", "requestId": id, "status": []}),
+                )],
+                OnMediaStatus::Ignore => Vec::new(),
+            },
             (NS_MULTIZONE, "GET_STATUS") => match &self.behavior.members {
                 Some(devices) => vec![json_message(
                     PLATFORM,
@@ -580,6 +604,7 @@ fn serve(
     let mut stream = StreamOwned::new(connection, tcp);
     let mut reader = FrameReader::new();
     let mut buffer = vec![0u8; 16 * 1024];
+    let mut stalled = false;
     loop {
         loop {
             match commands.try_recv() {
@@ -594,6 +619,7 @@ fn serve(
                     write(&mut stream, &status);
                 }
                 Ok(Command::ClearApps) => device.apps.clear(),
+                Ok(Command::Stall) => stalled = true,
                 Ok(Command::DropConnection) => {
                     let _ = stream.sock.shutdown(std::net::Shutdown::Both);
                     return false;
@@ -605,6 +631,10 @@ fn serve(
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
             }
+        }
+        if stalled {
+            thread::sleep(Duration::from_millis(10));
+            continue;
         }
         match stream.read(&mut buffer) {
             Ok(0) => return false,

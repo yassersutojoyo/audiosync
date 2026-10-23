@@ -87,6 +87,7 @@ export component TrayFlyout inherits Window {
     in property <bool> airplay-none-found;
     // Every speaker present is hidden.
     in property <bool> all-hidden;
+    in property <bool> connected-all-hidden;
     // AirPlay discovery runs and has found no speaker yet, short of 20 s.
     in property <bool> airplay-searching;
     // The newest notice only (or none); `notice-count` counts them all.
@@ -312,6 +313,10 @@ export component TrayFlyout inherits Window {
                         }
                     }
                 }
+            }
+
+            if root.connected-all-hidden && root.groups.length == 0: SecondaryText {
+                text: Strings.flyout-connected-hidden;
             }
 
             Divider { }

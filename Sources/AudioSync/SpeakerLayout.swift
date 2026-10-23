@@ -78,7 +78,7 @@ enum SpeakerTag: Equatable {
     func typeTint(_ state: SpeakerState) -> TypeIconTint {
         guard state == .playing else { return .muted }
         switch self {
-        // The system's "active" blue, as Control Center shows AirPlay and Bluetooth.
+        // An "active" blue, as Control Center shows AirPlay and Bluetooth.
         case .airplay, .systemAirPlay, .bluetooth: return .active
         default: return .teal
         }

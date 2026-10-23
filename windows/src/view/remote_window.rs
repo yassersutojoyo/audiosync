@@ -211,6 +211,10 @@ impl App {
         let w = weak.clone();
         self.remote_window
             .on_forget_all_requested(move || with_app(&w, App::forget_remote_devices));
+        self.remote_window
+            .on_use_port_enabled(|text, port, failed| {
+                u16::try_from(port).is_ok_and(|port| remote::use_port_enabled(&text, port, failed))
+            });
         let w = weak.clone();
         self.remote_window.on_port_submitted(move |text| {
             with_app(&w, |app| app.use_remote_port(&text));
@@ -734,8 +738,18 @@ mod tests {
         app.remote_window.invoke_port_submitted("80".into());
         assert!(app.remote_window.get_port_invalid());
         assert!(app.remote_window.get_port_in_use(), "nothing changed");
+        let use_port = |text: &str| {
+            app.remote_window.invoke_use_port_enabled(
+                text.into(),
+                app.remote_window.get_port(),
+                app.remote_window.get_port_problem(),
+            )
+        };
+        assert!(!use_port("80"));
+        assert!(use_port(&busy.to_string()), "the same port again retries");
 
         let free = free_port();
+        assert!(use_port(&free.to_string()));
         app.remote_window
             .invoke_port_submitted(free.to_string().into());
         assert!(!app.remote_window.get_port_in_use());

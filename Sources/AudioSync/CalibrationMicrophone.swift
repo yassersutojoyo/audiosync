@@ -17,6 +17,11 @@ final class CalibrationMicrophone {
         case unusable
         /// Core Audio wouldn't start the IOProc.
         case notStarted(OSStatus)
+        /// A Bluetooth headset's hands-free input (`CalibrationFlow.microphoneRefusal`).
+        case handsFree
+
+        /// What the calibration says about it.
+        var failure: CalibrationFailure { self == .handsFree ? .handsFreeMicrophone : .noMicrophone }
     }
 
     /// The device's nominal rate, whole Hz.
@@ -29,6 +34,7 @@ final class CalibrationMicrophone {
     /// Opens the default input and starts recording up to `seconds`.
     init(seconds: Double) throws {
         guard let device = MicrophoneHAL.defaultInput() else { throw StartError.noDevice }
+        if Self.refusal(of: device) != nil { throw StartError.handsFree }
         switch CaptureInputFormat.check(MicrophoneHAL.inputFormats(of: device)) {
         case .usable: break
         case .noChannels: throw StartError.noDevice
@@ -66,6 +72,18 @@ final class CalibrationMicrophone {
               asc_calibration_signal_frames(UInt32(nominal)) > 0
         else { return nil }
         return UInt32(nominal)
+    }
+
+    /// Why calibration won't record from the default input
+    /// (`CalibrationFlow.microphoneRefusal`); nil without a default input.
+    static func defaultInputRefusal() -> CalibrationFailure? {
+        MicrophoneHAL.defaultInput().flatMap(refusal(of:))
+    }
+
+    private static func refusal(of device: AudioObjectID) -> CalibrationFailure? {
+        let read = AudioDevices.inputTransports(of: device)
+        return CalibrationFlow.microphoneRefusal(defaultInputTransport: read?.transport,
+                                                 inputSubTransports: read?.subDevices ?? [])
     }
 
     /// Host ticks of the first recorded frame; nil before the first buffer.
