@@ -567,6 +567,10 @@ pub struct AppState {
     /// The hidden speakers, by name (case-insensitively), then by ID.
     pub hidden: Vec<HiddenSpeaker>,
     pub groups: Vec<Group>,
+    /// The zones (spec S245), stored and migrated from the groups; the
+    /// windows still show the groups.
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+    pub zones: Vec<audiosync_core::policy::zones::Zone>,
     pub equalizer: EqSettings,
     /// Newest first.
     pub notices: Vec<Notice>,
@@ -871,6 +875,10 @@ pub trait Backend {
     fn new_group(&mut self, name: &str) -> Result<(), GroupError>;
     fn rename_group(&mut self, id: &str, name: &str);
     fn delete_group(&mut self, id: &str);
+    /// Switches zone `id`'s members as the core's click plan says (spec
+    /// S246, S247).
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+    fn toggle_zone(&mut self, _id: &str) {}
     fn set_equalizer(&mut self, settings: EqSettings);
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
@@ -1188,6 +1196,7 @@ impl MockBackend {
                 name: "Downstairs".into(),
                 members: vec!["airplay:kitchen".into(), "airplay:living".into()],
             }],
+            zones: Vec::new(),
             equalizer: EqSettings::default(),
             notices: Vec::new(),
             pin_prompt: None,

@@ -222,6 +222,76 @@ do {
     check(Migration.migrate(edge, receivers: ["FFFFFFFFFFFF", "000000000001"]).enabledAirPlay
             == ["native:FFFFFFFFFFFF", "native:000000000001"],
           "speaker IDs: the largest and smallest device IDs move too")
+    // Zones: one zone per speaker, so a zone holding the new key keeps it and the old key goes everywhere.
+    let zoned = Migration.Saved(
+        enabledAirPlay: [], airplayVolumes: [:], groups: [], autoConnect: [],
+        zones: [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:\(tvOld)", "lc:usb:out", "ap:\(gone)"], volume: 40),
+                SpeakerZone(id: "z2", name: "Den", members: ["ap:\(denOld)"], volume: 100),
+                SpeakerZone(id: "z3", name: "Office", members: ["ap:\(denNew)"], volume: 100)])
+    check(Migration.renames(zoned, receivers: receivers) == [tvOld: tvNew, denOld: denNew],
+          "speaker IDs: a bundled-engine ID kept only in a zone moves too", "\(Migration.renames(zoned, receivers: receivers))")
+    let movedZones = Migration.migrate(zoned, receivers: receivers).zones
+    check(movedZones == [
+            SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:\(tvNew)", "lc:usb:out", "ap:\(gone)"], volume: 40),
+            SpeakerZone(id: "z2", name: "Den", members: [], volume: 100),
+            SpeakerZone(id: "z3", name: "Office", members: ["ap:\(denNew)"], volume: 100)],
+          "speaker IDs: zone members are renamed in place, and a zone already holding the new key keeps it",
+          "\(movedZones)")
+}
+
+// MARK: Zones — the groups become zones once (Zones.swift, AppSettings.swift, S245, S248)
+do {
+    typealias Keys = AppSettings.Keys
+    final class Stored { var values: [String: Any] = [:]; var order: [String] = [] }
+    let stored = Stored()
+    let store = SettingsStore(read: { stored.values[$0] },
+                              write: { value, key in stored.values[key] = value; stored.order.append(key) })
+    let groups = [
+        SpeakerGroup(id: "g1", name: "Living Room", members: ["lc:BuiltInSpeakerDevice", "ap:native:AABBCCDDEE01"]),
+        SpeakerGroup(id: "g2", name: "Group 2", members: ["ap:native:AABBCCDDEE01", "cc:Chromecast-1"]),
+        SpeakerGroup(id: "g3", name: "Den", members: ["lc:BuiltInSpeakerDevice"]),
+    ]
+    let expected = [
+        SpeakerZone(id: "g1", name: "Living Room", members: ["lc:BuiltInSpeakerDevice", "ap:native:AABBCCDDEE01"], volume: 100),
+        SpeakerZone(id: "g2", name: "Group 2", members: ["cc:Chromecast-1"], volume: 100),
+        SpeakerZone(id: "g3", name: "Den", members: [], volume: 100),
+    ]
+    check(ZoneMigration.zones(from: Array(groups.prefix(1))) == Array(expected.prefix(1))
+            && ZoneMigration.zones(from: []).isEmpty,
+          "zones: disjoint groups become zones unchanged, at volume 100")
+    check(ZoneMigration.zones(from: groups) == expected,
+          "zones: overlapping groups keep each speaker in its first zone, and a group left empty is an empty zone",
+          "\(ZoneMigration.zones(from: groups))")
+
+    store.save(groups: groups)
+    stored.order = []
+    let first = store.load()
+    check(first.zones == expected && first.groups == groups,
+          "zones: the first launch moves the groups to zones and leaves the saved groups as they are", "\(first.zones)")
+    check(stored.order.last == Keys.zonesMigrated && stored.values[Keys.zonesMigrated] as? Bool == true,
+          "zones: the migrated mark is written last", "\(stored.order)")
+    stored.values[Keys.zonesMigrated] = nil
+    stored.values[Keys.zones] = nil
+    check(store.load().zones == expected, "zones: a migration cut short before its mark runs again to the same zones")
+    store.save(groups: [SpeakerGroup(id: "g9", name: "Later", members: ["lc:usb:out"])])
+    stored.order = []
+    check(store.load().zones == expected && stored.order.isEmpty,
+          "zones: migrating twice changes nothing: once marked, a launch writes nothing")
+
+    let edited = [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:usb:out", "cc:Group-7"], volume: 35.5),
+                  SpeakerZone(id: "z2", name: "Empty", members: [], volume: 0)]
+    store.save(zones: edited)
+    check(store.load().zones == edited, "zones: zones round-trip through the user defaults, an empty one included")
+    let messy = [SpeakerZone(id: "z1", name: "A", members: ["lc:a", "lc:a", "ap:b"], volume: 140),
+                 SpeakerZone(id: "z2", name: "B", members: ["ap:b", "cc:c"], volume: -3),
+                 SpeakerZone(id: "z1", name: "A again", members: ["lc:d"], volume: 50)]
+    store.save(zones: messy)
+    check(store.load().zones == [SpeakerZone(id: "z1", name: "A", members: ["lc:a", "ap:b"], volume: 100),
+                                 SpeakerZone(id: "z2", name: "B", members: ["cc:c"], volume: 0)],
+          "zones: stored zones keep a speaker in its first zone, one zone per ID, volumes within 0…100")
+    stored.values[Keys.zones] = Data("not json".utf8)
+    check(store.load().zones.isEmpty && stored.values[Keys.zonesMigrated] as? Bool == true,
+          "zones: unreadable zones read as none and never migrate again")
 }
 
 // MARK: Output devices — virtual ones hidden unless asked for or chosen
@@ -2818,7 +2888,8 @@ do {
         (Keys.localOffsets, "localOffsetMsByUID"),
         (Keys.airPlayDelay, "airPlayDelayMs"), (Keys.nativeAirPlayAdjustment, "nativeAirPlayAdjustmentMs"),
         (Keys.localDelaysMigrated, "localDelayModelMigrated"), (Keys.speakerNames, "speakerNamesByKey"),
-        (Keys.airPlay2, "airPlay2Enabled"),
+        (Keys.airPlay2, "airPlay2Enabled"), (Keys.zones, "speakerZones"),
+        (Keys.zonesMigrated, "speakerZonesMigrated"),
     ]
     let renamed = pinned.filter { $0.0 != $0.1 }.map(\.1)
     check(renamed.isEmpty, "settings: every UserDefaults key keeps the name existing installs use",

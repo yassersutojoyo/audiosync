@@ -89,12 +89,13 @@ enum GroupName {
 /// so running the migration again changes nothing.
 enum SpeakerIDMigration {
     /// What is saved by AirPlay speaker ID: the speakers switched on, their
-    /// volumes, the groups and the auto-connect list.
+    /// volumes, the groups, the auto-connect list and the zones (S248).
     struct Saved: Equatable {
         var enabledAirPlay: Set<String>
         var airplayVolumes: [String: Double]
         var groups: [SpeakerGroup]
         var autoConnect: Set<String>
+        var zones: [SpeakerZone] = []
     }
 
     /// The largest device ID: six bytes.
@@ -127,7 +128,7 @@ enum SpeakerIDMigration {
         }
         guard !byDevice.isEmpty else { return [:] }
         var ids = saved.enabledAirPlay.union(saved.airplayVolumes.keys)
-        let keys = saved.autoConnect.union(saved.groups.flatMap(\.members))
+        let keys = saved.autoConnect.union(saved.groups.flatMap(\.members)).union(saved.zones.flatMap(\.members))
         for key in keys {
             if let (id, airplay) = SpeakerKey.parse(key), airplay { ids.insert(id) }
         }
@@ -142,8 +143,9 @@ enum SpeakerIDMigration {
 
     /// `saved` with every ID in `renames` replaced, as an ID and inside
     /// AirPlay speaker keys. A volume already saved under the new ID wins
-    /// over the old one, and a group that already lists the new key drops
-    /// the old one; the groups keep their order.
+    /// over the old one, a group that already lists the new key drops the
+    /// old one, and so does every zone once any zone holds the new key
+    /// (one zone per speaker, S245); groups and zones keep their order.
     static func apply(_ renames: [String: String], to saved: Saved) -> Saved {
         guard !renames.isEmpty else { return saved }
         func renamed(_ id: String) -> String { renames[id] ?? id }
@@ -167,6 +169,18 @@ enum SpeakerIDMigration {
                 // Already listed under the new key: the old one goes.
                 if key != member, group.members.contains(key) || copy.members.contains(key) { continue }
                 copy.members.append(key)
+            }
+            return copy
+        }
+        let zoneKeys = Set(saved.zones.flatMap(\.members))
+        var taken = Set<String>()
+        out.zones = saved.zones.map { zone in
+            var copy = zone
+            copy.members = []
+            for member in zone.members {
+                let key = renamedKey(member)
+                if key != member, zoneKeys.contains(key) { continue }
+                if taken.insert(key).inserted { copy.members.append(key) }
             }
             return copy
         }

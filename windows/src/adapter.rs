@@ -71,6 +71,7 @@ use audiosync_core::policy::session::{
 };
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, renamed_group};
+use audiosync_core::policy::zones::{self, MemberKind, Situation, Step, Zone, Zones};
 use audiosync_core::reader::DRIFT_TOLERANCE_MS;
 
 use crate::audio::backend::{
@@ -93,7 +94,7 @@ use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
     self, KeptAside, SavedEqualizer, SavedGroup, SavedHidden, SavedInput, SavedSource,
-    SavedSpeaker, Settings, SettingsFile,
+    SavedSpeaker, SavedZone, Settings, SettingsFile,
 };
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
@@ -273,6 +274,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     custom_names: SpeakerNames,
     groups: Vec<Group>,
     next_group: u64,
+    /// The zones (spec S245), migrated from the groups once (S248).
+    zones: Zones,
     gate: AutoStartGate,
     notices: Notices<NoticeSubject, Posted>,
     next_notice: u64,
@@ -387,6 +390,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             custom_names: SpeakerNames::default(),
             groups: Vec::new(),
             next_group: 1,
+            zones: Zones::default(),
             gate: AutoStartGate::default(),
             notices: Notices::new(),
             next_notice: 1,
@@ -435,6 +439,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// them when it appears. Nothing starts streaming here; auto-connect
     /// speakers do once the first listing finds them.
     fn restore(&mut self, saved: Settings) {
+        let saved = saved.with_zones_migrated();
         self.audio.set_master_volume(saved.master_volume);
         // A hidden speaker is never switched on, not even by the saved on-state.
         self.hidden = saved.hidden_speakers.clone();
@@ -489,6 +494,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .filter_map(|group| group.id.strip_prefix("group:")?.parse::<u64>().ok())
             .max()
             .map_or(1, |last| last.saturating_add(1));
+        self.zones = Zones::from_stored(saved.speaker_zones.iter().map(|zone| Zone {
+            id: zone.id.clone(),
+            name: zone.name.clone(),
+            members: zone.members.clone(),
+            volume: zone.volume,
+        }));
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
         self.cast_addresses = saved.cast_addresses.clone();
@@ -618,6 +629,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     members: group.members.clone(),
                 })
                 .collect(),
+            speaker_zones: self
+                .zones
+                .list()
+                .iter()
+                .cloned()
+                .map(SavedZone::from)
+                .collect(),
+            speaker_zones_migrated: true,
             equalizer: SavedEqualizer::from(self.equalizer),
             show_virtual_devices: self.view.show_virtual_devices,
             appearance: self.view.appearance,
@@ -1261,6 +1280,52 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.take_events();
     }
 
+    /// Whether another app took Cast speaker `id` over, as its notice says:
+    /// a zone click leaves it off (spec S246).
+    fn cast_taken_over(&self, id: &str) -> bool {
+        self.notices.iter().any(|(subject, posted)| {
+            *subject == NoticeSubject::Cast(id.to_owned())
+                && matches!(
+                    posted.message,
+                    NoticeMessage::CastCantPlay {
+                        problem: ui_model::CastProblem::TakenOver,
+                        ..
+                    }
+                )
+        })
+    }
+
+    /// Switches one zone member on or off as its own switch would, without
+    /// starting or stopping streaming; a new attempt clears its notice.
+    fn switch_zone_member(&mut self, key: &SpeakerKey, on: bool) {
+        match key {
+            SpeakerKey::Local(endpoint_id) => {
+                if on {
+                    self.notices.clear(&[speaker_subject(endpoint_id)]);
+                }
+                if self.audio.set_output_enabled(endpoint_id, on).is_err() {
+                    self.output_failed(endpoint_id, true);
+                }
+            }
+            SpeakerKey::AirPlay(id) => {
+                if on {
+                    self.notices.clear(&[airplay_subject(id)]);
+                }
+                if let Err(problem) = self.switch_airplay_by_user(id, on) {
+                    self.airplay_switch_failed(id, problem);
+                }
+            }
+            SpeakerKey::Cast(id) => {
+                if on {
+                    self.notices.clear(&[NoticeSubject::Cast(id.clone())]);
+                }
+                if let Err(problem) = self.audio.set_cast_enabled(id, on) {
+                    self.cast_cant_play(id, problem);
+                }
+            }
+        }
+    }
+
     /// Tells why a Cast speaker can't play; it is off.
     fn cast_cant_play(&mut self, id: &str, problem: CastProblem) {
         let speaker = self.cast_name(id);
@@ -1447,12 +1512,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Whether the user set anything for output `endpoint_id`: settings, an
-    /// auto-connect mark, a group or Hide Speaker.
+    /// auto-connect mark, a group, a zone or Hide Speaker.
     fn has_choices(&self, endpoint_id: &str) -> bool {
         let key = speaker_key(endpoint_id);
         self.audio.has_output_settings(endpoint_id)
             || self.auto_connect.contains(&key)
             || self.groups.iter().any(|group| group.members.contains(&key))
+            || self.zones.zone_of(&key).is_some()
             || self.is_hidden(&key)
     }
 
@@ -1540,6 +1606,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             }
         }
+        self.zones.rename_key(&from_key, &to_key);
         if self.saved.outputs.remove(from).is_some() {
             self.must_save = true;
         }
@@ -2491,6 +2558,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             speakers,
             hidden,
             groups: self.groups.clone(),
+            zones: self.zones.list().to_vec(),
             equalizer: self.equalizer,
             notices: self
                 .notices
@@ -2889,6 +2957,88 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 }
                 SpeakerKey::Cast(_) => {}
             }
+        }
+        if turn_on {
+            self.start_if_switched_on();
+        } else {
+            self.stop_if_idle();
+        }
+        self.take_events();
+    }
+
+    /// The core's plan for a click on zone `id` (spec S246, S247), carried
+    /// out: present members only, at most one Cast speaker, every AirPlay 2
+    /// member on even when it waits for the AirPlay 2 place.
+    fn toggle_zone(&mut self, id: &str) {
+        let state = self.snapshot();
+        let Some(zone) = self.zones.get(id).cloned() else {
+            return;
+        };
+        let in_zone = |key: &str| zone.members.iter().any(|member| member == key);
+        let elsewhere = |kind: SpeakerKind| {
+            state.speakers.iter().filter(move |speaker| {
+                speaker.kind == kind && speaker.enabled && !in_zone(&speaker.id)
+            })
+        };
+        let situation = Situation {
+            streaming: state.running,
+            cast_on_elsewhere: elsewhere(SpeakerKind::Cast).next().is_some(),
+            airplay2_playing_elsewhere: state.running
+                && elsewhere(SpeakerKind::AirPlay2).any(|speaker| speaker.waiting.is_none()),
+        };
+        let members: Vec<(SpeakerKey, bool, zones::Member)> = zone
+            .members
+            .iter()
+            .filter_map(|text| {
+                let key = SpeakerKey::parse(text)?;
+                let listed = state.speaker(text);
+                let kind = match (&key, listed.map(|speaker| speaker.kind)) {
+                    (SpeakerKey::Local(_), _) => MemberKind::Local,
+                    (SpeakerKey::Cast(_), _) => MemberKind::Cast,
+                    (SpeakerKey::AirPlay(_), Some(SpeakerKind::AirPlay2)) => MemberKind::AirPlay2,
+                    (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
+                    (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
+                };
+                let on = listed.is_some_and(|speaker| speaker.enabled);
+                let member = zones::Member {
+                    kind,
+                    listed: listed.is_some(),
+                    on,
+                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                    needs_airplay2: listed.is_none()
+                        && !self.view.airplay2_experimental
+                        && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
+                    in_target: matches!(&key, SpeakerKey::AirPlay(id)
+                        if self.audio.airplay_holding_target(id).is_some()),
+                };
+                Some((key, on, member))
+            })
+            .collect();
+        let facts: Vec<zones::Member> = members.iter().map(|(_, _, member)| *member).collect();
+        let plan = zones::click_plan(&facts, situation);
+        let turn_on = match plan.action {
+            zones::ClickAction::Nothing => return,
+            zones::ClickAction::TurnOn { .. } => true,
+            zones::ClickAction::TurnOff => false,
+        };
+        self.log.log(|| {
+            let switched = if turn_on { "on" } else { "off" };
+            format!("the user switched zone \"{}\" {switched}", zone.name)
+        });
+        let running = self.running();
+        for ((key, on, _), step) in members.iter().zip(&plan.steps) {
+            let switch_on = match step {
+                // While streaming is off every member starts a new attempt.
+                Step::On | Step::Waiting if !running || !on => true,
+                Step::Off | Step::CastLeftOff(_) if *on => false,
+                Step::CastLeftOff(reason) => {
+                    self.log
+                        .log(|| format!("zone \"{}\": {key} stays off ({reason:?})", zone.name));
+                    continue;
+                }
+                _ => continue,
+            };
+            self.switch_zone_member(key, switch_on);
         }
         if turn_on {
             self.start_if_switched_on();
@@ -3396,6 +3546,12 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
 }
 
 /// What a notice about one local output is about.
+/// Whether an AirPlay ID is a stereo pair's or home theater's, which plays
+/// over AirPlay 2 only (spec S149, P176).
+fn is_airplay_target(id: &str) -> bool {
+    id.starts_with("pair:") || id.starts_with("theater:")
+}
+
 fn speaker_subject(endpoint_id: &str) -> NoticeSubject {
     NoticeSubject::Speaker(SpeakerKey::Local(endpoint_id.to_owned()))
 }
@@ -6966,7 +7122,7 @@ mod tests {
                 adjusted: false
             }
         );
-        assert_eq!(settings::VERSION, 2);
+        assert_eq!(settings::VERSION, 3);
         assert_eq!(saved.outputs["bluetooth"].delay_ms, -250.0);
         assert_eq!(saved.outputs["tv"].delay_ms, -130.0);
         assert_eq!(saved.outputs["builtin"].delay_ms, 0.0);
@@ -7214,7 +7370,7 @@ mod tests {
             &[
                 "settings: ignored: it isn't valid (",
                 "settings: saved",
-                "settings: read (format version 2)",
+                "settings: read (format version 3)",
             ],
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -7895,6 +8051,125 @@ mod tests {
         assert!(!state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
         assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
         assert!(state.running);
+    }
+
+    fn zone(members: Vec<String>) -> SavedZone {
+        SavedZone {
+            id: "zone:1".to_owned(),
+            name: "Downstairs".to_owned(),
+            members,
+            volume: 80.0,
+        }
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_click_turns_on_its_present_members_and_one_cast_speaker() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![
+                key(SPEAKERS),
+                cc(CAST_KITCHEN),
+                cc(CAST_LIVING),
+                key("gone"),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.toggle_zone("zone:1");
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert!(enabled(&adapter, SPEAKERS) && !enabled(&adapter, HEADPHONES));
+        assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert!(
+            !state.speaker(&cc(CAST_LIVING)).unwrap().enabled,
+            "one Cast speaker at a time"
+        );
+        assert!(
+            !messages(&adapter).contains(&cast_cant_play("Living Room", UiCastProblem::Busy)),
+            "the click never tries the second one"
+        );
+
+        adapter.toggle_zone("zone:1");
+        let state = adapter.snapshot();
+        assert!(!state.running, "its speakers were the last ones on");
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        adapter.toggle_zone("zone:9");
+        assert!(!adapter.snapshot().running, "no such zone: nothing");
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_click_leaves_a_cast_speaker_outside_the_zone_on() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), cc(CAST_KITCHEN)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        adapter.toggle_zone("zone:1");
+        let living =
+            |adapter: &AudioAdapter<MockBackend>| speaker_of(adapter, &cc(CAST_LIVING)).enabled;
+        assert!(enabled(&adapter, SPEAKERS) && living(&adapter));
+        assert!(!speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled);
+        // The Cast member left off counts neither way: the next click is off.
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS) && living(&adapter));
+        assert!(adapter.snapshot().running);
+    }
+
+    // covers: S248
+    #[test]
+    fn the_groups_become_zones_once_and_are_saved_with_the_mark() {
+        let mut adapter = adapter();
+        adapter.restore(Settings {
+            groups: vec![
+                SavedGroup {
+                    id: "group:1".to_owned(),
+                    name: "Desk".to_owned(),
+                    members: vec![key(SPEAKERS), key(HEADPHONES)],
+                },
+                SavedGroup {
+                    id: "group:2".to_owned(),
+                    name: "Group 2".to_owned(),
+                    members: vec![key(HEADPHONES)],
+                },
+            ],
+            speaker_zones_migrated: false,
+            ..Settings::default()
+        });
+        let members: Vec<(String, Vec<String>)> = adapter
+            .snapshot()
+            .zones
+            .into_iter()
+            .map(|zone| (zone.id, zone.members))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                ("group:1".to_owned(), vec![key(SPEAKERS), key(HEADPHONES)]),
+                ("group:2".to_owned(), Vec::new()),
+            ]
+        );
+        let saved = adapter.current_settings();
+        assert!(saved.speaker_zones_migrated);
+        assert_eq!(saved.groups.len(), 2, "the groups stay");
+        assert_eq!(
+            saved.speaker_zones[1],
+            SavedZone {
+                id: "group:2".to_owned(),
+                name: "Group 2".to_owned(),
+                members: Vec::new(),
+                volume: 100.0,
+            }
+        );
+        // A later launch keeps the zones as saved, whatever the groups are.
+        let mut later = adapter.current_settings();
+        later.groups.clear();
+        adapter.restore(later);
+        assert_eq!(adapter.snapshot().zones.len(), 2);
     }
 
     #[test]

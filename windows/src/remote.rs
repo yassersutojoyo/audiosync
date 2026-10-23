@@ -453,6 +453,7 @@ mod tests {
             ],
             hidden: Vec::new(),
             groups: Vec::new(),
+            zones: Vec::new(),
             equalizer: Default::default(),
             notices: Vec::new(),
             pin_prompt: None,

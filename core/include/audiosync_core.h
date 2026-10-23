@@ -291,6 +291,29 @@ extern "C" {
 #define ASC_STREAMING_RUNNING 1    /* a session runs */
 #define ASC_STREAMING_REBUILDING 2 /* a session is being rebuilt (a capture format change): counts as on */
 
+/* A zone member's kind (AscZoneMember.kind). */
+#define ASC_ZONE_MEMBER_LOCAL 0    /* a local output */
+#define ASC_ZONE_MEMBER_AIRPLAY 1  /* an AirPlay speaker on AirPlay 1 */
+#define ASC_ZONE_MEMBER_AIRPLAY2 2 /* an AirPlay speaker or target on AirPlay 2: one plays at a time (P169) */
+#define ASC_ZONE_MEMBER_CAST 3     /* a Google Cast speaker or Cast group */
+
+/* What asc_zone_click_plan answers for the zone. */
+#define ASC_ZONE_CLICK_NOTHING 0  /* no member counts: nothing changes */
+#define ASC_ZONE_CLICK_TURN_ON 1  /* members go on; streaming is on */
+#define ASC_ZONE_CLICK_START 2    /* members go on, and streaming starts */
+#define ASC_ZONE_CLICK_TURN_OFF 3 /* every counted member goes off */
+
+/* What asc_zone_click_plan writes for each member. */
+#define ASC_ZONE_STEP_ABSENT 0             /* not listed, or hidden: left alone */
+#define ASC_ZONE_STEP_NEEDS_AIRPLAY2 1     /* a pair or theater target while AirPlay 2 is off: left alone */
+#define ASC_ZONE_STEP_IN_TARGET 2          /* plays as part of a target: left alone */
+#define ASC_ZONE_STEP_ON 3                 /* switched on, or stays on */
+#define ASC_ZONE_STEP_WAITING 4            /* switched on, waiting for the other AirPlay 2 speaker */
+#define ASC_ZONE_STEP_OFF 5                /* switched off, or stays off */
+#define ASC_ZONE_STEP_CAST_ANOTHER_PLAYS 6 /* a Cast member left off: a Cast speaker outside the zone is on */
+#define ASC_ZONE_STEP_CAST_ONE_AT_A_TIME 7 /* a Cast member left off: another Cast member plays */
+#define ASC_ZONE_STEP_CAST_BUSY 8          /* a Cast member left off: it can't start now */
+
 /* The port the web remote listens on unless its configuration names another (unassigned at IANA). */
 #define ASC_REMOTE_DEFAULT_PORT 7655
 
@@ -977,6 +1000,37 @@ const char *asc_device_volume_decision_name(uint32_t decision_code);
  * ASC_STREAMING_OFF. Pure function for the control thread.
  */
 uint32_t asc_source_quit_decide(const char *setting, const char *source, const char *quit_app, uint32_t streaming);
+
+/* ---- Zones ---------------------------------------------------------------- */
+
+/* One zone member as the host sees it when the zone is clicked. */
+typedef struct AscZoneMember {
+    uint32_t kind;       /* an ASC_ZONE_MEMBER_ code; an unknown one is absent */
+    bool listed;         /* listed now and not hidden */
+    bool on;             /* switched on */
+    bool busy;           /* a Cast speaker the host can't start now */
+    bool needs_airplay2; /* a pair or theater target while the AirPlay 2 switch is off */
+    bool in_target;      /* plays as part of a stereo pair or home theater target now */
+} AscZoneMember;
+
+/*
+ * The plan of a click on a zone (S246, S247): an ASC_ZONE_CLICK_ code, with
+ * one ASC_ZONE_STEP_ code per member written into `steps`, in zone order.
+ * At most one Cast member goes on: the one on already, else the first not
+ * busy, and none while `cast_on_elsewhere`. NULL arrays with a count above
+ * 0 answer ASC_ZONE_CLICK_NOTHING and write nothing. Pure function for the
+ * control thread.
+ */
+uint32_t asc_zone_click_plan(const AscZoneMember *members, size_t count, bool streaming, bool cast_on_elsewhere, bool airplay2_playing_elsewhere, uint32_t *steps);
+
+/*
+ * The one-time migration of groups to zones (S248): `keys` holds every
+ * saved group's member keys, group after group in saved order; `keep[i]`
+ * becomes false for a key that comes earlier in the list, and for a NULL or
+ * non-UTF-8 one, else true. Does nothing for a NULL array. Pure function
+ * for the control thread.
+ */
+void asc_zone_migration_keeps(const char *const *keys, size_t count, bool *keep);
 
 /* ---- Microphone calibration ---------------------------------------------- */
 

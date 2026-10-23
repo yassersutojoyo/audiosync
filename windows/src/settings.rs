@@ -9,7 +9,7 @@
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
 //! auto-connect marks, the names the user gave speakers, the groups, the
-//! equalizer, View > Show Virtual Devices, View > Appearance, the main
+//! zones, the equalizer, View > Show Virtual Devices, View > Appearance, the main
 //! window's place and size, and File > Web Remote with its port.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
@@ -46,6 +46,7 @@ use audiosync_core::policy::delay::{
 };
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::SpeakerKey;
+use audiosync_core::policy::zones::{self, DEFAULT_ZONE_VOLUME, Zone, Zones};
 use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_position};
 use serde::{Deserialize, Serialize};
 
@@ -75,7 +76,11 @@ pub const IGNORED_FILE_NAME: &str = "settings.ignored.json";
 /// `airplay_adjustment_ms` is the AirPlay delay adjustment. In version 1 an
 /// output's `delay_ms` was its own trim, 0 to 20 000 ms, and
 /// [`migrate_delays`] turns it into an offset once.
-pub const VERSION: u32 = 2;
+///
+/// Version 3 (zones, spec S248) adds `speaker_zones` and
+/// `speaker_zones_migrated`. A version 2 file reads as version 3, its groups
+/// becoming zones once ([`Settings::with_zones_migrated`]); the groups stay.
+pub const VERSION: u32 = 3;
 
 /// The first format version with offsets relative to the reference.
 pub const OFFSETS_VERSION: u32 = 2;
@@ -204,6 +209,55 @@ pub struct SavedGroup {
     pub id: String,
     pub name: String,
     pub members: Vec<String>,
+}
+
+/// A zone (spec S245): its members by speaker key, a Cast speaker's
+/// included, and its volume slider position, 0 to 100.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedZone {
+    pub id: String,
+    pub name: String,
+    pub members: Vec<String>,
+    pub volume: f64,
+}
+
+impl Default for SavedZone {
+    fn default() -> SavedZone {
+        SavedZone {
+            id: String::new(),
+            name: String::new(),
+            members: Vec::new(),
+            volume: DEFAULT_ZONE_VOLUME,
+        }
+    }
+}
+
+impl From<Zone> for SavedZone {
+    fn from(zone: Zone) -> SavedZone {
+        SavedZone {
+            id: zone.id,
+            name: zone.name,
+            members: zone.members,
+            volume: zone.volume,
+        }
+    }
+}
+
+/// The zones as stored, read leniently: an entry that isn't one is skipped,
+/// and so is anything that isn't a list.
+fn zones_that_read<'de, D>(deserializer: D) -> Result<Vec<SavedZone>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(entries) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
 }
 
 /// The equalizer.
@@ -345,6 +399,14 @@ pub struct Settings {
     )]
     pub hidden_speakers: Vec<SavedHidden>,
     pub groups: Vec<SavedGroup>,
+    /// The zones, in order, each speaker in at most one (spec S245).
+    #[serde(deserialize_with = "zones_that_read")]
+    pub speaker_zones: Vec<SavedZone>,
+    /// The groups were moved to zones (spec S248). A file without it, as
+    /// every version 2 file, has not been migrated; the defaults have, since
+    /// there are no groups to move.
+    #[serde(default)]
+    pub speaker_zones_migrated: bool,
     pub equalizer: SavedEqualizer,
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
@@ -381,6 +443,8 @@ impl Default for Settings {
             speaker_names: BTreeMap::new(),
             hidden_speakers: Vec::new(),
             groups: Vec::new(),
+            speaker_zones: Vec::new(),
+            speaker_zones_migrated: true,
             equalizer: SavedEqualizer::default(),
             show_virtual_devices: false,
             appearance: Appearance::System,
@@ -517,6 +581,27 @@ impl Settings {
             })
             .take(MAX_ENTRIES)
             .collect();
+        let speaker_zones = Zones::from_stored(
+            self.speaker_zones
+                .into_iter()
+                .filter(|zone| usable_id(&zone.id))
+                .take(MAX_ENTRIES)
+                .map(|zone| Zone {
+                    id: zone.id,
+                    name: cut(zone.name),
+                    members: zone
+                        .members
+                        .into_iter()
+                        .filter(|key| usable_name_key(key))
+                        .take(MAX_ENTRIES)
+                        .collect(),
+                    volume: zone.volume,
+                }),
+        )
+        .into_list()
+        .into_iter()
+        .map(SavedZone::from)
+        .collect();
         // A format 1 file kept trims, 0 to 20 000 ms; [`migrate_delays`]
         // turns them into offsets.
         let output_delays = if self.version < OFFSETS_VERSION {
@@ -548,6 +633,8 @@ impl Settings {
             .saved(),
             hidden_speakers: clamp_hidden(self.hidden_speakers),
             groups,
+            speaker_zones,
+            speaker_zones_migrated: self.speaker_zones_migrated,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             show_virtual_devices: self.show_virtual_devices,
             appearance: self.appearance,
@@ -560,6 +647,30 @@ impl Settings {
             remote: self.remote.clamped(),
             cast_addresses: cast_address::clamped(self.cast_addresses),
             airplay2_experimental: self.airplay2_experimental,
+        }
+    }
+
+    /// The one-time move of the groups to zones (spec S248): without the
+    /// mark, the zones become the groups' ([`zones::zones_from_groups`]) and
+    /// the mark is set; the groups stay. With it, nothing changes.
+    pub fn with_zones_migrated(self) -> Settings {
+        if self.speaker_zones_migrated {
+            return self;
+        }
+        let speaker_zones =
+            zones::zones_from_groups(self.groups.iter().map(|group| zones::SavedGroup {
+                id: &group.id,
+                name: &group.name,
+                members: &group.members,
+            }))
+            .into_list()
+            .into_iter()
+            .map(SavedZone::from)
+            .collect();
+        Settings {
+            speaker_zones,
+            speaker_zones_migrated: true,
+            ..self
         }
     }
 
@@ -599,7 +710,10 @@ impl Settings {
                 version: VERSION,
                 ..read
             };
-        Ok((clamped, Loaded::Read { version, adjusted }))
+        Ok((
+            clamped.with_zones_migrated(),
+            Loaded::Read { version, adjusted },
+        ))
     }
 }
 
@@ -1006,6 +1120,90 @@ mod tests {
             read.auto_connect,
             BTreeSet::from(["ap:pair:5A1B".to_owned()])
         );
+    }
+
+    // covers: S245, S248
+    #[test]
+    fn a_v2_settings_file_is_read_as_v3_with_its_groups_as_zones() {
+        let text = r#"{"version": 2,
+            "groups": [
+                {"id": "g1", "name": "Living Room", "members": ["lc:desk", "ap:pair:5A1B"]},
+                {"id": "g2", "name": "Group 2", "members": ["ap:pair:5A1B", "ap:kitchen"]}
+            ]
+        }"#;
+        let (read, found) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            found,
+            Loaded::Read {
+                version: 2,
+                adjusted: false
+            }
+        );
+        assert_eq!(read.version, VERSION);
+        assert!(read.speaker_zones_migrated);
+        assert_eq!(read.groups.len(), 2, "the groups stay");
+        let zone = |id: &str, name: &str, members: &[&str]| SavedZone {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            members: members.iter().map(|key| (*key).to_owned()).collect(),
+            volume: 100.0,
+        };
+        assert_eq!(
+            read.speaker_zones,
+            [
+                zone("g1", "Living Room", &["lc:desk", "ap:pair:5A1B"]),
+                zone("g2", "Group 2", &["ap:kitchen"]),
+            ]
+        );
+        // Written as version 3 with the mark, it reads back the same, and the
+        // groups never migrate again.
+        let json = read.to_json();
+        assert!(
+            json.contains("\"version\": 3") && json.contains("\"speaker_zones_migrated\": true")
+        );
+        let (again, _) = Settings::from_json(&json).expect("read");
+        assert_eq!(again, read);
+        let mut changed = read.clone();
+        changed.groups.clear();
+        let (later, _) = Settings::from_json(&changed.to_json()).expect("read");
+        assert_eq!(later.speaker_zones, read.speaker_zones);
+    }
+
+    // covers: S245
+    #[test]
+    fn zones_keep_cast_keys_and_empty_zones_and_each_speaker_once() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true,
+            "speaker_zones": [
+                {"id": "z1", "name": "Den", "members": ["cc:attic", "lc:desk", "lc:desk"], "volume": 140},
+                {"id": "z2", "name": "Empty", "members": [], "volume": -4},
+                {"id": "z3", "name": "Kitchen", "members": ["lc:desk", "bt:x", "ap:kitchen"]},
+                {"id": "z1", "name": "Again", "members": ["ap:other"]},
+                {"id": "", "name": "No ID", "members": ["ap:third"]},
+                {"id": "z4", "volume": "loud"},
+                7
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        let shape: Vec<(&str, Vec<&str>, f64)> = read
+            .speaker_zones
+            .iter()
+            .map(|zone| {
+                (
+                    zone.id.as_str(),
+                    zone.members.iter().map(String::as_str).collect(),
+                    zone.volume,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("z1", vec!["cc:attic", "lc:desk"], 100.0),
+                ("z2", vec![], 0.0),
+                ("z3", vec!["ap:kitchen"], 100.0),
+            ]
+        );
+        assert!(Settings::default().speaker_zones_migrated);
     }
 
     #[test]

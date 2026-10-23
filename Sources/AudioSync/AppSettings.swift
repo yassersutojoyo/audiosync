@@ -31,8 +31,13 @@ struct AppSettings: Equatable {
         static let localDelays = "localDelayMsByUID"
         /// Each AirPlay speaker's own slider position (0…100), by output ID (S73).
         static let airplayVolumes = "airPlayVolumeByID"
-        /// `[SpeakerGroup]` as JSON (S149).
+        /// `[SpeakerGroup]` as JSON (S149). Left as it is when the groups
+        /// become zones, for older builds (S248).
         static let groups = "speakerGroups"
+        /// `[SpeakerZone]` as JSON (S245).
+        static let zones = "speakerZones"
+        /// True once the groups were moved to `zones` (S248); written last.
+        static let zonesMigrated = "speakerZonesMigrated"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
         static let autoConnect = "autoConnectSpeakers"
         /// The names the user gave speakers, by speaker key (`SpeakerNames`).
@@ -101,6 +106,7 @@ struct AppSettings: Equatable {
     var localDelays: [String: Double] = [:]
     var airplayVolumes: [String: Double] = [:]
     var groups: [SpeakerGroup] = []
+    var zones: [SpeakerZone] = []
     var autoConnect: Set<String> = []
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
@@ -146,6 +152,7 @@ struct AppSettings: Equatable {
         s.localDelaysMigrated = read(Keys.localDelaysMigrated) as? Bool ?? false
         s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
         s.groups = decodeGroups(read(Keys.groups) as? Data)
+        s.zones = decodeZones(read(Keys.zones) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
@@ -202,6 +209,13 @@ struct AppSettings: Equatable {
         guard let data, let list = try? JSONDecoder().decode([SpeakerGroup].self, from: data) else { return [] }
         return list
     }
+
+    /// The stored zones as S245 keeps them; none when the data is missing or
+    /// can't be read.
+    static func decodeZones(_ data: Data?) -> [SpeakerZone] {
+        guard let data, let list = try? JSONDecoder().decode([SpeakerZone].self, from: data) else { return [] }
+        return SpeakerZone.normalized(list)
+    }
 }
 
 /// Where the settings are read and written: UserDefaults in the app, a plain
@@ -219,10 +233,22 @@ struct SettingsStore {
                       write: { UserDefaults.standard.set($0, forKey: $1) })
     }
 
-    /// Brings older forms up to date (`migrate`), then reads every setting.
+    /// Brings older forms up to date (`migrate`, `migrateZones`), then reads
+    /// every setting.
     func load() -> AppSettings {
         migrate()
+        migrateZones()
         return AppSettings.load(read)
+    }
+
+    /// The one-time move of the groups to zones (S248): without the mark, the
+    /// stored groups become the stored zones, then the mark is written. The
+    /// groups stay as they are. A run cut short before the mark runs again
+    /// from the same groups, to the same zones; once marked, nothing changes.
+    func migrateZones() {
+        guard read(Keys.zonesMigrated) as? Bool != true else { return }
+        save(zones: ZoneMigration.zones(from: AppSettings.decodeGroups(read(Keys.groups) as? Data)))
+        write(true, Keys.zonesMigrated)
     }
 
     /// Local volumes stored as linear gain become slider positions under
@@ -248,6 +274,11 @@ struct SettingsStore {
     func save(groups: [SpeakerGroup]) {
         guard let data = try? JSONEncoder().encode(groups) else { return }
         write(data, Keys.groups)
+    }
+
+    func save(zones: [SpeakerZone]) {
+        guard let data = try? JSONEncoder().encode(zones) else { return }
+        write(data, Keys.zones)
     }
 
     /// Removed once no speaker has a name of the user's.
