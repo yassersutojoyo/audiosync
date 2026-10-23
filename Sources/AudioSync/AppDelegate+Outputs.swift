@@ -50,12 +50,13 @@ extension AppDelegate {
     }
 
     /// The master scales every speaker AudioSync plays: a local speaker's
-    /// gain, and each AirPlay speaker's volume, which AudioSync's own sender
-    /// scales by it.
+    /// gain, each AirPlay speaker's volume, which AudioSync's own sender
+    /// scales by it, and the Cast speaker's device volume (C104).
     func setMasterVolume(_ position: Double) {
         masterVolume = max(0, min(100, position))
         LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
         nativeAirPlay?.setMaster(masterVolume)
+        if let level = castModel.setMaster(masterVolume) { castSender?.setVolume(level) }
         pushModel()
     }
 
@@ -66,9 +67,12 @@ extension AppDelegate {
     /// lowest (S177).
     func setLocalOffset(_ uid: String, _ rawMs: Double) {
         guard let ms = LocalDelay.sanitizedOffset(rawMs) else { return }   // not finite: ignored
+        let differs = CalibrationStatus.offsetDiffers(stored: localOffsetMs[uid], clamped: ms)
         localOffsetMs[uid] = ms
-        calibrationOffsetChanged(uid)
-        retimeLocalOutputs()
+        if differs {
+            calibrationOffsetChanged(uid)
+            retimeLocalOutputs()
+        }
         pushModel()
     }
 

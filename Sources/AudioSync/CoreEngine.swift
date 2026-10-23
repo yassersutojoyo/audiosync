@@ -82,7 +82,8 @@ final class CoreDelayReader {
     /// The next frame to read after the latest read (output thread writes it).
     private let nextFrame = Atomic<Int64>(0)
 
-    /// Nil outside 8 000…384 000 Hz. The drift tolerance starts at 50 ms at
+    /// Nil outside 8 000…384 000 Hz, or for a rate whose 24 s the ring can't
+    /// hold (S36). The drift tolerance starts at 50 ms at
     /// `captureRate` and the delay at 0 until a target is set.
     init?(ring: CoreDelayRing, captureRate: Double) {
         guard let rate = CoreRate.hz(captureRate), let reader = asc_reader_create(ring.handle, rate)
@@ -231,8 +232,9 @@ final class CoreRenderer {
     private let handle: OpaquePointer
     private let captureRate: UInt32
 
-    /// Nil when the core can't make it: no channels, or a rate outside
-    /// 8 000…384 000 Hz. The delay is 0 until one is set.
+    /// Nil when the core can't make it: no channels, a rate outside
+    /// 8 000…384 000 Hz, or a capture rate whose 24 s the ring can't hold
+    /// (S36). The delay is 0 until one is set.
     init?(ring: CoreDelayRing, captureRate: Double, deviceRate: Double, channels: Int, gain: Double) {
         guard channels > 0, let capture = CoreRate.hz(captureRate), let device = CoreRate.hz(deviceRate),
               let renderer = asc_renderer_create(ring.handle, capture, device, channels,

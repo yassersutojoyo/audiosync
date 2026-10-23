@@ -511,12 +511,26 @@ impl CastSession {
 
     /// The user's Resync (C79): a new `LOAD` on the same app, which brings
     /// the latency back to a fresh start at the cost of a short gap. Never
-    /// called by the sender itself.
+    /// called by the sender itself. A failed Resync is recovered once with a
+    /// reload (C81); if that fails too, the session ends with its reason
+    /// (C83). The Resync's own error is returned either way.
     pub fn resync(&mut self) -> Result<(), MediaError> {
         if self.ended {
             return Err(MediaError::NotRunning);
         }
-        self.load_until_playing()
+        let error = match self.load_until_playing() {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        if self.ended {
+            return Err(error);
+        }
+        match &error {
+            _ if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
+            MediaError::Ended(reason) => self.on_event(Event::Ended(reason.clone())),
+            _ => self.recover(EndReason::Io("resync failed".to_owned()), true),
+        }
+        Err(error)
     }
 
     /// Sends the events of every later recovery to `sink` as they happen:
@@ -741,6 +755,9 @@ impl CastSession {
                     self.finished_reloaded = true;
                     match self.load_until_playing() {
                         Ok(()) => self.report(SessionEvent::Reloaded),
+                        Err(_) if !self.selected.load(Ordering::SeqCst) => {
+                            self.end(SessionEnd::Deselected)
+                        }
                         Err(error) => self.end(SessionEnd::Failed(error.into())),
                     }
                 }

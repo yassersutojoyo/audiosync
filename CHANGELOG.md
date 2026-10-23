@@ -6,31 +6,55 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Added
 
-- Web Remote: control your speakers from a phone on the same network. It's off until you turn it on under Web Remote… in the gear menu or the Window menu on the Mac, or in the File menu on Windows. Open the address it shows or scan its QR code, enter the pairing code, and the phone can switch each speaker on and off, set its volume and delay and Master Volume, and show what's playing. It uses plain HTTP, so keep it to your home network. Forget All Remote Devices unpairs every phone, also while the remote is off.
-- Calibrate All Speakers, on the Mac and on Windows. It plays the test sweep on each speaker that's on, one at a time, and lists each speaker's new delay, or why it couldn't be measured. On the Mac it leaves out headphones and virtual outputs, which the microphone can't hear, as Calibrate with Microphone under one speaker does; Include Anyway on such a row measures it in that window's runs, for an output that reports the wrong kind. Apply sets them all as one change, Undo puts them all back, and Measure Again repeats one speaker. A Cast speaker that had no offset goes back to none on Undo, so the next run searches for it again, also after a restart.
+- Web Remote: control your speakers from a phone on the same network. It's off until you turn it on under Web Remote… in the gear menu or the Window menu on the Mac, or in the File menu on Windows. Open the address it shows or scan its QR code, add the page to the Home Screen, open it from there and enter the pairing code, and the phone can switch each speaker on and off, set its volume and delay and Master Volume, and show what's playing. It uses plain HTTP, so keep it to your home network. Forget All Remote Devices unpairs every phone, also while the remote is off.
+- Calibrate All Speakers, on the Mac and on Windows. It plays the test sweep on each speaker that's on, one at a time, and lists each speaker's new delay, or why it couldn't be measured. It leaves out headphones and virtual outputs, which the microphone can't hear, and so does Calibrate with Microphone under one speaker; the row says why. Include Anyway on such a row measures it with the others until the results close, for an output that reports the wrong kind. Apply sets them all as one change, Undo puts them all back, and Measure Again repeats one speaker. A Cast speaker that had no offset goes back to none on Undo, so the next run searches for it again, also after a restart.
 - The Mac Guide has a Calibration topic: measuring one speaker, Calibrate All Speakers, which outputs are left out and Include Anyway, and what to try when a speaker isn't measured clearly.
 - On Windows, Calibrate with Microphone under a local speaker sets its delay for you, as on the Mac. If the microphone is blocked, AudioSync says so and offers to open the privacy settings.
 - A speaker group made in the Google Home app now plays as one Cast speaker, with one volume and one offset. Its row names the speakers in the group once the group reports them. Those speakers keep their own rows, but they're busy while the group plays.
 - AirPlay 2 has a switch now: turn on "AirPlay 2 (Experimental)" in the app menu or the gear menu on the Mac, or in the File menu on Windows. It's off by default, it's saved, and it takes effect the next time AudioSync starts.
 - With AirPlay 2 on, a stereo pair, or an Apple TV with HomePods as its home theater speakers, shows as one row with one switch and one volume. The row says "Stereo pair" or "Home theater group" with the speakers in it, or which one is missing. Like the rest of AirPlay 2, this hasn't been tried on real speakers yet.
+- If a Google Cast speaker doesn't show up, you can add it by its IP address or host name: Add by Address… under Connected Speakers on the Mac, or Speakers > Add by Address… on Windows. AudioSync checks that a speaker answers there and keeps the address for the next launch. The row says "Added by address" until a search finds the speaker, and Remove in its menu forgets it.
+- A Google Cast speaker now shows what's playing, with the title, artist, album and cover. When AudioSync doesn't know the track, the speaker gets none.
+- AirPlay speakers that show a track's progress now get how far into the track you are and how long it is. On the Mac that comes from Spotify and Music, on Windows from any app that reports its track's length. A track without a known length sends none.
+- When you change an AirPlay speaker's volume on the speaker itself, its slider in AudioSync follows, on speakers that report it.
+- With AirPlay 2 on, a notice tells you when another app holds port 319 or 320, so AirPlay 2 speakers that need PTP timing can't play. It hasn't been tried on a real receiver yet.
+- Web Remote: too many wrong pairing codes from one device block pairing for that device until the code is renewed, not for every phone, and a paired phone still gets in while other devices hold connections open.
+- The Web Remote window shows the setup as three numbered steps under the QR code, worded for iPhone or Android, and the page shows the same steps until you open it from the Home Screen. On iPhone a pairing made in Safari doesn't carry over to the Home Screen, so the Home Screen comes before the code.
+- On the Mac, the AirPlay 2 (Experimental) switch has a note under it in the app menu and the gear menu that says what it does and that it takes effect once you quit and reopen AudioSync.
 
 ### Changed
 
 - AirPlay speakers can now wait up to 20 seconds instead of 3, so a long Cast offset or a large Calibrate All result plays in full instead of being cut short.
+- The arrow keys on a Google Cast speaker's volume slider now move by the step the speaker reports, if it reports one.
+- On the Mac, a Bluetooth speaker gets the speaker icon instead of headphones, unless its name says it's headphones, such as AirPods or a name with "headphones", "headset", "earbuds", "earphones" or "buds" in it. Calibration goes by the same names, so a Bluetooth speaker that macOS reports as headphones, such as a soundcore Select 4 Go, is still measured.
+
+### Fixed
+
+- On the Mac, streaming All System Audio while nothing plays no longer brings up the notice that capture permission is missing. The notice now waits for sound.
+- On the Mac, calibration works while the source plays nothing. Before, the test sound never started and the run failed as if the source were silent.
+- On the Mac, after you type in a delay field, a click on that panel's step button steps from the value you typed, and a click that closes the panel leaves the keyboard focus on the speaker's delay.
+- On the Mac, a + step on a delay that's already at the 20 s maximum no longer clears the speaker's last calibration result.
+
+### Windows (preview, not released yet)
+
+- The first release with the Windows 11 version, for x64 and ARM64 PCs, is still to come. It isn't code-signed, so SmartScreen may warn the first time you open it. It has the 0.6.0 changes too, except where an entry says "On the Mac". Google Cast speakers play on Windows as well, "Switch to All System Audio When the Source App Quits" is in the File menu, the Guide's diagrams have descriptions for Narrator, and a click on the empty space of an open delay panel closes it.
+- You can rename a speaker: double-click its name, or right-click it or use its … button and choose Rename. Press Enter to keep the new name or Escape to cancel; a click outside the field keeps it too. The name stays after a restart and shows in the notification area flyout, in notices and in the AirPlay code and password dialogs. Leave it empty to go back to the device's own name, which the name's tooltip keeps showing while it's renamed.
+- A Now Playing card in the main window follows what Windows reports as playing, with the track, artist and artwork, and Previous Track, play or pause and Next Track buttons.
+- View > Appearance shows AudioSync's windows in Light or Dark, or follows Windows with Match System. Ctrl+W closes the window you're in, and Ctrl+Q exits AudioSync from any of its windows.
+- The Guide now covers input devices, track info on AirPlay receivers, Launch at Sign-In, AirPlay passwords, and what happens when the source app quits.
 
 ## [0.6.0] - unreleased
 
 ### Added
 
-- Google Cast speakers, on the Mac and on Windows. They're listed with your other speakers and start and stop with streaming, with their own volume and Mute. One plays at a time, and speaker groups made in the Google Home app can't play. If another app starts casting to a speaker AudioSync plays on, AudioSync turns it off and says so.
+- Google Cast speakers. They're listed with your other speakers and start and stop with streaming, with their own volume and Mute. One plays at a time, and speaker groups made in the Google Home app can't play. If another app starts casting to a speaker AudioSync plays on, AudioSync turns it off and says so.
 - Cast has no shared clock, so AudioSync can't line a Cast speaker up by itself: you set its offset by ear under the speaker, and it's kept for that speaker. If one drifts, Resync under its volume restarts the stream with a short gap. AudioSync never does that on its own.
 - When a Cast speaker and AirPlay speakers are on together, the side that's ahead waits for the other. AirPlay can wait at most 3 seconds; past that a notice says how far ahead AirPlay plays and suggests lowering the Cast speaker's offset.
 - AirPlay 2, experimental and off unless you start AudioSync with `AUDIOSYNC_AIRPLAY2=1`. It plays one AirPlay 2 speaker at a time: a second one waits with a note under its name and starts once the first stops. A speaker that asks for a PIN gets the pairing prompt, and a pairing the speaker turns down is forgotten, so the next try pairs again. It hasn't been tried on a real AirPlay 2 receiver yet.
 - On the Mac, Calibrate with Microphone under a local speaker sets its delay for you. It fades the music out, plays a short, quiet sweep on the built-in speakers and then on that speaker, and sets the delay from the difference. It needs the built-in speakers in the list. If you cancel, the microphone isn't allowed, or the result isn't clear, the delay stays as it was and AudioSync says why.
-- The Guide has three diagrams, in light and dark: where the sound goes, what a speaker's delay does, and how a Cast speaker's offset fits with your other speakers. Each has a description for VoiceOver and Narrator.
-- When the app you capture quits, AudioSync can switch to all system audio instead of stopping. Turn on "Switch to All System Audio When the Source App Quits" in the app menu or the gear menu on the Mac, or in the File menu on Windows. A notice tells you when it switched.
+- The Guide has three diagrams, in light and dark: where the sound goes, what a speaker's delay does, and how a Cast speaker's offset fits with your other speakers. Each has a description for VoiceOver.
+- When the app you capture quits, AudioSync can switch to all system audio instead of stopping. Turn on "Switch to All System Audio When the Source App Quits" in the app menu or the gear menu. A notice tells you when it switched.
 - On the Mac, you can rename a speaker: double-click its name, or choose "Rename…" from the speaker's … menu. The name stays after a restart and shows in the menu bar panel and in notices too. Clear it to go back to the device's own name, which the speaker's tooltip keeps showing while it's renamed.
-- On Windows too, you can rename a speaker: double-click its name, or right-click it or use its … button and choose Rename. Press Enter to keep the new name or Escape to cancel; a click outside the field keeps it too. The name stays after a restart and shows in the notification area flyout, in notices and in the AirPlay code and password dialogs. Leave it empty to go back to the device's own name, which the name's tooltip keeps showing while it's renamed.
 
 ### Changed
 
@@ -42,20 +66,13 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On the Mac, a delay you've typed now applies as soon as you leave its field: when you click into another delay field, move on with Tab, or click any other control, such as a volume slider or the power switch. A step button adds to the value you typed.
 - On the Mac, a delay field no longer shows a character it can't take for a moment before removing it: the keystroke is blocked, and the field gets the red outline with a note on what it takes. While the field has the focus, one red outline marks it in place of the blue focus ring.
-- On the Mac and on Windows, a click on the empty space of an open delay panel closes it, like a click anywhere else on the speaker's row.
+- On the Mac, a click on the empty space of an open delay panel closes it, like a click anywhere else on the speaker's row.
 - On the Mac, a Bluetooth speaker that reports a latency below 50 ms or above 1 second no longer cuts its fade-out short when you switch it off, or holds the stop for the full half second. AudioSync uses the last plausible latency it saw for that speaker instead, or 150 ms. Your delays and the timing between speakers don't change.
 - A local speaker that plays later than your earliest one, because you set a delay on it or an AirPlay speaker is on, now keeps its timing when its clock runs a little fast or slow. AudioSync now nudges its speed in small, smoothed steps, where before it drifted until a short skip or moment of silence put it back. Speakers whose clocks keep time are also no longer adjusted back and forth when the system wakes AudioSync a little late now and then.
 - A local speaker at the same sample rate as the captured audio no longer runs short for a moment now and then when its clock runs a little fast. It gets the same small speed adjustments as a speaker at another rate, and plays the audio unchanged between them.
 - On the Mac, a speaker (often Bluetooth) that started while the system was waking AudioSync late, or whose second wake-up came late, no longer plays a little ahead of your other speakers for the whole session, or skips once right after it starts. Once its wake-ups come on time again, it eases to the timing you set, so the same delay lands on the same timing every session.
 - On the Mac, a speaker whose timestamps briefly said it was early no longer ends up that much later than its delay when you change the delay within the next minute, and the debug log no longer counts that minute's wake-ups as late.
 - Raising a playing speaker's delay by more than 5 seconds restarts it at the new delay, instead of leaving it silent for the whole increase.
-
-### Windows (preview)
-
-- This is the first release with the Windows 11 version, for x64 and ARM64 PCs. It isn't code-signed, so SmartScreen may warn the first time you open it. Everything above applies to it too, except where an entry says "On the Mac".
-- A Now Playing card in the main window follows what Windows reports as playing, with the track, artist and artwork, and Previous Track, play or pause and Next Track buttons.
-- View > Appearance shows AudioSync's windows in Light or Dark, or follows Windows with Match System. Ctrl+W closes the window you're in, and Ctrl+Q exits AudioSync from any of its windows.
-- The Guide now covers input devices, track info on AirPlay receivers, Launch at Sign-In, AirPlay passwords, and what happens when the source app quits.
 
 ## [0.5.0] - 2026-10-21
 

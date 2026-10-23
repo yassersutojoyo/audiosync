@@ -53,6 +53,15 @@ final class PortDraft: ObservableObject {
     @Published var text = ""
 }
 
+enum WebRemotePhone: Hashable {
+    case iPhone, android
+}
+
+/// Which phone the setup steps are written for.
+final class PhoneChoice: ObservableObject {
+    @Published var phone = WebRemotePhone.iPhone
+}
+
 struct WebRemoteView: View {
     @ObservedObject var settings: WebRemoteSettings
     let text: UIStrings
@@ -60,6 +69,7 @@ struct WebRemoteView: View {
     /// The port as typed. An object rather than @State: the Command Line Tools
     /// toolchain ships without SwiftUI's macro plugins.
     @StateObject private var port = PortDraft()
+    @StateObject private var phone = PhoneChoice()
 
     var body: some View {
         let t = text
@@ -137,41 +147,76 @@ struct WebRemoteView: View {
     @ViewBuilder
     private func addressSection(port: Int, _ t: UIStrings) -> some View {
         let urls = settings.addresses.urls(port: port)
-        HStack(alignment: .top, spacing: 16) {
-            if let first = urls.first, let qr = QRCodeImage.make(first) {
-                Image(nsImage: qr)
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: 132, height: 132)
-                    // Dark modules on white in both appearances: cameras need that contrast.
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
-                    .accessibilityLabel(t.webRemoteQRLabel(first))
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 16) {
+                if let first = urls.first, let qr = QRCodeImage.make(first) {
+                    Image(nsImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 132, height: 132)
+                        // Dark modules on white in both appearances: cameras need that contrast.
+                        .padding(8)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
+                        .accessibilityLabel(t.webRemoteQRLabel(first))
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(t.webRemoteAddressTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    if urls.isEmpty {
+                        Text(t.webRemoteNoAddress).foregroundStyle(Brand.errorText)
+                    }
+                    ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(index == 0 ? t.webRemoteAddressLabel : t.webRemoteIPLabel)
+                                .font(.caption)
+                                .foregroundStyle(Brand.secondaryText)
+                            Text(url)
+                                .font(index == 0 ? .body.monospaced() : .callout.monospaced())
+                                .foregroundStyle(index == 0 ? Color.primary : Brand.secondaryText)
+                                .textSelection(.enabled)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
             }
-            VStack(alignment: .leading, spacing: 6) {
-                Text(t.webRemoteAddressTitle)
+            setupSteps(t)
+        }
+    }
+
+    /// Adding the page to the Home Screen comes before the code: on iPhone the
+    /// Home Screen app keeps its own cookies, so a pairing made in Safari is lost.
+    private func setupSteps(_ t: UIStrings) -> some View {
+        let iPhone = phone.phone == .iPhone
+        let steps = [t.webRemoteStepScan, iPhone ? t.webRemoteStepHomeIPhone : t.webRemoteStepHomeAndroid, t.webRemoteStepOpen]
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(t.webRemoteSetupTitle)
                     .font(.subheadline.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
-                if urls.isEmpty {
-                    Text(t.webRemoteNoAddress).foregroundStyle(Brand.errorText)
+                Spacer(minLength: 8)
+                Picker(t.webRemotePhonePicker, selection: $phone.phone) {
+                    Text(t.webRemoteIPhone).tag(WebRemotePhone.iPhone)
+                    Text(t.webRemoteAndroid).tag(WebRemotePhone.android)
                 }
-                ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(index == 0 ? t.webRemoteAddressLabel : t.webRemoteIPLabel)
-                            .font(.caption)
-                            .foregroundStyle(Brand.secondaryText)
-                        Text(url)
-                            .font(index == 0 ? .body.monospaced() : .callout.monospaced())
-                            .foregroundStyle(index == 0 ? Color.primary : Brand.secondaryText)
-                            .textSelection(.enabled)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-                Text(t.webRemoteSteps)
-                    .font(.callout)
-                    .foregroundStyle(Brand.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
             }
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(t.webRemoteStepNumber(index + 1))
+                        .monospacedDigit()
+                    Text(step)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.callout)
+                .accessibilityElement(children: .combine)
+            }
+            Text(iPhone ? t.webRemoteOrderIPhone : t.webRemoteOrderAndroid)
+                .font(.callout)
+                .foregroundStyle(Brand.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -234,7 +279,7 @@ struct WebRemoteView: View {
         let failedOnPort: Bool = { if case .failed = settings.status { return true } else { return false } }()
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Text(t.webRemotePort)
+                Text(t.webRemotePort).accessibilityHidden(true)
                 TextField(t.webRemotePort, text: $port.text)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)

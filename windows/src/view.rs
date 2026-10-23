@@ -1372,6 +1372,7 @@ impl App {
             .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
+        self.flyout.set_airplay_searching(state.airplay_searching);
         self.main.set_cast_list(cast_list(state.cast_list));
         self.main.set_cast_by_address(state.cast_by_address);
         let listed = |s: &&ui_model::Speaker| lists(s);

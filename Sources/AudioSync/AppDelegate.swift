@@ -18,7 +18,7 @@ import Synchronization
 ///
 /// Main thread only, except the three static members below. Clause numbers
 /// refer to docs/ENGINE_SPEC.md, case IDs to docs/EDGE_CASES.md.
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
 
     // MARK: - One copy at a time (main.swift)
 
@@ -247,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         airPlay2 = saved.airPlay2
         airPlay2AtLaunch = saved.airPlay2
         super.init()
+        _ = castModel.setMaster(saved.master)
     }
 
     /// The one-time migration of the absolute delays to offsets (S179), with
@@ -284,7 +285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         handleEngineEvents()
         setUpMenuBar()
-        NSApp.mainMenu = MainMenu.make(text: text)
+        NSApp.mainMenu = MainMenu.make(text: text, airPlay2: airPlay2, airPlay2AtLaunch: airPlay2AtLaunch,
+                                       appMenuDelegate: self)
         mainWindow = MainWindowController(model: appModel)
         launchAtLogin = SMAppService.mainApp.status == .enabled
 

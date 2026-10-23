@@ -46,12 +46,14 @@
     --notice: #443927;
     --error: #FF99A4;
     --focus: #63DAC2;
-    --knob: #F6F6F6;
+    --knob: #1E1E1E;
   }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* manipulation drops double-tap zoom (quick taps on the delay steps zoomed iOS Safari in) and keeps pinch zoom. */
+html, body, button, input, label, .switch { touch-action: manipulation; }
 body {
   margin: 0;
   background: var(--background);
@@ -98,7 +100,8 @@ input[type=text], input[type=number] {
   border-radius: 10px;
   background: var(--surface);
   padding: 0 12px;
-  font-size: 1rem;
+  /* Below 16 px iOS zooms in on focus. */
+  font-size: max(16px, 1rem);
 }
 input[type=range] { width: 100%; min-width: 0; height: 44px; margin: 0; background: transparent; }
 .pair label { display: block; font-weight: 600; margin: 16px 0 8px; }
@@ -159,7 +162,12 @@ input[role=switch]:checked::before { background: var(--knob); transform: transla
 .speaker.off-line { background: var(--background); border-style: dashed; border-color: var(--control-border); }
 .speaker.off-line h2 { color: var(--muted); }
 .state-text { padding: 24px 0; text-align: center; }
+.setup-head { display: flex; align-items: center; gap: 12px; }
+.setup-head h2 { flex: 1; }
+.setup ol { margin: 8px 0; padding-left: 1.5em; }
+.setup li + li { margin-top: 4px; }
 footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+footer .error { flex-basis: 100%; margin-top: 0; }
 @media (prefers-reduced-motion: reduce) {
   input[role=switch], input[role=switch]::before { transition: none; }
 }
@@ -168,42 +176,52 @@ footer { display: flex; align-items: center; justify-content: space-between; fle
 </head>
 <body>
 <main>
-<h1>Audio<span>Sync</span></h1>
+<h1 id="title" tabindex="-1">Audio<span>Sync</span></h1>
 <p id="live" class="sr-only" aria-live="polite"></p>
+
+<section id="setup" class="setup card" aria-labelledby="setup-title" hidden>
+<div class="setup-head">
+<h2 id="setup-title" data-text="setupTitle"></h2>
+<button id="setup-hide" type="button" aria-describedby="setup-title" data-text="hide"></button>
+</div>
+<ol id="setup-steps"></ol>
+<p id="setup-order" class="muted"></p>
+</section>
 
 <form id="pair" class="pair card" hidden novalidate>
 <p id="pair-hint"></p>
-<label for="code">Pairing code</label>
+<label for="code" data-text="codeLabel"></label>
 <div class="pair-line">
 <input id="code" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" aria-describedby="pair-error">
-<button id="pair-button" class="primary" type="submit">Pair</button>
+<button id="pair-button" class="primary" type="submit" data-text="pair"></button>
 </div>
 <p id="pair-error" class="error" hidden></p>
 </form>
 
 <section id="remote" hidden>
 <div id="banner" class="banner" hidden>
-<p id="banner-text">Can't reach AudioSync. Retrying…</p>
-<button id="retry" type="button">Retry</button>
+<p id="banner-text" data-text="lost"></p>
+<button id="retry" type="button" data-text="retry"></button>
 </div>
-<p id="loading" class="state-text muted">Connecting to AudioSync…</p>
+<p id="loading" class="state-text muted" data-text="connecting"></p>
 <fieldset id="controls" hidden>
 <section class="playing card" aria-labelledby="playing-label">
-<h2 id="playing-label" class="sr-only">Now playing</h2>
+<h2 id="playing-label" class="sr-only" data-text="nowPlaying"></h2>
 <p id="playing-title" class="title"></p>
 <p id="playing-detail" class="detail muted"></p>
 <div class="slider-line">
-<label for="master">Master volume</label>
+<label for="master" data-text="masterVolume"></label>
 <input id="master" type="range" min="0" max="100" step="1">
 <output id="master-value" for="master"></output>
 </div>
 <p id="master-error" class="error" hidden></p>
 </section>
-<p id="empty" class="state-text muted" hidden>AudioSync hasn't found any speakers yet. Check that they're on and on the same network.</p>
+<p id="empty" class="state-text muted" data-text="noSpeakers" hidden></p>
 <div id="speakers"></div>
 <footer>
 <p id="computer" class="muted"></p>
-<button id="unpair" type="button">Unpair this phone</button>
+<button id="unpair" type="button" aria-describedby="unpair-error" data-text="unpair"></button>
+<p id="unpair-error" class="error" hidden></p>
 </footer>
 </fieldset>
 </section>
@@ -212,6 +230,16 @@ footer { display: flex; align-items: center; justify-content: space-between; fle
 "use strict";
 
 const TEXT = {
+  setupTitle: "Add AudioSync to the Home Screen",
+  hide: "Hide",
+  codeLabel: "Pairing code",
+  pair: "Pair",
+  retry: "Retry",
+  connecting: "Connecting to AudioSync…",
+  nowPlaying: "Now playing",
+  masterVolume: "Master volume",
+  noSpeakers: "AudioSync hasn't found any speakers yet. Check that they're on and on the same network.",
+  unpair: "Unpair this phone",
   hintBrowser: "Add to Home Screen first, then open it from there and enter the code.",
   hintStandalone: "Enter the code AudioSync shows.",
   codeShape: "The code has 6 digits.",
@@ -237,16 +265,28 @@ const TEXT = {
   delayRange: (min, max) => `Delay must be from ${min} to ${max} ms.`,
   unavailable: "Not available right now.",
   percent: (value) => `${value}%`,
+  stepOpened: "Open this page on your phone. You've done this one.",
+  stepHomeIPhone: "Add the page to your Home Screen: tap the options button left of Safari's address bar, then Share, View More and Add to Home Screen.",
+  stepHomeOther: "Add the page to your Home screen: in the browser's menu, tap Add to Home screen or Install app.",
+  stepOpen: "Open AudioSync from the new icon and enter the pairing code.",
+  orderIPhone: "Do step 2 before you enter the code: a pairing made in Safari doesn't carry over to the Home Screen app, so you would pair again there.",
+  orderOther: "Do step 2 before you enter the code, so you pair in the app you'll use.",
 };
 
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
 const SEND_EVERY_MS = 100;
 const DELAY_STEP_MS = 10;
 const PAIRED_KEY = "audiosync.paired";
+const SETUP_HIDDEN_KEY = "audiosync.setupHidden";
 
 const byId = (id) => document.getElementById(id);
 const ui = {
+  title: byId("title"),
   live: byId("live"),
+  setup: byId("setup"),
+  setupHide: byId("setup-hide"),
+  setupSteps: byId("setup-steps"),
+  setupOrder: byId("setup-order"),
   pair: byId("pair"),
   pairHint: byId("pair-hint"),
   code: byId("code"),
@@ -267,6 +307,7 @@ const ui = {
   speakers: byId("speakers"),
   computer: byId("computer"),
   unpair: byId("unpair"),
+  unpairError: byId("unpair-error"),
 };
 
 let events = null;
@@ -274,6 +315,7 @@ let retryTimer = null;
 let failures = 0;
 let lost = false;
 let streamed = false;
+let focusAfterPair = false;
 let snapshot = null;
 let rowCount = 0;
 const rows = new Map();
@@ -299,8 +341,36 @@ function showError(element, message) {
 }
 
 function isStandalone() {
-  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  if (window.navigator.standalone === true) { return true; }
+  try { return window.matchMedia("(display-mode: standalone)").matches; } catch (_) { return false; }
 }
+
+// Only iOS Safari defines navigator.standalone; a Home Screen app there keeps its own cookies.
+function isIOS() {
+  return typeof window.navigator.standalone === "boolean";
+}
+
+function setupHidden() {
+  try { return localStorage.getItem(SETUP_HIDDEN_KEY) === "1"; } catch (_) { return false; }
+}
+
+function showSetup() {
+  if (isStandalone() || setupHidden()) { return; }
+  const ios = isIOS();
+  for (const step of [TEXT.stepOpened, ios ? TEXT.stepHomeIPhone : TEXT.stepHomeOther, TEXT.stepOpen]) {
+    const item = document.createElement("li");
+    item.textContent = step;
+    ui.setupSteps.append(item);
+  }
+  ui.setupOrder.textContent = ios ? TEXT.orderIPhone : TEXT.orderOther;
+  ui.setup.hidden = false;
+}
+
+ui.setupHide.addEventListener("click", () => {
+  ui.setup.hidden = true;
+  try { localStorage.setItem(SETUP_HIDDEN_KEY, "1"); } catch (_) { /* it shows again next time */ }
+  ui.title.focus();
+});
 
 function stopStream() {
   window.clearTimeout(retryTimer);
@@ -312,6 +382,7 @@ function showPairing(message) {
   stopStream();
   snapshot = null;
   lost = false;
+  focusAfterPair = false;
   ui.banner.hidden = true;
   ui.controls.disabled = false;
   ui.remote.hidden = true;
@@ -319,7 +390,8 @@ function showPairing(message) {
   ui.pairHint.textContent = isStandalone() ? TEXT.hintStandalone : TEXT.hintBrowser;
   ui.pairButton.disabled = false;
   showError(ui.pairError, message);
-  if (message) { announce(message); }
+  // The app unpaired the phone mid-use: focus was in the remote, which is now hidden.
+  if (message) { announce(message); ui.code.focus(); }
 }
 
 function showRemote() {
@@ -331,6 +403,7 @@ function showRemote() {
 
 function clearErrors() {
   showError(ui.masterError, "");
+  showError(ui.unpairError, "");
   for (const row of rows.values()) { showError(row.error, ""); }
 }
 
@@ -360,8 +433,16 @@ function connect() {
     failures = 0;
     streamed = true;
     remember(true);
+    // Retry and the pairing form hide now, which would drop focus to the page top.
+    const focused = document.activeElement;
+    const stranded = focusAfterPair || ui.banner.contains(focused) || ui.pair.contains(focused);
+    focusAfterPair = false;
     setLost(false);
     render(next);
+    const now = document.activeElement;
+    if (stranded && (!now || now === document.body || ui.banner.contains(now) || ui.pair.contains(now))) {
+      ui.master.focus();
+    }
   });
   events.onerror = () => {
     stopStream();
@@ -576,7 +657,7 @@ function makeRow(speaker) {
   error.hidden = true;
   root.append(head, body, notice, error);
 
-  const row = { id: speaker.id, root, name, kind, power, body, volume, less, delay, more, notice, error, speaker };
+  const row = { id: speaker.id, root, name, kind, power, body, volume, delayLine, less, delay, more, notice, error, speaker };
 
   const fail = (message) => {
     showError(row.error, message);
@@ -655,9 +736,13 @@ function updateRow(row, speaker) {
   row.root.classList.toggle("off-line", !speaker.available);
   // Hiding the focused control drops focus to the page top; keep it on this speaker.
   const focused = document.activeElement;
-  if (!speaker.available && (row.body.contains(focused) || row.power.parentElement.contains(focused))) {
+  // The reference output and a Cast group have no delay of their own to change.
+  const fixedDelay = speaker.delay_min_ms === speaker.delay_max_ms;
+  if ((!speaker.available && (row.body.contains(focused) || row.power.parentElement.contains(focused)))
+    || (fixedDelay && row.delayLine.contains(focused))) {
     row.name.focus();
   }
+  row.delayLine.hidden = fixedDelay;
   row.body.hidden = !speaker.available;
   row.power.parentElement.hidden = !speaker.available;
   row.less.setAttribute("aria-label", `${TEXT.lessDelay}, ${speaker.name}`);
@@ -676,6 +761,15 @@ function updateRow(row, speaker) {
   if (!row.volumeControl.held()) { row.volumeControl.show(speaker.volume); }
   const editing = document.activeElement === row.delay;
   if (!row.delaySender.busy() && !editing) { showDelay(row, speaker.delay_ms); }
+}
+
+// Removing the focused card drops focus to the page top; move it to the next card, else the previous one, else the title.
+function focusNeighbor(order, gone) {
+  const at = order.indexOf(gone);
+  const alive = (root) => root.isConnected;
+  const neighbor = order.slice(at + 1).find(alive) || order.slice(0, at).reverse().find(alive);
+  const row = neighbor && [...rows.values()].find((candidate) => candidate.root === neighbor);
+  (row ? row.name : ui.title).focus();
 }
 
 function showComputer(name) {
@@ -700,6 +794,8 @@ function render(next) {
   ui.playingDetail.hidden = ui.playingDetail.textContent === "";
   if (!masterControl.held()) { masterControl.show(next.master.volume); }
 
+  const order = Array.from(ui.speakers.children);
+  const focusedRow = [...rows.values()].find((row) => row.root.contains(document.activeElement));
   const seen = new Set();
   let previous = null;
   for (const speaker of next.speakers) {
@@ -717,6 +813,7 @@ function render(next) {
   for (const [id, row] of rows) {
     if (!seen.has(id)) { row.root.remove(); rows.delete(id); }
   }
+  if (focusedRow && !focusedRow.root.isConnected) { focusNeighbor(order, focusedRow.root); }
   ui.empty.hidden = next.speakers.length > 0;
 }
 
@@ -754,6 +851,7 @@ ui.pair.addEventListener("submit", (event) => {
       ui.code.value = "";
       announce(TEXT.paired);
       failures = 0;
+      focusAfterPair = true;
       connect();
       return null;
     }
@@ -772,12 +870,16 @@ ui.retry.addEventListener("click", connect);
 
 ui.unpair.addEventListener("click", () => {
   if (!window.confirm(TEXT.unpairConfirm)) { return; }
+  showError(ui.unpairError, "");
   post("/api/unpair", {}).then(() => {
     remember(false);
     showPairing("");
     announce(TEXT.unpairedHere);
   }, (problem) => {
-    if (problem) { announce(problem.message); }
+    if (problem) {
+      showError(ui.unpairError, problem.message);
+      announce(problem.message);
+    }
   });
 });
 
@@ -790,7 +892,9 @@ document.addEventListener("visibilitychange", () => {
 
 const host = window.location.hostname.replace(/\.$/, "");
 const localName = host.toLowerCase().endsWith(".local") ? host.slice(0, -".local".length) : "";
+for (const element of document.querySelectorAll("[data-text]")) { element.textContent = TEXT[element.dataset.text]; }
 showComputer("");
+showSetup();
 
 connect();
 </script>

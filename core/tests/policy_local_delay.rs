@@ -584,4 +584,61 @@ proptest! {
             prop_assert!(held.iter().any(|(_, h)| *h == 0.0), "the earliest plays at once");
         }
     }
+
+    // covers: S176
+    #[test]
+    fn without_airplay_adding_the_same_number_to_every_offset_changes_nothing(
+        offsets in proptest::collection::vec(-2000i32..=9000, 1..6),
+        shift in 0i32..=11_000,
+    ) {
+        let ids = ["a", "b", "c", "d", "e"];
+        let taking_part = |shift: i32| -> Vec<Participant> {
+            offsets
+                .iter()
+                .enumerate()
+                .map(|(index, &offset)| output(ids[index], f64::from(offset + shift)))
+                .collect()
+        };
+        prop_assert_eq!(hold_backs(&taking_part(shift), None), hold_backs(&taking_part(0), None));
+    }
+}
+
+// covers: S179
+#[test]
+fn migration_takes_a_reference_delay_of_1000_ms_as_tuned_for_airplay() {
+    let at = |reference_ms: f64| {
+        migrate_mac_delays(
+            &[
+                stored(true, Some(reference_ms)),
+                stored(false, Some(1200.0)),
+            ],
+            None,
+        )
+    };
+    let tuned = at(1000.0);
+    assert_eq!(tuned.airplay_delay_ms, 1000.0);
+    assert_eq!(tuned.offsets_ms, [None, Some(200.0)]);
+    let untuned = at(999.0);
+    assert_eq!(untuned.airplay_delay_ms, DEFAULT_AIRPLAY_DELAY_MS);
+    assert_eq!(untuned.offsets_ms, [None, Some(201.0)]);
+    // D0 at 1000 ms counts as tuned too: an output without a stored delay
+    // keeps its D0 sound against the new AirPlay delay.
+    let migration = migrate_mac_delays(&[stored(true, None), stored(false, None)], Some(1000.0));
+    assert_eq!(migration.airplay_delay_ms, 1000.0);
+    assert_eq!(migration.offsets_ms, [None, Some(0.0)]);
+}
+
+// covers: S179
+#[test]
+fn migration_counts_only_the_first_entry_marked_as_the_reference() {
+    let migration = migrate_mac_delays(
+        &[
+            stored(false, Some(2400.0)),
+            stored(true, Some(2500.0)),
+            stored(true, Some(1500.0)),
+        ],
+        None,
+    );
+    assert_eq!(migration.airplay_delay_ms, 2500.0);
+    assert_eq!(migration.offsets_ms, [Some(-100.0), None, Some(-1000.0)]);
 }

@@ -562,7 +562,8 @@ pub unsafe extern "C" fn asc_calibration_sheet_measure_again(
 /// Puts the row a Measure Again run's sheet holds in place of the old one,
 /// and frees `again`. False, changing nothing in `sheet`, for an `again`
 /// that was cancelled or ended by a change, one that doesn't come from this
-/// sheet's Measure Again, or a null argument; `again` is freed either way.
+/// sheet's Measure Again, or a null argument; `again` is freed either way,
+/// except when it is `sheet` itself: then false, and nothing is freed.
 ///
 /// # Safety
 ///
@@ -573,7 +574,8 @@ pub unsafe extern "C" fn asc_calibration_sheet_replace(
     sheet: *mut AscCalibrationSheet,
     again: *mut AscCalibrationSheet,
 ) -> bool {
-    if again.is_null() {
+    // Freeing `again` would free `sheet` under the caller.
+    if again.is_null() || ptr::eq(sheet, again) {
         return false;
     }
     // SAFETY: a handle from Box::into_raw that nothing uses any more.
@@ -964,6 +966,12 @@ mod tests {
             let other = asc_calibration_run_create(RATE, speakers.as_ptr(), 3, 0);
             let other = asc_calibration_run_finish(other);
             assert!(!asc_calibration_sheet_replace(ptr::null_mut(), other));
+            let rows = asc_calibration_sheet_rows(sheet);
+            assert!(
+                !asc_calibration_sheet_replace(sheet, sheet),
+                "a sheet as its own Measure Again"
+            );
+            assert_eq!(asc_calibration_sheet_rows(sheet), rows);
             asc_calibration_sheet_destroy(sheet);
         }
     }

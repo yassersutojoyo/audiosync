@@ -412,6 +412,23 @@ fn fades_follow_the_raised_cosine_over_20_ms_at_the_streams_rate() {
 
 // covers: S182
 #[test]
+fn a_fade_of_half_a_frame_more_rounds_up() {
+    // 0.020 × 11 025 = 220.5 and 0.020 × 33 075 = 661.5, exactly.
+    assert_eq!(fade_frames(11_025), 221);
+    assert_eq!(fade_frames(33_075), 662);
+    assert_eq!(fade_frames(8_000), 160);
+    assert_eq!(fade_frames(384_000), 7680);
+    let mut fade = Fade::new(11_025);
+    assert_eq!(fade.len(), 221);
+    fade.fade_in();
+    let gains: Vec<f32> = (0..221).map(|_| fade.next_gain()).collect();
+    assert!(gains[219] < 1.0);
+    assert_eq!(gains[220], 1.0);
+    assert_eq!(fade.state(), FadeState::Open);
+}
+
+// covers: S182
+#[test]
 fn a_fade_reversed_midway_never_jumps() {
     for rate in [48_000, 44_100] {
         let len = fade_frames(rate);

@@ -568,6 +568,94 @@ fn diagnostics_count_drift_and_resync_is_only_the_users() {
     device.join();
 }
 
+// covers: C83
+#[test]
+fn a_failed_resync_reloads_once_then_ends_with_its_reason() {
+    // The Resync's LOAD fails and the recovery's reload plays.
+    let device = FakeDevice::start(Behavior {
+        load_script: vec![OnLoad::Play, OnLoad::Error("LOAD_FAILED", json!({}))],
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    assert!(session.resync().is_err());
+    let seen = run_until(&mut session, Duration::from_secs(15), |event| {
+        matches!(
+            event,
+            SessionEvent::Recovered { .. } | SessionEvent::Ended(_)
+        )
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: false })),
+        "{seen:?}"
+    );
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 3);
+    session.stop();
+    device.join();
+
+    // The reload fails too: the session ends with a reason, after one try.
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::Error("LOAD_FAILED", json!({"detailedErrorCode": 104})),
+        load_script: vec![OnLoad::Play],
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    assert!(session.resync().is_err());
+    let seen = run_until(&mut session, Duration::from_secs(15), |event| {
+        matches!(event, SessionEvent::Ended(_))
+    });
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(SessionEnd::Failed(SessionError::Media(
+                MediaError::LoadFailed {
+                    detailed_error_code: Some(104)
+                }
+            )))
+        )),
+        "{seen:?}"
+    );
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 3, "one recovery only");
+    device.join();
+}
+
+// covers: C86
+#[test]
+fn a_stop_during_the_reload_after_finished_ends_as_deselected() {
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::NeverPlay,
+        load_script: vec![OnLoad::Play],
+        ..Behavior::default()
+    });
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let selected = Arc::new(AtomicBool::new(true));
+    let mut session = CastSession::start(config(&device), reader, Arc::clone(&selected), |_, _| {})
+        .expect("plays");
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "IDLE",
+        Some("FINISHED"),
+    )));
+    let user = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(500));
+        selected.store(false, Ordering::SeqCst);
+    });
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Ended(_))
+    });
+    user.join().expect("user");
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Ended(SessionEnd::Deselected))),
+        "{seen:?}"
+    );
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2);
+    device.join();
+}
+
 /// The header of a PNG of `width` by `height` pixels: all the stream server
 /// reads of it.
 fn png(width: u32, height: u32) -> Vec<u8> {
@@ -663,6 +751,68 @@ fn device_volume_changes_never_touch_the_samples() {
             .iter()
             .all(|sample| *sample == 9)
     );
+    session.stop();
+    device.join();
+}
+
+// covers: C25, C81
+#[test]
+fn an_oversized_frame_from_the_device_is_a_fault_the_session_recovers_from() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::SendRaw(70_000u32.to_be_bytes().to_vec()));
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: false })),
+        "{seen:?}"
+    );
+    assert_eq!(device.connection_count(), 2, "the channel was closed");
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1);
+    assert!(!session.is_ended());
+    session.stop();
+    device.join();
+}
+
+// covers: C82
+#[test]
+fn a_close_from_the_running_app_reconnects_its_virtual_connection_and_plays_on() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::Send(json_message(
+        "transport-1",
+        "sender-0",
+        NS_CONNECTION,
+        json!({"type": "CLOSE"}),
+    )));
+    let app_connects = |device: &FakeDevice| {
+        device
+            .received()
+            .into_iter()
+            .filter(|(destination, ns, payload)| {
+                destination == "transport-1" && ns == NS_CONNECTION && payload["type"] == "CONNECT"
+            })
+            .count()
+    };
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until && app_connects(&device) < 2 {
+        session.run_for(Duration::from_millis(50));
+    }
+    assert_eq!(app_connects(&device), 2, "the app's CONNECT once more");
+    session.run_for(Duration::from_millis(500));
+    let seen: Vec<SessionEvent> = std::iter::from_fn(|| session.poll_event()).collect();
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Ended(_) | SessionEvent::Recovering(_))),
+        "{seen:?}"
+    );
+    assert_eq!(device.connection_count(), 1, "the same channel");
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1);
     session.stop();
     device.join();
 }
