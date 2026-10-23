@@ -70,6 +70,7 @@ extension AppDelegate {
         var a = AppModel.Actions()
         a.setPower = { [weak self] on in self?.setStreaming(on) }
         a.selectSource = { [weak self] id in self?.setSource(AudioSource(defaultsValue: id)) }
+        a.selectInputPair = { [weak self] index in self?.setInputPair(index) }
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
         a.setAirPlayEnabled = { [weak self] id, on in self?.setNativeAirPlayEnabled(id, on) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
@@ -232,6 +233,7 @@ extension AppDelegate {
     func pushModel() {
         publish(\.running, engine.isRunning)
         publish(\.sourceID, audioSource.defaultsValue)
+        publish(\.inputPair, currentInputPair)
         publish(\.master, masterVolume)
         // Hidden speakers leave the rows here, so every list built from them loses them.
         let hiddenKey = { (s: AppModel.Speaker) in HiddenSpeakers.key(id: s.id, tag: s.tag) }
@@ -274,7 +276,9 @@ extension AppDelegate {
     /// plugged in and out.
     func pushSources() {
         let running = SourceApps.running()
-        let inputs = devices.allInputDevices().map { (uid: $0.uid, name: text.deviceName($0.name)) }
+        let inputDevices = devices.allInputDevices()
+        let inputs = inputDevices.map { (uid: $0.uid, name: text.deviceName($0.name)) }
+        let channels = Dictionary(inputDevices.map { ($0.uid, $0.inputChannels) }, uniquingKeysWith: { first, _ in first })
         let entries = SourceList.entries(systemName: text.sourceSystem,
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
@@ -288,7 +292,11 @@ extension AppDelegate {
             } else if !entry.id.isEmpty {
                 icon = (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized)
             }
-            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput)
+            var pairs: [String] = []
+            if case .input(let uid) = AudioSource(defaultsValue: entry.id) {
+                pairs = InputChannelPair.offered(channels: channels[uid] ?? 0).map(text.inputChannelPair)
+            }
+            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs)
         }
         publish(\.sources, sources)
     }

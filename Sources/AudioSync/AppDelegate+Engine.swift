@@ -41,7 +41,7 @@ extension AppDelegate {
         // the old outputs' fade-outs (at most 500 ms, S186).
         if engine.isRunning { engine.stop() }
         do {
-            try engine.start(source: audioSource)
+            try engine.start(source: audioSource, inputPair: currentInputPair)
         } catch {
             DebugTrace.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
             if rebuild, let quit = AppLifecycle.sourceQuit(.rebuildFailed(error), source: audioSource,

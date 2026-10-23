@@ -74,12 +74,16 @@ final class AppModel: ObservableObject {
         let id, name: String        // id: "" for the whole system, else a bundle ID
         let icon: NSImage?
         let isInput: Bool
-        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name }
+        /// The channel pairs an input device with more than two channels
+        /// offers, as shown (`InputChannelPair.offered`); empty otherwise.
+        var pairs: [String] = []
+        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs }
     }
 
     struct Actions {
         var setPower: (Bool) -> Void = { _ in }
         var selectSource: (String) -> Void = { _ in }
+        var selectInputPair: (Int) -> Void = { _ in }
         var setMaster: (Double) -> Void = { _ in }
         var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
@@ -151,6 +155,8 @@ final class AppModel: ObservableObject {
 
     @Published var running = false
     @Published var sourceID = ""
+    /// The stored channel pair of the input source (`InputChannelPair.index`).
+    @Published var inputPair = 0
     @Published var sources: [Source] = []
     @Published var master: Double = 100
     @Published var airplay: [Speaker] = []
@@ -1081,13 +1087,38 @@ struct AvailabilityNote: View {
 }
 
 /// The audio source menu: the whole system, running apps, then input devices.
+/// Under it, an input device with more than two channels gets its channel
+/// pair choice.
 struct SourcePicker: View {
     @ObservedObject var model: AppModel
     var large = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sourceMenu
+            if let pairs = model.currentSource?.pairs, !pairs.isEmpty {
+                pairPicker(pairs)
+            }
+        }
+    }
+
+    private func pairPicker(_ pairs: [String]) -> some View {
         let t = model.text
-        Menu {
+        let selected = pairs.indices.contains(model.inputPair) ? model.inputPair : 0
+        return Picker(t.inputChannelsLabel, selection: Binding(get: { selected },
+                                                               set: { model.actions.selectInputPair($0) })) {
+            ForEach(Array(pairs.enumerated()), id: \.offset) { index, label in
+                Text(label).tag(index)
+            }
+        }
+        .pickerStyle(.menu)
+        .padding(.horizontal, 10)
+        .accessibilityLabel(t.inputChannelsLabel)
+    }
+
+    private var sourceMenu: some View {
+        let t = model.text
+        return Menu {
             ForEach(Array(model.sources.enumerated()), id: \.element.id) { index, source in
                 if source.isInput && (index == 0 || !model.sources[index - 1].isInput) {
                     Divider()

@@ -25,6 +25,9 @@ struct AudioDevices: Sendable {
         /// from the headphone jack (S173) and headphones from speakers for
         /// calibration; nil when it couldn't be read and for input devices.
         var outputTerminal: UInt32? = nil
+        /// An input device's input channels, which decide the channel pairs
+        /// it offers (`InputChannelPair`); 0 for output devices.
+        var inputChannels = 0
     }
 
     /// Devices with at least one output channel, in Core Audio's order.
@@ -116,15 +119,18 @@ struct AudioDevices: Sendable {
         let transport = HALProperty.uint32(of: id, kAudioDevicePropertyTransportType)
         let composition = transport == kAudioDeviceTransportTypeAggregate
             ? HALProperty.dictionary(of: id, kAudioAggregateDevicePropertyComposition) : nil
+        let channels = HALProperty.channelCount(of: id, in: scope)
         var device = Self.entry(id: id,
                                 alive: HALProperty.uint32(of: id, kAudioDevicePropertyDeviceIsAlive),
-                                channels: HALProperty.channelCount(of: id, in: scope),
+                                channels: channels,
                                 transport: transport,
                                 composition: composition,
                                 uid: HALProperty.string(of: id, kAudioDevicePropertyDeviceUID),
                                 name: HALProperty.string(of: id, kAudioObjectPropertyName))
         if scope == kAudioObjectPropertyScopeOutput {
             device?.outputTerminal = HALProperty.firstStreamTerminal(of: id, in: scope)
+        } else {
+            device?.inputChannels = channels
         }
         return device
     }

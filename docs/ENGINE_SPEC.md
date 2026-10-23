@@ -35,7 +35,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 - **S11** *Observed* (`AudioSource.swift:15-23`, `:206-285`; tests "processes: …"). Three source kinds. `system`: every process's audio except AudioSync's own. `app(bundleID)`: every Core Audio process object whose PID is the app's PID or whose responsible PID (the process macOS holds responsible, e.g. a WebKit GPU helper's app) is the app's PID, AudioSync's own process always excepted (S10). Without macOS's responsibility lookup only the app's own process matches, and the debug log says so once. `input(uid)`: an input device, by Core Audio device UID. *Required:* the app's process list is resolved at session start and SHOULD be refreshed when the app starts new audio processes.
 - **S12** *Observed* (`AudioSource.swift:25-30`, `:43-73`, `:97-192`; tests "source: …", "source apps: …"). Persisted form: `""` = system, `"input:<uid>"` = input device, anything else = an app bundle ID; a missing value means system. Only `app` has a bundle ID. The source picker offers the running regular apps that have a bundle ID, never AudioSync itself, one entry per bundle ID (the first instance's), sorted by name case-insensitively with the bundle ID breaking ties. An app shows the first non-blank, trimmed name of: the running app's name, the installed app's Finder name without a trailing ".app", the bundle ID.
 - **S13** *Observed* (`README.md` "How it works, briefly"). System and app sources are captured with a Core Audio process tap that also mutes the tapped processes' original output, so only AudioSync's synced copies are heard. Input devices are read directly.
-- **S14** *Observed* (`README.md` "Multi-room audio on macOS"). An input device contributes its first two channels as L and R. *Required:* a one-channel input is copied to both L and R; channels beyond the second are ignored.
+- **S14** *Observed* (`README.md` "Multi-room audio on macOS"). An input device contributes its first two channels as L and R. *Required:* a one-channel input is copied to both L and R; channels beyond the second are ignored. *Required* (`CaptureSupport.swift`, `InputChannelPair`; tests "channel pairs: …"): a device with more than two input channels offers its channels two by two (1-2, 3-4, …), an odd last channel as a pair of its own that plays on both sides; the chosen pair is kept per device UID under `inputChannelPairByUID` (a device on 1-2 has no entry) and plays as L and R. A saved pair the device no longer has falls back to 1-2, which the debug log notes. Choosing another pair while streaming restarts the capture, as a source switch does. Linear PCM input in native byte order is read as 32-bit float or as 16-, 24- (packed, or in 32 bits aligned high or low) and 32-bit signed integer, turned into float in the IOProc (full scale gives -1 and just under 1); only the streams holding the chosen pair need a readable format, and the device's format is never changed.
 - **S15** *Observed* (`AppDelegate+Engine.swift:21-40`). An input source needs the microphone permission: authorized → start; not determined → request, then start or fail; denied or restricted → the start fails with a notice.
 - **S16** *Required.* The capture stage delivers interleaved stereo float32 at Rc in blocks of any size ≥ 1 frame. Rc is read at session start: the nominal rate of the device the capture IOProc runs on (the input device, or the tap's private aggregate device), else the tap's own format rate when the device's can't be read, else 48 000 Hz when neither gives a rate above 0. Rates from 8 000 to 384 000 Hz MUST be accepted (the suites exercise 32 000, 44 100, 48 000, 96 000 and size a ring for 192 000).
 - **S17** *Observed* (`CaptureCheck.swift:5-9`; `AppDelegate+Engine.swift:120-121`). A process tap delivers no frames until its source actually plays; "no frames yet" is normal. `framesCaptured` is the number of frames written to the ring in the current session and restarts at 0 with each session.
@@ -805,9 +805,17 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | capture rate: the tap's rate when the device's can't be read | S16, S157 |
 | capture rate: nothing readable keeps the session playing | S157 |
 | input format: native 32-bit float is read as it is | S14, S16 |
-| input format: integer, big-endian or 64-bit samples aren't read | S16 |
+| input format: big-endian, 64-bit, unsigned and fixed-point samples aren't read | S14, S16 |
 | input format: a device without input channels has nothing to capture | S14 |
 | input format: a stream without channels doesn't count | S14 |
+| input format: 16-bit, 24-bit (packed and in 32) and 32-bit signed integers are read | S14 |
+| input format: an integer device is captured without changing its format | S14 |
+| integer input: 16-bit min, max, zero and sign | S14 |
+| integer input: packed 24-bit min, max, zero and sign | S14 |
+| integer input: 24-bit high in 32 min, max, zero and sign; the low byte is ignored | S14 |
+| integer input: 24-bit low in 32 min, max, zero and sign; the high byte is ignored | S14 |
+| integer input: 32-bit min, max, zero and sign | S14 |
+| channel pairs: … (offers, fallback, restart, labels, layouts, settings) | S14 |
 | app tap: the same processes in another order keep the tap | S11 |
 | app tap: a new audio process (a browser's audio helper) is tapped too | S11 |
 | app tap: a process that ends leaves the tap | S11 |

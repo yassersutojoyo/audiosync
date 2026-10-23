@@ -202,6 +202,29 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// The channel pair stored for the input source (`InputChannelPair.index`);
+    /// 0 for every other source.
+    var currentInputPair: Int {
+        guard case .input(let uid) = audioSource else { return 0 }
+        return inputPairs[uid] ?? 0
+    }
+
+    /// Chooses the channel pair the input source plays (S14). A running
+    /// session restarts on it, as for a source switch.
+    func setInputPair(_ index: Int) {
+        guard case .input(let uid) = audioSource else { return }
+        let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
+        guard change != .none else { return }
+        inputPairs[uid] = index == 0 ? nil : index
+        clearNotices([Notice.capture])   // about the old pair
+        autoStartFailed = false
+        if change == .restart {
+            stopEngine()
+            startEngine(origin: .user)
+        }
+        pushModel()
+    }
+
     // MARK: - List reconciliation (local outputs)
 
     /// `keepListed`: a virtual device already in the list stays there, so

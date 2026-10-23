@@ -152,6 +152,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var whenSourceQuits: WhenSourceQuits {
         didSet { if whenSourceQuits != oldValue { store.save(whenSourceQuits: whenSourceQuits) } }
     }
+    /// The channel pair each input device plays (`InputChannelPair.index`), by
+    /// device UID; a device without an entry plays channels 1-2.
+    var inputPairs: [String: Int] {
+        didSet { if inputPairs != oldValue { store.save(inputPairs: inputPairs) } }
+    }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
     let defaultVolume = AppSettings.defaultVolume
@@ -249,6 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         showVirtualDevices = saved.showVirtualDevices
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits
+        inputPairs = saved.inputPairs
         airPlay2 = saved.airPlay2
         airPlay2AtLaunch = saved.airPlay2
         super.init()

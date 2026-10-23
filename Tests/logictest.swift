@@ -1149,13 +1149,14 @@ do {
         free(list.unsafeMutablePointer)
     }
     // What the capture IOProc hands to the engine parts: the blocks, joined.
-    func stereo(_ buffers: [Buffer], blockFrames: Int = CaptureChannels.blockFrames) -> (samples: [Float], blocks: [Int]) {
+    func stereo(_ buffers: [Buffer], blockFrames: Int = CaptureChannels.blockFrames,
+                layout: CaptureChannels.Layout = .stereoFloat) -> (samples: [Float], blocks: [Int]) {
         var samples: [Float] = []
         var blocks: [Int] = []
         withInput(buffers) { list in
             let scratch = UnsafeMutablePointer<Float>.allocate(capacity: blockFrames * 2)
             defer { scratch.deallocate() }
-            CaptureChannels(list).forEachBlock(in: scratch, blockFrames: blockFrames) { block, count in
+            CaptureChannels(list, layout: layout).forEachBlock(in: scratch, blockFrames: blockFrames) { block, count in
                 samples += Array(UnsafeBufferPointer(start: block, count: count * 2))
                 blocks.append(count)
             }
@@ -1209,17 +1210,145 @@ do {
                                     mBitsPerChannel: bits, mReserved: 0)
     }
     let float32 = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked
-    check(CaptureInputFormat.check([format(flags: float32)]) == .usable,
+    let signed = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked
+    check(CaptureInputFormat.check([format(flags: float32)]) == .usable(.stereoFloat),
           "input format: native 32-bit float is read as it is")
-    check(CaptureInputFormat.check([format(flags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked, bits: 16)]) == .unsupported
-            && CaptureInputFormat.check([format(flags: float32 | kAudioFormatFlagIsBigEndian)]) == .unsupported
-            && CaptureInputFormat.check([format(flags: float32, bits: 64)]) == .unsupported,
-          "input format: integer, big-endian or 64-bit samples aren't read")
+    check(CaptureInputFormat.check([format(flags: float32 | kAudioFormatFlagIsBigEndian)]) == .unsupported
+            && CaptureInputFormat.check([format(flags: float32, bits: 64)]) == .unsupported
+            && CaptureInputFormat.check([format(flags: kAudioFormatFlagIsPacked, bits: 16)]) == .unsupported
+            && CaptureInputFormat.check([format(flags: signed | (8 << kLinearPCMFormatFlagsSampleFractionShift))]) == .unsupported,
+          "input format: big-endian, 64-bit, unsigned and fixed-point samples aren't read")
     check(CaptureInputFormat.check([]) == .noChannels
             && CaptureInputFormat.check([format(flags: float32, channels: 0)]) == .noChannels,
           "input format: a device without input channels has nothing to capture")
-    check(CaptureInputFormat.check([format(flags: float32), format(flags: kAudioFormatFlagIsSignedInteger, bits: 16, channels: 0)]) == .usable,
+    check(CaptureInputFormat.check([format(flags: float32), format(flags: signed, bits: 16, channels: 0)]) == .usable(.stereoFloat),
           "input format: a stream without channels doesn't count")
+
+    // Integer streams: which sample type each format is.
+    var packed24 = format(flags: signed, bits: 24)
+    packed24.mBytesPerFrame = 6
+    var high24 = format(flags: signed | kAudioFormatFlagIsAlignedHigh, bits: 24)
+    high24.mBytesPerFrame = 8
+    high24.mFormatFlags &= ~kAudioFormatFlagIsPacked
+    var low24 = high24
+    low24.mFormatFlags &= ~kAudioFormatFlagIsAlignedHigh
+    var nonInterleaved16 = format(flags: signed | kAudioFormatFlagIsNonInterleaved, bits: 16)
+    nonInterleaved16.mBytesPerFrame = 2
+    check(CaptureChannels.Sample.of(format(flags: signed, bits: 16)) == .int16
+            && CaptureChannels.Sample.of(packed24) == .int24
+            && CaptureChannels.Sample.of(high24) == .int24High
+            && CaptureChannels.Sample.of(low24) == .int24Low
+            && CaptureChannels.Sample.of(format(flags: signed, bits: 32)) == .int32
+            && CaptureChannels.Sample.of(nonInterleaved16) == .int16,
+          "input format: 16-bit, 24-bit (packed and in 32) and 32-bit signed integers are read")
+    check(CaptureInputFormat.check([format(flags: signed, bits: 16)])
+            == .usable(CaptureChannels.Layout(left: 0, right: 1, leftSample: .int16, rightSample: .int16)),
+          "input format: an integer device is captured without changing its format")
+
+    // Integer to float: full scale, zero and the sign of the smallest step.
+    func converted<T>(_ value: T, _ sample: CaptureChannels.Sample) -> Float {
+        withUnsafeBytes(of: value) { sample.value(at: $0.baseAddress!) }
+    }
+    func converted(bytes: [UInt8], _ sample: CaptureChannels.Sample) -> Float {
+        bytes.withUnsafeBytes { sample.value(at: $0.baseAddress!) }
+    }
+    check(converted(Int16.min, .int16) == -1 && converted(Int16.max, .int16) == 32_767 / 32_768
+            && converted(Int16(0), .int16) == 0 && converted(Int16(-1), .int16) == -1 / 32_768,
+          "integer input: 16-bit min, max, zero and sign")
+    check(converted(bytes: [0x00, 0x00, 0x80], .int24) == -1
+            && converted(bytes: [0xFF, 0xFF, 0x7F], .int24) == 8_388_607 / 8_388_608
+            && converted(bytes: [0, 0, 0], .int24) == 0
+            && converted(bytes: [0xFF, 0xFF, 0xFF], .int24) == -1 / 8_388_608
+            && converted(bytes: [0x01, 0x00, 0x00], .int24) == 1 / 8_388_608,
+          "integer input: packed 24-bit min, max, zero and sign")
+    check(converted(Int32(bitPattern: 0x8000_0000), .int24High) == -1
+            && converted(Int32(0x7FFF_FF00), .int24High) == 8_388_607 / 8_388_608
+            && converted(Int32(0x0000_00FF), .int24High) == 0
+            && converted(Int32(bitPattern: 0xFFFF_FF00), .int24High) == -1 / 8_388_608,
+          "integer input: 24-bit high in 32 min, max, zero and sign; the low byte is ignored")
+    check(converted(Int32(0x0080_0000), .int24Low) == -1
+            && converted(Int32(0x007F_FFFF), .int24Low) == 8_388_607 / 8_388_608
+            && converted(Int32(0), .int24Low) == 0
+            && converted(Int32(0x00FF_FFFF), .int24Low) == -1 / 8_388_608
+            && converted(Int32(bitPattern: 0xAB80_0000), .int24Low) == -1,
+          "integer input: 24-bit low in 32 min, max, zero and sign; the high byte is ignored")
+    check(converted(Int32.min, .int32) == -1 && converted(Int32.max, .int32) <= 1
+            && converted(Int32.max, .int32) > 0.999_999 && converted(Int32(0), .int32) == 0
+            && converted(Int32(-1), .int32) == -1 / 2_147_483_648,
+          "integer input: 32-bit min, max, zero and sign")
+
+    // Channel pairs on devices with more than two channels.
+    check(InputChannelPair.offered(channels: 1).isEmpty && InputChannelPair.offered(channels: 2).isEmpty,
+          "channel pairs: a mono or stereo device offers no choice")
+    let four = InputChannelPair.offered(channels: 4)
+    check(four.map { [$0.index, $0.left, $0.right] } == [[0, 0, 1], [1, 2, 3]],
+          "channel pairs: four channels offer 1-2 and 3-4", "\(four)")
+    let five = InputChannelPair.offered(channels: 5)
+    check(five.map { [$0.left, $0.right] } == [[0, 1], [2, 3], [4, 4]] && five[2].isMono && !five[1].isMono,
+          "channel pairs: an odd last channel is a pair of its own", "\(five)")
+    func resolves(_ saved: Int, on channels: Int, to pair: InputChannelPair, fellBack: Bool) -> Bool {
+        let found = InputChannelPair.resolve(saved: saved, channels: channels)
+        return found.pair == pair && found.fellBack == fellBack
+    }
+    check(resolves(0, on: 8, to: .first, fellBack: false) && resolves(0, on: 1, to: .first, fellBack: false),
+          "channel pairs: nothing saved reads channels 1-2, on a mono device too")
+    check(resolves(1, on: 4, to: four[1], fellBack: false) && resolves(2, on: 5, to: five[2], fellBack: false),
+          "channel pairs: a saved pair the device has is read")
+    check(resolves(2, on: 4, to: .first, fellBack: true) && resolves(1, on: 2, to: .first, fellBack: true)
+            && resolves(-1, on: 8, to: .first, fellBack: true),
+          "channel pairs: a saved pair the device no longer has falls back to 1-2 and says so")
+    check(InputChannelPair.change(from: 0, to: 1, streaming: true) == .restart
+            && InputChannelPair.change(from: 0, to: 1, streaming: false) == .remember
+            && InputChannelPair.change(from: 1, to: 1, streaming: true) == .none
+            && InputChannelPair.change(from: 1, to: -1, streaming: true) == .none,
+          "channel pairs: choosing another pair restarts a running session, the same one does nothing")
+    check(UIStrings().inputChannelPair(four[1]) == "Channels 3-4" && UIStrings().inputChannelPair(five[2]) == "Channel 5",
+          "channel pairs: shown as the device counts its channels")
+
+    // The pair's channels reach L and R, wherever they sit.
+    func pairLayout(_ pair: InputChannelPair) -> CaptureChannels.Layout {
+        CaptureChannels.Layout(left: pair.left, right: pair.right, leftSample: .float32, rightSample: .float32)
+    }
+    check(stereo([(4, [1, 2, 3, 4, 5, 6, 7, 8])], layout: pairLayout(four[1])).samples == [3, 4, 7, 8],
+          "channel pairs: pair 3-4 of an interleaved input plays its channels 3 and 4")
+    check(stereo([(1, [1, 2]), (1, [3, 4]), (1, [5, 6]), (1, [7, 8])], layout: pairLayout(four[1])).samples == [5, 7, 6, 8],
+          "channel pairs: pair 3-4 of one buffer per channel plays the third and fourth buffers")
+    check(stereo([(2, [1, 2, 3, 4]), (3, [10, 20, 30, 40, 50, 60])], layout: pairLayout(five[2])).samples == [30, 30, 60, 60],
+          "channel pairs: a lone fifth channel plays on both sides")
+    check(stereo([(1, [1, 2, 3])], layout: pairLayout(.first)).samples == [1, 1, 2, 2, 3, 3],
+          "channel pairs: a mono device on 1-2 still plays its channel on both sides")
+    let twoStreams = [format(flags: float32), format(flags: signed, bits: 16)]
+    check(CaptureInputFormat.check(twoStreams, pair: four[1])
+            == .usable(CaptureChannels.Layout(left: 2, right: 3, leftSample: .int16, rightSample: .int16)),
+          "channel pairs: the pair's stream decides its sample type")
+    check(CaptureInputFormat.check([format(flags: float32), format(flags: kAudioFormatFlagIsPacked, bits: 16)]) == .usable(.stereoFloat)
+            && CaptureInputFormat.check([format(flags: float32), format(flags: kAudioFormatFlagIsPacked, bits: 16)],
+                                        pair: four[1]) == .unsupported,
+          "channel pairs: only the streams holding the pair have to be readable")
+    let int16Pair = CaptureChannels.Layout(left: 2, right: 3, leftSample: .int16, rightSample: .int16)
+    let int16Bytes: [Int16] = [0, 0, Int16.min, 16_384, 0, 0, Int16.max, -1]
+    let int16Stereo: [Float] = int16Bytes.withUnsafeBytes { raw in
+        var list = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(
+            mNumberChannels: 4, mDataByteSize: UInt32(raw.count), mData: UnsafeMutableRawPointer(mutating: raw.baseAddress)))
+        var out = [Float](repeating: 9, count: 4)
+        withUnsafePointer(to: &list) { CaptureChannels($0, layout: int16Pair).copy(from: 0, frames: 2, into: &out) }
+        return out
+    }
+    check(int16Stereo == [-1, 0.5, 32_767 / 32_768, -1 / 32_768],
+          "channel pairs: a 16-bit input's pair 3-4 is converted to float", "\(int16Stereo)")
+
+    let storedPairs: [String: Any] = ["a": 1, "b": 2.0, "c": 0, "d": -1, "e": 1.5, "f": "x", "g": Double.nan]
+    check(AppSettings.channelPairs(storedPairs) == ["a": 1, "b": 2] && AppSettings.channelPairs("x").isEmpty,
+          "channel pairs: only whole stored pairs above 1-2 are read back")
+    final class PairStore { var values: [String: Any] = [:] }
+    let pairStore = PairStore()
+    let pairSettings = SettingsStore(read: { pairStore.values[$0] }, write: { value, key in pairStore.values[key] = value })
+    check(pairSettings.load().inputPairs.isEmpty, "channel pairs: a new install reads every device on 1-2")
+    pairSettings.save(inputPairs: ["mic-uid": 1])
+    let pairsBack = pairSettings.load().inputPairs
+    pairSettings.save(inputPairs: [:])
+    check(pairsBack == ["mic-uid": 1] && pairStore.values[AppSettings.Keys.inputChannelPairs] == nil,
+          "channel pairs: a pair is kept per device UID, and the key goes once all are on 1-2")
 
     check(AppTapFollow.decide(tapped: [5, 7], found: [7, 5], appRunning: true) == .keep,
           "app tap: the same processes in another order keep the tap")

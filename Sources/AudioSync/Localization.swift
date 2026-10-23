@@ -475,6 +475,12 @@ struct UIStrings {
     let sourceLabel = "Audio Source"
     let sourceSystem = "All System Audio"
     let sourceInputsHeader = "Input Devices"
+    let inputChannelsLabel = "Input Channels"
+    /// One channel pair of an input device, counted from 1 as the device's
+    /// own settings count them.
+    func inputChannelPair(_ pair: InputChannelPair) -> String {
+        pair.isMono ? "Channel \(pair.left + 1)" : "Channels \(pair.left + 1)-\(pair.right + 1)"
+    }
     let microphoneDenied = """
         AudioSync is not allowed to use input devices.
         Open System Settings → Privacy & Security → Microphone and turn on AudioSync.
