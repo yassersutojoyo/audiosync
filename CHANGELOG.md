@@ -33,12 +33,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, streaming All System Audio while nothing plays no longer brings up the notice that capture permission is missing. The notice now waits for sound.
 - On the Mac, calibration works while the source plays nothing. Before, the test sound never started and the run failed as if the source were silent.
 - On the Mac, after you type in a delay field, a click on that panel's step button steps from the value you typed, and a click that closes the panel leaves the keyboard focus on the speaker's delay.
-- On Windows, a + step on a delay that's already at the 20 s maximum no longer clears the speaker's last calibration result.
 - On the Mac, a + step on a delay that's already at the 20 s maximum no longer clears the speaker's last calibration result.
-- On Windows, closing the Calibrate All results puts the keyboard focus on the Calibrate All button instead of losing it.
-- On Windows, Narrator reads the reason again when Add by Address turns down a second address for the same reason.
-- In the Web Remote page on iPhone, quick taps on the delay steps no longer zoom the page in, and tapping a field doesn't zoom either. Pinch zoom still works.
-- The Mac app builds with only the Command Line Tools installed again.
 
 ## [0.6.0] - unreleased
 
