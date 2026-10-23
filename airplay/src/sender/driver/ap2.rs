@@ -565,6 +565,8 @@ impl Driver {
                     speaker.backoff.on_playing();
                 }
                 self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Playing));
+                // Ready follows the stream SETUP answer and FLUSH (P123).
+                self.send_now_playing(key, now);
             }
             Ap2Event::Warning(warning) => self.emit_speaker(key, SpeakerEvent::Warning(warning)),
             Ap2Event::Failed(error) => {

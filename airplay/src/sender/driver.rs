@@ -1269,11 +1269,7 @@ impl Driver {
                 }
             }
             Command::SetVolume(key, volume) => self.set_volume(&key, volume, now),
-            Command::ReadVolume(key) => {
-                if let Some(active) = self.active(&key) {
-                    active.session.read_volume(now);
-                }
-            }
+            Command::ReadVolume(key) => self.read_volume(&key, now),
             Command::SetNowPlaying(now_playing) => {
                 self.now_playing = Some((now_playing, now));
                 let keys: Vec<DeviceKey> = self.stream_ids.values().cloned().collect();
@@ -1567,8 +1563,9 @@ impl Driver {
         self.emit_speaker(key, SpeakerEvent::State(state));
     }
 
-    /// Sends what is playing to one playing speaker, as far as it lists the
-    /// types (P123 to P127). Each item applies from the audio arriving now.
+    /// Sends what is playing to one playing speaker, on either path, as far
+    /// as it lists the types (P123 to P127). Each item applies from the
+    /// audio arriving now.
     fn send_now_playing(&mut self, key: &DeviceKey, now: Instant) {
         let Some((now_playing, set_at)) = self.now_playing.clone() else {
             return;
@@ -1576,21 +1573,23 @@ impl Driver {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
-        let Phase::Active(active) = &mut speaker.phase else {
-            return;
+        let stream_id = match &speaker.phase {
+            Phase::Active(active) => active.stream_id,
+            Phase::Ap2(active) => active.stream_id,
+            _ => None,
         };
-        let Some(rtptime) = active.stream_id.and_then(|id| self.stream.rtptime_now(id)) else {
+        let Some(rtptime) = stream_id.and_then(|id| self.stream.rtptime_now(id)) else {
             return;
         };
         let frames = |duration: Duration| {
             (duration.as_secs_f64() * f64::from(SAMPLE_RATE)).round() as u64 as u32
         };
-        let session = &mut active.session;
+        let mut items = Vec::new();
         if let Some(info) = now_playing.track {
-            let _ = session.send_metadata(Metadata::Track { info, rtptime }, now);
+            items.push(Metadata::Track { info, rtptime });
         }
         if let Some(jpeg) = now_playing.artwork {
-            let _ = session.send_metadata(Metadata::Artwork { jpeg, rtptime }, now);
+            items.push(Metadata::Artwork { jpeg, rtptime });
         }
         if let Some(progress) = now_playing
             .progress
@@ -1598,12 +1597,39 @@ impl Driver {
         {
             let start = rtptime.wrapping_sub(frames(progress.elapsed));
             let end = start.wrapping_add(frames(progress.length));
-            let metadata = Metadata::Progress {
+            items.push(Metadata::Progress {
                 start,
                 current: rtptime,
                 end,
+            });
+        }
+        for metadata in items {
+            let _ = match &mut speaker.phase {
+                Phase::Active(active) => active.session.send_metadata(metadata, now),
+                Phase::Ap2(active) => active.session.send_metadata(metadata, now),
+                _ => return,
             };
-            let _ = session.send_metadata(metadata, now);
+        }
+    }
+
+    /// A read-back of a playing speaker's volume (P122). On the AirPlay 2
+    /// path it reports the last value set instead of asking the receiver.
+    fn read_volume(&mut self, key: &DeviceKey, now: Instant) {
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
+        let last_set = match &mut speaker.phase {
+            Phase::Active(active) => {
+                active.session.read_volume(now);
+                None
+            }
+            Phase::Ap2(active) if active.stream_id.is_some() => {
+                Some(speaker.options.volume.wire_db())
+            }
+            _ => None,
+        };
+        if let Some(db) = last_set {
+            self.emit_speaker(key, SpeakerEvent::VolumeReported(db));
         }
     }
 
