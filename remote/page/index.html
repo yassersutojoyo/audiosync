@@ -253,12 +253,12 @@ const TEXT = {
   delayRange: (min, max) => `Delay must be from ${min} to ${max} ms.`,
   unavailable: "Not available right now.",
   percent: (value) => `${value}%`,
-  stepScan: "Scan the QR code with your phone's camera.",
+  stepOpened: "Open this page on your phone. You've done this one.",
   stepHomeIPhone: "Add the page to your Home Screen: tap the options button left of Safari's address bar, then Share, View More and Add to Home Screen.",
-  stepHomeAndroid: "Add the page to your Home screen: in Chrome's menu, tap Add to Home screen or Install app.",
+  stepHomeOther: "Add the page to your Home screen: in the browser's menu, tap Add to Home screen or Install app.",
   stepOpen: "Open AudioSync from the new icon and enter the pairing code.",
   orderIPhone: "Do step 2 before you enter the code: a pairing made in Safari doesn't carry over to the Home Screen app, so you would pair again there.",
-  orderAndroid: "Do step 2 before you enter the code, so you pair in the app you'll use.",
+  orderOther: "Do step 2 before you enter the code, so you pair in the app you'll use.",
 };
 
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
@@ -327,7 +327,8 @@ function showError(element, message) {
 }
 
 function isStandalone() {
-  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  if (window.navigator.standalone === true) { return true; }
+  try { return window.matchMedia("(display-mode: standalone)").matches; } catch (_) { return false; }
 }
 
 // Only iOS Safari defines navigator.standalone; a Home Screen app there keeps its own cookies.
@@ -342,12 +343,12 @@ function setupHidden() {
 function showSetup() {
   if (isStandalone() || setupHidden()) { return; }
   const ios = isIOS();
-  for (const step of [TEXT.stepScan, ios ? TEXT.stepHomeIPhone : TEXT.stepHomeAndroid, TEXT.stepOpen]) {
+  for (const step of [TEXT.stepOpened, ios ? TEXT.stepHomeIPhone : TEXT.stepHomeOther, TEXT.stepOpen]) {
     const item = document.createElement("li");
     item.textContent = step;
     ui.setupSteps.append(item);
   }
-  ui.setupOrder.textContent = ios ? TEXT.orderIPhone : TEXT.orderAndroid;
+  ui.setupOrder.textContent = ios ? TEXT.orderIPhone : TEXT.orderOther;
   ui.setup.hidden = false;
 }
 
