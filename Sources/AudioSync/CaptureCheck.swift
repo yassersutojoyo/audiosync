@@ -37,7 +37,7 @@ enum CaptureCheck: Equatable {
     /// a tap needs it, so a microphone or line-in heard says nothing about it.
     static func provesPermission(_ source: AudioSource) -> Bool {
         switch source {
-        case .system, .app: return true
+        case .system, .app, .mix: return true
         case .input: return false
         }
     }

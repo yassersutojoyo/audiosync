@@ -1826,6 +1826,64 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn only_a_cast_speaker_without_an_offset_waits_for_the_unknown_start_guess() {
+        use audiosync_cast::audio::Codec;
+        use audiosync_cast::discovery::DeviceId;
+        use audiosync_cast::host::{AttemptId, HostEvent};
+        use audiosync_cast::session::SessionEvent;
+        use audiosync_core::calibrate_all::{
+            CAST_LATENCY_ALLOWANCE_MS, CAST_UNKNOWN_FLAC_MS, CAST_UNKNOWN_WAV_MS,
+        };
+
+        use crate::audio::backend::SourceId;
+        use crate::audio::cast::tests::{ATTIC, FakeCast};
+        use crate::audio::mock::MockBackend;
+
+        let mut backend = MockBackend::demo();
+        let cast = FakeCast::default();
+        cast.announce(ATTIC, "Attic", 32_123);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_output_enabled("speakers", true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_offset(ATTIC, 2400.0);
+        backend.set_cast_enabled(ATTIC, true).unwrap();
+        cast.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: DeviceId::parse(ATTIC).unwrap(),
+            event: SessionEvent::Playing,
+        });
+        backend.poll();
+        let wait = |backend: &MockBackend| {
+            let speaker = backend.cast_speakers().into_iter().next().unwrap();
+            let guess_ms = match speaker.format {
+                Some(Codec::Wav) => CAST_UNKNOWN_WAV_MS,
+                _ => CAST_UNKNOWN_FLAC_MS,
+            };
+            let latency_ms = lineup(backend)
+                .members
+                .into_iter()
+                .find(|member| member.class == Class::Cast)
+                .map(|member| member.latency_ms);
+            (latency_ms, speaker.hold_back_ms, guess_ms)
+        };
+
+        let (latency_ms, hold_back_ms, _) = wait(&backend);
+        assert_eq!(
+            latency_ms,
+            Some(2400.0 + hold_back_ms + CAST_LATENCY_ALLOWANCE_MS),
+            "a calibrated speaker waits for its offset, without the guess on top"
+        );
+        backend.set_cast_offset(ATTIC, 0.0);
+        let (latency_ms, hold_back_ms, guess_ms) = wait(&backend);
+        assert_eq!(
+            latency_ms,
+            Some(hold_back_ms + guess_ms),
+            "an uncalibrated speaker waits for the guess"
+        );
+    }
+
     /// Turns on a local output whose device reports `form_factor` and
     /// `enumerator`, heard 2100 ms after its sweep entered its path.
     fn add_device(rig: &mut FakeRig, id: &str, form_factor: u32, enumerator: &str) {

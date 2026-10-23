@@ -74,12 +74,18 @@ final class AppModel: ObservableObject {
         let id, name: String        // id: "" for the whole system, else a bundle ID
         let icon: NSImage?
         let isInput: Bool
-        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name }
+        /// The channel pairs an input device with more than two channels
+        /// offers, as shown (`InputChannelPair.offered`); empty otherwise.
+        var pairs: [String] = []
+        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs }
     }
 
     struct Actions {
         var setPower: (Bool) -> Void = { _ in }
         var selectSource: (String) -> Void = { _ in }
+        var selectInputPair: (Int) -> Void = { _ in }
+        var toggleMixApp: (String) -> Void = { _ in }
+        var setMixMode: (AppMixMode) -> Void = { _ in }
         var setMaster: (Double) -> Void = { _ in }
         var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
@@ -151,7 +157,16 @@ final class AppModel: ObservableObject {
 
     @Published var running = false
     @Published var sourceID = ""
+    /// The stored channel pair of the input source (`InputChannelPair.index`).
+    @Published var inputPair = 0
     @Published var sources: [Source] = []
+    /// The level meter under the source; it publishes on its own.
+    let inputLevel = InputLevel()
+    /// The several-apps menu: the apps it offers, the mode it shows and the
+    /// apps checked in that mode.
+    @Published var mixApps: [Source] = []
+    @Published var mixMode: AppMixMode = .only
+    @Published var mixChecked: [String] = []
     @Published var master: Double = 100
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
@@ -1082,13 +1097,44 @@ struct AvailabilityNote: View {
 }
 
 /// The audio source menu: the whole system, running apps, then input devices.
+/// Under it, an input device with more than two channels gets its channel
+/// pair choice.
 struct SourcePicker: View {
     @ObservedObject var model: AppModel
     var large = false
 
+    /// Whether the chosen source is a mix, which checks the Several Apps menu.
+    private var isMix: Bool {
+        if case .mix = AudioSource(defaultsValue: model.sourceID) { return true }
+        return false
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sourceMenu
+            if let pairs = model.currentSource?.pairs, !pairs.isEmpty {
+                pairPicker(pairs)
+            }
+        }
+    }
+
+    private func pairPicker(_ pairs: [String]) -> some View {
         let t = model.text
-        Menu {
+        let selected = pairs.indices.contains(model.inputPair) ? model.inputPair : 0
+        return Picker(t.inputChannelsLabel, selection: Binding(get: { selected },
+                                                               set: { model.actions.selectInputPair($0) })) {
+            ForEach(Array(pairs.enumerated()), id: \.offset) { index, label in
+                Text(label).tag(index)
+            }
+        }
+        .pickerStyle(.menu)
+        .padding(.horizontal, 10)
+        .accessibilityLabel(t.inputChannelsLabel)
+    }
+
+    private var sourceMenu: some View {
+        let t = model.text
+        return Menu {
             ForEach(Array(model.sources.enumerated()), id: \.element.id) { index, source in
                 if source.isInput && (index == 0 || !model.sources[index - 1].isInput) {
                     Divider()
@@ -1101,6 +1147,30 @@ struct SourcePicker: View {
                     Text(source.name)
                 }
                 if source.id.isEmpty { Divider() }
+            }
+            Divider()
+            Menu {
+                Picker(t.sourceSeveralApps, selection: Binding(get: { model.mixMode },
+                                                               set: { model.actions.setMixMode($0) })) {
+                    Text(t.sourceMixOnly).tag(AppMixMode.only)
+                    Text(t.sourceMixAllExcept).tag(AppMixMode.allExcept)
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+                Divider()
+                if model.mixApps.isEmpty {
+                    Text(t.sourceMixEmpty)
+                }
+                ForEach(model.mixApps) { app in
+                    Toggle(isOn: Binding(get: { model.mixChecked.contains(app.id) },
+                                         set: { _ in model.actions.toggleMixApp(app.id) })) {
+                        if let icon = app.icon { Image(nsImage: icon) }
+                        Text(app.name)
+                    }
+                }
+            } label: {
+                if isMix { Image(systemName: "checkmark") }
+                Text(t.sourceSeveralApps)
             }
         } label: {
             HStack(spacing: 8) {
@@ -1136,6 +1206,32 @@ struct SourcePicker: View {
                 .frame(width: edge, height: edge)
                 .foregroundStyle(Brand.tealText)
         }
+    }
+}
+
+/// The input level meter under the source picker, while an input device is
+/// captured: a bar that only reads out, never a control or a focus stop. Its
+/// row is always laid out, so nothing below it moves when it shows.
+struct InputLevelMeter: View {
+    @ObservedObject var level: InputLevel
+    let text: UIStrings
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Brand.meterTrack)
+                Capsule().fill(Brand.tealText)
+                    .frame(width: geometry.size.width * CGFloat(min(max(level.level, 0), 1)))
+            }
+        }
+        .frame(height: 4)
+        .padding(.horizontal, 10)
+        .opacity(level.shown ? 1 : 0)
+        .accessibilityElement()
+        .accessibilityLabel(text.inputLevel)
+        .accessibilityValue(text.inputLevelValue(level.spokenPercent))
+        .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityHidden(!level.shown)
     }
 }
 

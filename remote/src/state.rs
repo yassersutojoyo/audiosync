@@ -18,6 +18,10 @@ pub struct State {
     pub now_playing: Option<NowPlaying>,
     /// In the app's order.
     pub speakers: Vec<Speaker>,
+    /// What the app can capture, in its source picker's order.
+    pub sources: Vec<Source>,
+    /// The source in use; `None` when it isn't one of `sources`.
+    pub source_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +52,49 @@ pub struct Speaker {
     pub available: bool,
     /// The row's notice text, if any.
     pub notice: Option<String>,
+}
+
+/// Something the app can capture, as its source picker lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Source {
+    /// Unique in a snapshot; the page posts it to `/api/source`.
+    pub id: String,
+    pub name: String,
+    pub kind: SourceKind,
+    /// False when the app can't switch to it now; a switch then fails with
+    /// 409. True when the snapshot leaves it out.
+    pub available: bool,
+    /// The entry's notice text, if any.
+    pub notice: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceKind {
+    /// Everything the computer plays.
+    System,
+    /// One app.
+    App,
+    /// An input device.
+    Input,
+}
+
+impl SourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SourceKind::System => "system",
+            SourceKind::App => "app",
+            SourceKind::Input => "input",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<SourceKind> {
+        match text {
+            "system" => Some(SourceKind::System),
+            "app" => Some(SourceKind::App),
+            "input" => Some(SourceKind::Input),
+            _ => None,
+        }
+    }
 }
 
 /// Why a published snapshot was refused.
@@ -97,6 +144,51 @@ fn int_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<i64, S
     field(object, name, at)?
         .as_i64()
         .ok_or_else(|| invalid(format!("{at}{name} is not a whole number")))
+}
+
+fn notice_field(object: &Map<String, Value>, at: &str) -> Result<Option<String>, StateError> {
+    match object.get("notice") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(notice)) => Ok(Some(notice.clone())),
+        Some(_) => Err(invalid(format!("{at}notice is not a string or null"))),
+    }
+}
+
+fn sources_field(root: &Map<String, Value>) -> Result<Vec<Source>, StateError> {
+    let list = match root.get("sources") {
+        None => return Ok(Vec::new()),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| invalid("sources is not a list"))?,
+    };
+    let mut sources = Vec::with_capacity(list.len());
+    let mut ids = HashSet::new();
+    for (index, item) in list.iter().enumerate() {
+        let at = format!("sources[{index}].");
+        let object = item
+            .as_object()
+            .ok_or_else(|| invalid(format!("sources[{index}] is not an object")))?;
+        let kind = text_field(object, "kind", &at)?;
+        let source = Source {
+            id: text_field(object, "id", &at)?,
+            name: text_field(object, "name", &at)?,
+            kind: SourceKind::parse(&kind)
+                .ok_or_else(|| invalid(format!("{at}kind is not system, app or input")))?,
+            available: match object.get("available") {
+                None => true,
+                Some(_) => bool_field(object, "available", &at)?,
+            },
+            notice: notice_field(object, &at)?,
+        };
+        if source.id.is_empty() {
+            return Err(invalid(format!("{at}id is empty")));
+        }
+        if !ids.insert(source.id.clone()) {
+            return Err(invalid(format!("{at}id is used twice")));
+        }
+        sources.push(source);
+    }
+    Ok(sources)
 }
 
 fn step_field(object: &Map<String, Value>, at: &str) -> Result<f64, StateError> {
@@ -161,11 +253,7 @@ impl State {
                 delay_min_ms: int_field(object, "delay_min_ms", &at)?,
                 delay_max_ms: int_field(object, "delay_max_ms", &at)?,
                 available: bool_field(object, "available", &at)?,
-                notice: match object.get("notice") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(notice)) => Some(notice.clone()),
-                    Some(_) => return Err(invalid(format!("{at}notice is not a string or null"))),
-                },
+                notice: notice_field(object, &at)?,
             };
             if speaker.id.is_empty() {
                 return Err(invalid(format!("{at}id is empty")));
@@ -178,11 +266,21 @@ impl State {
             }
             speakers.push(speaker);
         }
+        let sources = sources_field(root)?;
+        // The app may still name a source it no longer lists (an unplugged input).
+        let source_id = match root.get("source_id") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(id)) => Some(id.clone()),
+            Some(_) => return Err(invalid("source_id is not a string or null")),
+        }
+        .filter(|id| sources.iter().any(|source| &source.id == id));
         Ok(State {
             computer_name,
             master_volume,
             now_playing,
             speakers,
+            sources,
+            source_id,
         })
     }
 
@@ -214,18 +312,37 @@ impl State {
                 "source": playing.source,
             })
         });
+        let sources: Vec<Value> = self
+            .sources
+            .iter()
+            .map(|source| {
+                json!({
+                    "id": source.id,
+                    "name": source.name,
+                    "kind": source.kind.as_str(),
+                    "available": source.available,
+                    "notice": source.notice,
+                })
+            })
+            .collect();
         json!({
             "revision": revision,
             "computer_name": self.computer_name,
             "master": { "volume": self.master_volume },
             "now_playing": now_playing,
             "speakers": speakers,
+            "sources": sources,
+            "source_id": self.source_id,
         })
         .to_string()
     }
 
     pub fn speaker(&self, id: &str) -> Option<&Speaker> {
         self.speakers.iter().find(|speaker| speaker.id == id)
+    }
+
+    pub fn source(&self, id: &str) -> Option<&Source> {
+        self.sources.iter().find(|source| source.id == id)
     }
 }
 
@@ -240,13 +357,23 @@ pub struct SpeakerChange {
 /// A change the page asks for, as the app's callback receives it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    Speaker { id: String, change: SpeakerChange },
-    Master { volume: f64 },
+    Speaker {
+        id: String,
+        change: SpeakerChange,
+    },
+    Master {
+        volume: f64,
+    },
+    /// Capture this source, as a pick in the app's source picker would.
+    Source {
+        id: String,
+    },
 }
 
 impl Command {
-    /// `{"type":"speaker","id":…,"on"?,"volume"?,"delay_ms"?}` or
-    /// `{"type":"master","volume":…}`, with only the fields that were posted.
+    /// `{"type":"speaker","id":…,"on"?,"volume"?,"delay_ms"?}`,
+    /// `{"type":"master","volume":…}` or `{"type":"source","id":…}`, with
+    /// only the fields that were posted.
     pub fn to_json(&self) -> String {
         let mut object = Map::new();
         match self {
@@ -266,6 +393,10 @@ impl Command {
             Command::Master { volume } => {
                 object.insert("type".to_owned(), json!("master"));
                 object.insert("volume".to_owned(), json!(volume));
+            }
+            Command::Source { id } => {
+                object.insert("type".to_owned(), json!("source"));
+                object.insert("id".to_owned(), json!(id));
             }
         }
         Value::Object(object).to_string()
@@ -324,6 +455,12 @@ pub fn speaker_change_from_body(body: &[u8]) -> Result<SpeakerChange, BodyError>
 pub fn master_volume_from_body(body: &[u8]) -> Result<f64, BodyError> {
     let object = body_object(body)?;
     optional(&object, "volume", Value::as_f64)?.ok_or(BodyError::Empty)
+}
+
+/// Reads `{id}`, a source's ID as a string; unknown fields are ignored.
+pub fn source_id_from_body(body: &[u8]) -> Result<String, BodyError> {
+    let object = body_object(body)?;
+    optional(&object, "id", |value| value.as_str().map(str::to_owned))?.ok_or(BodyError::Empty)
 }
 
 /// Reads `{code}`, the code as a string.
@@ -394,6 +531,66 @@ mod tests {
         assert_eq!(written["speakers"][0]["notice"], Value::Null);
         let again = State::from_json(&state.to_json(7)).unwrap();
         assert_eq!(again, state);
+    }
+
+    const SOURCES: &str = r#""sources": [
+            {"id": "system", "name": "All System Audio", "kind": "system"},
+            {"id": "app:music", "name": "Music", "kind": "app", "available": true, "notice": null},
+            {"id": "input:usb", "name": "USB Mic", "kind": "input", "available": false,
+             "notice": "Allow microphone access"}
+        ],"#;
+
+    fn with_sources(source_id: &str) -> String {
+        SAMPLE.replacen(
+            "\"speakers\"",
+            &format!("{SOURCES} \"source_id\": {source_id}, \"speakers\""),
+            1,
+        )
+    }
+
+    #[test]
+    fn sources_keep_their_order_kind_and_the_current_one() {
+        let state = State::from_json(&with_sources("\"app:music\"")).unwrap();
+        let ids: Vec<&str> = state.sources.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["system", "app:music", "input:usb"]);
+        assert_eq!(state.sources[0].kind, SourceKind::System);
+        assert!(state.sources[0].available, "available when left out");
+        assert!(!state.sources[2].available);
+        assert_eq!(state.source_id.as_deref(), Some("app:music"));
+        assert_eq!(state.source("input:usb").unwrap().kind, SourceKind::Input);
+        let written: Value = serde_json::from_str(&state.to_json(3)).unwrap();
+        assert_eq!(written["source_id"], "app:music");
+        assert_eq!(written["sources"][1]["kind"], "app");
+        assert_eq!(written["sources"][2]["notice"], "Allow microphone access");
+        assert_eq!(State::from_json(&state.to_json(3)).unwrap(), state);
+    }
+
+    #[test]
+    fn a_snapshot_without_sources_or_with_an_unlisted_current_one_has_none() {
+        let bare = State::from_json(SAMPLE).unwrap();
+        assert!(bare.sources.is_empty());
+        assert_eq!(bare.source_id, None);
+        let written: Value = serde_json::from_str(&bare.to_json(1)).unwrap();
+        assert_eq!(written["sources"], json!([]));
+        assert_eq!(written["source_id"], Value::Null);
+        for current in ["\"input:gone\"", "null"] {
+            let state = State::from_json(&with_sources(current)).unwrap();
+            assert_eq!(state.source_id, None, "{current}");
+        }
+    }
+
+    #[test]
+    fn a_bad_source_list_is_refused() {
+        for bad in [
+            with_sources("3"),
+            with_sources("\"system\"").replace("\"kind\": \"input\"", "\"kind\": \"tv\""),
+            with_sources("\"system\"").replace("\"app:music\"", "\"system\""),
+            with_sources("\"system\"").replace("\"id\": \"input:usb\"", "\"id\": \"\""),
+            with_sources("\"system\"").replace("\"available\": false", "\"available\": 0"),
+            SAMPLE.replacen("\"speakers\"", "\"sources\": {}, \"speakers\"", 1),
+        ] {
+            assert!(State::from_json(&bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -472,6 +669,15 @@ mod tests {
         assert_eq!(master_volume_from_body(br#"{"volume": 12.5}"#), Ok(12.5));
         assert_eq!(master_volume_from_body(b"{}"), Err(BodyError::Empty));
         assert_eq!(
+            source_id_from_body(br#"{"id": "app:music", "x": 1}"#),
+            Ok("app:music".to_owned())
+        );
+        assert_eq!(source_id_from_body(b"{}"), Err(BodyError::Empty));
+        assert_eq!(
+            source_id_from_body(br#"{"id": 7}"#),
+            Err(BodyError::Malformed)
+        );
+        assert_eq!(
             pairing_code_from_body(br#"{"code": "012345"}"#),
             Ok("012345".to_owned())
         );
@@ -524,5 +730,13 @@ mod tests {
         let master: Value =
             serde_json::from_str(&Command::Master { volume: 5.0 }.to_json()).unwrap();
         assert_eq!(master, json!({"type": "master", "volume": 5.0}));
+        let source: Value = serde_json::from_str(
+            &Command::Source {
+                id: "input:usb".to_owned(),
+            }
+            .to_json(),
+        )
+        .unwrap();
+        assert_eq!(source, json!({"type": "source", "id": "input:usb"}));
     }
 }
