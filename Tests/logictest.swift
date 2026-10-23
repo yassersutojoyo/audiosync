@@ -1608,7 +1608,7 @@ do {
         withUnsafePointer(to: &list) { CaptureChannels($0, layout: int16Pair).copy(from: 0, frames: 2, into: &out) }
         return out
     }
-    check(int16Stereo == [-1, 0.5, 32_767 / 32_768, -1 / 32_768],
+    check(int16Stereo == [-1, 0.5, Float(32_767) / 32_768, Float(-1) / 32_768],
           "channel pairs: a 16-bit input's pair 3-4 is converted to float", "\(int16Stereo)")
 
     let started = [format(flags: float32), format(flags: signed, bits: 16)]
@@ -1620,9 +1620,9 @@ do {
                                                now: [format(flags: float32), format(flags: signed, bits: 16, channels: 4)])
             && CaptureInputFormat.needsRestart(started: started, now: [format(flags: float32)]),
           "input format: a new bit depth, channel count or stream list restarts the capture")
-    var otherRate = started
-    otherRate[0].mSampleRate = 44_100
-    check(!CaptureInputFormat.needsRestart(started: started, now: otherRate),
+    var otherRateFormats = started
+    otherRateFormats[0].mSampleRate = 44_100
+    check(!CaptureInputFormat.needsRestart(started: started, now: otherRateFormats),
           "input format: a rate change is left to the rate listener")
 
     let storedPairs: [String: Any] = ["a": 1, "b": 2.0, "c": 0, "d": -1, "e": 1.5, "f": "x", "g": Double.nan,
