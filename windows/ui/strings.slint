@@ -631,7 +631,7 @@ export global Strings {
     out property <string> help-art-delay: @tr("Two speakers playing the same sound toward a listener. The second starts later, held back by its delay, so their waves line up.");
     out property <string> help-art-classes: @tr("Left: local and AirPlay speakers playing in step. Right: a Google Cast speaker starting after an offset you set by ear.");
     out property <string> help-calibration-title: @tr("Calibration");
-    out property <string> help-calibration: @tr("A microphone can measure delays for you. Put it where you listen and keep the room quiet. Each measurement compares a speaker with the PC's own speakers, so they have to be on and playing, and streaming has to be on too.\n\nTo measure one local speaker, turn it on, select its row or its delay, and select Calibrate with Microphone under the delay controls. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets its delay from the difference. Cancel stops it and leaves the delay as it was.\n\nCalibrate All Speakers, on the Calibration card under Equalizer, measures every speaker that is on, AirPlay and Google Cast included. AudioSync fades the music out, plays a sweep on each speaker in turn, twice each, and fades the music back in. The results show each speaker's old and new delay; the AirPlay speakers share one AirPlay delay, the middle of their values. Nothing changes until you choose Apply. Undo puts the old delays back, and Measure Again repeats one speaker.\n\nIf Windows blocks microphone access for desktop apps, AudioSync says so and where to allow it.");
+    out property <string> help-calibration: @tr("A microphone can measure delays for you. Put it where you listen and keep the room quiet. Each measurement compares a speaker with the PC's own speakers, so they have to be on and playing, and streaming has to be on too.\n\nTo measure one local speaker, turn it on, select its row or its delay, and select Calibrate with Microphone under the delay controls. Headphones and virtual outputs don't have that button. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets its delay from the difference. Cancel stops it and leaves the delay as it was.\n\nCalibrate All Speakers, on the Calibration card under Equalizer, measures every speaker that is on, AirPlay and Google Cast included. Headphones and virtual outputs are left out, since the microphone can't hear them, and their delay stays yours to set; the card lists them with the reason. If a speaker reports itself as headphones or a virtual output, Include Anyway measures it with the others until you close the results. AudioSync fades the music out, plays a sweep on each speaker in turn, twice each, and fades the music back in. The results show each speaker's old and new delay; the AirPlay speakers share one AirPlay delay, the middle of their values. Nothing changes until you choose Apply. Undo puts the old delays back, and Measure Again repeats one speaker.\n\nIf Windows blocks microphone access for desktop apps, AudioSync says so and where to allow it.");
     out property <string> help-volume-title: @tr("Volume");
     out property <string> help-volume: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay speakers included. A Google Cast speaker's slider sets the speaker's own volume, which Master Volume leaves alone, and Mute under it mutes the speaker itself.\n\nWhen a local speaker that is on is turned down low or muted in Windows, a line under its slider says so, with a button that fixes it. AudioSync changes the Windows volume only when you select that button.");
     out property <string> help-bluetooth-title: @tr("Bluetooth");
@@ -1199,9 +1199,9 @@ export global Strings {
 
     public pure function calibrate-all-hint(reference: string) -> string {
         if reference == "" {
-            return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on the PC's own speakers and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Nothing changes until you choose Apply.");
+            return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on the PC's own speakers and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Headphones and virtual outputs are left out. Nothing changes until you choose Apply.");
         }
-        return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on {} and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Nothing changes until you choose Apply.", reference);
+        return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on {} and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Headphones and virtual outputs are left out. Nothing changes until you choose Apply.", reference);
     }
 
     public pure function calibrate-all-turn-on(reference: string) -> string {
@@ -1225,6 +1225,31 @@ export global Strings {
         }
         return @tr("Only {} is on. Turn on another speaker to calibrate it.", reference);
     }
+
+    // Every other speaker that is on is left out by its kind.
+    out property <string> calibrate-all-only-left-out: @tr("The other speakers that are on are headphones or virtual outputs, which the microphone can't hear. Turn on another speaker, or choose Include Anyway for one below.");
+    // Why an output that is on sits out of Calibrate All, under its name.
+    out property <string> calibrate-all-left-out-headphones: @tr("Headphones are left out: the microphone can't hear them.");
+    out property <string> calibrate-all-left-out-virtual: @tr("Virtual output: there's nothing for the microphone to hear.");
+    out property <string> calibrate-all-included: @tr("Included anyway: measured in this run.");
+    out property <string> calibrate-all-left-out-title: @tr("Left out");
+    out property <string> include-anyway: @tr("Include Anyway");
+    out property <string> include-anyway-help-headphones: @tr("For a speaker that reports itself as headphones. It counts until you close the calibration results.");
+    out property <string> include-anyway-help-virtual: @tr("For a virtual output that passes the sound on to a speaker. It counts until you close the calibration results.");
+    out property <string> leave-out: @tr("Leave Out");
+
+    public pure function include-anyway-label(name: string) -> string {
+        return @tr("Include {} anyway", name);
+    }
+
+    public pure function leave-out-label(name: string) -> string {
+        return @tr("Leave {} out", name);
+    }
+
+    // In a left-out output's delay controls, instead of Calibrate with
+    // Microphone; its delay stays the user's to set.
+    out property <string> calibration-left-out-headphones: @tr("Left out of microphone calibration: the microphone can't hear headphones.");
+    out property <string> calibration-left-out-virtual: @tr("Left out of microphone calibration: a virtual output has nothing for the microphone to hear.");
 
     // Take is 1 or 2: each speaker plays the sweep twice.
     public pure function calibrate-all-sweep(name: string, take: int) -> string {

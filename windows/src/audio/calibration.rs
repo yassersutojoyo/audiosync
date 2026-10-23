@@ -299,6 +299,9 @@ pub enum Failure {
     Unfinished,
     /// Calibrate All found no speaker on besides the reference.
     NothingToMeasure,
+    /// Calibrate All found no speaker on besides the reference that the
+    /// microphone can hear: the others are headphones or virtual outputs.
+    OnlyLeftOut,
     TooShort(Option<Which>),
     TooLong(Option<Which>),
     Clipped(Option<Which>),

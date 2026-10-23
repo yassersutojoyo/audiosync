@@ -35,15 +35,15 @@ use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
-    self, AllPhase, AllProgress, AppState, Backend, MainWindowShows, NoticeMessage, PinPrompt,
-    SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings, WindowFrame,
+    self, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MainWindowShows, NoticeMessage,
+    PinPrompt, SheetRow, SheetState, SourceKind, SpeakerState, ViewSettings, WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
     CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GroupItem, GroupNameDialog,
-    GuidePage, GuideStepItem, GuideWindow, MainControl, MainWindow, NameField, NoticeItem,
-    NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState, SpeakerGroup,
-    SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
+    GuidePage, GuideStepItem, GuideWindow, LeftOutItem, MainControl, MainWindow, NameField,
+    NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, RowPart, RowState,
+    SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, speaker_names,
 };
 
 mod help_window;
@@ -194,6 +194,7 @@ struct Models {
     gains: Rc<VecModel<f32>>,
     presets: Rc<VecModel<SharedString>>,
     calibration_rows: Rc<VecModel<CalibrationRowItem>>,
+    calibration_left_out: Rc<VecModel<LeftOutItem>>,
 }
 
 /// How many notices the main window lists, newest first.
@@ -742,6 +743,7 @@ impl App {
             gains: Rc::new(VecModel::default()),
             presets: Rc::new(VecModel::default()),
             calibration_rows: Rc::new(VecModel::default()),
+            calibration_left_out: Rc::new(VecModel::default()),
         };
         let app = Rc::new(App {
             backend: RefCell::new(backend),
@@ -1274,6 +1276,8 @@ impl App {
         self.main.set_notices(ModelRc::from(m.notices.clone()));
         self.main
             .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
+        self.main
+            .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
         self.flyout.set_sources(ModelRc::from(m.sources.clone()));
         self.flyout
             .set_speakers(ModelRc::from(m.all_speakers.clone()));
@@ -1352,6 +1356,11 @@ impl App {
                 row.name_text = text.as_str().into();
             }
             row.calibration_status = calibration_status(&strings, &state, speaker);
+            row.calibration_left_out = speaker
+                .mic_left_out
+                .map_or_else(SharedString::default, |kind| {
+                    calibration_left_out(&strings, kind)
+                });
             row.availability = with_switch(row.availability, ui.airplay2_experimental);
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
@@ -1579,6 +1588,7 @@ impl App {
         main.set_calibrate_all_can_apply(card.can_apply);
         main.set_calibrate_all_can_undo(card.can_undo);
         sync_model(&self.models.calibration_rows, card.rows);
+        sync_model(&self.models.calibration_left_out, card.left_out);
     }
 
     /// Empties both live regions now.
@@ -1813,6 +1823,22 @@ impl App {
                 if let Ok(row) = usize::try_from(row) {
                     app.update(|b| b.measure_again(row));
                     app.follow_calibration(&w);
+                }
+            });
+        });
+        let w = weak.clone();
+        main.on_calibrate_all_include_requested(move |row, included| {
+            with_app(&w, |app| {
+                let id = usize::try_from(row).ok().and_then(|row| {
+                    let state = app.snapshot();
+                    state
+                        .calibrate_all
+                        .left_out
+                        .get(row)
+                        .map(|left| left.id.clone())
+                });
+                if let Some(id) = id {
+                    app.update(|b| b.include_in_calibration(&id, included));
                 }
             });
         });
@@ -3160,6 +3186,8 @@ pub fn speaker_item(
         calibration_status: SharedString::default(),
         calibration_privacy: state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
             && state.calibration.phase == Phase::Failed(Failure::MicrophoneDenied),
+        // Needs the strings: set by the caller (`App::refresh`).
+        calibration_left_out: SharedString::default(),
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
         paired: speaker.paired,
@@ -3222,11 +3250,12 @@ fn group_note(strings: &Strings<'_>, speaker: &ui_model::Speaker) -> SharedStrin
     )
 }
 
-/// A local output with an offset (not the reference, AirPlay or Cast): it
-/// can be calibrated with the microphone.
+/// A local output with an offset (not the reference, AirPlay or Cast) that
+/// a microphone can hear: it can be calibrated with the microphone.
 fn is_calibratable(speaker: &ui_model::Speaker) -> bool {
     speaker.delay_ms.is_some()
         && speaker.cast.is_none()
+        && speaker.mic_left_out.is_none()
         && !matches!(
             speaker.kind,
             ui_model::SpeakerKind::AirPlay
@@ -3284,6 +3313,23 @@ fn calibration_status(
     }
 }
 
+/// Why microphone calibration leaves an output out, in its delay controls.
+fn calibration_left_out(strings: &Strings<'_>, kind: ui_model::MicKind) -> SharedString {
+    match kind {
+        ui_model::MicKind::Virtual => strings.get_calibration_left_out_virtual(),
+        _ => strings.get_calibration_left_out_headphones(),
+    }
+}
+
+/// Why Calibrate All leaves an output out, or that it is included anyway.
+fn left_out_reason(strings: &Strings<'_>, row: &LeftOutRow) -> SharedString {
+    match (row.included, row.kind) {
+        (true, _) => strings.get_calibrate_all_included(),
+        (false, ui_model::MicKind::Virtual) => strings.get_calibrate_all_left_out_virtual(),
+        (false, _) => strings.get_calibrate_all_left_out_headphones(),
+    }
+}
+
 /// The speaker whose calibration just ended, once per ending, so Narrator
 /// hears how it ended without the focus moving to its line.
 fn calibration_ended(
@@ -3314,6 +3360,7 @@ struct CalibrateAllCard {
     privacy: bool,
     results_shown: bool,
     rows: Vec<CalibrationRowItem>,
+    left_out: Vec<LeftOutItem>,
     airplay: SharedString,
     outcome: SharedString,
     can_apply: bool,
@@ -3341,6 +3388,7 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             Some(Failure::NothingToMeasure) => {
                 strings.invoke_calibrate_all_nothing(reference.into())
             }
+            Some(Failure::OnlyLeftOut) => strings.get_calibrate_all_only_left_out(),
             Some(_) => strings.invoke_calibrate_all_turn_on(reference.into()),
             None => strings.invoke_calibrate_all_hint(reference.into()),
         },
@@ -3364,6 +3412,19 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         privacy: all.phase == AllPhase::Failed(Failure::MicrophoneDenied)
             || sheet.is_some_and(|sheet| sheet.failure == Some(Failure::MicrophoneDenied)),
         results_shown: sheet.is_some(),
+        left_out: all
+            .left_out
+            .iter()
+            .map(|row| LeftOutItem {
+                name: row.name.as_str().into(),
+                reason: left_out_reason(strings, row),
+                help: match row.kind {
+                    ui_model::MicKind::Virtual => strings.get_include_anyway_help_virtual(),
+                    _ => strings.get_include_anyway_help_headphones(),
+                },
+                included: row.included,
+            })
+            .collect(),
         rows: sheet.map_or_else(Vec::new, |sheet| {
             sheet
                 .rows
@@ -3546,6 +3607,7 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
         Failure::MicrophoneInUse => strings.get_calibration_microphone_in_use(),
         Failure::Unfinished => strings.get_calibration_unfinished(),
         Failure::NothingToMeasure => strings.invoke_calibrate_all_nothing(reference.into()),
+        Failure::OnlyLeftOut => strings.get_calibrate_all_only_left_out(),
         Failure::TooShort(_) => strings.get_calibration_too_short(),
         Failure::TooLong(_) => strings.get_calibration_too_long(),
         Failure::Clipped(which) => strings.invoke_calibration_clipped(subject(which)),
@@ -4329,6 +4391,59 @@ mod tests {
         };
         let line = calibration_status(&app.strings(), &state, &speaker);
         assert!(line.contains("412"), "{line}");
+    }
+
+    #[test]
+    fn outputs_left_out_by_kind_show_why_on_the_card_and_in_their_delay_controls() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.calibrate_all.blocked = Some(Failure::OnlyLeftOut);
+        state.calibrate_all.left_out = vec![
+            LeftOutRow {
+                id: "phones".into(),
+                name: "Headphones".into(),
+                kind: ui_model::MicKind::Headphones,
+                included: false,
+            },
+            LeftOutRow {
+                id: "cable".into(),
+                name: "Cable Input".into(),
+                kind: ui_model::MicKind::Virtual,
+                included: true,
+            },
+        ];
+        let card = calibrate_all_card(&strings, &state);
+        assert!(!card.can_start);
+        assert!(card.status.contains("Include Anyway"), "{}", card.status);
+        assert!(
+            !card.status.contains("Only"),
+            "not the only-the-reference text"
+        );
+        assert_eq!(card.left_out.len(), 2);
+        assert_eq!(
+            card.left_out[0].reason,
+            "Headphones are left out: the microphone can't hear them."
+        );
+        assert!(!card.left_out[0].included);
+        assert_eq!(
+            card.left_out[1].reason,
+            "Included anyway: measured in this run."
+        );
+        assert!(card.left_out[0].help.contains("as headphones"));
+        assert!(card.left_out[1].help.starts_with("For a virtual output"));
+
+        let mut speaker = state.speaker("local:desk").unwrap().clone();
+        speaker.enabled = true;
+        assert!(is_calibratable(&speaker));
+        speaker.mic_left_out = Some(ui_model::MicKind::Virtual);
+        assert!(!is_calibratable(&speaker), "no Calibrate with Microphone");
+        assert_eq!(calibration_status(&strings, &state, &speaker), "");
+        assert_eq!(
+            calibration_left_out(&strings, ui_model::MicKind::Virtual),
+            "Left out of microphone calibration: a virtual output has nothing for the \
+             microphone to hear."
+        );
     }
 
     #[test]

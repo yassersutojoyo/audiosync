@@ -33,8 +33,8 @@ use super::backend::{BackendError, OutputKind};
 use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
 use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
 use super::outputs::{
-    Endpoint, EndpointProperties, EndpointReading, Listing, RenderFormat, StreamSetup,
-    list_endpoints,
+    DeviceTraits, Endpoint, EndpointProperties, EndpointReading, Listing, RenderFormat,
+    StreamSetup, list_endpoints,
 };
 use super::process::{ProcessEntry, ProcessTable};
 use super::routing::{EndpointAudio, EndpointVolume};
@@ -766,6 +766,7 @@ impl Controller<MockDriver> {
                 name: name.to_owned(),
                 is_default: false,
                 kind: OutputKind::Other,
+                traits: DeviceTraits::default(),
             }),
         }
         driver.changed = true;
@@ -778,6 +779,15 @@ impl Controller<MockDriver> {
         if let Some(output) = driver.outputs.iter_mut().find(|output| output.id == id) {
             output.kind = kind;
         }
+    }
+
+    /// Sets what Windows says about a connected output's device.
+    pub fn set_output_traits(&mut self, id: &str, traits: DeviceTraits) {
+        let driver = self.driver_mut();
+        if let Some(output) = driver.outputs.iter_mut().find(|output| output.id == id) {
+            output.traits = traits;
+        }
+        driver.changed = true;
     }
 
     /// Disconnects an output; an output playing on it stops by itself.

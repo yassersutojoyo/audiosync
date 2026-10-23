@@ -87,6 +87,7 @@ use audiosync_core::calibrate_all::{
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress};
 use crate::audio::calibration::{self, CalibrationRun, Failure};
 use crate::audio::capture::WHOLE_SYSTEM_NAME;
+use crate::audio::outputs::MicKind;
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
@@ -98,8 +99,8 @@ use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressError, CastGroup, CastList, CastRow, CastState, Group, GroupError,
-    Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState, Source,
-    SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
+    LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState,
+    Source, SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -131,6 +132,9 @@ struct CalibrateAll {
     phase: AllPhase,
     sheet: Option<KeptSheet>,
     endings: u64,
+    /// Outputs left out by kind that the user chose Include Anyway for,
+    /// until the results close.
+    included: BTreeSet<String>,
 }
 
 /// After this many polls, 20 seconds, of AirPlay discovery without a single
@@ -938,23 +942,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// Why Calibrate All can't start now: a reference that plays and
-    /// another speaker that plays (S235).
-    fn calibrate_all_blocked(&self) -> Option<Failure> {
-        let lineup = calibrate_all::lineup(&self.audio);
-        let Some(reference) = lineup.reference.as_deref() else {
-            return Some(Failure::NoReference);
-        };
-        let reference_plays = lineup
-            .members
-            .iter()
-            .any(|m| m.class == Class::Local && m.id == reference);
-        if lineup.session.is_none() || !reference_plays {
-            return Some(Failure::NotPlaying);
-        }
-        (lineup.members.len() < 2).then_some(Failure::NothingToMeasure)
-    }
-
     fn calibrate_all_state(&self) -> CalibrateAllState {
         let all = &self.calibrate_all;
         let running = all.run.as_ref().filter(|run| run.is_running());
@@ -963,9 +950,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
             None => all.phase.clone(),
         };
         let busy = all.run.is_some();
+        let lineup = calibrate_all::lineup(&self.audio);
+        let left_out = lineup
+            .plan(&all.included)
+            .1
+            .into_iter()
+            .map(|left| LeftOutRow {
+                name: self.output_name(&left.id),
+                id: left.id,
+                kind: left.kind,
+                included: left.included,
+            })
+            .collect();
         CalibrateAllState {
             phase,
-            blocked: self.calibrate_all_blocked(),
+            // Why it can't start now (S235).
+            blocked: calibrate_all::blocked(&lineup, &all.included),
+            left_out,
             other_running: self.calibration_run.is_some(),
             sheet: all.sheet.as_ref().map(|kept| self.sheet_state(kept, busy)),
             endings: all.endings,
@@ -1294,6 +1295,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 added_by_address: speaker.address.is_some(),
             }),
             group: None,
+            mic_left_out: None,
         }
     }
 
@@ -2295,6 +2297,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .filter(|_| speaker.enabled),
             cast: None,
             group: speaker.group,
+            mic_left_out: None,
         }
     }
 
@@ -2315,6 +2318,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     fn speaker(&self, output: OutputInfo) -> Speaker {
         let id = speaker_key(&output.id);
+        let mic_left_out = left_out(&output);
         Speaker {
             auto_connect: self.auto_connect.contains(&id),
             name: self.custom_names.shown(&id, &output.name),
@@ -2335,6 +2339,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .then_some(Waiting::ForDevice),
             cast: None,
             group: None,
+            mic_left_out,
         }
     }
 
@@ -2952,6 +2957,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
             return;
         }
+        let outputs = self.audio.outputs();
+        let output = outputs.iter().find(|output| output.id == endpoint_id);
+        if output.and_then(left_out).is_some() {
+            return;
+        }
         let started = CalibrationRun::start(
             &mut self.audio,
             &endpoint_id,
@@ -2981,7 +2991,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
             return;
         }
-        match AllRun::start(&mut self.audio, clock::now_ns(), self.log.clone()) {
+        let started = AllRun::start(
+            &mut self.audio,
+            &self.calibrate_all.included,
+            clock::now_ns(),
+            self.log.clone(),
+        );
+        match started {
             Ok(run) => {
                 self.calibrate_all.phase = AllPhase::Idle;
                 self.calibrate_all.sheet = None;
@@ -3087,6 +3103,18 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.calibrate_all.endings += 1;
     }
 
+    fn include_in_calibration(&mut self, id: &str, included: bool) {
+        if self.calibrate_all.run.is_some() {
+            return;
+        }
+        let ids = &mut self.calibrate_all.included;
+        if included {
+            ids.insert(id.to_owned());
+        } else {
+            ids.remove(id);
+        }
+    }
+
     fn close_calibrate_all(&mut self) {
         if self.calibrate_all.run.is_none() {
             self.calibrate_all = CalibrateAll {
@@ -3179,6 +3207,13 @@ fn unnumbered(name: &str) -> String {
     }
     plain.push_str(rest);
     plain
+}
+
+/// The kind microphone calibration leaves `output` out for, if any. The
+/// reference is never left out: it is what the others are measured against.
+fn left_out(output: &OutputInfo) -> Option<MicKind> {
+    let kind = output.traits.mic_kind();
+    (kind != MicKind::Speaker && !output.is_reference).then_some(kind)
 }
 
 /// The UI's ID of a local output.
@@ -6405,6 +6440,60 @@ mod tests {
             AllPhase::Failed(Failure::NoMicrophone)
         );
         assert!(!state.calibration.busy);
+    }
+
+    #[test]
+    fn headphones_that_are_on_are_listed_left_out_until_included_anyway() {
+        let mut audio = reference_audio();
+        audio.set_output_traits(
+            "bluetooth",
+            crate::audio::outputs::DeviceTraits {
+                form_factor: Some(3),
+                enumerator: Some("BTHENUM".to_owned()),
+            },
+        );
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        let state = adapter.snapshot();
+        assert_eq!(state.calibrate_all.blocked, Some(Failure::OnlyLeftOut));
+        assert_eq!(
+            state.calibrate_all.left_out,
+            vec![LeftOutRow {
+                id: "bluetooth".to_owned(),
+                name: "Earbuds".to_owned(),
+                kind: MicKind::Headphones,
+                included: false,
+            }]
+        );
+        assert_eq!(
+            speaker_of(&adapter, &speaker_key("bluetooth")).mic_left_out,
+            Some(MicKind::Headphones)
+        );
+        assert_eq!(
+            speaker_of(&adapter, &speaker_key("builtin")).mic_left_out,
+            None
+        );
+        assert_eq!(speaker_of(&adapter, &speaker_key("tv")).mic_left_out, None);
+        // Its row offers no Calibrate with Microphone, and none starts.
+        adapter.start_calibration(&speaker_key("bluetooth"));
+        assert_eq!(adapter.snapshot().calibration.speaker_id, None);
+
+        adapter.include_in_calibration("bluetooth", true);
+        let state = adapter.snapshot();
+        assert_eq!(state.calibrate_all.blocked, None);
+        assert!(state.calibrate_all.left_out[0].included);
+        adapter.include_in_calibration("bluetooth", false);
+        assert_eq!(
+            adapter.snapshot().calibrate_all.blocked,
+            Some(Failure::OnlyLeftOut)
+        );
+        adapter.include_in_calibration("bluetooth", true);
+        adapter.close_calibrate_all();
+        assert!(
+            !adapter.snapshot().calibrate_all.left_out[0].included,
+            "Include Anyway lasts until the results close"
+        );
     }
 
     fn reference_audio() -> MockBackend {

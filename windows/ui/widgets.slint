@@ -774,6 +774,8 @@ export component SyncControls inherits VerticalLayout {
     in property <bool> calibration-enabled;
     in property <string> calibration-status;
     in property <bool> calibration-privacy;
+    // Why microphone calibration leaves it out; empty otherwise.
+    in property <string> calibration-left-out;
     callback calibrate();
     callback cancel-calibration();
     callback calibration-privacy-requested();
@@ -945,6 +947,10 @@ export component SyncControls inherits VerticalLayout {
         QuietText {
             text: root.calibration-status != "" ? root.calibration-status : Strings.calibration-hint(root.reference-name);
         }
+    }
+
+    if root.calibration-left-out != "": SecondaryText {
+        text: root.calibration-left-out;
     }
 }
 
@@ -1691,6 +1697,7 @@ export component SpeakerRow inherits Rectangle {
                         calibration-enabled: root.item.calibration-enabled;
                         calibration-status: root.item.calibration-status;
                         calibration-privacy: root.item.calibration-privacy;
+                        calibration-left-out: root.item.calibration-left-out;
                         calibrate => {
                             root.calibrate();
                         }
