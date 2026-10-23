@@ -174,6 +174,53 @@ mod tests {
     }
 
     #[test]
+    fn focus_stays_near_a_removed_speaker_and_moves_to_the_code_when_unpaired() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("focusNeighbor(order, focusedRow.root);"));
+        assert!(script.contains("(row ? row.name : ui.title).focus();"));
+        assert!(script.contains("if (message) { announce(message); ui.code.focus(); }"));
+    }
+
+    #[test]
+    fn the_dark_switch_knob_stands_out_on_the_accent_track() {
+        let style = only_element(PAGE, "style").unwrap();
+        let dark = &style[style.find("prefers-color-scheme: dark").unwrap()..];
+        assert!(dark.contains("--knob: #1E1E1E;"));
+    }
+
+    #[test]
+    fn every_visible_string_in_the_markup_comes_from_the_text_table() {
+        let start = PAGE.find("<main>").unwrap();
+        let markup = &PAGE[start..PAGE.find("<script>").unwrap()];
+        let mut text = String::new();
+        let mut in_tag = false;
+        for character in markup.chars() {
+            match character {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                _ if !in_tag => text.push(character),
+                _ => {}
+            }
+        }
+        // The brand wordmark is the only text written into the markup.
+        assert_eq!(text.split_whitespace().collect::<String>(), "AudioSync");
+
+        let script = only_element(PAGE, "script").unwrap();
+        let table = &script[script.find("const TEXT = {").unwrap()..];
+        let table = &table[..table.find("\n};").unwrap()];
+        let keys: Vec<&str> = markup
+            .split("data-text=\"")
+            .skip(1)
+            .map(|rest| &rest[..rest.find('"').unwrap()])
+            .collect();
+        assert!(keys.len() >= 10);
+        for key in keys {
+            assert!(table.contains(&format!("\n  {key}: \"")), "{key}");
+        }
+        assert!(script.contains("element.textContent = TEXT[element.dataset.text];"));
+    }
+
+    #[test]
     fn the_icons_are_png_of_their_size() {
         for (icon, size) in [(ICON_180, 180u32), (ICON_512, 512)] {
             assert_eq!(&icon[..8], b"\x89PNG\r\n\x1a\n");
