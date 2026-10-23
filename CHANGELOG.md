@@ -18,7 +18,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AirPlay speakers that show a track's progress now get how far into the track you are and how long it is. On the Mac that comes from Spotify and Music, on Windows from any app that reports its track's length. A track without a known length sends none.
 - When you change an AirPlay speaker's volume on the speaker itself, its slider in AudioSync follows, on speakers that report it.
 - With AirPlay 2 on, a notice tells you when another app holds port 319 or 320, so AirPlay 2 speakers that need PTP timing can't play. It hasn't been tried on a real receiver yet.
-- Web Remote: too many wrong pairing codes from one device block pairing for that device until the code is renewed, not for every phone, and a paired phone still gets in while other devices hold connections open.
+- Web Remote: too many wrong pairing codes from one device block pairing for that device until the code is renewed, not for every phone, and a paired phone still gets in while other devices hold connections open, also when one device holds them from many addresses. A phone turned away while the remote is busy gets that answer on Windows too, instead of a dropped connection.
 - The Web Remote window shows the setup as three numbered steps under the QR code, worded for iPhone or Android, and the page shows the same steps until you open it from the Home Screen. On iPhone a pairing made in Safari doesn't carry over to the Home Screen, so the Home Screen comes before the code.
 - On the Mac, the AirPlay 2 (Experimental) switch has a note under it in the app menu and the gear menu that says what it does and that it takes effect once you quit and reopen AudioSync.
 
@@ -27,13 +27,18 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AirPlay speakers can now wait up to 20 seconds instead of 3, so a long Cast offset or a large Calibrate All result plays in full instead of being cut short.
 - The arrow keys on a Google Cast speaker's volume slider now move by the step the speaker reports, if it reports one.
 - On the Mac, a Bluetooth speaker gets the speaker icon instead of headphones, unless its name says it's headphones, such as AirPods or a name with "headphones", "headset", "earbuds", "earphones" or "buds" in it. Calibration goes by the same names, so a Bluetooth speaker that macOS reports as headphones, such as a soundcore Select 4 Go, is still measured.
+- A speaker's name tooltip in the main window starts with its full name, on the Mac and on Windows, so a long name cut short in the row can still be read. On Windows the tooltip wraps instead of cutting the name off, and on the Mac the menu bar panel row has the full name as its tooltip.
+- On Windows, the notification area flyout says "Looking for speakers…" while it searches, and "No speakers found" only after 20 seconds without one.
 
 ### Fixed
 
 - On the Mac, streaming All System Audio while nothing plays no longer brings up the notice that capture permission is missing. The notice now waits for sound.
 - On the Mac, calibration works while the source plays nothing. Before, the test sound never started and the run failed as if the source were silent.
 - On the Mac, after you type in a delay field, a click on that panel's step button steps from the value you typed, and a click that closes the panel leaves the keyboard focus on the speaker's delay.
-- On the Mac, a + step on a delay that's already at the 20 s maximum no longer clears the speaker's last calibration result.
+- On the Mac and on Windows, a + step on a delay that's already at the 20 s maximum no longer clears the speaker's last calibration result.
+- Web Remote: quick taps on the page, such as on the delay - and + buttons, no longer zoom it in on iPhone, and tapping a text field doesn't zoom either. Pinch to zoom still works.
+- If a Google Cast speaker's volume turns fixed while you drag its slider, the last drag value no longer gets sent to it.
+- With AirPlay 2 on, AudioSync ignores timing packets from devices it isn't playing to, so a flood of them from another computer can't hold up the audio.
 
 ## [0.6.0] - unreleased
 
