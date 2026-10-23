@@ -80,9 +80,7 @@ use crate::audio::backend::{
 };
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
 use crate::audio::cast_address::{self, CastAddress};
-use audiosync_core::calibrate_all::{
-    Applied, Change, Class, EndReason, RowState, Sheet, Take, Target,
-};
+use audiosync_core::calibrate_all::{Applied, Class, EndReason, RowState, Sheet, Take, Target};
 
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress};
 use crate::audio::calibration::{self, CalibrationRun, Failure};
@@ -122,6 +120,9 @@ struct KeptSheet {
     again_ended: Option<EndReason>,
     /// What Apply wrote, kept for Undo while every value still holds.
     applied: Option<Applied>,
+    /// The AirPlay adjustment A before and after Apply. Undo and the check
+    /// that drops it use A, not L, so a new L_s changes neither (S238).
+    airplay_adjustment: Option<(f64, f64)>,
     undone: bool,
 }
 
@@ -988,6 +989,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 failure,
                 again_ended: None,
                 applied: None,
+                airplay_adjustment: None,
                 undone: false,
             });
             return;
@@ -1063,16 +1065,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
             now.is_none_or(|now| (now - then.unwrap_or(0.0)).abs() <= 0.5)
         };
         if let Some(applied) = &kept.applied {
-            let held = applied.changes.iter().all(|change| {
-                let now = match &change.target {
-                    Target::AirPlay => self.airplay_delay_ms(),
-                    Target::Speaker(key) => kept
+            let held = applied.changes.iter().all(|change| match &change.target {
+                Target::AirPlay => kept.airplay_adjustment.is_none_or(|(_, written)| {
+                    holds(Some(self.audio.airplay_adjustment()), Some(written))
+                }),
+                Target::Speaker(key) => {
+                    let now = kept
                         .members
                         .iter()
                         .find(|m| m.key() == *key)
-                        .and_then(|m| self.calibrated_now(m.class, &m.id)),
-                };
-                holds(now, Some(change.new_ms))
+                        .and_then(|m| self.calibrated_now(m.class, &m.id));
+                    holds(now, Some(change.new_ms))
+                }
             });
             if held {
                 return false;
@@ -1081,6 +1085,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .log(|| "Calibrate All: a delay changed after Apply, Undo goes".to_owned());
             if let Some(kept) = self.calibrate_all.sheet.as_mut() {
                 kept.applied = None;
+                kept.airplay_adjustment = None;
             }
             return true;
         }
@@ -1164,38 +1169,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The AirPlay delay is set through the sender's latency, unknown while
-    /// AirPlay doesn't play: Apply and Undo wait rather than leave it out.
-    fn airplay_waits(&self, kept: &KeptSheet) -> bool {
-        if self.audio.airplay_sender_latency_ms().is_some() {
-            return false;
-        }
-        let airplay = |changes: &[Change]| changes.iter().any(|c| c.target == Target::AirPlay);
-        match &kept.applied {
-            Some(applied) => airplay(&applied.changes),
-            None => kept
-                .sheet
-                .changes()
-                .is_ok_and(|applied| airplay(&applied.changes)),
-        }
-    }
-
-    fn calibrate_all_waits(&self) -> bool {
-        let waits = self
-            .calibrate_all
-            .sheet
-            .as_ref()
-            .is_some_and(|kept| self.airplay_waits(kept));
-        if waits {
-            self.log
-                .log(|| "Calibrate All: the AirPlay delay waits for AirPlay to play".to_owned());
-        }
-        waits
-    }
-
     fn sheet_state(&self, kept: &KeptSheet, busy: bool) -> SheetState {
         let sheet = &kept.sheet;
-        let waits = self.airplay_waits(kept);
         let open = sheet.ended().is_none() && !sheet.applied();
         SheetState {
             rows: sheet
@@ -1214,10 +1189,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ended: sheet.ended(),
             failure: kept.failure,
             again_ended: kept.again_ended,
-            can_apply: !busy && !waits && sheet.changes().is_ok(),
-            airplay_waits: waits,
+            can_apply: !busy && sheet.changes().is_ok(),
             applied: sheet.applied(),
-            can_undo: !busy && !waits && kept.applied.is_some(),
+            can_undo: !busy && kept.applied.is_some(),
             undone: kept.undone,
         }
     }
@@ -1853,8 +1827,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Switches on the auto-connect speakers among `appeared`, then starts
-    /// streaming once for all of them, unless the user switched streaming off
-    /// or an automatic start failed (S120).
+    /// streaming once for all of them, unless the user switched streaming off,
+    /// an automatic start failed (S120) or no speaker is left on.
     fn auto_connect(&mut self, appeared: &[String]) {
         let hits: Vec<&String> = appeared
             .iter()
@@ -1875,7 +1849,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.output_failed(id, false);
             }
         }
-        if !self.running() {
+        if !self.running() && self.enabled_count() > 0 {
             self.start_session(StartOrigin::AutoConnect);
         }
     }
@@ -3027,12 +3001,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.stop_if_idle();
     }
 
-    /// Stores the adjustment that makes L what the user entered, with the
-    /// sender's latency of this moment (spec S178, S181).
+    /// Stores the adjustment that makes L what the user entered, against
+    /// the sender's latency of this moment or the last one known (spec
+    /// S178, S181).
     fn set_airplay_delay(&mut self, ms: f64) {
-        let Some(sender) = self.audio.airplay_sender_latency_ms() else {
-            return;
-        };
+        let sender = self.audio.airplay_adjustment_base_ms();
         if let Some(adjustment) = native_airplay_adjustment_ms(ms, sender) {
             self.audio.set_airplay_adjustment(adjustment);
         }
@@ -3495,7 +3468,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn apply_calibrate_all(&mut self) {
-        if self.calibrate_all.run.is_some() || self.calibrate_all_waits() {
+        if self.calibrate_all.run.is_some() {
             return;
         }
         let Some(kept) = self.calibrate_all.sheet.as_mut() else {
@@ -3512,17 +3485,24 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let members = kept.members.clone();
         self.log
             .log(|| format!("Calibrate All applied: {:?}", applied.changes));
+        let before = self.audio.airplay_adjustment();
         for change in &applied.changes {
             self.write_calibrated(&members, &change.target, Some(change.new_ms));
         }
+        let airplay_adjustment = applied
+            .changes
+            .iter()
+            .any(|change| change.target == Target::AirPlay)
+            .then(|| (before, self.audio.airplay_adjustment()));
         if let Some(kept) = self.calibrate_all.sheet.as_mut() {
             kept.applied = Some(applied);
+            kept.airplay_adjustment = airplay_adjustment;
         }
         self.calibrate_all.endings += 1;
     }
 
     fn undo_calibrate_all(&mut self) {
-        if self.calibrate_all.run.is_some() || self.calibrate_all_waits() {
+        if self.calibrate_all.run.is_some() {
             return;
         }
         let Some(kept) = self.calibrate_all.sheet.as_mut() else {
@@ -3533,11 +3513,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         };
         kept.undone = true;
         let members = kept.members.clone();
+        let airplay_adjustment = kept.airplay_adjustment.take();
         let previous = applied.undo.undo();
         self.log
             .log(|| format!("Calibrate All undone: {previous:?}"));
         for (target, value) in &previous {
-            self.write_calibrated(&members, target, *value);
+            match (target, airplay_adjustment) {
+                (Target::AirPlay, Some((before, _))) => self.audio.set_airplay_adjustment(before),
+                _ => self.write_calibrated(&members, target, *value),
+            }
         }
         self.calibrate_all.endings += 1;
     }
@@ -5148,6 +5132,38 @@ mod tests {
             "on, to play at the next start"
         );
         assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
+    fn an_auto_connect_speaker_that_cant_start_posts_no_start_notice() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_auto_connect(&key(HEADPHONES), true);
+        unplug(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        for id in [SPEAKERS, HEADPHONES] {
+            adapter
+                .audio_mut()
+                .fail_output(id, Some(BackendError::UnsupportedFormat));
+        }
+        // Speakers can't restart in the pass that switches Headphones on, so
+        // the failed auto-connect leaves no speaker on.
+        adapter.audio_mut().end_renderer(SPEAKERS);
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [
+                NoticeMessage::SpeakerFailed {
+                    speaker: "Speakers".to_owned()
+                },
+                NoticeMessage::SpeakerFailed {
+                    speaker: "Headphones".to_owned()
+                },
+            ],
+            "the failures, and no Start notice as if the user pressed Start"
+        );
     }
 
     #[test]
@@ -7103,6 +7119,7 @@ mod tests {
             failure: None,
             again_ended: None,
             applied: None,
+            airplay_adjustment: None,
             undone: false,
         });
         let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
@@ -7146,6 +7163,7 @@ mod tests {
             failure: None,
             again_ended: None,
             applied: None,
+            airplay_adjustment: None,
             undone: false,
         });
         adapter.poll();
@@ -7170,6 +7188,7 @@ mod tests {
             failure: None,
             again_ended: None,
             applied: None,
+            airplay_adjustment: None,
             undone: false,
         });
     }
@@ -7206,7 +7225,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_waits_for_airplay_to_play_rather_than_leave_its_delay_out() {
+    fn apply_without_a_sender_stores_the_airplay_delay_for_the_next_one() {
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
         keep(
@@ -7218,13 +7237,102 @@ mod tests {
             ]),
         );
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
-        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
-        assert!(shown.airplay_waits && !shown.can_apply);
+        assert!(
+            adapter
+                .snapshot()
+                .calibrate_all
+                .sheet
+                .expect("results")
+                .can_apply
+        );
 
         adapter.apply_calibrate_all();
         let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
-        assert!(!shown.applied, "nothing was set");
-        assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).delay_ms, Some(0.0));
+        assert!(shown.applied && shown.can_undo);
+        let airplay_ms = adapter
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .and_then(|kept| kept.applied.as_ref())
+            .and_then(|applied| applied.changes.iter().find(|c| c.target == Target::AirPlay))
+            .expect("an AirPlay change")
+            .new_ms;
+        assert_eq!(
+            adapter.audio.airplay_adjustment(),
+            airplay_ms - crate::audio::outputs::DEFAULT_SENDER_LATENCY_MS,
+            "against the default L_s"
+        );
+
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(1750.0));
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(airplay_ms));
+    }
+
+    /// Applies an AirPlay row against a sender's L_s of 2000 ms, then a
+    /// new sender, as after Retry, starts at 1750 ms.
+    fn applied_before_a_new_sender() -> (AudioAdapter<MockBackend>, FakeAirPlay, f64) {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let old = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(old.link(), None);
+        old.set_latency(std::time::Duration::from_millis(2000));
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(2000.0));
+        adapter.audio.set_airplay_adjustment(100.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(2100.0), 2150.0),
+            ]),
+        );
+        adapter.apply_calibrate_all();
+        let written = adapter.audio.airplay_adjustment();
+        assert_ne!(written, 100.0, "Apply wrote a new adjustment");
+
+        let new = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(new.link(), None);
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(1750.0));
+        (adapter, new, written)
+    }
+
+    #[test]
+    fn a_new_sender_latency_after_apply_keeps_undo_and_undo_restores_the_adjustment() {
+        let (mut adapter, _sender, written) = applied_before_a_new_sender();
+        assert!(
+            adapter
+                .snapshot()
+                .calibrate_all
+                .sheet
+                .expect("results")
+                .can_undo,
+            "the user changed nothing, only L_s moved"
+        );
+        assert_eq!(adapter.audio.airplay_adjustment(), written);
+
+        adapter.undo_calibrate_all();
+        assert_eq!(adapter.audio.airplay_adjustment(), 100.0);
+    }
+
+    #[test]
+    fn an_airplay_delay_changed_after_apply_still_drops_undo() {
+        let (mut adapter, _sender, written) = applied_before_a_new_sender();
+        let shown = adapter.snapshot().airplay_delay_ms.expect("a sender runs");
+        adapter.set_airplay_delay(shown + 40.0);
+        adapter.poll();
+        assert_ne!(adapter.audio.airplay_adjustment(), written);
+        assert!(
+            !adapter
+                .snapshot()
+                .calibrate_all
+                .sheet
+                .expect("results")
+                .can_undo
+        );
     }
 
     #[test]

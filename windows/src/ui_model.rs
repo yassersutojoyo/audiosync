@@ -693,9 +693,6 @@ pub struct SheetState {
     /// The last Measure Again ended early, so its row stayed.
     pub again_ended: Option<EndReason>,
     pub can_apply: bool,
-    /// Apply or Undo would set the AirPlay delay while AirPlay doesn't
-    /// play, so it can't be worked out: both wait.
-    pub airplay_waits: bool,
     pub applied: bool,
     /// Undo restores what Apply replaced, in one step.
     pub can_undo: bool,
@@ -775,6 +772,15 @@ impl AppState {
     /// Whether the speakers present are all hidden, at least one of them.
     pub fn all_hidden(&self) -> bool {
         self.speakers.is_empty() && self.hidden.iter().any(|hidden| hidden.present.is_some())
+    }
+
+    /// Whether the tray flyout lists only the PC's own speakers because
+    /// every connected speaker present is hidden and there is no group.
+    pub fn connected_all_hidden(&self) -> bool {
+        self.groups.is_empty()
+            && !self.speakers.is_empty()
+            && self.speakers.iter().all(|s| s.kind.is_this_pc())
+            && self.hidden_in(false)
     }
 
     /// Speakers switched on right now.
@@ -1637,6 +1643,34 @@ mod tests {
         // Hidden or minimized: what was kept stays.
         let kept = Some(frame(100, 1000.0, true));
         assert_eq!(frame_to_keep(MainWindowShows::Not, kept), kept);
+    }
+
+    #[test]
+    fn the_flyout_says_so_when_only_connected_speakers_are_hidden() {
+        let mut backend = MockBackend::new();
+        let connected: Vec<String> = backend
+            .snapshot()
+            .speakers
+            .iter()
+            .filter(|s| !s.kind.is_this_pc())
+            .map(|s| s.id.clone())
+            .collect();
+        for id in &connected {
+            backend.hide_speaker(id, "AirPlay");
+        }
+        let state = backend.snapshot();
+        assert!(!state.connected_all_hidden(), "a group is still listed");
+        backend.delete_group("group:1");
+        let state = backend.snapshot();
+        assert!(state.connected_all_hidden());
+        assert!(!state.all_hidden(), "the PC's own speakers are listed");
+
+        backend.unhide_speaker(&connected[0]);
+        assert!(!backend.snapshot().connected_all_hidden());
+        let mut only_this_pc = MockBackend::new();
+        only_this_pc.delete_group("group:1");
+        only_this_pc.hide_speaker("local:headphones", "Headphones");
+        assert!(!only_this_pc.snapshot().connected_all_hidden());
     }
 
     #[test]

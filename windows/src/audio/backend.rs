@@ -798,6 +798,10 @@ pub trait AudioBackend {
     /// while there is no sender.
     fn airplay_sender_latency_ms(&self) -> Option<f64>;
 
+    /// The L_s the AirPlay delay field's value is turned into A against,
+    /// also while there is no sender (spec S178).
+    fn airplay_adjustment_base_ms(&self) -> f64;
+
     /// The user's AirPlay delay adjustment A in milliseconds: L = L_s + A
     /// while an AirPlay speaker is chosen (spec S178).
     fn airplay_adjustment(&self) -> f64;
