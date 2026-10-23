@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::json;
 
@@ -462,9 +462,11 @@ impl Shared {
 
     fn paired(&self, request: &Request) -> Option<String> {
         let token = request.cookie(TOKEN_COOKIE)?;
-        lock(&self.devices)
-            .contains(token)
-            .then(|| token.to_owned())
+        let (paired, snapshot) = lock(&self.devices).check(token, SystemTime::now());
+        if let Some(snapshot) = snapshot {
+            self.save(snapshot);
+        }
+        paired.then(|| token.to_owned())
     }
 
     /// Hands `command` to the app; false once the server is stopping.
@@ -646,7 +648,7 @@ impl RemoteServer {
     }
 
     pub fn device_count(&self) -> usize {
-        lock(&self.shared.devices).len()
+        lock(&self.shared.devices).count_at(SystemTime::now())
     }
 
     /// Forgets every paired device; their next request gets 401 and their
@@ -1078,7 +1080,7 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
         shared.report(ServerEvent::PairFailed { from, why: outcome });
         return error(failure);
     }
-    let snapshot = lock(&shared.devices).add(&token);
+    let snapshot = lock(&shared.devices).add(&token, SystemTime::now());
     shared.save(snapshot);
     shared.report(ServerEvent::Paired { from });
     Response::json(200, json!({ "paired": true }).to_string())
@@ -1207,7 +1209,7 @@ fn send_events(mut stream: TcpStream, token: &str, id: u64, shared: &Shared) {
             loop {
                 if shared.stopped.load(Ordering::SeqCst)
                     || !shared.stream_open(id)
-                    || !lock(&shared.devices).contains(token)
+                    || !lock(&shared.devices).contains(token, SystemTime::now())
                 {
                     return;
                 }

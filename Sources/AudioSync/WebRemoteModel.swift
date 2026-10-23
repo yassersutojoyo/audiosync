@@ -280,7 +280,7 @@ enum RemotePort {
     }
 }
 
-/// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…]}`),
+/// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…], "seen": [Unix seconds…]}`),
 /// read and cleared here while the remote is off, so a lost phone can be
 /// unpaired before the remote is turned on again.
 enum RemoteDevicesFile {
