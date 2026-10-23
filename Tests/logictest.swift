@@ -1501,6 +1501,24 @@ do {
             && UIStrings().airPlay2Note(on: true, onAtLaunch: false) == lets
             && UIStrings().airPlay2Note(on: false, onAtLaunch: false) == lets,
           "AirPlay 2 switch: its note says AirPlay 2 stops only once turned off from a launch that runs it, as on Windows")
+    // The menu classes are main-actor bound; top-level code runs on the main thread.
+    MainActor.assumeIsolated {
+        let noteMenu = NSMenu()
+        MenuNoteItem.airPlay2Items(text: UIStrings(), on: true, onAtLaunch: true,
+                                   action: #selector(NSApplication.terminate(_:))).forEach(noteMenu.addItem)
+        let noteRow = noteMenu.items.last as? MenuNoteItem
+        check(noteMenu.items.count == 2 && noteMenu.items[0].title == "AirPlay 2 (Experimental)"
+                && noteMenu.items[0].state == .on && noteMenu.items[0].toolTip == lets
+                && noteRow?.note == lets && noteRow?.view != nil && !(noteRow?.isEnabled ?? true),
+              "AirPlay 2 switch: its note is a row of its own under it, not a subtitle the menus don't show")
+        let oneLine = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize).boundingRectForFont.height
+        check((noteRow?.view?.frame.height ?? 0) > oneLine * 1.5,
+              "AirPlay 2 switch: its note wraps onto more than one line instead of widening the menu",
+              "\(noteRow?.view?.frame.height ?? 0) vs one line \(oneLine)")
+        MenuNoteItem.refresh(noteMenu, below: #selector(NSApplication.terminate(_:)), note: stops)
+        check(noteRow?.note == stops && noteMenu.items[0].toolTip == stops,
+              "AirPlay 2 switch: turned off from a launch that runs it, the note under it says AirPlay 2 stops")
+    }
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting for the other AirPlay 2 speaker"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,
