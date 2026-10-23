@@ -47,7 +47,10 @@ enum Mock {
             bundleID: "com.example.player", appName: "Player", title: "Midnight Drive",
             artist: "Example Artist", album: "Example Album", isPlaying: true, artwork: artwork())
         model.equalizerOn = true
-        model.groups = [AppModel.Group(id: "downstairs", name: "Downstairs", memberCount: 2, available: 2, allOn: true)]
+        model.zones = [AppModel.Zone(id: "zone:1", name: "Downstairs", volume: 60, members: [
+            AppModel.ZoneMember(key: "airplay:living", name: "Living Room", symbol: "hifispeaker", speakerID: "living"),
+            AppModel.ZoneMember(key: "airplay:kitchen", name: "Kitchen", symbol: "hifispeaker", speakerID: "kitchen"),
+        ], on: 2, present: 2, allOn: true)]
         model.airplay = [
             AppModel.Speaker(id: "living", name: "Living Room", tag: .airplay, enabled: true, volume: 64, offsetMs: nil),
             AppModel.Speaker(id: "kitchen", name: "Kitchen", tag: .airplay, enabled: true, volume: 48, offsetMs: nil,
@@ -82,7 +85,7 @@ enum Mock {
             model.notices.post(model.text.sourceTerminated(name: "Player"), subject: Notice.source)
             model.nowPlaying = nil
             model.equalizerOn = false
-            model.groups = []
+            model.zones = []
             model.airplay = []
             model.cast = []
             model.castList = .searching
@@ -94,7 +97,7 @@ enum Mock {
         model { model in
             model.running = false
             model.nowPlaying = nil
-            model.groups = []
+            model.zones = []
             model.airplay = []
             model.local = []
             model.cast = []
@@ -262,7 +265,7 @@ func mainWindowShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
 
 /// The equalizer window as EqualizerWindowController sets it up.
 func equalizerShot(_ model: EqualizerModel, look: Look) -> NSBitmapImageRep {
-    let window = ShotWindow(contentViewController: NSHostingController(rootView: EqualizerView(model: model)))
+    let window = ShotWindow(contentViewController: NSHostingController(rootView: EqualizerView(model: model, askSave: {}, askRename: { _ in })))
     window.appearance = look.appearance
     window.title = UIStrings().equalizerTitle
     window.styleMask = [.titled, .closable]
