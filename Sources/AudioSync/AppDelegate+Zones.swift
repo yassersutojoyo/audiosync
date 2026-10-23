@@ -247,6 +247,7 @@ extension AppDelegate {
         let name = GroupName.afterRename(typed: typed, current: current)
         guard name != zones[index].name else { return }
         zones[index].name = name   // saved by `zones`' didSet
+        rereadCalibrateZoneSheet()
         pushModel()
     }
 

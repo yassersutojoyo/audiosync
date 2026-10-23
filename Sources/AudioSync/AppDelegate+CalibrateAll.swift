@@ -438,6 +438,12 @@ extension AppDelegate {
         return CalibrateZoneScope(id: zone.id, name: zone.name, members: zone.members, present: Set(present), off: off)
     }
 
+    /// A zone sheet's lines after a zone rename: they name zones (S255).
+    func rereadCalibrateZoneSheet() {
+        guard let shown = appModel.calibrateAll.zone, let scope = calibrateZoneScope(shown.id) else { return }
+        appModel.calibrateAll.zone = calibrateZoneSheet(scope)
+    }
+
     /// The sheet's zone line: its name and whom the AirPlay delay moves (S255).
     func calibrateZoneSheet(_ scope: CalibrateZoneScope) -> CalibrateZoneSheet {
         let listed = airplayOrder.map { SpeakerKey.make(id: $0, kind: .airplay) }
