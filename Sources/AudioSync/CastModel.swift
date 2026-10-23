@@ -313,8 +313,8 @@ enum CastOutcome: Equatable {
     case playing(String)
     /// The device went off on its own; a notice says why when `problem` is set.
     case turnedOff(String, problem: CastProblem?)
-    /// Send this level, 0 to 1, to the device: it plays louder than the
-    /// master allows (C104). The row changed too.
+    /// Send this level, 0 to 1, to the device: its session starts at master
+    /// × own level (C105). The row changed too.
     case setVolume(Double)
     case memoryChanged
     /// The sender stopped working; `wasOn`: the speaker that was on, now off.
@@ -623,32 +623,42 @@ struct CastModel {
     private mutating func levelToSend(_ id: String, own: Double) -> Double? {
         guard volumes[id]?.fixed != true else { return nil }
         let level = asc_cast_device_level(master, own)
-        if unanswered.count == Self.maxUnanswered { unanswered.removeFirst() }
-        unanswered.append(level)
+        if let current = volumes[id]?.level, asc_cast_level_answers(level, current) {
+            // The device reports only changes, so this level gets no answer; it
+            // is still sent, so it replaces a level the sender holds back.
+            unanswered = []
+            levels[id] = own
+            if requested?.id == id { requested = nil }
+        } else {
+            if unanswered.count == Self.maxUnanswered { unanswered.removeFirst() }
+            unanswered.append(level)
+        }
         return level
     }
 
-    /// A status's volume (C70, C104): the answer to a level sent keeps the
-    /// own level, any other level moves it by the master, and the session's
-    /// first one is brought down once when the master allows less.
+    /// A status's volume (C70, C104, C105): the answer to a level sent keeps
+    /// the own level and any other level moves it by the master, except the
+    /// session's first, which is set to master × own level instead.
     private mutating func volumeReported(_ id: String, _ volume: CastVolume) -> CastOutcome? {
         let shown = ownLevel(of: id)
         let level = volume.level
+        let first = attempt?.heardVolume == false
+        attempt?.heardVolume = true
         let answered = unanswered.lastIndex { asc_cast_level_answers($0, level) }
+        if let answered { unanswered.removeFirst(answered + 1) }
         let own: Double
-        if let answered {
-            unanswered.removeFirst(answered + 1)
+        if first {
+            own = asc_cast_start_own_level(master, shown != nil, shown ?? 0, level)
+        } else if answered != nil {
             own = shown ?? asc_cast_own_level(level, master, level)
         } else {
             own = asc_cast_own_level(level, master, shown ?? level)
         }
         if requested?.id == id, answered == nil || unanswered.isEmpty { requested = nil }
         levels[id] = own
-        let first = attempt?.heardVolume == false
-        attempt?.heardVolume = true
         let changed = volumes[id] != volume || ownLevel(of: id) != shown
         volumes[id] = volume
-        if first, answered == nil, !asc_cast_level_answers(asc_cast_device_level(master, own), level),
+        if first, !asc_cast_level_answers(asc_cast_device_level(master, own), level),
            let send = levelToSend(id, own: own) {
             return .setVolume(send)
         }

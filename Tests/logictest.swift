@@ -4995,6 +4995,16 @@ do {
     _ = loud.apply(.volume(attempt: 3, reported(0.5, fixed: true)))
     check(loud.setMaster(20) == nil, "cast master: a fixed volume gets nothing (C68)")
 
+    var still = session(master: 100, attempt: 8)
+    _ = still.apply(.volume(attempt: 8, reported(0.5)))
+    _ = still.setVolume(tv, position: 0)
+    _ = still.apply(.volume(attempt: 8, reported(0)))
+    for position in [60.0, 50, 40] { _ = still.setMaster(position) }
+    _ = still.apply(.volume(attempt: 8, reported(0.3)))
+    _ = still.apply(.volume(attempt: 8, reported(0)))
+    check(still.volume(of: tv) == 0 && still.setMaster(100) == 0,
+          "cast master: a level the device already has is not waited for, so its buttons' 0 is read back and a muted speaker stays silent")
+
     var quiet = session(master: 100, attempt: 5)
     _ = quiet.apply(.volume(attempt: 5, reported(0.5)))
     _ = quiet.setVolume(tv, position: 80)

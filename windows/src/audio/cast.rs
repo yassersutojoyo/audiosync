@@ -52,7 +52,9 @@ use audiosync_cast::host::{
 };
 use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
-use audiosync_cast::status::{ControlType, DeviceVolume, answers_level, device_level, own_level};
+use audiosync_cast::status::{
+    ControlType, DeviceVolume, answers_level, device_level, own_level, start_own_level,
+};
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 
@@ -1196,48 +1198,63 @@ impl CastSpeakers {
 
     /// Sends master × `own`, unless the device's volume is fixed (C68).
     fn send_level(&mut self, device: DeviceId, own: f64) {
-        let fixed = self
-            .volumes
-            .get(&device)
-            .is_some_and(|volume| volume.control_type == ControlType::Fixed);
-        if fixed {
+        let reported = self.volumes.get(&device);
+        if reported.is_some_and(|volume| volume.control_type == ControlType::Fixed) {
             return;
         }
         let level = device_level(self.master, own);
-        if self.unanswered.len() == MAX_UNANSWERED {
-            self.unanswered.remove(0);
+        if reported.is_some_and(|volume| answers_level(level, volume.level)) {
+            // The device reports only changes, so this level gets no answer,
+            // and the latest level sent replaces whatever was still in flight.
+            self.unanswered.clear();
+            self.levels.insert(device, own);
+            if self
+                .requested
+                .is_some_and(|(requested, _)| requested == device)
+            {
+                self.requested = None;
+            }
+        } else {
+            if self.unanswered.len() == MAX_UNANSWERED {
+                self.unanswered.remove(0);
+            }
+            self.unanswered.push(level);
         }
-        self.unanswered.push(level);
         if let Some(link) = self.link.as_mut() {
             link.set_volume(level);
         }
     }
 
-    /// A status's volume (C70, C104): the answer to a level sent keeps the
-    /// own level, any other level moves it by the master, and the session's
-    /// first one is brought down once when the master allows less.
+    /// A status's volume (C70, C104, C105): the answer to a level sent keeps
+    /// the own level and any other level moves it by the master, except the
+    /// session's first, which is set to master × own level instead.
     fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume) {
         let shown = self.own_of(device);
         let level = volume.level;
-        let answered = self
-            .unanswered
-            .iter()
-            .rposition(|&sent| answers_level(sent, level));
-        let own = match answered {
-            Some(index) => {
-                self.unanswered.drain(..=index);
-                shown.unwrap_or_else(|| own_level(level, self.master, level))
-            }
-            None => own_level(level, self.master, shown.unwrap_or(level)),
-        };
-        if answered.is_none() || self.unanswered.is_empty() {
-            self.requested = None;
-        }
-        self.levels.insert(device, own);
         let first = self
             .attempt
             .as_mut()
             .is_some_and(|attempt| !std::mem::replace(&mut attempt.heard_volume, true));
+        let answered = self
+            .unanswered
+            .iter()
+            .rposition(|&sent| answers_level(sent, level));
+        if let Some(index) = answered {
+            self.unanswered.drain(..=index);
+        }
+        let own = match (first, answered) {
+            (true, _) => start_own_level(self.master, shown, level),
+            (false, Some(_)) => shown.unwrap_or_else(|| own_level(level, self.master, level)),
+            (false, None) => own_level(level, self.master, shown.unwrap_or(level)),
+        };
+        if self
+            .requested
+            .is_some_and(|(requested, _)| requested == device)
+            && (answered.is_none() || self.unanswered.is_empty())
+        {
+            self.requested = None;
+        }
+        self.levels.insert(device, own);
         if self.volumes.get(&device) != Some(&volume) {
             self.volumes.insert(device, volume);
             self.pending.push(BackendEvent::CastChanged);
@@ -1245,10 +1262,10 @@ impl CastSpeakers {
             self.pending.push(BackendEvent::CastChanged);
         }
         let allowed = device_level(self.master, own);
-        if first && answered.is_none() && !answers_level(allowed, level) {
+        if first && !answers_level(allowed, level) {
             self.log.log(|| {
                 format!(
-                    "Cast: {} starts at level {level:.2}, the master allows {allowed:.2}",
+                    "Cast: {} reports level {level:.2} at the start, set to {allowed:.2}",
                     self.name(device)
                 )
             });
@@ -2624,6 +2641,28 @@ pub mod tests {
         cast.poll();
         assert_eq!(sent(&fake), [0.0, 0.35], "louder than master × own: set");
         assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9, "not read back");
+    }
+
+    #[test]
+    fn a_level_the_device_already_has_is_not_waited_for() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        cast.set_volume(KITCHEN, 0.0);
+        report(&fake, &mut cast, 0.0);
+        for master in [60.0, 50.0, 40.0] {
+            cast.set_master(master);
+        }
+        report(&fake, &mut cast, 0.3);
+        report(&fake, &mut cast, 0.0);
+        assert_eq!(shown(&cast, KITCHEN), 0.0, "the buttons' 0 is read back");
+        cast.set_master(100.0);
+        assert_eq!(
+            sent(&fake).last(),
+            Some(&0.0),
+            "a muted speaker stays silent"
+        );
     }
 
     #[test]

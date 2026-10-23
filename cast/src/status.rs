@@ -62,6 +62,16 @@ pub fn own_level(reported: f64, master: f64, own: f64) -> f64 {
     unit(unit(reported) / master.min(1.0))
 }
 
+/// The own level a session starts from (C105): the one kept, whatever the
+/// first status reports; without one, that status's level read as
+/// [`own_level`] reads it.
+pub fn start_own_level(master: f64, own: Option<f64>, reported: f64) -> f64 {
+    match own.filter(|own| own.is_finite()) {
+        Some(own) => own.clamp(0.0, 1.0),
+        None => own_level(reported, master, unit(reported)),
+    }
+}
+
 /// Whether a reported level is the device's answer to `sent` (C104).
 pub fn answers_level(sent: f64, reported: f64) -> bool {
     (sent - reported).abs() <= ANSWER_TOLERANCE
