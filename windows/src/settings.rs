@@ -437,19 +437,16 @@ fn usable_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_TEXT
 }
 
-/// Whether `key` is a speaker key the app can use (`lc:` or `ap:` and an ID).
+/// Whether `key` is a key a group or the auto-connect list can hold: `lc:`
+/// or `ap:` and an ID. Neither switches a Cast speaker yet.
 fn usable_key(key: &str) -> bool {
-    key.len() <= MAX_TEXT && SpeakerKey::parse(key).is_some_and(|key| !key.id().is_empty())
+    usable_name_key(key) && !matches!(SpeakerKey::parse(key), Some(SpeakerKey::Cast(_)))
 }
 
-/// A key a speaker's name may be saved under: a Google Cast speaker can be
-/// renamed too, though the core's keys don't know it.
+/// A key a speaker's name or hidden entry may be saved under: any speaker
+/// key with an ID, a Google Cast speaker's included.
 fn usable_name_key(key: &str) -> bool {
-    usable_key(key)
-        || key.len() <= MAX_TEXT
-            && key
-                .strip_prefix(crate::adapter::CAST_PREFIX)
-                .is_some_and(|id| !id.is_empty())
+    key.len() <= MAX_TEXT && SpeakerKey::parse(key).is_some_and(|key| !key.id().is_empty())
 }
 
 /// The first [`MAX_ENTRIES`] hidden speakers with a usable key, one entry
@@ -993,6 +990,21 @@ mod tests {
         assert!(
             !without.contains("hidden_speakers"),
             "none hidden, no field"
+        );
+    }
+
+    #[test]
+    fn groups_and_auto_connect_keep_leaving_cast_keys_out() {
+        let text = r#"{"version": 2,
+            "groups": [{"id": "g1", "name": "Den", "members": ["cc:attic", "lc:desk"]}],
+            "auto_connect": ["cc:attic", "ap:pair:5A1B"]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(read.groups.len(), 1);
+        assert_eq!(read.groups[0].members, ["lc:desk"]);
+        assert_eq!(
+            read.auto_connect,
+            BTreeSet::from(["ap:pair:5A1B".to_owned()])
         );
     }
 

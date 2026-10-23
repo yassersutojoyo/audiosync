@@ -145,10 +145,6 @@ struct CalibrateAll {
 /// receivers' answers out, and the list would just stay empty.
 const NONE_FOUND_POLLS: u32 = 40;
 
-/// The prefix of a Google Cast speaker's UI ID; the core's speaker keys
-/// know only local and AirPlay speakers.
-pub(crate) const CAST_PREFIX: &str = "cc:";
-
 /// The UI's ID of the whole-system source.
 const SYSTEM_KEY: &str = "system";
 
@@ -2592,14 +2588,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_enabled(&mut self, id: &str, on: bool) {
-        if let Some(cast_id) = cast_id(id) {
-            self.set_cast_enabled(cast_id, on);
-            return;
-        }
         let endpoint_id = match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => endpoint_id,
             Some(SpeakerKey::AirPlay(airplay_id)) => {
                 self.set_airplay_enabled(&airplay_id, on);
+                return;
+            }
+            Some(SpeakerKey::Cast(cast_id)) => {
+                self.set_cast_enabled(&cast_id, on);
                 return;
             }
             None => return,
@@ -2628,10 +2624,6 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn set_speaker_volume(&mut self, id: &str, position: f64) {
-        if let Some(cast_id) = cast_id(id) {
-            self.audio.set_cast_volume(cast_id, position);
-            return;
-        }
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {
                 self.audio.set_output_volume(&endpoint_id, position);
@@ -2639,6 +2631,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             Some(SpeakerKey::AirPlay(airplay_id)) => {
                 self.audio.set_airplay_volume(&airplay_id, position);
             }
+            Some(SpeakerKey::Cast(cast_id)) => self.audio.set_cast_volume(&cast_id, position),
             None => {}
         }
     }
@@ -2646,11 +2639,6 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// A local output's delay, an AirPlay speaker's own delay d_s, or a
     /// Cast speaker's measured offset (never negative).
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {
-        if let Some(cast_id) = cast_id(id) {
-            self.audio
-                .set_cast_offset(cast_id, clamp_delay_ms(ms).max(0.0));
-            return;
-        }
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {
                 let ms = clamp_delay_ms(ms);
@@ -2669,6 +2657,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             Some(SpeakerKey::AirPlay(airplay_id)) => {
                 self.audio
                     .set_airplay_delay(&airplay_id, clamp_delay_ms(ms));
+            }
+            Some(SpeakerKey::Cast(cast_id)) => {
+                self.audio
+                    .set_cast_offset(&cast_id, clamp_delay_ms(ms).max(0.0));
             }
             None => {}
         }
@@ -2752,7 +2744,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let system = match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => self.names.get(&endpoint_id).cloned(),
             Some(SpeakerKey::AirPlay(airplay_id)) => self.airplay_names.get(&airplay_id).cloned(),
-            None => cast_id(id).and_then(|cast| self.cast_names.get(cast).cloned()),
+            Some(SpeakerKey::Cast(cast_id)) => self.cast_names.get(&cast_id).cloned(),
+            None => None,
         };
         // A speaker never listed has no system name to come back to.
         let Some(system) = system else {
@@ -2805,7 +2798,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let subject = match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => Some(speaker_subject(&endpoint_id)),
             Some(SpeakerKey::AirPlay(airplay_id)) => Some(airplay_subject(&airplay_id)),
-            None => cast_id(id).map(|cast| NoticeSubject::Cast(cast.to_owned())),
+            Some(SpeakerKey::Cast(cast_id)) => Some(NoticeSubject::Cast(cast_id)),
+            None => None,
         };
         if let Some(subject) = subject {
             self.notices.clear(&[subject]);
@@ -2850,6 +2844,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let members: Vec<SpeakerKey> = state
             .available_members(group)
             .filter_map(|speaker| SpeakerKey::parse(&speaker.id))
+            // Groups switch local and AirPlay speakers only; the settings
+            // never load a Cast member into one.
+            .filter(|key| !matches!(key, SpeakerKey::Cast(_)))
             .collect();
         if members.is_empty() {
             return;
@@ -2890,6 +2887,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                         self.airplay_switch_failed(id, problem);
                     }
                 }
+                SpeakerKey::Cast(_) => {}
             }
         }
         if turn_on {
@@ -3375,13 +3373,14 @@ fn airplay_key(id: &str) -> String {
     SpeakerKey::AirPlay(id.to_owned()).to_string()
 }
 
+/// The UI's ID of a Google Cast speaker.
 fn cast_key(id: &str) -> String {
-    format!("{CAST_PREFIX}{id}")
+    SpeakerKey::Cast(id.to_owned()).to_string()
 }
 
 /// The device ID in a Cast speaker's UI ID; `None` for any other speaker.
 fn cast_id(key: &str) -> Option<&str> {
-    key.strip_prefix(CAST_PREFIX)
+    SpeakerKey::cast_id(key)
 }
 
 fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
@@ -7719,6 +7718,20 @@ mod tests {
         let names: Vec<&str> = connected.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Headphones", "Kitchen", "Living Room", "Speakers"]);
         assert_eq!(state.cast_list, CastList::Quiet);
+    }
+
+    #[test]
+    fn a_cast_rows_id_is_the_cores_cast_key() {
+        let (adapter, _) = cast_adapter();
+        let state = adapter.snapshot();
+        let row = state.speaker(&cc(CAST_KITCHEN)).expect("Kitchen is listed");
+        assert_eq!(
+            SpeakerKey::parse(&row.id),
+            Some(SpeakerKey::Cast(CAST_KITCHEN.to_owned()))
+        );
+        assert_eq!(cast_key(CAST_KITCHEN), row.id);
+        assert_eq!(cast_id(&row.id), Some(CAST_KITCHEN));
+        assert_eq!(cast_id(&speaker_key(CAST_KITCHEN)), None);
     }
 
     #[test]

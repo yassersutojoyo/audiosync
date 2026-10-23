@@ -43,6 +43,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 - **S19** *Observed* (`AppDelegate+Engine.swift:155-165`). "Known playing" comes only from a live Now Playing reading (Spotify, Music): for the system source any playing player counts; for an app source only that app; for an input source never.
 - **S20** *Observed* (`AppDelegate.swift:267-274`; `AppLifecycle.swift:49`). When the capture format changes under a running session, the engine reports an interruption `formatChanged` on the main thread, and the host restarts the session (stop, then start, automatic origin) at the new rate.
 - **S157** *Observed* (`CaptureCheck.swift:33-43`; tests "EC4 rate: …"). Capture-rate decision: a rate reported for the running capture rebuilds the session (S20) only when it is a real rate (greater than 0) that differs from the session's Rc, lower or higher (48 000 → 44 100 and 44 100 → 96 000 both rebuild); the same rate, or one that couldn't be read (reported as 0), keeps the session playing. *Required:* the engine reports `interrupted(formatChanged)` only when this rule asks for a rebuild.
+- **S242** *Required.* Placeholder, not a rule: the number is taken by the multi-app source clause on another branch, whose text replaces this line when it merges.
 - **S21** *Observed* (`AppDelegate.swift:297-302`). When capture fails for good, the engine reports `sourceLost(error)` on the main thread; the host stops the session and posts a "source" notice. Stopping ends every AirPlay speaker's session, but the speakers the user chose stay chosen (`AppDelegate.swift`, `.sourceLost`, and `AppDelegate+Engine.swift`, `stopEngine`; Windows: `windows/src/audio/controller.rs`, `StopReason::CaptureFailed`). Before 2026-10-21 this clause said every AirPlay speaker was deselected, which the bundled engine's host did and neither app has done since that engine went (2026-10-20).
 
 ## 3. Equalizer
@@ -492,7 +493,8 @@ Retired with the bundled engine on 2026-10-20, all but S111 and part of S101 and
 
 These run in the host application, not the audio engine core, but the logic suite checks them, so a port that replaces the host must keep them.
 
-- **S149** *Observed* (tests "speaker key: …", "groups: JSON round-trip"). Speaker keys: `ap:<engine output id>` for AirPlay (`ap:native:<receiver ID>` under AudioSync's own sender, S204), `lc:<device UID>` for local; parsing splits at the first colon only (UIDs may contain colons); any other prefix is rejected. A group (id, name, member keys) round-trips through JSON unchanged.
+- **S149** *Observed* (tests "speaker key: …", "groups: JSON round-trip"; `core/src/policy/speakers.rs`, `SpeakerKey`). Speaker keys: `ap:<engine output id>` for AirPlay (`ap:native:<receiver ID>` under AudioSync's own sender on the Mac, S204, and `ap:<receiver ID>` on Windows), `lc:<device UID>` for local, `cc:<Cast device ID>` for Google Cast (S243); parsing splits at the first colon only (UIDs and IDs may contain colons); any other prefix, in any other case, is rejected. A stereo pair or home theater target is an AirPlay speaker whose ID keeps its `pair:<tsid>` or `theater:<group>` form (`ap:native:pair:<tsid>` on the Mac, `ap:pair:<tsid>` on Windows), and every key prints back as the text it was parsed from. A group (id, name, member keys) round-trips through JSON unchanged.
+- **S243** *Observed* (`core/src/policy/speakers.rs`, `SpeakerKey::Cast`; `CastModel.swift`, `CastID`; `SpeakerGroups.swift`, `SpeakerKey`; `SpeakerNames.swift`, `castKeysMoved`; `windows/src/adapter.rs`, `cast_key`; tests "speaker key: Cast …", "speaker names: Cast names …"). A Cast speaker or Cast group has the key `cc:<device ID>` on both hosts, the core's form; a device ID added by address keeps its `manual:` prefix and colons. On the Mac a Cast row's app ID `cast:<device ID>` maps to that key and back, and the key is what a renamed Cast speaker's name is kept by. A name the Mac kept before under `lc:cast:<device ID>` moves to `cc:<device ID>` once, at launch: a name already kept under the new key wins, the old entry goes, and a second launch changes nothing. A hidden Cast speaker stays listed under its app ID, as before. Groups and the auto-connect list still switch local and AirPlay speakers only: a Cast key in them is left out when the settings are read, on Windows, and skipped when a group is switched, on both hosts. Windows saves no settings version for this, since its Cast keys already had this form.
 - **S150** *Observed* (tests "group name: …", "group rename: …"). Group names are trimmed; blank or whitespace-only is no name. A new group without a name gets "Group n", n being one more than the number of existing groups, skipping names in use. A blank rename keeps the old name.
 - **S210** *Observed* (`WindowRules.swift`, `GroupSummary`; tests "groups: on when every present member is on; absent members don't count", "groups: off while a present member is off", "groups: a group with no member present is never on"). A group's switch counts only its present members, those listed now (local devices under S151, AirPlay receivers under S222): it shows on when every present member is on, off while any present member is off, and never on when no member is present. A member that isn't listed counts neither way.
 - **S204** *Required* (the maintainer's decision for the switch to AudioSync's own sender, the one change of saved IDs it may make; tests "speaker IDs: …"). *Saved speaker IDs after the switch to AudioSync's own sender.* An AirPlay speaker is saved by its ID alone (switched on: `enabledAirPlayIds`; its volume: `airPlayVolumeByID`; the `ap:` keys of groups and of auto-connect), never with its name or address. Both senders take their ID from the receiver's device ID, the MAC-style address in its announcement (docs/AIRPLAY_SPEC.md P8, P9): the bundled engine writes that 48-bit number in decimal, AudioSync's own sender writes 12 uppercase hex digits behind `native:` (P10). So when the native sender's discovery reports a receiver (found or changed) whose receiver ID is 12 hex digits, every saved ID that is the same number in the engine's form (decimal digits only, no sign, space or leading zero, 1 to 2^48 − 1) becomes `native:<receiver ID>`, as an ID and inside `ap:` keys, before the receiver's row appears, so auto-connect and a speaker that was on act on the new ID at once. A volume already saved under the new ID wins over the old one; a group that already lists the new key drops the old one and otherwise keeps its order; a set never holds an ID twice. Every other ID and key stays as it is: local keys, IDs of receivers discovery hasn't listed, receivers without a device ID, anything not in the engine's form. An ID therefore moves once, when its receiver is first seen, and a second run changes nothing. The old ID is gone afterwards: back on the bundled engine (the hidden option), a moved speaker is off and outside its groups, like any speaker that engine never saw. The debug log has one line per moved ID. *Unverified* (no receiver here): that the bundled engine's output ID is the device ID in decimal; if it isn't, nothing matches, nothing moves, and the saved speakers stay off under the native sender, as before this clause. To check on a Mac with a receiver: a group saved under the bundled engine keeps its AirPlay speaker after the switch.
@@ -584,6 +586,10 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | speaker key: AirPlay prefix | S149 |
 | speaker key: local parse keeps colons | S149 |
 | speaker key: unknown prefix rejected | S149 |
+| speaker key: Cast prefix, colons kept | S149, S243 |
+| speaker key: Cast app ID maps to its key and back | S243 |
+| speaker key: pair and theater targets round-trip | S149 |
+| speaker names: Cast names move from lc:cast: once | S243 |
 | groups: JSON round-trip | S149 |
 | speaker IDs: a saved bundled-engine ID moves to the receiver whose device ID it is | S204 |
 | speaker IDs: a speaker that was on stays on under its new ID; one not discovered keeps its old ID | S204 |
@@ -1501,3 +1507,16 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format | S241 |
 | a_run_its_sheet_apply_and_measure_again_cross_the_boundary | S235, S236, S237, S238, S239 |
 | a_refused_reference_and_bad_arguments | S236 |
+
+### Speaker keys: core and Windows (`cargo test` in `core/` and `windows/`)
+
+The checks for S149 and S243 in the Rust core (`core/tests/policy_speakers.rs`) and in the Windows host (`windows/src/adapter.rs`, `windows/src/settings.rs`).
+
+| Test | Clauses |
+|---|---|
+| speaker_keys_have_an_airplay_or_local_prefix | S149 |
+| a_cast_speaker_has_a_cc_key | S149, S243 |
+| pair_theater_and_cast_keys_keep_the_colons_of_their_ids | S149, S243 |
+| speaker_keys_round_trip | S149, S243 |
+| a_cast_rows_id_is_the_cores_cast_key | S243 |
+| groups_and_auto_connect_keep_leaving_cast_keys_out | S243 |
