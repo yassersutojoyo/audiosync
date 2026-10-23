@@ -186,6 +186,15 @@ mod tests {
             assert!(!handler.contains(retry), "{retry}");
         }
         assert!(script.contains("replaced: \"This remote is open in another tab or window."));
+        // Coming back into view must not take the stream back either; Retry or pairing does.
+        assert!(handler.contains("streamReplaced = true;"));
+        let visible = &script[script.find("\"visibilitychange\"").unwrap()..];
+        let visible = &visible[visible.find("if (").unwrap()..];
+        let condition = &visible[..visible.find('{').unwrap()];
+        assert!(condition.contains("!streamReplaced"), "{condition}");
+        let connect = &script[script.find("function connect() {").unwrap()..];
+        let connect = &connect[..connect.find("\n}\n").unwrap()];
+        assert!(connect.contains("streamReplaced = false;"));
     }
 
     #[test]

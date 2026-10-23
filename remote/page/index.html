@@ -306,6 +306,7 @@ let retryTimer = null;
 let failures = 0;
 let lost = false;
 let streamed = false;
+let streamReplaced = false;
 let focusAfterPair = false;
 let snapshot = null;
 let rowCount = 0;
@@ -415,6 +416,7 @@ function setLost(value, message) {
 
 function connect() {
   stopStream();
+  streamReplaced = false;
   showRemote();
   events = new EventSource("/api/events");
   events.addEventListener("state", (event) => {
@@ -437,6 +439,7 @@ function connect() {
   // Sent when a newer page of this device took the stream; reconnecting would take it back.
   events.addEventListener("replaced", () => {
     stopStream();
+    streamReplaced = true;
     setLost(true, TEXT.replaced);
   });
   events.onerror = () => {
@@ -867,7 +870,7 @@ ui.unpair.addEventListener("click", () => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && ui.pair.hidden && events === null) {
+  if (document.visibilityState === "visible" && ui.pair.hidden && events === null && !streamReplaced) {
     failures = 0;
     connect();
   }
