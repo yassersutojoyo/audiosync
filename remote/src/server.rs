@@ -460,6 +460,20 @@ impl Shared {
         lock(&self.streams).retain(|(open, _)| *open != id);
     }
 
+    /// Marks the connection that owns `paired` as paired; false when it was
+    /// already closed to make room, so its request is not acted on.
+    fn mark_paired(&self, paired: &Arc<AtomicBool>) -> bool {
+        // Under the lock admit decides and closes under, so it never closes a connection marked here.
+        let connections = lock(&self.connections);
+        let listed = connections
+            .iter()
+            .any(|connection| Arc::ptr_eq(&connection.paired, paired));
+        if listed {
+            paired.store(true, Ordering::SeqCst);
+        }
+        listed
+    }
+
     fn paired(&self, request: &Request) -> Option<String> {
         let token = request.cookie(TOKEN_COOKIE)?;
         let (paired, snapshot) = lock(&self.devices).check(token, SystemTime::now());
@@ -778,28 +792,27 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) -> Option<Tc
     // Accepted sockets inherit the listener's non-blocking mode on WinSock and BSD.
     let _ = stream.set_nonblocking(false);
     let peer = net::peer_group(from);
-    let admitted = {
-        let mut connections = lock(&shared.connections);
-        connections.retain(|connection| !connection.thread.is_finished());
-        let held: Vec<Slot> = connections
-            .iter()
-            .map(|connection| Slot {
-                paired: connection.paired.load(Ordering::SeqCst),
-                ..connection.slot
-            })
-            .collect();
-        let admitted = admission(&held, peer, shared.capacity);
-        if let Admission::Replace(oldest) = admitted {
-            let _ = connections.remove(oldest).stream.shutdown(Shutdown::Both);
-        }
-        admitted
-    };
+    // Held through the push, so serve marks a connection paired only while it is listed.
+    let mut connections = lock(&shared.connections);
+    connections.retain(|connection| !connection.thread.is_finished());
+    let held: Vec<Slot> = connections
+        .iter()
+        .map(|connection| Slot {
+            paired: connection.paired.load(Ordering::SeqCst),
+            ..connection.slot
+        })
+        .collect();
+    let admitted = admission(&held, peer, shared.capacity);
+    if let Admission::Replace(oldest) = admitted {
+        let _ = connections.remove(oldest).stream.shutdown(Shutdown::Both);
+    }
     let refused = match admitted {
         Admission::Open | Admission::Reserved | Admission::Replace(_) => None,
         Admission::Busy => Some(ServerEvent::Busy { from }),
         Admission::PeerBusy => Some(ServerEvent::PeerBusy { from }),
     };
     if let Some(event) = refused {
+        drop(connections);
         shared.report(event);
         let mut stream = stream;
         let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
@@ -838,8 +851,6 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) -> Option<Tc
             }
         });
     if let Ok(thread) = spawned {
-        let mut connections = lock(&shared.connections);
-        connections.retain(|connection| !connection.thread.is_finished());
         connections.push(Connection {
             slot,
             paired,
@@ -872,7 +883,7 @@ fn serve(
     mut stream: TcpStream,
     from: IpAddr,
     reserved: bool,
-    paired: &AtomicBool,
+    paired: &Arc<AtomicBool>,
     shared: &Shared,
 ) {
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
@@ -905,7 +916,9 @@ fn serve(
         return;
     }
     if shared.paired(&request).is_some() {
-        paired.store(true, Ordering::SeqCst);
+        if !shared.mark_paired(paired) {
+            return;
+        }
     } else if reserved {
         shared.report(ServerEvent::Busy { from });
         let _ = http::write_response(&mut stream, &Response::error(&text::busy()), csp);
@@ -1185,7 +1198,7 @@ fn source(request: &Request, shared: &Shared) -> Answer {
 /// The event stream (HTML Living Standard §9.2): the current snapshot at
 /// once, then each new revision once, a comment line when it has been quiet
 /// for a heartbeat. It ends when the server stops, the device is forgotten
-/// or the device opens a stream too many.
+/// or the device opens a stream too many, which sends a last `replaced` event.
 fn stream_events(stream: TcpStream, token: &str, shared: &Shared) {
     let id = shared.open_stream(token);
     send_events(stream, token, id, shared);
@@ -1212,9 +1225,16 @@ fn send_events(mut stream: TcpStream, token: &str, id: u64, shared: &Shared) {
             let mut published = lock(&shared.published);
             loop {
                 if shared.stopped.load(Ordering::SeqCst)
-                    || !shared.stream_open(id)
                     || !lock(&shared.devices).contains(token, SystemTime::now())
                 {
+                    return;
+                }
+                if !shared.stream_open(id) {
+                    drop(published);
+                    // Without it the page would reconnect and end the device's next stream in turn.
+                    let _ = stream
+                        .write_all(b"event: replaced\ndata: {}\n\n")
+                        .and_then(|()| stream.flush());
                     return;
                 }
                 let batch = published.since(sent);
