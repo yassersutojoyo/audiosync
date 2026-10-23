@@ -62,7 +62,7 @@ use crate::audio::capture::{
     LoopbackMode, MAX_MIX_APPS, SampleType, StreamFormat,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
-use crate::audio::mix::{LaneInput, StreamMixer, as_bytes};
+use crate::audio::mix::{LaneStream, MixLanes, MixPlan, as_bytes};
 use crate::audio::outputs::HNS_PER_MS;
 
 /// The buffer a capture stream asks for, 100 ms: room for the capture thread
@@ -94,6 +94,8 @@ pub struct LoopbackCapture {
     /// The captured apps, to notice when they quit; empty when one can't be
     /// watched or the capture isn't of apps.
     sources: Vec<ProcessWatch>,
+    /// The apps a mix captures, which it follows while it runs.
+    plan: Option<Arc<MixPlan>>,
     /// How Windows accepted to deliver the capture.
     setup: CaptureAttempt,
     /// What the log calls the capture when it fails.
@@ -123,6 +125,19 @@ impl CaptureHandle for LoopbackCapture {
 
     fn setup(&self) -> Option<CaptureAttempt> {
         Some(self.setup)
+    }
+
+    fn retarget(&mut self, target: &CaptureTarget) -> bool {
+        let (Some(plan), CaptureTarget::Mix(activations)) = (&self.plan, target) else {
+            return false;
+        };
+        let pids: Vec<u32> = activations
+            .iter()
+            .map(|activation| activation.target_pid)
+            .collect();
+        plan.set(&pids);
+        self.sources = watch_all(activations);
+        true
     }
 }
 
@@ -163,6 +178,7 @@ pub(super) fn start(
         CaptureTarget::Mix(activations) => (watch_all(activations), "process loopback capture"),
         CaptureTarget::Input { .. } => (Vec::new(), "input device capture"),
     };
+    let plan = matches!(target, CaptureTarget::Mix(_)).then(|| Arc::new(MixPlan::default()));
     let stop = Arc::new(Event::manual_reset()?);
     let failure = Arc::new(AtomicI32::new(0));
     let ended = Arc::new(AtomicBool::new(false));
@@ -172,9 +188,19 @@ pub(super) fn start(
         let failure = Arc::clone(&failure);
         let ended = Arc::clone(&ended);
         let captured = Arc::clone(&captured);
+        let plan = plan.clone();
         spawn_worker("audiosync-capture", move |ready| {
             run(
-                &target, writer, equalizer, feeds, &stop, &failure, &ended, &captured, ready,
+                &target,
+                plan.as_deref(),
+                writer,
+                equalizer,
+                feeds,
+                &stop,
+                &failure,
+                &ended,
+                &captured,
+                ready,
             );
         })?
     };
@@ -186,6 +212,7 @@ pub(super) fn start(
         captured,
         thread,
         sources,
+        plan,
         setup,
         call,
         input,
@@ -215,22 +242,24 @@ fn watch_all(activations: &[Activation]) -> Vec<ProcessWatch> {
 )]
 fn run(
     target: &CaptureTarget,
+    plan: Option<&MixPlan>,
     writer: RingWriter,
     equalizer: EqProcessor,
     feeds: Feeds,
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
-    captured: &AtomicU64,
+    captured: &Arc<AtomicU64>,
     ready: Ready<CaptureAttempt>,
 ) {
     let _apartment = match Apartment::enter() {
         Ok(apartment) => apartment,
         Err(error) => return ready.fail(error),
     };
-    if let CaptureTarget::Mix(activations) = target {
+    if let (CaptureTarget::Mix(activations), Some(plan)) = (target, plan) {
         return run_mix(
             activations,
+            plan,
             writer,
             equalizer,
             feeds,
@@ -565,7 +594,7 @@ fn drain(
     gaps: &mut GapFill,
     frequency: i64,
     captured: &AtomicU64,
-    deliver: &mut impl FnMut(&[u8], usize, bool),
+    deliver: &mut dyn FnMut(&[u8], usize, bool),
 ) -> Result<usize, HRESULT> {
     let block = stream.format.block_align();
     let mut packets = 0;
@@ -637,175 +666,179 @@ const MIX_FORMAT: StreamFormat = StreamFormat {
     channels: 2,
 };
 
-/// The capture thread of a mix: opens and starts every loopback of
-/// `activations`, then mixes them ([`mix_loop`]). A mix of none writes
-/// silence in real time ([`silence_loop`]), so an "all except" source whose
-/// other apps have no audio session still runs. Reports the first stream's
-/// setup.
+/// One app's loopback in a mix.
+struct LoopbackLane {
+    stream: CaptureStream,
+    /// Its app, to tell a stream that failed because the app quit; `None`
+    /// when it can't be watched.
+    watch: Option<ProcessWatch>,
+    frequency: i64,
+    captured: Arc<AtomicU64>,
+}
+
+impl LoopbackLane {
+    /// Opens and starts the loopback of app `pid`'s tree.
+    fn open(pid: u32, frequency: i64, captured: &Arc<AtomicU64>) -> Result<Self, BackendError> {
+        let stream = open_stream(&CaptureTarget::Loopback(Activation {
+            mode: LoopbackMode::IncludeTree,
+            target_pid: pid,
+        }))?;
+        // SAFETY: starts the stream initialized above; dropping the lane
+        // stops it.
+        unsafe { stream.client.Start() }
+            .map_err(|error| system_error("IAudioClient::Start", &error))?;
+        Ok(LoopbackLane {
+            stream,
+            watch: ProcessWatch::open(pid).ok().flatten(),
+            frequency,
+            captured: Arc::clone(captured),
+        })
+    }
+}
+
+impl Drop for LoopbackLane {
+    fn drop(&mut self) {
+        // SAFETY: stops the stream started when the lane opened.
+        let _ = unsafe { self.stream.client.Stop() };
+    }
+}
+
+impl LaneStream for LoopbackLane {
+    fn format(&self) -> StreamFormat {
+        self.stream.format
+    }
+
+    fn drain(
+        &mut self,
+        gaps: &mut GapFill,
+        deliver: &mut dyn FnMut(&[u8], usize, bool),
+    ) -> Result<usize, i32> {
+        drain(&self.stream, gaps, self.frequency, &self.captured, deliver).map_err(|code| code.0)
+    }
+
+    fn app_exited(&self) -> bool {
+        self.watch.as_ref().is_some_and(ProcessWatch::has_exited)
+    }
+}
+
+/// The capture thread of a mix: opens the loopback of every app in
+/// `activations`, then mixes them ([`mix_loop`]), following `plan` as the
+/// backend changes the apps. A mix of none writes silence in real time, so
+/// an "all except" source whose other apps have no audio session still
+/// runs. Fails to start only when every app's loopback fails to open.
 #[expect(
     clippy::too_many_arguments,
     reason = "everything the thread owns or shares, passed once at its start"
 )]
 fn run_mix(
     activations: &[Activation],
+    plan: &MixPlan,
     writer: RingWriter,
     equalizer: EqProcessor,
     feeds: Feeds,
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
-    captured: &AtomicU64,
+    captured: &Arc<AtomicU64>,
     ready: Ready<CaptureAttempt>,
 ) {
-    let activations = &activations[..activations.len().min(MAX_MIX_APPS)];
-    let mut streams = Vec::with_capacity(activations.len());
-    let mut lanes = Vec::with_capacity(activations.len());
-    for &activation in activations {
-        let stream = match open_stream(&CaptureTarget::Loopback(activation)) {
-            Ok(stream) => stream,
-            Err(error) => return ready.fail(error),
-        };
-        match LaneInput::new(stream.format) {
-            Ok(lane) => lanes.push(lane),
-            Err(error) => return ready.fail(error),
-        }
-        streams.push(stream);
-    }
     let mut converter = match CaptureConverter::new(MIX_FORMAT, writer, equalizer, feeds) {
         Ok(converter) => converter,
         Err(error) => return ready.fail(error),
     };
-    let mut mixer = StreamMixer::new(streams.len());
-    let _task = ProAudioTask::join();
-    let stop_all = |streams: &[CaptureStream]| {
-        for stream in streams {
-            // SAFETY: stops a stream started below; stopping one that isn't
-            // started only fails.
-            let _ = unsafe { stream.client.Stop() };
-        }
-    };
-    for stream in &streams {
-        // SAFETY: starts a stream initialized above.
-        if let Err(error) = unsafe { stream.client.Start() } {
-            stop_all(&streams);
-            return ready.fail(system_error("IAudioClient::Start", &error));
-        }
+    let mut frequency = 0_i64;
+    // SAFETY: writes one integer.
+    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
+    let pids: Vec<u32> = activations
+        .iter()
+        .map(|activation| activation.target_pid)
+        .collect();
+    let mut lanes = MixLanes::new(now_hns(frequency));
+    let refused = lanes.set_apps(&pids, now_hns(frequency), |pid| {
+        LoopbackLane::open(pid, frequency, captured)
+    });
+    if let Some(error) = refused
+        && lanes.streams().next().is_none()
+    {
+        return ready.fail(error);
     }
-    let setup = streams.first().map_or(
+    let _task = ProAudioTask::join();
+    let setup = lanes.streams().next().map_or(
         CaptureAttempt {
             format: MIX_FORMAT,
             autoconvert: false,
         },
-        |stream| CaptureAttempt {
-            format: stream.format,
-            autoconvert: stream.autoconvert,
+        |lane| CaptureAttempt {
+            format: lane.stream.format,
+            autoconvert: lane.stream.autoconvert,
         },
     );
     if !ready.ok(setup) {
-        return stop_all(&streams);
+        return;
     }
-    let result = if streams.is_empty() {
-        silence_loop(&mut converter, stop)
-    } else {
-        mix_loop(
-            &streams,
-            &mut lanes,
-            &mut mixer,
-            &mut converter,
-            stop,
-            captured,
-        )
-    };
-    stop_all(&streams);
+    let result = mix_loop(&mut lanes, plan, &mut converter, stop, frequency, captured);
+    drop(lanes);
     if let Err(code) = result {
         failure.store(code.0, Ordering::Relaxed);
         ended.store(true, Ordering::Release);
     }
 }
 
-/// Writes silence in real time until `stop` is set: a mix with no stream.
-fn silence_loop(converter: &mut CaptureConverter, stop: &Event) -> Result<(), HRESULT> {
-    let mut frequency = 0_i64;
-    // SAFETY: writes one integer.
-    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
-    let began = now_hns(frequency);
-    let mut written = 0_u64;
-    loop {
-        // SAFETY: the handle lives as long as this loop.
-        let wait = unsafe { WaitForSingleObject(stop.raw(), WAIT_MS) };
-        if wait == WAIT_OBJECT_0 {
-            return Ok(());
-        }
-        if wait != WAIT_TIMEOUT {
-            return Err(E_FAIL);
-        }
-        let elapsed = now_hns(frequency).saturating_sub(began);
-        let due = (u128::from(elapsed) * u128::from(SESSION_RATE) / 10_000_000) as u64;
-        let frames = due.saturating_sub(written);
-        if frames > 0 {
-            written += frames;
-            converter.push(&[], frames as usize, true);
-        }
-    }
-}
-
-/// Captures every stream of a mix until `stop` is set (`Ok`) or a call
-/// fails (its HRESULT), as [`capture_loop`] does for one: every wake reads
-/// each stream's packets, and its gap silence, into its lane, and the mixer
-/// hands on what all lanes reach. Never allocates, locks or logs.
+/// Mixes until `stop` is set (`Ok`) or the mix fails (its HRESULT): every
+/// wake reads each stream's packets, and its gap silence, into its lane, and
+/// the mixer hands on what all lanes reach. Reading never allocates, locks
+/// or logs; when `plan` changes, the apps' loopbacks are opened and closed
+/// between two wakes, which blocks the thread for an activation while the
+/// other streams' buffers (100 ms) wait and their positions keep the time.
 fn mix_loop(
-    streams: &[CaptureStream],
-    lanes: &mut [LaneInput],
-    mixer: &mut StreamMixer,
+    lanes: &mut MixLanes<LoopbackLane>,
+    plan: &MixPlan,
     converter: &mut CaptureConverter,
     stop: &Event,
-    captured: &AtomicU64,
+    frequency: i64,
+    captured: &Arc<AtomicU64>,
 ) -> Result<(), HRESULT> {
-    let count = streams.len().min(MAX_MIX_APPS).min(lanes.len());
     let mut handles = [HANDLE::default(); MAX_MIX_APPS + 1];
-    handles[0] = stop.raw();
-    for (slot, stream) in handles[1..].iter_mut().zip(streams) {
-        *slot = stream.event.raw();
-    }
-    let handles = &handles[..=count];
-    let mut gaps = [const { None }; MAX_MIX_APPS];
-    for (slot, stream) in gaps.iter_mut().zip(streams) {
-        *slot = Some(GapFill::new(stream.format.rate));
-    }
-    let mut frequency = 0_i64;
-    // SAFETY: writes one integer.
-    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
+    let mut count = wait_handles(lanes, stop, &mut handles);
+    let mut seen = 0;
+    let mut planned = [0_u32; MAX_MIX_APPS];
     let mut sink = |stereo: &[f32], frames: usize| converter.push(as_bytes(stereo), frames, false);
     loop {
-        // SAFETY: every handle lives as long as this loop.
-        let wait = unsafe { WaitForMultipleObjects(handles, false, WAIT_MS) };
+        // SAFETY: every handle lives as long as its stream, which lives
+        // until the handles are taken again below.
+        let wait = unsafe { WaitForMultipleObjects(&handles[..count], false, WAIT_MS) };
         if wait == WAIT_OBJECT_0 {
             return Ok(());
         }
-        let packet_ready = (1..=count as u32).contains(&wait.0.wrapping_sub(WAIT_OBJECT_0.0));
+        let packet_ready = (1..count as u32).contains(&wait.0.wrapping_sub(WAIT_OBJECT_0.0));
         if wait != WAIT_TIMEOUT && !packet_ready {
             return Err(E_FAIL);
         }
-        let now = now_hns(frequency);
-        for (index, (stream, lane)) in streams.iter().zip(lanes.iter_mut()).take(count).enumerate()
-        {
-            let Some(gaps) = gaps[index].as_mut() else {
-                continue;
-            };
-            let mut deliver = |data: &[u8], frames: usize, silent: bool| {
-                lane.convert(data, frames, silent, &mut |stereo: &[f32]| {
-                    mixer.push(index, stereo, &mut sink);
-                });
-            };
-            let packets = drain(stream, gaps, frequency, captured, &mut deliver)?;
-            if packets == 0 {
-                let fill = gaps.idle(now);
-                if fill > 0 {
-                    deliver(&[], fill, true);
-                }
-            }
+        lanes.read(now_hns(frequency), &mut sink).map_err(HRESULT)?;
+        if let Some((apps, version)) = plan.read(seen, &mut planned) {
+            seen = version;
+            let _ = lanes.set_apps(&planned[..apps], now_hns(frequency), |pid| {
+                LoopbackLane::open(pid, frequency, captured)
+            });
         }
+        count = wait_handles(lanes, stop, &mut handles);
     }
+}
+
+/// Fills `handles` with the stop event and each open stream's packet event;
+/// returns how many it holds.
+fn wait_handles(
+    lanes: &MixLanes<LoopbackLane>,
+    stop: &Event,
+    handles: &mut [HANDLE; MAX_MIX_APPS + 1],
+) -> usize {
+    handles[0] = stop.raw();
+    let mut count = 1;
+    for (slot, lane) in handles[1..].iter_mut().zip(lanes.streams()) {
+        *slot = lane.stream.event.raw();
+        count += 1;
+    }
+    count
 }
 
 #[cfg(test)]
@@ -913,6 +946,7 @@ mod tests {
             captured: Arc::new(AtomicU64::new(0)),
             thread,
             sources: Vec::new(),
+            plan: None,
             setup: CAPTURE_ATTEMPTS[0],
             call: "process loopback capture",
             input: false,

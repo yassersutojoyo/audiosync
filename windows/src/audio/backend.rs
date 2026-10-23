@@ -32,10 +32,14 @@ pub enum SourceId {
     },
     /// Several apps mixed: each top process in `root_pids` and every
     /// process it started, each tree in its own loopback. A tree that no
-    /// longer runs is skipped.
+    /// longer runs is skipped, and an app with an audio session running one
+    /// of `executables` joins while the source plays.
     Apps {
         /// The process IDs of the apps' top processes.
         root_pids: Vec<u32>,
+        /// The apps' executable file names, to find instances that start
+        /// later.
+        executables: Vec<String>,
     },
     /// Every app with an audio session except those running one of
     /// `executables` (file names, such as `spotify.exe`), and never

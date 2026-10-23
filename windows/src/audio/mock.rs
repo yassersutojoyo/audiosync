@@ -157,6 +157,19 @@ impl CaptureHandle for MockCapture {
     fn setup(&self) -> Option<CaptureAttempt> {
         Some(CAPTURE_ATTEMPTS[0])
     }
+
+    /// A mix follows its apps, as a real one does.
+    fn retarget(&mut self, target: &CaptureTarget) -> bool {
+        let mut link = lock(&self.link);
+        if !matches!(
+            (&link.target, target),
+            (CaptureTarget::Mix(_), CaptureTarget::Mix(_))
+        ) {
+            return false;
+        }
+        link.target = target.clone();
+        true
+    }
 }
 
 impl Drop for MockCapture {
@@ -310,6 +323,12 @@ impl MockDriver {
     /// Every capture started, in order.
     pub fn captures_started(&self) -> &[CaptureTarget] {
         &self.captures_started
+    }
+
+    /// What the running capture takes in now, a mix's apps as it follows
+    /// them.
+    pub fn capture_target(&self) -> Option<CaptureTarget> {
+        self.capture.as_ref().map(|link| lock(link).target.clone())
     }
 
     /// Whether the running capture feeds the AirPlay sender.
@@ -704,11 +723,22 @@ impl Controller<MockDriver> {
             .retain(|&session_pid| session_pid != pid);
         if let Some(link) = &driver.capture {
             let mut link = lock(link);
-            let captures_app = matches!(
-                link.target,
-                CaptureTarget::Loopback(activation)
-                    if activation.mode == LoopbackMode::IncludeTree && activation.target_pid == pid
-            );
+            let processes = &driver.processes;
+            let captures_app = match &link.target {
+                CaptureTarget::Loopback(activation) => {
+                    activation.mode == LoopbackMode::IncludeTree && activation.target_pid == pid
+                }
+                // A mix reports a quit once all of its apps quit.
+                CaptureTarget::Mix(activations) => {
+                    !activations.is_empty()
+                        && activations.iter().all(|activation| {
+                            !processes
+                                .iter()
+                                .any(|process| process.pid == activation.target_pid)
+                        })
+                }
+                CaptureTarget::Input { .. } => false,
+            };
             if captures_app && link.state == CaptureState::Running {
                 link.state = CaptureState::SourceQuit;
             }

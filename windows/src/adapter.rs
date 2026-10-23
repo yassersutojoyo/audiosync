@@ -207,9 +207,10 @@ impl Chosen {
             // `chosen_source` finds the processes of an "only these" mix.
             Chosen::Mix {
                 mode: MixMode::Only,
-                ..
+                apps,
             } => SourceId::Apps {
                 root_pids: Vec::new(),
+                executables: apps.iter().map(|app| app.executable.clone()).collect(),
             },
             Chosen::Mix {
                 mode: MixMode::AllExcept,
@@ -1963,7 +1964,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             if root_pids.is_empty() {
                 return Err(BackendError::SourceGone);
             }
-            return Ok(SourceId::Apps { root_pids });
+            return Ok(SourceId::Apps {
+                root_pids,
+                executables: apps.iter().map(|app| app.executable.clone()).collect(),
+            });
         }
         let key = self.chosen.key();
         if matches!(self.chosen, Chosen::Input { .. })
@@ -3891,7 +3895,8 @@ mod tests {
         assert_eq!(
             both.id(),
             SourceId::Apps {
-                root_pids: Vec::new()
+                root_pids: Vec::new(),
+                executables: vec!["player.exe".to_owned(), "browser.exe".to_owned()],
             },
             "the pids are found at the next listing"
         );

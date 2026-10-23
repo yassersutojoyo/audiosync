@@ -5,9 +5,12 @@
 //! Each loopback runs on its own clock and delivers its packets at its own
 //! moments, so each stream first becomes stereo float at [`SESSION_RATE`]
 //! ([`LaneInput`]) and waits in its own lane of the [`StreamMixer`], which
-//! sums the lanes as far as all of them reach. Everything is allocated up
-//! front; [`LaneInput::convert`] and [`StreamMixer::push`] never allocate,
-//! lock or block.
+//! sums the lanes as far as all of them reach. Lanes open and close while
+//! the mix runs, as apps join and leave it. Everything is allocated up
+//! front; [`LaneInput::convert`] and the mixer never allocate, lock or
+//! block.
+
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 
 use audiosync_core::channels::input_to_stereo;
 use audiosync_core::resample::Resampler;
@@ -15,7 +18,7 @@ use audiosync_core::ring::is_supported_rate;
 
 use super::SESSION_RATE;
 use super::backend::BackendError;
-use super::capture::{CONVERT_CHUNK, StreamFormat, decode};
+use super::capture::{CONVERT_CHUNK, GapFill, MAX_MIX_APPS, StreamFormat, decode};
 
 /// How far a lane may run ahead of the slowest one, 60 ms: more than a
 /// quiet loopback waits before its silence is filled (25 ms, then 10 ms
@@ -35,6 +38,9 @@ struct Lane {
     start: usize,
     /// Waiting frames.
     len: usize,
+    /// Whether its stream is in the mix. A closed lane still hands on what
+    /// it holds, but no longer sets the pace.
+    open: bool,
 }
 
 impl Lane {
@@ -43,6 +49,16 @@ impl Lane {
             samples: vec![0.0; LANE_FRAMES * 2].into_boxed_slice(),
             start: 0,
             len: 0,
+            open: true,
+        }
+    }
+
+    /// Appends `frames` frames of silence; the caller keeps them within room.
+    fn append_silence(&mut self, frames: usize) {
+        for _ in 0..frames {
+            let at = (self.start + self.len) % LANE_FRAMES * 2;
+            self.samples[at..at + 2].fill(0.0);
+            self.len += 1;
         }
     }
 
@@ -75,7 +91,7 @@ pub struct StreamMixer {
 }
 
 impl StreamMixer {
-    /// A mixer for `streams` streams.
+    /// A mixer for `streams` streams, every lane open.
     pub fn new(streams: usize) -> StreamMixer {
         StreamMixer {
             lanes: (0..streams).map(|_| Lane::new()).collect(),
@@ -89,6 +105,9 @@ impl StreamMixer {
         if lane >= self.lanes.len() {
             return;
         }
+        if !self.lanes[lane].open {
+            return;
+        }
         let mut rest = &stereo[..stereo.len() / 2 * 2];
         while !rest.is_empty() {
             let piece = (rest.len() / 2).min(CONVERT_CHUNK);
@@ -96,6 +115,55 @@ impl StreamMixer {
             rest = &rest[piece * 2..];
             self.mix(sink);
         }
+    }
+
+    /// Adds `frames` frames of silence to `lane`, as [`StreamMixer::push`].
+    pub fn push_silence(
+        &mut self,
+        lane: usize,
+        frames: usize,
+        sink: &mut impl FnMut(&[f32], usize),
+    ) {
+        if self.lanes.get(lane).is_none_or(|lane| !lane.open) {
+            return;
+        }
+        let mut rest = frames;
+        while rest > 0 {
+            let piece = rest.min(CONVERT_CHUNK);
+            self.lanes[lane].append_silence(piece);
+            rest -= piece;
+            self.mix(sink);
+        }
+    }
+
+    /// Takes `lane`'s stream into the mix. It starts level with the open
+    /// lane furthest behind, padded with silence, so joining never holds
+    /// the mix back.
+    pub fn open_lane(&mut self, lane: usize) {
+        let level = self.slowest().unwrap_or(0);
+        let Some(joining) = self.lanes.get_mut(lane) else {
+            return;
+        };
+        joining.start = 0;
+        joining.len = 0;
+        joining.open = true;
+        joining.append_silence(level);
+    }
+
+    /// Leaves `lane`'s stream out of the mix; what it holds is still mixed.
+    pub fn close_lane(&mut self, lane: usize) {
+        if let Some(leaving) = self.lanes.get_mut(lane) {
+            leaving.open = false;
+        }
+    }
+
+    /// The frames waiting in the open lane furthest behind.
+    fn slowest(&self) -> Option<usize> {
+        self.lanes
+            .iter()
+            .filter(|lane| lane.open)
+            .map(|lane| lane.len)
+            .min()
     }
 
     /// Frames waiting in `lane`.
@@ -107,10 +175,16 @@ impl StreamMixer {
     /// Hands on what every lane has reached, then cuts back a lead past the
     /// allowed lag.
     fn mix(&mut self, sink: &mut impl FnMut(&[f32], usize)) {
-        let ready = self.lanes.iter().map(|lane| lane.len).min().unwrap_or(0);
+        let ready = self.slowest().unwrap_or(0);
         self.emit(ready, sink);
         // Drift rule: once a lane leads the slowest by over MAX_LAG, the mix moves on to half that lead, padding short lanes with silence and dropping nothing.
-        let lead = self.lanes.iter().map(|lane| lane.len).max().unwrap_or(0);
+        let lead = self
+            .lanes
+            .iter()
+            .filter(|lane| lane.open)
+            .map(|lane| lane.len)
+            .max()
+            .unwrap_or(0);
         if lead > MAX_LAG_FRAMES {
             self.emit(lead - TARGET_LAG_FRAMES, sink);
         }
@@ -130,6 +204,214 @@ impl StreamMixer {
             sink(out, n);
             done += n;
         }
+    }
+}
+
+/// The apps a running mix captures, by top process ID, as the backend last
+/// set them. One thread sets it and the capture thread reads it, without a
+/// lock: a version that is odd while the IDs are written tells the reader
+/// to come back at its next wake.
+pub struct MixPlan {
+    version: AtomicU64,
+    count: AtomicUsize,
+    pids: [AtomicU32; MAX_MIX_APPS],
+}
+
+impl Default for MixPlan {
+    fn default() -> MixPlan {
+        MixPlan {
+            version: AtomicU64::new(0),
+            count: AtomicUsize::new(0),
+            pids: [const { AtomicU32::new(0) }; MAX_MIX_APPS],
+        }
+    }
+}
+
+impl MixPlan {
+    /// Sets the apps to `pids`, the first [`MAX_MIX_APPS`]. Only one thread
+    /// sets a plan.
+    pub fn set(&self, pids: &[u32]) {
+        let version = self.version.load(Ordering::Relaxed);
+        self.version.store(version + 1, Ordering::Relaxed);
+        fence(Ordering::Release);
+        let pids = &pids[..pids.len().min(MAX_MIX_APPS)];
+        for (slot, &pid) in self.pids.iter().zip(pids) {
+            slot.store(pid, Ordering::Relaxed);
+        }
+        self.count.store(pids.len(), Ordering::Relaxed);
+        self.version.store(version + 2, Ordering::Release);
+    }
+
+    /// The apps into `out`, when the plan changed since version `seen` and
+    /// isn't being written: their count and the version read.
+    pub fn read(&self, seen: u64, out: &mut [u32; MAX_MIX_APPS]) -> Option<(usize, u64)> {
+        let version = self.version.load(Ordering::Acquire);
+        if version == seen || version % 2 == 1 {
+            return None;
+        }
+        let count = self.count.load(Ordering::Relaxed).min(MAX_MIX_APPS);
+        for (pid, slot) in out.iter_mut().zip(&self.pids).take(count) {
+            *pid = slot.load(Ordering::Relaxed);
+        }
+        fence(Ordering::Acquire);
+        (self.version.load(Ordering::Relaxed) == version).then_some((count, version))
+    }
+}
+
+/// One app's capture stream in a mix.
+pub trait LaneStream {
+    /// The format its packets come in.
+    fn format(&self) -> StreamFormat;
+
+    /// Reads every waiting packet into `deliver` (bytes, frames, silent),
+    /// with the silence `gaps` puts before each. Returns the packets read,
+    /// or the failing call's code. Never allocates, locks or logs.
+    fn drain(
+        &mut self,
+        gaps: &mut GapFill,
+        deliver: &mut dyn FnMut(&[u8], usize, bool),
+    ) -> Result<usize, i32>;
+
+    /// Whether its app is known to have exited.
+    fn app_exited(&self) -> bool;
+}
+
+/// An app's stream in the mix, with its conversion and gap tracking.
+struct Slot<S> {
+    pid: u32,
+    stream: S,
+    input: LaneInput,
+    gaps: GapFill,
+}
+
+/// The streams of a running mix, one lane each, and a pace lane of silence
+/// that keeps the mix in real time while no app plays, or none is left.
+/// Opening a stream can block for its activation, so it happens only when
+/// the plan changes; reading never allocates, locks or blocks.
+pub struct MixLanes<S> {
+    slots: Box<[Option<Slot<S>>]>,
+    /// Lane 0 is the pace lane; slot `i` is lane `i + 1`.
+    mixer: StreamMixer,
+    pace: GapFill,
+}
+
+impl<S: LaneStream> MixLanes<S> {
+    /// Lanes for no app yet, at `now` (100 ns units).
+    pub fn new(now: u64) -> MixLanes<S> {
+        let mut mixer = StreamMixer::new(MAX_MIX_APPS + 1);
+        for lane in 1..=MAX_MIX_APPS {
+            mixer.close_lane(lane);
+        }
+        MixLanes {
+            slots: (0..MAX_MIX_APPS).map(|_| None).collect(),
+            mixer,
+            pace: GapFill::started(SESSION_RATE, now),
+        }
+    }
+
+    /// Captures the apps `pids` from `now` on: closes the streams of apps
+    /// left out, and opens one through `open` for each new app. Returns the
+    /// first error opening one. An app whose stream failed is tried again
+    /// here only, when the plan changes.
+    pub fn set_apps(
+        &mut self,
+        pids: &[u32],
+        now: u64,
+        mut open: impl FnMut(u32) -> Result<S, BackendError>,
+    ) -> Option<BackendError> {
+        for index in 0..self.slots.len() {
+            if self.slots[index]
+                .as_ref()
+                .is_some_and(|slot| !pids.contains(&slot.pid))
+            {
+                self.retire(index);
+            }
+        }
+        let mut first_error = None;
+        for &pid in pids {
+            if self.slots.iter().flatten().any(|slot| slot.pid == pid) {
+                continue;
+            }
+            let Some(index) = self.slots.iter().position(Option::is_none) else {
+                break;
+            };
+            let opened = open(pid).and_then(|stream| {
+                let input = LaneInput::new(stream.format())?;
+                Ok((stream, input))
+            });
+            match opened {
+                Ok((stream, input)) => {
+                    let gaps = GapFill::started(stream.format().rate, now);
+                    self.slots[index] = Some(Slot {
+                        pid,
+                        stream,
+                        input,
+                        gaps,
+                    });
+                    self.mixer.open_lane(index + 1);
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error
+    }
+
+    /// The open streams, in lane order.
+    pub fn streams(&self) -> impl Iterator<Item = &S> {
+        self.slots.iter().flatten().map(|slot| &slot.stream)
+    }
+
+    /// Reads every stream at `now` and hands on what the mix has ready to
+    /// `sink`. A stream that fails leaves the mix and its lane goes silent;
+    /// only when one fails while its app still runs and no stream is left
+    /// does the mix end, with that code (Windows audio itself went away).
+    pub fn read(&mut self, now: u64, sink: &mut impl FnMut(&[f32], usize)) -> Result<(), i32> {
+        let fill = self.pace.idle(now);
+        self.mixer.push_silence(0, fill, sink);
+        let mut failure = None;
+        for index in 0..self.slots.len() {
+            let Some(slot) = self.slots[index].as_mut() else {
+                continue;
+            };
+            let mixer = &mut self.mixer;
+            let Slot {
+                stream,
+                input,
+                gaps,
+                ..
+            } = slot;
+            let mut deliver = |data: &[u8], frames: usize, silent: bool| {
+                input.convert(data, frames, silent, &mut |stereo: &[f32]| {
+                    mixer.push(index + 1, stereo, sink);
+                });
+            };
+            match stream.drain(gaps, &mut deliver) {
+                Ok(0) => {
+                    let fill = gaps.idle(now);
+                    if fill > 0 {
+                        deliver(&[], fill, true);
+                    }
+                }
+                Ok(_) => {}
+                Err(code) => {
+                    if !stream.app_exited() {
+                        failure = Some(code);
+                    }
+                    self.retire(index);
+                }
+            }
+        }
+        match failure {
+            Some(code) if self.streams().next().is_none() => Err(code),
+            _ => Ok(()),
+        }
+    }
+
+    fn retire(&mut self, index: usize) {
+        self.slots[index] = None;
+        self.mixer.close_lane(index + 1);
     }
 }
 
@@ -234,6 +516,9 @@ pub fn as_bytes(samples: &[f32]) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
     use crate::audio::capture::SampleType;
 
@@ -304,6 +589,175 @@ mod tests {
         assert!(
             mixed <= fast && fast - mixed <= MAX_LAG_FRAMES,
             "{mixed} of {fast}"
+        );
+    }
+
+    #[test]
+    fn a_lane_that_never_delivers_keeps_pace_from_its_start_without_bursts() {
+        // Lane 1 is a paused app: its loopback never sends a packet, and its
+        // fill, anchored when the stream started, writes silence at each wake.
+        let mut mixer = StreamMixer::new(2);
+        let mut quiet = GapFill::started(SESSION_RATE, 0);
+        let (mut playing, mut mixed) = (0, 0);
+        for tick in 1..=500_u64 {
+            let mut sink = |out: &[f32], n: usize| {
+                assert!(out[..n * 2].iter().all(|&v| (v - 0.25).abs() < 1e-6));
+                mixed += n;
+            };
+            mixer.push(0, &[0.25; 960], &mut sink);
+            playing += 480;
+            let fill = quiet.idle(tick * 100_000);
+            mixer.push_silence(1, fill, &mut sink);
+            // 10 ms behind the playing app at most, the fill's own lag,
+            // never held back to the drift rule's bound.
+            assert!(playing - mixed <= 480, "tick {tick}: {mixed} of {playing}");
+        }
+    }
+
+    #[test]
+    fn lanes_join_level_with_the_slowest_and_a_closed_lane_no_longer_sets_the_pace() {
+        let mut mixer = StreamMixer::new(3);
+        mixer.close_lane(2);
+        assert_eq!(run(&mut mixer, &[(0, 0.25, 300), (1, 0.5, 100)]).len(), 100);
+        assert_eq!(
+            run(&mut mixer, &[(2, 1.0, 50)]).len(),
+            0,
+            "a closed lane takes nothing"
+        );
+        mixer.open_lane(2);
+        assert_eq!(
+            mixer.waiting(2),
+            0,
+            "level with lane 1, which has nothing waiting"
+        );
+        let mixed = run(&mut mixer, &[(1, 0.5, 200), (2, 1.0, 200)]);
+        assert_eq!(mixed.len(), 200);
+        assert!(mixed.iter().all(|&v| (v - 1.75).abs() < 1e-6));
+        // Lane 1's app quits: its lane closes, and the others go on alone.
+        mixer.close_lane(1);
+        let alone = run(&mut mixer, &[(0, 0.25, 100), (2, 1.0, 100)]);
+        assert_eq!(alone.len(), 100);
+        assert!(alone.iter().all(|&v| (v - 1.25).abs() < 1e-6));
+        // With every lane closed nothing is mixed, and nothing breaks.
+        mixer.close_lane(0);
+        mixer.close_lane(2);
+        assert!(run(&mut mixer, &[(0, 0.25, 10)]).is_empty());
+    }
+
+    /// What a test makes a fake stream do at the next read.
+    #[derive(Default)]
+    struct Script {
+        /// A packet (start in 100 ns units, frames, sample value), once.
+        packet: Option<(u64, usize, f32)>,
+        /// The code its next read fails with.
+        fail: Option<i32>,
+        exited: bool,
+    }
+
+    struct FakeStream(Rc<RefCell<Script>>);
+
+    impl LaneStream for FakeStream {
+        fn format(&self) -> StreamFormat {
+            StreamFormat {
+                sample: SampleType::F32,
+                rate: SESSION_RATE,
+                channels: 2,
+            }
+        }
+
+        fn drain(
+            &mut self,
+            gaps: &mut GapFill,
+            deliver: &mut dyn FnMut(&[u8], usize, bool),
+        ) -> Result<usize, i32> {
+            let mut script = self.0.borrow_mut();
+            if let Some(code) = script.fail.take() {
+                return Err(code);
+            }
+            let Some((start, frames, value)) = script.packet.take() else {
+                return Ok(0);
+            };
+            let (fill, skip) = gaps.packet(start, frames, false);
+            if fill > 0 {
+                deliver(&[], fill, true);
+            }
+            let samples = vec![value; (frames - skip) * 2];
+            deliver(as_bytes(&samples), frames - skip, false);
+            Ok(1)
+        }
+
+        fn app_exited(&self) -> bool {
+            self.0.borrow().exited
+        }
+    }
+
+    #[test]
+    fn a_mix_follows_its_plan_and_a_failing_stream_only_silences_its_lane() {
+        let scripts: Vec<Rc<RefCell<Script>>> = (0..3).map(|_| Rc::default()).collect();
+        let mut lanes = MixLanes::new(0);
+        let open = |pid: u32| Ok(FakeStream(Rc::clone(&scripts[pid as usize])));
+        assert!(lanes.set_apps(&[1, 2], 0, open).is_none());
+        let (mut mixed, mut loud) = (0, 0);
+        let mut wake = |lanes: &mut MixLanes<FakeStream>, tick: u64| {
+            let result = lanes.read(tick * 100_000, &mut |out: &[f32], n: usize| {
+                mixed += n;
+                loud += out[..n * 2].iter().step_by(2).filter(|&&v| v > 0.0).count();
+            });
+            (result, mixed, loud)
+        };
+        // App 1 plays, app 2 is paused and never sends a packet.
+        for tick in 1..=100 {
+            scripts[1].borrow_mut().packet = Some(((tick - 1) * 100_000, 480, 0.25));
+            let (result, mixed, _) = wake(&mut lanes, tick);
+            assert_eq!(result, Ok(()));
+            assert!(tick as usize * 480 - mixed <= 960, "tick {tick}: {mixed}");
+        }
+        // App 2 quits and its stream fails: the mix goes on with app 1.
+        scripts[2].borrow_mut().exited = true;
+        scripts[2].borrow_mut().fail = Some(-1);
+        assert_eq!(wake(&mut lanes, 101).0, Ok(()));
+        assert_eq!(lanes.streams().count(), 1);
+        // App 0 joins without a new session.
+        assert!(lanes.set_apps(&[1, 0], 101 * 100_000, open).is_none());
+        assert_eq!(lanes.streams().count(), 2);
+        for tick in 102..=150 {
+            scripts[1].borrow_mut().packet = Some(((tick - 1) * 100_000, 480, 0.25));
+            let (result, mixed, loud) = wake(&mut lanes, tick);
+            assert_eq!(result, Ok(()));
+            assert!(tick as usize * 480 - mixed <= 960, "tick {tick}: {mixed}");
+            assert!(loud > 0);
+        }
+        // Every stream fails while its app runs: Windows audio went away.
+        scripts[0].borrow_mut().fail = Some(-2);
+        scripts[1].borrow_mut().fail = Some(-2);
+        assert_eq!(wake(&mut lanes, 151).0, Err(-2));
+    }
+
+    #[test]
+    fn a_mix_of_no_app_writes_silence_in_real_time() {
+        let mut lanes: MixLanes<FakeStream> = MixLanes::new(0);
+        let mut mixed = 0;
+        for tick in 1..=100_u64 {
+            lanes
+                .read(tick * 100_000, &mut |_: &[f32], n: usize| mixed += n)
+                .unwrap();
+        }
+        assert_eq!(mixed, 99 * 480, "10 ms behind now, the fill's lag");
+    }
+
+    #[test]
+    fn a_plan_is_read_once_per_change() {
+        let plan = MixPlan::default();
+        let mut pids = [0; MAX_MIX_APPS];
+        assert_eq!(plan.read(0, &mut pids), None);
+        plan.set(&[7, 9]);
+        let (count, version) = plan.read(0, &mut pids).expect("a new plan");
+        assert_eq!(&pids[..count], [7, 9]);
+        assert_eq!(plan.read(version, &mut pids), None);
+        plan.set(&[]);
+        assert_eq!(
+            plan.read(version, &mut pids).map(|(count, _)| count),
+            Some(0)
         );
     }
 
