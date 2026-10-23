@@ -4699,6 +4699,26 @@ do {
                        .local(id: "hdmi", ms: nil), .local(id: "usb", ms: 150)],
           "calibrate all: Undo restores each replaced delay and the AirPlay delay, and forgets one that wasn't stored",
           "\(restores)")
+
+    // Undo lasts only while every value Apply wrote is still stored (S238).
+    var appliedUndo = undo
+    appliedUndo.afterApply = [.local(id: "usb", ms: 100), .local(id: "hdmi", ms: 40), .cast(id: "cast:tv", ms: 900),
+                              .cast(id: "cast:hall", ms: 300), .airPlay(AirPlayDelay(adjustmentMs: 215))]
+    var manual = appliedUndo.afterApply
+    manual[0] = .local(id: "usb", ms: 120)
+    var cleared = appliedUndo.afterApply
+    cleared[2] = .cast(id: "cast:tv", ms: nil)
+    var nudged = appliedUndo.afterApply
+    nudged[4] = .airPlay(AirPlayDelay(adjustmentMs: 240))
+    check(CalibrateAllFlow.undoHolds(appliedUndo, now: appliedUndo.afterApply)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: manual)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: cleared)
+            && !CalibrateAllFlow.undoHolds(appliedUndo, now: nudged),
+          "calibrate all: a delay changed by hand after Apply drops Undo")
+    let adjustment = AirPlayDelay(adjustmentMs: 215)
+    check(adjustment.latencyMs(senderMs: 1750) != adjustment.latencyMs(senderMs: 2000)
+            && CalibrateAllFlow.undoHolds(appliedUndo, now: appliedUndo.afterApply),
+          "calibrate all: a new AirPlay sender latency alone keeps Undo, since the adjustment didn't move")
     var castMemory = CastModel()
     _ = castMemory.setOffset("tv", ms: 900)
     for case .cast(let id, .none) in restores where id == "cast:tv" { _ = castMemory.clearOffset("tv") }
