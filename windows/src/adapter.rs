@@ -1629,8 +1629,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Switches on the auto-connect speakers among `appeared`, then starts
-    /// streaming once for all of them, unless the user switched streaming off
-    /// or an automatic start failed (S120).
+    /// streaming once for all of them, unless the user switched streaming off,
+    /// an automatic start failed (S120) or no speaker is left on.
     fn auto_connect(&mut self, appeared: &[String]) {
         let hits: Vec<&String> = appeared
             .iter()
@@ -1651,7 +1651,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.output_failed(id, false);
             }
         }
-        if !self.running() {
+        if !self.running() && self.enabled_count() > 0 {
             self.start_session(StartOrigin::AutoConnect);
         }
     }
@@ -4752,6 +4752,38 @@ mod tests {
             "on, to play at the next start"
         );
         assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
+    fn an_auto_connect_speaker_that_cant_start_posts_no_start_notice() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_auto_connect(&key(HEADPHONES), true);
+        unplug(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        for id in [SPEAKERS, HEADPHONES] {
+            adapter
+                .audio_mut()
+                .fail_output(id, Some(BackendError::UnsupportedFormat));
+        }
+        // Speakers can't restart in the pass that switches Headphones on, so
+        // the failed auto-connect leaves no speaker on.
+        adapter.audio_mut().end_renderer(SPEAKERS);
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [
+                NoticeMessage::SpeakerFailed {
+                    speaker: "Speakers".to_owned()
+                },
+                NoticeMessage::SpeakerFailed {
+                    speaker: "Headphones".to_owned()
+                },
+            ],
+            "the failures, and no Start notice as if the user pressed Start"
+        );
     }
 
     #[test]
