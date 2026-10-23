@@ -366,7 +366,7 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
 ];
 
 /// Frames converted per step; bounds the converter's buffers.
-const CONVERT_CHUNK: usize = 1024;
+pub(crate) const CONVERT_CHUNK: usize = 1024;
 
 /// The network senders' feeds a capture is lent: each gets the same
 /// equalized audio as the ring. The calibration's tap rides along: it fades
@@ -752,7 +752,7 @@ impl GapFill {
 }
 
 /// Decodes little-endian samples into floats in -1.0..=1.0.
-fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
+pub(crate) fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
     match sample {
         SampleType::F32 => {
             for (value, raw) in out.iter_mut().zip(bytes.as_chunks::<4>().0) {
