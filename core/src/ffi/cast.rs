@@ -47,7 +47,7 @@ use audiosync_cast::host::{
 };
 use audiosync_cast::media::{MediaError, Metadata, VolumeError};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
-use audiosync_cast::status::ControlType;
+use audiosync_cast::status::{self, ControlType};
 use audiosync_cast::stream::StreamError;
 
 use super::airplay::{LATEST_PANIC, PANICS, caught_panic_location, note_panic_locations};
@@ -1439,6 +1439,28 @@ pub unsafe extern "C" fn asc_cast_set_muted(cast: *mut AscCast, muted: bool) -> 
 pub unsafe extern "C" fn asc_cast_step_volume(cast: *mut AscCast, up: bool) -> bool {
     // SAFETY: as the caller's.
     unsafe { with_session(cast, |host| host.step_volume(up)) }
+}
+
+/// The level to send for the host's master and the speaker's own level, all
+/// 0 to 1: their product, clamped; anything not finite counts as 0 (C104).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_device_level(master: f64, own: f64) -> f64 {
+    status::device_level(master, own)
+}
+
+/// The own level a reported device level means at `master` (C104):
+/// level ÷ master, clamped to 0 to 1; `own` as it is at master 0 or when a
+/// value isn't finite.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_own_level(reported: f64, master: f64, own: f64) -> f64 {
+    status::own_level(reported, master, own)
+}
+
+/// Whether a reported level is the device's answer to the level `sent`
+/// (C104): within half a percent.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_level_answers(sent: f64, reported: f64) -> bool {
+    status::answers_level(sent, reported)
 }
 
 /// Sets the track's title, artist and album (UTF-8) for the next `LOAD`:

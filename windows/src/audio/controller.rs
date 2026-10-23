@@ -612,6 +612,7 @@ impl<D: Driver> Controller<D> {
     /// Plays to Google Cast speakers through `link`, fed by the capture.
     pub fn set_cast(&mut self, link: Box<dyn CastLink>) {
         let mut cast = CastSpeakers::new(link, self.log.clone());
+        cast.set_master(self.policy.master());
         cast.set_streaming(self.session.is_some());
         self.cast = Some(cast);
         self.sync_cast_rule();
@@ -2052,6 +2053,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 && master != before
             {
                 airplay.set_master(master);
+            }
+            if let Some(cast) = self.cast.as_mut() {
+                cast.set_master(master);
             }
             let after = self.policy.master();
             if after != before {

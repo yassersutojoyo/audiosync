@@ -52,7 +52,9 @@ use audiosync_cast::host::{
 };
 use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
-use audiosync_cast::status::{ControlType, DeviceVolume};
+use audiosync_cast::status::{
+    ControlType, DeviceVolume, answers_level, device_level, own_level,
+};
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 
@@ -78,6 +80,10 @@ const PAGE_BYTES: usize = 4096;
 
 /// The volume step of a device that reports none, 0 to 100.
 const DEFAULT_VOLUME_STEP: f64 = 1.0;
+
+/// The unanswered levels kept to recognize their answers: a slider drag
+/// sends one every 100 ms at most (C70).
+const MAX_UNANSWERED: usize = 16;
 
 /// What a Cast device shows of the playing track (C53): only what the
 /// track itself has, never a label or the app's icon in place of a missing
@@ -515,6 +521,8 @@ struct Attempt {
     status: CastStatus,
     /// The format the device plays, once the session reports it.
     codec: Option<Codec>,
+    /// Whether the session reported the device's volume yet (C104).
+    heard_volume: bool,
 }
 
 /// The Cast side of the backend.
@@ -526,8 +534,16 @@ pub struct CastSpeakers {
     enabled: Option<DeviceId>,
     /// Each device's volume as its latest status reports it.
     volumes: BTreeMap<DeviceId, DeviceVolume>,
-    /// A level the user set that no status has answered yet, 0.0 to 1.0.
+    /// An own level the user set that no status has answered yet, 0.0 to
+    /// 1.0.
     requested: Option<(DeviceId, f64)>,
+    /// Each device's own level, 0.0 to 1.0, which the master scales (C104).
+    levels: BTreeMap<DeviceId, f64>,
+    /// The master, 0.0 to 1.0.
+    master: f64,
+    /// The levels sent in this session that no status has answered yet,
+    /// oldest first.
+    unanswered: Vec<f64>,
     attempt: Option<Attempt>,
     /// How long the feed waits for L, in ms (C77).
     hold_back_ms: f64,
@@ -558,6 +574,9 @@ impl CastSpeakers {
             enabled: None,
             volumes: BTreeMap::new(),
             requested: None,
+            levels: BTreeMap::new(),
+            master: 1.0,
+            unanswered: Vec::new(),
             attempt: None,
             hold_back_ms: 0.0,
             records: None,
@@ -857,10 +876,9 @@ impl CastSpeakers {
         memory: &DeviceMemory,
     ) -> CastInfo {
         let reported = self.volumes.get(&id);
-        let level = match self.requested {
-            Some((device, level)) if device == id => level,
-            _ => reported.map_or(1.0, |volume| volume.level),
-        };
+        let level = self
+            .own_of(id)
+            .unwrap_or_else(|| reported.map_or(1.0, |volume| volume.level));
         let session = self.attempt.filter(|attempt| attempt.device == id);
         let status = session.map_or(CastStatus::Idle, |attempt| attempt.status);
         CastInfo {
@@ -1081,6 +1099,7 @@ impl CastSpeakers {
                     device: id,
                     status: CastStatus::Connecting,
                     codec: None,
+                    heard_volume: false,
                 });
                 if records.is_some() {
                     self.members.remove(&id);
@@ -1111,6 +1130,7 @@ impl CastSpeakers {
         };
         self.records = None;
         self.requested = None;
+        self.unanswered.clear();
         if let Some(link) = self.link.as_mut() {
             link.stop();
         }
@@ -1135,8 +1155,8 @@ impl CastSpeakers {
         self.pending.push(BackendEvent::CastChanged);
     }
 
-    /// The device's volume, 0 to 100, sent as it is (C69); shown until the
-    /// device's next status answers it.
+    /// The device's own level, 0 to 100, sent times the master (C69,
+    /// C104); shown until the device's next status answers it.
     pub fn set_volume(&mut self, id: &str, position: f64) {
         let Some(device) = self.playing_device(id) else {
             return;
@@ -1144,10 +1164,97 @@ impl CastSpeakers {
         if !position.is_finite() {
             return;
         }
-        let level = (position / 100.0).clamp(0.0, 1.0);
-        self.requested = Some((device, level));
+        let own = (position / 100.0).clamp(0.0, 1.0);
+        self.requested = Some((device, own));
+        self.send_level(device, own);
+    }
+
+    /// The master position, 0 to 100 (C104): a change reaches the device in
+    /// a session at once.
+    pub fn set_master(&mut self, position: f64) {
+        if !position.is_finite() {
+            return;
+        }
+        let master = (position / 100.0).clamp(0.0, 1.0);
+        if master == self.master {
+            return;
+        }
+        self.master = master;
+        if let Some(attempt) = self.attempt
+            && let Some(own) = self.own_of(attempt.device)
+        {
+            self.send_level(attempt.device, own);
+        }
+    }
+
+    /// The own level the slider shows: one the user set that no status
+    /// answered yet, else the one kept.
+    fn own_of(&self, device: DeviceId) -> Option<f64> {
+        match self.requested {
+            Some((requested, own)) if requested == device => Some(own),
+            _ => self.levels.get(&device).copied(),
+        }
+    }
+
+    /// Sends master × `own`, unless the device's volume is fixed (C68).
+    fn send_level(&mut self, device: DeviceId, own: f64) {
+        let fixed = self
+            .volumes
+            .get(&device)
+            .is_some_and(|volume| volume.control_type == ControlType::Fixed);
+        if fixed {
+            return;
+        }
+        let level = device_level(self.master, own);
+        if self.unanswered.len() == MAX_UNANSWERED {
+            self.unanswered.remove(0);
+        }
+        self.unanswered.push(level);
         if let Some(link) = self.link.as_mut() {
             link.set_volume(level);
+        }
+    }
+
+    /// A status's volume (C70, C104): the answer to a level sent keeps the
+    /// own level, any other level moves it by the master, and the session's
+    /// first one is brought down once when the master allows less.
+    fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume) {
+        let shown = self.own_of(device);
+        let level = volume.level;
+        let answered = self
+            .unanswered
+            .iter()
+            .rposition(|&sent| answers_level(sent, level));
+        let own = match answered {
+            Some(index) => {
+                self.unanswered.drain(..=index);
+                shown.unwrap_or_else(|| own_level(level, self.master, level))
+            }
+            None => own_level(level, self.master, shown.unwrap_or(level)),
+        };
+        if answered.is_none() || self.unanswered.is_empty() {
+            self.requested = None;
+        }
+        self.levels.insert(device, own);
+        let first = self
+            .attempt
+            .as_mut()
+            .is_some_and(|attempt| !std::mem::replace(&mut attempt.heard_volume, true));
+        if self.volumes.get(&device) != Some(&volume) {
+            self.volumes.insert(device, volume);
+            self.pending.push(BackendEvent::CastChanged);
+        } else if self.own_of(device) != shown {
+            self.pending.push(BackendEvent::CastChanged);
+        }
+        let allowed = device_level(self.master, own);
+        if first && answered.is_none() && !answers_level(allowed, level) {
+            self.log.log(|| {
+                format!(
+                    "Cast: {} starts at level {level:.2}, the master allows {allowed:.2}",
+                    self.name(device)
+                )
+            });
+            self.send_level(device, own);
         }
     }
 
@@ -1346,6 +1453,7 @@ impl CastSpeakers {
                 self.records = None;
                 self.sent = None;
                 self.requested = None;
+                self.unanswered.clear();
                 self.feed.hand(None);
                 let key = self.key_of(device);
                 self.list.set_in_session(key, false);
@@ -1387,18 +1495,7 @@ impl CastSpeakers {
                     self.set_status(CastStatus::Reconnecting);
                 }
             }
-            SessionEvent::Volume(volume) => {
-                if self
-                    .requested
-                    .is_some_and(|(requested, _)| requested == device)
-                {
-                    self.requested = None;
-                }
-                if self.volumes.get(&device) != Some(&volume) {
-                    self.volumes.insert(device, volume);
-                    self.pending.push(BackendEvent::CastChanged);
-                }
-            }
+            SessionEvent::Volume(volume) => self.volume_reported(device, volume),
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
                     .log(|| format!("Cast diagnostics: {diagnostics:?}"));

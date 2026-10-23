@@ -1759,6 +1759,18 @@ bool asc_cast_set_muted(AscCast *cast, bool muted);
 bool asc_cast_step_volume(AscCast *cast, bool up);
 
 /*
+ * The host's master on a Cast speaker, all levels 0 to 1. The level to send
+ * is the master times the speaker's own level, clamped; anything not finite
+ * counts as 0. A reported level that answers none the host sent means the
+ * own level reported / master, clamped, and leaves `own` as it is at master 0
+ * or when a value isn't finite. A reported level answers a sent one within
+ * half a percent.
+ */
+double asc_cast_device_level(double master, double own);
+double asc_cast_own_level(double reported, double master, double own);
+bool asc_cast_level_answers(double sent, double reported);
+
+/*
  * Sets the track's title, artist and album (UTF-8) for the next time the
  * stream is loaded: the next start, or a Resync; a playing stream is not
  * reloaded for it. NULL or "" leaves a field out. Returns false, changing
