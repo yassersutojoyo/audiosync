@@ -822,18 +822,59 @@ struct UIStrings {
     /// The menu bar panel's short Quit, next to Open AudioSync.
     let quitShort = "Quit"
     let equalizer = "Equalizer"
-    let groups = "Groups"
-    let newGroup = "New Group from Active Speakers…"
-    let newGroupTitle = "New Speaker Group"
-    let newGroupMessage = "The speakers that are on right now become this group. Click the group later to switch them all at once."
-    let newGroupPlaceholder = "Living room, Office…"
-    /// VoiceOver label of the name field in the New Speaker Group alert.
-    let newGroupFieldLabel = "Group name"
-    let newGroupNeedsSpeakers = "Turn on the speakers you want in the group first, then create it."
-    let deleteGroup = "Delete Group"
-    let renameGroup = "Rename Group…"
-    let renameGroupTitle = "Rename Group"
-    func renameGroupMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
+    let zones = "Zones"
+    /// The gear menu and the Speakers menu (Command-N).
+    let newZone = "New Zone from Active Speakers…"
+    let newZoneTitle = "New Zone"
+    let newZoneMessage = "The speakers that are on right now move into this zone. A speaker in another zone leaves that zone."
+    /// New Zone… in a speaker's Move to Zone menu.
+    func newZoneForSpeaker(_ name: String) -> String { "\(name) moves into this zone." }
+    let newZonePlaceholder = "Living room, Kitchen…"
+    /// VoiceOver label of the name field in the New Zone alert.
+    let newZoneFieldLabel = "Zone name"
+    let newZoneNeedsSpeakers = "Turn on the speakers you want in the zone first, then create it."
+    /// A speaker's ⋯ menu: a submenu of the other zones, then New Zone….
+    let moveToZone = "Move to Zone"
+    let newZoneItem = "New Zone…"
+    let removeFromZone = "Remove from Zone"
+    let renameZone = "Rename Zone…"
+    let renameZoneTitle = "Rename Zone"
+    func renameMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
+    let deleteZone = "Delete Zone"
+    /// A zone header's count; `zoneWaiting` follows it when a member waits.
+    func zoneCount(on: Int, of total: Int) -> String { "\(on) of \(total) on" }
+    func zoneWaiting(_ n: Int) -> String { ", \(n) waiting" }
+    /// A zone none of whose members is here.
+    func zoneNoneHere(_ total: Int) -> String { "0 of \(total) here" }
+    /// A zone with no member, until it is deleted.
+    let zoneEmpty = "No speakers"
+    /// A zone header's VoiceOver label and value.
+    func zoneLabel(_ name: String) -> String { "\(name), zone" }
+    func zoneValue(on: Int, of total: Int, waiting: Int) -> String {
+        "\(on) of \(total) speaker\(total == 1 ? "" : "s") on" + (waiting > 0 ? zoneWaiting(waiting) : "")
+    }
+    func showZoneSpeakers(_ name: String) -> String { "Show speakers in \(name)" }
+    func hideZoneSpeakers(_ name: String) -> String { "Hide speakers in \(name)" }
+    /// A new zone's name when none was typed.
+    func numberedZone(_ n: Int) -> String { "Zone \(n)" }
+    /// This Mac and Connected Speakers when each of their speakers is in a zone.
+    let thisMacAllInZones = "Every output on this Mac is in a zone."
+    let connectedAllInZones = "Every connected speaker is in a zone."
+    /// A zone member that plays as part of a stereo pair or home theater (S247).
+    func zoneMemberInTarget(_ target: String) -> String { "Plays as part of \(target)" }
+    /// The zone menu's way to put that target in the member's place.
+    func useTargetInstead(_ target: String) -> String { "Use \(target) Instead" }
+    /// A stereo pair or home theater in a zone while the AirPlay 2 switch is off.
+    let needsAirPlay2 = "Needs AirPlay 2 (Experimental)"
+    /// A zone member that isn't listed right now.
+    let zoneMemberNotFound = "Not found"
+    /// A Cast member a zone click left off (S246).
+    let castStayedOff = "Stayed off, since one Cast speaker plays at a time"
+    /// What VoiceOver says after Move to Zone and Delete Zone.
+    func speakerMovedToZone(_ speaker: String, zone: String) -> String { "\(speaker) moved to \(zone)" }
+    func zoneDeleted(_ name: String) -> String { "\(name) deleted" }
+    /// The notice at the first launch after the groups became zones (S248).
+    let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it instead of under Connected Speakers."
     let rename = "Rename"
     /// In a speaker's ⋯ menu and right-click menu: edits its name in the row.
     let renameSpeaker = "Rename…"
@@ -867,8 +908,6 @@ struct UIStrings {
     }
     /// A section whose every speaker is hidden.
     let allSpeakersHidden = "Every speaker here is hidden. Choose Hidden Speakers in the gear menu to show one again."
-    /// A new group's name when none was typed.
-    func numberedGroup(_ n: Int) -> String { "Group \(n)" }
     let create = "Create"
     let cancel = "Cancel"
     let autoConnect = "Auto-connect when available"
@@ -899,9 +938,6 @@ struct UIStrings {
     let openLocalNetworkSettings = "Open Local Network Settings"
     let launchAtLoginNeedsApproval = "Allow AudioSync in System Settings → General → Login Items & Extensions to finish turning on Launch at Login."
 
-    func groupMembers(_ available: Int, of total: Int) -> String {
-        available == total ? "\(total) speaker\(total == 1 ? "" : "s")" : "\(available) of \(total) speakers available"
-    }
     let syncAdjust = "Adjust sync"
     /// The hint under a local speaker's delay field: what the value is
     /// relative to (S181). Without the Mac's built-in speakers listed, the
@@ -1186,7 +1222,7 @@ struct UIStrings {
            Home Settings → Speakers & TV → Allow Speaker & TV Access →
            "Anyone on the Same Network".
         4. Speakers are listed under 'This Mac' (the Mac's own speakers and
-           headphone jack), then your groups, then 'Connected Speakers': every
+           headphone jack), then your zones, then 'Connected Speakers': every
            AirPlay, Google Cast, Bluetooth, USB, HDMI or other output, by name, each with a
            small icon for its kind (in color while it plays).
         5. Click a speaker's round icon to start streaming to it. Click it again to turn
@@ -1203,9 +1239,12 @@ struct UIStrings {
           as Bluetooth. While an AirPlay
           speaker is on, every local speaker also waits the 'AirPlay delay'
           under Connected Speakers for it.
-        - Groups: turn on the speakers you want, then choose 'New Group from Active
-          Speakers' in the gear menu. Click the group to switch them all at once.
-          To rename or delete a group, right-click it or use its ⋯ button.
+        - Zones: turn on the speakers you want, then choose 'New Zone from Active
+          Speakers' in the gear menu. A speaker is in one zone at a time, and it
+          shows under its zone instead of under This Mac or Connected Speakers.
+          Click the zone's name to switch its speakers at once. To move a
+          speaker, choose 'Move to Zone' from its ⋯ button. To rename or delete
+          a zone, right-click it or use its ⋯ button.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           'Auto-connect when available'. AudioSync then turns it on whenever it
           appears.
@@ -1364,7 +1403,7 @@ struct UIStrings {
     func guideArtAnchor(_ art: GuideArt) -> String {
         switch art {
         case .source: return "First Steps"
-        case .delay: return "- Groups:"
+        case .delay: return "- Zones:"
         case .classes: return "Notices"
         }
     }

@@ -12,7 +12,7 @@ import Synchronization
 /// devices that come and go, a second launch) and quitting. The work
 /// sits in the extensions: `+Engine` (streaming on and off, notices, alerts),
 /// `+Outputs` (speaker and source state, local outputs), `+AirPlay` (the
-/// AirPlay list, pairing, sleep and wake, track info), `+Groups` (groups,
+/// AirPlay list, pairing, sleep and wake, track info), `+Zones` (zones,
 /// auto-connect, the login item) and `+Windows` (menus, windows, the model
 /// the views render).
 ///
@@ -123,10 +123,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }
-    /// The zones (S245): stored and migrated from the groups, not shown yet.
+    /// The zones (S245), migrated from the groups once (S248).
     var zones: [SpeakerZone] {
         didSet { if zones != oldValue { store.save(zones: zones) } }
     }
+    /// The groups became zones and this launch says so in a notice, once.
+    private let zonesNoticeDue: Bool
     /// Speaker keys switched on as soon as they appear.
     var autoConnect: Set<String> {
         didSet { if autoConnect != oldValue { store.save(ids: autoConnect, forKey: Keys.autoConnect) } }
@@ -249,6 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         airplayVolume = saved.airplayVolumes
         groups = saved.groups
         zones = saved.zones
+        zonesNoticeDue = saved.zonesNoticeDue
         autoConnect = saved.autoConnect
         speakerNames = saved.speakerNames.castKeysMoved()
         showVirtualDevices = saved.showVirtualDevices
@@ -314,6 +317,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // so a Local Network prompt they raise comes up in front of it.
         reconcileAirPlaySpeakers()
         webRemote?.startIfEnabled()   // after the window too: listening on the network can raise that prompt
+        if zonesNoticeDue {
+            postNotice(text.groupsBecameZones, subject: Notice.zones)
+            store.zonesNoticeShown()
+        }
         pushModel()
     }
 

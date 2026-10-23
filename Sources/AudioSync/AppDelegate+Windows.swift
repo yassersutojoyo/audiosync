@@ -114,10 +114,15 @@ extension AppDelegate {
             guard let self, !self.appModel.notices.isEmpty else { return }
             self.appModel.notices.clearAll()
         }
-        a.toggleGroup = { [weak self] id in self?.toggleGroup(id) }
-        a.deleteGroup = { [weak self] id in self?.deleteGroup(id) }
-        a.renameGroup = { [weak self] id in self?.promptRenameGroup(id) }
-        a.newGroup = { [weak self] in self?.promptNewGroup() }
+        a.toggleZone = { [weak self] id in self?.toggleZone(id) }
+        a.deleteZone = { [weak self] id in self?.deleteZone(id) }
+        a.renameZone = { [weak self] id in self?.promptRenameZone(id) }
+        a.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
+        a.newZone = { [weak self] in self?.promptNewZone() }
+        a.newZoneWithSpeaker = { [weak self] key, name in self?.promptNewZone(with: key, name: name) }
+        a.moveToZone = { [weak self] key, id in self?.moveToZone(key, id) }
+        a.removeFromZone = { [weak self] key in self?.removeFromZone(key) }
+        a.useTargetInstead = { [weak self] id, key in self?.useTargetInstead(in: id, for: key) }
         a.setAutoConnect = { [weak self] key, on in self?.setAutoConnect(key, on) }
         a.renameSpeaker = { [weak self] key, system, typed in self?.renameSpeaker(key, system: system, to: typed) }
         a.hideSpeaker = { [weak self] key, name, kind in self?.hideSpeaker(key, name: name, kind: kind) }
@@ -175,12 +180,6 @@ extension AppDelegate {
         if launchAtLogin { clearNotices([Notice.login]) }   // approved meanwhile
         recheckLocalNetwork()
         pushSources()
-        pushModel()
-    }
-
-    private func deleteGroup(_ id: String) {
-        guard groups.contains(where: { $0.id == id }) else { return }
-        groups.removeAll { $0.id == id }   // saved by `groups`' didSet
         pushModel()
     }
 
@@ -255,7 +254,7 @@ extension AppDelegate {
             access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
             emptySince: airplayEmptySince, now: Date()))
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
-        publish(\.groups, groupSnapshot())
+        publish(\.zones, zoneSnapshot())
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
@@ -339,15 +338,6 @@ extension AppDelegate {
                                     systemName: text.deviceName(device.name),
                                     calibrationLeftOut: calibrationLeftOut(uid),
                                     isReference: uid == localReference)
-        }
-    }
-
-    private func groupSnapshot() -> [AppModel.Group] {
-        groups.map { group in
-            let summary = GroupSummary.summarize(members: group.members, isAvailable: isAvailable,
-                                                 isEnabled: isEnabled)
-            return AppModel.Group(id: group.id, name: group.name, memberCount: group.members.count,
-                                  available: summary.available, allOn: summary.allOn)
         }
     }
 
@@ -471,7 +461,7 @@ extension AppDelegate {
 
     @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning) }
 
-    @objc func newGroup(_ sender: Any?) { promptNewGroup() }
+    @objc func newZone(_ sender: Any?) { promptNewZone() }
 
     @objc func refreshDevices(_ sender: Any?) { rescanDevices() }
 

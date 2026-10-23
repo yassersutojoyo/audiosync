@@ -108,6 +108,7 @@ private let accent = Brand.teal
 struct MainView: View {
     @ObservedObject var model: AppModel
     @StateObject private var gearAnchor = MenuAnchor.Box()
+    @StateObject private var zoneDisclosure = ZoneDisclosure()
 
     var body: some View {
         let t = model.text
@@ -125,17 +126,22 @@ struct MainView: View {
                 }
                 .frame(width: 280)
                 GeometryReader { viewport in ScrollView {
-                    let layout = model.layout
+                    let all = model.layout
+                    let layout = model.zonelessLayout
                     VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
                         // This Mac first: few, stable rows that don't shift as
-                        // other speakers come and go. Then groups, then every
-                        // connected speaker (AirPlay and local) by name.
+                        // other speakers come and go. Then the zones, then every
+                        // connected speaker (AirPlay and local) by name; a
+                        // speaker in a zone shows only under its zone.
                         speakerSection(t.thisMacSection, speakers: layout.thisMac,
-                                       empty: model.hidden.inThisMac ? t.allSpeakersHidden : t.thisMacNone)
-                        if !model.groups.isEmpty { groupsSection(t) }
+                                       empty: model.hidden.inThisMac ? t.allSpeakersHidden
+                                           : model.allInZones(all.thisMac) ? t.thisMacAllInZones : t.thisMacNone)
+                        if !model.zones.isEmpty { zonesSection(t) }
                         speakerSection(t.connectedSection, speakers: layout.connected,
-                                       empty: model.hidden.inConnected ? t.allSpeakersHidden : model.networkEmptyText,
-                                       connected: true,
+                                       empty: model.hidden.inConnected ? t.allSpeakersHidden
+                                           : model.allInZones(all.connected) ? t.connectedAllInZones
+                                           : model.networkEmptyText,
+                                       connected: true, airPlayListed: all.connected.contains { $0.isAirPlay },
                                        problem: model.airPlayProblem,
                                        localNetworkHint: model.localNetworkHint)
                     }
@@ -338,15 +344,12 @@ struct MainView: View {
 
     // MARK: Right column
 
-    private func groupsSection(_ t: UIStrings) -> some View {
+    private func zonesSection(_ t: UIStrings) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            SectionTitle(t.groups).padding(.leading, 4)
-            Card(padding: 4) {
-                VStack(spacing: 0) {
-                    ForEach(Array(model.groups.enumerated()), id: \.element.id) { index, group in
-                        if index > 0 { Divider().padding(.leading, 52) }
-                        GroupRow(model: model, group: group)
-                    }
+            SectionTitle(t.zones).padding(.leading, 4)
+            VStack(spacing: BrandTokens.Spacing.cardGap) {
+                ForEach(model.zones) { zone in
+                    ZoneCard(model: model, disclosure: zoneDisclosure, zone: zone)
                 }
             }
         }
@@ -357,11 +360,13 @@ struct MainView: View {
     /// (why AirPlay can't work right now) above the list, and while no AirPlay
     /// speaker is listed, `empty` (starting, none found) with the Local
     /// Network hint. Denied Local Network access shows even over a stale list.
+    /// `airPlayListed`: an AirPlay speaker is listed, in a zone or not, so
+    /// the AirPlay delay stays here.
     private func speakerSection(_ title: String, speakers: [AppModel.Speaker], empty: String,
-                                connected: Bool = false, problem: String? = nil,
+                                connected: Bool = false, airPlayListed: Bool = false, problem: String? = nil,
                                 localNetworkHint: LocalNetworkHint = .none) -> some View {
         let hint = model.text.localNetworkHint(localNetworkHint, short: false)
-        let hasAirPlay = speakers.contains { $0.isAirPlay }
+        let hasAirPlay = airPlayListed || speakers.contains { $0.isAirPlay }
         return VStack(alignment: .leading, spacing: 6) {
             SectionTitle(title).padding(.leading, 4)
             Card(padding: 4) {
@@ -479,39 +484,99 @@ private struct SectionTitle: View {
     }
 }
 
-private struct GroupRow: View {
-    @ObservedObject var model: AppModel
-    let group: AppModel.Group
+/// The zones collapsed in this window; every zone opens expanded, and
+/// nothing is saved. An object rather than @State: the Command Line Tools
+/// toolchain ships without SwiftUI's macro plugins.
+final class ZoneDisclosure: ObservableObject {
+    @Published private(set) var collapsed: Set<String> = []
 
-    private var state: SpeakerState { model.state(of: group) }
+    func isExpanded(_ id: String) -> Bool { !collapsed.contains(id) }
+
+    func toggle(_ id: String) {
+        if collapsed.remove(id) == nil { collapsed.insert(id) }
+    }
+}
+
+/// One zone: its header (disclosure, switch, volume, options), then its
+/// members as speaker rows, dimmed while they can't play with it.
+private struct ZoneCard: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var disclosure: ZoneDisclosure
+    let zone: AppModel.Zone
+
+    private var state: SpeakerState { model.state(of: zone) }
+    private var expanded: Bool { disclosure.isExpanded(zone.id) }
 
     var body: some View {
         let t = model.text
-        HStack(spacing: 12) {
-            Button { model.actions.toggleGroup(group.id) } label: {
-                HStack(spacing: 12) {
-                    SpeakerBadge(symbol: "square.stack.3d.up.fill", state: state, size: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(group.name).font(.body.weight(state == .playing ? .semibold : .regular))
-                        Text(t.groupMembers(group.available, of: group.memberCount))
-                            .font(.caption).foregroundStyle(Brand.secondaryText)
+        Card(padding: 4) {
+            VStack(spacing: 0) {
+                header(t)
+                if expanded {
+                    ForEach(zone.members) { member in
+                        Divider().padding(.leading, 52)
+                        if let speaker = model.speaker(of: member) {
+                            SpeakerRow(model: model, speaker: speaker, showTag: true, zoneNote: member.note)
+                        } else {
+                            ZoneMemberPlaceholder(member: member, text: t)
+                        }
                     }
-                    Spacer()
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(zone.name)
+    }
+
+    private func header(_ t: UIStrings) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .frame(width: 16, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Brand.secondaryText)
+            .accessibilityLabel(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
+            .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
+
+            Button { model.actions.toggleZone(zone.id) } label: {
+                HStack(spacing: 12) {
+                    SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(zone.name)
+                            .font(.body.weight(state == .playing ? .semibold : .regular))
+                            .lineLimit(1)
+                        countLine(t)
+                    }
+                    Spacer(minLength: 8)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(group.available == 0)   // none of its speakers is here
-            .opacity(group.available == 0 ? 0.45 : 1)
-            .accessibilityLabel(group.name)
-            .accessibilityValue(t.value(state))
-            .accessibilityHint(t.rowHint(state, note: t.groupMembers(group.available, of: group.memberCount)))
+            .disabled(zone.present == 0)   // none of its speakers is here
+            .opacity(zone.present == 0 ? 0.45 : 1)
+            .accessibilityLabel(t.zoneLabel(zone.name))
+            .accessibilityValue(zone.present == 0 ? model.countText(of: zone)
+                                : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
+            .accessibilityHint(t.rowHint(state, note: nil))
             .help(t.help(state))
 
-            Menu {
-                Button(t.renameGroup) { model.actions.renameGroup(group.id) }
-                Button(t.deleteGroup, role: .destructive) { model.actions.deleteGroup(group.id) }
-            } label: {
+            Slider(value: Binding(get: { zone.volume }, set: { model.actions.setZoneVolume(zone.id, $0) }),
+                   in: 0...100)
+                .controlSize(.small)
+                .frame(width: 140)
+                .tint(Brand.tealText)
+                .disabled(zone.total == 0)
+                .accessibilityLabel(t.volume(of: zone.name))
+                .accessibilityValue(t.volumeValue(zone.volume))
+                .help(t.volume(of: zone.name))
+
+            Menu { menuItems(t) } label: {
                 Image(systemName: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
@@ -520,15 +585,76 @@ private struct GroupRow: View {
             .tint(Brand.tealText)
             .menuIndicator(.hidden)
             .fixedSize()
-            .accessibilityLabel(t.speakerOptions(name: group.name))
-            .help(t.speakerOptions(name: group.name))
+            .accessibilityLabel(t.speakerOptions(name: zone.name))
+            .help(t.speakerOptions(name: zone.name))
+        }
+        .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
+        .padding(.leading, 2)
+        .padding(.trailing, BrandTokens.Spacing.rowPaddingX)
+        .contextMenu { menuItems(t) }
+    }
+
+    /// "2 of 3 on" in the readable teal while one plays, ", 1 waiting" in
+    /// secondary text; read through the switch's value instead.
+    private func countLine(_ t: UIStrings) -> some View {
+        HStack(spacing: 0) {
+            if zone.present == 0 {
+                Text(model.countText(of: zone)).foregroundStyle(Brand.secondaryText)
+            } else {
+                Text(t.zoneCount(on: zone.on, of: zone.total))
+                    .foregroundStyle(zone.on > 0 ? Brand.tealText : Brand.secondaryText)
+                if zone.waiting > 0 {
+                    Text(t.zoneWaiting(zone.waiting)).foregroundStyle(Brand.secondaryText)
+                }
+            }
+        }
+        .font(.caption)
+        .lineLimit(1)
+        .accessibilityHidden(true)
+    }
+
+    /// One Use <target> Instead per target its members play as part of.
+    private var targetChoices: [AppModel.ZoneMember] {
+        var seen = Set<String>()
+        return zone.members.filter { member in member.target.map { seen.insert($0.key).inserted } ?? false }
+    }
+
+    @ViewBuilder
+    private func menuItems(_ t: UIStrings) -> some View {
+        Button(t.renameZone) { model.actions.renameZone(zone.id) }
+        ForEach(targetChoices) { member in
+            if let target = member.target {
+                Button(t.useTargetInstead(target.name)) { model.actions.useTargetInstead(zone.id, member.key) }
+            }
+        }
+        Divider()
+        Button(t.deleteZone, role: .destructive) { model.delete(zone) }
+    }
+}
+
+/// A zone member that can't play with its zone now: not found yet, part of a
+/// stereo pair or home theater, or a target that needs AirPlay 2.
+private struct ZoneMemberPlaceholder: View {
+    let member: AppModel.ZoneMember
+    let text: UIStrings
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Dimmed by the badge and secondary text, which keeps 4.5:1.
+            SpeakerBadge(symbol: member.symbol, state: .off, size: 32).opacity(0.45)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(member.name).font(.body).foregroundStyle(Brand.secondaryText).lineLimit(1)
+                if let note = member.note {
+                    Text(note).font(.caption).foregroundStyle(Brand.secondaryText).lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
-        .contextMenu {
-            Button(t.renameGroup) { model.actions.renameGroup(group.id) }
-            Button(t.deleteGroup, role: .destructive) { model.actions.deleteGroup(group.id) }
-        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(member.name)
+        .accessibilityValue(member.note ?? "")
     }
 }
 
@@ -538,6 +664,8 @@ struct SpeakerRow: View {
     /// Show the kind of output (an AirPlay, Bluetooth, USB… icon) after the
     /// speaker's name; VoiceOver reads it in the row's label.
     var showTag = false
+    /// What the speaker's zone says about it, shown when its own note is empty.
+    var zoneNote: String? = nil
 
     private var tag: String? { showTag ? model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2) : nil }
 
@@ -738,10 +866,29 @@ struct SpeakerRow: View {
                     .help(t.forgetPairingHelp)
             }
         }
+        Divider()
+        zoneItems(t)
         if !speaker.isReference {
-            Divider()
             Button(t.hideSpeaker) { model.hide(speaker) }
                 .help(t.hideSpeakerHelp)
+        }
+    }
+
+    /// Move to Zone (the other zones, then New Zone…), and Remove from Zone
+    /// while the speaker is in one.
+    @ViewBuilder
+    private func zoneItems(_ t: UIStrings) -> some View {
+        let current = model.zone(holding: speaker.key)
+        Menu(t.moveToZone) {
+            let others = model.zones.filter { $0.id != current?.id }
+            ForEach(others) { zone in
+                Button(zone.name) { model.move(speaker, to: zone) }
+            }
+            if !others.isEmpty { Divider() }
+            Button(t.newZoneItem) { model.actions.newZoneWithSpeaker(speaker.key, speaker.name) }
+        }
+        if current != nil {
+            Button(t.removeFromZone) { model.actions.removeFromZone(speaker.key) }
         }
     }
 
@@ -749,7 +896,7 @@ struct SpeakerRow: View {
     /// slot, or what a stereo pair or home theater group is made of.
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
-                           target: speaker.airPlayTarget)
+                           target: speaker.airPlayTarget) ?? zoneNote
     }
 
     /// The device's own volume moves only while a session reaches it.
@@ -1125,7 +1272,7 @@ private enum GearMenu {
     static func make(model: AppModel, text t: UIStrings) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        menu.addItem(item(t.newGroup) { model.actions.newGroup() })
+        menu.addItem(item(t.newZone) { model.actions.newZone() })
         menu.addItem(item(t.refreshDevices) { model.actions.refreshDevices() })
         let hidden = NSMenu(title: t.hiddenSpeakers)
         hidden.autoenablesItems = false

@@ -212,9 +212,9 @@ extension AppDelegate {
         }
         migrateLocalDelays(listed: outputs)   // once, before auto-connect below (S179)
         // Virtual devices are hidden unless asked for, or the user chose them:
-        // on, auto-connect, or in a group.
+        // on, auto-connect, or in a zone.
         var chosen = enabledLocal
-        for key in autoConnect.union(groups.flatMap(\.members)) {
+        for key in autoConnect.union(zones.flatMap(\.members)) {
             if let (id, airplay) = SpeakerKey.parse(key), !airplay { chosen.insert(id) }
         }
         if keepListed { chosen.formUnion(localOrder) }
