@@ -4995,6 +4995,21 @@ do {
     _ = loud.apply(.volume(attempt: 3, reported(0.5, fixed: true)))
     check(loud.setMaster(20) == nil, "cast master: a fixed volume gets nothing (C68)")
 
+    var quiet = session(master: 100, attempt: 5)
+    _ = quiet.apply(.volume(attempt: 5, reported(0.5)))
+    _ = quiet.setVolume(tv, position: 80)
+    _ = quiet.apply(.volume(attempt: 5, reported(0.8)))
+    quiet.stopSent()
+    quiet.startSent(tv)
+    _ = quiet.started(tv, attempt: 6, refusal: ASC_CAST_REFUSED_NONE)
+    check(quiet.apply(.volume(attempt: 6, reported(0.1))) == .setVolume(0.8) && approx(quiet.volume(of: tv), 80, 1e-9),
+          "cast master: a session starts at master × own level when the device is quieter, not read back (C105)")
+    quiet.stopSent()
+    quiet.startSent(tv)
+    _ = quiet.started(tv, attempt: 7, refusal: ASC_CAST_REFUSED_NONE)
+    check(quiet.apply(.volume(attempt: 7, reported(0.1, fixed: true))) != .setVolume(0.8),
+          "cast master: a fixed volume is not set at the start (C68)")
+
     var group = CastModel()
     group.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
     _ = group.setMaster(50)
@@ -5006,6 +5021,7 @@ do {
 
     check(approx(asc_cast_device_level(0.5, 0.8), 0.4, 1e-12) && asc_cast_device_level(0, 0.8) == 0
             && approx(asc_cast_own_level(0.2, 0.5, 0.9), 0.4, 1e-12) && asc_cast_own_level(0.2, 0, 0.7) == 0.7
+            && asc_cast_start_own_level(1, true, 0.8, 0.1) == 0.8 && approx(asc_cast_start_own_level(0.5, false, 0, 0.2), 0.4, 1e-12)
             && asc_cast_level_answers(0.4, 0.404) && !asc_cast_level_answers(0.4, 0.41),
           "cast master: the core's arithmetic")
 }

@@ -1,7 +1,22 @@
-//! The host's master on a Cast device's volume (C104): the arithmetic both
-//! apps share, the Windows app directly and the Mac app through the core.
+//! The host's master on a Cast device's volume (C104, C105): the arithmetic
+//! both apps share, the Windows app directly and the Mac app through the
+//! core.
 
-use audiosync_cast::status::{answers_level, device_level, own_level};
+use audiosync_cast::status::{answers_level, device_level, own_level, start_own_level};
+
+// covers: C105
+#[test]
+fn a_session_starts_from_the_own_level_kept_whatever_the_device_reports() {
+    assert_eq!(start_own_level(1.0, Some(0.8), 0.1), 0.8, "quieter device");
+    assert_eq!(start_own_level(0.5, Some(0.7), 0.8), 0.7, "louder device");
+    assert!(
+        (start_own_level(0.5, None, 0.2) - 0.4).abs() < 1e-9,
+        "none kept yet: the reported level by the master"
+    );
+    assert_eq!(start_own_level(0.0, None, 0.7), 0.7, "none kept, master 0");
+    assert_eq!(start_own_level(0.5, None, 0.8), 1.0);
+    assert_eq!(start_own_level(1.0, Some(f64::NAN), 0.3), 0.3);
+}
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9

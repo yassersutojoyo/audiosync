@@ -2622,8 +2622,33 @@ pub mod tests {
             }),
         });
         cast.poll();
-        assert_eq!(sent(&fake), [0.0, 0.5], "louder than the master: down once");
-        assert_eq!(shown(&cast, KITCHEN), 100.0);
+        assert_eq!(sent(&fake), [0.0, 0.35], "louder than master × own: set");
+        assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9, "not read back");
+    }
+
+    #[test]
+    fn a_session_starts_at_master_times_the_own_level_even_when_the_device_is_quieter() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        cast.set_volume(KITCHEN, 80.0);
+        report(&fake, &mut cast, 0.8);
+        assert_eq!(sent(&fake), [0.8]);
+
+        cast.set_enabled(KITCHEN, false).unwrap();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.1,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert_eq!(sent(&fake), [0.8, 0.8], "quieter than master × own: set");
+        assert_eq!(shown(&cast, KITCHEN), 80.0, "not read back");
     }
 
     #[test]
