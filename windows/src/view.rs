@@ -2232,7 +2232,10 @@ impl App {
         main.on_zone_deleted(move |id| with_app(&w, |app| app.delete_zone(&id)));
         let w = weak.clone();
         main.on_zone_calibrate_requested(move |id| {
-            with_app(&w, |app| app.update(|b| b.start_calibrate_zone(&id)))
+            with_app(&w, |app| {
+                app.update(|b| b.start_calibrate_zone(&id));
+                app.follow_calibration(&w);
+            });
         });
         let w = weak.clone();
         main.on_zone_use_target_requested(move |member| {
@@ -4098,12 +4101,18 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             })
             .collect(),
         rows: sheet.map_or_else(Vec::new, |sheet| {
+            let off = all.zone.as_ref().map_or(&[][..], |zone| &zone.off_rows);
             sheet
                 .rows
                 .iter()
-                .map(|row| CalibrationRowItem {
+                .enumerate()
+                .map(|(index, row)| CalibrationRowItem {
                     name: row.name.as_str().into(),
-                    detail: row_detail(strings, reference, row),
+                    detail: if off.contains(&index) {
+                        strings.get_calibrate_all_off()
+                    } else {
+                        row_detail(strings, reference, row)
+                    },
                     can_measure_again: row.can_measure_again && !busy,
                 })
                 .collect()
@@ -7060,6 +7069,19 @@ mod tests {
 
     // covers: S255
     #[test]
+    fn a_zone_run_is_ticked_once_it_starts() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main
+            .invoke_zone_calibrate_requested("zone:living".into());
+        assert!(app.snapshot().calibration.busy);
+        assert!(
+            app.calibration_timer.running(),
+            "a run that no tick moves on stalls at its first step"
+        );
+    }
+
+    // covers: S255
+    #[test]
     fn calibrate_zone_is_offered_for_a_zone_with_a_member_here() {
         let app = app_over(MockBackend::zones_preview());
         assert!(app.models.zones.row_data(0).unwrap().can_calibrate);
@@ -7114,9 +7136,49 @@ mod tests {
             )
         );
 
+        let row = |name: &str, state| SheetRow {
+            name: name.into(),
+            class: Class::Local,
+            old_ms: Some(0.0),
+            state,
+            can_measure_again: true,
+        };
+        state.calibrate_all.phase = AllPhase::Idle;
+        state.calibrate_all.sheet = Some(SheetState {
+            rows: vec![
+                row("Speakers", SheetRowState::Reference),
+                row("TV", SheetRowState::NotMeasured),
+                row("Desk", SheetRowState::NotMeasured),
+            ],
+            airplay: None,
+            ended: None,
+            failure: None,
+            again_ended: None,
+            can_apply: false,
+            applied: false,
+            can_undo: false,
+            undone: false,
+        });
+        if let Some(zone) = state.calibrate_all.zone.as_mut() {
+            zone.off_rows = vec![1];
+        }
+        let card = calibrate_all_card(&strings, &state);
+        assert_eq!(
+            card.rows[1].detail,
+            "Off, so it wasn't measured. Turn it on and choose Measure Again."
+        );
+        assert_eq!(
+            card.rows[2].detail,
+            strings.get_calibrate_all_not_measured()
+        );
+
         state.calibrate_all.zone = None;
         let card = calibrate_all_card(&strings, &state);
         assert!(card.zone.is_empty());
+        assert_eq!(
+            card.rows[1].detail,
+            strings.get_calibrate_all_not_measured()
+        );
         assert!(!card.status.contains("Upstairs"), "a whole run's text");
     }
 

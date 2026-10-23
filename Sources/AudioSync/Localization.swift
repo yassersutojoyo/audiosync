@@ -279,6 +279,8 @@ struct UIStrings {
     /// In a zone's ⋯ menu; `calibrateZone` titles its sheet and button.
     let calibrateZoneItem = "Calibrate Zone…"
     let calibrateZone = "Calibrate Zone"
+    /// A zone member that was off when the run started (S255).
+    let calibrateAllOff = "Off, so it wasn't measured. Turn it on and choose Measure Again."
     func calibrateZoneBring(_ name: String) -> String {
         "Bring the Mac into “\(name)”: the microphone and the built-in speakers stay on it. "
             + "Speakers outside the zone aren't measured."
@@ -388,6 +390,7 @@ struct UIStrings {
 
     /// What the New column says about a row.
     func calibrateAllResult(_ row: CalibrateAllSheet.Row) -> String {
+        if row.off { return calibrateAllOff }
         let kind = row.speaker.kind
         switch row.result {
         case .reference:

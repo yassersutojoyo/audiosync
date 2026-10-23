@@ -5464,6 +5464,15 @@ do {
                 == "Nothing to measure in “Upstairs”. Turn on a speaker in this zone first.",
           "calibrate zone: a zone with only the reference measurable says there is nothing to measure (S255)",
           "\(String(describing: nothing))")
+
+    let tv = CalibrateAllSpeaker(id: "tv", name: "TV", kind: .local, offsetMs: nil, latencyMs: 0)
+    let offRow = CalibrateAllSheet.Row(index: 1, speaker: tv, oldMs: nil, result: .notMeasured, off: true)
+    let skipped = CalibrateAllSheet.Row(index: 1, speaker: tv, oldMs: nil, result: .notMeasured)
+    // covers: S255
+    check(zoneText.calibrateAllResult(offRow) == "Off, so it wasn't measured. Turn it on and choose Measure Again."
+            && zoneText.calibrateAllResult(skipped) == "Not measured.",
+          "calibrate zone: a member that was off says Off on its row, not Not measured (S255)",
+          zoneText.calibrateAllResult(offRow))
 }
 
 // MARK: Google Cast speakers: one session, matched by attempt (CastModel)

@@ -216,6 +216,9 @@ export global Strings {
     // Calibrate Zone (spec S255): in a zone's menu, then what the Calibrate
     // All card says for a zone run.
     out property <string> calibrate-zone-item: @tr("Calibrate Zone…");
+    out property <string> calibrate-zone: @tr("Calibrate Zone");
+    // A zone member that was off when the run started.
+    out property <string> calibrate-all-off: @tr("Off, so it wasn't measured. Turn it on and choose Measure Again.");
 
     public pure function calibrate-zone-bring(zone: string) -> string {
         return @tr("Bring the PC into “{}”: the microphone and its own speakers stay on it. Speakers outside the zone aren't measured.", zone);

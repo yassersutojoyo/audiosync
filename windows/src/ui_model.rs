@@ -687,7 +687,6 @@ pub struct CalibrateAllState {
 
 /// What a Calibrate Zone sheet says besides Calibrate All's (spec S255).
 #[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code, reason = "the rows don't say Off yet"))]
 pub struct ZoneSheet {
     /// "Bring the computer into <name>".
     pub name: String,
@@ -1854,6 +1853,14 @@ impl Backend for MockBackend {
 
     fn set_zone_volume(&mut self, id: &str, volume: f64) {
         self.zones_mut(|zones| zones.set_volume(id, volume));
+    }
+
+    /// A zone run holds the outputs as soon as it starts.
+    fn start_calibrate_zone(&mut self, id: &str) {
+        if self.state.zones.iter().any(|zone| zone.id == id) {
+            self.state.calibration.busy = true;
+            self.state.calibrate_all.phase = AllPhase::Running(AllProgress::Preparing);
+        }
     }
 
     fn use_target_instead(&mut self, speaker_id: &str) {

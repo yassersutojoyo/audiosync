@@ -3980,6 +3980,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if self.calibration_run.is_some() || self.calibrate_all.run.is_some() {
             return;
         }
+        // After a zone run the card's button runs that zone again (spec S255).
+        let measured = self.calibrate_all.zone.as_ref().map(|zone| zone.id.clone());
+        if let Some(id) = measured.filter(|id| self.zones.get(id).is_some()) {
+            return self.start_calibrate_zone(&id);
+        }
         let started = AllRun::start(
             &mut self.audio,
             &self.calibrate_all.included,
@@ -9157,6 +9162,32 @@ mod tests {
             adapter.snapshot().calibrate_all.phase,
             AllPhase::Failed(Failure::NothingToMeasure),
             "only the reference plays in the zone"
+        );
+    }
+
+    // covers: S255
+    #[test]
+    fn the_cards_button_after_a_zone_run_runs_that_zone_again() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibrate_zone("zone:1");
+        let endings = adapter.snapshot().calibrate_all.endings;
+
+        adapter.start_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.endings, endings + 1, "it tried again");
+        assert_eq!(
+            state.zone.expect("still the zone's run").name,
+            "Downstairs",
+            "never a whole run"
+        );
+
+        adapter.delete_zone("zone:1");
+        adapter.start_calibrate_all();
+        assert!(
+            adapter.snapshot().calibrate_all.zone.is_none(),
+            "with the zone gone, a whole run"
         );
     }
 
