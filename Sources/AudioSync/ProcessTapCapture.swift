@@ -14,8 +14,10 @@ import Synchronization
 ///   process out, or its delayed local copies would be captured again (S10).
 /// - An app source's tap covers the app and every process it is responsible
 ///   for, and is built again whenever that set changes (S11, `AppTapFollow`).
-/// - An input device is read directly, its first two channels as L and R (S13,
-///   S14, `CaptureChannels`).
+///   A mix of apps does the same over all of them in one tap; an "all except"
+///   mix taps the whole system without those processes and AudioSync's own.
+/// - An input device is read directly, the chosen channel pair as L and R
+///   (S13, S14, `CaptureChannels`, `InputChannelPair`).
 ///
 /// Control calls, the property listeners and `onInterrupted` all run on the
 /// main queue. The IOProc touches nothing but a `CaptureSink`, which is set up
@@ -37,6 +39,10 @@ final class SourceCapture {
         case ioProcNotStarted(OSStatus)
         /// No input device has this UID, or it has no input channel.
         case inputNotFound(String)
+        /// The input device with this UID is a Bluetooth hands-free input
+        /// (`AudioDevices.isHandsFreeInput`), which the picker doesn't list
+        /// either: a source saved before it was left out.
+        case inputHandsFree(String)
         /// The input device went away while it was captured.
         case inputDisconnected
 
@@ -50,6 +56,7 @@ final class SourceCapture {
             case .aggregateDeviceFailed(let status): return "aggregate device failed (\(Self.describe(status)))"
             case .ioProcNotStarted(let status): return "capture IOProc failed (\(Self.describe(status)))"
             case .inputNotFound(let uid): return "input device not found (\(uid))"
+            case .inputHandsFree(let uid): return "input device is a Bluetooth hands-free input (\(uid))"
             case .inputDisconnected: return "input device disconnected"
             }
         }
@@ -90,6 +97,8 @@ final class SourceCapture {
     var sessionHeard: Bool { sink?.heard.load(ordering: .relaxed) ?? false }
 
     private var source: AudioSource?
+    /// The stored channel pair (`InputChannelPair.index`) an input source reads.
+    private var inputPair = 0
     private var parts: EngineParts?
     private var sink: CaptureSink?
     /// The IOProc that feeds `sink`, on the tap's aggregate device or the input device.
@@ -116,11 +125,13 @@ final class SourceCapture {
 
     /// Starts capturing `source` into `parts`. Once the capture rate is known,
     /// `parts.prepare(captureRate:)` runs before the first IOProc callback. On
-    /// any failure everything is released again and the error is thrown.
-    func start(source: AudioSource, parts: EngineParts) throws {
+    /// any failure everything is released again and the error is thrown. An
+    /// input source reads the channel pair stored as `inputPair`.
+    func start(source: AudioSource, parts: EngineParts, inputPair: Int = 0) throws {
         halt()   // a start always follows a halt; this keeps a stray second start harmless
         sessionMark &+= 1
         self.source = source
+        self.inputPair = inputPair
         self.parts = parts
         _ = Self.runHeard   // the static's lazy init runs here, never on the IO thread
         sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(source))
@@ -133,7 +144,9 @@ final class SourceCapture {
     private func startSource(_ source: AudioSource) throws {
         switch source {
         case .system: try startSystem()
-        case .app(let bundleID): try startApp(bundleID)
+        case .app(let bundleID): try startApps([bundleID])
+        case .mix(.only, let bundleIDs): try startApps(bundleIDs)
+        case .mix(.allExcept, let bundleIDs): try startExcluding(bundleIDs)
         case .input(let uid): try startInput(uid)
         }
     }
@@ -166,32 +179,69 @@ final class SourceCapture {
         DebugTrace.log("[AudioSync] capture: whole system at \(sampleRate) Hz")
     }
 
-    /// One app and the processes it is responsible for (S11). The process list
-    /// is watched from the start, so a process the app starts while the tap is
-    /// being built is picked up too.
-    private func startApp(_ bundleID: String) throws {
-        let pids = Self.runningPIDs(of: bundleID)
-        guard !pids.isEmpty else { throw CaptureError.appNotRunning(bundleID) }
+    /// One or more apps and the processes each is responsible for (S11), in
+    /// one tap. An app that isn't running is skipped; only none of them
+    /// running fails. The process list is watched from the start, so a process
+    /// an app starts while the tap is being built is picked up too.
+    private func startApps(_ bundleIDs: [String]) throws {
+        let label = bundleIDs.joined(separator: ", ")
+        let pids = bundleIDs.flatMap(Self.runningPIDs(of:))
+        guard !pids.isEmpty else { throw CaptureError.appNotRunning(bundleIDs.first ?? "") }
         watchAppProcesses()
         let found = Self.audioProcesses(of: pids)
         guard !found.isEmpty else {
             // Running without an audio process yet (a browser starts its audio
             // helper once a page plays): nothing to tap until one appears.
             parts?.prepare(captureRate: sampleRate)
-            DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process yet; waiting for one")
+            DebugTrace.log("[AudioSync] capture: \(label) has no audio process yet; waiting for one")
             return
         }
         tapped = found
-        try openTap(CATapDescription(stereoMixdownOfProcesses: found))
-        DebugTrace.log("[AudioSync] capture: \(bundleID) (\(found.count) audio processes) at \(sampleRate) Hz")
+        try openTap(Self.describe(found, excluding: false))
+        DebugTrace.log("[AudioSync] capture: \(label) (\(found.count) audio processes) at \(sampleRate) Hz")
+    }
+
+    /// Every process except AudioSync's own and the listed apps' (S10, S11).
+    /// The list follows those apps' audio processes as they come and go.
+    private func startExcluding(_ bundleIDs: [String]) throws {
+        guard let own = AudioProcesses.processObject(for: getpid()) else { throw CaptureError.ownProcessUnknown }
+        watchAppProcesses()
+        let excluded = Set(Self.audioProcesses(of: bundleIDs.flatMap(Self.runningPIDs(of:)))).union([own]).sorted()
+        tapped = excluded
+        try openTap(Self.describe(excluded, excluding: true))
+        DebugTrace.log("[AudioSync] capture: everything except \(bundleIDs.joined(separator: ", ")) "
+                + "(\(excluded.count - 1) audio processes left out) at \(sampleRate) Hz")
+    }
+
+    /// The tap description for `processes`: their mixdown, or with
+    /// `excluding` every process but them.
+    private static func describe(_ processes: [AudioObjectID], excluding: Bool) -> CATapDescription {
+        excluding
+            ? CATapDescription(stereoGlobalTapButExcludeProcesses: processes)
+            : CATapDescription(stereoMixdownOfProcesses: processes)
+    }
+
+    /// Whether the session's tap is an "all except" tap.
+    private var tapExcludes: Bool {
+        if case .mix(.allExcept, _)? = source { return true }
+        return false
     }
 
     /// An input device, read directly (S13, S14).
     private func startInput(_ uid: String) throws {
-        guard let parts, let sink else { return }
+        guard let parts else { return }
         guard let device = HAL.device(uid: uid) else { throw CaptureError.inputNotFound(uid) }
-        switch CaptureInputFormat.check(try HAL.inputStreamFormats(of: device)) {
-        case .usable: break
+        if AudioDevices.isHandsFreeInput(device) { throw CaptureError.inputHandsFree(uid) }
+        let streams = try HAL.inputStreamFormats(of: device)
+        let channels = CaptureInputFormat.channelCount(streams)
+        let (pair, fellBack) = InputChannelPair.resolve(saved: inputPair, channels: channels)
+        if fellBack {
+            DebugTrace.log("[AudioSync] capture: \(uid) has \(channels) channels, so its saved pair "
+                           + "\(2 * inputPair + 1)-\(2 * inputPair + 2) is gone; reading channels 1-2")
+        }
+        let layout: CaptureChannels.Layout
+        switch CaptureInputFormat.check(streams, pair: pair) {
+        case .usable(let found): layout = found
         case .noChannels: throw CaptureError.inputNotFound(uid)
         case .unsupported: throw CaptureError.formatUnusable(kAudioDeviceUnsupportedFormatError)
         }
@@ -199,12 +249,17 @@ final class SourceCapture {
         let status = HAL.read(device, kAudioDevicePropertyNominalSampleRate, into: &rate)
         guard status == noErr else { throw CaptureError.formatUnusable(status) }
         sampleRate = CaptureRate.session(reported: rate)
+        // The IOProc reads the layout without a lock, so it is fixed before the IOProc exists.
+        let sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(.input(uid: uid)),
+                               layout: layout)
+        self.sink = sink
         let link = try IOLink(device: device, sink: sink)
         parts.prepare(captureRate: sampleRate)
         do { try link.begin() } catch { link.close(); throw error }
         io = link
-        watchInput(device, uid: uid)
-        DebugTrace.log("[AudioSync] capture: input device \(uid) at \(sampleRate) Hz")
+        watchInput(device, uid: uid, formats: streams)
+        DebugTrace.log("[AudioSync] capture: input device \(uid) at \(sampleRate) Hz, "
+                       + "\(CaptureChannels.describe(layout, of: channels))")
     }
 
     // MARK: - The tap
@@ -241,7 +296,7 @@ final class SourceCapture {
     /// running tap or Core Audio refuses the change.
     private func updateTap(to processes: [AudioObjectID]) -> Bool {
         guard let tap else { return false }
-        let description = CATapDescription(stereoMixdownOfProcesses: processes)
+        let description = Self.describe(processes, excluding: tapExcludes)
         TapObjects.configure(description)
         description.uuid = tap.uuid   // the same tap, which the aggregate device names by its UID
         let status = HAL.setTapDescription(of: tap.tap, to: description)
@@ -276,12 +331,24 @@ final class SourceCapture {
         DispatchQueue.main.async { body() }
     }
 
-    /// The app's audio processes changed: follow them (S11).
+    /// The apps' audio processes changed: follow them (S11).
     private func followApp() {
-        guard case .app(let bundleID)? = source else { return }
-        let pids = Self.runningPIDs(of: bundleID)
+        guard let source else { return }
+        let excluding = tapExcludes
+        let apps: [String]
+        if case .mix(_, let ids) = source { apps = ids } else { apps = source.capturedApps }
+        guard !apps.isEmpty else { return }
+        let bundleID = apps.joined(separator: ", ")
+        let pids = apps.flatMap(Self.runningPIDs(of:))
         let found = Self.audioProcesses(of: pids)
-        switch AppTapFollow.decide(tapped: tapped, found: found, appRunning: !pids.isEmpty) {
+        let decision: AppTapFollow
+        if excluding {
+            guard let own = AudioProcesses.processObject(for: getpid()) else { return }
+            decision = AppTapFollow.decideExcluding(tapped: tapped, found: found, own: own)
+        } else {
+            decision = AppTapFollow.decide(tapped: tapped, found: found, appRunning: !pids.isEmpty)
+        }
+        switch decision {
         case .keep:
             return
         case .wait:
@@ -292,7 +359,7 @@ final class SourceCapture {
             closeCapture()
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) is gone")
-            interrupt(.sourceLost(.appNotRunning(bundleID)))
+            interrupt(.sourceLost(.appNotRunning(apps[0])))
         case .retap(let processes):
             retap(bundleID, to: processes)
         }
@@ -306,7 +373,7 @@ final class SourceCapture {
             outcome = try AppRetap.run(
                 updateInPlace: { updateTap(to: processes) },
                 makeTap: { () throws -> TapObjects in
-                    try TapObjects(CATapDescription(stereoMixdownOfProcesses: processes))
+                    try TapObjects(Self.describe(processes, excluding: tapExcludes))
                 },
                 rateFits: { !CaptureRate.needsRestart(current: sampleRate, reported: Self.rate(of: $0)) },
                 discard: { retire($0) },
@@ -369,7 +436,7 @@ final class SourceCapture {
         }
     }
 
-    private func watchInput(_ device: AudioObjectID, uid: String) {
+    private func watchInput(_ device: AudioObjectID, uid: String, formats: [AudioStreamBasicDescription]) {
         let mark = sessionMark
         let gone = { [weak self] in
             guard let self, self.isCurrent(mark) else { return }
@@ -390,6 +457,19 @@ final class SourceCapture {
             guard CaptureRate.needsRestart(current: self.sampleRate, reported: rate) else { return }
             DebugTrace.log("[AudioSync] capture rate changed: \(self.sampleRate) → \(rate) Hz")
             self.interrupt(.formatChanged)
+        }
+        // The IOProc's layout was read from these formats; a new bit depth or channel count would be misread.
+        let layoutChanged = { [weak self] in
+            guard let self, self.isCurrent(mark) else { return }
+            let now = try? HAL.inputStreamFormats(of: device)
+            guard CaptureInputFormat.needsRestart(started: formats, now: now) else { return }
+            DebugTrace.log("[AudioSync] capture: input device \(uid) changed its stream format")
+            self.interrupt(.formatChanged)
+        }
+        sessionListeners.add(device, kAudioDevicePropertyStreamConfiguration, scope: kAudioObjectPropertyScopeInput,
+                             layoutChanged)
+        for stream in (try? HAL.inputStreams(of: device)) ?? [] {
+            sessionListeners.add(stream, kAudioStreamPropertyVirtualFormat, layoutChanged)
         }
     }
 
@@ -443,10 +523,13 @@ private extension SourceCapture {
         static let runHeard = Atomic<Bool>(false)
         /// This session reads a tap, so its sound proves the permission (`CaptureCheck.provesPermission`).
         private let provesPermission: Bool
+        /// Which channels play as L and R, and how they are stored.
+        private let layout: CaptureChannels.Layout
 
-        init(parts: EngineParts, provesPermission: Bool) {
+        init(parts: EngineParts, provesPermission: Bool, layout: CaptureChannels.Layout = .stereoFloat) {
             self.parts = parts
             self.provesPermission = provesPermission
+            self.layout = layout
             stereoBlock = .allocate(capacity: CaptureChannels.blockFrames * 2)
             stereoBlock.initialize(repeating: 0, count: CaptureChannels.blockFrames * 2)
         }
@@ -457,18 +540,21 @@ private extension SourceCapture {
         /// and the AirPlay sender's input block by block (S7, S34–S40). Real-time safe.
         func consume(_ input: UnsafePointer<AudioBufferList>) {
             callbacks.wrappingAdd(1, ordering: .relaxed)
-            let channels = CaptureChannels(input)
+            let channels = CaptureChannels(input, layout: layout)
             guard channels.frames > 0 else {
                 silentCallbacks.wrappingAdd(1, ordering: .relaxed)
                 return
             }
             parts.gate.lastCallbackFrames.store(channels.frames, ordering: .relaxed)
+            let now = mach_absolute_time()
+            var offset = 0
             channels.forEachBlock(in: stereoBlock) { block, count in
                 if !self.heard.load(ordering: .relaxed), CaptureChannels.hasSound(block, frames: count) {
                     self.heard.store(true, ordering: .relaxed)
                     if self.provesPermission { CaptureSink.runHeard.store(true, ordering: .relaxed) }
                 }
-                self.parts.deliver(block, frames: count)
+                self.parts.deliver(block, frames: count, offset: offset, callbackFrames: channels.frames, now: now)
+                offset += count
             }
             frames.wrappingAdd(UInt64(channels.frames), ordering: .relaxed)
         }
@@ -584,8 +670,9 @@ private extension SourceCapture {
         /// Adds a listener for one property of `object`. A listener Core Audio
         /// refuses is logged and left out; capture runs on without it.
         mutating func add(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                          scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
                           _ handler: @escaping () -> Void) {
-            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope,
                                                      mElement: kAudioObjectPropertyElementMain)
             // Kept as the block object itself, so the removal names the same block.
             let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
@@ -666,8 +753,8 @@ private extension SourceCapture {
             return device
         }
 
-        /// The formats the device's input streams deliver to an IOProc, in stream order.
-        static func inputStreamFormats(of device: AudioObjectID) throws -> [AudioStreamBasicDescription] {
+        /// The device's input streams, in stream order.
+        static func inputStreams(of device: AudioObjectID) throws -> [AudioStreamID] {
             var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
                                                      mScope: kAudioObjectPropertyScopeInput,
                                                      mElement: kAudioObjectPropertyElementMain)
@@ -678,7 +765,12 @@ private extension SourceCapture {
             if streams.isEmpty { return [] }
             status = AudioObjectGetPropertyData(device, &address, 0, nil, &listBytes, &streams)
             guard status == noErr else { throw CaptureError.formatUnusable(status) }
-            return try streams.prefix(Int(listBytes) / MemoryLayout<AudioStreamID>.size).map { stream in
+            return Array(streams.prefix(Int(listBytes) / MemoryLayout<AudioStreamID>.size))
+        }
+
+        /// The formats the device's input streams deliver to an IOProc, in stream order.
+        static func inputStreamFormats(of device: AudioObjectID) throws -> [AudioStreamBasicDescription] {
+            return try inputStreams(of: device).map { stream in
                 var format = AudioStreamBasicDescription()
                 let status = read(stream, kAudioStreamPropertyVirtualFormat, into: &format)
                 guard status == noErr else { throw CaptureError.formatUnusable(status) }
