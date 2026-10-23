@@ -57,6 +57,16 @@ final class NowPlayingMonitor {
             return abs(new.length - old.length) > jumpTolerance
                 || abs(new.elapsed - old.elapsed(at: new.readAt)) > jumpTolerance
         }
+
+        /// Whether the track moved on between two readings, by at least half
+        /// the time between them: a paused or stalled player can still report
+        /// itself as playing.
+        static func advances(from old: Position, to new: Position) -> Bool {
+            let span = new.readAt - old.readAt
+            guard span > 0, new.playing, abs(new.length - old.length) <= jumpTolerance else { return false }
+            let moved = new.elapsed - old.elapsed
+            return moved > 0 && moved >= span / 2
+        }
     }
 
     enum Command { case playPause, next, previous }
@@ -95,6 +105,9 @@ final class NowPlayingMonitor {
     /// (until then it is the one from before).
     private(set) var hasReading = false
     private(set) var track: Track?
+    /// The latest reading since polling started, with its fresh position;
+    /// `track` keeps the position of the last change.
+    private(set) var reading: Track?
     private var refreshing = false
 
     // Scripts queue only.
@@ -115,6 +128,7 @@ final class NowPlayingMonitor {
         timer = nil
         startedAt = nil
         hasReading = false
+        reading = nil
     }
 
     func send(_ command: Command) {
@@ -158,6 +172,7 @@ final class NowPlayingMonitor {
             }
             DispatchQueue.main.async {
                 self.refreshing = false
+                if self.isRunning { self.reading = next }
                 self.publish(next, reading: true)
             }
         }
