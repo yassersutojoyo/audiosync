@@ -59,8 +59,24 @@ extension AppDelegate {
         syncCast()   // the Cast speaker that is on connects
         syncLocalOutputs(origin: origin)
         DebugTrace.log("[AudioSync] " + LocalDelay.leadDescription(source: audioSource, networkMs: networkWaitMs))
+        logSessionLead(session: session)
         startInputLevel()
         verifyAudioFlowing(origin: origin)
+    }
+
+    /// Writes the measured local session lead to the debug log once every
+    /// local speaker of session `started` has reported its start lead; it
+    /// looks every 200 ms for about 2 s.
+    func logSessionLead(session started: Int, tries: Int = 10) {
+        guard DebugTrace.enabled, tries > 0, engine.isRunning, session == started else { return }
+        if let ms = engine.sessionLeadMs() {
+            DebugTrace.log("[AudioSync] lead: the local session lead is \(String(format: "%.1f", ms)) ms over "
+                + "\(engine.activeOutputUIDs.count) output(s)")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.logSessionLead(session: started, tries: tries - 1)
+        }
     }
 
     /// Moves the input level meter while this session captures an input

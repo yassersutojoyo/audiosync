@@ -83,10 +83,10 @@ enum LocalDelay {
         case let (wait?, _):
             return "lead: \(live)local speakers wait \(Int(wait.rounded())) ms for the network speakers"
         case let (nil, network?):
-            return "lead: \(live)local speakers play at their device's start lead, "
+            return "lead: \(live)local speakers play at their device's start lead (logged in ms once measured), "
                 + "AirPlay and Google Cast at \(Int(network.rounded())) ms"
         case (nil, nil):
-            return "lead: \(live)local speakers play at their device's start lead"
+            return "lead: \(live)local speakers play at their device's start lead (logged in ms once measured)"
         }
     }
 

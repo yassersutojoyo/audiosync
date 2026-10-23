@@ -1138,26 +1138,28 @@ struct SourcePicker: View {
 }
 
 /// The input level meter under the source picker, while an input device is
-/// captured: a bar that only reads out, never a control or a focus stop.
+/// captured: a bar that only reads out, never a control or a focus stop. Its
+/// row is always laid out, so nothing below it moves when it shows.
 struct InputLevelMeter: View {
     @ObservedObject var level: InputLevel
     let text: UIStrings
 
     var body: some View {
-        if level.shown {
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Brand.meterTrack)
-                    Capsule().fill(Brand.tealText)
-                        .frame(width: geometry.size.width * CGFloat(min(max(level.level, 0), 1)))
-                }
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Brand.meterTrack)
+                Capsule().fill(Brand.tealText)
+                    .frame(width: geometry.size.width * CGFloat(min(max(level.level, 0), 1)))
             }
-            .frame(height: 4)
-            .padding(.horizontal, 10)
-            .accessibilityElement()
-            .accessibilityLabel(text.inputLevel)
-            .accessibilityValue(text.inputLevelValue(level.level))
         }
+        .frame(height: 4)
+        .padding(.horizontal, 10)
+        .opacity(level.shown ? 1 : 0)
+        .accessibilityElement()
+        .accessibilityLabel(text.inputLevel)
+        .accessibilityValue(text.inputLevelValue(level.spokenPercent))
+        .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityHidden(!level.shown)
     }
 }
 

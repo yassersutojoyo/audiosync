@@ -5768,7 +5768,10 @@ do {
     meter.update(peak: 0)
     check(abs(meter.level - 0.85) < 1e-5, "input level: it falls back a step, \(meter.level)")
     check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden again, emptied")
-    check(UIStrings(locale: Locale(identifier: "en_US")).inputLevelValue(0.42) == "42%",
+    check(meter.spokenPercent == 0 && asc_meter_spoken_percent(0.42) == 40 && asc_meter_spoken_percent(0.66) == 70
+            && asc_meter_spoken_percent(1.4) == 100 && asc_meter_spoken_percent(.nan) == 0,
+          "input level: VoiceOver hears it in steps of 10 percent")
+    check(UIStrings(locale: Locale(identifier: "en_US")).inputLevelValue(40) == "40%",
           "input level: VoiceOver reads a percent")
 
     func luminance(_ c: BrandRGB) -> Double {

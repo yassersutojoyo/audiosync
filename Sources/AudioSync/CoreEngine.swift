@@ -53,6 +53,12 @@ final class CoreDelayRing {
     /// Any thread: the largest sample magnitude written since the last call
     /// (1 is full scale), for the input level meter.
     func takePeak() -> Float { asc_ring_take_peak(handle) }
+    /// Any thread: the session lead of the ring's renderers in capture
+    /// frames, once every counted renderer has published its start lead (S208).
+    var publishedSessionLeadFrames: Int64? {
+        var frames: Int64 = 0
+        return asc_ring_session_lead_frames(handle, &frames) ? frames : nil
+    }
 
     /// Capture thread: appends `frames` interleaved stereo frames. Real-time safe.
     func write(interleaved samples: UnsafePointer<Float>, frames: Int) {

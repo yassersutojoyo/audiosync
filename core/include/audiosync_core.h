@@ -467,6 +467,21 @@ float asc_ring_take_peak(const AscRing *ring);
  */
 float asc_meter_level(float previous, float peak);
 
+/*
+ * The input level meter's length as a screen reader reads it: whole percent
+ * in steps of 10, so the value changes a few times per word instead of at every
+ * poll. A non-finite length counts as 0. Pure function.
+ */
+uint32_t asc_meter_spoken_percent(float level);
+
+/*
+ * Any thread: the session lead of the ring's renderers in capture frames, into
+ * *frames, once every counted renderer has published its start lead (S208).
+ * False, writing nothing, before that, while none counts, or for a NULL
+ * argument. For the debug log.
+ */
+bool asc_ring_session_lead_frames(const AscRing *ring, int64_t *frames);
+
 /* Takes the ring's only writer; NULL while another writer exists. */
 AscRingWriter *asc_ring_writer_create(AscRing *ring);
 

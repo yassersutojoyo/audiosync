@@ -12,6 +12,10 @@ final class InputLevel: ObservableObject {
     @Published private(set) var shown = false
     private var timer: Timer?
 
+    /// The level as VoiceOver reads it, in steps of 10 percent (the core's
+    /// rule, shared with the Windows app).
+    var spokenPercent: Int { Int(asc_meter_spoken_percent(level)) }
+
     /// Moves the meter to `peak`, the largest sample magnitude since the last
     /// update; nil hides it. Returns whether it shows.
     @discardableResult

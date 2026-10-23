@@ -978,12 +978,15 @@ impl App {
             self.meter_timer.stop();
             self.meter_level.set(0.0);
             self.main.set_input_level(0.0);
+            self.main.set_input_level_spoken(0);
             self.main.set_input_meter_shown(false);
             return false;
         };
         let level = meter::meter_level(self.meter_level.get(), peak);
         self.meter_level.set(level);
         self.main.set_input_level(level);
+        self.main
+            .set_input_level_spoken(meter::meter_spoken_percent(level) as i32);
         self.main.set_input_meter_shown(true);
         true
     }
@@ -5615,8 +5618,9 @@ mod tests {
         };
 
         rename("Desk");
-        // The master volume's slider, in the left column.
-        click(window, 150.0, 275.0);
+        // The master volume's slider, in the left column, below the source
+        // card's level meter row.
+        click(window, 150.0, 289.0);
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::MasterVolume)

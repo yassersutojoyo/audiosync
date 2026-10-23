@@ -546,6 +546,8 @@ export component VolumeSlider inherits HorizontalLayout {
 export component LevelMeter inherits Rectangle {
     // 0 to 1.
     in property <float> level;
+    // The level as Narrator reads it, in steps of 10 percent.
+    in property <int> spoken-percent;
     in property <string> label;
 
     height: 4px;
@@ -553,7 +555,7 @@ export component LevelMeter inherits Rectangle {
     background: Tokens.separator;
     accessible-role: progress-indicator;
     accessible-label: root.label;
-    accessible-value: Strings.input-level-value(root.level);
+    accessible-value: Strings.input-level-value(root.spoken-percent);
     accessible-value-minimum: 0;
     accessible-value-maximum: 100;
 

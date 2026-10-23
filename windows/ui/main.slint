@@ -679,6 +679,8 @@ export component MainWindow inherits Window {
     // The level meter under the source, while an input device is captured.
     in property <bool> input-meter-shown;
     in property <float> input-level;
+    // The level as Narrator reads it, in steps of 10 percent.
+    in property <int> input-level-spoken;
     in property <float> master-volume;
     in property <bool> equalizer-on;
     // The Now Playing card, while a media session counts for the source.
@@ -1216,8 +1218,11 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            if root.input-meter-shown: LevelMeter {
+                            // Always laid out, so nothing below moves when it shows.
+                            LevelMeter {
+                                visible: root.input-meter-shown;
                                 level: root.input-level;
+                                spoken-percent: root.input-level-spoken;
                                 label: Strings.input-level;
                             }
                         }

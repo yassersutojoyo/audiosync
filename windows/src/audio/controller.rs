@@ -309,6 +309,8 @@ struct Session<D: Driver> {
     /// capture, let go while Windows audio hung, still held them: the
     /// session starts again once that one gives one back.
     waits_for_feed: MissingFeeds,
+    /// The session lead last written to the debug log, in capture frames.
+    logged_lead: Option<i64>,
 }
 
 /// Which of the senders' feeds a capture started without.
@@ -358,6 +360,9 @@ struct RoutingState {
 pub struct Controller<D: Driver> {
     driver: D,
     policy: OutputPolicy,
+    /// How long AirPlay and Google Cast were last held back to meet each
+    /// other, in ms, for the debug log.
+    network_hold_backs: (f64, f64),
     /// The connected endpoints, sorted by ID, as last listed successfully.
     present: Vec<Endpoint>,
     /// Whether the last listing worked: false before the first one and after
@@ -460,6 +465,7 @@ impl<D: Driver> Controller<D> {
         Controller {
             driver,
             policy: OutputPolicy::new(AirPlay::Unavailable),
+            network_hold_backs: (0.0, 0.0),
             present: Vec::new(),
             listing_ok: false,
             session: None,
@@ -643,6 +649,36 @@ impl<D: Driver> Controller<D> {
         if let Some(speakers) = self.cast.as_mut() {
             speakers.set_hold_back(cast);
         }
+        // Logged apart from the local outputs' re-timing, which live input skips.
+        if (airplay, cast) != self.network_hold_backs {
+            self.network_hold_backs = (airplay, cast);
+            self.log.log(|| {
+                format!(
+                    "AirPlay held back {} ms and Google Cast {} ms to meet each other",
+                    airplay.round(),
+                    cast.round()
+                )
+            });
+        }
+    }
+
+    /// Writes the session lead to the debug log once every local output has
+    /// reported its start lead, and again whenever it moves.
+    fn log_session_lead(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(lead) = session.ring.session_leads().published_session_lead() else {
+            return;
+        };
+        if session.logged_lead == Some(lead) {
+            return;
+        }
+        session.logged_lead = Some(lead);
+        let ms = lead as f64 * 1000.0 / f64::from(SESSION_RATE);
+        let outputs = session.outputs.len();
+        self.log
+            .log(|| format!("lead: the local session lead is {ms:.1} ms over {outputs} output(s)"));
     }
 
     /// Re-times the other outputs, live, when a Google Cast speaker is
@@ -1689,6 +1725,7 @@ impl<D: Driver> Controller<D> {
             outputs: BTreeMap::new(),
             trial_polls: 0,
             waits_for_feed,
+            logged_lead: None,
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -2398,6 +2435,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             *wait = wait.saturating_sub(1);
         }
         self.device_volumes.tick();
+        self.log_session_lead();
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
@@ -4704,6 +4742,27 @@ mod tests {
     fn logged(log: &DebugLog, dir: &Path) -> Vec<String> {
         assert!(log.flush(TEST_FLUSH), "the log is written");
         read_messages(&dir.join(FILE_NAME))
+    }
+
+    #[test]
+    fn a_session_start_logs_the_lead_it_chose() {
+        let (mut backend, log, dir) = logged_backend("controller-lead");
+        backend.connect_input("mic", "Microphone", "USB");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.stop();
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "lead: local outputs play at their device's start lead",
+                "starting: capturing the input device mic",
+                "lead: live input: local outputs play at their device's start lead",
+            ],
+        );
     }
 
     #[test]

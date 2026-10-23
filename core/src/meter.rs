@@ -31,9 +31,38 @@ pub fn meter_level(previous: f32, peak: f32) -> f32 {
     target.max(previous - METER_FALL_PER_POLL).max(0.0)
 }
 
+/// The meter's length as a screen reader reads it: whole percent in steps
+/// of [`METER_SPOKEN_STEP`], so the value changes a few times per word
+/// instead of at every poll. A non-finite length counts as 0.
+pub fn meter_spoken_percent(level: f32) -> u32 {
+    let level = if level.is_finite() {
+        level.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let steps = (level * 100.0 / METER_SPOKEN_STEP as f32).round() as u32;
+    steps * METER_SPOKEN_STEP
+}
+
+/// The step of [`meter_spoken_percent`], in percent.
+pub const METER_SPOKEN_STEP: u32 = 10;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_spoken_value_moves_in_steps_of_ten_percent() {
+        assert_eq!(meter_spoken_percent(0.0), 0);
+        assert_eq!(meter_spoken_percent(0.04), 0);
+        assert_eq!(meter_spoken_percent(0.05), 10);
+        assert_eq!(meter_spoken_percent(0.42), 40);
+        assert_eq!(meter_spoken_percent(0.66), 70);
+        assert_eq!(meter_spoken_percent(1.0), 100);
+        assert_eq!(meter_spoken_percent(1.7), 100);
+        assert_eq!(meter_spoken_percent(-0.3), 0);
+        assert_eq!(meter_spoken_percent(f32::NAN), 0);
+    }
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5

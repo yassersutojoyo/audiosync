@@ -471,11 +471,14 @@ impl OutputPolicy {
                 wait.round()
             ),
             (None, Some(network)) => format!(
-                "lead: {live}local outputs play at their device's start lead, AirPlay and \
-                 Google Cast at {} ms",
+                "lead: {live}local outputs play at their device's start lead (logged in ms \
+                 once measured), AirPlay and Google Cast at {} ms",
                 network.round()
             ),
-            (None, None) => format!("lead: {live}local outputs play at their device's start lead"),
+            (None, None) => format!(
+                "lead: {live}local outputs play at their device's start lead (logged in ms \
+                 once measured)"
+            ),
         }
     }
 

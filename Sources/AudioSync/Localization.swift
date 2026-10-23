@@ -476,9 +476,9 @@ struct UIStrings {
     let sourceSystem = "All System Audio"
     let sourceInputsHeader = "Input Devices"
     /// The level meter under the source while an input device is captured,
-    /// for VoiceOver: its name, and how full the bar is.
+    /// for VoiceOver: its name, and how full the bar is in steps of 10%.
     let inputLevel = "Input level"
-    func inputLevelValue(_ level: Float) -> String { percent(Int((level * 100).rounded())) }
+    func inputLevelValue(_ spokenPercent: Int) -> String { percent(spokenPercent) }
     let microphoneDenied = """
         AudioSync is not allowed to use input devices.
         Open System Settings → Privacy & Security → Microphone and turn on AudioSync.

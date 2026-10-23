@@ -109,6 +109,20 @@ impl SessionLeads {
             })
             .fold(0, i64::max)
     }
+
+    /// K once every counted renderer has published its start lead, for the
+    /// debug log; `None` before that and while no renderer counts.
+    pub fn published_session_lead(&self) -> Option<i64> {
+        let mut counted = self.slots.iter().filter(|slot| {
+            slot.taken.load(Ordering::Acquire) && !slot.leaving.load(Ordering::Relaxed)
+        });
+        let mut any = false;
+        let all = counted.all(|slot| {
+            any = true;
+            slot.lead.load(Ordering::Relaxed) != NO_LEAD
+        });
+        (any && all).then(|| self.session_lead())
+    }
 }
 
 /// What a session captures, as far as the lead is concerned.
@@ -154,6 +168,23 @@ pub fn network_wait_ms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_session_lead_is_published_once_every_counted_renderer_reported() {
+        let leads = SessionLeads::new();
+        assert_eq!(leads.published_session_lead(), None, "no renderer");
+        let built_in = leads.claim(0).unwrap();
+        let bluetooth = leads.claim(0).unwrap();
+        leads.set_lead(built_in, 960);
+        assert_eq!(leads.published_session_lead(), None, "one still starting");
+        leads.set_lead(bluetooth, 1472);
+        assert_eq!(leads.published_session_lead(), Some(1472));
+        leads.leave(bluetooth);
+        assert_eq!(leads.published_session_lead(), Some(960), "a leaving one");
+        leads.release(bluetooth);
+        leads.leave(built_in);
+        assert_eq!(leads.published_session_lead(), None, "none counts");
+    }
 
     #[test]
     fn only_live_input_on_a_local_output_skips_the_network_wait() {

@@ -305,6 +305,41 @@ pub extern "C" fn asc_meter_level(previous: f32, peak: f32) -> f32 {
     meter::meter_level(previous, peak)
 }
 
+/// [`meter::meter_spoken_percent`]: the meter's length as a screen reader
+/// reads it, in steps of 10 percent.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_meter_spoken_percent(level: f32) -> u32 {
+    meter::meter_spoken_percent(level)
+}
+
+/// Any thread: K, the session lead of the ring's renderers in capture
+/// frames, into `frames` once every counted renderer has published its
+/// start lead (S208); false, writing nothing, before that, while none
+/// counts, or for a null argument.
+///
+/// # Safety
+///
+/// `ring` is null or a live ring handle; `frames` is null or points to an
+/// aligned, writable `int64_t` that nothing else touches during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_ring_session_lead_frames(
+    ring: *const AscRing,
+    frames: *mut i64,
+) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(lead) =
+        (unsafe { ring_of(ring) }).and_then(|ring| ring.session_leads().published_session_lead())
+    else {
+        return false;
+    };
+    if frames.is_null() {
+        return false;
+    }
+    // SAFETY: non-null, and by the caller's contract aligned, writable and only ours.
+    unsafe { frames.write(lead) };
+    true
+}
+
 /// Takes the ring's only writer; null while another one exists (S35).
 ///
 /// # Safety
