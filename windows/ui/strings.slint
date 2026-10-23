@@ -27,7 +27,7 @@ export global Strings {
     out property <string> waiting-for-airplay2: @tr("Waiting for the other AirPlay 2 speaker");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
-    // The flyout's speaker list when it has no speaker and no group.
+    // The flyout's speaker list when it has no speaker and no zone.
     out property <string> no-speakers: @tr("No speakers found");
     // The flyout's empty speaker list while AirPlay discovery runs.
     out property <string> looking-for-speakers: @tr("Looking for speakers…");
@@ -89,7 +89,7 @@ export global Strings {
     out property <string> receiver-untitled: "AudioSync";
     out property <string> receiver-unnamed-source: @tr("Live audio");
     out property <string> receiver-album: @tr("From your PC");
-    out property <string> groups: @tr("Groups");
+    out property <string> zones: @tr("Zones");
     out property <string> this-pc-section: @tr("This PC");
     out property <string> connected-section: @tr("Connected Speakers");
     out property <string> this-pc-none: @tr("No built-in output");
@@ -182,19 +182,36 @@ export global Strings {
         return @tr("{} is protected by a password. Enter the password set for it in the Home app or in the speaker's settings. Cancel turns the speaker off; turn it on again to retry.", speaker);
     }
 
-    // Groups
-    out property <string> new-group: @tr("New Group from Active Speakers…");
-    out property <string> new-group-title: @tr("New Speaker Group");
-    out property <string> new-group-message: @tr("The speakers that are on right now become this group. Select the group later to switch them all at once.");
-    out property <string> new-group-placeholder: @tr("Living room, Office…");
-    out property <string> new-group-field-label: @tr("Group name");
-    out property <string> new-group-needs-speakers: @tr("Turn on the speakers you want in the group first, then create it.");
+    // Zones
+    out property <string> new-zone: @tr("New Zone from Active Speakers…");
+    out property <string> new-zone-title: @tr("New Zone");
+    out property <string> new-zone-message: @tr("The speakers that are on right now move into this zone. A speaker in another zone leaves that zone.");
+    out property <string> new-zone-placeholder: @tr("Living room, Kitchen…");
+    out property <string> new-zone-field-label: @tr("Zone name");
+    out property <string> new-zone-needs-speakers: @tr("Turn on the speakers you want in the zone first, then create it.");
+    // In a speaker's … menu: the submenu of zones, its last entry, and the
+    // entry of a speaker in a zone.
+    out property <string> move-to-zone: @tr("Move to Zone");
+    out property <string> new-zone-item: @tr("New Zone…");
+    out property <string> remove-from-zone: @tr("Remove from Zone");
+    out property <string> rename-zone: @tr("Rename Zone…");
+    out property <string> rename-zone-title: @tr("Rename Zone");
+    out property <string> delete-zone: @tr("Delete Zone");
+    // In a zone without members.
+    out property <string> zone-empty: @tr("No speakers");
+    // Notes on a zone member's row: a stereo pair or home theater while
+    // AirPlay 2 is off, a member that isn't listed (with its name when none
+    // is known), and a Cast member a zone click left off (S246).
+    out property <string> needs-airplay2: @tr("Needs AirPlay 2 (Experimental)");
+    out property <string> zone-member-not-found: @tr("Not found");
+    out property <string> unknown-device: @tr("Unknown device");
+    out property <string> cast-stayed-off: @tr("Stayed off, since one Cast speaker plays at a time");
+    // This PC and Connected Speakers when each of their speakers is in a zone.
+    out property <string> this-pc-all-in-zones: @tr("Every output on this PC is in a zone.");
+    out property <string> connected-all-in-zones: @tr("Every connected speaker is in a zone.");
     out property <string> ok: @tr("OK");
     out property <string> create: @tr("Create");
     out property <string> cancel: @tr("Cancel");
-    out property <string> delete-group: @tr("Delete Group");
-    out property <string> rename-group: @tr("Rename Group…");
-    out property <string> rename-group-title: @tr("Rename Group");
     out property <string> rename: @tr("Rename");
     // In a speaker's … menu and right-click menu: edits its name in the row.
     out property <string> rename-speaker: @tr("Rename…");
@@ -297,6 +314,8 @@ export global Strings {
     out property <string> remote-http-note: @tr("The page uses plain HTTP, so use the web remote only on your home network.");
     // The window and a notice, while the remote listens and a connected
     // network has Windows' Public profile.
+    // The first launch after the update that turned the saved groups into zones.
+    out property <string> notice-groups-became-zones: @tr("Your groups are zones now. Each zone has its own volume, and its speakers show under it instead of under Connected Speakers.");
     out property <string> remote-public-network: @tr("This PC is on a network Windows calls Public, such as a cafe or hotel Wi-Fi, so anyone on that network can open the web remote's pairing page. Turn the web remote off while you're on it.");
     public pure function remote-port-in-use(port: int) -> string {
         return @tr("Another app uses port {}, so the web remote can't start. Enter another port and select Use Port.", port);
@@ -660,7 +679,7 @@ export global Strings {
     out property <string> help-title: @tr("AudioSync Guide");
     out property <string> help-intro: @tr("AudioSync plays your PC's sound on AirPlay and Google Cast speakers and on the outputs connected to this PC at the same time, and lines them up with a delay for each speaker.");
     out property <string> help-start-title: @tr("First Steps");
-    out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens AudioSync quick settings, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. If Windows blocks microphone access for desktop apps, a notice says so, with a button that opens those privacy settings.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your groups, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with its kind under its name.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
+    out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens AudioSync quick settings, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. If Windows blocks microphone access for desktop apps, a notice says so, with a button that opens those privacy settings.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your zones, each with its speakers under it, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with its kind under its name.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
     out property <string> help-sync-title: @tr("Sync");
     out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S (File > Apply Typed Delay); the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay card under Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.");
     // The Sync section's second part, after the delay illustration.
@@ -680,7 +699,7 @@ export global Strings {
     out property <string> help-double-title: @tr("Hearing Sound Twice");
     out property <string> help-double: @tr("Windows keeps playing the source on its own outputs while AudioSync plays its synced copies, so you may hear it twice. For one app, open the Volume mixer and send the app to an output you don't listen to. For All System Audio, make such an output the Windows default in Sound settings. Don't mute the app itself in the Volume mixer: AudioSync would capture silence.\n\nWhen AudioSync detects this, it shows a notice. Its Show How button opens the steps for your setup.");
     out property <string> help-more-title: @tr("More Controls");
-    out property <string> help-more: @tr("To make a group, turn on the speakers you want, then choose Speakers > New Group from Active Speakers (Ctrl+N). Select the group to turn them all on or off at once. To rename or delete it, right-click it or use its … button.\n\nTo rename a speaker, double-click its name, or right-click it or use its … button and choose Rename. Type a name and press Enter. Leave it empty to use the device's own name; while a speaker is renamed, its tooltip shows that name.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-connect when available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nTo keep a speaker you never use out of the lists, choose Hide Speaker in its menu. A speaker that is on turns off first. Hidden Speakers in the Speakers menu lists what you hid; choose one to show it again, off, with its volume and delay as you left them.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp, preset curves and curves you save yourself. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media controls Windows shows for apps that support them. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as loopback drivers, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in to Windows, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync icon in the notification area. AudioSync then starts there without opening its window. If AudioSync is turned off in Settings > Apps > Startup, that page opens with a notice: turn AudioSync on there.\n\nView > Appearance: Match System follows Windows; Light or Dark keeps AudioSync's windows that way. The AudioSync icon in the notification area always follows the Windows theme.\n\nAudioSync saves the source, each speaker's switch, delay, volume and name, the speakers you hid, your groups and the equalizer, and restores them the next time it starts.");
+    out property <string> help-more: @tr("To make a zone, turn on the speakers you want, then choose Speakers > New Zone from Active Speakers (Ctrl+N). They move under the zone, and a speaker is in one zone at most. Select the zone's name to turn its speakers on or off at once; its arrow shows or hides them. Each zone has its own volume. To rename or delete a zone, right-click it or use its … button; F2 renames the zone you're on. Deleting a zone puts its speakers back under This PC or Connected Speakers. To move a speaker, right-click it or use its … button and choose Move to Zone or Remove from Zone.\n\nTo rename a speaker, double-click its name, or right-click it or use its … button and choose Rename. Type a name and press Enter. Leave it empty to use the device's own name; while a speaker is renamed, its tooltip shows that name.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-connect when available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nTo keep a speaker you never use out of the lists, choose Hide Speaker in its menu. A speaker that is on turns off first. Hidden Speakers in the Speakers menu lists what you hid; choose one to show it again, off, with its volume and delay as you left them.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp, preset curves and curves you save yourself. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media controls Windows shows for apps that support them. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as loopback drivers, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in to Windows, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync icon in the notification area. AudioSync then starts there without opening its window. If AudioSync is turned off in Settings > Apps > Startup, that page opens with a notice: turn AudioSync on there.\n\nView > Appearance: Match System follows Windows; Light or Dark keeps AudioSync's windows that way. The AudioSync icon in the notification area always follows the Windows theme.\n\nAudioSync saves the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer, and restores them the next time it starts.");
     out property <string> help-airplay-title: @tr("AirPlay");
     out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows \"Asks for a code\". When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead.\n\nA speaker protected by a password shows \"Asks for a code\" too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\n'AirPlay 2 (Experimental)', in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync. With it on, a stereo pair or home theater group shows as one row, and its note names the speakers in it.");
     out property <string> help-remote-title: @tr("Web Remote");
@@ -785,6 +804,9 @@ export global Strings {
         }
         if kind == NoticeKind.airplay-ahead-of-cast {
             return @tr("AirPlay ahead of {}", name);
+        }
+        if kind == NoticeKind.groups-became-zones {
+            return @tr("groups became zones");
         }
         return @tr("double audio");
     }
@@ -1385,16 +1407,21 @@ export global Strings {
         return @tr("Increase delay by {} {}", delta, root.milliseconds-unit);
     }
 
-    public pure function group-members(available: int, total: int) -> string {
-        if available == total {
-            return @tr("{n} speaker" | "{n} speakers" % total);
+    // Under a zone's name: how many of its members are on, and how many of
+    // those wait; with none of them listed, how many it has.
+    public pure function zone-count(on: int, total: int, waiting: int, present: int) -> string {
+        if present == 0 && total > 0 {
+            return @tr("0 of {} here", total);
         }
-        return @tr("{} of {} speakers available", available, total);
+        if waiting > 0 {
+            return @tr("{} of {} on, {} waiting", on, total, waiting);
+        }
+        return @tr("{} of {} on", on, total);
     }
 
-    // A new group's name when none was typed.
-    public pure function numbered-group(n: int) -> string {
-        return @tr("Group {}", n);
+    // What Narrator reads for a zone header: its name, then its count.
+    public pure function zone-label(name: string) -> string {
+        return @tr("{}, zone", name);
     }
 
     // The name the Save Curve field starts with when no saved curve is shown.
@@ -1415,8 +1442,57 @@ export global Strings {
         return @tr("On, {}", curve);
     }
 
-    public pure function rename-group-message(name: string) -> string {
+    public pure function zone-value(on: int, total: int, waiting: int) -> string {
+        if waiting > 0 {
+            return @tr("{} of {} speakers on, {} waiting", on, total, waiting);
+        }
+        return @tr("{} of {} speakers on", on, total);
+    }
+
+    public pure function zone-volume(name: string) -> string {
+        return @tr("{} volume", name);
+    }
+
+    // A zone's arrow: its tooltip and what Narrator calls it.
+    public pure function show-zone-speakers(name: string) -> string {
+        return @tr("Show speakers in {}", name);
+    }
+
+    public pure function hide-zone-speakers(name: string) -> string {
+        return @tr("Hide speakers in {}", name);
+    }
+
+    // A new zone's name when none was typed.
+    public pure function numbered-zone(n: int) -> string {
+        return @tr("Zone {}", n);
+    }
+
+    // New Zone… in a speaker's menu.
+    public pure function new-zone-for-speaker(name: string) -> string {
+        return @tr("{} moves into this zone.", name);
+    }
+
+    public pure function rename-message(name: string) -> string {
         return @tr("Enter a new name for “{}”.", name);
+    }
+
+    // A zone member that plays as part of a stereo pair or home theater: its
+    // row's note, and the zone menu's entry that puts the target in its place.
+    public pure function zone-member-in-target(target: string) -> string {
+        return @tr("Plays as part of {}", target);
+    }
+
+    public pure function use-target-instead(target: string) -> string {
+        return @tr("Use {} Instead", target);
+    }
+
+    // What Narrator says after Move to Zone and Delete Zone.
+    public pure function speaker-moved-to-zone(speaker: string, zone: string) -> string {
+        return @tr("{} moved to {}", speaker, zone);
+    }
+
+    public pure function zone-deleted(name: string) -> string {
+        return @tr("{} deleted", name);
     }
 
     public pure function equalizer-caption(max-gain: int) -> string {

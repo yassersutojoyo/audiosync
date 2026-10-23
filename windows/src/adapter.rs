@@ -73,7 +73,7 @@ use audiosync_core::policy::session::{
     reaction, source_switch, streaming_after,
 };
 use audiosync_core::policy::source_quit::WhenSourceQuits;
-use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, renamed_group};
+use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey};
 use audiosync_core::policy::zones::{self, MemberKind, Situation, Step, Zone, Zones};
 use audiosync_core::reader::DRIFT_TOLERANCE_MS;
 
@@ -101,11 +101,11 @@ use crate::settings::{
 };
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
-    self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
+    self, AbsentMember, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
-    Group, GroupError, HiddenSpeaker, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase,
+    HiddenSpeaker, InTarget, LeftOutRow, Notice, NoticeMessage, PasswordPrompt, PinPhase,
     PinPrompt, SheetRow, SheetState, Source, SourceKind, Speaker, SpeakerKind, ViewSettings,
-    Waiting, clamp_delay_ms,
+    Waiting, ZoneError, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -275,8 +275,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     hidden: Vec<SavedHidden>,
     /// The names the user gave speakers (spec S228).
     custom_names: SpeakerNames,
-    groups: Vec<Group>,
-    next_group: u64,
+    /// The groups as saved; only the Mac still shows them (S248).
+    groups: Vec<SavedGroup>,
     /// The zones (spec S245), migrated from the groups once (S248).
     zones: Zones,
     /// The speaker presets (spec S251), the overlapping groups among them
@@ -397,7 +397,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
             hidden: Vec::new(),
             custom_names: SpeakerNames::default(),
             groups: Vec::new(),
-            next_group: 1,
             zones: Zones::default(),
             presets: Vec::new(),
             gate: AutoStartGate::default(),
@@ -430,7 +429,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             calibration: calibration::Status::default(),
             calibrate_all: CalibrateAll::default(),
         };
+        let had_groups = matches!(
+            loaded,
+            settings::Loaded::Read { version, .. } if version < settings::ZONES_VERSION
+        );
         adapter.restore(saved);
+        // The first launch with zones says what became of the groups, once:
+        // the next save marks them migrated.
+        if had_groups && !adapter.zones.list().is_empty() {
+            adapter.post(NoticeSubject::Zones, NoticeMessage::GroupsBecameZones);
+        }
         // Settings ignored at launch: the user is told now why the defaults
         // apply, even if they change nothing.
         adapter.keep_settings_aside(false);
@@ -489,21 +497,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.auto_connect = saved.auto_connect.clone();
         self.custom_names = SpeakerNames::from_saved(&saved.speaker_names);
-        self.groups = saved
-            .groups
-            .iter()
-            .map(|group| Group {
-                id: group.id.clone(),
-                name: group.name.clone(),
-                members: group.members.clone(),
-            })
-            .collect();
-        self.next_group = self
-            .groups
-            .iter()
-            .filter_map(|group| group.id.strip_prefix("group:")?.parse::<u64>().ok())
-            .max()
-            .map_or(1, |last| last.saturating_add(1));
+        self.groups = saved.groups.clone();
         self.zones = Zones::from_stored(saved.speaker_zones.iter().map(|zone| Zone {
             id: zone.id.clone(),
             name: zone.name.clone(),
@@ -633,15 +627,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             auto_connect: self.auto_connect.clone(),
             speaker_names: self.custom_names.saved(),
             hidden_speakers: self.hidden.clone(),
-            groups: self
-                .groups
-                .iter()
-                .map(|group| SavedGroup {
-                    id: group.id.clone(),
-                    name: group.name.clone(),
-                    members: group.members.clone(),
-                })
-                .collect(),
+            groups: self.groups.clone(),
             speaker_zones: self
                 .zones
                 .list()
@@ -1316,6 +1302,29 @@ impl<A: AudioBackend> AudioAdapter<A> {
         })
     }
 
+    /// Adds a zone named `typed` (S150) holding `members`, each leaving the
+    /// zone that held it; returns its name.
+    fn add_zone(&mut self, typed: &str, members: &[String]) -> String {
+        let next = self
+            .zones
+            .list()
+            .iter()
+            .filter_map(|zone| zone.id.strip_prefix("zone:")?.parse::<u64>().ok())
+            .max()
+            .map_or(1, |last| last.saturating_add(1));
+        let id = format!("zone:{next}");
+        let name = self
+            .zones
+            .new_zone(&id, typed, |n| format!("Zone {n}"))
+            .name
+            .clone();
+        for member in members {
+            self.zones.move_speaker(member, &id);
+        }
+        self.push_zone_volumes();
+        name
+    }
+
     /// Switches one zone member on or off as its own switch would, without
     /// starting or stopping streaming; a new attempt clears its notice.
     fn switch_zone_member(&mut self, key: &SpeakerKey, on: bool) {
@@ -1536,6 +1545,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }),
             group: None,
             mic_left_out: None,
+            in_target: None,
         }
     }
 
@@ -1822,6 +1832,43 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if !self.running() && self.enabled_count() > 0 {
             self.start_session(StartOrigin::AutoConnect);
         }
+    }
+
+    /// The zone members neither `speakers` nor `hidden` holds, by the name
+    /// the user gave them, else the one last listed.
+    fn absent_members(&self, speakers: &[Speaker], hidden: &[HiddenSpeaker]) -> Vec<AbsentMember> {
+        let known = |key: &String| {
+            speakers.iter().any(|speaker| speaker.id == *key)
+                || hidden.iter().any(|entry| entry.id == *key)
+        };
+        self.zones
+            .list()
+            .iter()
+            .flat_map(|zone| &zone.members)
+            .filter(|key| !known(key))
+            .map(|key| {
+                let (last, kind) = match SpeakerKey::parse(key) {
+                    Some(SpeakerKey::Local(id)) => (
+                        self.names.get(&id),
+                        self.kinds
+                            .get(&id)
+                            .map_or(SpeakerKind::Other, |kind| speaker_kind(*kind)),
+                    ),
+                    Some(SpeakerKey::AirPlay(id)) => {
+                        (self.airplay_names.get(&id), SpeakerKind::AirPlay)
+                    }
+                    Some(SpeakerKey::Cast(id)) => (self.cast_names.get(&id), SpeakerKind::Cast),
+                    None => (None, SpeakerKind::Other),
+                };
+                AbsentMember {
+                    id: key.clone(),
+                    name: self
+                        .custom_names
+                        .shown(key, last.map_or("", String::as_str)),
+                    kind,
+                }
+            })
+            .collect()
     }
 
     /// Whether speaker `key` is hidden with Hide Speaker.
@@ -2202,7 +2249,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         {
             let message = NoticeMessage::AirPlayPlaysInGroup {
                 speaker: self.airplay_name(id),
-                target,
+                target: target.name,
             };
             self.airplay_off(id, problem, message);
             return;
@@ -2558,6 +2605,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn airplay_speaker(&self, speaker: AirPlayInfo, prompted: Option<&str>) -> Speaker {
         let waiting = prompted.is_some_and(|prompted| prompted != speaker.id);
         let id = airplay_key(&speaker.id);
+        let in_target = self
+            .audio
+            .airplay_holding_target(&speaker.id)
+            .map(|target| InTarget {
+                id: airplay_key(&target.id),
+                name: target.name,
+            });
         Speaker {
             auto_connect: self.auto_connect.contains(&id),
             name: self.custom_names.shown(&id, &speaker.name),
@@ -2589,6 +2643,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast: None,
             group: speaker.group,
             mic_left_out: None,
+            in_target,
         }
     }
 
@@ -2631,6 +2686,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast: None,
             group: None,
             mic_left_out,
+            in_target: None,
         }
     }
 
@@ -2732,6 +2788,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 )
                 .collect(),
         );
+        let absent = self.absent_members(&speakers, &hidden);
         AppState {
             reference_name,
             airplay_delay_ms: self.airplay_delay_ms(),
@@ -2742,8 +2799,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             source_id: self.chosen.key(),
             master_volume: self.audio.master_volume(),
             speakers,
+            absent,
             hidden,
-            groups: self.groups.clone(),
             zones: self.zones.list().to_vec(),
             equalizer: self.equalizer,
             equalizer_curves: self.equalizer_curves.clone(),
@@ -3091,68 +3148,6 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     /// Present members only; absent ones are left alone.
-    fn toggle_group(&mut self, id: &str) {
-        let state = self.snapshot();
-        let Some(group) = state.groups.iter().find(|group| group.id == id) else {
-            return;
-        };
-        let members: Vec<SpeakerKey> = state
-            .available_members(group)
-            .filter_map(|speaker| SpeakerKey::parse(&speaker.id))
-            // Groups switch local and AirPlay speakers only; the settings
-            // never load a Cast member into one.
-            .filter(|key| !matches!(key, SpeakerKey::Cast(_)))
-            .collect();
-        if members.is_empty() {
-            return;
-        }
-        // While streaming is off, a click starts it, even for a group that
-        // is on already.
-        let turn_on = state.group_state(group).click_turns_on();
-        self.log.log(|| {
-            let switched = if turn_on { "on" } else { "off" };
-            format!(
-                "the user switched group \"{}\" {switched}: {} speaker(s) present",
-                group.name,
-                members.len()
-            )
-        });
-        for member in &members {
-            match member {
-                SpeakerKey::Local(endpoint_id) => {
-                    if turn_on {
-                        if self.running() && self.is_enabled(endpoint_id) {
-                            continue;
-                        }
-                        // A new attempt.
-                        self.notices.clear(&[speaker_subject(endpoint_id)]);
-                    }
-                    if self.audio.set_output_enabled(endpoint_id, turn_on).is_err() {
-                        self.output_failed(endpoint_id, true);
-                    }
-                }
-                SpeakerKey::AirPlay(id) => {
-                    if turn_on {
-                        if self.running() && self.is_airplay_enabled(id) {
-                            continue;
-                        }
-                        self.notices.clear(&[airplay_subject(id)]);
-                    }
-                    if let Err(problem) = self.switch_airplay_by_user(id, turn_on) {
-                        self.airplay_switch_failed(id, problem);
-                    }
-                }
-                SpeakerKey::Cast(_) => {}
-            }
-        }
-        if turn_on {
-            self.start_if_switched_on();
-        } else {
-            self.stop_if_idle();
-        }
-        self.take_events();
-    }
-
     /// The core's plan for a click on zone `id` (spec S246, S247), carried
     /// out: present members only, at most one Cast speaker, every AirPlay 2
     /// member on even when it waits for the AirPlay 2 place.
@@ -3235,56 +3230,73 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
-    /// Sets zone `id`'s volume (S245), which its playing members hear at
-    /// once (S249).
-    fn set_zone_volume(&mut self, id: &str, position: f64) {
-        if self.zones.set_volume(id, position) {
+    fn new_zone(&mut self, name: &str) -> Result<(), ZoneError> {
+        let members: Vec<String> = self
+            .snapshot()
+            .speakers
+            .into_iter()
+            .filter(|speaker| speaker.enabled)
+            .map(|speaker| speaker.id)
+            .collect();
+        if members.is_empty() {
+            return Err(ZoneError::NoActiveSpeakers);
+        }
+        let name = self.add_zone(name, &members);
+        self.log
+            .log(|| format!("zone \"{name}\" made of {} speaker(s)", members.len()));
+        Ok(())
+    }
+
+    fn new_zone_with(&mut self, speaker_id: &str, name: &str) {
+        let name = self.add_zone(name, &[speaker_id.to_owned()]);
+        self.log
+            .log(|| format!("zone \"{name}\" made of {speaker_id}"));
+    }
+
+    fn rename_zone(&mut self, id: &str, name: &str) {
+        self.zones.rename(id, name);
+    }
+
+    fn delete_zone(&mut self, id: &str) {
+        if self.zones.delete(id) {
+            self.log.log(|| format!("zone {id} deleted"));
             self.push_zone_volumes();
         }
     }
 
-    fn new_group(&mut self, name: &str) -> Result<(), GroupError> {
-        let members: Vec<String> = self
-            .audio
-            .outputs()
-            .into_iter()
-            .filter(|output| output.enabled)
-            .map(|output| speaker_key(&output.id))
-            .chain(
-                self.audio
-                    .airplay_speakers()
-                    .into_iter()
-                    .filter(|speaker| speaker.enabled)
-                    .map(|speaker| airplay_key(&speaker.id)),
-            )
-            .collect();
-        if members.is_empty() {
-            return Err(GroupError::NoActiveSpeakers);
-        }
-        self.log.log(|| {
-            format!(
-                "group \"{}\" made of {} speaker(s)",
-                name.trim(),
-                members.len()
-            )
-        });
-        self.groups.push(Group {
-            id: format!("group:{}", self.next_group),
-            name: name.trim().to_owned(),
-            members,
-        });
-        self.next_group += 1;
-        Ok(())
-    }
-
-    fn rename_group(&mut self, id: &str, name: &str) {
-        if let Some(group) = self.groups.iter_mut().find(|group| group.id == id) {
-            group.name = renamed_group(&group.name, name);
+    fn move_to_zone(&mut self, speaker_id: &str, zone_id: &str) {
+        if self.zones.move_speaker(speaker_id, zone_id) {
+            self.log
+                .log(|| format!("{speaker_id} moved to zone {zone_id}"));
+            self.push_zone_volumes();
         }
     }
 
-    fn delete_group(&mut self, id: &str) {
-        self.groups.retain(|group| group.id != id);
+    fn remove_from_zone(&mut self, speaker_id: &str) {
+        if self.zones.remove_speaker(speaker_id) {
+            self.log.log(|| format!("{speaker_id} left its zone"));
+            self.push_zone_volumes();
+        }
+    }
+
+    fn set_zone_volume(&mut self, id: &str, volume: f64) {
+        if self.zones.set_volume(id, volume) {
+            self.push_zone_volumes();
+        }
+    }
+
+    fn use_target_instead(&mut self, speaker_id: &str) {
+        let Some(target) = self
+            .snapshot()
+            .speaker(speaker_id)
+            .and_then(|speaker| speaker.in_target.clone())
+        else {
+            return;
+        };
+        self.log
+            .log(|| format!("zone: {} takes the place of {speaker_id}", target.id));
+        self.zones.rename_key(speaker_id, &target.id);
+        self.push_zone_volumes();
     }
 
     fn set_equalizer(&mut self, settings: EqSettings) {
@@ -4102,7 +4114,7 @@ mod tests {
         assert_eq!(speakers.delay_ms, Some(0.0), "local outputs have a delay");
         assert_eq!(speakers.volume, DEFAULT_LOCAL_POSITION);
         assert_eq!(speakers.availability, Availability::Open);
-        assert!(state.notices.is_empty() && state.groups.is_empty());
+        assert!(state.notices.is_empty() && state.zones.is_empty());
     }
 
     #[test]
@@ -4249,59 +4261,81 @@ mod tests {
     }
 
     #[test]
-    fn a_group_switches_its_present_members_together() {
+    fn a_zone_switches_its_present_members_together() {
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
         turn_on(&mut adapter, HEADPHONES);
-        adapter.new_group(" Desk ").unwrap();
-        let group = adapter.snapshot().groups[0].clone();
-        assert_eq!(group.name, "Desk");
-        assert_eq!(group.members, [key(HEADPHONES), key(SPEAKERS)]);
+        adapter.new_zone(" Desk ").unwrap();
+        let zone = adapter.snapshot().zones[0].clone();
+        assert_eq!(zone.name, "Desk");
+        let mut members = zone.members.clone();
+        members.sort();
+        assert_eq!(members, [key(HEADPHONES), key(SPEAKERS)]);
 
-        adapter.toggle_group(&group.id);
+        adapter.toggle_zone(&zone.id);
         let state = adapter.snapshot();
         assert!(!state.running, "its speakers were the last ones on");
-        assert_eq!(state.group_state(&group), SpeakerState::Off);
+        assert_eq!(state.zone_state(&zone), SpeakerState::Off);
 
-        adapter.toggle_group(&group.id);
+        adapter.toggle_zone(&zone.id);
         let state = adapter.snapshot();
         assert!(state.running);
-        assert_eq!(state.group_state(&group), SpeakerState::Playing);
+        assert_eq!(state.zone_state(&zone), SpeakerState::Playing);
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
 
         // An absent member is left alone.
         adapter.audio_mut().disconnect_output(HEADPHONES);
         adapter.poll();
-        adapter.toggle_group(&group.id);
+        adapter.toggle_zone(&zone.id);
         assert!(!enabled(&adapter, SPEAKERS));
         assert_eq!(adapter.audio.enabled_outputs(), [HEADPHONES]);
         assert!(adapter.snapshot().running, "the absent member is still on");
     }
 
     #[test]
-    fn a_new_group_needs_a_speaker_that_is_on_and_names_can_change() {
+    fn a_new_zone_needs_a_speaker_that_is_on_and_names_can_change() {
         let mut adapter = adapter();
-        assert_eq!(
-            adapter.new_group("Office"),
-            Err(GroupError::NoActiveSpeakers)
-        );
+        assert_eq!(adapter.new_zone("Office"), Err(ZoneError::NoActiveSpeakers));
         turn_on(&mut adapter, HEADPHONES);
-        adapter.new_group("Office").unwrap();
-        adapter.new_group("Den").unwrap();
-        let groups = || adapter.snapshot().groups;
-        let ids: Vec<String> = groups().into_iter().map(|g| g.id).collect();
-        assert_eq!(ids, ["group:1", "group:2"]);
-        adapter.rename_group("group:1", "  ");
-        adapter.rename_group("group:2", " Study ");
+        adapter.new_zone("Office").unwrap();
+        adapter.new_zone("Den").unwrap();
+        let zones = adapter.snapshot().zones;
+        let ids: Vec<&str> = zones.iter().map(|z| z.id.as_str()).collect();
+        assert_eq!(ids, ["zone:1", "zone:2"]);
+        assert!(zones[0].members.is_empty(), "the headphones moved to Den");
+        assert_eq!(zones[1].members, [key(HEADPHONES)]);
+        adapter.rename_zone("zone:1", "  ");
+        adapter.rename_zone("zone:2", " Study ");
         let names: Vec<String> = adapter
             .snapshot()
-            .groups
+            .zones
             .into_iter()
-            .map(|g| g.name)
+            .map(|z| z.name)
             .collect();
         assert_eq!(names, ["Office", "Study"], "a blank name keeps the old one");
-        adapter.delete_group("group:1");
-        assert_eq!(adapter.snapshot().groups.len(), 1);
+        adapter.delete_zone("zone:1");
+        assert_eq!(adapter.snapshot().zones.len(), 1);
+    }
+
+    #[test]
+    fn a_speaker_moves_between_zones_from_its_menu() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_zone("Desk").unwrap();
+        adapter.new_zone_with(&key(SPEAKERS), "  ");
+        let zones = adapter.snapshot().zones;
+        assert_eq!(zones[1].name, "Zone 2", "a blank name is numbered");
+        assert_eq!(zones[1].members, [key(SPEAKERS)]);
+        adapter.move_to_zone(&key(SPEAKERS), "zone:1");
+        let zones = adapter.snapshot().zones;
+        assert_eq!(zones[0].members, [key(HEADPHONES), key(SPEAKERS)]);
+        assert!(zones[1].members.is_empty());
+        adapter.remove_from_zone(&key(HEADPHONES));
+        adapter.set_zone_volume("zone:1", 140.0);
+        let zone = adapter.snapshot().zones[0].clone();
+        assert_eq!(zone.members, [key(SPEAKERS)]);
+        assert_eq!(zone.volume, 100.0, "kept within 0 to 100");
+        assert_eq!(adapter.current_settings().speaker_zones[0].volume, 100.0);
     }
 
     #[test]
@@ -4727,7 +4761,7 @@ mod tests {
         adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
         adapter.set_speaker_delay(&key(DAC_PORT_1), 120.0);
         adapter.set_auto_connect(&key(DAC_PORT_1), true);
-        adapter.new_group("Desk").unwrap();
+        adapter.new_zone("Desk").unwrap();
         adapter.poll();
 
         // Into another port: Windows lists it under a new endpoint ID.
@@ -4742,7 +4776,7 @@ mod tests {
         assert_eq!(dac.volume, 35.0);
         assert_eq!(dac.delay_ms, Some(120.0));
         assert!(dac.auto_connect);
-        assert_eq!(adapter.snapshot().groups[0].members, [key(DAC_PORT_2)]);
+        assert_eq!(adapter.snapshot().zones[0].members, [key(DAC_PORT_2)]);
         assert_eq!(playing(&adapter), [DAC_PORT_2]);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         assert_eq!(
@@ -4942,7 +4976,7 @@ mod tests {
         connect_monitor(&mut adapter, MONITOR_B);
         turn_on(&mut adapter, MONITOR_A);
         adapter.set_auto_connect(&key(MONITOR_A), true);
-        adapter.new_group("Desk").unwrap();
+        adapter.new_zone("Desk").unwrap();
         adapter.poll();
 
         // The displays sleep: both leave the list, and the one never set
@@ -4954,7 +4988,7 @@ mod tests {
         assert!(!b.enabled);
         assert!(!b.auto_connect);
         assert_eq!(adapter.audio.enabled_outputs(), [MONITOR_A]);
-        assert_eq!(adapter.snapshot().groups[0].members, [key(MONITOR_A)]);
+        assert_eq!(adapter.snapshot().zones[0].members, [key(MONITOR_A)]);
         let saved = adapter.current_settings();
         assert!(saved.auto_connect.contains(&key(MONITOR_A)));
 
@@ -5181,7 +5215,7 @@ mod tests {
         adapter.set_speaker_enabled("ap:kitchen", true);
         adapter.set_speaker_volume("garbage", 10.0);
         adapter.select_source("app:999999");
-        adapter.toggle_group("group:9");
+        adapter.toggle_zone("zone:9");
         adapter.dismiss_notice(42);
         assert_eq!(adapter.snapshot(), before);
     }
@@ -6545,14 +6579,18 @@ mod tests {
     }
 
     #[test]
-    fn groups_and_auto_connect_hold_airplay_speakers() {
+    fn zones_and_auto_connect_hold_airplay_speakers() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         turn_on(&mut adapter, SPEAKERS);
         adapter.set_speaker_enabled(&ap(&kitchen), true);
-        adapter.new_group("Downstairs").unwrap();
-        let group = adapter.snapshot().groups[0].clone();
-        assert_eq!(group.members, [key(SPEAKERS), ap(&kitchen)]);
-        adapter.toggle_group(&group.id);
+        adapter.new_zone("Downstairs").unwrap();
+        let zone = adapter.snapshot().zones[0].clone();
+        let mut members = zone.members.clone();
+        members.sort();
+        let mut expected = [key(SPEAKERS), ap(&kitchen)];
+        expected.sort();
+        assert_eq!(members, expected);
+        adapter.toggle_zone(&zone.id);
         assert!(!adapter.snapshot().running, "both switched off");
         assert!(!adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
 
@@ -6701,16 +6739,16 @@ mod tests {
     }
 
     #[test]
-    fn a_group_switches_only_its_members_that_arent_hidden() {
+    fn a_zone_switches_only_its_members_that_arent_hidden() {
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
         turn_on(&mut adapter, HEADPHONES);
-        adapter.new_group("Desk").unwrap();
+        adapter.new_zone("Desk").unwrap();
         adapter.hide_speaker(&key(HEADPHONES), "Headphones");
         adapter.set_speaker_enabled(&key(SPEAKERS), false);
-        let group = adapter.snapshot().groups[0].id.clone();
+        let zone = adapter.snapshot().zones[0].id.clone();
 
-        adapter.toggle_group(&group);
+        adapter.toggle_zone(&zone);
         assert_eq!(adapter.audio.enabled_outputs(), [SPEAKERS]);
         assert_eq!(playing(&adapter), [SPEAKERS]);
     }
@@ -6868,7 +6906,7 @@ mod tests {
         adapter.set_speaker_volume(&key(SPEAKERS), 35.0);
         adapter.set_speaker_delay(&key(SPEAKERS), 240.0);
         adapter.set_speaker_delay(&key(HEADPHONES), 15.0);
-        adapter.new_group("Desk").expect("made");
+        adapter.new_zone("Desk").expect("made");
         let mut equalizer = EqSettings {
             enabled: true,
             ..EqSettings::default()
@@ -6892,7 +6930,7 @@ mod tests {
         });
         assert!(adapter.snapshot().running);
         adapter.poll();
-        let groups = adapter.snapshot().groups;
+        let zones = adapter.snapshot().zones;
 
         // The app quits while streaming, and starts again with the player
         // running under a new process ID.
@@ -6914,7 +6952,7 @@ mod tests {
         let headphones = speaker_of(&adapter, &key(HEADPHONES));
         assert!(!headphones.enabled);
         assert_eq!(headphones.delay_ms, Some(15.0));
-        assert_eq!(state.groups, groups);
+        assert_eq!(state.zones, zones);
         assert_eq!(state.equalizer, equalizer);
         assert_eq!(state.equalizer_curves, curves);
         assert!(adapter.view_settings().show_virtual_devices);
@@ -6931,10 +6969,10 @@ mod tests {
             }
         );
 
-        // A new group gets the next number, and streaming starts from the
+        // A new zone gets the next number, and streaming starts from the
         // saved speakers when the user asks.
-        adapter.new_group("Two").expect("made");
-        assert_eq!(adapter.snapshot().groups[1].id, "group:2");
+        adapter.new_zone("Two").expect("made");
+        assert_eq!(adapter.snapshot().zones[1].id, "zone:2");
         adapter.set_running(true);
         assert_eq!(playing(&adapter), [SPEAKERS]);
         let _ = std::fs::remove_dir_all(dir);

@@ -89,6 +89,10 @@ pub const VERSION: u32 = 3;
 /// The first format version with offsets relative to the reference.
 pub const OFFSETS_VERSION: u32 = 2;
 
+/// The first format version with zones; an older file's groups become zones
+/// as it is read.
+pub const ZONES_VERSION: u32 = 3;
+
 /// The longest own delay an AirPlay speaker takes, in milliseconds: the
 /// sender's limit (P99), the core's delay range.
 pub const MAX_AIRPLAY_DELAY_MS: f64 = MAX_DELAY_MS;

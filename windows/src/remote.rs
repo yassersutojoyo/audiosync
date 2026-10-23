@@ -422,6 +422,7 @@ mod tests {
             cast: None,
             group: None,
             mic_left_out: None,
+            in_target: None,
         }
     }
 
@@ -452,8 +453,8 @@ mod tests {
                 speaker("loop", SpeakerKind::Virtual, Some(0.0)),
             ],
             hidden: Vec::new(),
-            groups: Vec::new(),
             zones: Vec::new(),
+            absent: Vec::new(),
             equalizer: Default::default(),
             equalizer_curves: Vec::new(),
             notices: Vec::new(),

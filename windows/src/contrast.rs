@@ -464,7 +464,8 @@ fn keyboard_shortcuts_are_declared() {
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
 /// The row note and notice for a speaker that plays only AirPlay 2 name
-/// that item, and show only for a receiver the sender found.
+/// that item, and show only for a receiver the sender found; so does the
+/// note on a zone's stereo pair or home theater that needs it.
 /// The calibration results' AirPlay lines show only when an AirPlay
 /// speaker took part, so the sender ran.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
@@ -506,6 +507,7 @@ fn no_text_promises_airplay() {
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
                 || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
+                || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
                 || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
                 || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
                 || line.contains("return @tr(\"AirPlay 2 after restart\");")
@@ -533,7 +535,7 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
         "the empty Connected Speakers list uses the plain note"
     );
     assert!(
@@ -989,7 +991,8 @@ fn the_flyout_row_shows_the_glyph_and_the_hint_in_its_description() {
 }
 
 /// A tray flyout row shows its speaker's note under the name (a waiting
-/// speaker's reason, for one), as a main window row does. The source is read
+/// speaker's reason, for one, after a zone's count), as a main window row
+/// does. The source is read
 /// line by line: Windows CI checks it out with CRLF line endings.
 #[test]
 fn a_flyout_row_shows_the_speakers_note() {
@@ -997,11 +1000,14 @@ fn a_flyout_row_shows_the_speakers_note() {
     let lines: Vec<&str> = row.lines().map(str::trim).collect();
     let note = lines
         .iter()
-        .position(|line| *line == "if Strings.row-note(root.state) != \"\": QuietText {")
+        .position(|line| {
+            *line
+                == "if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != \"\": QuietText {"
+        })
         .expect("FlyoutRow shows a QuietText while its state has a note");
     assert_eq!(
         lines.get(note + 1).copied(),
-        Some("text: Strings.row-note(root.state);"),
+        Some("text: Strings.speaker-caption(root.caption, Strings.row-note(root.state));"),
         "the QuietText shows the note"
     );
 }
