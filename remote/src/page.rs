@@ -174,6 +174,21 @@ mod tests {
     }
 
     #[test]
+    fn a_replaced_stream_waits_for_retry_instead_of_reconnecting() {
+        let script = only_element(PAGE, "script").unwrap();
+        let start = script
+            .find("events.addEventListener(\"replaced\"")
+            .expect("a replaced handler");
+        let handler = &script[start..start + script[start..].find("});").unwrap()];
+        assert!(handler.contains("stopStream();"));
+        assert!(handler.contains("setLost(true, TEXT.replaced);"));
+        for retry in ["retryLater", "setTimeout", "connect("] {
+            assert!(!handler.contains(retry), "{retry}");
+        }
+        assert!(script.contains("replaced: \"This remote is open in another tab or window."));
+    }
+
+    #[test]
     fn the_icons_are_png_of_their_size() {
         for (icon, size) in [(ICON_180, 180u32), (ICON_512, 512)] {
             assert_eq!(&icon[..8], b"\x89PNG\r\n\x1a\n");
