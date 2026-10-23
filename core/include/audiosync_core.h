@@ -1324,6 +1324,29 @@ bool asc_calibration_sheet_replace(AscCalibrationSheet *sheet, AscCalibrationShe
 /* Frees a sheet. */
 void asc_calibration_sheet_destroy(AscCalibrationSheet *sheet);
 
+/* What asc_calibration_zone_plan answers. */
+#define ASC_CALIBRATION_ZONE_OK 0                 /* rows, off and silenced hold the plan */
+#define ASC_CALIBRATION_ZONE_NO_REFERENCE 1       /* the reference isn't present and on */
+#define ASC_CALIBRATION_ZONE_NOTHING_TO_MEASURE 2 /* no member besides it is present and on */
+#define ASC_CALIBRATION_ZONE_INVALID 3            /* a NULL argument or a key that isn't UTF-8 */
+
+/* A speaker the host lists, as asc_calibration_zone_plan sorts it. */
+typedef struct AscCalibrationZoneSpeaker {
+    const char *key; /* its speaker key (S149) */
+    bool present;    /* listed, not hidden and not held by a target (S246) */
+    bool on;         /* on and playing */
+} AscCalibrationZoneSpeaker;
+
+/*
+ * The plan of Calibrate Zone (S255) over the zone keyed `members`, in zone
+ * order: the rows, each an index into `speakers`, go into `rows` with one
+ * `off` flag each (for asc_calibration_run_create_listing), *row_count says
+ * how many, and silenced[i] whether speaker i plays silenced for the run.
+ * `rows`, `off` and `silenced` hold `count` elements. Answers an
+ * ASC_CALIBRATION_ZONE_ code. Pure function for the control thread.
+ */
+uint32_t asc_calibration_zone_plan(const char *const *members, size_t member_count, const char *reference, const AscCalibrationZoneSpeaker *speakers, size_t count, size_t *rows, bool *off, size_t *row_count, bool *silenced);
+
 /*
  * A Cast speaker's expected arrival (AscCalibrationSpeaker.latency_ms), which
  * is also how long the music sent to it plays out, in ms: its stored offset

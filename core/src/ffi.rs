@@ -1248,6 +1248,19 @@ mod tests {
                 "ASC_CALIBRATION_APPLY_ALREADY_APPLIED",
                 CALIBRATION_APPLY_ALREADY_APPLIED.to_string(),
             ),
+            ("ASC_CALIBRATION_ZONE_OK", CALIBRATION_ZONE_OK.to_string()),
+            (
+                "ASC_CALIBRATION_ZONE_NO_REFERENCE",
+                CALIBRATION_ZONE_NO_REFERENCE.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ZONE_NOTHING_TO_MEASURE",
+                CALIBRATION_ZONE_NOTHING_TO_MEASURE.to_string(),
+            ),
+            (
+                "ASC_CALIBRATION_ZONE_INVALID",
+                CALIBRATION_ZONE_INVALID.to_string(),
+            ),
             ("ASC_SOURCE_QUIT_KEEP", SOURCE_QUIT_KEEP.to_string()),
             ("ASC_SOURCE_QUIT_STOP", SOURCE_QUIT_STOP.to_string()),
             (

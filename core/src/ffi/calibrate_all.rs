@@ -6,6 +6,7 @@
 //! keep that order. Every call is for one control thread at a time per
 //! handle; [`asc_calibration_run_record`] runs an FFT over the recording.
 
+use std::ffi::{CStr, c_char};
 use std::ptr;
 
 use audiosync_cast::audio::Codec;
@@ -15,11 +16,11 @@ use super::calibrate::{
     refusal_code,
 };
 use super::cast::{CAST_FORMAT_FLAC, CAST_FORMAT_WAV};
-use super::host_slice;
+use super::{host_slice, host_slice_mut};
 use crate::calibrate::Recording;
 use crate::calibrate_all::{
-    self, ApplyRefusal, Class, EndReason, Measurement, RowState, Run, SharedState, Sheet, Speaker,
-    Take, Target,
+    self, ApplyRefusal, Class, EndReason, Measurement, PlanError, RowState, Run, SharedState,
+    Sheet, Speaker, Take, Target, ZoneSpeaker,
 };
 
 /// [`Class::Local`].
@@ -687,6 +688,120 @@ pub unsafe extern "C" fn asc_calibration_sheet_destroy(sheet: *mut AscCalibratio
     }
 }
 
+/// [`calibrate_all::zone_plan`] answered: `rows`, `off` and `silenced` hold it.
+pub const CALIBRATION_ZONE_OK: u32 = 0;
+/// [`PlanError::NoReference`](calibrate_all::PlanError::NoReference).
+pub const CALIBRATION_ZONE_NO_REFERENCE: u32 = 1;
+/// [`PlanError::NothingToMeasure`](calibrate_all::PlanError::NothingToMeasure).
+pub const CALIBRATION_ZONE_NOTHING_TO_MEASURE: u32 = 2;
+/// A NULL argument or a key that isn't UTF-8: nothing written.
+pub const CALIBRATION_ZONE_INVALID: u32 = 3;
+
+/// A speaker the host lists, as [`asc_calibration_zone_plan`] sorts it.
+#[repr(C)]
+pub struct AscCalibrationZoneSpeaker {
+    /// Its speaker key (S149), NUL-terminated.
+    pub key: *const c_char,
+    /// Listed, not hidden and not held by a target (S246).
+    pub present: bool,
+    /// On and playing.
+    pub on: bool,
+}
+
+/// # Safety
+///
+/// `key` is NUL-terminated, unless null.
+unsafe fn key_text(key: *const c_char) -> Option<String> {
+    if key.is_null() {
+        return None;
+    }
+    // SAFETY: non-null, and by the caller's contract NUL-terminated.
+    unsafe { CStr::from_ptr(key) }
+        .to_str()
+        .ok()
+        .map(str::to_owned)
+}
+
+/// The plan of Calibrate Zone (S255) over the zone keyed `members`, in zone
+/// order: the rows, each an index into `speakers`, go into `rows` with one
+/// `off` flag each, `*row_count` says how many, and `silenced[i]` says
+/// whether speaker `i` plays silenced for the run. `rows`, `off` and
+/// `silenced` hold `count` elements. A `CALIBRATION_ZONE_` code.
+///
+/// # Safety
+///
+/// Unless null, `members` holds `member_count` NUL-terminated keys,
+/// `reference` and each speaker's key are NUL-terminated, `speakers` holds
+/// `count` elements and `rows`, `off` and `silenced` `count` writable ones.
+#[unsafe(no_mangle)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a flat C signature the Swift host calls"
+)]
+pub unsafe extern "C" fn asc_calibration_zone_plan(
+    members: *const *const c_char,
+    member_count: usize,
+    reference: *const c_char,
+    speakers: *const AscCalibrationZoneSpeaker,
+    count: usize,
+    rows: *mut usize,
+    off: *mut bool,
+    row_count: *mut usize,
+    silenced: *mut bool,
+) -> u32 {
+    // SAFETY: by the caller's contract, as each helper documents.
+    let (Some(members), Some(speakers), Some(rows), Some(off), Some(silenced)) = (unsafe {
+        (
+            host_slice(members, member_count),
+            host_slice(speakers, count),
+            host_slice_mut(rows, count),
+            host_slice_mut(off, count),
+            host_slice_mut(silenced, count),
+        )
+    }) else {
+        return CALIBRATION_ZONE_INVALID;
+    };
+    // SAFETY: NUL-terminated keys, by the caller's contract.
+    let members: Option<Vec<String>> = members
+        .iter()
+        .map(|&key| unsafe { key_text(key) })
+        .collect();
+    let listed: Option<Vec<ZoneSpeaker>> = speakers
+        .iter()
+        .map(|speaker| {
+            Some(ZoneSpeaker {
+                // SAFETY: NUL-terminated, by the caller's contract.
+                key: unsafe { key_text(speaker.key) }?,
+                present: speaker.present,
+                on: speaker.on,
+            })
+        })
+        .collect();
+    // SAFETY: NUL-terminated, by the caller's contract.
+    let reference = unsafe { key_text(reference) };
+    let (Some(members), Some(listed), Some(reference), false) =
+        (members, listed, reference, row_count.is_null())
+    else {
+        return CALIBRATION_ZONE_INVALID;
+    };
+    match calibrate_all::zone_plan(&members, &reference, &listed) {
+        Ok(plan) => {
+            for (i, (row, is_off)) in plan.rows.iter().zip(&plan.off).enumerate() {
+                rows[i] = *row;
+                off[i] = *is_off;
+            }
+            for (i, slot) in silenced.iter_mut().enumerate() {
+                *slot = plan.silenced.contains(&i);
+            }
+            // SAFETY: non-null, writable by the caller's contract.
+            unsafe { *row_count = plan.rows.len() };
+            CALIBRATION_ZONE_OK
+        }
+        Err(PlanError::NoReference) => CALIBRATION_ZONE_NO_REFERENCE,
+        Err(_) => CALIBRATION_ZONE_NOTHING_TO_MEASURE,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1180,5 +1295,85 @@ mod tests {
             assert!(!run.is_null());
             asc_calibration_run_destroy(run);
         }
+    }
+
+    // covers: S255
+    #[test]
+    fn the_zone_plan_crosses_the_boundary_as_the_core_makes_it() {
+        let keys: Vec<std::ffi::CString> = ["lc:mac", "ap:den", "lc:attic", "lc:usb"]
+            .iter()
+            .map(|key| std::ffi::CString::new(*key).unwrap())
+            .collect();
+        let listed = |i: usize, on: bool| AscCalibrationZoneSpeaker {
+            key: keys[i].as_ptr(),
+            present: true,
+            on,
+        };
+        let speakers = [
+            listed(0, true),
+            listed(1, true),
+            listed(2, false),
+            listed(3, true),
+        ];
+        let members = [keys[3].as_ptr(), keys[2].as_ptr()];
+        let (mut rows, mut off, mut silenced) = ([9usize; 4], [false; 4], [false; 4]);
+        let mut row_count = 0;
+        let plan = |members: &[*const c_char],
+                    rows: &mut [usize; 4],
+                    off: &mut [bool; 4],
+                    silenced: &mut [bool; 4],
+                    row_count: &mut usize| {
+            // SAFETY: live keys and arrays of the counts given.
+            unsafe {
+                asc_calibration_zone_plan(
+                    members.as_ptr(),
+                    members.len(),
+                    keys[0].as_ptr(),
+                    speakers.as_ptr(),
+                    speakers.len(),
+                    rows.as_mut_ptr(),
+                    off.as_mut_ptr(),
+                    row_count,
+                    silenced.as_mut_ptr(),
+                )
+            }
+        };
+        let code = plan(&members, &mut rows, &mut off, &mut silenced, &mut row_count);
+        assert_eq!(code, CALIBRATION_ZONE_OK);
+        assert_eq!(&rows[..row_count], [0, 3, 2]);
+        assert_eq!(&off[..row_count], [false, false, true]);
+        assert_eq!(silenced, [false, true, false, false]);
+
+        let code = plan(
+            &members[1..],
+            &mut rows,
+            &mut off,
+            &mut silenced,
+            &mut row_count,
+        );
+        assert_eq!(code, CALIBRATION_ZONE_NOTHING_TO_MEASURE);
+        let code = plan(
+            &[ptr::null()],
+            &mut rows,
+            &mut off,
+            &mut silenced,
+            &mut row_count,
+        );
+        assert_eq!(code, CALIBRATION_ZONE_INVALID);
+        // SAFETY: live keys and arrays; the null `silenced` is refused.
+        let refused = unsafe {
+            asc_calibration_zone_plan(
+                members.as_ptr(),
+                members.len(),
+                keys[1].as_ptr(),
+                speakers.as_ptr(),
+                speakers.len(),
+                rows.as_mut_ptr(),
+                off.as_mut_ptr(),
+                &mut row_count,
+                ptr::null_mut(),
+            )
+        };
+        assert_eq!(refused, CALIBRATION_ZONE_INVALID);
     }
 }

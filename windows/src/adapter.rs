@@ -8495,7 +8495,7 @@ mod tests {
 
     // covers: S240
     #[test]
-    fn deleting_the_measured_zone_or_taking_a_member_out_ends_the_run() {
+    fn deleting_the_measured_zone_ends_the_run() {
         let mut adapter = zone_adapter(&["bluetooth", "tv"]);
         zone_running(&mut adapter);
         assert!(adapter.zones.delete("zone:1"));
