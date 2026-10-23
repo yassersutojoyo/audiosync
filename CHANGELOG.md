@@ -31,6 +31,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a Bluetooth speaker gets the speaker icon instead of headphones, unless its name says it's headphones, such as AirPods or a name with "headphones", "headset", "earbuds", "earphones" or "buds" in it. Calibration goes by the same names, so a Bluetooth speaker that macOS reports as headphones, such as a soundcore Select 4 Go, is still measured.
 - A speaker's name tooltip in the main window starts with its full name, on the Mac and on Windows, so a long name cut short in the row can still be read. On Windows the tooltip wraps instead of cutting the name off, and on the Mac the menu bar panel row has the full name as its tooltip.
 - On Windows, the notification area flyout says "Looking for speakers…" while it searches, and "No speakers found" only after 20 seconds without one.
+- On the Mac, the Add by Address button reads "Checking…" while AudioSync tries the address, and the Web Remote window now says "Control your speakers from a phone on the same network as this Mac."
+- On the Mac, the Guide uses the system font and wraps its text to the width of the window.
 
 ### Fixed
 
@@ -50,6 +52,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a local speaker that can't start because the source's sample rate is higher than AudioSync can hold now says so, instead of blaming another app or the format.
 - On the Mac, a Google Cast offset you set by hand, or with Apply or Undo in Calibrate All, stays put. Before, a late update from the speaker could put the old offset back.
 - With AirPlay 2 on, a speaker that answers with an error about its own state, or a server error, keeps its HomeKit pairing and AudioSync tries again later. Only a rejected pairing asks you to pair again.
+- On the Mac, Forget All Remote Devices stays available after a save fails, so you can try again.
+- On Windows, an auto-connect speaker that can't start no longer brings up a Start notice when no speaker is left on.
 
 ### Windows (preview, not released yet)
 
