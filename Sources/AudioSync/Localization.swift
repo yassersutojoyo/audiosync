@@ -835,6 +835,9 @@ struct UIStrings {
     /// Last in a speaker's ⋯ menu and right-click menu; never on the reference.
     let hideSpeaker = "Hide Speaker"
     let hideSpeakerHelp = "Turns the speaker off and takes it out of the speaker lists. Hidden Speakers brings it back."
+    /// The menu bar panel's list when every speaker in it is hidden: the panel has no gear menu.
+    let panelAllHidden = "Every speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again."
+    let panelConnectedHidden = "Every connected speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again."
     /// What VoiceOver says after Hide Speaker and after choosing a hidden speaker.
     func speakerHidden(_ name: String) -> String { "\(name) hidden" }
     func speakerShown(_ name: String) -> String { "\(name) shown" }

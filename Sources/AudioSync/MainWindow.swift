@@ -579,6 +579,8 @@ struct SpeakerRow: View {
     @FocusState private var delayFocused: Bool
     /// The name field while the speaker is being renamed.
     @FocusState private var nameFocused: Bool
+    /// The switch, which takes the focus when a neighbouring row is hidden.
+    @FocusState private var switchFocused: Bool
 
     var body: some View {
         let t = model.text
@@ -594,6 +596,7 @@ struct SpeakerRow: View {
                 .accessibilityHint(t.rowHint(state, note: note ?? t.availability(speaker.availability)))
                 .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker) }
                 .help(t.help(state))
+                .focused($switchFocused)
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 6) {
@@ -697,6 +700,12 @@ struct SpeakerRow: View {
         .onChange(of: showSync) { _, open in
             if !open, model.draft(for: speaker.id).fieldFocused || model.delayFocusLeftByClick == speaker.id {
                 delayFocused = true
+            }
+        }
+        .onChange(of: model.focusSwitch, initial: true) { _, id in
+            if id == speaker.id {
+                switchFocused = true
+                model.focusSwitch = nil
             }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)

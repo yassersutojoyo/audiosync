@@ -202,9 +202,10 @@ export global Strings {
     out property <string> no-hidden-speakers: @tr("No hidden speakers");
     // Last in a speaker's … menu and right-click menu.
     out property <string> hide-speaker: @tr("Hide Speaker");
-    out property <string> hide-speaker-help: @tr("Turns the speaker off and takes it out of the speaker lists. Hidden Speakers brings it back.");
     // A section whose every speaker is hidden.
     out property <string> all-speakers-hidden: @tr("Every speaker here is hidden. Choose Hidden Speakers in the Speakers menu to show one again.");
+    // The tray flyout's list when every speaker is hidden: it has no Speakers menu.
+    out property <string> flyout-all-hidden: @tr("Every speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again.");
 
     // Add by Address…: a Google Cast speaker that discovery can't find.
     out property <string> cast-add-address: @tr("Add by Address…");

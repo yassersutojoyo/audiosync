@@ -376,6 +376,9 @@ struct MainFocus {
     /// transport, the master volume, the equalizer or calibration card or
     /// the AirPlay delay.
     control: Option<MainControl>,
+    /// The speaker Hide Speaker is taking out: its neighbour's switch takes
+    /// the focus, since only that row was meant to go.
+    hiding: Option<SharedString>,
 }
 
 /// Notes that the notice `id` gained or lost the focus.
@@ -488,9 +491,14 @@ impl MainFocus {
                 return Some(if listed {
                     MainFocusTarget::Speaker(id.clone(), *part)
                 } else {
+                    let part = if self.hiding.as_ref() == Some(id) {
+                        RowPart::Toggle
+                    } else {
+                        RowPart::Options
+                    };
                     neighbour(old_rows, new_rows, at, |s| &s.id).map_or_else(
                         || first_row(new),
-                        |next| MainFocusTarget::Speaker(next, RowPart::Options),
+                        |next| MainFocusTarget::Speaker(next, part),
                     )
                 });
             }
@@ -1569,7 +1577,9 @@ impl App {
         };
         let strings = self.main.global::<Strings>();
         let kind = strings.invoke_speaker_kind(speaker_kind(speaker.kind));
+        self.main_focus.borrow_mut().hiding = Some(id.into());
         self.update(|b| b.hide_speaker(id, &kind));
+        self.main_focus.borrow_mut().hiding = None;
         if self.snapshot().speaker(id).is_none() {
             self.announce(strings.invoke_speaker_hidden(speaker.name.as_str().into()));
         }
@@ -6987,6 +6997,20 @@ mod tests {
             on("b", RowPart::Toggle).target(&before, &lists(&["pc"], &["a", "c"])),
             options("c"),
             "the next row"
+        );
+        let hiding = |id: &str| MainFocus {
+            hiding: Some(id.into()),
+            ..on(id, RowPart::Options)
+        };
+        assert_eq!(
+            hiding("b").target(&before, &lists(&["pc"], &["a", "c"])),
+            Some(MainFocusTarget::Speaker("c".into(), RowPart::Toggle)),
+            "Hide Speaker: the next row's switch"
+        );
+        assert_eq!(
+            hiding("c").target(&before, &lists(&["pc"], &["a", "b"])),
+            Some(MainFocusTarget::Speaker("b".into(), RowPart::Toggle)),
+            "Hide Speaker on the last row: the previous row's switch"
         );
         assert_eq!(
             on("c", RowPart::Volume).target(&before, &lists(&["pc"], &["a", "b"])),

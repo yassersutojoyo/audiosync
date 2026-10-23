@@ -1444,12 +1444,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Whether the user set anything for output `endpoint_id`: settings, an
-    /// auto-connect mark or a group.
+    /// auto-connect mark, a group or Hide Speaker.
     fn has_choices(&self, endpoint_id: &str) -> bool {
         let key = speaker_key(endpoint_id);
         self.audio.has_output_settings(endpoint_id)
             || self.auto_connect.contains(&key)
             || self.groups.iter().any(|group| group.members.contains(&key))
+            || self.is_hidden(&key)
     }
 
     /// Hands what the user set for an output that is gone to one that
@@ -6265,6 +6266,20 @@ mod tests {
         assert!(!row.enabled, "back off");
         assert_eq!(row.delay_ms, Some(150.0), "its delay was kept");
         assert!(adapter.snapshot().hidden.is_empty());
+    }
+
+    #[test]
+    fn a_hidden_usb_speaker_moved_to_another_port_stays_hidden() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        adapter.hide_speaker(&key(DAC_PORT_1), "USB");
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert!(adapter.snapshot().speaker(&key(DAC_PORT_2)).is_none());
+        let hidden = adapter.snapshot().hidden;
+        assert_eq!(hidden.len(), 1, "no stale entry: {hidden:?}");
+        assert_eq!(hidden[0].id, key(DAC_PORT_2));
+        assert!(hidden[0].present.is_some());
     }
 
     #[test]

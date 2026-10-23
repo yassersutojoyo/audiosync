@@ -192,6 +192,8 @@ final class AppModel: ObservableObject {
     @Published var calibrateAll = CalibrateAllStatus()
     @Published var groups: [Group] = []
     @Published var hidden = HiddenState()
+    /// The row whose switch takes the keyboard focus once it is built (H11).
+    @Published var focusSwitch: String?
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
     @Published var switchWhenSourceQuits = false
@@ -307,8 +309,16 @@ final class AppModel: ObservableObject {
 
     /// Hide Speaker in a row's menu: the host turns it off first when it is on.
     func hide(_ speaker: Speaker) {
+        // H11: the next row's switch takes the focus, else the previous row's.
+        let sections = layout
+        let section = sections.thisMac.contains { $0.id == speaker.id } ? sections.thisMac : sections.connected
+        var neighbour: Speaker?
+        if let at = section.firstIndex(where: { $0.id == speaker.id }) {
+            neighbour = at + 1 < section.count ? section[at + 1] : (at > 0 ? section[at - 1] : nil)
+        }
         actions.hideSpeaker(HiddenSpeakers.key(id: speaker.id, tag: speaker.tag), speaker.name,
                             text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2))
+        focusSwitch = neighbour?.id
         AccessibilityNotification.Announcement(text.speakerHidden(speaker.name)).post()
     }
 
@@ -753,8 +763,9 @@ struct MenuBarView: View {
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
-            Text(model.layout.thisMac.isEmpty ? t.noSpeakers
-                 : model.hidden.inConnected ? t.allSpeakersHidden : model.networkEmptyText)
+            Text(model.layout.thisMac.isEmpty
+                 ? (model.hidden.inThisMac || model.hidden.inConnected ? t.panelAllHidden : t.noSpeakers)
+                 : model.hidden.inConnected ? t.panelConnectedHidden : model.networkEmptyText)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)

@@ -271,7 +271,7 @@ export component TrayFlyout inherits Window {
             // Said only once AirPlay discovery has looked for 20 seconds, as
             // the main window's note; before that the list stays empty.
             if root.groups.length == 0 && root.speakers.length == 0 && (root.airplay-none-found || root.all-hidden): SecondaryText {
-                text: root.all-hidden ? Strings.all-speakers-hidden : Strings.no-speakers;
+                text: root.all-hidden ? Strings.flyout-all-hidden : Strings.no-speakers;
             }
 
             if root.groups.length > 0 || root.speakers.length > 0: ScrollView {
