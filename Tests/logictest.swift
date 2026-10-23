@@ -432,6 +432,27 @@ do {
           && SpeakerTag.virtual.typeTint(.playing) == .teal,
           "layout: a playing speaker's type icon takes its own color")
 
+    // The badge icon follows the calibration rule: over Bluetooth only a headphone name means headphones.
+    check(SpeakerTag.bluetooth.symbol(name: "soundcore Select 4 Go") == "hifispeaker.fill"
+          && SpeakerTag.bluetooth.symbol(name: "JBL Flip 6") == "hifispeaker.fill"
+          && SpeakerTag.bluetooth.symbol(name: "AirPods Pro") == "headphones"
+          && SpeakerTag.bluetooth.symbol(name: "WH-1000XM5 Headphones") == "headphones"
+          && SpeakerTag.bluetooth.symbol(name: "Galaxy Buds2") == "headphones",
+          "layout: a Bluetooth speaker gets the speaker badge, Bluetooth headphones keep the headphones badge")
+    check(SpeakerTag.builtIn.symbol(name: "AirPods Pro") == "laptopcomputer"
+          && SpeakerTag.usb.symbol(name: "Desk Headphones") == "cable.connector"
+          && SpeakerTag.hdmi.symbol(name: "LG TV") == "display"
+          && SpeakerTag.airplay.symbol(name: "Kitchen") == "homepod.fill"
+          && SpeakerTag.cast.symbol(name: "Nest Audio") == "hifispeaker.fill"
+          && SpeakerTag.virtual.symbol(name: "Headset") == "hifispeaker.fill",
+          "layout: outside Bluetooth the badge depends on the transport only")
+    let badges = kinds.flatMap { [$0.symbol(name: "Speaker"), $0.symbol(name: "AirPods")] }
+        .filter { NSImage(systemSymbolName: $0, accessibilityDescription: nil) == nil }
+    check(badges.isEmpty, "layout: every badge icon is an existing SF Symbol", "\(badges)")
+    check(SpeakerTag.isHeadphoneName("Living Room AirPods Pro") && SpeakerTag.isHeadphoneName("EARBUDS")
+          && !SpeakerTag.isHeadphoneName("soundcore Select 4 Go") && !SpeakerTag.isHeadphoneName(""),
+          "layout: a headphone word anywhere in the name, in any case, marks headphones")
+
     typealias S = (name: String, tag: SpeakerTag)
     let local: [S] = [("MacBook Pro Speakers", .builtIn), ("studio Headphones", .bluetooth),
                       ("Desk Speakers", .usb), ("External Headphones", .builtIn), ("kitchen", .usb)]

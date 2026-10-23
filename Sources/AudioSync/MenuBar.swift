@@ -49,6 +49,8 @@ final class AppModel: ObservableObject {
         var isRenamed: Bool { !systemName.isEmpty && name != systemName }
         /// The system name when renamed, for VoiceOver labels.
         var renamedFrom: String? { isRenamed ? systemName : nil }
+        /// The badge icon, from the reported name so a rename doesn't change it.
+        var symbol: String { tag.symbol(name: systemName.isEmpty ? name : systemName) }
     }
 
     struct Group: Identifiable, Equatable {
@@ -333,21 +335,6 @@ final class AppModel: ObservableObject {
     /// while the sender runs or is starting.
     var airPlayProblem: String? {
         airplaySenderFailed ? text.nativeAirPlayFailed : nil
-    }
-}
-
-extension SpeakerTag {
-    /// The SF Symbol in the speaker's round badge.
-    var symbol: String {
-        switch self {
-        case .airplay: return "homepod.fill"
-        case .cast: return "hifispeaker.fill"
-        case .builtIn: return "laptopcomputer"
-        case .bluetooth: return "headphones"
-        case .hdmi, .displayPort: return "display"
-        case .usb, .thunderbolt: return "cable.connector"
-        case .systemAirPlay, .firewire, .pci, .avb, .virtual, .aggregate, .other: return "hifispeaker.fill"
-        }
     }
 }
 
@@ -777,7 +764,7 @@ struct MenuBarView: View {
         if !thisMac.isEmpty {
             VStack(spacing: 0) {
                 ForEach(thisMac) { speaker in
-                    CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
+                    CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                                text: t, height: rowHeight, renamedFrom: speaker.renamedFrom,
                                deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
                         model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn)
@@ -804,7 +791,7 @@ struct MenuBarView: View {
                     .disabled(group.available == 0)   // none of its speakers is here
             }
             ForEach(layout.connected) { speaker in
-                CompactRow(name: speaker.name, symbol: speaker.tag.symbol, state: model.state(of: speaker),
+                CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                            text: t, height: rowHeight,
                            hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                                            target: speaker.airPlayTarget),

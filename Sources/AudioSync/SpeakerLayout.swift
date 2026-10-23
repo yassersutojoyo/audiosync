@@ -50,6 +50,30 @@ enum SpeakerTag: Equatable {
         }
     }
 
+    /// The SF Symbol in the speaker's round badge; `name` is the name macOS
+    /// reports. Over Bluetooth only the name tells headphones from a speaker,
+    /// by the rule calibration uses (`isHeadphoneName`).
+    func symbol(name: String) -> String {
+        switch self {
+        case .airplay: return "homepod.fill"
+        case .cast: return "hifispeaker.fill"
+        case .builtIn: return "laptopcomputer"
+        case .bluetooth: return Self.isHeadphoneName(name) ? "headphones" : "hifispeaker.fill"
+        case .hdmi, .displayPort: return "display"
+        case .usb, .thunderbolt: return "cable.connector"
+        case .systemAirPlay, .firewire, .pci, .avb, .virtual, .aggregate, .other: return "hifispeaker.fill"
+        }
+    }
+
+    /// True when a device name has a headphone word. macOS reports Bluetooth
+    /// speakers with the headphones terminal too, so for Bluetooth the name decides.
+    static func isHeadphoneName(_ name: String) -> Bool {
+        let lowered = name.lowercased()
+        return headphoneWords.contains(where: { lowered.contains($0) })
+    }
+
+    private static let headphoneWords = ["airpods", "headphone", "headset", "earbud", "earphone", "buds"]
+
     /// The type icon's color for a speaker in `state`. Grey unless it plays.
     func typeTint(_ state: SpeakerState) -> TypeIconTint {
         guard state == .playing else { return .muted }

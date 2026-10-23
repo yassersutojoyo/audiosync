@@ -132,8 +132,7 @@ enum CalibrationFlow {
                         name: String) -> CalibrationLeftOut? {
         if transport == kAudioDeviceTransportTypeVirtual { return .virtual }
         if transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE {
-            let lowered = name.lowercased()
-            return headphoneWords.contains(where: { lowered.contains($0) }) ? .headphones : nil
+            return SpeakerTag.isHeadphoneName(name) ? .headphones : nil
         }
         if dataSource == headphoneJackSource { return .headphones }
         if let terminal, headphoneTerminals.contains(terminal) { return .headphones }
@@ -149,8 +148,6 @@ enum CalibrationFlow {
     private static let headphoneTerminals: Set<UInt32> = [
         UInt32(kAudioStreamTerminalTypeHeadphones), 0x0302, 0x0303, 0x0402,
     ]
-
-    private static let headphoneWords = ["airpods", "headphone", "headset", "earbud", "earphone", "buds"]
 
     /// What the estimate's answer does to the chosen speaker's offset.
     enum Outcome: Equatable {

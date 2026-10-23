@@ -574,7 +574,7 @@ struct SpeakerRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Button { toggle(state.clickTurnsOn) } label: {
-                    SpeakerBadge(symbol: speaker.tag.symbol, state: state, size: 32)
+                    SpeakerBadge(symbol: speaker.symbol, state: state, size: 32)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(t.speakerLabel(name: speaker.name, tag: tag,
