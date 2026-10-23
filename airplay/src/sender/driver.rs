@@ -1865,6 +1865,19 @@ mod tests {
     // joining it, and the speaker keeps the AirPlay 2 place (P158, P169).
     #[test]
     fn a_ptp_bind_waits_for_the_old_service_without_stalling_the_driver() {
+        // The picked ports are let go before the driver binds them, so a
+        // parallel test can take one; only that clash picks again.
+        for _ in 0..5 {
+            if ptp_bind_after_the_old_service() {
+                return;
+            }
+        }
+        panic!("another socket took a picked PTP port on every pick");
+    }
+
+    /// False when a picked port was taken before the driver bound it, which
+    /// the driver tells as PTP unavailable.
+    fn ptp_bind_after_the_old_service() -> bool {
         use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
         use std::net::{IpAddr, Ipv4Addr, TcpListener, UdpSocket};
 
@@ -1873,20 +1886,20 @@ mod tests {
         let (inputs, receiver) = mpsc::channel();
         let (events, _events) = mpsc::channel();
         let latency = Arc::new(AtomicU32::new(0));
+        // Both sockets are held until both are bound, so the two ports
+        // differ, and on the wildcard address the driver binds.
         let free = || {
-            UdpSocket::bind("127.0.0.1:0")
-                .and_then(|socket| socket.local_addr())
-                .map(|address| address.port())
-                .expect("a free port")
+            let [event, general] = [(); 2].map(|()| {
+                UdpSocket::bind("0.0.0.0:0")
+                    .and_then(|socket| Ok((socket.local_addr()?.port(), socket)))
+                    .expect("a free port")
+            });
+            crate::ptp::PtpPorts {
+                event: event.0,
+                general: general.0,
+            }
         };
-        let local = crate::ptp::PtpPorts {
-            event: free(),
-            general: free(),
-        };
-        let remote = crate::ptp::PtpPorts {
-            event: free(),
-            general: free(),
-        };
+        let (local, remote) = (free(), free());
         let mut driver = Driver::new(stream, receiver, inputs, events, latency)
             .with_airplay2(true, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
             .with_ptp_ports(local, remote);
@@ -1947,9 +1960,13 @@ mod tests {
         }
         driver.run_timers(now + Duration::from_secs(1));
         assert!(matches!(driver.speakers[&first_key].phase, Phase::Ap2(_)));
+        if driver.ptp_unavailable_told {
+            return false;
+        }
         assert!(driver.ptp.is_some(), "the service is bound");
         assert!(driver.speakers[&second_key].ap2_waiting);
         drop(listener);
+        true
     }
 
     /// A verifier without keys, for driving a session by hand.
