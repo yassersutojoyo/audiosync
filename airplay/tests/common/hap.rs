@@ -204,6 +204,10 @@ pub enum Answer {
     Error(u8),
     /// 200 with an empty body.
     Empty,
+    /// 200 with {state, error} whose error item is empty.
+    EmptyError,
+    /// 200 with a TLV8 body whose last item runs past its end.
+    Malformed,
 }
 
 pub struct FakeHomeKit {
@@ -325,6 +329,8 @@ impl FakeHomeKit {
         match self.special(path, state) {
             Some(Answer::Status(code)) => return Response::new(code, "Refused"),
             Some(Answer::Empty) => return Response::new(200, "OK"),
+            Some(Answer::EmptyError) => return ok(tlv(&[(6, &[state + 1]), (7, &[])])),
+            Some(Answer::Malformed) => return ok(vec![6, 5, state + 1]),
             Some(Answer::Error(code)) => {
                 let mut body = vec![(6u8, vec![state + 1]), (7u8, vec![code])];
                 if let Some(seconds) = self.back_off {

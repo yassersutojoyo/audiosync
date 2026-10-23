@@ -166,6 +166,58 @@ and AudioSync never connects to them. Speakers that only play AirPlay 2 get
 the same note unless you turn on File > AirPlay 2 (Experimental), then quit
 and reopen AudioSync.
 
+### Google Cast
+
+Google Cast speakers show up under Connected Speakers, one playing at a
+time. Cast has no shared clock, so AudioSync can't sync them by itself: each
+one has an offset you set by ear in its row. Hear it late? Raise the offset
+and the other speakers wait longer. AudioSync remembers it per speaker. If
+one drifts, Resync under its volume restarts the stream with a short gap.
+Its slider sets the speaker's own volume, which Master Volume leaves alone.
+
+A group made in the Google Home app plays as one speaker, with one volume
+and one offset, and its row names the members once the group reports them.
+The speakers in it keep their own rows. AirPlay speakers wait for a Cast
+speaker that plays later than them, but only up to 20 s; past that a notice
+says how far ahead they play.
+
+If none show up, check that the PC is on the same network and that the
+network is set to Private, or that Windows Firewall allows AudioSync on it.
+
+### Web Remote
+
+File > Web Remote… turns on a page that a phone on the same network can
+open, by its address or the QR code in the window. Add the page to the Home
+Screen first, then open it from there and enter the pairing code: on some
+phones a pairing made in the browser doesn't carry over. Each code works
+once and for 10 minutes, and New Code makes a fresh one. The phone can then
+switch speakers on and off and set their volume, their delay and Master
+Volume. The page is plain HTTP, so keep it to your home network. Forget All
+Remote Devices unpairs every phone. If another app already uses the port,
+the window says so and lets you pick another one.
+
+### Calibrate with Microphone
+
+A local speaker that has a delay field gets a Calibrate with Microphone
+button under its delay. Put the microphone where you listen and click it:
+AudioSync fades the music out, plays a short, quiet sweep on the PC's own
+speakers and then on that speaker, and sets the delay from the difference.
+Windows has to let desktop apps use the microphone (Settings > Privacy &
+security > Microphone), and a Bluetooth headset's hands-free mic won't do,
+since recording from it switches the headset to call mode.
+
+### Calibrate All Speakers
+
+The Calibration card in the main window measures every speaker that's on
+against the PC's own speakers, AirPlay and Google Cast included: it fades
+the music out, plays a short sweep on each one in turn, twice, and fades
+the music back in. A Cast speaker without a stored offset takes longer to
+find. You get a list of results, and nothing changes until you choose
+Apply. Undo puts the old delays back, and Measure Again redoes one speaker.
+Headphones and virtual outputs are left out, since the microphone can't
+hear them; Include Anyway on such a row measures it with the others until
+the results close.
+
 ## On a Mac
 
 The Windows-only code sits behind `#[cfg(windows)]`, so `cargo test` runs the

@@ -279,7 +279,7 @@ struct WebRemoteView: View {
         let failedOnPort: Bool = { if case .failed = settings.status { return true } else { return false } }()
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Text(t.webRemotePort)
+                Text(t.webRemotePort).accessibilityHidden(true)
                 TextField(t.webRemotePort, text: $port.text)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)

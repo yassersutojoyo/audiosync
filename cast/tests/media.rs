@@ -5,12 +5,15 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use audiosync_cast::channel::{Channel, Event, LOAD_TIMEOUT, PlaybackEnd, VOLUME_INTERVAL};
+use audiosync_cast::channel::{
+    Channel, Event, LOAD_TIMEOUT, PlaybackEnd, STOP_STEP_TIMEOUT, VOLUME_INTERVAL,
+};
 use audiosync_cast::error::EndReason;
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::media::{IdleReason, LoadRequest, MediaError, Metadata, VolumeError};
 use audiosync_cast::message::{
-    CastMessage, DEFAULT_MEDIA_RECEIVER, NS_HEARTBEAT, NS_MEDIA, NS_RECEIVER, PLATFORM, SENDER,
+    CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_MEDIA, NS_RECEIVER,
+    PLATFORM, SENDER,
 };
 use common::{app, json_message, media_status};
 use serde_json::{Value, json};
@@ -460,4 +463,134 @@ fn a_drag_sends_at_most_one_level_per_100_ms_and_status_changes_are_not_echoed()
     let reported = reported.expect("the status reaches the host");
     assert_eq!(reported.level, 0.9);
     assert!(reported.muted);
+}
+
+// covers: C68, C70
+#[test]
+fn a_drag_queued_before_the_control_turns_fixed_is_never_sent() {
+    let start = Instant::now();
+    let mut channel = running(start, volume());
+    channel.set_volume(start, 0.1).expect("sent");
+    channel
+        .set_volume(start + Duration::from_millis(10), 0.3)
+        .expect("queued");
+    assert_eq!(sent(&mut channel).len(), 1);
+    channel.handle(
+        start + Duration::from_millis(50),
+        status(
+            0,
+            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            json!({"level": 1.0, "controlType": "fixed"}),
+        ),
+    );
+    channel.tick(start + VOLUME_INTERVAL);
+    let volumes: Vec<Value> = sent(&mut channel)
+        .into_iter()
+        .filter(|(_, _, payload)| payload["type"] == "SET_VOLUME")
+        .map(|(_, _, payload)| payload)
+        .collect();
+    assert!(volumes.is_empty(), "fixed sends nothing: {volumes:?}");
+    channel.handle(
+        start + Duration::from_millis(150),
+        status(0, vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")], volume()),
+    );
+    channel.tick(start + VOLUME_INTERVAL * 3);
+    assert!(
+        sent(&mut channel)
+            .iter()
+            .all(|(_, _, payload)| payload["type"] != "SET_VOLUME"),
+        "the dropped drag value stays dropped"
+    );
+}
+
+// covers: C87
+#[test]
+fn a_silent_media_stop_moves_on_to_the_receiver_stop_after_two_seconds() {
+    let start = Instant::now();
+    let mut channel = playing(start);
+    channel.stop(start);
+    let out = sent(&mut channel);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].0, "t-1");
+    assert_eq!(out[0].2["type"], "STOP");
+    assert_eq!(out[0].2["mediaSessionId"], 7);
+    channel.tick(start + STOP_STEP_TIMEOUT - Duration::from_millis(1));
+    assert!(sent(&mut channel).is_empty(), "the media STOP still waits");
+    let receiver_stop_at = start + STOP_STEP_TIMEOUT;
+    channel.tick(receiver_stop_at);
+    let out = sent(&mut channel);
+    assert_eq!(
+        out,
+        vec![(
+            PLATFORM.to_owned(),
+            NS_RECEIVER.to_owned(),
+            json!({"type": "STOP", "sessionId": "s-1", "requestId": 104})
+        )]
+    );
+    assert!(!channel.is_ended());
+    channel.tick(receiver_stop_at + STOP_STEP_TIMEOUT);
+    assert!(channel.is_ended());
+    let closes: Vec<String> = sent(&mut channel)
+        .into_iter()
+        .filter(|(_, namespace, payload)| namespace == NS_CONNECTION && payload["type"] == "CLOSE")
+        .map(|(destination, _, _)| destination)
+        .collect();
+    assert_eq!(closes, ["t-1", PLATFORM]);
+    assert!(events(&mut channel).contains(&Event::Ended(EndReason::Stopped)));
+}
+
+// covers: C49, C86
+#[test]
+fn before_playing_a_status_of_an_earlier_media_session_changes_nothing() {
+    let start = Instant::now();
+    let mut channel = running(start, volume());
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
+    sent(&mut channel);
+    channel.handle(start, media_status("t-1", 102, 7, "BUFFERING", None));
+    events(&mut channel);
+    channel.handle(
+        start,
+        media_status("t-1", 0, 6, "IDLE", Some("INTERRUPTED")),
+    );
+    let seen = events(&mut channel);
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            Event::LoadFailed(_) | Event::PlaybackEnded(_) | Event::Ended(_)
+        )),
+        "{seen:?}"
+    );
+    assert!(channel.is_loading());
+    channel.handle(start, media_status("t-1", 0, 7, "PLAYING", None));
+    assert!(events(&mut channel).contains(&Event::Playing {
+        media_session_id: 7
+    }));
+}
+
+// covers: C29, C83
+#[test]
+fn an_error_reply_to_a_request_the_sender_never_sent_changes_nothing() {
+    let start = Instant::now();
+    let mut channel = running(start, volume());
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
+    sent(&mut channel);
+    for id in [0, 55, 103] {
+        channel.handle(
+            start,
+            json_message(
+                "t-1",
+                SENDER,
+                NS_MEDIA,
+                json!({"type": "LOAD_FAILED", "requestId": id}),
+            ),
+        );
+    }
+    assert!(events(&mut channel).is_empty());
+    assert!(channel.is_loading(), "the LOAD still waits for its reply");
+    channel.handle(start, media_status("t-1", 102, 7, "BUFFERING", None));
+    assert_eq!(channel.media_session_id(), Some(7));
 }

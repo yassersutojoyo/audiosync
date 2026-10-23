@@ -131,8 +131,9 @@ pub struct Step {
     /// How many frames to record, from the moment the sweep enters the
     /// speaker's path.
     pub window_frames: usize,
-    /// A Cast speaker without a stored offset: its first window is the
-    /// longest the core estimates, so the host shows that it is searching.
+    /// A Cast speaker without a stored offset (none or at most 0 ms, S241):
+    /// its first window is the longest the core estimates, so the host shows
+    /// that it is searching.
     pub searching: bool,
 }
 
@@ -453,9 +454,11 @@ impl Run {
         };
     }
 
+    /// A Cast speaker with no stored offset as [`cast_wait_ms`] reads it:
+    /// none, 0 ms (what the sender keeps after Undo), less, or not a number.
     fn unknown_cast(&self, row: usize) -> bool {
         let speaker = &self.speakers[row];
-        speaker.class == Class::Cast && speaker.offset_ms.is_none()
+        speaker.class == Class::Cast && !speaker.offset_ms.is_some_and(|ms| ms > 0.0)
     }
 
     fn ms(&self, frame: usize) -> f64 {
