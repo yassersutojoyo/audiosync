@@ -70,6 +70,18 @@ else
   echo "PASSED"
 fi
 
+echo "▶ no SwiftUI macros the Command Line Tools can't expand"
+# The Command Line Tools toolchain ships without SwiftUI's macro plugins, so a
+# plain @State (a macro in the macOS 27 SDK) builds in CI's Xcode but not with
+# ./build.sh on a Mac that has only the Command Line Tools. Keep such state in
+# an ObservableObject held by @StateObject or @ObservedObject instead.
+if grep -HnE '@State([^[:alnum:]_]|$)' "$SRC"/*.swift | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//'; then
+  echo "FAIL: plain @State needs SwiftUI's macro plugin, which the Command Line Tools lack"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ capture IOProc stays real-time safe"
 # The capture IOProc runs CaptureSink (ProcessTapCapture.swift), the
 # CaptureChannels it builds (CaptureSupport.swift) and, during a calibration,
