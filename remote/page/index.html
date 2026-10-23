@@ -52,6 +52,8 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* manipulation drops double-tap zoom (quick taps on the delay steps zoomed iOS Safari in) and keeps pinch zoom. */
+html, body, button, input, label, .switch { touch-action: manipulation; }
 body {
   margin: 0;
   background: var(--background);
@@ -98,7 +100,8 @@ input[type=text], input[type=number] {
   border-radius: 10px;
   background: var(--surface);
   padding: 0 12px;
-  font-size: 1rem;
+  /* Below 16 px iOS zooms in on focus. */
+  font-size: max(16px, 1rem);
 }
 input[type=range] { width: 100%; min-width: 0; height: 44px; margin: 0; background: transparent; }
 .pair label { display: block; font-weight: 600; margin: 16px 0 8px; }
@@ -159,6 +162,10 @@ input[role=switch]:checked::before { background: var(--knob); transform: transla
 .speaker.off-line { background: var(--background); border-style: dashed; border-color: var(--control-border); }
 .speaker.off-line h2 { color: var(--muted); }
 .state-text { padding: 24px 0; text-align: center; }
+.setup-head { display: flex; align-items: center; gap: 12px; }
+.setup-head h2 { flex: 1; }
+.setup ol { margin: 8px 0; padding-left: 1.5em; }
+.setup li + li { margin-top: 4px; }
 footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
 @media (prefers-reduced-motion: reduce) {
   input[role=switch], input[role=switch]::before { transition: none; }
@@ -168,8 +175,17 @@ footer { display: flex; align-items: center; justify-content: space-between; fle
 </head>
 <body>
 <main>
-<h1>Audio<span>Sync</span></h1>
+<h1 id="title" tabindex="-1">Audio<span>Sync</span></h1>
 <p id="live" class="sr-only" aria-live="polite"></p>
+
+<section id="setup" class="setup card" aria-labelledby="setup-title" hidden>
+<div class="setup-head">
+<h2 id="setup-title">Add AudioSync to the Home Screen</h2>
+<button id="setup-hide" type="button" aria-describedby="setup-title">Hide</button>
+</div>
+<ol id="setup-steps"></ol>
+<p id="setup-order" class="muted"></p>
+</section>
 
 <form id="pair" class="pair card" hidden novalidate>
 <p id="pair-hint"></p>
@@ -237,16 +253,28 @@ const TEXT = {
   delayRange: (min, max) => `Delay must be from ${min} to ${max} ms.`,
   unavailable: "Not available right now.",
   percent: (value) => `${value}%`,
+  stepOpened: "Open this page on your phone. You've done this one.",
+  stepHomeIPhone: "Add the page to your Home Screen: tap the options button left of Safari's address bar, then Share, View More and Add to Home Screen.",
+  stepHomeOther: "Add the page to your Home screen: in the browser's menu, tap Add to Home screen or Install app.",
+  stepOpen: "Open AudioSync from the new icon and enter the pairing code.",
+  orderIPhone: "Do step 2 before you enter the code: a pairing made in Safari doesn't carry over to the Home Screen app, so you would pair again there.",
+  orderOther: "Do step 2 before you enter the code, so you pair in the app you'll use.",
 };
 
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
 const SEND_EVERY_MS = 100;
 const DELAY_STEP_MS = 10;
 const PAIRED_KEY = "audiosync.paired";
+const SETUP_HIDDEN_KEY = "audiosync.setupHidden";
 
 const byId = (id) => document.getElementById(id);
 const ui = {
+  title: byId("title"),
   live: byId("live"),
+  setup: byId("setup"),
+  setupHide: byId("setup-hide"),
+  setupSteps: byId("setup-steps"),
+  setupOrder: byId("setup-order"),
   pair: byId("pair"),
   pairHint: byId("pair-hint"),
   code: byId("code"),
@@ -299,8 +327,36 @@ function showError(element, message) {
 }
 
 function isStandalone() {
-  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  if (window.navigator.standalone === true) { return true; }
+  try { return window.matchMedia("(display-mode: standalone)").matches; } catch (_) { return false; }
 }
+
+// Only iOS Safari defines navigator.standalone; a Home Screen app there keeps its own cookies.
+function isIOS() {
+  return typeof window.navigator.standalone === "boolean";
+}
+
+function setupHidden() {
+  try { return localStorage.getItem(SETUP_HIDDEN_KEY) === "1"; } catch (_) { return false; }
+}
+
+function showSetup() {
+  if (isStandalone() || setupHidden()) { return; }
+  const ios = isIOS();
+  for (const step of [TEXT.stepOpened, ios ? TEXT.stepHomeIPhone : TEXT.stepHomeOther, TEXT.stepOpen]) {
+    const item = document.createElement("li");
+    item.textContent = step;
+    ui.setupSteps.append(item);
+  }
+  ui.setupOrder.textContent = ios ? TEXT.orderIPhone : TEXT.orderOther;
+  ui.setup.hidden = false;
+}
+
+ui.setupHide.addEventListener("click", () => {
+  ui.setup.hidden = true;
+  try { localStorage.setItem(SETUP_HIDDEN_KEY, "1"); } catch (_) { /* it shows again next time */ }
+  ui.title.focus();
+});
 
 function stopStream() {
   window.clearTimeout(retryTimer);
@@ -791,6 +847,7 @@ document.addEventListener("visibilitychange", () => {
 const host = window.location.hostname.replace(/\.$/, "");
 const localName = host.toLowerCase().endsWith(".local") ? host.slice(0, -".local".length) : "";
 showComputer("");
+showSetup();
 
 connect();
 </script>
