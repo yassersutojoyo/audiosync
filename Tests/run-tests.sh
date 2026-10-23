@@ -145,7 +145,7 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   # logic suite links the core too.
   build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
     AirPlayPairing.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
-    AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift \
+    AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift PanelColors.swift BrandTokens.swift \
     NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift AppSettings.swift SpeakerNames.swift AppLifecycle.swift LocalDelay.swift DeviceVolume.swift \
     Localization.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   "$OUT/logic/run" || status=1

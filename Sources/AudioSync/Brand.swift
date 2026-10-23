@@ -34,6 +34,13 @@ enum Brand {
     /// Icons beside text may stay `.secondary`: non-text graphics need only 3:1.
     static let secondaryText = Color.primary.opacity(BrandTokens.Opacity.secondaryText)
 
+    /// Under the menu bar panel's content, so its text and icons keep their
+    /// contrast whatever window is behind the material (see PanelColors.swift).
+    static let panelBacking = Color(nsColor: .audioSyncPanelBacking)
+
+    /// A playing AirPlay or Bluetooth speaker's type icon (see PanelColors.swift).
+    static let activeBlue = Color(nsColor: .audioSyncActiveBlue)
+
     /// Poppins Medium, bundled in Contents/Resources/Fonts (registered through
     /// ATSApplicationFontsPath in Info.plist). SwiftUI falls back to the system
     /// font when it is missing, e.g. when the binary runs outside the app bundle.
@@ -43,19 +50,14 @@ enum Brand {
         Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 
-    private static func nsColor(_ rgb: BrandRGB) -> NSColor {
-        NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
-    }
-
     /// A color with one value in light appearances and another in dark ones.
     private static func dynamic(_ name: NSColor.Name, light: BrandRGB, dark: BrandRGB) -> Color {
-        Color(nsColor: NSColor(name: name) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? nsColor(dark) : nsColor(light)
-        })
+        Color(nsColor: .appearanceColor(name, light: light, dark: dark))
     }
 }
 
-/// The "audiosync" wordmark: "audio" in the label color, "sync" in the logo color.
+/// The "audiosync" wordmark: "audio" in the label color, "sync" in the darker
+/// text teal on light appearances and the logo mint on dark ones.
 struct Wordmark: View {
     var size: CGFloat
 
@@ -76,7 +78,7 @@ struct Wordmark: View {
         var audio = AttributedString("audio")
         audio.foregroundColor = .primary
         var sync = AttributedString("sync")
-        sync.foregroundColor = Brand.logo
+        sync.foregroundColor = Color(nsColor: .audioSyncWordmarkSync)
         return audio + sync
     }
 }
