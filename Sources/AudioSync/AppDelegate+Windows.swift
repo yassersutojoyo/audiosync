@@ -518,10 +518,13 @@ extension AppDelegate {
     }
 
     /// The AudioSync menu, before it opens: the AirPlay 2 note follows the
-    /// switch, which the gear menu may have changed.
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        MenuNoteItem.refresh(menu, below: #selector(toggleAirPlay2(_:)),
-                             note: text.airPlay2Note(on: airPlay2, onAtLaunch: airPlay2AtLaunch))
+    /// switch, which the gear menu may have changed. The SDK declares this
+    /// requirement nonisolated; AppKit calls it on the main thread.
+    nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
+        MainActor.assumeIsolated {
+            MenuNoteItem.refresh(menu, below: #selector(toggleAirPlay2(_:)),
+                                 note: text.airPlay2Note(on: airPlay2, onAtLaunch: airPlay2AtLaunch))
+        }
     }
 }
 
