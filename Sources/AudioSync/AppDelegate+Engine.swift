@@ -28,8 +28,9 @@ extension AppDelegate {
             case .authorized:
                 break
             case .notDetermined:
+                guard microphoneRequest.begin(origin: origin) else { return }
                 AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                    DispatchQueue.main.async { self?.microphoneAnswered(granted, origin: origin) }
+                    DispatchQueue.main.async { self?.microphoneAnswered(granted) }
                 }
                 return
             default:
@@ -58,12 +59,40 @@ extension AppDelegate {
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
         syncCast()   // the Cast speaker that is on connects
         syncLocalOutputs(origin: origin)
+        DebugTrace.log("[AudioSync] " + LocalDelay.leadDescription(source: audioSource, networkMs: networkWaitMs))
+        logSessionLead(session: session)
+        startInputLevel()
         verifyAudioFlowing(origin: origin)
+    }
+
+    /// Writes the measured local session lead to the debug log once every
+    /// local speaker of session `started` has reported its start lead; it
+    /// looks every 200 ms for about 2 s.
+    func logSessionLead(session started: Int, tries: Int = 10) {
+        guard DebugTrace.enabled, tries > 0, engine.isRunning, session == started else { return }
+        if let ms = engine.sessionLeadMs() {
+            DebugTrace.log("[AudioSync] lead: the local session lead is \(String(format: "%.1f", ms)) ms over "
+                + "\(engine.activeOutputUIDs.count) output(s)")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.logSessionLead(session: started, tries: tries - 1)
+        }
+    }
+
+    /// Moves the input level meter while this session captures an input
+    /// device; it hides once the session stops or captures something else.
+    func startInputLevel() {
+        appModel.inputLevel.follow { [weak self] in
+            guard let self, case .input = self.audioSource, self.engine.isRunning else { return nil }
+            return self.engine.takePeak()
+        }
     }
 
     /// macOS answered the microphone request a start made: start again, or
     /// say the source can't be captured.
-    private func microphoneAnswered(_ granted: Bool, origin: StartOrigin) {
+    private func microphoneAnswered(_ granted: Bool) {
+        guard let origin = microphoneRequest.answer() else { return }
         if granted { startEngine(origin: origin) } else { failStart(text.microphoneDenied, origin: origin) }
     }
 
@@ -181,6 +210,8 @@ extension AppDelegate {
         switch audioSource {
         case .system: return track
         case .app(let bundleID): return track.bundleID == bundleID ? track : nil
+        case .mix(.only, let ids): return ids.contains(track.bundleID) ? track : nil
+        case .mix(.allExcept, let ids): return ids.contains(track.bundleID) ? nil : track
         case .input: return nil
         }
     }

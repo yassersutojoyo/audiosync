@@ -39,6 +39,9 @@ It's a single exe with no installer: put it in a folder of its own, keep the
   You can also allow AudioSync on Public networks in Windows Security >
   Firewall & network protection > Allow an app through firewall. If no
   AirPlay speaker turns up within 20 seconds, the speaker list says so.
+- **Renaming a speaker:** double-click its name, or right-click it or use its
+  … button and choose Rename… from its menu. Leave the name empty to get the
+  device's own name back.
 - **One copy at a time:** starting it again while it runs brings the running
   copy's window to the front instead of opening a second one.
 - **Closing and quitting:** closing the window keeps AudioSync running in the
@@ -57,7 +60,8 @@ It's a single exe with no installer: put it in a folder of its own, keep the
   the AirPlay ones, and one plays at a time. Cast has no shared clock, so you
   set each one's offset by ear in its row; if it drifts, Resync under its
   volume restarts it with a short gap. A group made in the Google Home app
-  plays as one speaker.
+  plays as one speaker. If one doesn't show up, Speakers > Add by Address…
+  adds it by its IP address or host name.
 - **Web Remote:** File > Web Remote… lets a phone on the same network switch
   your speakers on and off and set volumes and delays. Turn it on, open the
   address it shows on the phone (or scan the QR code), add the page to the
@@ -173,7 +177,8 @@ time. Cast has no shared clock, so AudioSync can't sync them by itself: each
 one has an offset you set by ear in its row. Hear it late? Raise the offset
 and the other speakers wait longer. AudioSync remembers it per speaker. If
 one drifts, Resync under its volume restarts the stream with a short gap.
-Its slider sets the speaker's own volume, which Master Volume leaves alone.
+Its slider sets the speaker's own volume, and Master Volume scales it like
+every other speaker.
 
 A group made in the Google Home app plays as one speaker, with one volume
 and one offset, and its row names the members once the group reports them.
@@ -183,6 +188,9 @@ says how far ahead they play.
 
 If none show up, check that the PC is on the same network and that the
 network is set to Private, or that Windows Firewall allows AudioSync on it.
+If one still doesn't, choose Speakers > Add by Address…, or the Add by
+Address… link in the speaker list, and enter its IP address or host name.
+AudioSync keeps the address, and Remove in the speaker's menu forgets it.
 
 ### Web Remote
 
@@ -191,8 +199,9 @@ open, by its address or the QR code in the window. Add the page to the Home
 Screen first, then open it from there and enter the pairing code: on some
 phones a pairing made in the browser doesn't carry over. Each code works
 once and for 10 minutes, and New Code makes a fresh one. The phone can then
-switch speakers on and off and set their volume, their delay and Master
-Volume. The page is plain HTTP, so keep it to your home network. Forget All
+switch speakers on and off, set their volume, their delay and Master
+Volume, and pick the audio source from the same list as the main window.
+The page is plain HTTP, so keep it to your home network. Forget All
 Remote Devices unpairs every phone. If another app already uses the port,
 the window says so and lets you pick another one.
 

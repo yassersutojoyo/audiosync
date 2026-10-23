@@ -92,6 +92,7 @@ export component RemoteWindow inherits Window {
     callback new-code-requested();
     callback forget-all-requested();
     callback port-submitted(string);
+    pure callback use-port-enabled(string, int, bool) -> bool;
     callback close-requested();
     // Ctrl+Q, File > Exit from this window.
     callback exit-requested();
@@ -187,6 +188,7 @@ export component RemoteWindow inherits Window {
 
                             Button {
                                 text: Strings.remote-use-port;
+                                enabled: root.use-port-enabled(port-field.text, root.port, root.port-problem);
                                 accessible-description: root.port-invalid ? Strings.remote-port-invalid : "";
                                 clicked => {
                                     root.port-submitted(port-field.text);
@@ -284,12 +286,12 @@ export component RemoteWindow inherits Window {
                                 accessible-role: groupbox;
                                 accessible-label: Strings.remote-phone-picker;
 
-                                // Checkable buttons as a two-way choice; each click sets both,
-                                // since a click also flips the clicked one's own state.
+                                // Checkable buttons as a two-way choice; each click sets both, since a
+                                // click also flips the clicked one's own state and drops its binding.
                                 iphone-choice := Button {
                                     text: Strings.remote-iphone;
                                     checkable: true;
-                                    checked: true;
+                                    checked: root.steps-for-iphone;
                                     clicked => {
                                         root.steps-for-iphone = true;
                                         iphone-choice.checked = true;
@@ -300,7 +302,7 @@ export component RemoteWindow inherits Window {
                                 android-choice := Button {
                                     text: Strings.remote-android;
                                     checkable: true;
-                                    checked: false;
+                                    checked: !root.steps-for-iphone;
                                     clicked => {
                                         root.steps-for-iphone = false;
                                         iphone-choice.checked = false;

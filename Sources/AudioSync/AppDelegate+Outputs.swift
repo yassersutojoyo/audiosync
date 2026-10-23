@@ -110,13 +110,19 @@ extension AppDelegate {
     /// The hold-back of every local speaker taking part: switched on and
     /// listed now (S172, S176). They wait for L while an AirPlay speaker is
     /// chosen, for the Cast speaker's offset while one is, and for the
-    /// longer of the two when both are.
+    /// longer of the two when both are; an input device as the source keeps
+    /// them off that wait (live input).
     func localHoldBackTargets() -> [String: Double] {
-        let wait = CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil,
-                                           cast: castModel.anchorMs)
+        let wait = LocalDelay.networkWaitMs(source: audioSource, output: .local, networkMs: networkWaitMs)
         return LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
                                     offsets: localOffsetMs, airPlayChosen: wait != nil,
                                     latencyMs: wait ?? airPlayLatencyMs)
+    }
+
+    /// What the network speakers play at: L while an AirPlay speaker is
+    /// chosen, the Cast speaker's offset while one is on, the longer of both.
+    var networkWaitMs: Double? {
+        CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil, cast: castModel.anchorMs)
     }
 
     /// Holds the AirPlay speakers or the Cast feed back, live, so both play
@@ -181,6 +187,7 @@ extension AppDelegate {
         switch audioSource {
         case .system: nowPlaying.preferredBundleID = nil
         case .app(let bundleID): nowPlaying.preferredBundleID = bundleID
+        case .mix: nowPlaying.preferredBundleID = nil
         case .input: nowPlaying.preferredBundleID = ""
         }
         nowPlaying.refresh()

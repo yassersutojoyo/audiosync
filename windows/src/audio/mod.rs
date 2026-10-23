@@ -45,6 +45,7 @@ pub mod capture;
 pub mod cast;
 pub mod cast_address;
 pub mod controller;
+pub mod mix;
 #[cfg(test)]
 pub mod mock;
 pub mod now_playing;

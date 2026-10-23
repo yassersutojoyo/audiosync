@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::channel::Event;
 use audiosync_cast::client::{
-    CastClient, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS,
+    CastClient, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS, QUIT_BUDGET,
 };
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::error::{Backoff, ConnectError, EndReason, LaunchError};
+use audiosync_cast::host::SHUTDOWN_MARGIN;
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::message::{
     DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_DEVICE_AUTH, NS_HEARTBEAT, NS_RECEIVER, PLATFORM,
@@ -473,6 +474,38 @@ fn stop_tears_down_in_order_over_the_wire() {
             ("transport-1".to_owned(), "CLOSE".to_owned()),
             (PLATFORM.to_owned(), "CLOSE".to_owned()),
         ]
+    );
+    device.join();
+}
+
+// covers: C88
+// A device that stops reading fills the socket buffers until a write
+// blocks: that write gives up well inside the margin a quit has, and the
+// teardown after it keeps to the quit budget.
+#[test]
+fn a_device_that_stops_reading_holds_no_write_or_teardown_past_the_quit_budget() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut client = connect(&device);
+    device.send(Command::Stall);
+    thread::sleep(Duration::from_millis(100));
+    let until = Instant::now() + Duration::from_secs(30);
+    let mut longest = Duration::ZERO;
+    while !client.is_ended() && Instant::now() < until {
+        let started = Instant::now();
+        client.request_members();
+        longest = longest.max(started.elapsed());
+    }
+    assert!(client.is_ended(), "no write ever blocked");
+    assert!(
+        longest < SHUTDOWN_MARGIN,
+        "one write blocked for {longest:?}"
+    );
+    let started = Instant::now();
+    let _ = client.stop(QUIT_BUDGET);
+    let took = started.elapsed();
+    assert!(
+        took < QUIT_BUDGET + SHUTDOWN_MARGIN,
+        "the teardown took {took:?}"
     );
     device.join();
 }
