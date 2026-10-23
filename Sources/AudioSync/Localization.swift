@@ -672,9 +672,9 @@ struct UIStrings {
             return first + "Another app may be using it exclusively, or the format may be incompatible."
         }
         let highest = kiloHertz(Double(EngineParts.highestCaptureRate))
-        return first + "AudioSync captures the audio at \(kiloHertz(rate)), but plays it on this Mac's speakers "
-            + "only up to \(highest). In Audio MIDI Setup, set your Mac's output device (or the input you "
-            + "stream from) to \(highest) or lower, then turn this speaker on again."
+        return first + "AudioSync captures the audio at \(kiloHertz(rate)), but plays it on local speakers "
+            + "only up to \(highest). In Audio MIDI Setup, set your Mac's output device, or the input device "
+            + "you stream from, to \(highest) or lower, then turn this speaker on again."
     }
 
     /// "384 kHz", "352.8 kHz".

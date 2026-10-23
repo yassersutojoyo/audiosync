@@ -195,6 +195,13 @@ extension LocalOutputSync {
         return applied
     }
 
+    /// The refused capture rate for one alert naming all of `failures`: only
+    /// when every one of them failed for it, else nil (the generic text).
+    static func sharedRefusedRate(_ failures: [Failure]) -> Double? {
+        let rates = failures.compactMap(\.refusedCaptureRate)
+        return !rates.isEmpty && rates.count == failures.count ? rates.first : nil
+    }
+
     /// What the app does about the speakers that wouldn't start (S69).
     struct FailureReport: Equatable {
         /// The local speakers left on. Each failed one is switched off, so it

@@ -3898,6 +3898,14 @@ do {
           "S36 start failure: the text names the capture rate, the 192 kHz limit and Audio MIDI Setup", rateText)
     check(OutputRenderer.StartFailure.captureRateTooHigh(384_000).description.contains("384000 Hz"),
           "S36 start failure: the debug log names the refused rate")
+    let rateFailures = [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 384_000),
+                        F(uid: "bt", deviceName: "Headphones", refusedCaptureRate: 384_000)]
+    let mixedFailures = [rateFailures[0], F(uid: "bt", deviceName: "Headphones")]
+    check(LocalOutputSync.sharedRefusedRate(rateFailures) == 384_000
+            && LocalOutputSync.sharedRefusedRate(mixedFailures) == nil
+            && LocalOutputSync.sharedRefusedRate([]) == nil,
+          "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
+          "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
 
     // S72: a master change gives each running local speaker its gain again;
     // one switched on but not running (here "tv") gets no call.
