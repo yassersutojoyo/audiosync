@@ -48,6 +48,7 @@ extension AppDelegate {
         }
         publish(\.equalizerOn, settings.enabled)
         publishEqualizerCurve()
+        publishPresets()   // a band change moves the current mark (S264)
     }
 
     private func equalizerCurvesChanged(_ curves: [Equalizer.Curve]) {
@@ -60,6 +61,12 @@ extension AppDelegate {
     private func publishEqualizerCurve() {
         guard let equalizerModel else { return }
         publish(\.equalizerCurve, text.equalizerCurveName(equalizerModel.shownCurve, saved: equalizerModel.curves))
+    }
+
+    /// After the speaker rows, which the current mark is worked out from.
+    private func publishPresets() {
+        publish(\.presets, presetSnapshot())
+        PresetsMenu.update(appModel.presets)
     }
 
     private func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {
@@ -137,6 +144,11 @@ extension AppDelegate {
         a.newZoneWithSpeaker = { [weak self] key, name in self?.promptNewZone(with: key, name: name) }
         a.moveToZone = { [weak self] key, id in self?.moveToZone(key, id) }
         a.removeFromZone = { [weak self] key in self?.removeFromZone(key) }
+        a.recallPreset = { [weak self] id in self?.recallPreset(id, from: .app) }
+        a.savePreset = { [weak self] in self?.promptSavePreset() }
+        a.renamePreset = { [weak self] id in self?.promptRenamePreset(id) }
+        a.updatePreset = { [weak self] id in self?.updatePreset(id) }
+        a.deletePreset = { [weak self] id in self?.deletePreset(id) }
         a.useTargetInstead = { [weak self] id, key in self?.useTargetInstead(in: id, for: key) }
         a.setAutoConnect = { [weak self] key, on in self?.setAutoConnect(key, on) }
         a.renameSpeaker = { [weak self] key, system, typed in self?.renameSpeaker(key, system: system, to: typed) }
@@ -271,6 +283,7 @@ extension AppDelegate {
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
         publishEqualizerCurve()
         publish(\.zones, zoneSnapshot())
+        publishPresets()
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
@@ -526,6 +539,9 @@ extension AppDelegate {
             menuItem.state = whenSourceQuits == .system ? .on : .off
         case #selector(toggleAirPlay2(_:)):
             menuItem.state = airPlay2 ? .on : .off
+        case #selector(recallPresetFromMenu(_:)):
+            let id = menuItem.representedObject as? String
+            menuItem.state = appModel.presets.contains { $0.id == id && $0.current } ? .on : .off
         default:
             break
         }

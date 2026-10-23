@@ -67,6 +67,7 @@ enum MainMenu {
         window.addItem(.separator())
         window.addItem(item(t.mainWindowTitle, #selector(AppDelegate.showMainWindow(_:)), "0"))
         window.addItem(item(t.equalizer, #selector(AppDelegate.showEqualizer(_:)), "e", [.command, .option]))
+        window.addItem(withTitle: t.presets, action: nil, keyEquivalent: "").submenu = PresetsMenu.make(text: t)
         window.addItem(item(t.webRemoteMenu, #selector(AppDelegate.showWebRemote(_:))))
         window.addItem(.separator())
         window.addItem(item(t.menuBringAllToFront, #selector(NSApplication.arrangeInFront(_:))))
@@ -90,5 +91,53 @@ enum MainMenu {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.keyEquivalentModifierMask = modifiers
         return item
+    }
+}
+
+/// Window > Presets (S261). Rebuilt when the names or the order change, not
+/// when it opens, so Control-Command-1 to 9 work while it is closed;
+/// `validateMenuItem` keeps the check on the current one.
+@MainActor
+enum PresetsMenu {
+    private static weak var menu: NSMenu?
+    private static var text = UIStrings()
+    private static var shown: [PresetRow]?
+    /// The rows of the last push, which may come before the menu is made.
+    private static var latest: [PresetRow] = []
+
+    static func make(text t: UIStrings) -> NSMenu {
+        let menu = NSMenu(title: t.presets)
+        self.menu = menu
+        text = t
+        shown = nil
+        update(latest)
+        return menu
+    }
+
+    static func update(_ rows: [PresetRow]) {
+        latest = rows
+        guard let menu else { return }
+        let names = rows.map { PresetRow(id: $0.id, name: $0.name) }
+        guard names != shown else { return }
+        shown = names
+        menu.removeAllItems()
+        for entry in PresetMenu.entries(rows, text: text) {
+            switch entry {
+            case .preset(let id, let title, let key, let checked):
+                let item = NSMenuItem(title: title, action: #selector(AppDelegate.recallPresetFromMenu(_:)),
+                                      keyEquivalent: key)
+                item.keyEquivalentModifierMask = [.control, .command]
+                item.representedObject = id
+                item.state = checked ? .on : .off
+                menu.addItem(item)
+            case .empty(let title):
+                menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))   // no action: disabled
+            case .separator:
+                menu.addItem(.separator())
+            case .save(let title):
+                menu.addItem(NSMenuItem(title: title, action: #selector(AppDelegate.savePreset(_:)),
+                                        keyEquivalent: ""))
+            }
+        }
     }
 }

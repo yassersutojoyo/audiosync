@@ -155,6 +155,12 @@ final class AppModel: ObservableObject {
         /// Speaker key, zone ID.
         var moveToZone: (String, String) -> Void = { _, _ in }
         var removeFromZone: (String) -> Void = { _ in }
+        /// Preset ID (S265).
+        var recallPreset: (String) -> Void = { _ in }
+        var savePreset: () -> Void = {}
+        var renamePreset: (String) -> Void = { _ in }
+        var updatePreset: (String) -> Void = { _ in }
+        var deletePreset: (String) -> Void = { _ in }
         /// Zone ID, the member's key: its target takes its place (S247).
         var useTargetInstead: (String, String) -> Void = { _, _ in }
         var setAutoConnect: (String, Bool) -> Void = { _, _ in }
@@ -232,6 +238,8 @@ final class AppModel: ObservableObject {
     /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
     @Published var calibrateAll = CalibrateAllStatus()
     @Published var zones: [Zone] = []
+    /// The presets in list order, the current one marked (S259, S264).
+    @Published var presets: [PresetRow] = []
     @Published var hidden = HiddenState()
     /// The row whose switch takes the keyboard focus once it is built (H11).
     @Published var focusSwitch: String?
@@ -736,6 +744,7 @@ struct MenuBarView: View {
         height += CGFloat(min(model.notices.items.count, 2)) * 90
         if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
         if offersCastAdd { height += 20 }
+        if PresetPanel.showsRow(model.presets) { height += 38 }
         return height
     }
 
@@ -755,6 +764,7 @@ struct MenuBarView: View {
             header(t)
             NoticeStack(model: model, compact: true)
             SourcePicker(model: model)
+            if PresetPanel.showsRow(model.presets) { PresetPicker(model: model) }
             // The Mac's own speakers belong with the volume, above the one
             // divider, drawn tight together as one block.
             VStack(alignment: .leading, spacing: 2) {
@@ -1246,6 +1256,43 @@ struct SourcePicker: View {
                 .frame(width: edge, height: edge)
                 .foregroundStyle(Brand.tealText)
         }
+    }
+}
+
+/// The panel's preset row (S260): recall only, the current one checked.
+/// Choosing one leaves the panel open.
+struct PresetPicker: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        let t = model.text
+        let current = PresetPanel.label(model.presets)
+        Menu {
+            ForEach(model.presets) { preset in
+                Toggle(preset.name, isOn: Binding(get: { preset.current },
+                                                  set: { _ in model.actions.recallPreset(preset.id) }))
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .frame(width: 18, height: 18)
+                    .foregroundStyle(Brand.tealText)
+                    .accessibilityHidden(true)
+                Text(current ?? t.choosePreset)
+                    .foregroundStyle(current == nil ? HierarchicalShapeStyle.secondary : .primary)
+                    .lineLimit(1)
+                Spacer()
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .tint(.primary)   // as the source picker: the teal falls under 4.5:1 on the panel
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(0.6)))
+        .help(current ?? t.choosePreset)
+        .accessibilityLabel(t.presets)
+        .accessibilityValue(current ?? t.choosePreset)
     }
 }
 

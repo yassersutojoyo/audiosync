@@ -120,6 +120,7 @@ struct MainView: View {
                     sourceCard(t)
                     if let track = model.nowPlaying { nowPlayingCard(track, t) }
                     volumeCard(t)
+                    PresetsCard(model: model)
                     equalizerCard(t)
                     Card { CalibrateAllButton(model: model) }
                     Spacer(minLength: 0)
@@ -483,6 +484,102 @@ private struct SectionTitle: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(Brand.secondaryText)
             .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The Presets card (S259): one row per preset in list order, a click,
+/// Space or Return recalls it; Save as Preset… below the rows.
+private struct PresetsCard: View {
+    @ObservedObject var model: AppModel
+    private let rowHeight: CGFloat = 26
+    private let shownRows = 5
+
+    var body: some View {
+        let t = model.text
+        Card {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionTitle(t.presets)
+                if model.presets.isEmpty {
+                    Text(t.presetsEmpty)
+                        .font(.caption)
+                        .foregroundStyle(Brand.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if model.presets.count > shownRows {
+                    ScrollView { rows(t) }
+                        .frame(height: rowHeight * CGFloat(shownRows))
+                } else {
+                    rows(t)
+                }
+                Button { model.actions.savePreset() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle")
+                            .foregroundStyle(Brand.tealText)
+                            .accessibilityHidden(true)
+                        Text(t.savePreset)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(t.savePreset)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func rows(_ t: UIStrings) -> some View {
+        VStack(spacing: 0) {
+            ForEach(model.presets) { row in
+                HStack(spacing: 6) {
+                    Button { model.actions.recallPreset(row.id) } label: {
+                        HStack(spacing: 6) {
+                            // Kept in place while hidden, so the names stay aligned.
+                            Image(systemName: "checkmark")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Brand.tealText)
+                                .opacity(row.current ? 1 : 0)
+                                .frame(width: 14)
+                                .accessibilityHidden(true)
+                            Text(row.name)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 4)
+                        }
+                        .frame(minHeight: rowHeight)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onKeyPress(.return) {
+                        model.actions.recallPreset(row.id)
+                        return .handled
+                    }
+                    .help(row.name)
+                    .accessibilityLabel(row.name)
+                    .accessibilityValue(row.current ? t.presetCurrent : "")
+                    .accessibilityHint(t.presetRecallHint)
+
+                    Menu { menuItems(row, t) } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .tint(Brand.tealText)   // the readable teal, as on the zone cards
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel(t.speakerOptions(name: row.name))
+                    .help(t.speakerOptions(name: row.name))
+                }
+                .contextMenu { menuItems(row, t) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func menuItems(_ row: PresetRow, _ t: UIStrings) -> some View {
+        Button(t.renamePreset) { model.actions.renamePreset(row.id) }
+        Button(t.updatePreset) { model.actions.updatePreset(row.id) }
+            .disabled(!PresetEdit.canUpdate(row))
+        Divider()
+        Button(t.deletePreset, role: .destructive) { model.actions.deletePreset(row.id) }
     }
 }
 
