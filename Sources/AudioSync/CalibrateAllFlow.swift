@@ -373,6 +373,12 @@ enum CalibrateAllFlow {
         status.shown ? status.zone?.id : nil
     }
 
+    /// Whether a zone's Calibrate Zone… can be chosen: some member is here
+    /// and no calibration holds the outputs, since a start then does nothing.
+    static func offersZoneRun(_ status: CalibrateAllStatus, singleHoldsOutputs: Bool, present: Int) -> Bool {
+        present > 0 && !status.isRunning && !status.holdsOutputs && !singleHoldsOutputs
+    }
+
     /// Whether the sheet lists the outputs that sit out before the run
     /// starts, so one can be included anyway: for Calibrate Zone only when
     /// one is a member of the zone, since no other is measured (S255).

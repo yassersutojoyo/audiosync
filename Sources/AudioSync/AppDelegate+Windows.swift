@@ -135,6 +135,7 @@ extension AppDelegate {
         a.toggleZone = { [weak self] id in self?.toggleZone(id) }
         a.deleteZone = { [weak self] id in self?.deleteZone(id) }
         a.renameZone = { [weak self] id in self?.promptRenameZone(id) }
+        a.calibrateZone = { [weak self] id in self?.calibrateZone(id) }
         a.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
         a.newZone = { [weak self] in self?.promptNewZone() }
         a.newZoneWithSpeaker = { [weak self] key, name in self?.promptNewZone(with: key, name: name) }

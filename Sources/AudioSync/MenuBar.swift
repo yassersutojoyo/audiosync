@@ -153,6 +153,8 @@ final class AppModel: ObservableObject {
         var toggleZone: (String) -> Void = { _ in }
         var deleteZone: (String) -> Void = { _ in }
         var renameZone: (String) -> Void = { _ in }
+        /// Calibrate Zone… for zone `id` (S255).
+        var calibrateZone: (String) -> Void = { _ in }
         /// The zone slider's position, 0 to 100.
         var setZoneVolume: (String, Double) -> Void = { _, _ in }
         var newZone: () -> Void = {}

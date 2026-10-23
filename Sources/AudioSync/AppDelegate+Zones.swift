@@ -78,6 +78,7 @@ extension AppDelegate {
     /// present members only, at most one Cast speaker, and every AirPlay 2
     /// member on, even one that waits for the AirPlay 2 place.
     func toggleZone(_ id: String) {
+        calibrateZoneClicked()   // before the guard: a click that switches nothing ends a run too (S240)
         guard let zone = zones.first(where: { $0.id == id }) else { return }
         let members = zone.members.compactMap(memberState)
         let situation = zoneSituation(Set(zone.members))

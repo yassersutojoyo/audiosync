@@ -630,6 +630,10 @@ private struct ZoneCard: View {
                 Button(t.useTargetInstead(target.name)) { model.actions.useTargetInstead(zone.id, member.key) }
             }
         }
+        Button(t.calibrateZoneItem) { model.actions.calibrateZone(zone.id) }
+            .disabled(!CalibrateAllFlow.offersZoneRun(model.calibrateAll,
+                                                      singleHoldsOutputs: model.calibration.holdsOutputs,
+                                                      present: zone.present))
         Divider()
         Button(t.deleteZone, role: .destructive) { model.delete(zone) }
     }

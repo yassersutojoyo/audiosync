@@ -272,6 +272,31 @@ struct UIStrings {
     let calibrateAllIntro = "Put the microphone where you listen and keep the room quiet. "
         + "Nothing changes until you click Apply."
 
+    // MARK: Calibrate Zone (S255)
+
+    /// In a zone's ⋯ menu; `calibrateZone` titles its sheet and button.
+    let calibrateZoneItem = "Calibrate Zone…"
+    let calibrateZone = "Calibrate Zone"
+    func calibrateZoneBring(_ name: String) -> String {
+        "Bring the Mac into “\(name)”: the microphone and the built-in speakers measure from there. "
+            + "Speakers outside the zone aren't measured."
+    }
+
+    /// Under a zone sheet's AirPlay line: the other places the shared delay moves.
+    func calibrateZoneAirPlayMoves(_ moves: CalibrateZoneAirPlayMoves) -> String? {
+        let zones = moves.zones.map { "“\($0)”" }
+        let named: String? = zones.count < 2 ? zones.first
+            : zones.dropLast().joined(separator: ", ") + " and " + (zones.last ?? "")
+        let places: String
+        switch (named, moves.noZone) {
+        case (nil, false): return nil
+        case (nil, true): places = "the AirPlay speakers in no zone"
+        case (let named?, false): places = "the AirPlay speakers in \(named)"
+        case (let named?, true): places = "the AirPlay speakers in \(named), and those in no zone"
+        }
+        return "AirPlay speakers share one delay, so a new AirPlay delay applies to \(places) too."
+    }
+
     /// Why the button is off, under it and as its tooltip.
     func calibrateAllUnavailable(_ blocker: CalibrateAllBlocker) -> String {
         switch blocker {

@@ -5423,6 +5423,36 @@ do {
             && CalibrateAllFlow.end(start: whole, now: whole, taking: ["mac", "usb"]) == nil,
           "calibrate zone: the measured zone losing a member or being deleted stops the run as a changed list (S240)",
           "\(ends)")
+
+    var measuring = opened
+    measuring.progress = .listening(name: "Desk", sweep: 1)
+    var playingOut = opened
+    playingOut.holdsOutputs = true
+    let offers = [CalibrateAllFlow.offersZoneRun(opened, singleHoldsOutputs: false, present: 2),
+                  CalibrateAllFlow.offersZoneRun(opened, singleHoldsOutputs: false, present: 0),
+                  CalibrateAllFlow.offersZoneRun(measuring, singleHoldsOutputs: false, present: 2),
+                  CalibrateAllFlow.offersZoneRun(playingOut, singleHoldsOutputs: false, present: 2),
+                  CalibrateAllFlow.offersZoneRun(opened, singleHoldsOutputs: true, present: 2)]
+    // covers: S255
+    check(offers == [true, false, false, false, false],
+          "calibrate zone: the menu item is off while no member is here or a calibration holds the outputs (S255)",
+          "\(offers)")
+
+    let zoneText = UIStrings()
+    let lines = [CalibrateZoneAirPlayMoves(zones: [], noZone: false), CalibrateZoneAirPlayMoves(zones: [], noZone: true),
+                 CalibrateZoneAirPlayMoves(zones: ["Kitchen"], noZone: false), moves,
+                 CalibrateZoneAirPlayMoves(zones: ["Kitchen", "Garden"], noZone: true)]
+        .map(zoneText.calibrateZoneAirPlayMoves)
+    let share = "AirPlay speakers share one delay, so a new AirPlay delay applies to "
+    // covers: S255
+    check(lines == [nil, share + "the AirPlay speakers in no zone too.",
+                    share + "the AirPlay speakers in “Kitchen” too.",
+                    share + "the AirPlay speakers in “Kitchen” and “Garden” too.",
+                    share + "the AirPlay speakers in “Kitchen” and “Garden”, and those in no zone too."]
+            && zoneText.calibrateZoneItem == "Calibrate Zone…"
+            && zoneText.calibrateZoneBring("Upstairs").hasPrefix("Bring the Mac into “Upstairs”"),
+          "calibrate zone: the sheet says where to bring the Mac and which other zones the AirPlay delay moves (S255)",
+          "\(lines)")
 }
 
 // MARK: Google Cast speakers: one session, matched by attempt (CastModel)
