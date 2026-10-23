@@ -909,8 +909,9 @@ struct MenuBarView: View {
             // divider, with the volume.
             ForEach(model.zones) { zone in
                 CompactRow(name: zone.name, symbol: Self.zoneSymbol, state: model.state(of: zone),
-                           text: t, height: rowHeight, hint: model.countText(of: zone),
-                           label: t.zoneLabel(zone.name)) {
+                           text: t, height: rowHeight, label: t.zoneLabel(zone.name),
+                           value: zone.present == 0 ? model.countText(of: zone)
+                               : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting)) {
                     model.actions.toggleZone(zone.id)
                 }
                     .disabled(zone.present == 0)   // none of its speakers is here
@@ -954,13 +955,15 @@ private struct CompactRow: View {
     let state: SpeakerState
     let text: UIStrings
     let height: CGFloat
-    /// Read after the name by VoiceOver: a group's member count, or what a
-    /// Google Cast speaker is doing.
+    /// Read after the name by VoiceOver: what a Google Cast speaker is
+    /// doing, or why a zone member doesn't play with its zone.
     var hint: String? = nil
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
-    /// VoiceOver's label in place of the speaker's: a zone's.
+    /// VoiceOver's label and value in place of the speaker's: a zone's, read
+    /// as the main window reads it.
     var label: String? = nil
+    var value: String? = nil
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
     var airPlay2 = false
@@ -1003,7 +1006,7 @@ private struct CompactRow: View {
         .onHover { hover.isHovered = $0 }
         .accessibilityLabel(label ?? text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
                                                        renamedFrom: renamedFrom))
-        .accessibilityValue(text.value(state))
+        .accessibilityValue(value ?? text.value(state))
         .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
                                             ?? text.availability(availability)))
         .help(text.help(state))

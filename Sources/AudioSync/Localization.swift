@@ -874,7 +874,7 @@ struct UIStrings {
     func speakerMovedToZone(_ speaker: String, zone: String) -> String { "\(speaker) moved to \(zone)" }
     func zoneDeleted(_ name: String) -> String { "\(name) deleted" }
     /// The notice at the first launch after the groups became zones (S248).
-    let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it instead of under Connected Speakers."
+    let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it instead of in the speaker lists."
     let rename = "Rename"
     /// In a speaker's ⋯ menu and right-click menu: edits its name in the row.
     let renameSpeaker = "Rename…"
