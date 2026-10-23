@@ -388,7 +388,8 @@ component CalibrationCard inherits Card {
                     wrap: word-wrap;
                 }
 
-                SecondaryText {
+                // The button's description says it already.
+                QuietText {
                     text: item.reason;
                 }
 
@@ -402,7 +403,7 @@ component CalibrationCard inherits Card {
                         text: item.included ? Strings.leave-out : Strings.include-anyway;
                         enabled: !root.running;
                         accessible-label: item.included ? Strings.leave-out-label(item.name) : Strings.include-anyway-label(item.name);
-                        accessible-description: item.reason + " " + Strings.include-anyway-help;
+                        accessible-description: item.reason + " " + item.help;
                         clicked => {
                             root.include(index, !item.included);
                         }

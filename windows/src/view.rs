@@ -3398,6 +3398,10 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             .map(|row| LeftOutItem {
                 name: row.name.as_str().into(),
                 reason: left_out_reason(strings, row),
+                help: match row.kind {
+                    ui_model::MicKind::Virtual => strings.get_include_anyway_help_virtual(),
+                    _ => strings.get_include_anyway_help_headphones(),
+                },
                 included: row.included,
             })
             .collect(),
@@ -4402,7 +4406,12 @@ mod tests {
             "Headphones are left out: the microphone can't hear them."
         );
         assert!(!card.left_out[0].included);
-        assert!(card.left_out[1].reason.starts_with("Included anyway"));
+        assert_eq!(
+            card.left_out[1].reason,
+            "Included anyway: measured in this run."
+        );
+        assert!(card.left_out[0].help.contains("as headphones"));
+        assert!(card.left_out[1].help.starts_with("For a virtual output"));
 
         let mut speaker = state.speaker("local:desk").unwrap().clone();
         speaker.enabled = true;
@@ -4410,9 +4419,10 @@ mod tests {
         speaker.mic_left_out = Some(ui_model::MicKind::Virtual);
         assert!(!is_calibratable(&speaker), "no Calibrate with Microphone");
         assert_eq!(calibration_status(&strings, &state, &speaker), "");
-        assert!(
-            calibration_left_out(&strings, ui_model::MicKind::Virtual)
-                .starts_with("Left out of microphone calibration:")
+        assert_eq!(
+            calibration_left_out(&strings, ui_model::MicKind::Virtual),
+            "Left out of microphone calibration: a virtual output has nothing for the \
+             microphone to hear."
         );
     }
 

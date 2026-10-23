@@ -1217,10 +1217,11 @@ export global Strings {
     // Why an output that is on sits out of Calibrate All, under its name.
     out property <string> calibrate-all-left-out-headphones: @tr("Headphones are left out: the microphone can't hear them.");
     out property <string> calibrate-all-left-out-virtual: @tr("Virtual output: there's nothing for the microphone to hear.");
-    out property <string> calibrate-all-included: @tr("Included anyway: measured with the other speakers.");
+    out property <string> calibrate-all-included: @tr("Included anyway: measured in this run.");
     out property <string> calibrate-all-left-out-title: @tr("Left out");
     out property <string> include-anyway: @tr("Include Anyway");
-    out property <string> include-anyway-help: @tr("For a speaker that reports itself as headphones or a virtual output. It counts until you close the calibration results.");
+    out property <string> include-anyway-help-headphones: @tr("For a speaker that reports itself as headphones. It counts until you close the calibration results.");
+    out property <string> include-anyway-help-virtual: @tr("For a virtual output that passes the sound on to a speaker. It counts until you close the calibration results.");
     out property <string> leave-out: @tr("Leave Out");
 
     public pure function include-anyway-label(name: string) -> string {
@@ -1234,7 +1235,7 @@ export global Strings {
     // In a left-out output's delay controls, instead of Calibrate with
     // Microphone; its delay stays the user's to set.
     out property <string> calibration-left-out-headphones: @tr("Left out of microphone calibration: the microphone can't hear headphones.");
-    out property <string> calibration-left-out-virtual: @tr("Left out of microphone calibration: a virtual output plays nothing the microphone can hear.");
+    out property <string> calibration-left-out-virtual: @tr("Left out of microphone calibration: a virtual output has nothing for the microphone to hear.");
 
     // Take is 1 or 2: each speaker plays the sweep twice.
     public pure function calibrate-all-sweep(name: string, take: int) -> string {
