@@ -72,6 +72,8 @@ pub trait RowText {
     fn turn_on_at_pc(&self) -> String;
     /// The whole system's name in the source picker; the backend's is English.
     fn source_system(&self) -> String;
+    /// The name of a source that takes every app except `names`.
+    fn source_all_except(&self, names: &str) -> String;
 }
 
 /// A speaker that would ask for a PIN or password when turned on: the prompt
@@ -178,11 +180,12 @@ pub fn snapshot(
             id: source.id.clone(),
             name: match source.kind {
                 SourceKind::System => text.source_system(),
+                SourceKind::AppsExcept => text.source_all_except(&source.name),
                 SourceKind::App | SourceKind::Input => source.name.clone(),
             },
             kind: match source.kind {
                 SourceKind::System => RemoteSourceKind::System,
-                SourceKind::App => RemoteSourceKind::App,
+                SourceKind::App | SourceKind::AppsExcept => RemoteSourceKind::App,
                 SourceKind::Input => RemoteSourceKind::Input,
             },
             // The window's picker refuses none of its entries.
@@ -455,6 +458,9 @@ mod tests {
         fn source_system(&self) -> String {
             "Alle Systemaudio".to_owned()
         }
+        fn source_all_except(&self, names: &str) -> String {
+            format!("All apps except {names}")
+        }
     }
 
     fn with_sources() -> AppState {
@@ -495,6 +501,22 @@ mod tests {
         // What the server serves: the JSON round trip keeps the current source.
         let served = State::from_json(&snapshot.to_json(1)).unwrap();
         assert_eq!(served.source_id.as_deref(), Some("app:42:Spotify.exe"));
+    }
+
+    #[test]
+    fn an_all_apps_except_source_is_an_app_named_around_its_list() {
+        let mut state = with_sources();
+        state.sources.push(crate::ui_model::Source {
+            id: "mix:Spotify, Chrome".to_owned(),
+            name: "Spotify, Chrome".to_owned(),
+            kind: SourceKind::AppsExcept,
+        });
+        state.source_id = "mix:Spotify, Chrome".to_owned();
+        let snapshot = snapshot(&state, not_virtual, None, "Studio PC", &Text);
+        let mix = snapshot.sources.last().unwrap();
+        assert_eq!(mix.kind, RemoteSourceKind::App);
+        assert_eq!(mix.name, "All apps except Spotify, Chrome");
+        assert_eq!(snapshot.source_id.as_deref(), Some("mix:Spotify, Chrome"));
     }
 
     #[test]

@@ -152,6 +152,10 @@ impl RowText for StringsText<'_> {
         self.0.get_source_system().into()
     }
 
+    fn source_all_except(&self, names: &str) -> String {
+        self.0.invoke_source_all_except(names.into()).into()
+    }
+
     fn kind(&self, speaker: &Speaker) -> String {
         self.0
             .invoke_speaker_kind(speaker_kind(speaker.kind))

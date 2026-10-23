@@ -5515,6 +5515,20 @@ do {
             && pick("app:com.apple.Music").isEmpty && pick("app:gone").isEmpty
             && RemoteCommand(json: "{\"type\":\"source\",\"id\":3}") == nil,
           "web remote: a source pick is the picker's own; the one in use or one it doesn't list changes nothing")
+    let except = AudioSource.mixed(.allExcept, bundleIDs: ["com.spotify.client", "com.google.Chrome"])
+    let mixEntries = SourceList.entries(systemName: "All System Audio",
+                                        apps: [(bundleID: "com.spotify.client", name: "Spotify")], inputs: [],
+                                        chosen: except, chosenAppName: { _ in "Chrome" },
+                                        mixName: { "All apps except " + $1.joined(separator: " and ") })
+    let mixSources = mixEntries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    let mixSource = mixSources.first { $0.id == except.defaultsValue }
+    let onlyID = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.google.Chrome"]).defaultsValue
+    check(mixSource?.kind == .app && mixSource?.name == "All apps except Spotify and Chrome"
+            && zip(mixSources, mixEntries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
+            && RemoteSource.pickerID(RemoteSource.pageID(onlyID)) == onlyID
+            && ["apps:", "except:"].allSatisfy { RemoteSource.pickerID($0) == nil },
+          "web remote: a several-apps source in use is listed under apps with the picker's name and maps back",
+          mixSources.map(\.id).joined(separator: " "))
 
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }
