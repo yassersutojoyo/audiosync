@@ -167,8 +167,9 @@ struct UIStrings {
 
     let calibrateWithMicrophone = "Calibrate with Microphone"
     func calibrateLabel(of name: String) -> String { "Calibrate \(name) with the microphone" }
-    let calibrationHint = "Put the microphone where you listen. AudioSync pauses the music, plays a short, "
-        + "quiet sweep on the built-in speakers and then on this speaker, and sets this speaker's delay from the difference."
+    let calibrationHint = "Put the microphone where you listen. AudioSync fades the music out, plays a short, "
+        + "quiet sweep on the built-in speakers and then on this speaker, sets this speaker's delay from the "
+        + "difference and fades the music back in."
     let calibrationCancel = "Cancel"
     func calibrationCancelLabel(of name: String) -> String { "Cancel calibrating \(name)" }
     let openMicrophoneSettings = "Open Microphone Settings"
@@ -1149,14 +1150,10 @@ struct UIStrings {
         More Controls
         - Sync: the Mac's built-in speakers are the reference and have no delay.
           Every other local speaker has a delay relative to them, which always
-          applies: click the time next to it to adjust it. Once that control is
-          open, '\(calibrateWithMicrophone)' under it can measure the delay
-          instead. '\(calibrateAll)' in the left column measures each
-          speaker that is on, AirPlay and Google Cast too, and shows the new
-          delays before you apply them. Headphones and virtual outputs are
-          left out, since the microphone can't hear them; their delay stays
-          yours to set. A positive value holds the speaker back; a negative one is
-          for a speaker that sounds late, such as Bluetooth. While an AirPlay
+          applies: click the time next to it to adjust it, or let a microphone
+          measure it (see Calibration below). A positive value holds the
+          speaker back; a negative one is for a speaker that sounds late, such
+          as Bluetooth. While an AirPlay
           speaker is on, every local speaker also waits the 'AirPlay delay'
           under Connected Speakers for it.
         - Groups: turn on the speakers you want, then choose 'New Group from Active
@@ -1185,6 +1182,50 @@ struct UIStrings {
         - When the source app quits, streaming stops. To keep playing all system
           audio instead, turn on 'Switch to All System Audio When the Source App
           Quits' in the gear menu or the AudioSync menu.
+
+        Calibration
+        A microphone can measure the delays for you. Put it where you listen
+        and keep the room quiet. Each measurement compares a speaker with the
+        Mac's built-in speakers, so streaming, the built-in speakers and the
+        speaker you measure have to be on. macOS asks once whether AudioSync
+        may use the microphone; if it may not, AudioSync says so, with a
+        button that opens the Microphone settings.
+
+        To measure one local speaker, click the time next to it, then
+        '\(calibrateWithMicrophone)'. AudioSync fades the music out, plays a
+        short, quiet sweep on the built-in speakers and then on this speaker,
+        sets its delay from the difference and fades the music back in.
+        Cancel stops it and leaves the delay as it was.
+
+        '\(calibrateAll)' in the left column measures every speaker that
+        is on, AirPlay and Google Cast too. AudioSync fades the music out,
+        plays a sweep on the built-in speakers and then on each other speaker,
+        one at a time, twice each, and fades the music back in. A Google Cast
+        speaker with no offset yet can take up to a minute. The results show
+        each speaker's current delay and the new one with its margin, such as
+        +50 ms ± 3 ms. The AirPlay speakers share one AirPlay delay, the middle
+        of their values. Nothing changes until you click '\(calibrateAllApply)',
+        which sets the delays of the speakers that were measured clearly.
+        '\(calibrateAllUndo)' then puts the old delays back. Before you apply,
+        '\(measureAgain)' repeats one speaker. If the speakers, the source or
+        a delay change during a run, it stops and no delay changes.
+
+        Headphones, headsets, earbuds and virtual outputs are left out, since
+        the microphone can't hear them: their rows say so, and their delay
+        stays yours to set. If one of them does play through a speaker in the
+        room, such as a speaker that reports itself as headphones or a virtual
+        output that passes the sound on, click '\(includeAnyway)' next to it
+        in the \(calibrateAll) window. That holds until you close the window.
+        While headphones are plugged into the Mac, its built-in speakers are
+        silent, so calibration can't start until you unplug them.
+
+        A row that wasn't measured clearly says why, and its delay stays. The
+        microphone may have barely heard the speaker, been overloaded, or
+        heard an echo almost as loud as the sweep, or the two sweeps differed
+        too much. Turn the speaker up or down, move the microphone or quiet
+        the room, then click '\(measureAgain)' on that row. One speaker's
+        calibration says the same under its button and leaves the delay as it
+        was; click '\(calibrateWithMicrophone)' again to retry.
 
         Speaker Notes
         \(guideCodeNote)

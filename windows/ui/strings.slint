@@ -1129,9 +1129,9 @@ export global Strings {
 
     public pure function calibration-hint(reference: string) -> string {
         if reference == "" {
-            return @tr("Put the microphone where you listen. AudioSync pauses the music, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets this speaker's delay from the difference.");
+            return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, sets this speaker's delay from the difference and fades the music back in.");
         }
-        return @tr("Put the microphone where you listen. AudioSync pauses the music, plays a short, quiet sweep on {} and then on this speaker, and sets this speaker's delay from the difference.", reference);
+        return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short, quiet sweep on {} and then on this speaker, sets this speaker's delay from the difference and fades the music back in.", reference);
     }
 
     public pure function calibration-listening(name: string) -> string {
