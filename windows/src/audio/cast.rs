@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use audiosync_cast::audio::{AudioReader, AudioWriter, audio_ring};
+use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::{BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent};
 use audiosync_cast::group::{GroupMember, GroupRecords};
@@ -85,11 +85,13 @@ pub struct CastTrack {
 
 /// The step the volume keys move a device by, 0 to 100: the device's own
 /// `stepInterval` (C69), or [`DEFAULT_VOLUME_STEP`] without a usable one.
+/// Rounded to a whole level and at least 1, so a tiny step still moves the
+/// slider and an odd one like 0.07 lands on whole percents.
 pub fn volume_step(volume: Option<&DeviceVolume>) -> f64 {
     volume
         .and_then(|volume| volume.step_interval)
         .filter(|step| step.is_finite() && *step > 0.0 && *step <= 1.0)
-        .map_or(DEFAULT_VOLUME_STEP, |step| step * 100.0)
+        .map_or(DEFAULT_VOLUME_STEP, |step| (step * 100.0).round().max(1.0))
 }
 
 /// Interleaved stereo frames held back by a delay that may change while it
@@ -483,6 +485,8 @@ struct Attempt {
     id: AttemptId,
     device: DeviceId,
     status: CastStatus,
+    /// The format the device plays, once the session reports it.
+    codec: Option<Codec>,
 }
 
 /// The Cast side of the backend.
@@ -497,6 +501,8 @@ pub struct CastSpeakers {
     /// A level the user set that no status has answered yet, 0.0 to 1.0.
     requested: Option<(DeviceId, f64)>,
     attempt: Option<Attempt>,
+    /// How long the feed waits for L, in ms (C77).
+    hold_back_ms: f64,
     /// The addresses of the group in a session, kept current from
     /// discovery (C90, C103).
     records: Option<GroupRecords>,
@@ -522,6 +528,7 @@ impl CastSpeakers {
             volumes: BTreeMap::new(),
             requested: None,
             attempt: None,
+            hold_back_ms: 0.0,
             records: None,
             members: BTreeMap::new(),
             streaming: false,
@@ -586,10 +593,8 @@ impl CastSpeakers {
             Some((device, level)) if device == id => level,
             _ => reported.map_or(1.0, |volume| volume.level),
         };
-        let status = match self.attempt {
-            Some(attempt) if attempt.device == id => attempt.status,
-            _ => CastStatus::Idle,
-        };
+        let session = self.attempt.filter(|attempt| attempt.device == id);
+        let status = session.map_or(CastStatus::Idle, |attempt| attempt.status);
         Some(CastInfo {
             id: id.to_string(),
             name: device
@@ -606,6 +611,12 @@ impl CastSpeakers {
             volume_step: volume_step(reported),
             offset_ms: offset_ms(memory, &id),
             status,
+            format: session.and_then(|attempt| attempt.codec),
+            hold_back_ms: if session.is_some() {
+                self.hold_back_ms
+            } else {
+                0.0
+            },
         })
     }
 
@@ -636,6 +647,7 @@ impl CastSpeakers {
         } else {
             0.0
         };
+        self.hold_back_ms = ms;
         let frames = (ms * f64::from(SESSION_RATE) / 1000.0).round() as usize;
         if self.feed.set_hold_back(frames) {
             self.log
@@ -801,6 +813,7 @@ impl CastSpeakers {
                     id: attempt,
                     device: id,
                     status: CastStatus::Connecting,
+                    codec: None,
                 });
                 if records.is_some() {
                     self.members.remove(&id);
@@ -1008,6 +1021,12 @@ impl CastSpeakers {
         }
     }
 
+    fn set_codec(&mut self, codec: Codec) {
+        if let Some(attempt) = self.attempt.as_mut() {
+            attempt.codec = Some(codec);
+        }
+    }
+
     fn handle(&mut self, event: HostEvent) {
         match event {
             HostEvent::Session {
@@ -1031,6 +1050,7 @@ impl CastSpeakers {
             } => {
                 if self.is_current(attempt) {
                     self.log.log(|| format!("Cast: plays {format:?}"));
+                    self.set_codec(format.codec());
                     self.set_status(CastStatus::Playing);
                 }
             }
@@ -1110,6 +1130,7 @@ impl CastSpeakers {
             SessionEvent::FormatFallback { from, to, reason } => {
                 self.log
                     .log(|| format!("Cast: {from:?} refused ({reason}), {to:?} instead"));
+                self.set_codec(to);
             }
             SessionEvent::Rebuffering => self.log.log(|| "Cast: the device ran dry".to_owned()),
             SessionEvent::Stream(event) => self.log.log(|| format!("Cast stream: {event:?}")),
@@ -1907,7 +1928,11 @@ pub mod tests {
             ..DeviceVolume::default()
         };
         assert_eq!(volume_step(Some(&reported(None))), 1.0);
-        assert!((volume_step(Some(&reported(Some(0.05)))) - 5.0).abs() < 1e-9);
+        assert_eq!(volume_step(Some(&reported(Some(0.05)))), 5.0);
+        assert_eq!(volume_step(Some(&reported(Some(0.07)))), 7.0);
+        assert_eq!(volume_step(Some(&reported(Some(0.125)))), 13.0);
+        assert_eq!(volume_step(Some(&reported(Some(0.004)))), 1.0);
+        assert_eq!(volume_step(Some(&reported(Some(1.0)))), 100.0);
         for bad in [0.0, -0.1, 1.5, f64::NAN] {
             assert_eq!(volume_step(Some(&reported(Some(bad)))), 1.0, "{bad}");
         }
@@ -1928,6 +1953,6 @@ pub mod tests {
             event: SessionEvent::Volume(reported(Some(0.02))),
         });
         cast.poll();
-        assert!((step_of(&cast).unwrap() - 2.0).abs() < 1e-9);
+        assert_eq!(step_of(&cast), Some(2.0));
     }
 }

@@ -1,21 +1,22 @@
 //! The calibration's recording of the default input device: shared mode,
-//! 32-bit float at the device's own rate and channels (Windows converts when
-//! its mix format isn't float), mixed down to mono into a buffer allocated
+//! 32-bit float at the device's own rate and channels (Windows converts from
+//! its mix format), mixed down to mono into a buffer allocated
 //! before the stream starts. The thread stamps the first frame with the
 //! core's clock, from a packet's position on the performance counter, so a
 //! run can find the frame where its signal entered the ring, and marks where
-//! the device lost audio, which would move every later frame.
+//! the device lost audio, which would move every later frame, and when it
+//! stopped on its own, as an unplugged device does.
 
 use std::slice;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use audiosync_core::clock;
 use windows::Win32::Foundation::{E_ACCESSDENIED, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
-    AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
     AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioCaptureClient, IAudioClient, WAVEFORMATEX,
     eCapture, eConsole,
@@ -35,6 +36,12 @@ use crate::audio::outputs::{HNS_PER_MS, RenderFormat, default_channel_mask, is_h
 /// The stream buffer asked for, 100 ms.
 const BUFFER_HNS: i64 = 100 * HNS_PER_MS;
 
+/// Windows converts even from a float mix format: the channel mask asked
+/// for may not be the device's.
+const STREAM_FLAGS: u32 = AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+
 /// How long the loop waits for a packet before it checks the stream.
 const WAIT_MS: u32 = 20;
 
@@ -51,6 +58,7 @@ pub struct WasapiMicrophone {
     frames: Arc<AtomicUsize>,
     first_ns: Arc<AtomicU64>,
     gap_at: Arc<AtomicUsize>,
+    stopped: Arc<AtomicBool>,
     recording: Receiver<Vec<f32>>,
     thread: Worker,
 }
@@ -61,14 +69,18 @@ pub(super) fn open(seconds: f64) -> Result<WasapiMicrophone, MicrophoneError> {
     let frames = Arc::new(AtomicUsize::new(0));
     let first_ns = Arc::new(AtomicU64::new(UNSET));
     let gap_at = Arc::new(AtomicUsize::new(NO_GAP));
+    let stopped = Arc::new(AtomicBool::new(false));
     let (send, recording) = mpsc::channel();
     let (thread, id) = {
         let stop = Arc::clone(&stop);
-        let frames = Arc::clone(&frames);
-        let first_ns = Arc::clone(&first_ns);
-        let gap_at = Arc::clone(&gap_at);
+        let marks = Marks {
+            frames: Arc::clone(&frames),
+            first_ns: Arc::clone(&first_ns),
+            gap_at: Arc::clone(&gap_at),
+            stopped: Arc::clone(&stopped),
+        };
         spawn_worker("audiosync-microphone", move |ready| {
-            run(seconds, &stop, &frames, &first_ns, &gap_at, &send, ready);
+            run(seconds, &stop, &marks, &send, ready);
         })
         .map_err(|_| MicrophoneError::Missing)?
     };
@@ -79,6 +91,7 @@ pub(super) fn open(seconds: f64) -> Result<WasapiMicrophone, MicrophoneError> {
             frames,
             first_ns,
             gap_at,
+            stopped,
             recording,
             thread,
         }),
@@ -103,6 +116,10 @@ impl Microphone for WasapiMicrophone {
     fn gap_at(&self) -> Option<usize> {
         let gap = self.gap_at.load(Ordering::Acquire);
         (gap != NO_GAP).then_some(gap)
+    }
+
+    fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
     }
 
     fn take(&mut self, start: usize, count: usize) -> Vec<f32> {
@@ -136,11 +153,20 @@ struct Stream {
     channels: usize,
 }
 
-fn denied_or_missing(code: HRESULT) -> MicrophoneError {
-    if code == E_ACCESSDENIED {
-        MicrophoneError::Denied
-    } else {
-        MicrophoneError::Missing
+/// What the recording thread tells the run while it records.
+struct Marks {
+    frames: Arc<AtomicUsize>,
+    first_ns: Arc<AtomicU64>,
+    gap_at: Arc<AtomicUsize>,
+    /// The stream failed before it was told to stop.
+    stopped: Arc<AtomicBool>,
+}
+
+fn setup_error(code: HRESULT) -> MicrophoneError {
+    match code {
+        E_ACCESSDENIED => MicrophoneError::Denied,
+        AUDCLNT_E_DEVICE_IN_USE => MicrophoneError::InUse,
+        _ => MicrophoneError::Missing,
     }
 }
 
@@ -160,11 +186,11 @@ fn open_stream() -> Result<Stream, MicrophoneError> {
         let device_name = device_id(&device).unwrap_or_default();
         let client: IAudioClient = device
             .Activate(CLSCTX_ALL, None)
-            .map_err(|error| denied_or_missing(error.code()))?;
+            .map_err(|error| setup_error(error.code()))?;
         let mix = ComMemory::new(
             client
                 .GetMixFormat()
-                .map_err(|error| denied_or_missing(error.code()))?,
+                .map_err(|error| setup_error(error.code()))?,
         );
         let mix = read_mix_format(mix.as_ptr());
         if mix.channels == 0 || mix.rate == 0 {
@@ -178,22 +204,18 @@ fn open_stream() -> Result<Stream, MicrophoneError> {
             } else {
                 mix.channel_mask
             },
-            convert: !mix.float32,
+            convert: true,
         });
-        let mut flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
-        if !mix.float32 {
-            flags |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-        }
         client
             .Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
-                flags,
+                STREAM_FLAGS,
                 BUFFER_HNS,
                 0,
                 (&raw const own).cast::<WAVEFORMATEX>(),
                 None,
             )
-            .map_err(|error| denied_or_missing(error.code()))?;
+            .map_err(|error| setup_error(error.code()))?;
         let event = Event::auto_reset().map_err(|_| MicrophoneError::Missing)?;
         client
             .SetEventHandle(event.raw())
@@ -219,9 +241,7 @@ fn open_stream() -> Result<Stream, MicrophoneError> {
 fn run(
     seconds: f64,
     stop: &Event,
-    frames: &AtomicUsize,
-    first_ns: &AtomicU64,
-    gap_at: &AtomicUsize,
+    marks: &Marks,
     send: &Sender<Vec<f32>>,
     ready: Ready<Result<MicrophoneId, MicrophoneError>>,
 ) {
@@ -242,13 +262,16 @@ fn run(
     let capacity = (seconds.max(0.0) * f64::from(stream.id.rate)).ceil() as usize;
     let mut samples = vec![0.0_f32; capacity];
     // SAFETY: starts the stream initialized above.
-    if unsafe { stream.client.Start() }.is_err() {
-        let _ = ready.ok(Err(MicrophoneError::Missing));
+    if let Err(error) = unsafe { stream.client.Start() } {
+        let _ = ready.ok(Err(setup_error(error.code())));
         return;
     }
     if ready.ok(Ok(stream.id.clone())) {
-        let written = record(&stream, &mut samples, stop, frames, first_ns, gap_at);
+        let (written, failed) = record(&stream, &mut samples, stop, marks);
         samples.truncate(written);
+        if failed {
+            marks.stopped.store(true, Ordering::Release);
+        }
     }
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
@@ -266,15 +289,8 @@ fn now_hns(frequency: i64) -> Option<u64> {
 }
 
 /// Records into `samples` until `stop` is set, a call fails or it is full;
-/// returns the frames recorded. Allocates nothing.
-fn record(
-    stream: &Stream,
-    samples: &mut [f32],
-    stop: &Event,
-    frames: &AtomicUsize,
-    first_ns: &AtomicU64,
-    gap_at: &AtomicUsize,
-) -> usize {
+/// returns the frames recorded and whether a call failed. Allocates nothing.
+fn record(stream: &Stream, samples: &mut [f32], stop: &Event, marks: &Marks) -> (usize, bool) {
     let handles = [stop.raw(), stream.event.raw()];
     let packet_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
     let mut frequency = 0_i64;
@@ -285,13 +301,16 @@ fn record(
     loop {
         // SAFETY: both handles live as long as this loop.
         let wait = unsafe { WaitForMultipleObjects(&handles, false, WAIT_MS) };
-        if wait == WAIT_OBJECT_0 || (wait != packet_ready && wait != WAIT_TIMEOUT) {
-            return written;
+        if wait == WAIT_OBJECT_0 {
+            return (written, false);
+        }
+        if wait != packet_ready && wait != WAIT_TIMEOUT {
+            return (written, true);
         }
         loop {
             // SAFETY: calls on the capture client this thread owns.
             let Ok(packet) = (unsafe { stream.capture.GetNextPacketSize() }) else {
-                return written;
+                return (written, true);
             };
             if packet == 0 {
                 break;
@@ -312,7 +331,7 @@ fn record(
             }
             .is_err()
             {
-                return written;
+                return (written, true);
             }
             let count = count as usize;
             if count > 0 {
@@ -329,10 +348,10 @@ fn record(
                     flags & (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32) != 0,
                 );
                 if let Some(first) = timing.first_frame_ns {
-                    first_ns.store(first, Ordering::Release);
+                    marks.first_ns.store(first, Ordering::Release);
                 }
                 if let Some(gap) = timing.gap_at {
-                    gap_at.store(gap, Ordering::Release);
+                    marks.gap_at.store(gap, Ordering::Release);
                 }
             }
             let room = samples.len() - written;
@@ -352,14 +371,28 @@ fn record(
                 }
             }
             written += take;
-            frames.store(written, Ordering::Release);
+            marks.frames.store(written, Ordering::Release);
             // SAFETY: releases the packet read above.
             if unsafe { stream.capture.ReleaseBuffer(count as u32) }.is_err() {
-                return written;
+                return (written, true);
             }
             if written == samples.len() {
-                return written;
+                return (written, false);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use windows::Win32::Foundation::E_FAIL;
+
+    use super::*;
+
+    #[test]
+    fn a_device_held_by_another_app_is_told_apart_from_a_missing_one() {
+        assert_eq!(setup_error(E_ACCESSDENIED), MicrophoneError::Denied);
+        assert_eq!(setup_error(AUDCLNT_E_DEVICE_IN_USE), MicrophoneError::InUse);
+        assert_eq!(setup_error(E_FAIL), MicrophoneError::Missing);
     }
 }

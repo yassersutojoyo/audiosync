@@ -264,7 +264,8 @@ extension AppDelegate {
 
     private func castLogLine(_ event: CastEvent) -> String? {
         switch event {
-        case .started(let a): return "attempt \(a) plays"
+        case .started(let a, let format): return "attempt \(a) plays, format \(format)"
+        case .formatFallback(let a, let format): return "attempt \(a): the device refused WAV; format \(format) instead"
         case .playing(let a): return "attempt \(a): the device reports playing"
         case .connectFailed(let a, let error, let retry):
             return "attempt \(a): connecting failed (\(String(describing: error))), again in \(retry) ms"

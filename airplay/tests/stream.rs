@@ -784,6 +784,54 @@ fn latency_reporting() {
     }
 }
 
+// covers: P86, P87
+#[test]
+fn retransmission_across_the_sequence_wrap() {
+    let mut rig = Rig::with_host();
+    let mut config = speaker(1, Codec::Alac);
+    config.first_seq = 65_000;
+    let id = rig.add(config);
+    rig.run_for(Duration::from_secs(10));
+    let originals: Vec<Vec<u8>> = rig
+        .of(id)
+        .into_iter()
+        .filter(|s| s.transmit.kind == PacketKind::Audio)
+        .map(|s| s.transmit.bytes.clone())
+        .collect();
+    let seq_of = |bytes: &[u8]| u16::from_be_bytes([bytes[2], bytes[3]]);
+    let last = seq_of(originals.last().expect("packet"));
+    assert!((2..1_000).contains(&last.wrapping_sub(65_534)), "{last}");
+
+    let first = 65_534;
+    let request = ResendRequest {
+        seq: 1,
+        first,
+        count: 4,
+    }
+    .encode();
+    rig.stream.handle_control_packet(id, &request, rig.now);
+    let start = rig.sent.len();
+    rig.drain();
+    let got: Vec<Vec<u8>> = rig.sent[start..]
+        .iter()
+        .filter(|s| s.transmit.kind == PacketKind::Resend)
+        .map(|s| s.transmit.bytes.clone())
+        .collect();
+    assert_eq!(got.len(), 4);
+    for (offset, reply) in got.iter().enumerate() {
+        let seq = first.wrapping_add(offset as u16);
+        assert_eq!(
+            &reply[..RESEND_PREFIX_BYTES],
+            &[0x80, 0xD6, (seq >> 8) as u8, seq as u8]
+        );
+        let original = originals
+            .iter()
+            .find(|bytes| seq_of(bytes) == seq)
+            .expect("sent");
+        assert_eq!(&reply[RESEND_PREFIX_BYTES..], &original[..]);
+    }
+}
+
 // covers: P86, P87, P88
 #[test]
 fn retransmission() {

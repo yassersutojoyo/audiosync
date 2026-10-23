@@ -140,6 +140,14 @@ enum NativeSpeakerEvent: Equatable {
     /// A pairing succeeded and its credentials are stored; `storeNote` is
     /// empty, or why they last only until AudioSync quits.
     case paired(id: String, storeNote: String)
+    /// Someone changed its volume on the speaker itself: the slider position
+    /// (0 to 100) that plays at it, which the sender already counts as the
+    /// speaker's own (P122, P180).
+    case volume(id: String, position: Double)
+    /// Something about its session for the debug log; the session goes on.
+    /// `ptpPortsTaken`: PTP port 319 or 320 is taken, so speakers that need
+    /// PTP timing can't play (P158).
+    case warning(id: String, ptpPortsTaken: Bool, detail: String)
 
     /// The event as a debug log line; `name` gives a speaker's name. Never
     /// holds a PIN, password or credential (none crosses into the app).
@@ -169,6 +177,10 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)): pairing failed: " + (wrongPin ? "wrong PIN" : problem.rawValue) + " (\(detail))"
         case .paired(let id, let note):
             line = "\(label(id)): paired, credentials stored" + (note.isEmpty ? "" : " for this run only (\(note))")
+        case .volume(let id, let position):
+            line = "\(label(id)) volume changed on the speaker: slider at \(Int(position.rounded()))"
+        case .warning(let id, _, let detail):
+            line = "\(label(id)) warning: \(detail)"
         }
         return "[AudioSync] native AirPlay: " + line
     }
@@ -267,6 +279,10 @@ struct NativeAirPlayPlan: Equatable {
     var release: [String] = []
 
     var isEmpty: Bool { add.isEmpty && remove.isEmpty && turnOff.isEmpty && release.isEmpty }
+
+    /// Applying it changes the rows by itself: a target or lapsed receiver
+    /// shows only while in the sender, and its later Stopped event is passed over.
+    var changesRows: Bool { !remove.isEmpty }
 }
 
 /// What the app does about a speaker event (`NativeAirPlayModel.apply`).
@@ -292,6 +308,12 @@ enum NativeAirPlayOutcome: Equatable {
     /// false): it stays on, and the sender starts it once the slot frees
     /// (P169).
     case waiting(String, Bool)
+    /// Someone changed the speaker's volume on the speaker itself (app ID):
+    /// its slider follows, and nothing goes back to the sender.
+    case volumeChanged(String, Double)
+    /// PTP port 319 or 320 is taken, so speakers that need PTP timing
+    /// can't play (P158).
+    case ptpPortsTaken
 }
 
 /// The native sender's receivers and speakers as the app sees them (main
@@ -749,6 +771,11 @@ struct NativeAirPlayModel {
             return .senderFailed
         case .pinNeeded, .passwordNeeded, .pairingFailed, .paired:
             return pairingEvent(event)
+        case .volume(let id, let position):
+            guard states[id] != nil else { return nil }
+            return .volumeChanged(NativeAirPlayID.app(id), position)
+        case .warning(_, let ptpPortsTaken, _):
+            return ptpPortsTaken ? .ptpPortsTaken : nil
         }
     }
 }

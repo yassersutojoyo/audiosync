@@ -119,8 +119,9 @@ pub struct PtpService {
     clock: SenderClock,
     identity: [u8; 8],
     remote_ports: PtpPorts,
-    /// The receivers it serves while their PTP sessions run (P167, P179).
-    peers: Vec<IpAddr>,
+    /// The receivers it serves while their PTP sessions run (P167, P179),
+    /// with the scope of a link-local address (P17); the port is unused.
+    peers: Vec<SocketAddr>,
     next_announce: Option<Instant>,
     next_sync: Option<Instant>,
     announce_seq: u16,
@@ -149,11 +150,11 @@ impl PtpService {
 
     /// The first receiver served now, if any.
     pub fn peer(&self) -> Option<IpAddr> {
-        self.peers.first().copied()
+        self.peers.first().map(SocketAddr::ip)
     }
 
     /// Every receiver served now.
-    pub fn peers(&self) -> &[IpAddr] {
+    pub fn peers(&self) -> &[SocketAddr] {
         &self.peers
     }
 
@@ -161,9 +162,16 @@ impl PtpService {
     /// Announce goes at once, and Sync every 125 ms from now on. Another
     /// member of the same target joins the schedule already running
     /// (P179).
-    pub fn start(&mut self, peer: IpAddr, now: Instant) {
-        let peer = peer.to_canonical();
-        if self.peers.contains(&peer) {
+    pub fn start(&mut self, peer: SocketAddr, now: Instant) {
+        let peer = match peer.ip().to_canonical() {
+            IpAddr::V6(_) => {
+                let mut scoped = peer;
+                scoped.set_port(0);
+                scoped
+            }
+            ip => SocketAddr::new(ip, 0),
+        };
+        if self.peers.iter().any(|known| known.ip() == peer.ip()) {
             return;
         }
         self.peers.push(peer);
@@ -185,7 +193,7 @@ impl PtpService {
     /// One receiver's session ended; the others are still served.
     pub fn stop_peer(&mut self, peer: IpAddr) {
         let peer = peer.to_canonical();
-        self.peers.retain(|known| *known != peer);
+        self.peers.retain(|known| known.ip() != peer);
         self.transmits.retain(|transmit| transmit.to.ip() != peer);
         if self.peers.is_empty() {
             self.stop();
@@ -250,9 +258,9 @@ impl PtpService {
     /// receiver's Follow_Up carries the time.
     pub fn sync_sent_to(&mut self, sequence_id: u16, peer: IpAddr, sent: Instant) {
         let peer = peer.to_canonical();
-        if !self.peers.contains(&peer) {
+        let Some(&peer) = self.peers.iter().find(|known| known.ip() == peer) else {
             return;
-        }
+        };
         let bytes = self.follow_up(sequence_id, self.clock.ptp(sent));
         self.queue(MessageType::FollowUp, peer, sequence_id, bytes);
     }
@@ -264,7 +272,7 @@ impl PtpService {
         if !self
             .peers
             .iter()
-            .any(|peer| crate::transport::from_receiver(source, *peer))
+            .any(|peer| crate::transport::from_receiver(source, peer.ip()))
         {
             return;
         }
@@ -280,7 +288,9 @@ impl PtpService {
         );
         put_timestamp(&mut out, self.clock.ptp(received));
         out.extend_from_slice(&request.source_port_identity);
-        let to = SocketAddr::new(source.ip(), self.remote_ports.general);
+        // `source` keeps the scope of a link-local receiver (P17).
+        let mut to = source;
+        to.set_port(self.remote_ports.general);
         self.transmits.push_back(PtpTransmit {
             kind: MessageType::DelayResp,
             port: PtpPort::General,
@@ -290,7 +300,7 @@ impl PtpService {
         });
     }
 
-    fn queue(&mut self, kind: MessageType, peer: IpAddr, sequence_id: u16, bytes: Vec<u8>) {
+    fn queue(&mut self, kind: MessageType, peer: SocketAddr, sequence_id: u16, bytes: Vec<u8>) {
         let port = match kind {
             MessageType::Sync | MessageType::DelayReq => PtpPort::Event,
             _ => PtpPort::General,
@@ -299,10 +309,12 @@ impl PtpService {
             PtpPort::Event => self.remote_ports.event,
             PtpPort::General => self.remote_ports.general,
         };
+        let mut to = peer;
+        to.set_port(remote);
         self.transmits.push_back(PtpTransmit {
             kind,
             port,
-            to: SocketAddr::new(peer, remote),
+            to,
             sequence_id,
             bytes,
         });

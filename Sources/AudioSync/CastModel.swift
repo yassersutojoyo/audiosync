@@ -151,7 +151,8 @@ enum CastVolumeStep: Equatable {
 
 /// What the sender reported, copied out of the core's event.
 enum CastEvent: Equatable {
-    case started(attempt: UInt64)
+    /// The device plays the stream in `format`, an `ASC_CAST_FORMAT_` code.
+    case started(attempt: UInt64, format: Int32)
     case playing(attempt: UInt64)
     case connectFailed(attempt: UInt64, error: CastError?, retryMs: Int64)
     case recovering(attempt: UInt64)
@@ -160,8 +161,9 @@ enum CastEvent: Equatable {
     case volume(attempt: UInt64, CastVolume)
     case commandFailed(attempt: UInt64, error: CastError?)
     case ended(attempt: UInt64, CastEnd)
-    /// Diagnostics, format fallbacks, rebuffering and the stream's own log:
-    /// for the debug log only.
+    /// The device refused WAV; `format` is loaded instead (C84).
+    case formatFallback(attempt: UInt64, format: Int32)
+    /// Diagnostics, rebuffering and the stream's own log: for the debug log only.
     case note(attempt: UInt64, String)
     /// The playing group's member list changed; empty while none is known.
     case members(attempt: UInt64, [CastMember])
@@ -174,8 +176,8 @@ enum CastEvent: Equatable {
 
     var attempt: UInt64? {
         switch self {
-        case .started(let a), .playing(let a), .connectFailed(let a, _, _), .recovering(let a),
-             .recovered(let a), .reloaded(let a), .volume(let a, _), .commandFailed(let a, _),
+        case .started(let a, _), .formatFallback(let a, _), .playing(let a), .connectFailed(let a, _, _),
+             .recovering(let a), .recovered(let a), .reloaded(let a), .volume(let a, _), .commandFailed(let a, _),
              .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
         case .groupLog, .memoryChanged, .discoveryStopped, .failed:
@@ -191,7 +193,7 @@ enum CastEvent: Equatable {
         let detail = raw.detail.map { String(cString: $0) } ?? ""
         let error = CastError(raw.error)
         switch raw.kind {
-        case ASC_CAST_EVENT_STARTED: self = .started(attempt: a)
+        case ASC_CAST_EVENT_STARTED: self = .started(attempt: a, format: raw.format)
         case ASC_CAST_EVENT_PLAYING: self = .playing(attempt: a)
         case ASC_CAST_EVENT_CONNECT_FAILED: self = .connectFailed(attempt: a, error: error, retryMs: raw.retry_ms)
         case ASC_CAST_EVENT_RECOVERING: self = .recovering(attempt: a)
@@ -211,8 +213,7 @@ enum CastEvent: Equatable {
             }
             self = .ended(attempt: a, end)
         case ASC_CAST_EVENT_REBUFFERING: self = .note(attempt: a, "the device ran dry")
-        case ASC_CAST_EVENT_FORMAT_FALLBACK:
-            self = .note(attempt: a, "the device refused WAV; format \(raw.format) instead")
+        case ASC_CAST_EVENT_FORMAT_FALLBACK: self = .formatFallback(attempt: a, format: raw.format)
         case ASC_CAST_EVENT_DIAGNOSTICS:
             self = .note(attempt: a, String(format: "drift %.0f ms, queued %.0f ms", raw.drift_ms, raw.queued_ms))
         case ASC_CAST_EVENT_STREAM: self = .note(attempt: a, "stream: " + detail)
@@ -313,6 +314,8 @@ struct CastModel {
         let number: UInt64
         let device: String
         var status: CastStatus
+        /// The `ASC_CAST_FORMAT_` code it plays in; 0 until the session reports it.
+        var format: Int32 = 0
     }
 
     var discovery = Discovery.off
@@ -381,6 +384,9 @@ struct CastModel {
         guard let id = enabled, status(of: id) == .playing else { return nil }
         return id
     }
+
+    /// The `ASC_CAST_FORMAT_` code the session plays in; 0 while none reported one.
+    var playingFormat: Int32 { attempt?.format ?? 0 }
 
     /// The user turns `id` on, a group like any device: refused while
     /// another one is on, a member of the group that is on included (C2, C99).
@@ -463,7 +469,13 @@ struct CastModel {
         guard let current = attempt, event.attempt == current.number else { return nil }
         let id = current.device
         switch event {
-        case .started, .playing, .recovered, .reloaded:
+        case .started(_, let format):
+            attempt?.format = format
+            return setStatus(.playing)
+        case .formatFallback(_, let format):
+            attempt?.format = format
+            return nil
+        case .playing, .recovered, .reloaded:
             return setStatus(.playing)
         case .recovering:
             return setStatus(.reconnecting)

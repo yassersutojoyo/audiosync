@@ -21,6 +21,7 @@ struct Notice: Identifiable, Equatable {
     static let capture = "capture"      // streaming started but no audio arrives
     static let login = "login"          // Launch at Login
     static let airplaySender = "airplay-sender"   // AudioSync's own AirPlay sender couldn't start
+    static let airplayPtp = "airplay-ptp"   // another app holds PTP port 319 or 320
     /// A Google Cast speaker, by its device ID.
     static func cast(_ device: String) -> String { CastID.app(device) }
     static let castSender = "cast-sender"   // the Google Cast sender stopped working

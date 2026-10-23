@@ -23,7 +23,12 @@
 //! - right after reading starts, nothing goes out until the first reading,
 //!   for at most [`READING_WAIT`], so a track from before never does;
 //! - artwork goes out as a JPEG of at most [`ARTWORK_LIMIT`] bytes and
-//!   [`ARTWORK_SIDE`] pixels a side ([`fit_jpeg`]).
+//!   [`ARTWORK_SIDE`] pixels a side ([`fit_jpeg`]);
+//! - a playing track whose session reports its length gets its progress
+//!   ([`Timeline`]); a live stream, a paused track and AudioSync's labels
+//!   get none. The receiver counts on by itself, so progress goes out again
+//!   only when the track changes or the position jumps by more than
+//!   [`PROGRESS_SLACK`], as a seek does.
 //!
 //! Reading never runs on the UI thread or an audio thread: a session that
 //! hangs holds up the reader's thread only, and a failed reading counts as
@@ -32,10 +37,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use audiosync_airplay::metadata::TrackInfo as TrackFields;
-use audiosync_airplay::sender::NowPlaying;
+use audiosync_airplay::sender::{NowPlaying, Progress};
 use audiosync_cast::media::Metadata;
 
 use super::cast::CastTrack;
@@ -52,6 +57,9 @@ pub const READING_WAIT: Duration = Duration::from_secs(3);
 pub const ARTWORK_LIMIT: usize = 6060;
 /// At most this many pixels a side, as large as a receiver shows a cover.
 pub const ARTWORK_SIDE: u32 = 600;
+/// How far a track's position may stray from where the progress sent last
+/// puts it by now before progress goes out again.
+pub const PROGRESS_SLACK: Duration = Duration::from_secs(1);
 const SMALLEST_SIDE: u32 = 64;
 const JPEG_QUALITIES: [f32; 3] = [0.65, 0.5, 0.4];
 
@@ -160,6 +168,82 @@ pub struct Track {
     /// Its artwork, already fitted ([`fit_jpeg`]); `None` while the session
     /// has none, or it couldn't be fitted.
     pub artwork: Option<Arc<[u8]>>,
+    /// Where the track stands; `None` when its length is unknown.
+    pub timeline: Option<Timeline>,
+}
+
+/// A session's timeline as Windows reports it, all in 100 ns units: the
+/// track's start and end, the position, and the time that position was
+/// current, counted from 1601 in UTC (0 when the app gives none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawTimeline {
+    pub start: i64,
+    pub end: i64,
+    pub position: i64,
+    pub updated: i64,
+}
+
+/// Where a track stands: `elapsed` into it at `at`, and its length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timeline {
+    pub elapsed: Duration,
+    pub length: Duration,
+    pub at: Instant,
+    /// What it was read from, which tells a timeline left from the previous
+    /// track apart from a new one.
+    pub raw: RawTimeline,
+}
+
+const TICK_NANOS: u64 = 100;
+/// 1601 to 1970, in 100 ns units.
+const UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+
+/// `time` in the units and from the epoch of [`RawTimeline::updated`].
+pub fn wall_ticks(time: SystemTime) -> i64 {
+    let since = |duration: Duration| i64::try_from(duration.as_nanos() / 100).unwrap_or(i64::MAX);
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(after) => UNIX_EPOCH_TICKS.saturating_add(since(after)),
+        Err(before) => UNIX_EPOCH_TICKS.saturating_sub(since(before.duration())),
+    }
+}
+
+fn ticks(count: i64) -> Duration {
+    Duration::from_nanos(u64::try_from(count).unwrap_or(0).saturating_mul(TICK_NANOS))
+}
+
+impl Timeline {
+    /// `raw` as read at `read_at`, when the wall clock stood at `read_wall`
+    /// ([`wall_ticks`]). `None` for a track without a length (a live
+    /// stream), or a position that can't be placed in time. Without an
+    /// update time the position counts as current when read.
+    pub fn read(raw: RawTimeline, read_wall: i64, read_at: Instant) -> Option<Timeline> {
+        let length = raw
+            .end
+            .checked_sub(raw.start)
+            .filter(|length| *length > 0)?;
+        let elapsed = raw.position.saturating_sub(raw.start).clamp(0, length);
+        let age = if raw.updated > 0 {
+            ticks(read_wall.saturating_sub(raw.updated))
+        } else {
+            Duration::ZERO
+        };
+        Some(Timeline {
+            elapsed: ticks(elapsed),
+            length: ticks(length),
+            at: read_at.checked_sub(age)?,
+            raw,
+        })
+    }
+
+    /// The progress at `now` of a track that plays on; `None` once past its
+    /// end, where a timeline the app stopped updating would put it.
+    pub fn progress_at(&self, now: Instant) -> Option<Progress> {
+        let elapsed = self.elapsed + now.saturating_duration_since(self.at);
+        (elapsed <= self.length).then_some(Progress {
+            elapsed,
+            length: self.length,
+        })
+    }
 }
 
 /// One reading of the sessions: the track that counts, if any.
@@ -330,8 +414,9 @@ pub struct TrackInfo {
     reading: Option<Reading>,
     /// The fields receivers should show, and since when.
     fields: Option<(TrackFields, Instant)>,
-    /// What the sender was given last.
-    sent: Option<NowPlaying>,
+    /// What the sender was given last, and when.
+    sent: Option<(NowPlaying, Instant)>,
+    timelines: TimelineGuard,
     labels: SharedLabels,
     log: DebugLog,
 }
@@ -388,6 +473,7 @@ impl TrackInfo {
             self.following = follow;
             self.since = Some(now);
             self.reading = None;
+            self.timelines = TimelineGuard::default();
             if stopped {
                 self.fields = None;
                 if self.sent.take().is_some() {
@@ -427,17 +513,92 @@ impl TrackInfo {
             Artwork::Wait => None,
         };
         let artwork = artwork.map(|jpeg| jpeg.to_vec());
+        let progress = self.timelines.progress(track, &shown.fields, now);
         let next = NowPlaying {
             track: Some(shown.fields),
             artwork,
-            progress: None,
+            progress,
         };
-        if self.sent.as_ref() == Some(&next) {
+        if let Some((sent, at)) = &self.sent
+            && sent.track == next.track
+            && sent.artwork == next.artwork
+            && progress_holds(sent.progress, *at, next.progress, now)
+        {
             return None;
         }
         self.log.log(|| describe(&next, track));
-        self.sent = Some(next.clone());
+        self.sent = Some((next.clone(), now));
         Some(next)
+    }
+}
+
+/// Keeps progress from a timeline an app may still report for a moment
+/// after the track changed, which is the previous track's.
+#[derive(Default)]
+struct TimelineGuard {
+    /// The fields shown last, and the last timeline read while they showed,
+    /// paused or playing.
+    timed: Option<(TrackFields, Option<RawTimeline>)>,
+    /// The previous track's timeline, while the reading still has it.
+    stale: Option<RawTimeline>,
+}
+
+impl TimelineGuard {
+    /// The progress at `now` of `track`, shown as `fields`: only while it
+    /// plays, and never from the timeline the previous track left.
+    fn progress(
+        &mut self,
+        track: Option<&Track>,
+        fields: &TrackFields,
+        now: Instant,
+    ) -> Option<Progress> {
+        if self.timed.as_ref().is_none_or(|(timed, _)| timed != fields) {
+            if let Some(previous) = self.timed.take().and_then(|(_, last)| last) {
+                self.stale = Some(previous);
+            }
+            self.timed = Some((fields.clone(), None));
+        }
+        if let Some(raw) = track
+            .and_then(|track| track.timeline)
+            .map(|timeline| timeline.raw)
+        {
+            if self.stale.is_some_and(|stale| same_place(stale, raw)) {
+                return None;
+            }
+            self.stale = None;
+            if let Some((_, last)) = &mut self.timed {
+                *last = Some(raw);
+            }
+        }
+        track
+            .filter(|track| track.session.playing)
+            .and_then(|track| track.timeline)?
+            .progress_at(now)
+    }
+}
+
+/// Whether two timelines put a track at the same place. The update time is
+/// left out: an app may refresh it on a timeline it no longer advances.
+fn same_place(one: RawTimeline, other: RawTimeline) -> bool {
+    (one.start, one.end, one.position) == (other.start, other.end, other.position)
+}
+
+/// Whether `sent` at `sent_at` still says what `next` says at `now`: both
+/// none, or the same length with `sent` carried to `now` within
+/// [`PROGRESS_SLACK`] of `next`.
+fn progress_holds(
+    sent: Option<Progress>,
+    sent_at: Instant,
+    next: Option<Progress>,
+    now: Instant,
+) -> bool {
+    match (sent, next) {
+        (None, None) => true,
+        (Some(sent), Some(next)) => {
+            let carried = sent.elapsed + now.saturating_duration_since(sent_at);
+            sent.length == next.length && carried.abs_diff(next.elapsed) <= PROGRESS_SLACK
+        }
+        _ => false,
     }
 }
 
@@ -452,8 +613,16 @@ fn describe(now_playing: &NowPlaying, track: Option<&Track>) -> String {
         Some(jpeg) => format!("{} bytes of artwork", jpeg.len()),
         None => "no artwork".to_owned(),
     };
+    let progress = match &now_playing.progress {
+        Some(progress) => format!(
+            "{:.1} s of {:.1} s",
+            progress.elapsed.as_secs_f64(),
+            progress.length.as_secs_f64()
+        ),
+        None => "no progress".to_owned(),
+    };
     format!(
-        "AirPlay now playing: \"{}\" by \"{}\" on \"{}\", from {from}, {artwork}",
+        "AirPlay now playing: \"{}\" by \"{}\" on \"{}\", from {from}, {artwork}, {progress}",
         field(|fields| &fields.title),
         field(|fields| &fields.artist),
         field(|fields| &fields.album),
@@ -553,6 +722,7 @@ pub mod fake {
         Track {
             session: session(app_id, title, playing),
             artwork: artwork.map(Into::into),
+            timeline: None,
         }
     }
 }
@@ -978,6 +1148,271 @@ mod tests {
             sent.track,
             fields("Title label", "Whole system label", "Album label")
         );
+    }
+
+    const SECOND: i64 = 10_000_000;
+
+    fn raw(start: i64, end: i64, position: i64, updated: i64) -> RawTimeline {
+        RawTimeline {
+            start: start * SECOND,
+            end: end * SECOND,
+            position: position * SECOND,
+            updated: updated * SECOND,
+        }
+    }
+
+    fn secs(count: u64) -> Duration {
+        Duration::from_secs(count)
+    }
+
+    /// A track `elapsed` seconds into `length` at `at`.
+    fn timed(title: &str, playing: bool, elapsed: i64, length: i64, at: Instant) -> Track {
+        Track {
+            timeline: Timeline::read(raw(0, length, elapsed, 0), 0, at),
+            ..track("Spotify.exe", title, playing, Some(COVER))
+        }
+    }
+
+    fn progress(elapsed: u64, length: u64) -> Option<Progress> {
+        Some(Progress {
+            elapsed: secs(elapsed),
+            length: secs(length),
+        })
+    }
+
+    #[test]
+    fn a_timeline_gives_the_elapsed_time_and_length_as_of_its_update() {
+        let read_at = Instant::now() + secs(60);
+        let wall = 13_000_000_000;
+        let timeline = Timeline::read(raw(10, 210, 60, wall - 3), wall * SECOND, read_at)
+            .expect("the length is known");
+        assert_eq!((timeline.elapsed, timeline.length), (secs(50), secs(200)));
+        assert_eq!(timeline.at, read_at - secs(3));
+        assert_eq!(timeline.progress_at(read_at), progress(53, 200));
+        assert_eq!(
+            timeline.progress_at(read_at + secs(147)),
+            progress(200, 200)
+        );
+        assert_eq!(
+            timeline.progress_at(read_at + secs(148)),
+            None,
+            "past the end the timeline is out of date"
+        );
+    }
+
+    #[test]
+    fn without_an_update_time_the_position_is_current_when_read() {
+        let read_at = Instant::now();
+        let timeline = Timeline::read(raw(0, 100, 30, 0), 13_000_000_000 * SECOND, read_at);
+        assert_eq!(timeline.map(|timeline| timeline.at), Some(read_at));
+        let ahead = Timeline::read(raw(0, 100, 30, 101), 100 * SECOND, read_at);
+        assert_eq!(
+            ahead.map(|timeline| timeline.at),
+            Some(read_at),
+            "an update time ahead of the clock counts as now"
+        );
+    }
+
+    #[test]
+    fn an_unknown_or_zero_length_gives_no_timeline() {
+        let now = Instant::now();
+        assert_eq!(Timeline::read(raw(0, 0, 0, 0), 0, now), None, "live");
+        assert_eq!(Timeline::read(raw(5, 5, 5, 0), 0, now), None);
+        assert_eq!(Timeline::read(raw(10, 5, 7, 0), 0, now), None);
+    }
+
+    #[test]
+    fn a_position_outside_the_track_is_held_to_its_bounds() {
+        let now = Instant::now();
+        let before = Timeline::read(raw(10, 110, 4, 0), 0, now).unwrap();
+        assert_eq!(before.elapsed, Duration::ZERO);
+        let after = Timeline::read(raw(10, 110, 500, 0), 0, now).unwrap();
+        assert_eq!(after.elapsed, secs(100));
+    }
+
+    #[test]
+    fn wall_ticks_count_from_1601() {
+        assert_eq!(wall_ticks(UNIX_EPOCH), UNIX_EPOCH_TICKS);
+        assert_eq!(
+            wall_ticks(UNIX_EPOCH + secs(2)),
+            UNIX_EPOCH_TICKS + 2 * SECOND
+        );
+    }
+
+    #[test]
+    fn a_playing_track_with_a_length_goes_out_with_its_progress() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(timed("Song", true, 30, 180, start)));
+        let sent = info
+            .sync(Some(&whole_system()), start + secs(1))
+            .expect("it is sent");
+        assert_eq!(sent.progress, progress(31, 180));
+        assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
+    }
+
+    #[test]
+    fn progress_that_runs_on_as_sent_is_not_sent_again() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(timed("Song", true, 30, 180, start)));
+        assert!(info.sync(Some(&whole_system()), start).is_some());
+
+        let later = start + POLL_INTERVAL;
+        reader.read(Some(timed("Song", true, 32, 180, later)));
+        assert_eq!(info.sync(Some(&whole_system()), later), None);
+        let drifted = later + POLL_INTERVAL;
+        reader.read(Some(timed("Song", true, 35, 180, drifted)));
+        assert_eq!(
+            info.sync(Some(&whole_system()), drifted),
+            None,
+            "a second off is within the slack"
+        );
+    }
+
+    #[test]
+    fn a_seek_sends_the_new_position() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(timed("Song", true, 30, 180, start)));
+        info.sync(Some(&whole_system()), start);
+
+        let later = start + POLL_INTERVAL;
+        reader.read(Some(timed("Song", true, 120, 180, later)));
+        let sent = info
+            .sync(Some(&whole_system()), later)
+            .expect("the seek is sent");
+        assert_eq!(sent.progress, progress(120, 180));
+    }
+
+    #[test]
+    fn a_live_or_paused_track_or_the_labels_go_out_without_progress() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        let source = app("Spotify.exe", "Spotify");
+        info.sync(Some(&source), start);
+        reader.read(Some(track("Spotify.exe", "Live", true, Some(COVER))));
+        let live = info.sync(Some(&source), start).expect("it is sent");
+        assert_eq!(live.progress, None);
+
+        reader.read(Some(timed("Song", false, 30, 180, start)));
+        let paused = info.sync(Some(&source), start).expect("it is sent");
+        assert_eq!(paused.progress, None);
+
+        reader.read(Some(timed("Song", true, 30, 180, start)));
+        let resumed = info.sync(Some(&source), start).expect("it is sent");
+        assert_eq!(resumed.progress, progress(30, 180));
+
+        reader.read(None);
+        let labels = info.sync(Some(&source), start).expect("it is sent");
+        assert_eq!(labels.progress, None);
+    }
+
+    #[test]
+    fn a_track_change_drops_the_previous_tracks_timeline() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        let first = timed("First", true, 170, 180, start);
+        let left = first.timeline;
+        reader.read(Some(first));
+        info.sync(Some(&whole_system()), start);
+
+        let later = start + POLL_INTERVAL;
+        reader.read(Some(Track {
+            timeline: left,
+            ..track("Spotify.exe", "Second", true, Some(COVER))
+        }));
+        let sent = info
+            .sync(Some(&whole_system()), later)
+            .expect("the new track is sent");
+        assert_eq!(
+            sent.track,
+            fields("Second", "Second artist", "Second album")
+        );
+        assert_eq!(
+            sent.progress, None,
+            "the old timeline isn't the new track's"
+        );
+
+        let next = later + POLL_INTERVAL;
+        reader.read(Some(timed("Second", true, 2, 240, next)));
+        let sent = info
+            .sync(Some(&whole_system()), next)
+            .expect("its own timeline is sent");
+        assert_eq!(sent.progress, progress(2, 240));
+    }
+
+    #[test]
+    fn a_track_change_after_a_pause_still_drops_the_previous_tracks_timeline() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        let source = app("Spotify.exe", "Spotify");
+        info.sync(Some(&source), start);
+        let first = timed("First", true, 170, 180, start);
+        let left = first.timeline;
+        reader.read(Some(first));
+        info.sync(Some(&source), start);
+        reader.read(Some(track("Spotify.exe", "First", false, Some(COVER))));
+        info.sync(Some(&source), start + POLL_INTERVAL);
+
+        let later = start + POLL_INTERVAL * 2;
+        reader.read(Some(Track {
+            timeline: left,
+            ..track("Spotify.exe", "Second", true, Some(COVER))
+        }));
+        let sent = info
+            .sync(Some(&source), later)
+            .expect("the new track is sent");
+        assert_eq!(
+            sent.progress, None,
+            "the old timeline isn't the new track's"
+        );
+    }
+
+    #[test]
+    fn an_old_timeline_with_a_fresh_update_time_is_still_the_old_one() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        let wall = 13_000_000_000;
+        reader.read(Some(Track {
+            timeline: Timeline::read(raw(0, 180, 170, wall), wall * SECOND, start),
+            ..track("Spotify.exe", "First", true, Some(COVER))
+        }));
+        info.sync(Some(&whole_system()), start);
+
+        let later = start + POLL_INTERVAL;
+        let refreshed = wall + 2;
+        reader.read(Some(Track {
+            timeline: Timeline::read(raw(0, 180, 170, refreshed), refreshed * SECOND, later),
+            ..track("Spotify.exe", "Second", true, Some(COVER))
+        }));
+        let sent = info
+            .sync(Some(&whole_system()), later)
+            .expect("the new track is sent");
+        assert_eq!(sent.progress, None);
+    }
+
+    #[test]
+    fn stopping_clears_the_progress_with_the_rest() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(timed("Song", true, 30, 180, start)));
+        info.sync(Some(&whole_system()), start);
+        assert_eq!(info.sync(None, start), Some(NowPlaying::default()));
     }
 
     /// A fake JPEG encoder whose output grows with the pixel count and

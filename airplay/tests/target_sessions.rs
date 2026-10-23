@@ -300,6 +300,45 @@ fn the_control_device_and_its_group_refuse_each_other() {
     sender.shutdown();
 }
 
+// covers: P179
+#[test]
+fn a_member_added_alone_while_its_target_tears_down_is_the_hosts_to_remove() {
+    let _serial = serial();
+    let a = NetReceiver::start(Behavior::default());
+    let b = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start(false);
+    let mut events = Events::default();
+    let (da, db) = (a.device(1, PCM_TXT), b.device(2, PCM_TXT));
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(
+            playing(&mut events, &sender, key, 1),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.remove_target(&id);
+    sender.add_speaker(da.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &da.key, 2),
+        "{:?}",
+        events.of(&da.key)
+    );
+    sender.remove_speaker(&da.key);
+    for key in [&da.key, &db.key] {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Stopped)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.shutdown();
+}
+
 fn airplay_record(port: u16, n: u8, features: &str) -> ServiceRecord {
     let id = device_id(n);
     ServiceRecord {
@@ -1237,8 +1276,8 @@ fn the_ptp_service_serves_every_member_until_the_last_leaves() {
     let a: IpAddr = [192, 0, 2, 1].into();
     let b: IpAddr = [192, 0, 2, 2].into();
     let now = Instant::now();
-    service.start(a, now);
-    service.start(b, now);
+    service.start(SocketAddr::new(a, 0), now);
+    service.start(SocketAddr::new(b, 0), now);
     service.handle_timeout(now + Duration::from_millis(200));
     let mut to = Vec::new();
     while let Some(transmit) = service.poll_transmit() {
@@ -1251,7 +1290,7 @@ fn the_ptp_service_serves_every_member_until_the_last_leaves() {
     let follow = service.poll_transmit().expect("a Follow_Up");
     assert_eq!(follow.to.ip(), b);
     service.stop_peer(a);
-    assert_eq!(service.peers(), &[b]);
+    assert_eq!(service.peers(), &[SocketAddr::new(b, 0)]);
     service.handle_timeout(now + Duration::from_secs(2));
     while let Some(transmit) = service.poll_transmit() {
         assert_eq!(transmit.to.ip(), b);

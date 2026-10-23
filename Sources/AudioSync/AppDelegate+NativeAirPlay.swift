@@ -57,7 +57,7 @@ extension AppDelegate {
     private func nativeStartFinished(_ native: NativeAirPlay, started: Bool) {
         let news = nativeStarts.finished(started: started, at: Date())
         if started {
-            clearNotices([Notice.airplaySender])
+            clearNotices([Notice.airplaySender, Notice.airplayPtp])   // a new sender binds PTP anew
             resendTrackInfo()   // a new sender knows nothing of what plays
             // Its discovery raised the Local Network prompt, if any: the
             // probe may ask now, and an empty list counts from here.
@@ -113,7 +113,9 @@ extension AppDelegate {
         switch outcome {
         case .playingChanged(let id, let playing):
             if playing {
-                clearNotices([SpeakerKey.make(id: id, airplay: true)])   // playing: whatever went wrong is over
+                // Playing: whatever went wrong is over. Each session binds
+                // PTP anew, so the port clash may be over too.
+                clearNotices([SpeakerKey.make(id: id, airplay: true), Notice.airplayPtp])
                 // It plays with credentials an earlier pairing stored: a
                 // pairing still under way for it is no longer needed.
                 if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.cancelPairing(receiver) }
@@ -146,6 +148,13 @@ extension AppDelegate {
                 clearNotices([SpeakerKey.make(id: id, airplay: true)])
             }
             pushModel()   // the row says it waits, or no longer
+        case .volumeChanged(let id, let position):
+            // Calibrate All Speakers keeps it silent and sets its volume back when the run ends.
+            guard calibrateAllRun?.silences(airPlay: id) != true else { return }
+            airplayVolume[id] = position
+            pushModel()
+        case .ptpPortsTaken:
+            postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp)
         }
     }
 
@@ -336,6 +345,10 @@ extension AppDelegate {
             if native.model.isWaiting(id) { clearNotices([SpeakerKey.make(id: NativeAirPlayID.app(id), airplay: true)]) }
             native.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
+        }
+        if plan.changesRows {
+            airplayOrder = native.model.rows(enabled: enabledAirPlay)
+            airplayEmptySince = airplayOrder.isEmpty ? (airplayEmptySince ?? Date()) : nil
         }
         for id in plan.add {
             let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume

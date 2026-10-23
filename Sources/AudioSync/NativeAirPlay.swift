@@ -18,6 +18,9 @@ import SystemConfiguration
 final class NativeAirPlay {
     /// How often the queue asks the sender for discovery changes and events.
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
+    /// Every how many polls the speakers are asked for their own volume
+    /// (2 s), so a change made on a speaker reaches its slider.
+    static let volumeReadPolls = 8
     /// The receivers the debug hook AUDIOSYNC_AIRPLAY_PCM names; the core
     /// reads the same variable and lets them use PCM when they are added.
     static let pcmDebugIDs = NativeAirPlayID.pcmDebugIDs(ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY_PCM"])
@@ -38,6 +41,8 @@ final class NativeAirPlay {
     private var input: OpaquePointer?
     /// The poll timer (queue only).
     private var timer: DispatchSourceTimer?
+    /// Polls since the speakers were last asked for their volume (queue only).
+    private var pollsSinceVolumeRead = 0
     /// What the receivers that show it get as playing (queue only).
     private var nowPlaying = NativeNowPlaying()
     /// The hold-back last asked for (main queue), and the one the sender
@@ -136,29 +141,34 @@ final class NativeAirPlay {
         }
     }
 
-    /// The track's title, artist and album for the receivers that show it,
-    /// sent with the artwork set last, which a new track drops
-    /// (`NativeNowPlaying`, P123 to P127). Main queue.
-    func setTrack(_ fields: TrackMetadata.Fields) {
+    /// What changed for the receivers that show it (P123 to P127), in one
+    /// send: the track's title, artist and album, which drop the artwork set
+    /// last (`NativeNowPlaying`); its artwork, scaled and encoded as a small
+    /// JPEG on the queue (`TrackMetadata.jpeg`); and, when `sendsPosition`,
+    /// its position, nil for none, which a new track drops in the core.
+    /// Main queue.
+    func setTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?,
+                      sendsPosition: Bool, position: NowPlayingMonitor.Position?) {
         queue.async { [weak self] in
             guard let self else { return }
-            self.nowPlaying.setTrack(fields)
-            self.sendNowPlaying()
-        }
-    }
-
-    /// The artwork for the receivers that show it, scaled and encoded as a
-    /// small JPEG on the queue (`TrackMetadata.jpeg`), and sent with the
-    /// track set last. Main queue.
-    func setArtwork(_ image: NSImage) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            guard let jpeg = TrackMetadata.jpeg(image) else {
-                DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
-                return
+            var changed = false
+            if let fields {
+                self.nowPlaying.setTrack(fields)
+                changed = true
             }
-            self.nowPlaying.setArtwork(jpeg)
-            self.sendNowPlaying()
+            if let artwork {
+                if let jpeg = TrackMetadata.jpeg(artwork) {
+                    self.nowPlaying.setArtwork(jpeg)
+                    changed = true
+                } else {
+                    DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
+                }
+            }
+            if changed { self.sendNowPlaying() }
+            // The core can't take progress before its track, so a new track goes out twice.
+            guard sendsPosition, let handle = self.handle else { return }
+            let elapsed = position?.elapsed(at: ProcessInfo.processInfo.systemUptime) ?? 0
+            _ = asc_airplay_set_progress(handle, elapsed * 1000, (position?.length ?? 0) * 1000)
         }
     }
 
@@ -374,6 +384,11 @@ final class NativeAirPlay {
     /// Takes every waiting change and event and hands them to the main queue at once.
     private func poll() {
         guard let handle else { return }
+        pollsSinceVolumeRead += 1
+        if pollsSinceVolumeRead >= Self.volumeReadPolls {
+            pollsSinceVolumeRead = 0
+            asc_airplay_read_volumes(handle)
+        }
         logStatusIfDue(handle)
         var changes: [NativeReceiverChange] = []
         var raw = AscAirPlayReceiver()
@@ -458,6 +473,11 @@ final class NativeAirPlay {
                                   Self.problem(raw.error), detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_PAIRED:
             return .paired(id: id, storeNote: text(raw.detail))
+        case ASC_AIRPLAY_EVENT_VOLUME:
+            return .volume(id: id, position: raw.volume)
+        case ASC_AIRPLAY_EVENT_WARNING:
+            return .warning(id: id, ptpPortsTaken: raw.warning == ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN,
+                            detail: text(raw.detail))
         default:
             return nil
         }
