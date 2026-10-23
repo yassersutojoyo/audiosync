@@ -54,6 +54,7 @@ On `main` (coming in 0.7), in both the Mac and the Windows app:
 - A Cast speaker that doesn't show up can be added by its IP address or host name, with Add by Address… under Connected Speakers on the Mac or in the Speakers menu on Windows.
 - Cast speakers show the track that's playing, with the title, artist, album and cover.
 - On Windows you can rename a speaker too, with a double-click on its name.
+- Hide Speaker takes a speaker you never use out of the lists, and Hidden Speakers brings it back.
 
 The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
