@@ -1308,6 +1308,14 @@ struct UIStrings {
           Click the zone's name to switch its speakers at once. To move a
           speaker, choose 'Move to Zone' from its ⋯ button. To rename or delete
           a zone, right-click it or use its ⋯ button.
+        - Presets: turn on the speakers you want and set their volumes, the
+          zone volumes, Master Volume and the equalizer curve, then click
+          'Save as Preset…' in the Presets card. Delays and the preamp aren't
+          saved. To recall a preset, click it in the card, pick it in the
+          menu bar panel, or press Control-Command-1 to 9 for the first nine
+          (they're also in Window > Presets). Speakers you hid are never
+          saved in a preset, and recalling one leaves them hidden. To rename,
+          update or delete a preset, use its ⋯ button.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           'Auto-connect when available'. AudioSync then turns it on whenever it
           appears.
