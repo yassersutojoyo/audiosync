@@ -79,6 +79,7 @@ use crate::audio::backend::{
     StopReason,
 };
 use crate::audio::backend::{AirPlayPinPrompt, PairingPhase};
+use crate::audio::cast_address::{self, CastAddress};
 use audiosync_core::calibrate_all::{
     Applied, Change, Class, EndReason, RowState, Sheet, Take, Target,
 };
@@ -96,9 +97,9 @@ use crate::settings::{
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
-    CalibrationState, CastGroup, CastList, CastRow, CastState, Group, GroupError, Notice,
-    NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState, Source, SourceKind,
-    Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
+    CalibrationState, CastAddressError, CastGroup, CastList, CastRow, CastState, Group, GroupError,
+    Notice, NoticeMessage, PasswordPrompt, PinPhase, PinPrompt, SheetRow, SheetState, Source,
+    SourceKind, Speaker, SpeakerKind, ViewSettings, Waiting, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -258,6 +259,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     cast_file: Option<PathBuf>,
     /// What that file holds as last written or read.
     cast_saved: Option<String>,
+    /// The Cast speakers the user added by address, as the settings keep
+    /// them (spec C18).
+    cast_addresses: Vec<String>,
+    /// Whether something answers at an address the user adds.
+    cast_probe: fn(&CastAddress) -> bool,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
     /// The names the user gave speakers (spec S228).
@@ -371,6 +377,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_quiet_polls: 0,
             cast_file: None,
             cast_saved: None,
+            cast_addresses: Vec::new(),
+            cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
             custom_names: SpeakerNames::default(),
             groups: Vec::new(),
@@ -474,6 +482,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .map_or(1, |last| last.saturating_add(1));
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
+        self.cast_addresses = saved.cast_addresses.clone();
+        for address in saved
+            .cast_addresses
+            .iter()
+            .filter_map(|text| CastAddress::parse(text))
+        {
+            self.audio.add_cast_address(address);
+        }
         self.chosen = match (&saved.input_device, &saved.source) {
             (Some(input), _) => Chosen::Input {
                 endpoint_id: input.id.clone(),
@@ -599,6 +615,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
             remote: self.view.remote,
+            cast_addresses: self.cast_addresses.clone(),
             airplay2_experimental: self.view.airplay2_experimental,
         }
         .clamped()
@@ -699,6 +716,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.saved = current;
         notices_changed
+    }
+
+    /// Stands in for the check that something answers at an address.
+    #[cfg(test)]
+    pub fn set_cast_probe(&mut self, probe: fn(&CastAddress) -> bool) {
+        self.cast_probe = probe;
     }
 
     /// The audio backend, to change the mock's pretend world in tests.
@@ -1268,6 +1291,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 group: speaker.group.map(|group| CastGroup {
                     members: group.members,
                 }),
+                added_by_address: speaker.address.is_some(),
             }),
             group: None,
         }
@@ -2423,6 +2447,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }),
             when_source_quits: self.when_source_quits,
             cast_list: self.cast_list(),
+            cast_by_address: self.audio.cast_discovery() != CastDiscovery::Off,
             calibration: CalibrationState {
                 speaker_id: self.calibration.id.as_deref().map(speaker_key),
                 phase: self.calibration.phase,
@@ -2584,6 +2609,42 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if let Some(cast_id) = cast_id(id) {
             self.audio.resync_cast(cast_id);
         }
+    }
+
+    fn add_cast_address(&mut self, text: &str) -> Result<(), CastAddressError> {
+        let Some(address) = CastAddress::parse(text) else {
+            self.log
+                .log(|| "Cast: Add by Address turned down what was typed".to_owned());
+            return Err(CastAddressError::Invalid);
+        };
+        if !(self.cast_probe)(&address) {
+            self.log
+                .log(|| format!("Cast: nothing answers at {}", address.text()));
+            return Err(CastAddressError::NotFound);
+        }
+        cast_address::add(&mut self.cast_addresses, &address);
+        self.audio.add_cast_address(address);
+        self.take_events();
+        Ok(())
+    }
+
+    fn remove_cast_address(&mut self, id: &str) {
+        let Some(text) = cast_id(id).and_then(|cast_id| {
+            self.audio
+                .cast_speakers()
+                .into_iter()
+                .find(|speaker| speaker.id == cast_id)?
+                .address
+        }) else {
+            return;
+        };
+        let Some(address) = CastAddress::parse(&text) else {
+            return;
+        };
+        cast_address::remove(&mut self.cast_addresses, &address);
+        self.audio.remove_cast_address(&address);
+        self.take_events();
+        self.stop_if_idle();
     }
 
     /// Stores the adjustment that makes L what the user entered, with the
@@ -7020,6 +7081,80 @@ mod tests {
     /// The UI's ID of a Google Cast speaker.
     fn cc(id: &str) -> String {
         format!("cc:{id}")
+    }
+
+    /// The UI's ID of a Google Cast speaker added by address.
+    fn cc_address(text: &str) -> String {
+        let address = CastAddress::parse(text).expect("an address");
+        cc(&address.device_id().to_string())
+    }
+
+    // covers: C18
+    #[test]
+    fn add_by_address_checks_the_address_then_lists_and_keeps_the_speaker() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.set_cast_probe(|address| !address.host().ends_with(".invalid"));
+        assert!(adapter.snapshot().cast_by_address);
+        assert_eq!(
+            adapter.add_cast_address("not an address"),
+            Err(CastAddressError::Invalid)
+        );
+        assert_eq!(
+            adapter.add_cast_address("speaker.invalid"),
+            Err(CastAddressError::NotFound)
+        );
+        assert!(adapter.current_settings().cast_addresses.is_empty());
+
+        assert_eq!(adapter.add_cast_address(" 192.0.2.20 "), Ok(()));
+        let id = cc_address("192.0.2.20");
+        let row = speaker_of(&adapter, &id);
+        assert_eq!(row.name, "192.0.2.20");
+        assert_eq!(row.kind, SpeakerKind::Cast);
+        assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
+        let kitchen = speaker_of(&adapter, &cc(CAST_KITCHEN));
+        assert!(
+            !kitchen
+                .cast
+                .as_ref()
+                .is_some_and(|cast| cast.added_by_address)
+        );
+        assert_eq!(adapter.current_settings().cast_addresses, ["192.0.2.20"]);
+
+        adapter.remove_cast_address(&cc(CAST_KITCHEN));
+        assert!(
+            adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_some(),
+            "not added"
+        );
+        adapter.remove_cast_address(&id);
+        assert!(adapter.snapshot().speaker(&id).is_none());
+        assert!(adapter.current_settings().cast_addresses.is_empty());
+    }
+
+    #[test]
+    fn without_a_cast_sender_add_by_address_is_off() {
+        let adapter = AudioAdapter::new(launch_audio(), || "09.41".to_owned(), DebugLog::default());
+        assert!(!adapter.snapshot().cast_by_address);
+    }
+
+    // covers: C18
+    #[test]
+    fn speakers_added_by_address_come_back_at_the_next_launch() {
+        let dir = test_dir("adapter-settings-cast-address");
+        let path = dir.join(settings::FILE_NAME);
+        let with_cast = || {
+            let mut audio = launch_audio();
+            audio.set_cast(FakeCast::default().link());
+            audio
+        };
+        let mut adapter = launch(with_cast(), &path);
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20:8010"), Ok(()));
+        adapter.poll();
+
+        let adapter = launch(with_cast(), &path);
+        let row = speaker_of(&adapter, &cc_address("192.0.2.20:8010"));
+        assert_eq!(row.name, "192.0.2.20:8010");
+        assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
     }
 
     fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {

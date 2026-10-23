@@ -326,18 +326,18 @@ impl DeviceList {
         self.entries.iter_mut().find(|entry| entry.key == key)
     }
 
-    /// Adds a device by address, keyed by that address (C18). An address a
-    /// listed device already has names that device, which stays one row
-    /// (C16).
+    /// Adds a device by address, keyed by that address (C18). An address
+    /// and port a listed device already has names that device instead:
+    /// `Updated` with its key, and nothing is added (C16).
     pub fn add_manual(&mut self, address: SocketAddr) -> ListEvent {
-        let key = DeviceKey::Manual(address);
         if let Some(entry) = self
             .entries
             .iter()
-            .find(|entry| entry.key == key || entry.addresses.contains(&address))
+            .find(|entry| entry.addresses.contains(&address))
         {
             return ListEvent::Updated(entry.key);
         }
+        let key = DeviceKey::Manual(address);
         self.entries.push(Entry {
             key,
             device: None,
@@ -346,6 +346,15 @@ impl DeviceList {
             in_session: false,
         });
         ListEvent::Added(key)
+    }
+
+    /// Takes back a device added by address that no browse has found yet;
+    /// one a browse found stays, keyed by its `id` (C18).
+    pub fn remove_manual(&mut self, address: SocketAddr) -> Option<ListEvent> {
+        let key = DeviceKey::Manual(address);
+        let index = self.entries.iter().position(|entry| entry.key == key)?;
+        self.entries.remove(index);
+        Some(ListEvent::Removed(key))
     }
 
     /// Marks whether a session with the device is open (C17).

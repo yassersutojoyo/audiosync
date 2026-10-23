@@ -205,6 +205,107 @@ final class CastSender {
         }
     }
 
+    /// Adds a device by address (C18). A host name is looked up, and with
+    /// `probe` the address must take a TCP connection, both off the queue
+    /// since they can take seconds. `completion` gets, on the main queue
+    /// and before the change the add makes, the ID the sender lists the
+    /// device under: a new `manual:` one, or the one already listed with
+    /// that address. Nil when nothing answers there, the sender is gone, or
+    /// `stillWanted`, asked on the main queue before the add, says no.
+    func addDevice(_ address: CastManualAddress, probe: Bool, stillWanted: @escaping () -> Bool = { true },
+                   completion: @escaping (String?) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let ip = address.isIPv4 ? address.host : CastSender.ipv4Address(of: address.host)
+            guard let ip, !probe || CastSender.answers(ip: ip, port: address.port, timeout: CastSender.probeTimeout),
+                  let self else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let target = "\(ip):\(address.port)"
+            DispatchQueue.main.async { [weak self] in
+                guard let self, stillWanted() else { return completion(nil) }
+                self.addOnQueue(target, completion: completion)
+            }
+        }
+    }
+
+    private func addOnQueue(_ target: String, completion: @escaping (String?) -> Void) {
+        queue.async { [weak self] in
+            guard let self, let handle = self.handle else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            // What waited goes out first, so the add's own change leads what follows.
+            self.poll()
+            guard asc_cast_add_device(handle, target) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let changes = self.takeChanges(handle)
+            let id = changes.first?.id
+            DispatchQueue.main.async { [weak self] in
+                completion(id)
+                guard let self, self.active, !changes.isEmpty else { return }
+                self.onChanges(changes)
+            }
+        }
+    }
+
+    /// Takes back a device added by address that no browse has found (C18);
+    /// it is off already, and its gone change comes with the next poll.
+    func removeDevice(_ id: String) {
+        queue.async { [weak self] in
+            guard let self, let handle = self.handle else { return }
+            _ = asc_cast_remove_device(handle, id)
+        }
+    }
+
+    static let probeTimeout: TimeInterval = 3
+
+    /// Whether something at `ip:port` takes a TCP connection within
+    /// `timeout`. Blocks.
+    static func answers(ip: String, port: UInt16, timeout: TimeInterval) -> Bool {
+        var target = sockaddr_in()
+        target.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        target.sin_family = sa_family_t(AF_INET)
+        target.sin_port = port.bigEndian
+        guard inet_pton(AF_INET, ip, &target.sin_addr) == 1 else { return false }
+        let socketFD = socket(AF_INET, SOCK_STREAM, 0)
+        guard socketFD >= 0 else { return false }
+        defer { close(socketFD) }
+        _ = fcntl(socketFD, F_SETFL, fcntl(socketFD, F_GETFL, 0) | O_NONBLOCK)
+        let started = withUnsafePointer(to: &target) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(socketFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if started == 0 { return true }
+        guard errno == EINPROGRESS else { return false }
+        var waiting = pollfd(fd: socketFD, events: Int16(POLLOUT), revents: 0)
+        guard Darwin.poll(&waiting, 1, Int32(timeout * 1000)) == 1 else { return false }
+        var failure: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        guard getsockopt(socketFD, SOL_SOCKET, SO_ERROR, &failure, &length) == 0 else { return false }
+        return failure == 0
+    }
+
+    /// The first IPv4 address `host` resolves to, as text. Blocks.
+    static func ipv4Address(of host: String) -> String? {
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        hints.ai_socktype = SOCK_STREAM
+        var found: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &found) == 0, let first = found else { return nil }
+        defer { freeaddrinfo(found) }
+        guard let socketAddress = first.pointee.ai_addr else { return nil }
+        var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        let written = socketAddress.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { ipv4 -> Bool in
+            var raw = ipv4.pointee.sin_addr
+            return inet_ntop(AF_INET, &raw, &text, socklen_t(INET_ADDRSTRLEN)) != nil
+        }
+        return written ? text.withUnsafeBufferPointer { $0.baseAddress.map { String(cString: $0) } } : nil
+    }
+
     /// Starts the teardown on the queue and returns at once; the group is
     /// done when the sender is gone. Nothing more reaches the callbacks.
     /// Main queue.
@@ -275,8 +376,7 @@ final class CastSender {
         }
     }
 
-    private func poll() {
-        guard let handle else { return }
+    private func takeChanges(_ handle: OpaquePointer) -> [CastDeviceChange] {
         var changes: [CastDeviceChange] = []
         var rawDevice = AscCastDevice()
         while asc_cast_next_device(handle, &rawDevice) {
@@ -284,6 +384,12 @@ final class CastSender {
                 changes.append(change)
             }
         }
+        return changes
+    }
+
+    private func poll() {
+        guard let handle else { return }
+        let changes = takeChanges(handle)
         var events: [CastEvent] = []
         var rawEvent = AscCastEvent()
         while asc_cast_next_event(handle, &rawEvent) {

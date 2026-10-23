@@ -82,6 +82,10 @@ final class AppModel: ObservableObject {
         var resyncCast: (String) -> Void = { _ in }
         /// The offset the user set by ear, 0 to 20 000 ms.
         var setCastOffset: (String, Double) -> Void = { _, _ in }
+        /// The address typed in the sheet; the completion gets why it wasn't
+        /// added, nil once it is listed (C18).
+        var addCastAddress: (String, @escaping (CastAddProblem?) -> Void) -> Void = { _, done in done(.notFound) }
+        var removeCastAddress: (String) -> Void = { _ in }
         var openMainWindow: () -> Void = {}
         var openGuide: () -> Void = {}
         var refreshDevices: () -> Void = {}
@@ -135,6 +139,13 @@ final class AppModel: ObservableObject {
     @Published var cast: [Speaker] = []
     /// What the list says about Google Cast while it lists none.
     @Published var castList = CastListState.quiet
+    /// The Cast sender runs, so a device can be added by address.
+    @Published var castCanAdd = false
+    /// The main window shows the sheet that adds a Cast device by address.
+    @Published var castAddShown = false
+    /// Moves on whenever the address sheet goes away, so an add still being
+    /// tried for a sheet that was cancelled is dropped.
+    var castAddGeneration = 0
     /// The Mac's built-in speakers are listed, so local offsets are relative
     /// to them (S173, S181).
     @Published var hasLocalReference = true
@@ -611,7 +622,14 @@ struct MenuBarView: View {
         var height: CGFloat = 220
         height += CGFloat(min(model.notices.items.count, 2)) * 90
         if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
+        if offersCastAdd { height += 20 }
         return height
+    }
+
+    /// While the Google Cast search finds nothing, the panel offers adding
+    /// a speaker by address.
+    private var offersCastAdd: Bool {
+        model.castCanAdd && (model.castList == .noneFound || model.castList == .failed)
     }
 
     private var maxListHeight: CGFloat {
@@ -633,6 +651,15 @@ struct MenuBarView: View {
             Divider().padding(.vertical, -4)   // 6 pt on both sides
             speakerList(t)
                 .id(model.panelSession)
+            if offersCastAdd {
+                // The sheet belongs to the main window, which has room for it.
+                NoticeLink(title: t.castAddByAddress) {
+                    model.actions.openMainWindow()
+                    model.castAddShown = true
+                }
+                .help(t.castAddBody)
+                .accessibilityHint(t.castAddBody)
+            }
             // AirPlay comes last in the list, so what's wrong with AirPlay goes
             // right after it.
             if let problem = model.airPlayProblem {

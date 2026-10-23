@@ -1601,6 +1601,8 @@ typedef struct AscCastDevice {
     const char *name;  /* the name it announces, "" when none */
     const char *model; /* its model, "" when none */
     uint32_t flags;    /* ASC_CAST_FLAG_* bits */
+    const char *former; /* on the APPEARED of a device a browse found that was added by address:
+                           the "manual:<ip:port>" id it was listed under; "" otherwise */
 } AscCastDevice;
 
 /*
@@ -1676,6 +1678,14 @@ void asc_cast_stop_discovery(AscCast *cast);
  * address that doesn't read.
  */
 bool asc_cast_add_device(AscCast *cast, const char *address);
+
+/*
+ * Takes back a device added by address that no browse has found yet, by its
+ * "manual:<ip:port>" ID; its gone change follows. Turn it off first. Returns
+ * false for a NULL or dead handle, or an ID that names no such device: one a
+ * browse found stays listed under its id.
+ */
+bool asc_cast_remove_device(AscCast *cast, const char *id);
 
 /*
  * Takes the next device change, if one is waiting, into *device and returns

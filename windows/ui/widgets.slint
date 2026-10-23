@@ -1109,6 +1109,8 @@ export component SpeakerRow inherits Rectangle {
     // A Google Cast speaker's Mute (true) or Unmute (false), and its Resync.
     callback cast-muted(bool);
     callback cast-resync();
+    // Remove, for a Google Cast speaker the user added by address.
+    callback cast-remove();
     // Calibrate with Microphone, and Cancel while it runs.
     callback calibrate();
     callback cancel-calibration();
@@ -1179,7 +1181,8 @@ export component SpeakerRow inherits Rectangle {
     // of one that can't simply play, or that is on but can't play right now
     // ("Waiting for device", "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group-note);
-    property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
+    property <string> state-note: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
+    property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
     property <string> caption: Strings.speaker-caption(root.item.show-kind ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     // A click on the row's box works like its delay button; a row without a
@@ -1274,6 +1277,13 @@ export component SpeakerRow inherits Rectangle {
                         root.forget-pairing();
                     }
                 }
+
+                if root.item.cast-added-by-address: MenuItem {
+                    title: Strings.cast-remove;
+                    activated => {
+                        root.cast-remove();
+                    }
+                }
             }
 
             VerticalLayout {
@@ -1296,7 +1306,7 @@ export component SpeakerRow inherits Rectangle {
                         badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
-                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
+                            label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
                             description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();

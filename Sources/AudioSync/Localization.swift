@@ -873,7 +873,7 @@ struct UIStrings {
         case .connecting: return "Connecting…"
         case .reconnecting: return "Reconnecting…"
         case .playing where row.muted: return row.group == nil ? "Muted on the speaker" : "Muted on the group"
-        case .playing, .idle: return row.group.map(castGroupNote)
+        case .playing, .idle: return row.group.map(castGroupNote) ?? (row.manual ? castAddedByAddress : nil)
         }
     }
     func castGroupNote(_ members: CastGroupMembers) -> String {
@@ -898,6 +898,26 @@ struct UIStrings {
     /// What VoiceOver reads for those buttons: the button's text, so Voice
     /// Control finds it by what it shows, then the speaker ("Mute, Kitchen").
     func castButtonLabel(_ text: String, name: String) -> String { "\(text), \(name)" }
+
+    // A Google Cast speaker added by address when discovery can't find it (C18).
+    let castAddByAddress = "Add by Address…"
+    let castAddTitle = "Add a Cast Speaker by Address"
+    let castAddBody = "Use this when a Google Cast speaker doesn't show up. Enter its IP address or host name, and add :port only if it doesn't use 8009."
+    let castAddField = "Address"
+    let castAddInvalid = "That isn't an IP address or host name. Check it and try again."
+    let castAddNotFound = "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
+    /// What VoiceOver reads for the spinner while the address is tried.
+    let castAddLooking = "Looking for the speaker…"
+    func castAddProblem(_ problem: CastAddProblem) -> String {
+        switch problem {
+        case .unreadable: return castAddInvalid
+        case .notFound: return castAddNotFound
+        }
+    }
+    let castAdd = "Add"
+    let castRemove = "Remove"
+    /// Under the name of a speaker added by address until a search finds it.
+    let castAddedByAddress = "Added by address"
     /// The volume slider's hint when the device's volume can't be changed.
     let castVolumeFixed = "This speaker's volume can't be changed from AudioSync."
     /// Under a Cast speaker's delay field, in place of the sync hint (CAST_SPEC C74-C77).
@@ -1153,7 +1173,9 @@ struct UIStrings {
         the group reports them. Those speakers keep their own rows and are
         busy while the group plays. While a Cast speaker or group plays,
         Resync under its volume restarts the stream, with a short gap, so it
-        lines up at its offset again.
+        lines up at its offset again. If a Cast speaker doesn't show up, click
+        \(castAddByAddress) under the speaker list and enter its IP address or
+        host name.
 
         Notices
         When something needs your attention, such as a speaker that was switched

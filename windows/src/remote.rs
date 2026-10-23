@@ -384,6 +384,7 @@ mod tests {
             state: CastState::Idle,
             muted: false,
             volume_fixed: false,
+            added_by_address: false,
             volume_step: 1.0,
         });
         let mut den = speaker("den", SpeakerKind::AirPlay2, None);
@@ -412,6 +413,7 @@ mod tests {
             airplay_none_found: false,
             when_source_quits: Default::default(),
             cast_list: crate::ui_model::CastList::Quiet,
+            cast_by_address: false,
             calibration: Default::default(),
             calibrate_all: Default::default(),
         }

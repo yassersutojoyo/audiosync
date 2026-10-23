@@ -43,13 +43,32 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] Cast: the sender started, but multicast DNS couldn't browse")
             castModel.discovery = .failed
         }
+        if running { addStoredCastAddresses(sender) }
         pushModel()
+    }
+
+    /// The addresses the user added before, given to the sender again: it
+    /// keeps nothing added by hand from one launch to the next.
+    private func addStoredCastAddresses(_ sender: CastSender) {
+        for address in SettingsStore.standard.castManualList.addresses {
+            // Not probed: a speaker that is off now still comes back once it answers.
+            sender.addDevice(address, probe: false) { [weak self] id in
+                guard let self, self.castSender === sender else { return }
+                guard let id else {
+                    DebugTrace.log("[AudioSync] Cast: the stored address \(address.text) could not be added")
+                    return
+                }
+                self.castModel.addedManually(id, address: address)
+                self.pushModel()
+            }
+        }
     }
 
     private func castDevicesChanged(_ changes: [CastDeviceChange]) {
         for change in changes {
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
             castModel.apply(change)
+            if case .appeared(let device, _, let former?) = change { moveCastNotices(from: former, to: device.id) }
         }
         castFollow()
     }
@@ -61,6 +80,17 @@ extension AppDelegate {
             castOutcome(outcome)
         }
         castFollow()
+    }
+
+    /// A problem said about a device added by address goes with it to the
+    /// ID a browse found it under. The AirPlay-ahead notice is left to
+    /// `syncNetworkHoldBacks`, which posts it again under the new ID.
+    private func moveCastNotices(from old: String, to new: String) {
+        var list = appModel.notices
+        guard let notice = list.items.first(where: { $0.subject == Notice.cast(old) }) else { return }
+        list.clear([Notice.cast(old)])
+        list.post(notice.text, subject: Notice.cast(new), at: notice.date, title: notice.title, settings: notice.settings)
+        appModel.notices = list
     }
 
     /// The session follows the model, then local outputs and the views.
@@ -190,6 +220,60 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// The user's Add in the address sheet: `completion` gets nil once the
+    /// sender lists the device (a new row whose address is stored, or the
+    /// row already listed at that address), else why it wasn't added.
+    func addCastAddress(_ typed: String, completion: @escaping (CastAddProblem?) -> Void) {
+        guard let address = CastManualAddress(typed) else { return completion(.unreadable) }
+        guard let sender = castSender else { return completion(.notFound) }
+        // A sheet cancelled while the address is tried adds nothing.
+        let generation = appModel.castAddGeneration
+        let stillWanted = { [weak self] in self?.appModel.castAddGeneration == generation }
+        sender.addDevice(address, probe: true, stillWanted: stillWanted) { [weak self] id in
+            if id == nil, self?.appModel.castAddGeneration != generation {
+                DebugTrace.log("[AudioSync] Cast: adding \(address.text) was cancelled")
+                return completion(.notFound)
+            }
+            guard let self, self.castSender === sender, let id else {
+                DebugTrace.log("[AudioSync] Cast: nothing answers at \(address.text)")
+                completion(.notFound)
+                return
+            }
+            guard id.hasPrefix(CastModel.manualPrefix) else {
+                // Already listed by a browse: its row is the one, nothing to keep.
+                DebugTrace.log("[AudioSync] Cast: \(address.text) is \(id), listed already")
+                completion(nil)
+                return
+            }
+            DebugTrace.log("[AudioSync] Cast: \(address.text) added by address as \(id)")
+            let store = SettingsStore.standard
+            var list = store.castManualList
+            // Two addresses for one device keep only the newer.
+            if let before = self.castModel.addedManually(id, address: address) { list.remove(before) }
+            list.add(address)
+            store.save(list)
+            self.pushModel()
+            completion(nil)
+        }
+    }
+
+    /// Remove on a device added by address: its address isn't added at the
+    /// next launch, and one no browse found goes off and leaves the list.
+    func removeCastAddress(_ appID: String) {
+        guard let id = CastID.device(appID), castModel.manualAddresses[id] != nil else { return }
+        if castModel.devices[id]?.manual == true, castModel.enabled == id { setCastEnabled(appID, false) }
+        let unfound = castModel.devices[id]?.manual == true
+        guard let address = castModel.removeManual(id) else { return }
+        if unfound { castSender?.removeDevice(id) }
+        DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
+        let store = SettingsStore.standard
+        var list = store.castManualList
+        list.remove(address)
+        store.save(list)
+        clearNotices([Notice.cast(id)])
+        castFollow()
+    }
+
     // MARK: - Track info
 
     /// A Cast device is on: it shows the track from its next load (C53, C54),
@@ -228,15 +312,19 @@ extension AppDelegate {
                                     systemName: text.deviceName(device.name),
                                     cast: CastRow(status: castModel.status(of: id), muted: volume?.muted ?? false,
                                                   volumeFixed: volume?.fixed ?? false,
-                                                  group: castModel.groupMembers(of: id, name: castMemberName)))
+                                                  group: castModel.groupMembers(of: id, name: castMemberName),
+                                                  manual: device.manual,
+                                                  removable: castModel.manualAddresses[id] != nil))
         }
     }
 
     /// A Cast speaker's name as the rows and notices show it: the user's,
-    /// else the one it announces.
+    /// else the one it announces, else the address it was added with.
     func castName(_ id: String) -> String {
-        speakerNames.shown(key: SpeakerKey.make(id: CastID.app(id), airplay: false),
-                           system: text.deviceName(castModel.devices[id]?.name ?? ""))
+        let announced = castModel.devices[id]?.name ?? ""
+        let shown = announced.isEmpty ? castModel.manualAddresses[id]?.text ?? "" : announced
+        return speakerNames.shown(key: SpeakerKey.make(id: CastID.app(id), airplay: false),
+                                  system: text.deviceName(shown))
     }
 
     /// A group member as its row shows it: the listed device's name, the
@@ -256,7 +344,8 @@ extension AppDelegate {
                 + (d.offline ? ", offline" : "") + (offset.map { ", offset \(Int($0)) ms" } ?? "")
         }
         switch change {
-        case .appeared(let d, let offset): return "appeared: " + describe(d, offset)
+        case .appeared(let d, let offset, let former):
+            return "appeared: " + describe(d, offset) + (former.map { ", was \($0)" } ?? "")
         case .changed(let d, let offset): return "changed: " + describe(d, offset)
         case .gone(let id): return "gone: \(id)"
         }

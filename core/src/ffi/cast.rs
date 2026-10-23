@@ -200,6 +200,10 @@ pub struct AscCastDevice {
     /// The `md` TXT value; "" when it has none.
     pub model: *const c_char,
     pub flags: u32,
+    /// On the [`CAST_APPEARED`] of a device a browse found that was added
+    /// by address, the `manual:<address>` ID it was listed under, so the
+    /// host moves what it kept for it (C18); "" otherwise.
+    pub former: *const c_char,
 }
 
 /// One member of the playing group (C94, C95). The strings are
@@ -331,6 +335,7 @@ struct Change {
     name: String,
     model: String,
     flags: u32,
+    former: String,
 }
 
 /// An attempt whose `Ended` hasn't come yet.
@@ -460,7 +465,7 @@ pub struct AscCast {
     open_browser: OpenBrowser,
     changes: VecDeque<Change>,
     /// The strings of the last device change handed out: ID, name, model.
-    change_strings: [CString; 3],
+    change_strings: [CString; 4],
     events: VecDeque<Pending>,
     /// The strings of the last event handed out: ID, detail.
     event_strings: [CString; 2],
@@ -644,6 +649,7 @@ impl AscCast {
             name: String::new(),
             model: String::new(),
             flags: 0,
+            former: String::new(),
         };
         if let Some(entry) = entry {
             if let Some(device) = &entry.device {
@@ -713,6 +719,9 @@ impl AscCast {
                 }
                 self.change(CAST_GONE, DeviceKey::Manual(from));
                 self.change(CAST_APPEARED, DeviceKey::Id(id));
+                if let Some(appeared) = self.changes.back_mut() {
+                    appeared.former = device_id_text(DeviceKey::Manual(from));
+                }
                 self.log_group(DeviceKey::Id(id));
             }
             ListEvent::Skipped(_) => {}
@@ -909,6 +918,7 @@ impl AscCast {
             c_string(&change.id),
             c_string(&change.name),
             c_string(&change.model),
+            c_string(&change.former),
         ];
         AscCastDevice {
             event: change.event,
@@ -916,6 +926,7 @@ impl AscCast {
             name: self.change_strings[1].as_ptr(),
             model: self.change_strings[2].as_ptr(),
             flags: change.flags,
+            former: self.change_strings[3].as_ptr(),
         }
     }
 
@@ -1199,6 +1210,33 @@ pub unsafe extern "C" fn asc_cast_add_device(cast: *mut AscCast, address: *const
     unsafe {
         live(cast, false, |cast| {
             let event = cast.list.add_manual(address);
+            cast.listed(event);
+            true
+        })
+    }
+}
+
+/// Takes back a device added by address that no browse has found yet, by
+/// its `manual:<ip:port>` ID; its gone change follows (C18). The host turns
+/// it off first. False for a null or dead handle, or an ID that names no
+/// such device: one a browse found stays listed under its `id`.
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract;
+/// `id` is null or a NUL-terminated string, unchanged during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_remove_device(cast: *mut AscCast, id: *const c_char) -> bool {
+    // SAFETY: as the caller's.
+    let Some(DeviceKey::Manual(address)) = unsafe { host_text(id) }.and_then(device_key) else {
+        return false;
+    };
+    // SAFETY: as the caller's.
+    unsafe {
+        live(cast, false, |cast| {
+            let Some(event) = cast.list.remove_manual(address) else {
+                return false;
+            };
             cast.listed(event);
             true
         })
@@ -1981,6 +2019,7 @@ mod tests {
             name: ptr::null(),
             model: ptr::null(),
             flags: 0,
+            former: ptr::null(),
         }
     }
 
@@ -1995,6 +2034,7 @@ mod tests {
                 name: text(device.name),
                 model: text(device.model),
                 flags: device.flags,
+                former: text(device.former),
             });
         }
         found
@@ -2099,6 +2139,10 @@ mod tests {
             assert!(!asc_cast_start_discovery(no_handle));
             asc_cast_stop_discovery(no_handle);
             assert!(!asc_cast_add_device(no_handle, c"127.0.0.1".as_ptr()));
+            assert!(!asc_cast_remove_device(
+                no_handle,
+                c"manual:127.0.0.1:8009".as_ptr()
+            ));
             assert!(!asc_cast_next_device(no_handle, &mut device));
             assert!(!asc_cast_next_event(no_handle, &mut event));
             let id = c"manual:127.0.0.1:8009".as_ptr();
@@ -2137,6 +2181,8 @@ mod tests {
             assert!(!asc_cast_next_event(handle, ptr::null_mut()));
             assert!(!asc_cast_add_device(handle, ptr::null()));
             assert!(!asc_cast_add_device(handle, c"not an address".as_ptr()));
+            assert!(!asc_cast_remove_device(handle, ptr::null()));
+            assert!(!asc_cast_remove_device(handle, c"\xff".as_ptr()));
             assert!(!asc_cast_set_volume(handle, f64::NAN));
             assert!(!asc_cast_set_artwork(handle, ptr::null(), 3));
             assert!(!asc_cast_set_metadata(
@@ -2214,6 +2260,7 @@ mod tests {
             name: name.to_owned(),
             model: "Chromecast Audio".to_owned(),
             flags,
+            former: String::new(),
         };
         let gone = Change {
             event: CAST_GONE,
@@ -2221,6 +2268,7 @@ mod tests {
             name: String::new(),
             model: String::new(),
             flags: 0,
+            former: String::new(),
         };
         assert_eq!(
             devices(handle),
@@ -2325,6 +2373,7 @@ mod tests {
             name: String::new(),
             model: String::new(),
             flags,
+            former: String::new(),
         };
         assert_eq!(
             devices(handle),
@@ -2342,6 +2391,40 @@ mod tests {
             (seen[1].event, seen[1].id.as_str()),
             (CAST_APPEARED, KITCHEN)
         );
+        assert_eq!(seen[1].former, "manual:192.0.2.5:8009", "what it was");
+        destroy(handle);
+    }
+
+    // CAST_SPEC: C18
+    #[test]
+    fn a_device_added_by_address_can_be_taken_back_until_a_browse_finds_it() {
+        let handle = create();
+        let id = add(handle, "192.0.2.5:8009");
+        add(handle, "192.0.2.6");
+        assert_eq!(devices(handle).len(), 2);
+        let remove = |id: &str| {
+            let id = CString::new(id).unwrap();
+            // SAFETY: a live handle, used by this thread only.
+            unsafe { asc_cast_remove_device(handle, id.as_ptr()) }
+        };
+        assert!(remove(&id));
+        let seen = devices(handle);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(
+            (seen[0].event, seen[0].id.as_str()),
+            (CAST_GONE, id.as_str())
+        );
+        assert!(!remove(&id), "already gone");
+        assert!(!remove("manual:192.0.2.9:8009"), "never added");
+        assert!(!remove("192.0.2.6"), "an address, not an ID");
+        let found = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 6));
+        browse(handle, vec![BrowseEvent::Resolved(found)], false);
+        assert_eq!(devices(handle).len(), 2);
+        assert!(!remove("manual:192.0.2.6:8009"), "identified");
+        assert!(!remove(KITCHEN), "found by a browse");
+        assert!(devices(handle).is_empty());
+        let (attempt, refused) = start(handle, &id);
+        assert_eq!((attempt, refused), (0, CAST_REFUSED_UNKNOWN));
         destroy(handle);
     }
 
