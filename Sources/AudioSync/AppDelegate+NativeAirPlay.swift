@@ -321,26 +321,27 @@ extension AppDelegate {
     /// speakers, local delays and auto-connect follow.
     func refreshNativeRows() {
         guard let native = nativeAirPlay else { return }
-        let model = native.model
+        let joinable = adoptNativeRows(native.model, stopped: false)
+        retimeLocalOutputs()   // also when only a speaker's playing state changed
+        syncNativeSpeakers()
+        autoConnect(joinable.map { SpeakerKey.make(id: $0, airplay: true) })
+        pushModel()
+    }
+
+    /// Sets the AirPlay rows, names and access from `model`; returns the
+    /// rows that appeared and can play, for auto-connect (none if `stopped`).
+    private func adoptNativeRows(_ model: NativeAirPlayModel, stopped: Bool) -> [String] {
         let rows = model.rows(enabled: enabledAirPlay)
-        let known = Set(airplayOrder)
         for id in rows {
             guard let receiver = NativeAirPlayID.receiver(id) else { continue }
             if let name = model.names[receiver] { airplayNames[id] = name }
             airplayAccess[id] = model.access(receiver) ?? .open
         }
-        let appeared = rows.filter { !known.contains($0) }
+        let joinable = model.joinable(rows, after: Set(airplayOrder), stopped: stopped)
         airplayOrder = rows
         updatePtpPortNotice { $0.listed(rows) }
         airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
-        retimeLocalOutputs()   // also when only a speaker's playing state changed
-        syncNativeSpeakers()
-        let joinable = appeared.filter { id in
-            guard let receiver = NativeAirPlayID.receiver(id) else { return false }
-            return model.receivers[receiver]?.availability == .available
-        }
-        autoConnect(joinable.map { SpeakerKey.make(id: $0, airplay: true) })
-        pushModel()
+        return joinable
     }
 
     /// Makes the sender's speakers match the switches while streaming, and
@@ -361,10 +362,8 @@ extension AppDelegate {
             native.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
         }
-        if plan.changesRows {
-            airplayOrder = native.model.rows(enabled: enabledAirPlay)
-            airplayEmptySince = airplayOrder.isEmpty ? (airplayEmptySince ?? Date()) : nil
-        }
+        // The plan's own streaming input: stopEngine stops the engine before it syncs.
+        let appeared = plan.changesRows ? adoptNativeRows(native.model, stopped: !engine.isRunning) : []
         for id in plan.add {
             let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume
             native.add(id, volume: volume)
@@ -374,6 +373,7 @@ extension AppDelegate {
         for off in plan.turnOff {
             turnOffNativeSpeaker(NativeAirPlayID.app(off.id), reason: off.reason, origin: .automatic)
         }
+        autoConnect(appeared.map { SpeakerKey.make(id: $0, airplay: true) })
     }
 
     /// The user's click on a native speaker: it is switched, and the

@@ -425,6 +425,18 @@ struct NativeAirPlayModel {
         return isPlaying(id) ? .open : nil
     }
 
+    /// The rows (app IDs) missing from `known` whose receiver is listed as
+    /// able to play: the ones auto-connect may switch on. None for rows a
+    /// stop rebuilt (`stopped`), as auto-connect would restart streaming
+    /// from inside the stop.
+    func joinable(_ rows: [String], after known: Set<String>, stopped: Bool) -> [String] {
+        guard !stopped else { return [] }
+        return rows.filter { id in
+            guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id) else { return false }
+            return receivers[receiver]?.availability == .available
+        }
+    }
+
     /// The app IDs local outputs line up with when switched on (S79 under
     /// this sender, as in the Windows app): listed as able to play, or
     /// playing. A receiver listed as unable to play and not playing, or one
