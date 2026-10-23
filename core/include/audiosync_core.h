@@ -475,7 +475,8 @@ void asc_ring_writer_reset(AscRingWriter *writer);
  * Creates a reader of `ring` for a session captured at capture_rate (Hz). Its
  * delay starts at 0 (one block) and its drift tolerance at 50 ms; it anchors
  * on its first read that finds more than its delay written, and reads silence
- * until then. Returns NULL outside 8000...384000 Hz.
+ * until then. Returns NULL outside 8000...384000 Hz, or for a capture_rate
+ * whose 24 s the ring can't hold (asc_ring_supports_rate).
  */
 AscReader *asc_reader_create(AscRing *ring, uint32_t capture_rate);
 
@@ -643,7 +644,8 @@ typedef struct AscRenderer AscRenderer;
  * Control thread: a renderer reading `ring`, captured at capture_rate, for a
  * device running at device_rate with `channels` interleaved channels, at
  * linear gain `gain`; its delay is 0 until one is set. NULL for a NULL ring,
- * no channels, or a rate outside 8000...384000 Hz.
+ * no channels, a rate outside 8000...384000 Hz, or a capture_rate whose 24 s
+ * the ring can't hold (asc_ring_supports_rate).
  */
 AscRenderer *asc_renderer_create(AscRing *ring, uint32_t capture_rate, uint32_t device_rate, size_t channels,
                                  float gain);

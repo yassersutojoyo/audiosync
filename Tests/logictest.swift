@@ -3645,7 +3645,7 @@ do {
     // the first 448 of the next, so its last frame is at offset 447 there.
     do {
         let rate = 48_000.0, frames = 512, period: UInt64 = 10_666_667, latency: UInt64 = 5 * ms
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let renderer = CoreRenderer(ring: ring, captureRate: rate, deviceRate: rate, channels: 2, gain: 1) {
             let level = [Float](repeating: 0.5, count: 480 * 2)
             for _ in 0..<100 { level.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 480) } }
@@ -3685,7 +3685,7 @@ do {
     // 512 frames to its start lead, which its start line logs in ms.
     do {
         let name = "bluetooth lead: a Bluetooth output's start lead counts a capture block more"
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
            let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
             buds.setBluetooth(true)
@@ -3700,7 +3700,7 @@ do {
     // way to its latest plausible one, else 150 ms; any other stays as it is.
     do {
         let name = "bluetooth latency: a report outside the window gives way, any other output's stays"
-        if let ring = CoreDelayRing(capacityFrames: 48_000 * 4),
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
            let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
            let buds = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
             buds.setBluetooth(true)
