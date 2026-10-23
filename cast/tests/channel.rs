@@ -714,3 +714,204 @@ fn a_message_without_a_type_or_for_someone_else_still_keeps_the_channel_alive() 
     channel.tick(elsewhere + DEAD_AFTER);
     assert!(channel.is_ended());
 }
+
+/// A device `PING` at each second up to `until`, ticking the channel, so
+/// only the launch timer can end anything.
+fn keep_alive(channel: &mut Channel, from: Instant, until: Instant) {
+    let mut now = from;
+    while now < until {
+        now = (now + Duration::from_secs(1)).min(until);
+        channel.handle(
+            now,
+            json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PING"})),
+        );
+        channel.tick(now);
+    }
+}
+
+fn launch_failures(channel: &mut Channel) -> Vec<LaunchError> {
+    events(channel)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::LaunchFailed(error) => Some(error),
+            _ => None,
+        })
+        .collect()
+}
+
+// covers: C41
+#[test]
+fn the_retry_after_cancelled_gets_its_own_fifteen_seconds() {
+    let start = Instant::now();
+    let mut channel = ready(start, Vec::new());
+    channel.launch(start).expect("ready");
+    sent(&mut channel);
+    let cancelled = start + Duration::from_secs(10);
+    keep_alive(&mut channel, start, cancelled);
+    channel.handle(
+        cancelled,
+        json_message(
+            PLATFORM,
+            SENDER,
+            NS_RECEIVER,
+            json!({"type": "LAUNCH_ERROR", "requestId": 101, "reason": "CANCELLED"}),
+        ),
+    );
+    assert!(sent(&mut channel).iter().any(|m| m.2["type"] == "LAUNCH"));
+    keep_alive(
+        &mut channel,
+        cancelled,
+        cancelled + LAUNCH_TIMEOUT - Duration::from_millis(1),
+    );
+    assert!(
+        launch_failures(&mut channel).is_empty(),
+        "the first LAUNCH's 15 s don't bound the retry"
+    );
+    channel.tick(cancelled + LAUNCH_TIMEOUT);
+    assert_eq!(launch_failures(&mut channel), [LaunchError::Timeout]);
+}
+
+// covers: C38, C41
+#[test]
+fn an_unasked_status_listing_the_app_completes_the_launch() {
+    let start = Instant::now();
+    let mut channel = ready(start, Vec::new());
+    channel.launch(start).expect("ready");
+    sent(&mut channel);
+    // Without a transportId the app can't be addressed yet.
+    channel.handle(
+        start,
+        status(
+            0,
+            vec![json!({"appId": DEFAULT_MEDIA_RECEIVER, "sessionId": "s-1"})],
+        ),
+    );
+    assert!(sent(&mut channel).is_empty());
+    assert!(
+        !events(&mut channel)
+            .iter()
+            .any(|event| matches!(event, Event::Launched { .. }))
+    );
+    channel.handle(
+        start,
+        status(0, vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")]),
+    );
+    assert_eq!(
+        sent(&mut channel),
+        vec![(
+            "t-1".to_owned(),
+            NS_CONNECTION.to_owned(),
+            json!({"type": "CONNECT"})
+        )]
+    );
+    assert!(events(&mut channel).iter().any(|event| matches!(
+        event,
+        Event::Launched { app, reused: false } if app.session_id == "s-1" && app.transport_id == "t-1"
+    )));
+    keep_alive(&mut channel, start, start + LAUNCH_TIMEOUT);
+    assert!(
+        launch_failures(&mut channel).is_empty(),
+        "the launch is over"
+    );
+}
+
+// covers: C33
+#[test]
+fn only_the_status_that_answers_get_status_makes_the_channel_ready() {
+    let start = Instant::now();
+    let mut channel = Channel::open(start, RequestIds::starting_at(7));
+    sent(&mut channel);
+    channel.handle(start, status(0, Vec::new()));
+    channel.handle(start, status(8, Vec::new()));
+    assert!(!channel.is_ready());
+    assert_eq!(channel.launch(start), Err(LaunchError::NotReady));
+    channel.handle(start, status(7, Vec::new()));
+    assert!(channel.is_ready());
+}
+
+// covers: C43
+#[test]
+fn another_session_of_the_default_media_receiver_is_a_take_over() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    channel.handle(
+        start,
+        status(0, vec![app(DEFAULT_MEDIA_RECEIVER, "s-2", "t-2")]),
+    );
+    assert!(channel.is_ended());
+    assert!(events(&mut channel).contains(&Event::Ended(EndReason::TakenOver)));
+    assert!(sent(&mut channel).is_empty(), "no relaunch");
+}
+
+// covers: C82
+#[test]
+fn a_close_from_the_app_ends_as_taken_over_when_the_status_lacks_it() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    channel.handle(
+        start,
+        json_message("t-9", SENDER, NS_CONNECTION, json!({"type": "CLOSE"})),
+    );
+    assert!(
+        sent(&mut channel).is_empty(),
+        "a stranger's CLOSE is ignored"
+    );
+    assert!(!channel.is_ended());
+
+    channel.handle(
+        start,
+        json_message("t-1", SENDER, NS_CONNECTION, json!({"type": "CLOSE"})),
+    );
+    let out = sent(&mut channel);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].0, PLATFORM);
+    assert_eq!(out[0].2["type"], "GET_STATUS");
+    let id = out[0].2["requestId"].as_u64().expect("id") as u32;
+    channel.handle(start, status(id, Vec::new()));
+    assert!(channel.is_ended());
+    assert!(events(&mut channel).contains(&Event::Ended(EndReason::TakenOver)));
+    assert!(sent(&mut channel).is_empty(), "no CONNECT, no relaunch");
+}
+
+// covers: C87
+#[test]
+fn a_stop_while_the_launch_waits_sends_only_the_platform_close() {
+    let start = Instant::now();
+    let mut channel = ready(start, Vec::new());
+    channel.launch(start).expect("ready");
+    sent(&mut channel);
+    channel.stop(start);
+    assert_eq!(
+        sent(&mut channel),
+        vec![(
+            PLATFORM.to_owned(),
+            NS_CONNECTION.to_owned(),
+            json!({"type": "CLOSE"})
+        )]
+    );
+    assert!(channel.is_ended());
+    assert!(events(&mut channel).contains(&Event::Ended(EndReason::Stopped)));
+    // The app that launch starts is left running; its late status is
+    // ignored.
+    channel.handle(
+        start + Duration::from_secs(1),
+        status(101, vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")]),
+    );
+    assert!(sent(&mut channel).is_empty());
+    assert!(events(&mut channel).is_empty());
+}
+
+// covers: C40, C87
+#[test]
+fn a_reused_app_is_the_senders_to_stop() {
+    let start = Instant::now();
+    let mut channel = ready(start, vec![app(DEFAULT_MEDIA_RECEIVER, "s-5", "t-5")]);
+    channel.launch(start).expect("ready");
+    sent(&mut channel);
+    channel.stop(start);
+    let out = sent(&mut channel);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].0, PLATFORM);
+    assert_eq!(out[0].2["type"], "STOP");
+    assert_eq!(out[0].2["sessionId"], "s-5");
+}
