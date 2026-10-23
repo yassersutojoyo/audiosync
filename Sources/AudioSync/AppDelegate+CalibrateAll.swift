@@ -39,7 +39,8 @@ extension AppDelegate {
         }
         guard let rate = CalibrationMicrophone.defaultInputRate() else { return calibrateAllFailed(.noMicrophone) }
         guard let handle = CalibrateAllRunHandle(rate: rate, speakers: speakers) else {
-            return calibrateAllFailed(.unsupportedRate)
+            // At a supported rate the core refuses only an arrival whose recording wouldn't fit there.
+            return calibrateAllFailed(asc_calibration_signal_frames(rate) > 0 ? .tooLong(nil) : .unsupportedRate)
         }
         var status = appModel.calibrateAll
         status.sheet = nil
@@ -223,10 +224,11 @@ extension AppDelegate {
     func calibrateAllPlan() -> Result<[CalibrateAllSpeaker], CalibrateAllBlocker> {
         let playing = calibratePlayingIDs()
         let airPlayL = airPlayChosenAndListed ? airPlayLatencyMs : nil
-        var cast: (id: String, name: String, offsetMs: Double?, waitMs: Double)?
+        var cast: (id: String, name: String, offsetMs: Double?, waitMs: Double, format: Int32)?
         if let device = castModel.enabled, playing.contains(CastID.app(device)) {
             cast = (id: CastID.app(device), name: castName(device), offsetMs: castModel.offsets[device],
-                    waitMs: NetworkHoldBack.castMs(airPlay: airPlayL, cast: castModel.anchorMs))
+                    waitMs: NetworkHoldBack.castMs(airPlay: airPlayL, cast: castModel.anchorMs),
+                    format: castModel.playingFormat)
         }
         let wanted = NetworkHoldBack.airPlayMs(airPlay: airPlayL, cast: castModel.anchorMs)
         let inputs = CalibrateAllFlow.Inputs(

@@ -207,11 +207,6 @@ enum CalibrateAllFlow {
     /// as the single-speaker calibration allows (`CalibrationFlow`).
     static let latencyAllowanceMs = CalibrationFlow.latencyAllowanceS * 1000
 
-    /// How long the music already sent to a Cast speaker without a stored
-    /// offset may still play: its latency isn't known before it is measured,
-    /// so this is a guess the measurement replaces.
-    static let unknownCastLatencyMs = 3000.0
-
     /// The sweep's length (S233).
     static let sweepSeconds = 0.75
 
@@ -224,8 +219,9 @@ enum CalibrateAllFlow {
         var localOutputs: [(id: String, name: String)]
         var localOffsets: [String: Double]
         var holdBacks: [String: Double]
-        /// The Cast speaker that plays, its stored offset and how long its feed waits.
-        var cast: (id: String, name: String, offsetMs: Double?, waitMs: Double)?
+        /// The Cast speaker that plays, its stored offset, how long its feed
+        /// waits and the `ASC_CAST_FORMAT_` code its session plays (0: none yet).
+        var cast: (id: String, name: String, offsetMs: Double?, waitMs: Double, format: Int32)?
         /// AirPlay speakers that play, in the window's order.
         var airPlay: [(id: String, name: String)]
         /// L, the AirPlay delay as its field shows it (S178).
@@ -251,9 +247,10 @@ enum CalibrateAllFlow {
             speakers.append(local(output.id, output.name, offset: inputs.localOffsets[output.id]))
         }
         if let cast = inputs.cast {
-            let wait = cast.waitMs.isFinite ? max(0, cast.waitMs) : 0
+            let latency = asc_calibration_cast_wait_ms(cast.offsetMs != nil, cast.offsetMs ?? 0, cast.waitMs,
+                                                       cast.format)
             speakers.append(CalibrateAllSpeaker(id: cast.id, name: cast.name, kind: .cast, offsetMs: cast.offsetMs,
-                                                latencyMs: cast.offsetMs.map { $0 + wait + latencyAllowanceMs } ?? wait))
+                                                latencyMs: latency))
         }
         let airPlayLatency = max(0, inputs.airPlayDelayMs) + max(0, inputs.airPlayHoldBackMs) + latencyAllowanceMs
         for speaker in inputs.airPlay {
@@ -265,9 +262,7 @@ enum CalibrateAllFlow {
 
     /// How long a speaker's music or sweep, once sent, may still play.
     static func playOutSeconds(_ speaker: CalibrateAllSpeaker) -> Double {
-        let latency = speaker.latencyMs.isFinite ? max(0, speaker.latencyMs) : 0
-        let unknown = speaker.kind == .cast && speaker.offsetMs == nil ? unknownCastLatencyMs : 0
-        return (latency + unknown) / 1000
+        (speaker.latencyMs.isFinite ? max(0, speaker.latencyMs) : 0) / 1000
     }
 
     /// How long the music on its way to every speaker taking part plays out

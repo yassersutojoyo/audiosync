@@ -1676,6 +1676,43 @@ do {
             && NativeSpeakerEvent.timeline(latencyMs: 1750, restarted: true).logLine(name: names)
             == "[AudioSync] native AirPlay: timeline: L = 1750 ms, restarted",
           "native airplay: latency and timeline log lines")
+
+    var volumes = NativeAirPlayModel()
+    volumes.apply(.appeared(receiver("A1", "Kitchen", .available)))
+    check(volumes.apply(.volume(id: "A1", position: 80)) == nil,
+          "native airplay: a volume from a speaker the app didn't add moves no slider")
+    volumes.added("A1")
+    check(volumes.apply(.volume(id: "A1", position: 80)) == .volumeChanged("native:A1", 80),
+          "native airplay: a volume changed on the speaker moves its slider")
+    check(volumes.apply(.warning(id: "A1", ptpPortsTaken: true, detail: "PtpUnavailable")) == .ptpPortsTaken
+            && volumes.apply(.warning(id: "A1", ptpPortsTaken: false, detail: "JackDisconnected")) == nil,
+          "native airplay: of the warnings, only a PTP port clash becomes a notice")
+    check(NativeSpeakerEvent.volume(id: "A1", position: 79.6).logLine(name: names)
+            == "[AudioSync] native AirPlay: Kitchen (A1) volume changed on the speaker: slider at 80"
+            && NativeSpeakerEvent.warning(id: "Z9", ptpPortsTaken: false, detail: "JackDisconnected").logLine(name: names)
+            == "[AudioSync] native AirPlay: Z9 warning: JackDisconnected",
+          "native airplay: volume and warning log lines")
+
+    check(!PtpPortNotice.shown(portsTaken: false, played: false, timingRows: 2)
+            && PtpPortNotice.shown(portsTaken: true, played: false, timingRows: 0)
+            && !PtpPortNotice.shown(portsTaken: true, played: true, timingRows: 0)
+            && PtpPortNotice.shown(portsTaken: true, played: true, timingRows: 1),
+          "ptp notice: shows once the ports are reported taken, until a speaker plays while no row needs PTP timing")
+    var ptp = PtpPortNotice()
+    ptp.turnedOff("native:H1", timing: true)
+    check(!ptp.shown, "ptp notice: a speaker off for PTP timing with no port clash reported says nothing about ports")
+    ptp.reported()
+    ptp.playing("native:N1")
+    check(ptp.shown, "ptp notice: an NTP speaker that plays leaves it while a PTP speaker is off for timing")
+    ptp.turnedOff("native:H1", timing: false)
+    check(!ptp.shown, "ptp notice: it clears once no row is off for PTP timing")
+    ptp.turnedOff("native:H2", timing: true)
+    check(ptp.shown, "ptp notice: it comes back when another speaker goes off for PTP timing, though reported once")
+    ptp.playing("native:H2")
+    check(!ptp.shown, "ptp notice: the PTP speaker playing clears it")
+    ptp.turnedOff("native:H1", timing: true)
+    ptp.listed(["native:N1"])
+    check(!ptp.shown && ptp.timingOff.isEmpty, "ptp notice: a row that leaves the list takes its timing reason along")
 }
 
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")
@@ -1742,6 +1779,19 @@ do {
     check(model.plan(streaming: true, enabled: on).remove == [left],
           "P176 native airplay: a member playing by itself leaves the sender when its pair is switched on")
     model.removed(left)
+    var unlisted = NativeAirPlayModel()
+    unlisted.added(pair)
+    let pairOn: Set<String> = [app(pair)]
+    check(unlisted.rows(enabled: pairOn) == [app(pair)] && unlisted.plan(streaming: true, enabled: pairOn).isEmpty,
+          "P176 native airplay: a target in the sender with no listing keeps its row")
+    let off = unlisted.plan(streaming: true, enabled: [])
+    unlisted.removed(pair)
+    check(off.remove == [pair] && off.changesRows && unlisted.rows(enabled: []).isEmpty
+            && unlisted.apply(.state(id: pair, .stopped, retryMs: nil)) == nil,
+          "P176 native airplay: switched off, an unlisted target's row goes when it is removed, since its Stopped event "
+            + "is passed over", "\(unlisted.rows(enabled: []))")
+    check(!NativeAirPlayPlan(add: ["K3"], remove: [], turnOff: []).changesRows,
+          "native airplay: a plan that only adds speakers leaves the rows to the sender's events")
     check(model.holdingTarget(right, on: false) == pair && model.holdingTarget("K3", on: false) == nil,
           "P176 native airplay: a member of a listed pair can't be turned on by itself")
 
@@ -2255,6 +2305,54 @@ do {
           "sent track info: artwork that never comes: the icon goes out once the wait is over")
     u = late.update(shows(next, .wait), artwork: nil, icon: icon, now: waitEnds + 1)
     check(nothing(u), "sent track info: after the wait, the icon isn't sent again")
+}
+
+// MARK: Track progress for receivers that show it: a jump is news, running on isn't (P126)
+do {
+    typealias Position = NowPlayingMonitor.Position
+    let start = Date(timeIntervalSinceReferenceDate: 0), uptime: TimeInterval = 1000   // readings use systemUptime
+    let at30 = Position(elapsed: 30, length: 200, readAt: uptime, playing: true)
+    check(at30.elapsed(at: uptime + 10) == 40 && at30.elapsed(at: uptime + 500) == 200,
+          "progress: a playing track runs on from its reading, up to its length")
+    let paused = Position(elapsed: 30, length: 200, readAt: uptime, playing: false)
+    check(paused.elapsed(at: uptime + 10) == 30, "progress: a paused track stays where it was read")
+    check(!Position.jumped(from: at30, to: Position(elapsed: 32.5, length: 200, readAt: uptime + 2, playing: true))
+            && !Position.jumped(from: nil, to: nil),
+          "progress: a reading where the track ran on to is no news")
+    check(Position.jumped(from: at30, to: Position(elapsed: 90, length: 200, readAt: uptime + 2, playing: true))
+            && Position.jumped(from: at30, to: Position(elapsed: 5, length: 200, readAt: uptime + 2, playing: true)),
+          "progress: a seek forward or back is news")
+    check(Position.jumped(from: at30, to: Position(elapsed: 32, length: 180, readAt: uptime + 2, playing: true))
+            && Position.jumped(from: at30, to: nil) && Position.jumped(from: nil, to: at30),
+          "progress: another length, or a position coming or going, is news")
+
+    let song = TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record")
+    let next = TrackMetadata.Fields(title: "Next", artist: "Band", album: "Record")
+    let spotify = NowPlayingMonitor.spotify
+    let track = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Song", artist: "Band",
+                                        album: "Record", isPlaying: false, artwork: nil, position: paused)
+    let untitled = TrackMetadata.Fields(title: "AudioSync", artist: "Live audio", album: "From your Mac")
+    check(ReceiverInfo.decide(track: track, source: .app(bundleID: spotify), sourceName: "Spotify",
+                              untitled: untitled).position == paused
+            && ReceiverInfo.decide(track: track, source: .system, sourceName: nil, untitled: untitled).position == nil,
+          "progress: only a track that shows takes its position to the receivers")
+
+    var sent = SentTrackInfo()
+    func shows(_ fields: TrackMetadata.Fields, _ position: Position?) -> ReceiverInfo {
+        ReceiverInfo(fields: fields, artwork: .neutral, position: position)
+    }
+    var u = sent.update(shows(song, at30), artwork: nil, icon: nil, now: start)
+    check(u.sendsPosition && u.position == at30, "progress: a new track's position goes out with it")
+    u = sent.update(shows(song, at30), artwork: nil, icon: nil, now: start + 1)
+    check(!u.sendsPosition, "progress: the same reading again gives the sender nothing")
+    u = sent.update(shows(song, paused), artwork: nil, icon: nil, now: start + 2)
+    check(u.sendsPosition && u.position == paused, "progress: a pause or a seek goes out")
+    u = sent.update(shows(next, nil), artwork: nil, icon: nil, now: start + 3)
+    check(u.fields == next && !u.sendsPosition,
+          "progress: a new track without a length sends none: the new track dropped it in the core")
+    u = sent.update(shows(song, paused), artwork: nil, icon: nil, now: start + 4)
+    check(u.fields == song && u.sendsPosition && u.position == paused,
+          "progress: back to a track whose reading went out before: the new track dropped it, so it goes again")
 }
 
 // MARK: When track info goes to the app's own sender (TrackInfoFeed, the AppDelegate wiring)
@@ -4039,13 +4137,13 @@ do {
         streaming: true, reference: "mac",
         localOutputs: [(id: "usb", name: "Desk"), (id: "mac", name: "MacBook Speakers")],
         localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
-        cast: (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 0),
+        cast: (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 0, format: ASC_CAST_FORMAT_WAV),
         airPlay: [(id: "native:a", name: "Kitchen"), (id: "native:b", name: "Bedroom")],
         airPlayDelayMs: 1750, airPlayHoldBackMs: 0)
     let planned = (try? CalibrateAllFlow.plan(inputs).get()) ?? []
     check(planned.map(\.id) == ["mac", "usb", "cast:tv", "native:a", "native:b"]
             && planned[0].offsetMs == nil && planned[1].offsetMs == 150 && planned[1].latencyMs == 2400
-            && planned[2].offsetMs == nil && planned[2].latencyMs == 0
+            && planned[2].offsetMs == nil && planned[2].latencyMs == 3000
             && planned[3].offsetMs == 1750 && planned[3].latencyMs == 2250 && planned[4].latencyMs == 2250,
           "calibrate all: the reference first, then each speaker with its stored delay and expected arrival, "
             + "one for every AirPlay speaker, so a sweep has left them all when its window or play-out ends (S235)",
@@ -4053,6 +4151,16 @@ do {
     check(CalibrateAllFlow.quietSeconds(planned) == 3 && CalibrateAllFlow.settleSeconds(planned[3]) == 3,
           "calibrate all: the music on its way plays out before the first sweep, a Cast speaker's unknown latency included",
           "\(CalibrateAllFlow.quietSeconds(planned))")
+
+    var held = inputs
+    held.cast = (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 1750, format: ASC_CAST_FORMAT_FLAC)
+    let heldPlan = (try? CalibrateAllFlow.plan(held).get()) ?? []
+    held.cast = (id: "cast:tv", name: "TV", offsetMs: 1000, waitMs: 750, format: ASC_CAST_FORMAT_FLAC)
+    let measuredPlan = (try? CalibrateAllFlow.plan(held).get()) ?? []
+    check(heldPlan.count > 2 && heldPlan[2].latencyMs == 7750 && CalibrateAllFlow.quietSeconds(heldPlan) == 7.75
+            && measuredPlan.count > 2 && measuredPlan[2].latencyMs == 2250,
+          "calibrate all: a Cast speaker without an offset waits its feed's hold-back plus the FLAC guess, "
+            + "one with an offset its offset, hold-back and allowance (S241)", "\(heldPlan) \(measuredPlan)")
 
     var alone = inputs
     alone.localOutputs = [(id: "mac", name: "MacBook Speakers")]
@@ -4260,21 +4368,21 @@ do {
     _ = castMemory.setOffset("tv", ms: 900)
     for case .cast(let id, .none) in restores where id == "cast:tv" { _ = castMemory.clearOffset("tv") }
     var again = inputs
-    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0)
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0, format: ASC_CAST_FORMAT_WAV)
     let replanned = (try? CalibrateAllFlow.plan(again).get()) ?? []
     check(castMemory.offsets["tv"] == nil && !castMemory.clearOffset("tv")
-            && replanned.count > 2 && replanned[2].offsetMs == nil && replanned[2].latencyMs == 0,
+            && replanned.count > 2 && replanned[2].offsetMs == nil && replanned[2].latencyMs == 3000,
           "calibrate all: after Undo a Cast speaker without a stored offset is searched again, not measured from 0 ms",
           "\(replanned)")
     castMemory.apply(.changed(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
-    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0)
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castMemory.offsets["tv"], waitMs: 0, format: ASC_CAST_FORMAT_WAV)
     let reannounced = (try? CalibrateAllFlow.plan(again).get()) ?? []
     check(castMemory.offsets["tv"] == nil && reannounced.count > 2 && reannounced[2].offsetMs == nil,
           "calibrate all: the 0 ms the sender keeps after Undo doesn't come back when the device re-announces",
           "\(castMemory.offsets)")
     var castAfterRestart = CastModel()
     castAfterRestart.apply(.appeared(CastDevice(id: "tv", name: "TV"), offsetMs: 0))
-    again.cast = (id: "cast:tv", name: "TV", offsetMs: castAfterRestart.offsets["tv"], waitMs: 0)
+    again.cast = (id: "cast:tv", name: "TV", offsetMs: castAfterRestart.offsets["tv"], waitMs: 0, format: ASC_CAST_FORMAT_WAV)
     let afterRestart = (try? CalibrateAllFlow.plan(again).get()) ?? []
     check(castAfterRestart.offsets["tv"] == nil && castAfterRestart.offset(of: "tv") == 0
             && afterRestart.count > 2 && afterRestart[2].offsetMs == nil,
@@ -4328,12 +4436,17 @@ do {
             && m.attempt?.number == 3 && m.status(of: kitchen) == .connecting,
           "cast: the attempt number comes back, connecting")
 
-    check(m.apply(.started(attempt: 2)) == nil && m.status(of: kitchen) == .connecting,
+    check(m.apply(.started(attempt: 2, format: ASC_CAST_FORMAT_WAV)) == nil && m.status(of: kitchen) == .connecting,
           "cast: an event of an older attempt is dropped")
     check(m.apply(.ended(attempt: 2, .failed(.connect))) == nil && m.enabled == kitchen,
           "cast: a late end of an older attempt never turns the speaker off")
-    check(m.apply(.started(attempt: 3)) == .playing(kitchen) && m.status(of: kitchen) == .playing,
-          "cast: the current attempt plays")
+    check(m.playingFormat == 0 && m.apply(.started(attempt: 3, format: ASC_CAST_FORMAT_WAV)) == .playing(kitchen)
+            && m.status(of: kitchen) == .playing && m.playingFormat == ASC_CAST_FORMAT_WAV,
+          "cast: the current attempt plays, in the format it reports")
+    var fellBack = m
+    check(fellBack.apply(.formatFallback(attempt: 3, format: ASC_CAST_FORMAT_FLAC)) == nil
+            && fellBack.playingFormat == ASC_CAST_FORMAT_FLAC,
+          "cast: a format fallback changes the format Calibrate All waits for (S241)")
     check(m.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: true, fixed: false))) == .changed
             && approx(m.volume(of: kitchen), 40, 1e-9) && m.volumes[kitchen]?.muted == true,
           "cast: the device's volume and mute follow its status")
@@ -4388,6 +4501,15 @@ do {
     check(offsets.setOffset(kitchen, ms: 250) == nil && offsets.setOffset(kitchen, ms: 30_000) == 20_000
             && offsets.offset(of: kitchen) == 20_000, "cast: an offset is stored clamped, and only when it changes")
 
+    var seeded = CastModel()
+    seeded.apply(.appeared(CastDevice(id: "hall", name: "Hall"), offsetMs: 500))
+    check(seeded.offsets["hall"] == 500, "cast: a device's first announcement seeds the offset its memory holds")
+    _ = seeded.setOffset("hall", ms: 300)
+    seeded.apply(.changed(CastDevice(id: "hall", name: "Hall"), offsetMs: 500))
+    check(seeded.offsets["hall"] == 300,
+          "cast: a memory offset read before the user's change and delivered after it doesn't overwrite it",
+          "\(seeded.offsets)")
+
     let start = Date()
     var listed = CastModel()
     check(listed.listState(now: start) == .quiet, "cast: no note before the search starts")
@@ -4412,6 +4534,10 @@ do {
     raw.volume_fixed = true
     check(CastEvent(raw) == .volume(attempt: 7, CastVolume(level: 0.25, muted: false, fixed: true))
             && CastEvent(raw)?.attempt == 7, "cast: a volume event copies level, mute and fixed")
+    raw.kind = ASC_CAST_EVENT_FORMAT_FALLBACK
+    raw.format = ASC_CAST_FORMAT_FLAC
+    check(CastEvent(raw) == .formatFallback(attempt: 7, format: ASC_CAST_FORMAT_FLAC),
+          "cast: a format fallback event copies the format")
     raw.kind = 999
     check(CastEvent(raw) == nil, "cast: an unknown event kind is skipped")
     let change: CastDeviceChange? = kitchen.withCString { id in
@@ -4504,7 +4630,7 @@ do {
     check(m.groupMembers(of: home, name: name) == .notReported, "cast group: no member note while it connects")
 
     var silent = m
-    check(silent.apply(.started(attempt: 5)) == .playing(home) && silent.groupMembers(of: home, name: name) == .unknown,
+    check(silent.apply(.started(attempt: 5, format: ASC_CAST_FORMAT_WAV)) == .playing(home) && silent.groupMembers(of: home, name: name) == .unknown,
           "cast group: playing without a member list says the members are unknown")
     _ = silent.apply(.members(attempt: 5, []))
     check(silent.groupMembers(of: home, name: name) == .unknown, "cast group: an empty member list stays unknown")
@@ -4513,7 +4639,7 @@ do {
     check(m.apply(.members(attempt: 4, list)) == nil && m.members == nil, "cast group: members of an older attempt are dropped")
     check(m.apply(.members(attempt: 5, list)) == .changed && m.apply(.members(attempt: 5, list)) == nil,
           "cast group: a member list changes the row once")
-    _ = m.apply(.started(attempt: 5))
+    _ = m.apply(.started(attempt: 5, format: ASC_CAST_FORMAT_WAV))
     check(m.groupMembers(of: home, name: name) == .known(["Kitchen speaker", "Garage"]),
           "cast group: members by their row's name, an unlisted one by the group's name for it")
     check(m.apply(.groupLog("Cast group message PLAYBACK_SESSION_UPDATED")) == nil,
@@ -4576,7 +4702,7 @@ do {
     let calibration = CalibrateAllFlow.Inputs(
         streaming: true, reference: "mac", localOutputs: [(id: "mac", name: "MacBook Speakers")],
         localOffsets: [:], holdBacks: [:],
-        cast: (id: CastID.app(device), name: "Home", offsetMs: m.offsets[device], waitMs: 0),
+        cast: (id: CastID.app(device), name: "Home", offsetMs: m.offsets[device], waitMs: 0, format: ASC_CAST_FORMAT_WAV),
         airPlay: [], airPlayDelayMs: 0, airPlayHoldBackMs: 0)
     let planned = (try? CalibrateAllFlow.plan(calibration).get()) ?? []
     let castRows = planned.filter { $0.kind == .cast }
@@ -4597,7 +4723,7 @@ do {
     _ = m.turnOn(tv)
     m.startSent(tv)
     _ = m.started(tv, attempt: 9, refusal: ASC_CAST_REFUSED_NONE)
-    _ = m.apply(.started(attempt: 9))
+    _ = m.apply(.started(attempt: 9, format: ASC_CAST_FORMAT_WAV))
     _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.4, muted: false, fixed: false)))
     check(m.stepVolume(tv, up: true) == .level(0.4 + CastModel.fallbackVolumeStep)
             && approx(m.volume(of: tv), 45, 1e-9),

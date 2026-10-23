@@ -1,4 +1,4 @@
-//! Calibrate All Speakers (S235 to S240): the reference and then every
+//! Calibrate All Speakers (S235 to S241): the reference and then every
 //! speaker that is on, one at a time, each measured twice against the
 //! reference with the microphone as S232 to S234 measure one output, and the
 //! results sheet the user applies, undoes or measures a row of again.
@@ -10,8 +10,9 @@
 
 use crate::calibrate::{self, GUARD_MS, MAX_RECORDING_FRAMES, Recording, Refusal, Refused};
 use crate::policy::delay::{
-    self, DEFAULT_AIRPLAY_DELAY_MS, MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS,
+    self, DEFAULT_AIRPLAY_DELAY_MS, MAX_DELAY_MS, MAX_HOLD_BACK_MS, MAX_OFFSET_MS, MIN_OFFSET_MS,
 };
+use audiosync_cast::audio::Codec;
 
 /// Recorded past the end of the sweep's expected arrival.
 pub const TAIL_SECONDS: f64 = 1.0;
@@ -20,6 +21,43 @@ pub const MAX_UNCERTAINTY_MS: f64 = 10.0;
 /// Above this spread the AirPlay speakers differ by more than one shared
 /// delay can make up for.
 pub const MAX_AIRPLAY_SPREAD_MS: f64 = 10.0;
+
+/// Added to a Cast speaker's measured offset for what the measurement
+/// leaves out, as for a local output (S232).
+pub const CAST_LATENCY_ALLOWANCE_MS: f64 = 500.0;
+/// How long a WAV stream already sent to a Cast speaker with no stored
+/// offset is taken to play on (S241): within the 2 to 5 s that users
+/// report for live WAV (CAST_SPEC C77a).
+pub const CAST_UNKNOWN_WAV_MS: f64 = 3000.0;
+/// The same for FLAC (S241). Derived, not measured: reports put the start
+/// later as the byte rate falls, and FLAC has about half of WAV's. G7
+/// replaces it with a measured figure.
+pub const CAST_UNKNOWN_FLAC_MS: f64 = 6000.0;
+
+/// How long after audio enters a Cast speaker's feed it is heard, in ms
+/// (S241): its stored offset plus the feed's hold-back plus
+/// [`CAST_LATENCY_ALLOWANCE_MS`]; with no offset stored (`None`, 0 or
+/// less, or not a number) the hold-back plus the guess for `format`, the
+/// session's codec, the longer guess while none is reported. It is the
+/// speaker's expected arrival (S235) and how long the music sent to it
+/// plays out; it never delays another output (C77).
+pub fn cast_wait_ms(offset_ms: Option<f64>, hold_back_ms: f64, format: Option<Codec>) -> f64 {
+    let hold_back_ms = if hold_back_ms.is_finite() {
+        hold_back_ms.clamp(0.0, MAX_HOLD_BACK_MS)
+    } else {
+        0.0
+    };
+    match offset_ms.filter(|ms| *ms > 0.0) {
+        Some(offset_ms) => offset_ms.min(MAX_DELAY_MS) + hold_back_ms + CAST_LATENCY_ALLOWANCE_MS,
+        None => {
+            let guess_ms = match format {
+                Some(Codec::Wav) => CAST_UNKNOWN_WAV_MS,
+                Some(Codec::Flac) | None => CAST_UNKNOWN_FLAC_MS,
+            };
+            hold_back_ms + guess_ms
+        }
+    }
+}
 
 /// How a speaker's delay is kept, which decides how a measured difference
 /// moves it.
@@ -61,6 +99,10 @@ pub enum PlanError {
     DuplicateId,
     /// Only the reference is on.
     NothingToMeasure,
+    /// A speaker's expected arrival is too late for its recording to fit
+    /// the estimate's 2^21 frames at this rate (S234): cut short, its sweep
+    /// would read as too quiet.
+    TooLong,
 }
 
 /// Why a run or a sheet ended before it could be applied.
@@ -158,6 +200,9 @@ pub struct AirPlayShared {
     pub spread_ms: f64,
     pub certain_rows: usize,
     pub state: SharedState,
+    /// The range cut the new delay: the AirPlay speakers stay off by the
+    /// rest.
+    pub clamped: bool,
 }
 
 /// What a change writes.
@@ -253,7 +298,7 @@ impl Run {
         }
         let mut states = vec![RowState::NotMeasured; speakers.len()];
         states[reference] = RowState::Reference;
-        Ok(Run {
+        let run = Run {
             rate,
             signal,
             rows: (0..speakers.len()).collect(),
@@ -264,7 +309,14 @@ impl Run {
             reference_ms: 0.0,
             next: Next::Reference,
             ended: None,
-        })
+        };
+        let cut = (0..run.speakers.len()).any(|row| {
+            !run.unknown_cast(row) && run.frames(run.expected_ms(row)) > MAX_RECORDING_FRAMES
+        });
+        if cut {
+            return Err(PlanError::TooLong);
+        }
+        Ok(run)
     }
 
     /// What to play and record next; `None` once the run is over.
@@ -410,19 +462,30 @@ impl Run {
         frame as f64 * 1000.0 / f64::from(self.rate)
     }
 
-    fn latency_window(&self, row: usize) -> usize {
+    fn expected_ms(&self, row: usize) -> f64 {
         let latency = self.speakers[row].latency_ms;
-        self.window(if latency.is_finite() { latency } else { 0.0 })
+        if latency.is_finite() { latency } else { 0.0 }
+    }
+
+    fn latency_window(&self, row: usize) -> usize {
+        self.window(self.expected_ms(row))
     }
 
     /// The sweep expected at `arrival_ms`, its length and [`TAIL_SECONDS`],
-    /// within what the estimate accepts.
-    fn window(&self, arrival_ms: f64) -> usize {
+    /// at least what the estimate accepts.
+    fn frames(&self, arrival_ms: f64) -> usize {
         let rate = f64::from(self.rate);
         let ms = arrival_ms.max(0.0) + (calibrate::SIGNAL_SECONDS + TAIL_SECONDS) * 1000.0;
         let shortest = self.signal.len() + (calibrate::MIN_EXTRA_SECONDS * rate).ceil() as usize;
-        let frames = (ms * rate / 1000.0).ceil().min(MAX_RECORDING_FRAMES as f64) as usize;
+        let frames = (ms * rate / 1000.0).ceil().min(usize::MAX as f64) as usize;
         frames.max(shortest)
+    }
+
+    /// [`Run::frames`] within the estimate's limit. [`Run::new`] refuses a
+    /// run the limit would cut, so only a searching Cast speaker's second
+    /// window meets it, and its sweep was already found inside the limit.
+    fn window(&self, arrival_ms: f64) -> usize {
+        self.frames(arrival_ms).min(MAX_RECORDING_FRAMES)
     }
 
     /// How much later than the reference the sweep arrived, and where.
@@ -505,6 +568,7 @@ fn shared(rows: &[Row]) -> Option<AirPlayShared> {
             spread_ms: 0.0,
             certain_rows: 0,
             state: SharedState::NoneCertain,
+            clamped: false,
         });
     };
     let spread_ms = high - low;
@@ -514,9 +578,10 @@ fn shared(rows: &[Row]) -> Option<AirPlayShared> {
     } else {
         differences[middle]
     };
+    let (new_ms, clamped) = moved(Class::AirPlay, old_ms, median);
     Some(AirPlayShared {
         old_ms,
-        new_ms: Some(moved(Class::AirPlay, old_ms, median).0),
+        new_ms: Some(new_ms),
         spread_ms,
         certain_rows: differences.len(),
         state: if spread_ms > MAX_AIRPLAY_SPREAD_MS {
@@ -524,6 +589,7 @@ fn shared(rows: &[Row]) -> Option<AirPlayShared> {
         } else {
             SharedState::Certain
         },
+        clamped,
     })
 }
 

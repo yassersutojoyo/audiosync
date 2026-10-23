@@ -22,9 +22,11 @@ use audiosync_airplay::discovery::{
     BrowseEvent, Browser, Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
+use audiosync_airplay::pairing::{Credentials, SECRET_BYTES};
 use audiosync_airplay::ptp::{PtpPorts, PtpService};
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
+    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState, member_options,
 };
 use audiosync_airplay::targets::{Member, Target, TargetId, TargetKind};
 use audiosync_airplay::volume::Volume;
@@ -138,6 +140,48 @@ fn payloads_of(receiver: &NetReceiver) -> BTreeMap<u64, Vec<u8>> {
             Some((host_frame_of(first)?, p.clone()))
         })
         .collect()
+}
+
+// covers: P179, P180
+#[test]
+fn every_member_keeps_its_own_secrets_but_takes_the_targets_delay_volume_and_pcm() {
+    let target = pair(vec![member(None, 1), member(None, 2)], None);
+    for target_pcm in [false, true] {
+        let mut target_options = SpeakerOptions::new(Volume::Db(-20.0));
+        target_options.delay = Duration::from_millis(1200);
+        target_options.pcm = target_pcm;
+        let own_secrets = |key: &DeviceKey| {
+            let n = match key {
+                DeviceKey::Id(id) => id.0[5],
+                other => panic!("unexpected member key {other:?}"),
+            };
+            let password = Secret::new(format!("member-{n}"));
+            let credentials = Credentials::new(&format!("{n:016X}"), [n; SECRET_BYTES])
+                .expect("valid credentials");
+            (password, credentials)
+        };
+        let members = member_options(&target, &target_options, |key, own| {
+            let (password, credentials) = own_secrets(key);
+            own.password = Some(password);
+            own.credentials = Some(credentials);
+            own.delay = Duration::from_millis(300);
+            own.volume = Volume::Muted;
+            own.pcm = !target_pcm;
+        });
+        let keys: Vec<&DeviceKey> = members.iter().map(|(key, _)| key).collect();
+        assert_eq!(
+            keys,
+            target.members.iter().map(|m| &m.key).collect::<Vec<_>>()
+        );
+        for (key, own) in &members {
+            let (password, credentials) = own_secrets(key);
+            assert_eq!(own.password.as_ref(), Some(&password), "{key:?}");
+            assert_eq!(own.credentials.as_ref(), Some(&credentials), "{key:?}");
+            assert_eq!(own.delay, target_options.delay, "{key:?}");
+            assert_eq!(own.volume, target_options.volume, "{key:?}");
+            assert_eq!(own.pcm, target_pcm, "{key:?}");
+        }
+    }
 }
 
 // covers: P171, P177, P178, P179
@@ -300,6 +344,45 @@ fn the_control_device_and_its_group_refuse_each_other() {
     sender.shutdown();
 }
 
+// covers: P179
+#[test]
+fn a_member_added_alone_while_its_target_tears_down_is_the_hosts_to_remove() {
+    let _serial = serial();
+    let a = NetReceiver::start(Behavior::default());
+    let b = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start(false);
+    let mut events = Events::default();
+    let (da, db) = (a.device(1, PCM_TXT), b.device(2, PCM_TXT));
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(
+            playing(&mut events, &sender, key, 1),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.remove_target(&id);
+    sender.add_speaker(da.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &da.key, 2),
+        "{:?}",
+        events.of(&da.key)
+    );
+    sender.remove_speaker(&da.key);
+    for key in [&da.key, &db.key] {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Stopped)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    sender.shutdown();
+}
+
 fn airplay_record(port: u16, n: u8, features: &str) -> ServiceRecord {
     let id = device_id(n);
     ServiceRecord {
@@ -370,6 +453,51 @@ fn a_target_takes_one_airplay2_place_for_all_its_members() {
         "{:?}",
         events.of(&dc.key)
     );
+    sender.shutdown();
+}
+
+// covers: P180
+#[test]
+fn an_airplay2_target_read_back_reports_the_target_volume_under_the_leader() {
+    let _serial = serial();
+    let first = Ap2Server::start(FakeAp2::new());
+    let second = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start(true);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10040"),
+        airplay2_only(&second, 2, "0x0,0x10040"),
+    );
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(playing(&mut events, &sender, key, 1));
+    }
+    let reported = |events: &Events, key: &DeviceKey| -> Vec<f64> {
+        events
+            .of(key)
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeakerEvent::VolumeReported(db) => Some(db),
+                _ => None,
+            })
+            .collect()
+    };
+    sender.set_target_volume(&id, Volume::Db(-12.0));
+    sender.read_target_volume(&id);
+    assert!(
+        wait_until(LONG, || {
+            events.drain(&sender);
+            reported(&events, &da.key) == vec![-12.0]
+        }),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert!(reported(&events, &db.key).is_empty());
+    for server in [&first, &second] {
+        assert!(!server.fake().keys().contains(&"GET_PARAMETER".to_owned()));
+    }
     sender.shutdown();
 }
 
@@ -1237,8 +1365,8 @@ fn the_ptp_service_serves_every_member_until_the_last_leaves() {
     let a: IpAddr = [192, 0, 2, 1].into();
     let b: IpAddr = [192, 0, 2, 2].into();
     let now = Instant::now();
-    service.start(a, now);
-    service.start(b, now);
+    service.start(SocketAddr::new(a, 0), now);
+    service.start(SocketAddr::new(b, 0), now);
     service.handle_timeout(now + Duration::from_millis(200));
     let mut to = Vec::new();
     while let Some(transmit) = service.poll_transmit() {
@@ -1251,7 +1379,7 @@ fn the_ptp_service_serves_every_member_until_the_last_leaves() {
     let follow = service.poll_transmit().expect("a Follow_Up");
     assert_eq!(follow.to.ip(), b);
     service.stop_peer(a);
-    assert_eq!(service.peers(), &[b]);
+    assert_eq!(service.peers(), &[SocketAddr::new(b, 0)]);
     service.handle_timeout(now + Duration::from_secs(2));
     while let Some(transmit) = service.poll_transmit() {
         assert_eq!(transmit.to.ip(), b);

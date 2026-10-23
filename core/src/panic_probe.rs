@@ -60,6 +60,8 @@ mod tests {
             receiver_latency_frames: 0,
             restarted: false,
             detail: ptr::null(),
+            volume: 0.0,
+            warning: 0,
         };
         // SAFETY: as above; a local out struct, whose strings stay valid
         // until the next call on the handle.

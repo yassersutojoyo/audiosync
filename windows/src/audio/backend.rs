@@ -10,6 +10,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use audiosync_cast::audio::Codec;
 use audiosync_core::eq::EqSettings;
 use audiosync_core::policy::device_volume::DeviceVolume;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
@@ -353,6 +354,10 @@ pub struct CastInfo {
     /// the other outputs wait for this speaker while it is on (spec C77).
     pub offset_ms: f64,
     pub status: CastStatus,
+    /// The format its session plays, once the session reports it.
+    pub format: Option<Codec>,
+    /// How long its feed waits for L while it is in a session, in ms (C77).
+    pub hold_back_ms: f64,
 }
 
 /// A Cast group as its row shows it.

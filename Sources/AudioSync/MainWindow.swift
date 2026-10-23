@@ -607,8 +607,9 @@ struct SpeakerRow: View {
                             Text(note)
                                 .font(.caption)
                                 .foregroundStyle(Brand.secondaryText)
-                                .lineLimit(1)
                                 // A group's member list can outrun the row.
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .help(note)
                                 .accessibilityHidden(true)
                         }
