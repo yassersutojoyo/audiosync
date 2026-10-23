@@ -295,6 +295,9 @@ export global Strings {
     out property <string> remote-port-label: @tr("Port");
     out property <string> remote-use-port: @tr("Use Port");
     out property <string> remote-port-invalid: @tr("Enter a port from 1024 to 65535.");
+    // On the page, a speaker that asks for a PIN or password: turning it on
+    // from the phone would open the prompt here with nobody at the PC.
+    out property <string> remote-turn-on-at-pc: @tr("Asks for a code: turn it on in AudioSync on the PC");
     out property <string> remote-failed: @tr("The web remote couldn't start. Turn it off and on again.");
     out property <string> remote-forget-failed: @tr("AudioSync couldn't save the list of paired devices, so they are paired again after AudioSync restarts. Select Forget All Remote Devices again.");
     // A check item in File: on, the captured app quitting moves streaming to

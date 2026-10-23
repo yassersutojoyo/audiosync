@@ -150,6 +150,30 @@ mod tests {
     }
 
     #[test]
+    fn a_fixed_delay_hides_its_row_and_an_unpair_error_shows_under_the_button() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(
+            script.contains("const fixedDelay = speaker.delay_min_ms === speaker.delay_max_ms;")
+        );
+        assert!(script.contains("row.delayLine.hidden = fixedDelay;"));
+        let button = PAGE
+            .lines()
+            .position(|line| line.contains("id=\"unpair\""))
+            .unwrap();
+        let error = PAGE.lines().nth(button + 1).unwrap();
+        assert!(error.contains("id=\"unpair-error\"") && error.ends_with(" hidden></p>"));
+        assert!(script.contains("showError(ui.unpairError, problem.message);"));
+    }
+
+    #[test]
+    fn focus_moves_to_the_master_volume_when_retry_or_the_pairing_form_hides() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("focusAfterPair = true;"));
+        assert!(script.contains("ui.banner.contains(focused)"));
+        assert!(script.contains("ui.master.focus();"));
+    }
+
+    #[test]
     fn the_icons_are_png_of_their_size() {
         for (icon, size) in [(ICON_180, 180u32), (ICON_512, 512)] {
             assert_eq!(&icon[..8], b"\x89PNG\r\n\x1a\n");
