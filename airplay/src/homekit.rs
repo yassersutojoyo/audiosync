@@ -872,7 +872,12 @@ impl PairVerify {
             }
         }
         let Ok(reply) = Tlv8::decode(&response.body) else {
-            return self.fail(rejected("malformed verification answer"));
+            // Only M2 carries the receiver's proof (P66); a malformed M4
+            // says nothing about the credentials (P154).
+            return self.fail(match self.stage {
+                VerifyStage::M1 => rejected("malformed verification answer"),
+                _ => PairingFailure::new(ErrorKind::ProtocolError, "malformed verification answer"),
+            });
         };
         if let Some(code) = reply.get(tlv8::ERROR) {
             return self.fail(match code.first().copied().unwrap_or(1) {

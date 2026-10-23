@@ -584,6 +584,8 @@ fn pair_verify_checks_m2_and_ends_with_the_x25519_secret() {
         (Answer::Error(4), Some(ErrorKind::PairingFailed)),
         (Answer::Error(5), Some(ErrorKind::PairingFailed)),
         (Answer::Error(6), Some(ErrorKind::PairingFailed)),
+        (Answer::Error(9), Some(ErrorKind::PairingFailed)),
+        (Answer::EmptyError, Some(ErrorKind::PairingFailed)),
         (Answer::Status(470), Some(ErrorKind::PairingRequired)),
         (Answer::Status(403), Some(ErrorKind::PairingRequired)),
         (Answer::Status(500), Some(ErrorKind::Refused)),
@@ -608,6 +610,29 @@ fn pair_verify_checks_m2_and_ends_with_the_x25519_secret() {
                 _ => panic!("{answer:?} at {state}: {end:?}"),
             }
         }
+    }
+}
+
+// A malformed M2 fails P66's checks and rejects the credentials; a malformed
+// M4 comes after the receiver proved itself, so it is a protocol error that
+// keeps them.
+// covers: P66, P154
+#[test]
+fn a_malformed_verify_answer_rejects_the_credentials_only_at_m2() {
+    let mut entropy = TestEntropy::new();
+    for (state, expected) in [
+        (1, ErrorKind::PairingRequired),
+        (3, ErrorKind::ProtocolError),
+    ] {
+        let mut fake = FakeHomeKit::new(PIN);
+        let credentials = paired(&mut fake, &mut entropy);
+        fake.answers
+            .push((("/pair-verify", state), Answer::Malformed));
+        let mut verify = PairVerify::new(credentials, &mut entropy).expect("entropy");
+        let VerifyStep::Failed(failure) = run_verify(&mut verify, &mut fake) else {
+            panic!("a failure at {state}");
+        };
+        assert_eq!(failure.error.kind, expected, "{state}");
     }
 }
 
