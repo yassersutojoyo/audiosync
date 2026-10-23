@@ -18,7 +18,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AirPlay speakers that show a track's progress now get how far into the track you are and how long it is. On the Mac that comes from Spotify and Music, on Windows from any app that reports its track's length. A track without a known length sends none.
 - When you change an AirPlay speaker's volume on the speaker itself, its slider in AudioSync follows, on speakers that report it.
 - With AirPlay 2 on, a notice tells you when another app holds port 319 or 320, so AirPlay 2 speakers that need PTP timing can't play. It hasn't been tried on a real receiver yet.
-- Web Remote: too many wrong pairing codes from one device block pairing for that device until the code is renewed, not for every phone, and a paired phone still gets in while other devices hold connections open, also when one device holds them from many addresses. A phone turned away while the remote is busy gets that answer on Windows too, instead of a dropped connection.
+- Web Remote: too many wrong pairing codes from one device block pairing for that device until the code is renewed, not for every phone, and a paired phone still gets in while other devices hold connections open, also when one device holds them from many addresses.
 - The Web Remote window shows the setup as three numbered steps under the QR code, worded for iPhone or Android, and the page shows the same steps until you open it from the Home Screen. On iPhone a pairing made in Safari doesn't carry over to the Home Screen, so the Home Screen comes before the code.
 - On the Mac, the AirPlay 2 (Experimental) switch has a note under it in the app menu and the gear menu that says what it does and that it takes effect once you quit and reopen AudioSync.
 
@@ -32,6 +32,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, a phone turned away because the Web Remote is busy now gets the busy message instead of a dropped connection.
 - On the Mac, streaming All System Audio while nothing plays no longer brings up the notice that capture permission is missing. The notice now waits for sound.
 - On the Mac, calibration works while the source plays nothing. Before, the test sound never started and the run failed as if the source were silent.
 - On the Mac, after you type in a delay field, a click on that panel's step button steps from the value you typed, and a click that closes the panel leaves the keyboard focus on the speaker's delay.
