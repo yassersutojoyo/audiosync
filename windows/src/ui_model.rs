@@ -879,6 +879,10 @@ pub trait Backend {
     /// S246, S247).
     #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
     fn toggle_zone(&mut self, _id: &str) {}
+    /// Sets zone `id`'s volume, 0 to 100, which scales each member's own
+    /// volume (spec S249).
+    #[cfg_attr(not(test), allow(dead_code, reason = "no window shows zones yet"))]
+    fn set_zone_volume(&mut self, _id: &str, _position: f64) {}
     fn set_equalizer(&mut self, settings: EqSettings);
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);

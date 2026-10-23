@@ -9,12 +9,39 @@ extension AppDelegate {
 
     // MARK: - Speaker / source state (shared by the window and the menu bar panel)
 
-    /// A local speaker's linear gain, through the core's volume curve; 0
-    /// while a calibration plays its signal through another output (S232, S235).
+    /// A local speaker's linear gain through its zone, on the core's volume
+    /// curve (S71, S249); 0 while a calibration plays its signal through
+    /// another output (S232, S235).
     private func effectiveGain(_ uid: String) -> Double {
         if let solo = calibrationRun?.soloUID ?? calibrateAllRun?.localSolo, solo != uid { return 0 }
+        let zone = SpeakerZone.volume(of: SpeakerKey.make(id: uid, kind: .local), in: zones)
         return engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume,
-                                           masterPosition: masterVolume)
+                                           zonePosition: zone, masterPosition: masterVolume)
+    }
+
+    /// Zone `id`'s volume (0 to 100, S245); its playing members hear it at once (S249).
+    func setZoneVolume(_ id: String, _ position: Double) {
+        guard position.isFinite, let index = zones.firstIndex(where: { $0.id == id }) else { return }
+        zones[index].volume = max(0, min(100, position))
+        pushModel()
+    }
+
+    /// Every zone volume to the speakers, as a master change does (S72,
+    /// S249): local gains, the AirPlay sender's zones by receiver ID, and
+    /// the Cast device in a session.
+    func applyZoneVolumes() {
+        reapplyLocalGains()
+        nativeAirPlay?.setZones(nativeZoneVolumes())
+        if let level = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast)) { castSender?.setVolume(level) }
+    }
+
+    /// The zone volume of every AirPlay speaker in a zone, by receiver ID.
+    func nativeZoneVolumes() -> [String: Double] {
+        var out: [String: Double] = [:]
+        for (appID, volume) in SpeakerZone.volumes(zones, kind: .airplay) {
+            if let receiver = NativeAirPlayID.receiver(appID) { out[receiver] = volume }
+        }
+        return out
     }
 
     /// Every running local output gets its gain again.

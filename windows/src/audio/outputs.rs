@@ -31,7 +31,8 @@ use audiosync_core::policy::session::sync_outputs;
 use audiosync_core::reader::delay_ms_to_frames;
 use audiosync_core::ring::is_supported_rate;
 use audiosync_core::volume::{
-    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, output_gain, sanitize_position,
+    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, NO_ZONE_POSITION, sanitize_position,
+    zoned_output_gain,
 };
 
 use super::SESSION_RATE;
@@ -409,6 +410,9 @@ impl OutputPlan {
 pub struct OutputPolicy {
     settings: BTreeMap<String, OutputSettings>,
     master: f64,
+    /// The zone volume of each endpoint ID in a zone (S249); one not here
+    /// is in no zone.
+    zones: BTreeMap<String, f64>,
     airplay: AirPlay,
     /// The native sender's adjustment A in ms, −2000 to +20 000 (S178).
     airplay_adjustment_ms: f64,
@@ -427,6 +431,7 @@ impl OutputPolicy {
         OutputPolicy {
             settings: BTreeMap::new(),
             master: DEFAULT_MASTER_POSITION,
+            zones: BTreeMap::new(),
             airplay,
             airplay_adjustment_ms: 0.0,
             listed: BTreeSet::new(),
@@ -617,6 +622,30 @@ impl OutputPolicy {
         self.master
     }
 
+    /// Sets the zone volume of every endpoint ID in a zone (S249); the rest
+    /// are in no zone. Returns the IDs whose zone volume changed.
+    pub fn set_zones(&mut self, zones: BTreeMap<String, f64>) -> Vec<String> {
+        let zones: BTreeMap<String, f64> = zones
+            .into_iter()
+            .filter_map(|(id, zone)| sanitize_position(zone).map(|zone| (id, zone)))
+            .filter(|(_, zone)| *zone != NO_ZONE_POSITION)
+            .collect();
+        let changed = self
+            .zones
+            .keys()
+            .chain(zones.keys())
+            .filter(|id| self.zones.get(*id) != zones.get(*id))
+            .cloned()
+            .collect::<BTreeSet<String>>();
+        self.zones = zones;
+        changed.into_iter().collect()
+    }
+
+    /// The zone volume of output `id`: 100 when it is in no zone.
+    fn zone(&self, id: &str) -> f64 {
+        self.zones.get(id).copied().unwrap_or(NO_ZONE_POSITION)
+    }
+
     /// Changes the AirPlay state. Returns true when the hold-backs may change
     /// because of it, so running renderers need re-timing (S177): an AirPlay
     /// speaker is chosen or no longer is, or L_s changed while one is.
@@ -637,13 +666,14 @@ impl OutputPolicy {
 
     /// The delay and gain a renderer for output `id` applies: its hold-back
     /// in frames at the session rate (S3, S176) and the product of its
-    /// volume and the master volume on the cubic curve (S70, S71).
+    /// volume, its zone's and the master volume on the cubic curve (S70,
+    /// S71, S249).
     pub fn params(&self, id: &str) -> OutputParams {
         let settings = self.settings(id);
         let delay_ms = self.hold_back_ms(id);
         OutputParams {
             delay_frames: delay_ms_to_frames(delay_ms, SESSION_RATE).unwrap_or(0),
-            gain: output_gain(settings.volume, self.master) as f32,
+            gain: zoned_output_gain(settings.volume, self.zone(id), self.master) as f32,
         }
     }
 
