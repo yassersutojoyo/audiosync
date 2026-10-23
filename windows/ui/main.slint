@@ -9,7 +9,7 @@ import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, GroupItem, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, RowPart, RowState, SpeakerItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Disclosure, Divider, Fluent, Glyph, Glyphs, GroupRow, IconButton, LinkButton, NoticeStack, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -1224,10 +1224,12 @@ export component MainWindow inherits Window {
 
                                 Rectangle { }
 
-                                if root.mix-apps.length > 0: CheckBox {
+                                Disclosure {
                                     text: Strings.source-mix-title;
-                                    accessible-label: Strings.source-mix-title;
-                                    checked <=> root.mix-open;
+                                    expanded: root.mix-open;
+                                    toggled => {
+                                        root.mix-open = !root.mix-open;
+                                    }
                                 }
                             }
 
@@ -1244,13 +1246,17 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            if root.mix-open && root.mix-apps.length > 0: VerticalLayout {
+                            if root.mix-open: VerticalLayout {
                                 spacing: 6px;
 
-                                ComboBox {
+                                if root.mix-apps.length == 0: SecondaryText {
+                                    text: Strings.source-mix-empty;
+                                }
+
+                                if root.mix-apps.length > 0: ComboBox {
                                     model: [Strings.source-mix-only, Strings.source-mix-all-except];
                                     current-index: root.mix-all-except ? 1 : 0;
-                                    accessible-label: Strings.source-mix-title;
+                                    accessible-label: Strings.source-mix-mode;
                                     selected => {
                                         root.mix-mode-selected(self.current-index == 1);
                                         self.current-index = root.mix-all-except ? 1 : 0;
@@ -1263,6 +1269,10 @@ export component MainWindow inherits Window {
                                     flip => {
                                         root.mix-app-toggled(index);
                                     }
+                                }
+
+                                if root.mix-apps.length > 0 && root.mix-all-except: SecondaryText {
+                                    text: Strings.source-mix-all-except-note;
                                 }
                             }
                         }

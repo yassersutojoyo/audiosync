@@ -1331,6 +1331,19 @@ impl Backend for MockBackend {
         {
             app.checked = !app.checked;
         }
+        let checked: Vec<&str> = self
+            .state
+            .mix_apps
+            .iter()
+            .filter(|app| app.checked)
+            .map(|app| app.id.as_str())
+            .collect();
+        // Two apps make a mix, as the real backend's source key shows it.
+        self.state.source_id = if checked.len() > 1 {
+            format!("mix:only:{}", checked.join(","))
+        } else {
+            "system".into()
+        };
     }
 
     fn set_mix_all_except(&mut self, on: bool) {

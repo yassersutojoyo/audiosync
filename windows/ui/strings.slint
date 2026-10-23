@@ -107,6 +107,10 @@ export global Strings {
     out property <string> source-mix-title: @tr("Several apps");
     out property <string> source-mix-only: @tr("Only the checked apps");
     out property <string> source-mix-all-except: @tr("All apps except the checked ones");
+    out property <string> source-mix-mode: @tr("Which apps to send");
+    out property <string> source-mix-empty: @tr("Apps show up here once they play sound.");
+    // Windows' process loopback reaches apps only, never the system sounds session.
+    out property <string> source-mix-all-except-note: @tr("Windows system sounds, such as notification chimes, aren't included.");
 
     // Notices: what happened and what to do about it
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");

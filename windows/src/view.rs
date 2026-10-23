@@ -93,6 +93,8 @@ struct UiState {
     /// `airplay2_at_launch`.
     airplay2_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
+    /// Whether the source was a mix at the last refresh.
+    source_was_mix: bool,
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -1334,15 +1336,19 @@ impl App {
         }
         let state = self.snapshot();
         let strings = self.strings();
-        {
+        let became_mix = {
             let mut ui = self.ui.borrow_mut();
+            let is_mix = state.source_id.starts_with("mix:");
+            let became_mix = is_mix && !ui.source_was_mix;
+            ui.source_was_mix = is_mix;
             let show_virtual = ui.show_virtual;
             ui.listed_virtual.note(&state.speakers, show_virtual);
             // A speaker that went takes what was typed for it along: back,
             // it shows its saved delay.
             ui.delay_drafts
                 .retain(|id, _| state.speakers.iter().any(|s| s.id == *id));
-        }
+            became_mix
+        };
         let ui = self.ui.borrow();
         let item = |speaker: &ui_model::Speaker, show_kind: bool| {
             let draft = ui
@@ -1532,8 +1538,9 @@ impl App {
                 .collect(),
         );
         self.main.set_mix_all_except(state.mix_all_except);
-        // A mix in use shows its list; folding it is left to the user.
-        if state.mix_all_except || state.mix_apps.iter().filter(|app| app.checked).count() > 1 {
+        // The list opens once as the source becomes a mix; folding it is
+        // the user's.
+        if became_mix {
             self.main.set_mix_open(true);
         }
         sync_model(&m.this_pc, this_pc);
@@ -7024,6 +7031,35 @@ mod tests {
         app.main.invoke_mix_mode_selected(true);
         assert!(app.snapshot().mix_all_except);
         assert!(app.main.get_mix_all_except());
+
+        // Folded again by the user, it stays folded while the mix plays on.
+        press(window, " ");
+        draw_frames();
+        assert!(!app.main.get_mix_open());
+        app.refresh();
+        assert!(!app.main.get_mix_open(), "a refresh never reopens it");
+    }
+
+    #[test]
+    fn the_several_apps_list_opens_by_itself_once_as_the_source_becomes_a_mix() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        assert!(!app.main.get_mix_open());
+        app.main.invoke_mix_app_toggled(0);
+        assert!(!app.main.get_mix_open(), "one app is no mix yet");
+        app.main.invoke_mix_app_toggled(1);
+        assert!(app.main.get_mix_open());
+        app.main.set_mix_open(false);
+        app.main.invoke_mix_app_toggled(1);
+        app.main.invoke_mix_app_toggled(1);
+        assert!(
+            app.main.get_mix_open(),
+            "back to a mix after one app opens it again"
+        );
+        app.main.set_mix_open(false);
+        app.refresh();
+        assert!(!app.main.get_mix_open());
     }
 
     #[test]
