@@ -277,6 +277,9 @@ do {
     stored.order = []
     check(store.load().zones == expected && stored.order.isEmpty,
           "zones: migrating twice changes nothing: once marked, a launch writes nothing")
+    check(first.zonesNoticeDue, "zones: groups moved to zones leave the notice due for the next window")
+    store.zonesNoticeShown()
+    check(!store.load().zonesNoticeDue, "zones: the groups-became-zones notice shows once")
 
     let edited = [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:usb:out", "cc:Group-7"], volume: 35.5),
                   SpeakerZone(id: "z2", name: "Empty", members: [], volume: 0)]
@@ -2755,16 +2758,59 @@ do {
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
 
-    let present: Set<String> = ["ap:a", "lc:b"]
-    func summary(_ members: [String], on: Set<String>) -> (available: Int, allOn: Bool) {
-        GroupSummary.summarize(members: members, isAvailable: present.contains, isEnabled: on.contains)
+    let zoneText = UIStrings()
+    func zoneCount(on: Int, waiting: Int = 0, present: Int, total: Int) -> String {
+        ZoneLayout.count(on: on, waiting: waiting, present: present, total: total, text: zoneText)
     }
-    check(summary(["ap:a", "lc:b", "lc:gone"], on: ["ap:a", "lc:b"]) == (2, true),
-          "groups: on when every present member is on; absent members don't count")
-    check(summary(["ap:a", "lc:b"], on: ["ap:a"]) == (2, false),
-          "groups: off while a present member is off")
-    check(summary(["lc:gone"], on: ["lc:gone"]) == (0, false),
-          "groups: a group with no member present is never on")
+    check(zoneCount(on: 0, present: 0, total: 0) == "No speakers",
+          "zones: a zone whose members are all hidden or gone says it has no speakers")
+    check(zoneCount(on: 0, present: 0, total: 3) == "0 of 3 here",
+          "zones: a zone with no member listed counts its members as not here")
+    check(zoneCount(on: 2, present: 3, total: 3) == "2 of 3 on",
+          "zones: the header counts the members that are on out of every shown member")
+    check(zoneCount(on: 2, waiting: 1, present: 2, total: 3) == "2 of 3 on, 1 waiting",
+          "zones: a member waiting for the AirPlay 2 place counts as on and is named as waiting")
+
+    let zoned: Set<String> = ["lc:usb", "ap:native:den"]
+    check(ZoneLayout.zoneless(["lc:built-in", "lc:usb", "ap:native:den", "cc:kitchen"], key: { $0 }, zoned: zoned)
+            == ["lc:built-in", "cc:kitchen"],
+          "zones: the speaker lists keep only the speakers in no zone, in their order")
+    check(ZoneLayout.zoneless(["lc:usb"], key: { $0 }, zoned: zoned).isEmpty,
+          "zones: a list whose speakers are all in zones is empty")
+
+    let living = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb", "ap:native:den"], volume: 80)
+    let kitchen = SpeakerZone(id: "z2", name: "Kitchen", members: ["cc:kitchen"], volume: 100)
+    let moved = ZoneEdit.moving("lc:usb", to: "z2", in: [living, kitchen])
+    check(moved.map(\.members) == [["ap:native:den"], ["cc:kitchen", "lc:usb"]],
+          "zones: Move to Zone takes the speaker out of its zone and adds it after the other one's members")
+    check(ZoneEdit.moving("lc:usb", to: "gone", in: [living]) == [living],
+          "zones: a move to a zone that isn't there changes nothing")
+    let added = ZoneEdit.adding(id: "z3", name: "Desk", members: ["lc:usb", "cc:kitchen", "lc:usb"], to: [living, kitchen])
+    check(added.map(\.members) == [["ap:native:den"], [], ["lc:usb", "cc:kitchen"]] && added[2].volume == 100,
+          "zones: a new zone takes its speakers from their zones, once each, at full volume")
+    check(ZoneEdit.removing("cc:kitchen", from: [kitchen]).map(\.members) == [[]],
+          "zones: Remove from Zone leaves the emptied zone in place")
+    let pair = SpeakerZone(id: "z4", name: "Den", members: ["lc:usb", "ap:native:left", "ap:native:right"], volume: 100)
+    let paired = ZoneEdit.usingTarget("ap:native:pair:lr", for: ["ap:native:left", "ap:native:right"], in: "z4",
+                                      zones: [pair])
+    check(paired[0].members == ["lc:usb", "ap:native:pair:lr"],
+          "zones: Use <target> Instead puts the target where its first member was and drops the others")
+
+    func local(_ on: Bool, listed: Bool = true) -> ZoneMemberFacts { ZoneMemberFacts(kind: .local, listed: listed, on: on) }
+    func zonePlan(_ members: [ZoneMemberFacts], streaming: Bool) -> (action: ZoneClick.Action, steps: [ZoneClick.Step]) {
+        ZoneClick.plan(members, streaming: streaming, castOnElsewhere: false, airPlay2PlayingElsewhere: false)
+    }
+    let allOn = zonePlan([local(true), local(true)], streaming: true)
+    check(allOn.action == .turnOff && allOn.steps == [.off, .off],
+          "zones: a click on a zone whose members all play switches them off")
+    let partly = zonePlan([local(true), local(false)], streaming: true)
+    check(partly.action == .turnOn && partly.steps == [.on, .on],
+          "zones: a click on a zone with a member off switches every member on")
+    check(zonePlan([local(true), local(true)], streaming: false).action == .start,
+          "zones: a click while streaming is off starts it with the zone's members")
+    let gone = zonePlan([local(false, listed: false)], streaming: true)
+    check(gone.action == .nothing && gone.steps == [.absent],
+          "zones: a zone with no member listed does nothing on a click")
 
     var tuned = Equalizer.Settings()
     tuned.enabled = true; tuned.preamp = -3; tuned.gains[0] = 6
@@ -2889,7 +2935,7 @@ do {
         (Keys.airPlayDelay, "airPlayDelayMs"), (Keys.nativeAirPlayAdjustment, "nativeAirPlayAdjustmentMs"),
         (Keys.localDelaysMigrated, "localDelayModelMigrated"), (Keys.speakerNames, "speakerNamesByKey"),
         (Keys.airPlay2, "airPlay2Enabled"), (Keys.zones, "speakerZones"),
-        (Keys.zonesMigrated, "speakerZonesMigrated"),
+        (Keys.zonesMigrated, "speakerZonesMigrated"), (Keys.zonesNoticeDue, "speakerZonesNoticeDue"),
     ]
     let renamed = pinned.filter { $0.0 != $0.1 }.map(\.1)
     check(renamed.isEmpty, "settings: every UserDefaults key keeps the name existing installs use",
@@ -5850,9 +5896,10 @@ do {
     check(hidden.partition(again, key: rowKey).shown.isEmpty,
           "hidden speakers: a Cast or AirPlay speaker that re-announces, even under a new name, stays hidden")
 
-    let group = GroupSummary.summarize(members: ["lc:BuiltIn", "lc:teams"],
-                                       isAvailable: { !hidden.contains($0) }, isEnabled: { _ in true })
-    check(group.available == 1 && group.allOn, "hidden speakers: a group counts a hidden member as not present")
+    let shownMembers = ["lc:BuiltIn", "lc:teams"].filter { !hidden.contains($0) }
+    check(ZoneLayout.count(on: shownMembers.count, waiting: 0, present: shownMembers.count, total: shownMembers.count,
+                           text: t) == "1 of 1 on",
+          "hidden speakers: a zone's count leaves a hidden member out of its total")
     check(hidden.autoConnecting(["lc:teams", "lc:usb", "lc:other"], marked: ["lc:teams", "lc:usb"]) == ["lc:usb"],
           "hidden speakers: auto-connect skips a hidden speaker marked for it")
 

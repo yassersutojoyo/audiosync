@@ -99,18 +99,6 @@ struct PromptWithdrawal {
     }
 }
 
-/// How a speaker group shows in the window and the panel.
-enum GroupSummary {
-    /// `available`: members present right now. `allOn`: at least one member
-    /// is present and every present one is switched on (absent members don't
-    /// count, as a click on the group leaves them alone).
-    static func summarize(members: [String], isAvailable: (String) -> Bool,
-                          isEnabled: (String) -> Bool) -> (available: Int, allOn: Bool) {
-        let present = members.filter(isAvailable)
-        return (present.count, !present.isEmpty && present.allSatisfy(isEnabled))
-    }
-}
-
 /// Equalizer settings as the app stores them (JSON in UserDefaults).
 enum StoredEqualizer {
     /// The saved settings, or the defaults when nothing usable is saved: no
