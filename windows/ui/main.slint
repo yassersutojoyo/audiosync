@@ -8,7 +8,7 @@
 import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { Appearance, CalibrationRowItem, CastList, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -341,6 +341,264 @@ component SpeakerSection inherits VerticalLayout {
                     clicked => {
                         root.add-address();
                     }
+                }
+            }
+        }
+    }
+}
+
+// One preset in the Presets card (spec S259, S267): a click, Space or
+// Return recalls it, F2 renames it, and its … button, a right-click, the
+// Menu key or Shift+F10 open its menu.
+component PresetRow inherits Rectangle {
+    in property <PresetItem> item;
+    // The app asks the row for the keyboard focus after a delete.
+    in property <bool> focus-wanted;
+    callback recall();
+    callback rename();
+    callback update();
+    callback delete();
+    callback focus-taken();
+
+    function take-focus() {
+        focus.focus();
+        root.focus-taken();
+    }
+    init => {
+        if root.focus-wanted {
+            root.take-focus();
+        }
+    }
+    changed focus-wanted => {
+        if root.focus-wanted {
+            root.take-focus();
+        }
+    }
+
+    property <bool> tip-allowed: true;
+    border-radius: Fluent.radius-control;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+    accessible-role: button;
+    accessible-label: root.item.name;
+    accessible-value: root.item.current ? Strings.preset-current : "";
+    accessible-description: Strings.preset-recall-hint;
+    accessible-action-default => {
+        root.recall();
+    }
+
+    touch := TouchArea {
+        changed has-hover => {
+            if !self.has-hover {
+                root.tip-allowed = true;
+            }
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.tip-allowed = false;
+            }
+        }
+        clicked => {
+            root.recall();
+        }
+
+        if root.tip-allowed: Tooltip {
+            Rectangle {
+                width: min(tip-text.preferred-width + 16px, root.width);
+                height: tip-text.preferred-height + 10px;
+                border-radius: Fluent.radius-control;
+                border-width: 1px;
+                border-color: Fluent.stroke;
+                background: Tokens.surface;
+                drop-shadow-blur: 8px;
+                drop-shadow-offset-y: 2px;
+                drop-shadow-color: Tokens.text.with-alpha(0.18);
+                accessible-role: none;
+
+                tip-text := Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    text: root.item.name;
+                    font-size: Tokens.font-size-caption;
+                    color: Tokens.text;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    accessible-role: none;
+                }
+            }
+        }
+
+        menu := ContextMenuArea {
+            Menu {
+                MenuItem {
+                    title: Strings.rename-preset;
+                    activated => {
+                        root.rename();
+                    }
+                }
+
+                MenuItem {
+                    title: Strings.update-preset;
+                    enabled: !root.item.current;
+                    activated => {
+                        root.update();
+                    }
+                }
+
+                MenuSeparator { }
+
+                MenuItem {
+                    title: Strings.delete-preset;
+                    activated => {
+                        root.delete();
+                    }
+                }
+            }
+
+            focus := FocusScope {
+                focus-on-click: false;
+                key-pressed(event) => {
+                    if event.text == " " || event.text == Key.Return {
+                        root.recall();
+                        return accept;
+                    }
+                    if event.text == Key.F2 {
+                        root.rename();
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                HorizontalLayout {
+                    padding-left: 6px;
+                    spacing: 6px;
+                    min-height: 36px;
+
+                    // Kept in place while hidden, so the names line up.
+                    Glyph {
+                        glyph: Glyphs.check;
+                        color: Tokens.teal-text;
+                        font-size: 12px;
+                        width: 16px;
+                        opacity: root.item.current ? 1 : 0;
+                    }
+
+                    Text {
+                        text: root.item.name;
+                        color: Tokens.text;
+                        font-weight: root.item.current ? 600 : 400;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        accessible-role: none;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            glyph: Glyphs.more;
+                            label: Strings.speaker-options(root.item.name);
+                            glyph-color: Tokens.teal-text;
+                            clicked => {
+                                // show() takes a point in the menu area, not in this button's layout.
+                                menu.show({
+                                    x: self.absolute-position.x - menu.absolute-position.x,
+                                    y: self.absolute-position.y - menu.absolute-position.y + self.height,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        border-width: focus.has-focus ? 2px : 0px;
+        border-color: Tokens.focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// The Presets card (spec S259, S263): the presets in list order, or the
+// empty line, then Save as Preset….
+component PresetsCard inherits Card {
+    in property <[PresetItem]> presets;
+    // False at the most presets the app keeps (spec S251).
+    in property <bool> can-save: true;
+    // The app asks for the focus on this preset's row, or on Save as Preset…,
+    // after a delete; whoever takes it clears the request.
+    in-out property <string> focus-id;
+    in-out property <bool> focus-save;
+    callback recall(string);
+    callback rename(string);
+    callback update(string);
+    callback delete(string);
+    callback save();
+
+    changed focus-save => {
+        if root.focus-save {
+            root.focus-save = false;
+            save.focus();
+        }
+    }
+
+    accessible-role: groupbox;
+    accessible-label: Strings.presets;
+
+    VerticalLayout {
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            Glyph {
+                glyph: Glyphs.presets;
+                color: Tokens.teal-text;
+                width: 20px;
+            }
+
+            SectionTitle {
+                text: Strings.presets;
+            }
+        }
+
+        if root.presets.length == 0: SecondaryText {
+            text: Strings.presets-empty;
+            accessible-role: text;
+            accessible-label: self.text;
+        }
+
+        if root.presets.length > 0: VerticalLayout {
+            for preset in root.presets: PresetRow {
+                item: preset;
+                focus-wanted: root.focus-id != "" && root.focus-id == preset.id;
+                focus-taken => {
+                    root.focus-id = "";
+                }
+                recall => {
+                    root.recall(preset.id);
+                }
+                rename => {
+                    root.rename(preset.id);
+                }
+                update => {
+                    root.update(preset.id);
+                }
+                delete => {
+                    root.delete(preset.id);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: start;
+            save := Button {
+                text: Strings.save-preset;
+                enabled: root.can-save;
+                accessible-label: Strings.save-preset;
+                clicked => {
+                    root.save();
                 }
             }
         }
@@ -870,6 +1128,11 @@ export component MainWindow inherits Window {
     in property <[SpeakerItem]> connected;
     in property <[ZoneItem]> zones;
     in property <[NoticeItem]> notices;
+    in property <[PresetItem]> presets;
+    in property <bool> can-save-preset: true;
+    // After a delete: the preset row, or Save as Preset…, that takes the focus.
+    in-out property <string> focus-preset-id;
+    in-out property <bool> focus-save-preset;
     // What Narrator says about a new notice, while the app wants it said
     // here (empty otherwise).
     in property <string> notice-announcement;
@@ -984,6 +1247,12 @@ export component MainWindow inherits Window {
     callback calibrate-all-apply-requested();
     callback calibrate-all-undo-requested();
     callback calibrate-all-close-requested();
+    // A preset row, View > Presets and Ctrl+1 to Ctrl+9 recall by ID.
+    callback preset-recall-requested(string);
+    callback preset-rename-requested(string);
+    callback preset-update-requested(string);
+    callback preset-delete-requested(string);
+    callback save-preset-requested();
     callback zone-toggled(string);
     callback zone-expanded-changed(string, bool);
     callback zone-volume-changed(string, float);
@@ -1202,6 +1471,37 @@ export component MainWindow inherits Window {
                 shortcut: @keys(Control + E);
                 activated => {
                     root.equalizer-requested();
+                }
+            }
+
+            // Rebuilt with the list, so Ctrl+1 to Ctrl+9 work while it is
+            // closed (spec S261).
+            Menu {
+                title: Strings.presets;
+
+                if root.presets.length == 0: MenuItem {
+                    title: Strings.no-presets;
+                    enabled: false;
+                }
+
+                for preset[index] in root.presets: MenuItem {
+                    title: preset.name;
+                    checkable: true;
+                    checked: preset.current;
+                    shortcut: index == 0 ? @keys(Control + "1") : index == 1 ? @keys(Control + "2") : index == 2 ? @keys(Control + "3") : index == 3 ? @keys(Control + "4") : index == 4 ? @keys(Control + "5") : index == 5 ? @keys(Control + "6") : index == 6 ? @keys(Control + "7") : index == 7 ? @keys(Control + "8") : index == 8 ? @keys(Control + "9") : @keys();
+                    activated => {
+                        root.preset-recall-requested(preset.id);
+                    }
+                }
+
+                MenuSeparator { }
+
+                MenuItem {
+                    title: Strings.save-preset;
+                    enabled: root.can-save-preset;
+                    activated => {
+                        root.save-preset-requested();
+                    }
                 }
             }
 
@@ -1522,6 +1822,28 @@ export component MainWindow inherits Window {
                                     root.master-volume-changed(value);
                                 }
                             }
+                        }
+                    }
+
+                    PresetsCard {
+                        presets: root.presets;
+                        can-save: root.can-save-preset;
+                        focus-id <=> root.focus-preset-id;
+                        focus-save <=> root.focus-save-preset;
+                        recall(id) => {
+                            root.preset-recall-requested(id);
+                        }
+                        rename(id) => {
+                            root.preset-rename-requested(id);
+                        }
+                        update(id) => {
+                            root.preset-update-requested(id);
+                        }
+                        delete(id) => {
+                            root.preset-delete-requested(id);
+                        }
+                        save => {
+                            root.save-preset-requested();
                         }
                     }
 

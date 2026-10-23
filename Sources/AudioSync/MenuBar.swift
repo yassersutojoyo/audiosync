@@ -117,14 +117,14 @@ final class AppModel: ObservableObject {
         var toggleMixApp: (String) -> Void = { _ in }
         var setMixMode: (AppMixMode) -> Void = { _ in }
         var setMaster: (Double) -> Void = { _ in }
-        var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
+        var setAirPlayEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
         var forgetAirPlayPairing: (String) -> Void = { _ in }
-        var setLocalEnabled: (String, Bool) -> Void = { _, _ in }
+        var setLocalEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
         var setAirPlayDelay: (Double) -> Void = { _ in }
-        var setCastEnabled: (String, Bool) -> Void = { _, _ in }
+        var setCastEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         /// The device's own volume, slider position 0 to 100.
         var setCastVolume: (String, Double) -> Void = { _, _ in }
         /// An arrow key on the device's slider: up or down one step.
@@ -163,6 +163,12 @@ final class AppModel: ObservableObject {
         /// Speaker key, zone ID.
         var moveToZone: (String, String) -> Void = { _, _ in }
         var removeFromZone: (String) -> Void = { _ in }
+        /// Preset ID (S265).
+        var recallPreset: (String) -> Void = { _ in }
+        var savePreset: () -> Void = {}
+        var renamePreset: (String) -> Void = { _ in }
+        var updatePreset: (String) -> Void = { _ in }
+        var deletePreset: (String) -> Void = { _ in }
         /// Zone ID, the member's key: its target takes its place (S247).
         var useTargetInstead: (String, String) -> Void = { _, _ in }
         var setAutoConnect: (String, Bool) -> Void = { _, _ in }
@@ -249,6 +255,8 @@ final class AppModel: ObservableObject {
     /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
     @Published var calibrateAll = CalibrateAllStatus()
     @Published var zones: [Zone] = []
+    /// The presets in list order, the current one marked (S259, S264).
+    @Published var presets: [PresetRow] = []
     @Published var hidden = HiddenState()
     /// The row whose switch takes the keyboard focus once it is built (H11).
     @Published var focusSwitch: String?
@@ -356,12 +364,13 @@ final class AppModel: ObservableObject {
                            in: deviceVolumes)
     }
 
-    /// A click on a speaker's switch, whatever kind it is.
-    func setEnabled(_ speaker: Speaker, _ on: Bool) {
+    /// A click on a speaker's switch, whatever kind it is; the web remote's
+    /// switches pass `.remote`.
+    func setEnabled(_ speaker: Speaker, _ on: Bool, origin: StartOrigin = .user) {
         switch speaker.tag {
-        case .airplay: actions.setAirPlayEnabled(speaker.id, on)
-        case .cast: actions.setCastEnabled(speaker.id, on)
-        default: actions.setLocalEnabled(speaker.id, on)
+        case .airplay: actions.setAirPlayEnabled(speaker.id, on, origin)
+        case .cast: actions.setCastEnabled(speaker.id, on, origin)
+        default: actions.setLocalEnabled(speaker.id, on, origin)
         }
     }
 
@@ -753,6 +762,7 @@ struct MenuBarView: View {
         height += CGFloat(min(model.notices.items.count, 2)) * 90
         if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
         if offersCastAdd { height += 20 }
+        if PresetPanel.showsRow(model.presets) { height += 38 }
         return height
     }
 
@@ -772,6 +782,7 @@ struct MenuBarView: View {
             header(t)
             NoticeStack(model: model, compact: true)
             SourcePicker(model: model)
+            if PresetPanel.showsRow(model.presets) { PresetPicker(model: model) }
             // The Mac's own speakers belong with the volume, above the one
             // divider, drawn tight together as one block.
             VStack(alignment: .leading, spacing: 2) {
@@ -910,7 +921,7 @@ struct MenuBarView: View {
                     CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                                text: t, height: rowHeight, renamedFrom: speaker.renamedFrom,
                                deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
-                        model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn)
+                        model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn, .user)
                     }
                 }
             }
@@ -1318,6 +1329,43 @@ struct SourcePicker: View {
                 .frame(width: edge, height: edge)
                 .foregroundStyle(Brand.tealText)
         }
+    }
+}
+
+/// The panel's preset row (S260): recall only, the current one checked.
+/// Choosing one leaves the panel open.
+struct PresetPicker: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        let t = model.text
+        let current = PresetPanel.label(model.presets)
+        Menu {
+            ForEach(model.presets) { preset in
+                Toggle(preset.name, isOn: Binding(get: { preset.current },
+                                                  set: { _ in model.actions.recallPreset(preset.id) }))
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .frame(width: 18, height: 18)
+                    .foregroundStyle(Brand.tealText)
+                    .accessibilityHidden(true)
+                Text(current ?? t.choosePreset)
+                    .foregroundStyle(current == nil ? HierarchicalShapeStyle.secondary : .primary)
+                    .lineLimit(1)
+                Spacer()
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .tint(.primary)   // as the source picker: the teal falls under 4.5:1 on the panel
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(0.6)))
+        .help(current ?? t.choosePreset)
+        .accessibilityLabel(t.presets)
+        .accessibilityValue(current ?? t.choosePreset)
     }
 }
 

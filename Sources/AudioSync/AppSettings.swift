@@ -38,14 +38,14 @@ struct AppSettings: Equatable {
         static let zones = "speakerZones"
         /// True once the groups were moved to `zones` (S248); written last.
         static let zonesMigrated = "speakerZonesMigrated"
+        /// True from a migration that made zones until the next launch says
+        /// so in a notice; removed once shown.
+        static let zonesNoticeDue = "speakerZonesNoticeDue"
         /// `[SpeakerPreset]` as JSON (S251).
         static let presets = "speakerPresets"
         /// True once the groups that lost a member to the zones became
         /// presets (S254); written last.
         static let presetsMigrated = "speakerPresetsMigrated"
-        /// True from a migration that made zones until the next launch says
-        /// so in a notice; removed once shown.
-        static let zonesNoticeDue = "speakerZonesNoticeDue"
         /// Speaker keys (`SpeakerKey`) marked for auto-connect, as an array.
         static let autoConnect = "autoConnectSpeakers"
         /// The names the user gave speakers, by speaker key (`SpeakerNames`).
@@ -120,9 +120,9 @@ struct AppSettings: Equatable {
     var airplayVolumes: [String: Double] = [:]
     var groups: [SpeakerGroup] = []
     var zones: [SpeakerZone] = []
-    var presets: [SpeakerPreset] = []
     /// The groups became zones and no launch said so yet.
     var zonesNoticeDue = false
+    var presets: [SpeakerPreset] = []
     var autoConnect: Set<String> = []
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
@@ -170,8 +170,8 @@ struct AppSettings: Equatable {
         s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
         s.groups = decodeGroups(read(Keys.groups) as? Data)
         s.zones = decodeZones(read(Keys.zones) as? Data)
-        s.presets = decodePresets(read(Keys.presets) as? Data)
         s.zonesNoticeDue = read(Keys.zonesNoticeDue) as? Bool ?? false
+        s.presets = decodePresets(read(Keys.presets) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)

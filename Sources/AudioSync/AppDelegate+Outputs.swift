@@ -49,13 +49,13 @@ extension AppDelegate {
         LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
     }
 
-    func setLocalEnabled(_ uid: String, _ on: Bool) {
+    func setLocalEnabled(_ uid: String, _ on: Bool, origin: StartOrigin = .user) {
         if on { clearNotices([SpeakerKey.make(id: uid, airplay: false)]) }   // a new attempt
         if on { enabledLocal.insert(uid) } else { enabledLocal.remove(uid) }
         if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.isRunning) {
-            startEngine(origin: .user)   // picking a speaker starts streaming to it
+            startEngine(origin: origin)   // picking a speaker starts streaming to it
         } else {
-            syncLocalOutputs(origin: .user)
+            syncLocalOutputs(origin: origin)
             stopIfIdle()
         }
         pushModel()

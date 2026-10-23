@@ -1267,6 +1267,12 @@ impl AirPlaySpeakers {
         Some(InTarget { id: target, name })
     }
 
+    /// The name the speaker or target `id` was last listed under, a member
+    /// its target holds included.
+    pub fn listed_name(&self, id: &str) -> Option<&str> {
+        self.names.get(id).map(String::as_str)
+    }
+
     /// The listed stereo pair or home theater group that the listed speaker
     /// `id` is a member of (P176).
     fn target_of(&self, id: &str) -> Option<&Target> {
@@ -5675,7 +5681,7 @@ pub mod tests {
     }
 
     /// A stereo pair of two AirPlay 2 speakers, Left and Right (P173).
-    fn stereo_pair() -> (Target, Device, Device) {
+    pub fn stereo_pair() -> (Target, Device, Device) {
         let left = airplay2_device(21, "Left", false);
         let right = airplay2_device(22, "Right", false);
         let target = Target {

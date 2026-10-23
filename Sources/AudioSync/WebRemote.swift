@@ -50,7 +50,18 @@ final class WebRemoteSettings: ObservableObject {
 /// main queue asynchronously, since `asc_remote_stop` waits for a callback
 /// in progress.
 final class WebRemote {
+    /// The zones and presets the phone lists, and what their commands do.
+    struct Host {
+        var zones: () -> [SpeakerZone] = { [] }
+        var presets: () -> [RemotePresetRow] = { [] }
+        var setZoneVolume: (String, Double) -> Void = { _, _ in }
+        /// Zone or preset ID, the member keys to keep off with a notice, and the origin.
+        var toggleZone: (String, [String], StartOrigin) -> Void = { _, _, _ in }
+        var recallPreset: (String, [String], StartOrigin) -> Void = { _, _, _ in }
+    }
+
     let settings: WebRemoteSettings
+    var host = Host()
     /// Called on the main queue when `showsNowPlaying` changes.
     var onNowPlayingNeedChange: () -> Void = {}
 
@@ -222,8 +233,11 @@ final class WebRemote {
         let playing = model.nowPlaying.map {
             RemoteSnapshot.Playing(title: $0.title, artist: $0.artist, source: $0.appName)
         }
+        let listed = rows()
         let (sources, current) = sourceList()
-        return RemoteSnapshot(computerName: computerName, master: model.master, nowPlaying: playing, rows: rows(),
+        return RemoteSnapshot(computerName: computerName, master: model.master, nowPlaying: playing, rows: listed,
+                              zones: host.zones().map { RemoteZoneRow($0, listed: listed) }, presets: host.presets(),
+                              calibrating: RemoteSnapshot.calibrating(model.calibration, model.calibrateAll),
                               sources: sources, sourceID: current)
     }
 
@@ -247,7 +261,8 @@ final class WebRemote {
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
                 needsCode: s.availability == .needsCode, paired: s.paired,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,
-                                target: s.airPlayTarget)), text: t)
+                                target: s.airPlayTarget),
+                key: s.key, waiting: s.enabled && s.waitingForAirPlay2), text: t)
         }
     }
 
@@ -266,15 +281,17 @@ final class WebRemote {
             DebugTrace.log("[AudioSync] web remote: a command didn't read")
             return
         }
-        let listed = rows()
-        if case .speaker(let id, _, _, _) = command, !listed.contains(where: { $0.id == id }) {
+        let now = snapshot()
+        if now.calibrating {
+            DebugTrace.log("[AudioSync] web remote: ignored a command during a microphone run")
+        } else if case .speaker(let id, _, _, _) = command, !now.rows.contains(where: { $0.id == id }) {
             DebugTrace.log("[AudioSync] web remote: ignored a command for \(id), which isn't listed (hidden or gone)")
         }
-        let (sources, current) = sourceList()
-        if case .source(let id) = command, !sources.contains(where: { $0.id == id }) {
+        if case .source(let id) = command, !now.sources.contains(where: { $0.id == id }) {
             DebugTrace.log("[AudioSync] web remote: ignored a pick of a source the picker no longer lists")
         }
-        let actions = RemoteAction.plan(command, rows: listed, sources: sources, sourceID: current)
+        let actions = RemoteAction.plan(command, rows: now.rows, zones: now.zones, presets: now.presets,
+                                        calibrating: now.calibrating, sources: now.sources, sourceID: now.sourceID)
         DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
         actions.forEach(apply)
         schedulePublish()
@@ -284,13 +301,16 @@ final class WebRemote {
         let speaker = { (id: String) in (self.model.airplay + self.model.local + self.model.cast).first { $0.id == id } }
         switch action {
         case .setEnabled(let id, let on):
-            if let s = speaker(id) { model.setEnabled(s, on) }
+            if let s = speaker(id) { model.setEnabled(s, on, origin: .remote) }
         case .setVolume(let id, let position):
             if let s = speaker(id) { model.setVolume(s, position) }
         case .setLocalOffset(let id, let ms): model.actions.setLocalOffset(id, ms)
         case .setCastOffset(let id, let ms): model.actions.setCastOffset(id, ms)
         case .setAirPlayDelay(let ms): model.actions.setAirPlayDelay(ms)
         case .setMaster(let position): model.actions.setMaster(position)
+        case .setZoneVolume(let id, let position): host.setZoneVolume(id, position)
+        case .toggleZone(let id, let keepOff): host.toggleZone(id, keepOff, .remote)
+        case .recallPreset(let id, let keepOff): host.recallPreset(id, keepOff, .remote)
         case .selectSource(let pickerID): model.actions.selectSource(pickerID)
         }
     }

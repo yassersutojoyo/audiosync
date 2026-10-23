@@ -1485,44 +1485,6 @@ mod tests {
     }
 
     #[test]
-    fn equalizer_curves_are_read_leniently_and_left_out_while_none_is() {
-        let text = r#"{"version": 2, "master_volume": 40, "equalizer_curves": [
-            {"name": "  Desk  ", "gains_db": [1.3, "loud", null, 30, -30]},
-            {"name": "desk", "gains_db": [6, 6, 6, 6, 6, 6, 6, 6, 6, 6]},
-            {"name": "   ", "gains_db": []},
-            {"gains_db": [1, 2]},
-            {"name": "Late", "gains_db": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9]},
-            7
-        ]}"#;
-        let (read, _) = Settings::from_json(text).expect("one odd entry spoils nothing");
-        assert_eq!(read.master_volume, 40.0);
-        let mut desk = vec![0.0; BAND_COUNT];
-        desk[..5].copy_from_slice(&[1.5, 0.0, 0.0, 12.0, -12.0]);
-        assert_eq!(
-            read.equalizer_curves,
-            [
-                SavedCurve {
-                    name: "Desk".into(),
-                    gains_db: desk,
-                },
-                SavedCurve {
-                    name: "Late".into(),
-                    gains_db: vec![0.0; BAND_COUNT],
-                },
-            ]
-        );
-        let (again, _) = Settings::from_json(&read.to_json()).expect("read");
-        assert_eq!(again.equalizer_curves, read.equalizer_curves);
-        let (read, _) =
-            Settings::from_json(r#"{"version": 2, "equalizer_curves": {}}"#).expect("read");
-        assert!(read.equalizer_curves.is_empty());
-        assert!(
-            !Settings::default().to_json().contains("equalizer_curves"),
-            "no curves, no field"
-        );
-    }
-
-    #[test]
     fn groups_and_auto_connect_keep_leaving_cast_keys_out() {
         let text = r#"{"version": 2,
             "groups": [{"id": "g1", "name": "Den", "members": ["cc:attic", "lc:desk"]}],
@@ -1762,6 +1724,44 @@ mod tests {
         );
         assert_eq!(keys(&value["members"][0]), ["key", "volume"]);
         assert_eq!(keys(&value["zones"][0]), ["id", "volume"]);
+    }
+
+    #[test]
+    fn equalizer_curves_are_read_leniently_and_left_out_while_none_is() {
+        let text = r#"{"version": 2, "master_volume": 40, "equalizer_curves": [
+            {"name": "  Desk  ", "gains_db": [1.3, "loud", null, 30, -30]},
+            {"name": "desk", "gains_db": [6, 6, 6, 6, 6, 6, 6, 6, 6, 6]},
+            {"name": "   ", "gains_db": []},
+            {"gains_db": [1, 2]},
+            {"name": "Late", "gains_db": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9]},
+            7
+        ]}"#;
+        let (read, _) = Settings::from_json(text).expect("one odd entry spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        let mut desk = vec![0.0; BAND_COUNT];
+        desk[..5].copy_from_slice(&[1.5, 0.0, 0.0, 12.0, -12.0]);
+        assert_eq!(
+            read.equalizer_curves,
+            [
+                SavedCurve {
+                    name: "Desk".into(),
+                    gains_db: desk,
+                },
+                SavedCurve {
+                    name: "Late".into(),
+                    gains_db: vec![0.0; BAND_COUNT],
+                },
+            ]
+        );
+        let (again, _) = Settings::from_json(&read.to_json()).expect("read");
+        assert_eq!(again.equalizer_curves, read.equalizer_curves);
+        let (read, _) =
+            Settings::from_json(r#"{"version": 2, "equalizer_curves": {}}"#).expect("read");
+        assert!(read.equalizer_curves.is_empty());
+        assert!(
+            !Settings::default().to_json().contains("equalizer_curves"),
+            "no curves, no field"
+        );
     }
 
     #[test]

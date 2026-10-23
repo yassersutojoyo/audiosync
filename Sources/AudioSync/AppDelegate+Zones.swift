@@ -7,13 +7,16 @@ extension AppDelegate {
 
     // MARK: - Zones
 
-    /// A zone member as the windows and a click on its zone see it.
-    private struct ZoneMemberState {
+    /// A zone or preset member as the windows, a click on its zone and a
+    /// recall see it.
+    struct ZoneMemberState {
         let key: String
         let kind: SpeakerKey.Kind
         /// The row's ID: a device UID, a native AirPlay ID or "cast:<device ID>".
         let appID: String
         var facts: ZoneMemberFacts
+        /// Listed now, hidden or not.
+        var found = false
         /// The receiver ID of the stereo pair or home theater it plays as part of.
         var target: String? = nil
         var waiting = false
@@ -23,23 +26,27 @@ extension AppDelegate {
     /// under its speaker key.
     func isHidden(_ key: String) -> Bool { hiddenSpeakers.contains(CastID.app(key: key) ?? key) }
 
-    private func memberState(_ key: String) -> ZoneMemberState? {
+    func memberState(_ key: String) -> ZoneMemberState? {
         guard let (id, kind) = SpeakerKey.parseAny(key) else { return nil }
         let hidden = isHidden(key)
         switch kind {
         case .local:
-            let listed = !hidden && localDevices[id] != nil && localOrder.contains(id)
+            let found = localDevices[id] != nil && localOrder.contains(id)
             return ZoneMemberState(key: key, kind: kind, appID: id,
-                                   facts: ZoneMemberFacts(kind: .local, listed: listed, on: enabledLocal.contains(id)))
+                                   facts: ZoneMemberFacts(kind: .local, listed: !hidden && found,
+                                                          on: enabledLocal.contains(id)),
+                                   found: found)
         case .cast:
-            let listed = !hidden && castModel.devices[id] != nil && castModel.rows.contains(id)
+            let found = castModel.devices[id] != nil && castModel.rows.contains(id)
             return ZoneMemberState(key: key, kind: kind, appID: CastID.app(id),
-                                   facts: ZoneMemberFacts(kind: .cast, listed: listed, on: castModel.enabled == id,
-                                                          busy: castModel.devices[id]?.offline == true))
+                                   facts: ZoneMemberFacts(kind: .cast, listed: !hidden && found, on: castModel.enabled == id,
+                                                          busy: castModel.devices[id]?.offline == true),
+                                   found: found)
         case .airplay:
             let on = enabledAirPlay.contains(id)
             // Rows left from before the sender stopped aren't shown (`AppModel.shownAirPlay`).
-            let listed = !hidden && !nativeStarts.stopped && airplayOrder.contains(id)
+            let found = !nativeStarts.stopped && airplayOrder.contains(id)
+            let listed = !hidden && found
             let model = nativeAirPlay?.model
             let receiver = NativeAirPlayID.receiver(id)
             let isTarget = receiver.map { NativeTarget.kind($0) != nil } ?? false
@@ -50,7 +57,7 @@ extension AppDelegate {
             let target = listed ? nil : receiver.flatMap { model?.holdingTarget($0, on: on) }
             let facts = ZoneMemberFacts(kind: isTarget || overAirPlay2 ? .airplay2 : .airplay, listed: listed, on: on,
                                         needsAirPlay2: isTarget && !listed && !airPlay2On, inTarget: target != nil)
-            return ZoneMemberState(key: key, kind: kind, appID: id, facts: facts, target: target,
+            return ZoneMemberState(key: key, kind: kind, appID: id, facts: facts, found: found, target: target,
                                    waiting: receiver.map { model?.isWaiting($0) == true } ?? false)
         }
     }
@@ -76,11 +83,17 @@ extension AppDelegate {
 
     /// A click on zone `id`, carried out as the core plans it (S246, S247):
     /// present members only, at most one Cast speaker, and every AirPlay 2
-    /// member on, even one that waits for the AirPlay 2 place.
-    func toggleZone(_ id: String) {
+    /// member on, even one that waits for the AirPlay 2 place. The members in
+    /// `keepOff` (a phone's click: they ask for a code) count as not listed
+    /// and get a notice each when the zone turns on (S257).
+    func toggleZone(_ id: String, keepingOff keepOff: [String] = [], origin: StartOrigin = .user) {
         calibrateZoneClicked()   // before the guard: a click that switches nothing ends a run too (S240)
         guard let zone = zones.first(where: { $0.id == id }) else { return }
-        let members = zone.members.compactMap(memberState)
+        let members = zone.members.compactMap(memberState).map { member -> ZoneMemberState in
+            var member = member
+            if keepOff.contains(member.key) { member.facts.listed = false }
+            return member
+        }
         let situation = zoneSituation(Set(zone.members))
         let plan = ZoneClick.plan(members.map(\.facts), streaming: engine.isRunning,
                                   castOnElsewhere: situation.castOnElsewhere,
@@ -92,6 +105,7 @@ extension AppDelegate {
         case .turnOff: turnOn = false
         }
         DebugTrace.log("[AudioSync] the user switched zone \"\(zone.name)\" \(turnOn ? "on" : "off")")
+        if turnOn { postPairFirst(keepOff.filter { zone.members.contains($0) }) }
         let running = engine.isRunning
         var attempts: [String] = []   // AirPlay members this click turns on
         for (member, step) in zip(members, plan.steps) {
@@ -110,10 +124,10 @@ extension AppDelegate {
         }
         beginNativeAttempts(attempts)   // before the sender's speakers follow
         if turnOn && !engine.isRunning {
-            startEngine(origin: .user)
+            startEngine(origin: origin)
         } else if engine.isRunning {
             applyAirPlaySelection()   // the sender's speakers follow the zone's switches
-            syncLocalOutputs(origin: .user)
+            syncLocalOutputs(origin: origin)
         }
         syncCast()
         stopIfIdle()
@@ -121,9 +135,20 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// A notice for each speaker a phone's zone or preset left off because it
+    /// asks for a code (S257): its prompt would wait on the Mac with nobody there.
+    func postPairFirst(_ keys: [String]) {
+        let listed = appModel.layout.thisMac + appModel.layout.connected
+        for key in keys {
+            guard let speaker = listed.first(where: { $0.key == key }) else { continue }
+            DebugTrace.log("[AudioSync] web remote: \(key) stays off, it asks for a code")
+            postNotice(text.remotePairFirst(speaker.name), subject: key)
+        }
+    }
+
     /// Switches one member as its own switch would, without starting or
     /// stopping streaming; switched on, it is a new attempt.
-    private func switchZoneMember(_ member: ZoneMemberState, on: Bool, attempts: inout [String]) {
+    func switchZoneMember(_ member: ZoneMemberState, on: Bool, attempts: inout [String]) {
         switch member.kind {
         case .local:
             if on {
@@ -191,7 +216,7 @@ extension AppDelegate {
                                    speakerID: member.facts.listed ? member.appID : nil, note: note, target: target)
     }
 
-    private func memberName(_ member: ZoneMemberState) -> String {
+    func memberName(_ member: ZoneMemberState) -> String {
         switch member.kind {
         case .airplay: return shownName(airPlay: member.appID)
         case .cast: return CastID.device(member.appID).map { castName($0) } ?? text.unknownDevice

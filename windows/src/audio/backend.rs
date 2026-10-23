@@ -821,6 +821,12 @@ pub trait AudioBackend {
         None
     }
 
+    /// The name the AirPlay speaker `id` was last listed under, also when
+    /// its stereo pair or home theater holds it and it has no row.
+    fn airplay_listed_name(&self, _id: &str) -> Option<String> {
+        None
+    }
+
     /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
     /// value that isn't finite is ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);

@@ -10,7 +10,7 @@ extension AppDelegate {
     /// `rebuild`: the restart after a capture format change (S20), which a
     /// source app that quit meanwhile turns into a stop or a switch (S227 e).
     func startEngine(origin: StartOrigin, rebuild: Bool = false) {
-        if origin == .user {
+        if origin != .automatic {
             userStopped = false
             autoStartFailed = false
             clearNotices([Notice.source, Notice.start, Notice.capture])

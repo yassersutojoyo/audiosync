@@ -386,13 +386,13 @@ extension AppDelegate {
     /// on, it is a new attempt: one that asks for a PIN pairs, and one that
     /// asks for a password AudioSync doesn't have this run prompts for it;
     /// switched off, a pairing under way stops.
-    func setNativeAirPlayEnabled(_ id: String, _ on: Bool) {
-        if on, refusedAsTargetMember(id) { return }
+    func setNativeAirPlayEnabled(_ id: String, _ on: Bool, origin: StartOrigin = .user) {
+        if on, refusedAsTargetMember(id, origin: origin) { return }
         if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
         if on { beginNativeAttempts([id]) } else { endNativeAttempt(id) }
         if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.isRunning) {
-            startEngine(origin: .user)
+            startEngine(origin: origin)
         } else {
             syncNativeSpeakers()
             stopIfIdle()
@@ -402,12 +402,12 @@ extension AppDelegate {
 
     /// A member of a listed stereo pair or home theater group plays only as
     /// part of it (P176): switched on by itself it stays off, and says why.
-    private func refusedAsTargetMember(_ id: String) -> Bool {
+    private func refusedAsTargetMember(_ id: String, origin: StartOrigin) -> Bool {
         guard let receiver = NativeAirPlayID.receiver(id), let native = nativeAirPlay,
               let target = native.model.holdingTarget(receiver, on: enabledAirPlay.contains(id)) else { return false }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: it plays as part of \(nativeLabel(target))")
         notify(text.nativeAirPlayPlaysInGroup(name: shownName(airPlay: id), group: shownName(airPlay: NativeAirPlayID.app(target))),
-               origin: .user, subject: SpeakerKey.make(id: id, airplay: true))
+               origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
         pushModel()
         return true
     }

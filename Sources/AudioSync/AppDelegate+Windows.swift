@@ -34,6 +34,22 @@ extension AppDelegate {
         let saved = AppSettings.load(SettingsStore.standard.read)
         let remote = WebRemote(model: appModel, store: .standard, enabled: saved.webRemote, port: saved.webRemotePort)
         remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
+        remote.host.zones = { [weak self] in self?.zones ?? [] }
+        remote.host.presets = { [weak self] in
+            guard let self else { return [] }
+            let members = Dictionary(presets.map { ($0.id, $0.members.map(\.key)) }, uniquingKeysWith: { first, _ in first })
+            return presetSnapshot().map {
+                RemotePresetRow(id: $0.id, name: $0.name, current: $0.current, members: members[$0.id] ?? [])
+            }
+        }
+        remote.host.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
+        remote.host.toggleZone = { [weak self] id, keepOff, origin in
+            self?.toggleZone(id, keepingOff: keepOff, origin: origin)
+        }
+        // A phone's recall starts as `.remote` either way (S266).
+        remote.host.recallPreset = { [weak self] id, keepOff, _ in
+            self?.recallPreset(id, from: .phone, keepingOff: keepOff)
+        }
         webRemote = remote
         webRemoteWindow = WebRemoteWindowController(remote: remote, text: text)
         menuBar = MenuBarController(model: appModel)
@@ -48,6 +64,7 @@ extension AppDelegate {
         }
         publish(\.equalizerOn, settings.enabled)
         publishEqualizerCurve()
+        publishPresets()   // a band change moves the current mark (S264)
     }
 
     private func equalizerCurvesChanged(_ curves: [Equalizer.Curve]) {
@@ -60,6 +77,14 @@ extension AppDelegate {
     private func publishEqualizerCurve() {
         guard let equalizerModel else { return }
         publish(\.equalizerCurve, text.equalizerCurveName(equalizerModel.shownCurve, saved: equalizerModel.curves))
+    }
+
+    /// After the speaker rows, which the current mark is worked out from.
+    private func publishPresets() {
+        let rows = presetSnapshot()
+        followPresetNotice(current: rows.first(where: \.current)?.id)
+        publish(\.presets, rows)
+        PresetsMenu.update(appModel.presets)
     }
 
     private func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {
@@ -89,10 +114,10 @@ extension AppDelegate {
         a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
         a.setMixMode = { [weak self] mode in self?.setMixMode(mode) }
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
-        a.setAirPlayEnabled = { [weak self] id, on in self?.setNativeAirPlayEnabled(id, on) }
+        a.setAirPlayEnabled = { [weak self] id, on, origin in self?.setNativeAirPlayEnabled(id, on, origin: origin) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
         a.forgetAirPlayPairing = { [weak self] id in self?.forgetNativePairing(id) }
-        a.setLocalEnabled = { [weak self] uid, on in self?.setLocalEnabled(uid, on) }
+        a.setLocalEnabled = { [weak self] uid, on, origin in self?.setLocalEnabled(uid, on, origin: origin) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
         a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
@@ -105,7 +130,7 @@ extension AppDelegate {
         a.undoCalibrateAll = { [weak self] in self?.undoCalibrateAll() }
         a.closeCalibrateAll = { [weak self] in self?.closeCalibrateAll() }
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
-        a.setCastEnabled = { [weak self] id, on in self?.setCastEnabled(id, on) }
+        a.setCastEnabled = { [weak self] id, on, origin in self?.setCastEnabled(id, on, origin: origin) }
         a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
         a.stepCastVolume = { [weak self] id, up in self?.stepCastVolume(id, up: up) }
         a.setCastMuted = { [weak self] id, muted in self?.setCastMuted(id, muted) }
@@ -141,6 +166,11 @@ extension AppDelegate {
         a.newZoneWithSpeaker = { [weak self] key, name in self?.promptNewZone(with: key, name: name) }
         a.moveToZone = { [weak self] key, id in self?.moveToZone(key, id) }
         a.removeFromZone = { [weak self] key in self?.removeFromZone(key) }
+        a.recallPreset = { [weak self] id in self?.recallPreset(id, from: .app) }
+        a.savePreset = { [weak self] in self?.promptSavePreset() }
+        a.renamePreset = { [weak self] id in self?.promptRenamePreset(id) }
+        a.updatePreset = { [weak self] id in self?.updatePreset(id) }
+        a.deletePreset = { [weak self] id in self?.deletePreset(id) }
         a.useTargetInstead = { [weak self] id, key in self?.useTargetInstead(in: id, for: key) }
         a.setAutoConnect = { [weak self] key, on in self?.setAutoConnect(key, on) }
         a.renameSpeaker = { [weak self] key, system, typed in self?.renameSpeaker(key, system: system, to: typed) }
@@ -276,6 +306,7 @@ extension AppDelegate {
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
         publishEqualizerCurve()
         publish(\.zones, zoneSnapshot())
+        publishPresets()
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
@@ -577,6 +608,9 @@ extension AppDelegate {
             menuItem.state = whenSourceQuits == .system ? .on : .off
         case #selector(toggleAirPlay2(_:)):
             menuItem.state = airPlay2 ? .on : .off
+        case #selector(recallPresetFromMenu(_:)):
+            let id = menuItem.representedObject as? String
+            menuItem.state = appModel.presets.contains { $0.id == id && $0.current } ? .on : .off
         default:
             break
         }

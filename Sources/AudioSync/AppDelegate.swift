@@ -130,12 +130,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var zones: [SpeakerZone] {
         didSet { if zones != oldValue { store.save(zones: zones); applyZoneVolumes() } }
     }
-    /// The speaker presets (S251): stored and migrated from the groups, not shown yet.
+    /// The groups became zones and this launch says so in a notice, once.
+    private let zonesNoticeDue: Bool
+    /// The speaker presets (S251), stored and migrated from the groups.
     var presets: [SpeakerPreset] {
         didSet { if presets != oldValue { store.save(presets: presets) } }
     }
-    /// The groups became zones and this launch says so in a notice, once.
-    private let zonesNoticeDue: Bool
+    /// What the preset notice says, so it follows its preset and members (S262, S265).
+    var presetNotice: PresetNotice.Cause?
     /// Speaker keys switched on as soon as they appear.
     var autoConnect: Set<String> {
         didSet { if autoConnect != oldValue { store.save(ids: autoConnect, forKey: Keys.autoConnect) } }
@@ -267,8 +269,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         airplayVolume = saved.airplayVolumes
         groups = saved.groups
         zones = saved.zones
-        presets = saved.presets
         zonesNoticeDue = saved.zonesNoticeDue
+        presets = saved.presets
         autoConnect = saved.autoConnect
         speakerNames = saved.speakerNames.castKeysMoved()
         showVirtualDevices = saved.showVirtualDevices

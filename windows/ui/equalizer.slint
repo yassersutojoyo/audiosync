@@ -81,6 +81,8 @@ export component EqualizerWindow inherits Window {
     callback close-requested();
     // Ctrl+Q, File > Exit from this window.
     callback exit-requested();
+    // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
+    callback preset-shortcut(int);
 
     title: Strings.equalizer-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -114,6 +116,10 @@ export component EqualizerWindow inherits Window {
             }
             if event.modifiers.control && event.text.to-lowercase() == "q" {
                 root.exit-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {
+                root.preset-shortcut(event.text.to-float());
                 return accept;
             }
             return reject;
