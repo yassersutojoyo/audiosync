@@ -14,7 +14,11 @@ use crate::audio::now_playing::SharedLabels;
 use crate::audio::pairings::{Seal, Sealer};
 use crate::debug_log::DebugLog;
 use crate::view::App;
-use crate::{LOG_FLUSH_AT_EXIT, StartError, audio, launch_at_login, single_instance, tray};
+use crate::{LOG_FLUSH_AT_EXIT, StartError, audio, launch_at_login, single_instance};
+
+// Declared here, not in main.rs: it is built on the Windows-only tray-icon crate.
+#[path = "../tray.rs"]
+mod tray;
 
 /// The WASAPI backend, with the media sessions as the playing track and the
 /// now-playing card's controls.

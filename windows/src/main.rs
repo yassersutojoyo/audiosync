@@ -45,8 +45,6 @@ mod speaker_names;
 #[cfg(test)]
 #[rustfmt::skip]
 mod tokens;
-#[cfg(os_backend)]
-mod tray;
 mod ui_model;
 mod view;
 
