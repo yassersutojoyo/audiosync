@@ -34,6 +34,49 @@ impl Default for DeviceVolume {
     }
 }
 
+/// How far a reported level may be from a level the host sent and still
+/// answer it: devices report 32-bit floats.
+const ANSWER_TOLERANCE: f64 = 0.005;
+
+fn unit(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// The level the host sends for its master and the speaker's own level,
+/// all 0.0 to 1.0 (C104). Anything not finite counts as 0.
+pub fn device_level(master: f64, own: f64) -> f64 {
+    unit(master) * unit(own)
+}
+
+/// The own level a reported level means at `master` (C104): level ÷
+/// master, clamped; `own` as it is at master 0 or with a value that isn't
+/// finite.
+pub fn own_level(reported: f64, master: f64, own: f64) -> f64 {
+    if !reported.is_finite() || !master.is_finite() || master <= 0.0 {
+        return own;
+    }
+    unit(unit(reported) / master.min(1.0))
+}
+
+/// The own level a session starts from (C105): the one kept, whatever the
+/// first status reports; without one, that status's level read as
+/// [`own_level`] reads it.
+pub fn start_own_level(master: f64, own: Option<f64>, reported: f64) -> f64 {
+    match own.filter(|own| own.is_finite()) {
+        Some(own) => own.clamp(0.0, 1.0),
+        None => own_level(reported, master, unit(reported)),
+    }
+}
+
+/// Whether a reported level is the device's answer to `sent` (C104).
+pub fn answers_level(sent: f64, reported: f64) -> bool {
+    (sent - reported).abs() <= ANSWER_TOLERANCE
+}
+
 /// One entry of `applications` (C37).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Application {

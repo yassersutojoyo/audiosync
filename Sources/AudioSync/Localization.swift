@@ -1312,8 +1312,9 @@ struct UIStrings {
         Volume
         Local speakers' sliders follow how loudness is heard: halfway is about −18 dB.
         AirPlay speakers use the AirPlay volume scale.
-        A Google Cast speaker's slider sets the speaker's own volume, which
-        Master Volume leaves alone, and Mute under it mutes the speaker itself.
+        A Google Cast speaker's slider sets the speaker's own volume, and Master
+        Volume scales it like every other speaker. Mute under it mutes the
+        speaker itself.
 
         Notes
         - AirPlay speakers are kept in step with each other by AudioSync's AirPlay

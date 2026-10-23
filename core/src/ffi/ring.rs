@@ -366,7 +366,8 @@ pub unsafe extern "C" fn asc_ring_writer_reset(writer: *mut AscRingWriter) {
 }
 
 /// Creates a reader of `ring` for a session captured at `capture_rate`
-/// (S41, S43, S50); null for an unsupported rate (S16).
+/// (S41, S43, S50); null for an unsupported rate (S16) or one the ring is too
+/// small for (S36).
 ///
 /// # Safety
 ///
@@ -376,13 +377,14 @@ pub unsafe extern "C" fn asc_reader_create(
     ring: *mut AscRing,
     capture_rate: u32,
 ) -> *mut AscReader {
-    if !ring::is_supported_rate(capture_rate) {
-        return ptr::null_mut();
-    }
     // SAFETY: by the caller's contract the handle is null or live.
     let Some(ring) = (unsafe { ring_of(ring) }) else {
         return ptr::null_mut();
     };
+    // A ring too short for the rate would cap the delay without a word.
+    if !ring.supports_rate(capture_rate) {
+        return ptr::null_mut();
+    }
     let reader = Reader::new(Arc::clone(ring), capture_rate);
     let control = reader.control();
     Box::into_raw(Box::new(AscReader { control, reader }))
@@ -1044,7 +1046,7 @@ mod tests {
     // covers: S128, S134
     #[test]
     fn handles_keep_the_ring_alive_in_any_destroy_order() {
-        let ring = asc_ring_create(MIN_RING_FRAMES);
+        let ring = asc_ring_create(asc_ring_capacity_for_rate(RATE));
         // SAFETY: `ring` is live until it is destroyed below; every handle is
         // destroyed once.
         unsafe {
