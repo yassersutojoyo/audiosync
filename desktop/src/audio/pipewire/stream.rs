@@ -86,6 +86,9 @@ struct Status {
     agreed: AtomicBool,
     /// Whether a linked capture failed to make a link it wants.
     missing_links: AtomicBool,
+    /// What PipeWire said with the first failure, for a live test's message.
+    #[cfg(test)]
+    reason: std::sync::Mutex<String>,
 }
 
 impl Status {
@@ -99,6 +102,19 @@ impl Status {
         let _ = self
             .failed
             .compare_exchange(RUNNING, code, Ordering::AcqRel, Ordering::Acquire);
+    }
+
+    /// [`Status::fail`], keeping `why` for a live test's message.
+    fn fail_because(&self, error: &BackendError, why: impl FnOnce() -> String) {
+        #[cfg(test)]
+        if let Ok(mut reason) = self.reason.lock()
+            && reason.is_empty()
+        {
+            *reason = why();
+        }
+        #[cfg(not(test))]
+        let _ = why;
+        self.fail(error);
     }
 
     /// Records that every app the capture follows quit.
@@ -153,6 +169,18 @@ impl CaptureHandle for MonitorCapture {
 
     fn holds_all(&self) -> bool {
         !self.status.missing_links.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+impl MonitorCapture {
+    /// What PipeWire said with the first failure; empty for none.
+    pub fn failure_reason(&self) -> String {
+        self.status
+            .reason
+            .lock()
+            .map(|reason| reason.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -474,9 +502,11 @@ fn serve(
             let main_loop = main_loop.clone();
             let status = Arc::clone(status);
             let ready = ready.clone();
-            move |id, _seq, _res, _message| {
+            move |id, _seq, res, message| {
                 if id == pw::core::PW_ID_CORE {
-                    status.fail(&BackendError::DeviceGone);
+                    status.fail_because(&BackendError::DeviceGone, || {
+                        format!("core error {res}: {message}")
+                    });
                     let _ = ready.send(Err(BackendError::DeviceGone));
                     main_loop.quit();
                 }
@@ -523,15 +553,19 @@ fn serve(
                 StreamState::Paused | StreamState::Streaming => {
                     let _ = ready.send(Ok(()));
                 }
-                StreamState::Error(_) => {
-                    status.fail(&BackendError::DeviceGone);
+                StreamState::Error(message) => {
+                    status.fail_because(&BackendError::DeviceGone, || {
+                        format!("stream error from {old:?}: {message}")
+                    });
                     let _ = ready.send(Err(BackendError::DeviceGone));
                     main_loop.quit();
                 }
                 StreamState::Unconnected
                     if matches!(old, StreamState::Paused | StreamState::Streaming) =>
                 {
-                    status.fail(&BackendError::DeviceGone);
+                    status.fail_because(&BackendError::DeviceGone, || {
+                        format!("stream unconnected from {old:?}")
+                    });
                     main_loop.quit();
                 }
                 _ => {}

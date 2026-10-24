@@ -472,6 +472,7 @@ fn one_app_is_captured_alone_and_followed() {
     }
     let captured = ring.take_peak();
     let held = capture.holds_all();
+    let failure = capture.failure_reason();
     let rendered = format!("{:?}; {}", out.reported_latency_ns(), out.render_report());
     drop(out);
     let (_, right) = recorder.finish();
@@ -490,7 +491,7 @@ fn one_app_is_captured_alone_and_followed() {
         wanted > 1.0,
         "no 440 Hz played: power {wanted}, captured peak {captured}, links held {held}, \
          {} frames recorded, peaks per 250 ms {profile:?}, output {rendered}, \
-         capture W per 250 ms {written:?}",
+         capture W per 250 ms {written:?}, capture failure {failure:?}",
         right.len()
     );
     assert!(below_db >= 40.0, "1 kHz only {below_db} dB down");
