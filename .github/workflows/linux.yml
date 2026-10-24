@@ -22,8 +22,11 @@ env:
   APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
   RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
   RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
-  # The source of the runtime's statically linked libfuse (LGPL-2.1), as the
-  # runtime's build fetches it; attached to each release with the runtime's own source.
+  # The runtime's source (with its patch to libfuse's mount.c) and that of the
+  # libfuse it links statically (LGPL-2.1), as its build fetches it; both go
+  # with each release that ships the AppImage (RELEASE.md).
+  RUNTIME_SOURCE_URL: https://github.com/AppImage/type2-runtime/archive/refs/tags/20251108.tar.gz
+  RUNTIME_SOURCE_SHA256: 4c4f6df4647c9f01f871d7edd3716d8aeeffda9d22ffbebe3fccd95a6ab52c95
   FUSE_SOURCE_URL: https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz
   FUSE_SOURCE_SHA256: 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0
 
@@ -93,7 +96,8 @@ jobs:
             usr/bin/audiosync usr/share/applications/io.github.yassersutojoyo.audiosync.desktop \
             usr/share/metainfo/io.github.yassersutojoyo.audiosync.metainfo.xml \
             usr/share/icons/hicolor/256x256/apps/io.github.yassersutojoyo.audiosync.png \
-            usr/share/doc/audiosync/THIRD-PARTY-NOTICES.txt usr/share/doc/audiosync/LICENSE; do
+            usr/share/doc/audiosync/THIRD-PARTY-NOTICES.txt usr/share/doc/audiosync/LICENSE \
+            usr/share/doc/audiosync/RUNTIME-NOTICES.txt; do
             [ -e "$root/$file" ] || { echo "the AppImage lacks $file"; exit 1; }
           done
           # Every library comes from the system; none is bundled.
@@ -135,8 +139,9 @@ jobs:
         run: |
           mkdir -p ../dist/runtime-sources
           cd ../dist/runtime-sources
-          curl -fsSL -o type2-runtime-20251108.tar.gz https://github.com/AppImage/type2-runtime/archive/refs/tags/20251108.tar.gz
+          curl -fsSL -o type2-runtime-20251108.tar.gz "$RUNTIME_SOURCE_URL"
           curl -fsSL -o fuse-3.15.0.tar.xz "$FUSE_SOURCE_URL"
+          echo "$RUNTIME_SOURCE_SHA256  type2-runtime-20251108.tar.gz" | sha256sum -c -
           echo "$FUSE_SOURCE_SHA256  fuse-3.15.0.tar.xz" | sha256sum -c -
           sha256sum ./* | tee SHA256SUMS
 

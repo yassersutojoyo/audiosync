@@ -33,6 +33,7 @@ install -m 644 "$repo/desktop/res/audiosync-256.png" "$appdir/usr/share/icons/hi
 ln -s "$id.png" "$appdir/.DirIcon"
 install -m 644 "$notices" "$appdir/usr/share/doc/audiosync/THIRD-PARTY-NOTICES.txt"
 install -m 644 "$repo/LICENSE" "$appdir/usr/share/doc/audiosync/LICENSE"
+install -m 644 "$linux/RUNTIME-NOTICES.txt" "$appdir/usr/share/doc/audiosync/RUNTIME-NOTICES.txt"
 
 # appimagetool is an AppImage itself; extracting it needs no FUSE on the runner.
 APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$tool" --runtime-file "$runtime" "$appdir" "$output"
