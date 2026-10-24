@@ -46,8 +46,8 @@ jobs:
       - name: Tests
         run: cargo test --locked
 
-  # The same crate on Linux: the UI-only build without an audio backend, the
-  # mock-backend build, and the tests.
+  # The same crate on Linux: the PipeWire build, the mock-backend build, the
+  # tests and the capture's smoke test.
   linux:
     name: Linux (format, clippy and tests)
     runs-on: ubuntu-24.04
@@ -65,11 +65,15 @@ jobs:
           rustc --version
 
       # Slint's fonts and windows, the Cast sender's native-tls (OpenSSL), and
-      # dbus-run-session for the now-playing tests' private session bus.
+      # dbus-run-session for the now-playing tests' private session bus, and
+      # the PipeWire client library with libclang for its bindings. The
+      # daemon, WirePlumber and the pw-* tools run the capture's smoke test.
       - name: System libraries
         run: >-
           sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
-          libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config dbus
+          libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
+          libpipewire-0.3-dev clang libclang-dev
+          pipewire pipewire-bin wireplumber dbus dbus-user-session
 
       - name: Format
         run: cargo fmt --check
@@ -86,6 +90,45 @@ jobs:
       - name: Tests
         if: ${{ !cancelled() }}
         run: dbus-run-session -- cargo test --locked
+
+      # A PipeWire daemon of its own with two null sinks, each playing a 440 Hz
+      # tone of its own level, and the ignored tests that capture the default
+      # output's monitor and follow a change of the default. The tones are
+      # linked by hand: WirePlumber moves even a targeted pw-play to a new
+      # default output. They ask for the capture's 1024-frame quantum: at
+      # pw-play's default 100 ms they failed every cycle and played silence.
+      - name: PipeWire capture smoke test
+        if: ${{ !cancelled() }}
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          python3 -c "
+          import math, struct, sys, wave
+          for name, level in (('loud', 16000), ('quiet', 3000)):
+              with wave.open(sys.argv[1] + '/' + name + '.wav', 'wb') as f:
+                  f.setnchannels(2); f.setsampwidth(2); f.setframerate(48000)
+                  f.writeframes(b''.join(struct.pack('<hh', s, s) for s in (int(level * math.sin(2 * math.pi * 440 * n / 48000)) for n in range(48000 * 120))))
+          " "$RUNNER_TEMP"
+          dbus-run-session -- bash -euo pipefail -c '
+            pipewire & sleep 1
+            wireplumber & sleep 2
+            for sink in ci-loud ci-quiet; do
+              pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=$sink media.class=Audio/Sink object.linger=true audio.position=[FL FR] }"
+            done
+            sleep 1
+            wpctl status
+            for level in loud quiet; do
+              pw-play --target 0 --latency 1024 -P "{ node.name = ci-$level-tone }" "$RUNNER_TEMP/$level.wav" &
+            done
+            sleep 1
+            for level in loud quiet; do
+              for channel in FL FR; do
+                pw-link "ci-$level-tone:output_$channel" "ci-$level:playback_$channel"
+              done
+            done
+            pw-link -l
+            cargo test --locked -- --ignored --test-threads 1 audio::pipewire::stream::tests::
+          '
 
   build:
     name: Release build (${{ matrix.arch }})

@@ -132,13 +132,6 @@ contained, and draws the remote's address as a QR code with `qrcode` (MIT OR
 Apache-2.0), built without its optional features, so it brings in no other
 crate.
 
-The same crate's Linux build, which isn't released yet, reads the playing
-track from the MPRIS media players over D-Bus with `zbus` and its own
-`zbus_macros`, `zbus_names` and `zvariant` crates (MIT), and decodes their
-artwork with `image` (MIT OR Apache-2.0). Both were already in
-`desktop/Cargo.lock`; every crate they bring in is under a license
-`desktop/deny.toml` allows, which CI checks.
-
 The Windows app reads and writes its settings file with `serde` and
 `serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
 and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the
@@ -172,6 +165,21 @@ time; none of them is part of the program or the AppImage. CI writes the
 build's `THIRD-PARTY-NOTICES.txt` with `scripts/windows_notices.py
 x86_64-unknown-linux-gnu`, and the AppImage carries it in
 `usr/share/doc/audiosync/`.
+
+It captures the whole system's sound through PipeWire with `pipewire`,
+`pipewire-sys`, `libspa`, `libspa-sys`, `cookie-factory` and `nom` (MIT),
+`bitflags` and `libc` (MIT OR Apache-2.0) and `rustix` (Apache-2.0 WITH
+LLVM-exception OR Apache-2.0 OR MIT). Their bindings are generated at build
+time with `bindgen` (BSD-3-Clause), `clang-sys` (Apache-2.0), `libloading`
+(ISC), `version-compare` (MIT), `system-deps`, `cfg-expr`,
+`annotate-snippets` and `cc` (MIT OR Apache-2.0) and `target-lexicon`
+(Apache-2.0 WITH LLVM-exception), none of which goes into the program.
+
+It reads the playing track from the MPRIS media players over D-Bus with
+`zbus` and its own `zbus_macros`, `zbus_names` and `zvariant` crates (MIT),
+and decodes their artwork with `image` (MIT OR Apache-2.0). Every crate
+these bring in is under a license `desktop/deny.toml` allows, which CI
+checks.
 
 The AppImage file also contains the AppImage runtime, a separate program
 that mounts the app and starts it:

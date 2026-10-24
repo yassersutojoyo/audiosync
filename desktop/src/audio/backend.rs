@@ -617,6 +617,20 @@ pub enum BackendError {
     /// Windows audio didn't answer in time: opening a device hung (after a
     /// wake, say). Worth another try a little later.
     NotResponding,
+    /// The system's audio service (PipeWire on Linux) isn't running, so
+    /// nothing can be captured until the user starts it: not retried.
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "only the Linux backend reports it")
+    )]
+    ServiceNotRunning,
+    /// This system's backend doesn't offer that yet, such as one app's sound
+    /// or a local output on Linux.
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "only the Linux backend reports it")
+    )]
+    NotOffered,
     /// A Windows call failed with this HRESULT.
     System {
         /// The call that failed.
@@ -651,6 +665,8 @@ impl fmt::Display for BackendError {
                 f.write_str("The device's audio format isn't supported.")
             }
             BackendError::NotResponding => f.write_str("Windows audio didn't answer in time."),
+            BackendError::ServiceNotRunning => f.write_str("The audio service isn't running."),
+            BackendError::NotOffered => f.write_str("AudioSync can't do that on this system yet."),
             BackendError::System { call, code } => {
                 // `{:08X}` of a negative i32 prints its two's complement, the
                 // way Windows writes HRESULTs.
@@ -978,6 +994,8 @@ mod tests {
             BackendError::DeviceBusy,
             BackendError::UnsupportedFormat,
             BackendError::NotResponding,
+            BackendError::ServiceNotRunning,
+            BackendError::NotOffered,
             BackendError::System { call: "x", code: 1 },
         ];
         for error in errors {
