@@ -341,7 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         reconcileAirPlaySpeakers()
         webRemote?.startIfEnabled()   // after the window too: listening on the network can raise that prompt
         if zonesNoticeDue {
-            postNotice(text.groupsBecameZones, subject: Notice.zones)
+            postNotice(text.groupsBecameZones, subject: Notice.zones, info: true)
             store.zonesNoticeShown()
         }
         pushModel()
@@ -428,7 +428,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let restart = nativeAirPlay == nil ? nativeStarts.restartAt : nil   // none while a start is under way
         let hint = LocalNetworkHint.dueAt(access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
                                           emptySince: airplayEmptySince, now: Date())
-        let next = AppLifecycle.nextDueReconcile(due: [restart, localNetworkProbe.recheckAt, hint],
+        let searchEnd = AirPlaySearch.endsAt(access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
+                                             emptySince: airplayEmptySince, now: Date())
+        let next = AppLifecycle.nextDueReconcile(due: [restart, localNetworkProbe.recheckAt, hint, searchEnd],
                                                  last: lastDueReconcile, asleep: macAsleep)
         guard next != dueReconcileAt else { return }
         dueTimer?.invalidate()

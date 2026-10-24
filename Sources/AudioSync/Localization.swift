@@ -36,7 +36,7 @@ struct UIStrings {
     let retryAirPlayHelp = "Start AirPlay again"
     /// AudioSync's own AirPlay sender stopped after an internal error; shown
     /// in place of the AirPlay speakers, with Retry.
-    let nativeAirPlayFailed = "AudioSync's own AirPlay sender stopped after an internal error."
+    let nativeAirPlayFailed = "AirPlay stopped after an internal error. Click Retry to start it again."
     let alertOK = "OK"
     let guideTitle = "AudioSync Guide"
     let refreshDevices = "Refresh Devices"
@@ -67,7 +67,11 @@ struct UIStrings {
     var receiverUntitled: String { appName }
     let receiverUnnamedSource = "Live audio"
     let receiverAlbum = "From your Mac"
-    let delayFieldLabel = "Delay in milliseconds"
+    /// A delay field's placeholder while it is empty; its VoiceOver label
+    /// (`delayFieldLabel`) says what the number is.
+    let delayFieldPlaceholder = "0"
+    /// `name`: the row's own delay label, such as "Kitchen delay".
+    func delayFieldLabel(_ name: String) -> String { "\(name) in milliseconds" }
     /// Under a delay field while it holds typing not yet applied; also the
     /// field's VoiceOver hint then.
     let delayDraftHint = "Press Return to apply"
@@ -535,7 +539,7 @@ struct UIStrings {
         return mode == .only ? list : "All Apps Except \(list)"
     }
     let microphoneDenied = """
-        AudioSync is not allowed to use input devices.
+        AudioSync isn't allowed to use the microphone or other inputs.
         Open System Settings → Privacy & Security → Microphone and turn on AudioSync.
         """
 
@@ -561,14 +565,14 @@ struct UIStrings {
             return "\(name) asks for a PIN or password, so it's off. "
                 + "To pair it, turn it on again and enter the code when AudioSync asks. "
                 + "To use it without a code, set Allow Speaker & TV Access on the speaker (or in the Home app) "
-                + "to \"Anyone on the Same Network\" and turn off Require Password."
+                + "to “Anyone on the Same Network” and turn off Require Password."
         case .cancelled:
             return "Pairing with \(name) was cancelled, so it's off. "
                 + "To try again, turn it on and enter its PIN or password when AudioSync asks."
         case .stillNeedsCode:
             return "\(name) still asks for a PIN or password after pairing, so it's off. "
                 + "On the speaker (or in the Home app), check that Allow Speaker & TV Access is set to "
-                + "\"Anyone on the Same Network\", then turn \(name) on again in AudioSync."
+                + "“Anyone on the Same Network”, then turn \(name) on again in AudioSync."
         }
     }
 
@@ -581,13 +585,8 @@ struct UIStrings {
 
     /// AudioSync's own AirPlay sender couldn't start (or browse the network
     /// for speakers). AudioSync tries again by itself.
-    let nativeAirPlayCouldNotStart = "AudioSync's own AirPlay sender couldn't start, so no AirPlay speakers "
-        + "are listed. AudioSync keeps trying. If this doesn't go away, restart AudioSync."
-
-    /// The notice when AudioSync's own AirPlay sender stopped after an
-    /// internal error.
-    let nativeAirPlayStopped = "AirPlay stopped after an internal error, so AirPlay speakers aren't playing. "
-        + "Click Retry to start it again. If it keeps stopping, restart AudioSync."
+    let nativeAirPlayCouldNotStart = "AirPlay couldn't start, so no AirPlay speakers are listed. "
+        + "AudioSync keeps trying. If this stays, quit AudioSync and open it again."
 
     /// AudioSync's own AirPlay sender can't play to this receiver.
     func nativeAirPlayCantPlay(name: String) -> String {
@@ -720,28 +719,34 @@ struct UIStrings {
         if let app { return "Waiting for audio from \(app). Start playback there and it streams right away." }
         return "Waiting for audio. Play something and it streams right away."
     }
-    let captureNotWorking = """
-        Audio is not being captured.
-        Open System Settings → Privacy & Security → Screen & System Audio Recording and turn \
-        on AudioSync under "System Audio Recording Only", then play something from the \
-        selected source. If you just allowed access, turn streaming off and on again.
-        """
+    /// Streaming runs but no audio arrives; `source` names the app, nil for
+    /// the whole system or an input device.
+    func captureNotWorking(_ source: String?) -> String {
+        "AudioSync isn't getting any audio from \(source ?? "the selected source"). Open System Settings → "
+            + "Privacy & Security → Screen & System Audio Recording and turn on AudioSync under "
+            + "“System Audio Recording Only”, then play something. If you just allowed access, "
+            + "turn streaming off and on again."
+    }
 
     let unknownDevice = "Unknown device"
     /// A device's name, or a placeholder when Core Audio can't read it.
     func deviceName(_ name: String) -> String { name.isEmpty ? unknownDevice : name }
 
-    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason.
-    func outputCouldNotStart(names: String, refusedCaptureRate: Double? = nil) -> String {
+    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason;
+    /// `count`: how many speakers `names` lists.
+    func outputCouldNotStart(names: String, count: Int = 1, refusedCaptureRate: Double? = nil) -> String {
         let deviceName = names.isEmpty ? unknownDevice : names
-        let first = "Could not start output for this speaker, so it's off: \(deviceName)\n"
+        let one = count <= 1
+        let first = "\(deviceName) couldn't start, so " + (one ? "it's off. " : "they're off. ")
+        let again = one ? "turn the speaker on again." : "turn the speakers on again."
         guard let rate = refusedCaptureRate else {
-            return first + "Another app may be using it exclusively, or the format may be incompatible."
+            return first + "Another app may be using " + (one ? "it" : "them") + " exclusively. "
+                + "Close that app and " + again
         }
         let highest = kiloHertz(Double(EngineParts.highestCaptureRate))
         return first + "AudioSync captures the audio at \(kiloHertz(rate)), but plays it on local speakers "
             + "only up to \(highest). In Audio MIDI Setup, set your Mac's output device, or the input device "
-            + "you stream from, to \(highest) or lower, then turn this speaker on again."
+            + "you stream from, to \(highest) or lower, then " + again
     }
 
     /// "384 kHz", "352.8 kHz".
@@ -778,7 +783,7 @@ struct UIStrings {
         case .appNotRunning(let bundleID):
             return "\(SourceApps.name(for: bundleID)) is not running. Open it first, or pick another source."
         case .ownProcessUnknown:
-            return "Could not find AudioSync's own audio process. Please relaunch the app."
+            return "AudioSync couldn't capture its own sound to leave it out. Quit AudioSync and open it again."
         case .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted:
             return captureFailed
         case .inputNotFound, .inputDisconnected:
@@ -803,6 +808,9 @@ struct UIStrings {
     private static let networkAdvice = "Make sure this Mac is on the same network as your speakers, "
         + "and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
     let thisMacNone = "No built-in output"
+    /// Connected Speakers while AirPlay discovery takes its first look.
+    let lookingForSpeakers = "Looking for speakers…"
+    let lookingForAirPlaySpeakers = "Looking for AirPlay speakers…"
 
     /// A connected speaker's kind of output: the type icon's tooltip and part
     /// of the row's VoiceOver label. `airPlay2`: an AirPlay speaker the
@@ -915,7 +923,7 @@ struct UIStrings {
     func zoneCount(on: Int, of total: Int) -> String { "\(on) of \(total) on" }
     func zoneWaiting(_ n: Int) -> String { ", \(n) waiting" }
     /// A zone none of whose members is here.
-    func zoneNoneHere(_ total: Int) -> String { "0 of \(total) here" }
+    func zoneNoneHere(_ total: Int) -> String { "None of \(total) found" }
     /// A zone with no member, until it is deleted.
     let zoneEmpty = "No speakers"
     /// A zone header's VoiceOver label and value.
@@ -1019,7 +1027,7 @@ struct UIStrings {
     let allSpeakersHidden = "Every speaker here is hidden. Choose Hidden Speakers in the gear menu to show one again."
     let create = "Create"
     let cancel = "Cancel"
-    let autoConnect = "Auto-connect when available"
+    let autoConnect = "Auto-Connect When Available"
     let launchAtLogin = "Launch at Login"
     let launchAtLoginFailed = "macOS did not allow AudioSync to launch at login. You can add it in System Settings → General → Login Items & Extensions."
     func automationDenied(_ app: String) -> String {
@@ -1058,7 +1066,7 @@ struct UIStrings {
             + " Heard this speaker first? Raise the value. Heard it late? Lower it."
     }
     /// The AirPlay delay (S178, S181): one field for every local speaker.
-    let airPlayDelay = "AirPlay delay"
+    let airPlayDelay = "AirPlay Delay"
     let airPlayDelayHint = "While an AirPlay speaker is on, local speakers wait this long for it. "
         + "Heard the AirPlay speakers late? Raise it."
     let millisecondsUnit = "ms"
@@ -1146,7 +1154,16 @@ struct UIStrings {
     /// list: no AirPlay speaker (`airPlayNone`), then how the Google Cast
     /// search goes; nil when there is nothing to say. `hint`: the Local
     /// Network hint on screen next to it.
-    func networkSpeakersNote(airPlayNone: Bool, cast: CastListState, hint: LocalNetworkHint = .none) -> String? {
+    /// `airPlaySearching`: AirPlay discovery has listed nothing yet but is
+    /// still within its first look (`AirPlaySearch`), so the note says it is
+    /// looking instead of giving network advice.
+    func networkSpeakersNote(airPlayNone: Bool, cast: CastListState, hint: LocalNetworkHint = .none,
+                             airPlaySearching: Bool = false) -> String? {
+        if airPlayNone && airPlaySearching {
+            if case .searching = cast { return lookingForSpeakers }
+            guard let castNote = castList(cast, hint: hint) else { return lookingForSpeakers }
+            return lookingForAirPlaySpeakers + " " + castNote
+        }
         switch (airPlayNone, cast) {
         case (true, .noneFound):
             return UIStrings.withNetworkAdvice("No AirPlay or Google Cast speakers found yet.", hint: hint)
@@ -1350,15 +1367,15 @@ struct UIStrings {
            the menu bar gives quick access to the power switch, the source, the
            volume and the speakers. Closing the window keeps AudioSync running in
            the menu bar, and streaming continues.
-        2. Pick a source under 'Audio Source': All System Audio, a specific app,
+        2. Pick a source under Audio Source: All System Audio, a specific app,
            or an input device.
            Keep the macOS sound output on a local device. Don't pick a HomePod in
            Control Center or in the player app: AudioSync streams to AirPlay itself.
         3. For AirPlay, check HomePod access in the Home app:
            Home Settings → Speakers & TV → Allow Speaker & TV Access →
-           "Anyone on the Same Network".
-        4. Speakers are listed under 'This Mac' (the Mac's own speakers and
-           headphone jack), then your zones, then 'Connected Speakers': every
+           “Anyone on the Same Network”.
+        4. Speakers are listed under This Mac (the Mac's own speakers and
+           headphone jack), then your zones, then Connected Speakers: every
            AirPlay, Google Cast, Bluetooth, USB, HDMI or other output, by name, each with a
            small icon for its kind (in color while it plays).
         5. Click a speaker's round icon to start streaming to it. Click it again to turn
@@ -1373,33 +1390,33 @@ struct UIStrings {
           measure it (see Calibration below). A positive value holds the
           speaker back; a negative one is for a speaker that sounds late, such
           as Bluetooth. While an AirPlay
-          speaker is on, every local speaker also waits the 'AirPlay delay'
+          speaker is on, every local speaker also waits the AirPlay Delay
           under Connected Speakers for it.
         - Zones: turn on the speakers you want, then choose 'New Zone from Active
           Speakers' in the gear menu. A speaker is in one zone at a time, and it
           shows under its zone instead of under This Mac or Connected Speakers.
           Click the zone's name to switch its speakers at once. To move a
-          speaker, choose 'Move to Zone' from its ⋯ button. To rename or delete
+          speaker, choose Move to Zone from its ⋯ button. To rename or delete
           a zone, right-click it or use its ⋯ button.
         - Presets: turn on the speakers you want and set their volumes, the
           zone volumes, Master Volume and the equalizer curve, then click
-          'Save as Preset…' in the Presets card. Delays and the preamp aren't
+          Save as Preset… in the Presets card. Delays and the preamp aren't
           saved. To recall a preset, click it in the card, pick it in the
           menu bar panel, or press Control-Command-1 to 9 for the first nine
           (they're also in Window > Presets). Speakers you hid are never
           saved in a preset, and recalling one leaves them hidden. To rename,
           update or delete a preset, use its ⋯ button.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
-          'Auto-connect when available'. AudioSync then turns it on whenever it
+          Auto-Connect When Available. AudioSync then turns it on whenever it
           appears.
-        - Rename: double-click a speaker's name, or choose 'Rename…' from its
+        - Rename: double-click a speaker's name, or choose Rename… from its
           ⋯ button, type a name and press Return. Leave it empty to go back to
           the device's own name, which its tooltip keeps showing.
         - Hide: to keep a speaker you never use out of the lists, choose 'Hide
           Speaker' from its ⋯ button. A speaker that is on turns off first.
-          'Hidden Speakers' in the gear menu lists what you hid; choose one to
+          Hidden Speakers in the gear menu lists what you hid; choose one to
           show it again, off, with its volume and delay as you left them.
-        - Equalizer: click 'Equalizer' in the window for 10 bands, a preamp and
+        - Equalizer: click Equalizer in the window for 10 bands, a preamp and
           presets. It shapes the sound on every speaker at once.
         - Now Playing: while Spotify or Music is open with a track, the window
           shows it with play/pause and skip, and AirPlay speakers with a
@@ -1407,7 +1424,7 @@ struct UIStrings {
           shown: macOS doesn't let apps read the system-wide Now Playing info.
           macOS asks once for Automation access to Spotify or Music.
         - Virtual devices (loopback drivers, meeting apps, aggregate devices) are
-          hidden unless you use them; 'Show Virtual Devices' in the gear menu
+          hidden unless you use them; Show Virtual Devices in the gear menu
           lists them all.
         - Launch at Login: in the gear menu, or in the AudioSync menu. The window
           doesn't open at login; click the Dock icon to bring it back.
@@ -1496,12 +1513,12 @@ struct UIStrings {
         When something needs your attention, such as a speaker that was switched
         off or a source that quit, a notice appears at the top of the window and
         of the menu bar panel, and a dot appears next to the menu bar icon.
-        Several can wait at once. Click × to dismiss one, or 'Dismiss All'
+        Several can wait at once. Click × to dismiss one, or Dismiss All
         when there is more than one. A notice also clears itself once its
         cause is gone.
 
         Web Remote
-        Choose 'Web Remote…' in the gear menu or the Window menu and turn it
+        Choose Web Remote… in the gear menu or the Window menu and turn it
         on to control the speakers from a phone on the same network: each
         speaker's switch, volume and delay, Master Volume, and what's playing.
         On the phone, open the address it shows or scan its QR code, add the
@@ -1509,9 +1526,9 @@ struct UIStrings {
         AudioSync from the new icon and pair there: on iPhone, a pairing made
         in Safari doesn't carry over to the Home Screen app. The window shows
         these steps for iPhone and Android. Each code works once and for
-        10 minutes; the window shows the next one, and 'New Code' makes a
+        10 minutes; the window shows the next one, and New Code makes a
         fresh one. The page uses plain HTTP, so use the web remote only on
-        your home network. 'Forget All Remote Devices' unpairs every phone,
+        your home network. Forget All Remote Devices unpairs every phone,
         also while the remote is off. If another app already uses the port,
         the window says so and lets you pick another one.
 
@@ -1565,10 +1582,10 @@ struct UIStrings {
         }
     }
 
-    /// The Guide's note on 'Asks for a code'.
+    /// The Guide's note on “Asks for a code”.
     private var guideCodeNote: String {
         let asks = """
-            - 'Asks for a code': the speaker wants a PIN or password. AudioSync asks
+            - “Asks for a code”: the speaker wants a PIN or password. AudioSync asks
               for it only when you turn the speaker on yourself. If it was turned on
               automatically (auto-connect, or at launch), it is switched off with a
               notice instead.

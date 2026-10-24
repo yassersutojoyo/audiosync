@@ -323,7 +323,8 @@ extension AppDelegate {
         if report.alertNames != nil {   // the failures' names, for a click of the user's
             let shown = applied.failures.map { shownName(local: $0.uid, system: $0.deviceName) }.joined(separator: ", ")
             let rate = LocalOutputSync.sharedRefusedRate(applied.failures)
-            showAlert(text.outputCouldNotStart(names: shown, refusedCaptureRate: rate), style: .warning)
+            showAlert(text.outputCouldNotStart(names: shown, count: applied.failures.count, refusedCaptureRate: rate),
+                      style: .warning)
         }
         for failure in report.notices {   // one notice per speaker, so each one clears by itself
             postNotice(text.outputCouldNotStart(names: shownName(local: failure.uid, system: failure.deviceName),

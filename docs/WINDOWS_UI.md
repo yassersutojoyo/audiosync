@@ -28,7 +28,7 @@ AudioSync's own: at the style's lightness, selected text in teal measured
 4.21:1, so a field selects in the teal text color with the surface color on
 it (5.85:1 in light mode, 5.6:1 in dark), and a teal line under it shows the focus.
 Text longer than the field slides left so the cursor stays in view, and a
-right click offers Undo, Redo, Cut, Copy, Paste and Select all.
+right click offers Undo, Redo, Cut, Copy, Paste and Select All.
 
 The About dialog (Help > About AudioSync) shows the brand mark and the
 wordmark on top, then the version, the audio core's version, the copyright and

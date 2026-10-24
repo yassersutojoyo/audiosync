@@ -242,6 +242,8 @@ final class AppModel: ObservableObject {
     /// Whether AudioSync is (or may be) kept off the local network, where
     /// the sender can't see any AirPlay speaker.
     @Published var localNetworkHint: LocalNetworkHint = .none
+    /// AirPlay discovery takes its first look (`AirPlaySearch`).
+    @Published var airplaySearching = false
     @Published var nowPlaying: NowPlayingMonitor.Track?
     @Published var equalizerOn = false
     /// The curve the equalizer picker shows, or "Custom".
@@ -488,7 +490,7 @@ final class AppModel: ObservableObject {
     /// shows, gives the network advice once for both.
     var networkNote: String? {
         text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList,
-                                 hint: shownLocalNetworkHint)
+                                 hint: shownLocalNetworkHint, airPlaySearching: airplaySearching)
     }
     /// Connected Speakers with no speaker at all.
     var networkEmptyText: String { networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint) }
@@ -1501,8 +1503,8 @@ struct NoticeBanner<Footer: View>: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+            Image(systemName: notice.info ? "info.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(notice.info ? Brand.tealText : .orange)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1541,7 +1543,7 @@ struct NoticeBanner<Footer: View>: View {
             .help(text.dismissNotice)
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.12)))
+        .background(RoundedRectangle(cornerRadius: 10).fill((notice.info ? Brand.teal : Color.orange).opacity(0.12)))
     }
 }
 
@@ -1572,7 +1574,7 @@ struct PowerSwitch: View {
         .buttonStyle(.plain)
         .accessibilityLabel(text.streamingSwitch)
         .accessibilityValue(isOn ? text.on : text.off)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(.isToggle)
     }
 }
 

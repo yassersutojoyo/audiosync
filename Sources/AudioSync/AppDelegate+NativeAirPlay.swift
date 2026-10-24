@@ -309,7 +309,8 @@ extension AppDelegate {
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
         stopNativeLocalNetworkProbe()
-        notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender)
+        // No notice: Connected Speakers says so in place of the AirPlay speakers, with Retry.
+        clearNotices([Notice.airplaySender])
         retimeLocalOutputs()   // no native speaker is chosen any more
         pushModel()
     }
