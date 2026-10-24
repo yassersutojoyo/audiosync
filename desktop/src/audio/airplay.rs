@@ -1707,6 +1707,7 @@ impl AirPlaySpeakers {
                         paired: false,
                         holds_password: false,
                         pairing: false,
+                        code_every_time: false,
                         airplay2: target
                             .members
                             .iter()
@@ -1732,6 +1733,7 @@ impl AirPlaySpeakers {
                     paired: self.store.contains(id) || self.shows_homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
                     pairing: self.pairings.contains_key(id),
+                    code_every_time: false,
                     airplay2: self.over_airplay2(id),
                     group: None,
                 }

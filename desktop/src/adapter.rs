@@ -2217,6 +2217,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            code_every_time: false,
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
                 .then_some(Waiting::Reconnecting),
@@ -3379,6 +3380,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             },
             paired: speaker.paired,
             holds_password: speaker.holds_password,
+            code_every_time: speaker.code_every_time,
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
             waiting: self
@@ -3424,6 +3426,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            code_every_time: false,
             // Read only while the output is on (S192).
             device_volume: output
                 .device_volume
@@ -4699,7 +4702,8 @@ mod tests {
     use super::*;
     use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{
-        APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, airplay2_tv, device, id_of,
+        APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, airplay2_every_time_tv, airplay2_tv, device,
+        id_of,
     };
     use crate::audio::capture::{CaptureTarget, LoopbackMode};
     use crate::audio::cast::tests::{
@@ -6870,6 +6874,82 @@ mod tests {
             fake.take_calls().contains(&Call::HomeKit(id_of(&loft))),
             "it joins with its AirPlay 2 credentials"
         );
+    }
+
+    #[test]
+    fn a_speaker_that_asks_for_a_code_every_time_never_auto_connects() {
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        let den = airplay2_every_time_tv(10, "Den");
+        fake.appear(&den);
+        adapter.poll();
+        let id = ap(&den);
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(row.code_every_time && !row.enabled);
+        assert!(
+            !state.speaker(&ap(&loft)).unwrap().code_every_time,
+            "Loft asks once"
+        );
+        adapter.set_auto_connect(&id, true);
+        fake.take_calls();
+
+        // It drops out of view and comes back.
+        fake.gone(&den);
+        adapter.poll();
+        fake.appear(&den);
+        adapter.poll();
+        // Saved as on from the last run, it is restored before it is listed.
+        fake.gone(&den);
+        adapter.poll();
+        adapter
+            .audio_mut()
+            .set_airplay_enabled(&id_of(&den), true)
+            .expect("not listed yet");
+        fake.appear(&den);
+        adapter.poll();
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(row.code_every_time && row.auto_connect);
+        assert!(!row.enabled, "it waits for the user");
+        assert!(!state.running);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_) | Call::Add { .. })),
+            "no code is asked for by itself"
+        );
+        assert!(messages(&adapter).is_empty(), "the row says why it is off");
+
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::StartPairing(id_of(&den))],
+            "turned on by hand, it asks for the code"
+        );
+    }
+
+    #[test]
+    fn a_speaker_that_asks_for_a_code_once_still_auto_connects() {
+        use crate::audio::pairings::tests::homekit;
+
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        let id = ap(&loft);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&loft, PairingEvent::HomeKitPaired(homekit(0x33)));
+        adapter.poll();
+        adapter.set_auto_connect(&id, true);
+        adapter.set_speaker_enabled(&id, false);
+        fake.gone(&loft);
+        adapter.poll();
+        fake.appear(&loft);
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.speaker(&id).unwrap().enabled);
+        assert!(state.running);
     }
 
     #[test]

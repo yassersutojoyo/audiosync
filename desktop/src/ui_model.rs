@@ -216,6 +216,9 @@ pub struct Speaker {
     /// An AirPlay speaker whose password AudioSync holds until it quits,
     /// which the user can forget.
     pub holds_password: bool,
+    /// An AirPlay speaker that asks for a code every time it connects:
+    /// auto-connect leaves it off, and its row says why.
+    pub code_every_time: bool,
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
@@ -1556,6 +1559,7 @@ impl MockBackend {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            code_every_time: false,
             device_volume: None,
             waiting: None,
             cast: None,
@@ -2165,6 +2169,7 @@ impl Backend for MockBackend {
                 availability: Availability::Open,
                 paired: false,
                 holds_password: false,
+                code_every_time: false,
                 device_volume: None,
                 waiting: None,
                 cast: Some(CastRow {
@@ -2547,6 +2552,7 @@ mod tests {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            code_every_time: false,
             device_volume: None,
             waiting: None,
             cast: None,

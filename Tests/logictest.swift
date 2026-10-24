@@ -846,6 +846,9 @@ check(SpeakerState.off.clickTurnsOn, "speaker: click on an off speaker turns it 
 check(SpeakerAvailability(.open) == .open, "availability: open")
 check(SpeakerAvailability(.code(password: false)) == .needsCode, "availability: PIN asks for a code")
 check(SpeakerAvailability(.code(password: true)) == .needsCode, "availability: password asks for a code")
+check(UIStrings().availability(.codeEveryTime) == "Asks for a code every time"
+        && UIStrings().availabilityHelp(.codeEveryTime) != nil,
+      "availability: a speaker that asks for a code every time says so under its name")
 
 // MARK: Device volume — a turned-down or muted output shows a hint and a one-click fix (S192 to S202)
 do {
@@ -1876,6 +1879,24 @@ do {
           "\(model.joinable(model.rows(enabled: []), after: [], stopped: false))")
     check(model.joinable(model.rows(enabled: []), after: [], stopped: true).isEmpty,
           "native airplay: rows rebuilt by a stop are not auto-connected, so the stop doesn't restart streaming")
+
+    // Lounge was paired by hand this run, so it can play until its session ends.
+    var lounge = receiver("G7", "Lounge", .available)
+    lounge.codeEveryTime = true
+    var den = receiver("H8", "Den", .needsPin)
+    den.codeEveryTime = true
+    var asking = NativeAirPlayModel()
+    for r in [lounge, den, receiver("A1", "kitchen", .available), receiver("B2", "Den TV", .needsPin)] {
+        asking.apply(.appeared(r))
+    }
+    let askingRows = asking.rows(enabled: [])
+    check(asking.joinable(askingRows, after: [], stopped: false) == ["native:A1"],
+          "native airplay: auto-connect never switches on a receiver that asks for a code every time",
+          "\(asking.joinable(askingRows, after: [], stopped: false))")
+    check(asking.appearedAskingEveryTime(askingRows, after: ["native:H8"]) == ["native:G7"]
+            && asking.asksEveryTime("H8") && !asking.asksEveryTime("B2") && !asking.asksEveryTime("A1"),
+          "native airplay: a receiver that asks for a code every time goes off when it appears, at launch or later",
+          "\(asking.appearedAskingEveryTime(askingRows, after: ["native:H8"]))")
 
     let all: Set<String> = ["native:A1", "native:B2", "native:C3", "native:D4", "123456789012"]
     check(model.plan(streaming: false, enabled: all).isEmpty, "native airplay: nothing joins while not streaming")

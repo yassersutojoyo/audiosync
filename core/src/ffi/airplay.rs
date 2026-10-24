@@ -182,6 +182,9 @@ pub const AIRPLAY_FLAG_TARGET: u32 = 1024;
 /// partner unreachable (P181). An added target's state and errors come
 /// under its own ID, derived from its members'.
 pub const AIRPLAY_FLAG_INCOMPLETE: u32 = 2048;
+/// The sender reaches it over AirPlay 2 and it asks for a code every time
+/// it connects (P61): auto-connect leaves it off.
+pub const AIRPLAY_FLAG_CODE_EVERY_TIME: u32 = 4096;
 
 /// What a sender event reports ([`AscAirPlayEvent::kind`]): a speaker's
 /// state changed ([`AscAirPlayEvent::state`]).
@@ -6840,6 +6843,11 @@ mod tests {
             report.availability, AIRPLAY_NEEDS_PIN,
             "reached over AirPlay 2, it pairs with a PIN, as on Windows"
         );
+        assert_eq!(
+            report.flags & AIRPLAY_FLAG_CODE_EVERY_TIME,
+            0,
+            "it asks once, so auto-connect may turn it on"
+        );
 
         let mut blob = vec![1u8];
         blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
@@ -6890,6 +6898,7 @@ mod tests {
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
         assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
         assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
+        assert_ne!(report.flags & AIRPLAY_FLAG_CODE_EVERY_TIME, 0);
 
         // A PIN pairing stores nothing and drops the refused keys; the
         // receiver can play until its session ends.
@@ -6902,6 +6911,11 @@ mod tests {
         assert_eq!(relisted.len(), 1);
         assert_eq!(relisted[0].availability, AIRPLAY_AVAILABLE);
         assert_eq!(relisted[0].flags & AIRPLAY_FLAG_PAIRED, 0);
+        assert_ne!(
+            relisted[0].flags & AIRPLAY_FLAG_CODE_EVERY_TIME,
+            0,
+            "paired for this session, it still asks next time"
+        );
         let events = events_until(handle, |events| {
             events.iter().any(|e| e.kind == AIRPLAY_EVENT_PAIRED)
         });
