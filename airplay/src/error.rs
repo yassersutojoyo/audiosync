@@ -222,6 +222,10 @@ pub enum Warning {
     /// Three volume reads in a row failed on an AirPlay 2 session, which
     /// reads no more; told once per session (P184).
     VolumeReadsStopped,
+    /// An artwork request was refused, or left unanswered (`status` none);
+    /// the session falls back to the small image or sends no more artwork,
+    /// and plays on. Told once per session (P185).
+    ArtworkRefused { status: Option<u16> },
     /// The receiver's reported latency R_s needs a larger Lf than the
     /// sounding stream it joined can take: it plays in step at that Lf;
     /// told once per session (P201).

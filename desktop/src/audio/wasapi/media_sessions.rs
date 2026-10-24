@@ -27,7 +27,7 @@ use super::media;
 use crate::audio::media_sessions::{
     APP_WAIT, MediaCardReader, MediaSessionReader, SessionList, THUMBNAIL_LIMIT, spawn,
 };
-use crate::audio::now_playing::{MediaSession, POLL_INTERVAL, RawTimeline};
+use crate::audio::now_playing::{FittedArtwork, MediaSession, POLL_INTERVAL, RawTimeline};
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{CardArtwork, Transport};
 
@@ -130,7 +130,7 @@ impl SessionList for WindowsSessions {
         self.manager = None;
     }
 
-    fn fit_image(&self, image: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    fn fit_image(&self, image: &[u8]) -> Result<Option<FittedArtwork>, String> {
         media::fit_image(image).map_err(|error| error.to_string())
     }
 
@@ -138,7 +138,7 @@ impl SessionList for WindowsSessions {
         media::card_artwork(image).map_err(|error| error.to_string())
     }
 
-    fn icon(&self, log: &DebugLog) -> Option<Arc<[u8]>> {
+    fn icon(&self, log: &DebugLog) -> Option<FittedArtwork> {
         media::fitted_icon(log)
     }
 }
@@ -371,10 +371,12 @@ mod tests {
         let icon = track
             .icon()
             .expect("the icon is made before the first reading");
-        println!("icon: {} bytes", icon.len());
+        println!("icon: {} and {} bytes", icon.large.len(), icon.small.len());
         match reading.track {
             Some(track) => {
-                let artwork = track.artwork.map(|jpeg| jpeg.len());
+                let artwork = track
+                    .artwork
+                    .map(|artwork| (artwork.large.len(), artwork.small.len()));
                 println!("{:?}, artwork: {artwork:?} bytes", track.session);
                 let progress = track
                     .timeline

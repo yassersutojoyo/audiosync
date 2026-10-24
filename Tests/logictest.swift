@@ -2757,7 +2757,8 @@ do {
           "EC12 network loss: an empty list with Local Network allowed shows no permission hint")
 }
 
-// MARK: Track info — artwork scaled to a small JPEG
+// MARK: Track info — artwork scaled to a large and a small JPEG
+// covers: S217, S272
 do {
     func artwork(_ width: Int, _ height: Int) -> CGImage {
         let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -2777,20 +2778,34 @@ do {
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
         return (image.width, image.height)
     }
-    let big = artwork(1200, 800)
-    let jpeg = TrackMetadata.jpeg(big)
-    let (w, h) = size(jpeg) ?? (0, 0)
-    check(jpeg.map { $0.starts(with: [0xFF, 0xD8]) && $0.count <= TrackMetadata.artworkLimit } == true,
-          "artwork: a JPEG within the artwork limit", "\(jpeg?.count ?? -1) bytes, \(w)×\(h)")
-    check(w > 0 && w <= TrackMetadata.artworkSide && h <= TrackMetadata.artworkSide && abs(Double(w) / Double(h) - 1.5) < 0.05,
-          "artwork: at most 600 px a side, aspect kept", "\(w)×\(h)")
-    let tight = TrackMetadata.jpeg(big, maxBytes: 2500)
+    let big = artwork(1600, 1200)
+    let pair = TrackMetadata.artwork(big)
+    let (lw, lh) = size(pair?.large) ?? (0, 0)
+    let (sw, sh) = size(pair?.small) ?? (0, 0)
+    let large = TrackMetadata.largeArtwork, small = TrackMetadata.smallArtwork
+    check(large == .init(side: 1024, bytes: 131_072) && small == .init(side: 600, bytes: 40_960),
+          "artwork: the limits are 1024 px and 128 KiB, 600 px and 40 KiB")
+    check(pair.map { $0.large.starts(with: [0xFF, 0xD8]) && $0.large.count <= large.bytes } == true
+            && lw > small.side && lw <= large.side && lh <= large.side && abs(Double(lw) / Double(lh) - 4.0 / 3) < 0.05,
+          "artwork: the large image is at most 1024 px a side and 128 KiB",
+          "\(pair?.large.count ?? -1) bytes, \(lw)×\(lh)")
+    check(pair.map { $0.small.starts(with: [0xFF, 0xD8]) && $0.small.count <= small.bytes } == true
+            && sw > 0 && sw <= small.side && sh <= small.side && abs(Double(sw) / Double(sh) - 4.0 / 3) < 0.05,
+          "artwork: the small image is at most 600 px a side and 40 KiB",
+          "\(pair?.small.count ?? -1) bytes, \(sw)×\(sh)")
+    let modest = TrackMetadata.artwork(artwork(300, 200))
+    check(modest.map { $0.large == $0.small } == true && size(modest?.small).map { $0 == (300, 200) } == true,
+          "artwork: an image within the small limits is one encoding for both")
+    let jpeg = TrackMetadata.jpeg(big, maxSide: small.side, maxBytes: small.bytes)
+    let w = size(jpeg)?.0 ?? 0
+    let tight = TrackMetadata.jpeg(big, maxSide: small.side, maxBytes: 2500)
     check(tight.map { $0.count <= 2500 } == true && (size(tight)?.0 ?? .max) < w,
           "artwork: a tighter limit gives a smaller image", "\(tight?.count ?? -1) bytes")
-    check(TrackMetadata.jpeg(big, maxBytes: 100) == nil, "artwork: nothing when not even the smallest image fits")
-    check(size(TrackMetadata.jpeg(artwork(100, 100))).map { $0 == (100, 100) } == true,
+    check(TrackMetadata.jpeg(big, maxSide: small.side, maxBytes: 100) == nil,
+          "artwork: nothing when not even the smallest image fits")
+    check(size(TrackMetadata.artwork(artwork(100, 100))?.large).map { $0 == (100, 100) } == true,
           "artwork: a small image isn't scaled up")
-    check(TrackMetadata.jpeg(NSImage(cgImage: big, size: NSSize(width: 1200, height: 800))) != nil,
+    check(TrackMetadata.artwork(NSImage(cgImage: big, size: NSSize(width: 1600, height: 1200))) != nil,
           "artwork: an NSImage (a player's artwork, AudioSync's icon) is encoded too")
 }
 
@@ -2893,7 +2908,8 @@ do {
 // MARK: Track info on AudioSync's own sender — a new track never goes out with the last one's cover
 do {
     let song = TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record")
-    let cover = Data([0xFF, 0xD8, 0xFF, 0x01]), nextCover = Data([0xFF, 0xD8, 0xFF, 0x02])
+    let cover = TrackMetadata.Artwork(large: Data([0xFF, 0xD8, 0xFF, 0x01]), small: Data([0xFF, 0xD8, 0xFF, 0x03]))
+    let nextCover = TrackMetadata.Artwork(large: Data([0xFF, 0xD8, 0xFF, 0x02]), small: Data([0xFF, 0xD8, 0xFF, 0x02]))
     var playing = NativeNowPlaying()
     playing.setTrack(song)
     playing.setArtwork(cover)

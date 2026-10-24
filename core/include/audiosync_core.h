@@ -144,7 +144,8 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
 #define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
 #define ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED 7       /* three volume reads in a row failed on an AirPlay 2 session: it isn't asked again */
-#define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 8          /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
+#define ASC_AIRPLAY_WARNING_ARTWORK_REFUSED 8            /* an artwork image was refused or unanswered: the small one or none follows; once per session */
+#define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 11         /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -1719,16 +1720,19 @@ bool asc_airplay_stream_counters(const AscAirPlay *airplay, AscAirPlayStreamCoun
 
 /*
  * Sets what is playing, for the receivers that show it: the track's title,
- * artist and album as UTF-8 text, and its artwork as a JPEG of at most
- * 512 KiB. Every speaker that lists the type gets it now, and every speaker
- * that starts or restarts later gets it too. A NULL text is an empty one,
- * and three NULL texts send no track information; NULL artwork, or a length
- * of 0, sends none. Returns false, changing nothing, for a NULL or dead
- * handle, a text that isn't UTF-8, a NULL artwork with a length, or artwork
- * the sender refuses (not a JPEG, or too large).
+ * artist and album as UTF-8 text, and its artwork as two JPEGs of at most
+ * 512 KiB each: large for AirPlay 2 sessions, small for AirPlay 1 sessions
+ * and after a refusal. Every speaker that lists the type gets it now, and
+ * every speaker that starts or restarts later gets it too. A NULL text is an
+ * empty one, and three NULL texts send no track information; one image alone
+ * serves both paths, and none (NULL or a length of 0) sends no artwork.
+ * Returns false, changing nothing, for a NULL or dead handle, a text that
+ * isn't UTF-8, a NULL image with a length, or an image the sender refuses
+ * (not a JPEG, or too large).
  */
 bool asc_airplay_set_now_playing(AscAirPlay *airplay, const char *title, const char *artist,
-                                 const char *album, const uint8_t *artwork, size_t artwork_len);
+                                 const char *album, const uint8_t *large, size_t large_len,
+                                 const uint8_t *small, size_t small_len);
 
 /*
  * Sets how far into the track the audio arriving now is, and how long the

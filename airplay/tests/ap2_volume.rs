@@ -316,7 +316,7 @@ fn reads_given_up_are_forgotten_once_a_later_request_is_answered() {
     for _ in 0..2 {
         ask_for(&mut rig, Duration::from_secs(2));
         // The read given up at the tick, then the feedback answered.
-        assert_eq!(rig.session.late_volume_reads(), 0, "{:?}", rig.keys());
+        assert_eq!(rig.session.late_answers(), 0, "{:?}", rig.keys());
     }
     assert_eq!(rig.times_of(READ).len(), 3, "{:?}", rig.keys());
     assert!(rig.failure().is_none(), "{:?}", rig.events);

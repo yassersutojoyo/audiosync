@@ -204,7 +204,9 @@ pub struct FakeAp2 {
     pub requests: Vec<(Request, bool)>,
     /// A status in place of 200, by request key.
     pub status: HashMap<String, u16>,
-    /// A status in place of 200 for the next request with the key only.
+    /// A status in place of 200 for the next request with the key only; a
+    /// key followed by a content type ("SET_PARAMETER image/jpeg") matches
+    /// only requests carrying that type.
     pub status_once: HashMap<String, u16>,
     /// A digest challenge (`WWW-Authenticate` value) for every request with
     /// the key that carries no `Authorization`.
@@ -336,7 +338,13 @@ impl FakeAp2 {
             let challenged = self.challenge.as_ref().is_some_and(|(wanted, _)| {
                 *wanted == key && !request.headers.contains("Authorization")
             });
-            let once = self.status_once.remove(&key);
+            let typed = request
+                .headers
+                .get("Content-Type")
+                .map(|kind| format!("{key} {kind}"));
+            let once = typed
+                .and_then(|typed| self.status_once.remove(&typed))
+                .or_else(|| self.status_once.remove(&key));
             let pairing = request.uri.starts_with("/pair-");
             if request.uri == "/pair-setup" {
                 let items = untlv(&request.body);

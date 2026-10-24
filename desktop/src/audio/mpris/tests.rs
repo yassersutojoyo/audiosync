@@ -179,10 +179,11 @@ fn a_playing_fake_shows_its_track_and_artwork_in_both_readers() {
     assert_eq!(read.session.title, "Song");
     assert_eq!(read.session.artist, "Artist One, Artist Two");
     assert!(read.session.playing);
-    let jpeg = read
+    let artwork = read
         .artwork
         .expect("the file:// artwork reaches the receivers");
-    assert!(jpeg.starts_with(&[0xFF, 0xD8]));
+    assert!(artwork.large.starts_with(&[0xFF, 0xD8]));
+    assert!(artwork.small.starts_with(&[0xFF, 0xD8]));
     let timeline = read.timeline.expect("a track with a length has a timeline");
     assert_eq!(timeline.length, Duration::from_secs(200));
     assert_eq!(shown.title, "Song");
@@ -357,7 +358,9 @@ fn reads_this_desktops_players() {
         Some(track) => println!(
             "{:?}, artwork: {:?} bytes, timeline: {:?}",
             track.session,
-            track.artwork.map(|jpeg| jpeg.len()),
+            track
+                .artwork
+                .map(|artwork| (artwork.large.len(), artwork.small.len())),
             track.timeline
         ),
         None => println!("no player counts"),

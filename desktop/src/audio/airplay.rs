@@ -5102,7 +5102,9 @@ pub mod tests {
                 artist: "Artist".to_owned(),
                 album: "Album".to_owned(),
             }),
-            artwork: Some(b"cover".to_vec()),
+            artwork: Some(audiosync_airplay::metadata::Artwork::single(
+                b"cover".to_vec(),
+            )),
             progress: None,
         };
         airplay.set_now_playing(now_playing.clone());

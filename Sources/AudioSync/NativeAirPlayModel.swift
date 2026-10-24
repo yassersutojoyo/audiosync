@@ -963,16 +963,16 @@ struct NativeSenderStarts {
 struct NativeNowPlaying: Equatable {
     /// The track's title, artist and album, once one was set.
     private(set) var fields: TrackMetadata.Fields?
-    /// The artwork as a JPEG, once one was set for this track.
-    private(set) var artwork: Data?
+    /// The artwork in both sizes, once one was set for this track.
+    private(set) var artwork: TrackMetadata.Artwork?
 
     mutating func setTrack(_ track: TrackMetadata.Fields) {
         if track != fields { artwork = nil }
         fields = track
     }
 
-    mutating func setArtwork(_ jpeg: Data) {
-        artwork = jpeg
+    mutating func setArtwork(_ artwork: TrackMetadata.Artwork) {
+        self.artwork = artwork
     }
 }
 

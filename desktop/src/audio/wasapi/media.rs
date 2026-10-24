@@ -1,6 +1,6 @@
 //! What the media sessions reader ([`super::media_sessions`]) makes of a
 //! session: its description for track info, and its thumbnail decoded
-//! through the WinRT imaging codecs, as a JPEG for receivers ([`fit_jpeg`])
+//! through the WinRT imaging codecs, as JPEGs for receivers ([`fit_artwork`])
 //! or as the Now Playing card's square tile ([`ARTWORK_SIDE`],
 //! [`cover_size`]). Decoding works on bytes already read, so it never waits
 //! on the app behind a session.
@@ -25,7 +25,7 @@ use windows::Storage::Streams::{
 };
 use windows::core::{HSTRING, Interface};
 
-use crate::audio::now_playing::{MediaSession, fit_jpeg};
+use crate::audio::now_playing::{FittedArtwork, MediaSession, fit_artwork};
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{ARTWORK_SIDE, CardArtwork, cover_size};
 
@@ -52,9 +52,9 @@ pub(super) fn describe(
 
 /// AudioSync's icon fitted as receiver artwork; `None`, logged, when it
 /// can't be.
-pub(super) fn fitted_icon(log: &DebugLog) -> Option<Arc<[u8]>> {
+pub(super) fn fitted_icon(log: &DebugLog) -> Option<FittedArtwork> {
     match fit_image(ICON_PNG) {
-        Ok(Some(jpeg)) => Some(Arc::from(jpeg)),
+        Ok(Some(artwork)) => Some(artwork),
         Ok(None) => {
             log.log(|| "now playing: AudioSync's icon doesn't fit as artwork".to_owned());
             None
@@ -67,11 +67,11 @@ pub(super) fn fitted_icon(log: &DebugLog) -> Option<Arc<[u8]>> {
 }
 
 /// An encoded image as fitted receiver artwork.
-pub(super) fn fit_image(image: &[u8]) -> windows::core::Result<Option<Vec<u8>>> {
+pub(super) fn fit_image(image: &[u8]) -> windows::core::Result<Option<FittedArtwork>> {
     let decoder = BitmapDecoder::CreateAsync(&memory_stream(image)?)?.join()?;
     let (width, height) = (decoder.PixelWidth()?, decoder.PixelHeight()?);
     let mut failure = None;
-    let fitted = fit_jpeg(width, height, |width, height, quality| match encode_scaled(
+    let fitted = fit_artwork(width, height, |width, height, quality| match encode_scaled(
         &decoder, width, height, quality,
     ) {
         Ok(jpeg) => Some(jpeg),
@@ -198,13 +198,16 @@ fn read_all(stream: &InMemoryRandomAccessStream) -> windows::core::Result<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::now_playing::ARTWORK_LIMIT;
+    use crate::audio::now_playing::SMALL_ARTWORK;
 
     #[test]
     fn the_icon_fits_as_a_jpeg_and_as_the_cards_tile() {
         let _apartment = super::super::com::Apartment::enter().unwrap();
-        let jpeg = fit_image(ICON_PNG).unwrap().expect("the icon fits");
-        assert!(jpeg.len() <= ARTWORK_LIMIT && jpeg.starts_with(&[0xFF, 0xD8]));
+        let artwork = fit_image(ICON_PNG).unwrap().expect("the icon fits");
+        assert_eq!(artwork.large, artwork.small, "256 px fits the small limits");
+        assert!(
+            artwork.small.len() <= SMALL_ARTWORK.bytes && artwork.small.starts_with(&[0xFF, 0xD8])
+        );
         let tile = card_artwork(ICON_PNG).unwrap().expect("the icon fits");
         assert_eq!(tile.rgba.len(), (tile.side * tile.side * 4) as usize);
     }
