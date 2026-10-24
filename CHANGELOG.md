@@ -95,7 +95,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The Guide now covers input devices, track info on AirPlay receivers, Launch at Sign-In, AirPlay passwords, and what happens when the source app quits.
 - While the Web Remote is on and the PC is connected to a network that Windows marks as Public, the Web Remote window and a notice say anyone on that network can open the pairing page.
 
-## [0.6.0] - unreleased
+## [0.6.0] - 2026-10-24
 
 ### Added
 
