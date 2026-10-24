@@ -460,7 +460,16 @@ fn one_app_is_captured_alone_and_followed() {
     .unwrap();
     let recorder = Recorder::start("app");
     let out = output(&ring, "as-b", 0, 1.0);
-    std::thread::sleep(Duration::from_secs(3));
+    let mut written = Vec::new();
+    for _ in 0..12 {
+        std::thread::sleep(Duration::from_millis(250));
+        let stamp = ring.stamp();
+        written.push(format!(
+            "{:?} {:?}",
+            stamp.map(|stamp| stamp.written),
+            capture.state()
+        ));
+    }
     let captured = ring.take_peak();
     let held = capture.holds_all();
     let rendered = format!("{:?}; {}", out.reported_latency_ns(), out.render_report());
@@ -480,7 +489,8 @@ fn one_app_is_captured_alone_and_followed() {
     assert!(
         wanted > 1.0,
         "no 440 Hz played: power {wanted}, captured peak {captured}, links held {held}, \
-         {} frames recorded, peaks per 250 ms {profile:?}, output {rendered}",
+         {} frames recorded, peaks per 250 ms {profile:?}, output {rendered}, \
+         capture W per 250 ms {written:?}",
         right.len()
     );
     assert!(below_db >= 40.0, "1 kHz only {below_db} dB down");
