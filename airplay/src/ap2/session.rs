@@ -75,7 +75,8 @@ pub struct Ap2Config {
     pub members: Vec<IpAddr>,
     /// The host asked for a PIN pairing (P61): the connection runs
     /// `/pair-pin-start`, waits for [`Ap2Session::submit_pin`], then pair-setup
-    /// M1 to M6 and a pair-verify (P153), and ends there without a session.
+    /// M1 to M6 and a pair-verify (P153), and waits in [`Ap2State::Paired`]
+    /// for [`Ap2Session::proceed`].
     pub pin_pairing: bool,
 }
 
@@ -119,6 +120,9 @@ pub enum Ap2State {
     /// The first `GET /info` is out.
     Info,
     Pairing,
+    /// A PIN pairing passed its pair-verify: the framed connection waits
+    /// for [`Ap2Session::proceed`] (P153).
+    Paired,
     /// The session SETUP is out; framing has started.
     SessionSetup,
     /// From the session SETUP answer to the FLUSH answer.
@@ -150,11 +154,11 @@ pub enum Ap2Event {
     /// `/pair-pin-start` was answered: the receiver shows a code, which the
     /// host passes to [`Ap2Session::submit_pin`] (P61).
     PinRequested,
-    /// The receiver turned the PIN down (P150, error 2); a Failed event
-    /// follows, and a new pairing shows a new code (P151).
+    /// The receiver turned the PIN down (P150, error 2). The code it shows
+    /// stays, and the session waits for another [`Ap2Session::submit_pin`].
     WrongPin,
     /// The PIN pairing's new credentials passed the pair-verify on the same
-    /// connection (P153), which then closes.
+    /// connection (P153), which waits for [`Ap2Session::proceed`].
     Verified,
     /// A session SETUP with this timing was answered 200; the host
     /// remembers PTP for the device (P157).
@@ -1422,7 +1426,6 @@ impl Ap2Session {
         };
         let mut entropy = Draw(self.entropy.as_mut());
         let step = setup.handle_response(response, &mut entropy);
-        let pin_rejected = setup.pin_rejected();
         match step {
             SetupStep::Send(_) => self.send(Kind::PairSetup, now, false),
             SetupStep::Retry => self.reconnect(Restart::PairingRetry, now),
@@ -1446,13 +1449,9 @@ impl Ap2Session {
                     ),
                 }
             }
-            SetupStep::Failed(failure) => {
-                if pin_rejected {
-                    self.event(Ap2Event::WrongPin);
-                }
-                self.fail_with(failure.error)
-            }
+            SetupStep::Failed(failure) => self.fail_with(failure.error),
             SetupStep::PinRequested => self.event(Ap2Event::PinRequested),
+            SetupStep::WrongPin => self.event(Ap2Event::WrongPin),
             SetupStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,
                 Some(Method::Post),
@@ -1491,12 +1490,40 @@ impl Ap2Session {
             );
         }
         self.pairing = None;
-        if self.config.pin_pairing {
-            self.event(Ap2Event::Verified);
-            return self.finish();
-        }
         self.framing = Some(Framing::control(secret.expose()));
         self.shared = Some(secret);
+        if self.config.pin_pairing {
+            self.state = Ap2State::Paired;
+            return self.event(Ap2Event::Verified);
+        }
+        self.send(Kind::SessionSetup, now, false);
+    }
+
+    /// Goes on from a PIN pairing's pair-verify to the session SETUP on the
+    /// same connection (P153), with `config` in place of the pairing's own,
+    /// except for the addresses, features and credentials the connection
+    /// already used. `connection` gives the UDP ports the session names.
+    /// Ignored unless the session is [`Ap2State::Paired`].
+    pub fn proceed(&mut self, config: Ap2Config, connection: Connection, now: Instant) {
+        if self.state != Ap2State::Paired {
+            return;
+        }
+        let addresses = std::mem::take(&mut self.config.addresses);
+        let credentials = self.config.credentials.take();
+        let features = self.config.features;
+        self.config = Ap2Config {
+            addresses,
+            features,
+            credentials,
+            pin_pairing: false,
+            ..config
+        };
+        self.timing = match (self.config.timing, &self.config.ptp) {
+            (Timing::Ptp, Some(_)) => Timing::Ptp,
+            _ => Timing::Ntp,
+        };
+        self.ptp_retried = self.timing == Timing::Ptp;
+        self.connection = Some(connection);
         self.send(Kind::SessionSetup, now, false);
     }
 

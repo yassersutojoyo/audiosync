@@ -276,6 +276,9 @@ pub(crate) struct Driver {
     sessions: HashMap<SessionKey, DeviceKey>,
     pairings: BTreeMap<DeviceKey, PairingRun>,
     pairing_sessions: HashMap<SessionKey, DeviceKey>,
+    /// The connections of AirPlay 2 PIN pairings that paired, waiting for
+    /// the speaker's session (P153).
+    held: BTreeMap<DeviceKey, ap2::Held>,
     stream_ids: HashMap<stream::SpeakerId, DeviceKey>,
     next_session: u64,
     /// Refusals for the one AirPlay 2 place so far (P169).
@@ -345,6 +348,7 @@ impl Driver {
             sessions: HashMap::new(),
             pairings: BTreeMap::new(),
             pairing_sessions: HashMap::new(),
+            held: BTreeMap::new(),
             stream_ids: HashMap::new(),
             next_session: 0,
             ap2_refusals: 0,
@@ -514,6 +518,9 @@ impl Driver {
                 next = next.min(at);
             }
         }
+        for held in self.held.values() {
+            next = next.min(held.until);
+        }
         if self.browser.is_some() {
             next = next.min(now + DISCOVERY_POLL);
         }
@@ -570,6 +577,15 @@ impl Driver {
                 run.pairing.handle_timeout(now);
             }
         }
+        let unclaimed: Vec<DeviceKey> = self
+            .held
+            .iter()
+            .filter(|(_, held)| held.until <= now)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in unclaimed {
+            self.drop_held(&key);
+        }
         self.poll_discovery();
         let (done, running): (Vec<_>, Vec<_>) = self
             .retired
@@ -624,7 +640,7 @@ impl Driver {
                     .get(&key)
                     .is_some_and(|run| run.pairing.state() == PairingState::Closed)
                 {
-                    self.end_pairing(&key);
+                    self.finish_pairing(&key, now);
                 }
             }
             while let Some(transmit) = self.stream.poll_transmit() {
@@ -720,12 +736,41 @@ impl Driver {
         }
     }
 
-    /// Forgets a pairing, closing its connection if it is still open.
+    /// Forgets a pairing, closing its connection if it is still open, and
+    /// the connection of one that paired.
     fn end_pairing(&mut self, key: &DeviceKey) {
         if let Some(mut run) = self.pairings.remove(key) {
             self.pairing_sessions.remove(&run.key);
             if let Some(io) = run.io.take() {
                 self.retired.extend(io.close());
+            }
+        }
+        self.drop_held(key);
+    }
+
+    /// A pairing ended. An AirPlay 2 PIN pairing that paired keeps its
+    /// connection for the speaker's session (P153); any other closes.
+    fn finish_pairing(&mut self, key: &DeviceKey, now: Instant) {
+        let Some(run) = self.pairings.remove(key) else {
+            return;
+        };
+        let PairingRun {
+            key: session_key,
+            pairing,
+            attempt,
+            io,
+        } = run;
+        let session = match pairing {
+            Job::HomeKit(pairing) => pairing.into_session(),
+            Job::Legacy(_) => None,
+        };
+        match (session, io) {
+            (Some(session), Some(io)) => self.hold(key, session_key, attempt, session, io, now),
+            (_, io) => {
+                self.pairing_sessions.remove(&session_key);
+                if let Some(io) = io {
+                    self.retired.extend(io.close());
+                }
             }
         }
     }
@@ -792,7 +837,7 @@ impl Driver {
     fn pairing_io_event(&mut self, key: &DeviceKey, event: IoEvent, now: Instant) {
         let notify = self.notify();
         let Some(run) = self.pairings.get_mut(key) else {
-            return;
+            return self.held_io_event(key, &event);
         };
         match event {
             IoEvent::Connected {
@@ -1310,8 +1355,12 @@ impl Driver {
                 if let Some(run) = self.pairings.get_mut(&key) {
                     run.pairing.cancel(now);
                 }
+                self.drop_held(&key);
             }
-            Command::ForgetHomeKit(key) => self.forget_homekit(&key),
+            Command::ForgetHomeKit(key) => {
+                self.drop_held(&key);
+                self.forget_homekit(&key);
+            }
             Command::AddTarget { target, members } => self.add_target(*target, members, now),
             Command::RemoveTarget(id) => self.remove_target(&id, now),
             Command::SetTargetDelay(id, delay) => self.set_target_delay(&id, delay, now),
@@ -1761,6 +1810,10 @@ impl Driver {
         for run in self.pairings.values_mut() {
             run.pairing.cancel(now);
         }
+        let held: Vec<DeviceKey> = self.held.keys().cloned().collect();
+        for key in held {
+            self.drop_held(&key);
+        }
         let keys: Vec<DeviceKey> = self.speakers.keys().cloned().collect();
         for key in keys {
             let Some(speaker) = self.speakers.get_mut(&key) else {
@@ -1779,7 +1832,12 @@ impl Driver {
 
     /// Closes whatever is still open when the loop ends.
     fn close_all(&mut self) {
-        let pairings: Vec<DeviceKey> = self.pairings.keys().cloned().collect();
+        let pairings: Vec<DeviceKey> = self
+            .pairings
+            .keys()
+            .chain(self.held.keys())
+            .cloned()
+            .collect();
         for key in pairings {
             self.end_pairing(&key);
         }

@@ -403,14 +403,14 @@ fn srp_draws_a_until_a_is_full_and_retries_once_after_a_short_b() {
     assert_eq!(retries, 1);
     assert_eq!(failed_kind(&end), ErrorKind::PairingRequired);
 
-    // A PIN pairing doesn't retry by itself.
+    // A PIN pairing doesn't retry by itself: it asks for the PIN again.
     let mut fake = FakeHomeKit::new(PIN);
     fake.hash_padded = true;
     fake.zero_led_b = 1;
     let mut setup = PairSetup::pin(identity(&mut entropy));
     let (end, retries) = run_setup(&mut setup, &mut fake, &mut entropy, Some(PIN));
     assert_eq!(retries, 0);
-    assert_eq!(failed_kind(&end), ErrorKind::PairingFailed);
+    assert_eq!(end, SetupStep::WrongPin);
 
     // Without a short B or S, error 2 is mapped at once: no retry.
     let mut fake = FakeHomeKit::new("3939");
@@ -490,11 +490,26 @@ fn pin_and_password_pairings_seal_m5_and_open_m6() {
     let mut setup = PairSetup::password(Secret::from("wrong"), identity(&mut entropy));
     let (end, _) = run_setup(&mut setup, &mut fake, &mut entropy, None);
     assert_eq!(failed_kind(&end), ErrorKind::WrongPassword);
-    // A wrong PIN: PairingFailed.
+    // A wrong PIN is asked for again; the right one then pairs from M1,
+    // with the code still shown (no second /pair-pin-start).
     let mut fake = FakeHomeKit::new(PIN);
     let mut setup = PairSetup::pin(identity(&mut entropy));
     let (end, _) = run_setup(&mut setup, &mut fake, &mut entropy, Some("0000"));
-    assert_eq!(failed_kind(&end), ErrorKind::PairingFailed);
+    assert_eq!(end, SetupStep::WrongPin);
+    let mut request = setup.submit_pin(PIN).expect("M1 again");
+    let end = loop {
+        match setup.handle_response(&fake.answer(&request), &mut entropy) {
+            SetupStep::Send(next) => request = next,
+            end => break end,
+        }
+    };
+    assert!(matches!(end, SetupStep::Paired(_)), "{end:?}");
+    let starts = fake
+        .requests
+        .iter()
+        .filter(|r| r.uri == "/pair-pin-start")
+        .count();
+    assert_eq!(starts, 1);
     // A PIN can only be given after /pair-pin-start was answered.
     let mut setup = PairSetup::pin(identity(&mut entropy));
     assert!(setup.submit_pin(PIN).is_none());
@@ -752,6 +767,11 @@ fn pair_setup_error_items_map_to_session_errors() {
             };
             let (end, retries) = run_setup(&mut setup, &mut fake, &mut entropy, Some(PIN));
             assert_eq!(retries, 0);
+            // A PIN turned down at M4 is asked for again (P150).
+            if (code, state, kind) == (2, 3, 0) {
+                assert_eq!(end, SetupStep::WrongPin);
+                continue;
+            }
             let SetupStep::Failed(failure) = end else {
                 panic!("{code} at {state}: {end:?}");
             };

@@ -657,6 +657,9 @@ struct NativeAirPlayModel {
     private mutating func pairingEvent(_ event: NativeSpeakerEvent) -> NativeAirPlayOutcome? {
         switch event {
         case .pinNeeded(let id):
+            // An AirPlay 2 receiver that turned the PIN down asks again on
+            // the same connection, with the same code (P150).
+            if stages[id] == .checkingPin { return ask(id, .askingPin(wrong: true)) }
             guard case .pairing(let afterWrongPin)? = stages[id] else { return .cancelPairing(id) }
             return ask(id, .askingPin(wrong: afterWrongPin))
         case .passwordNeeded(let id, let wrong):

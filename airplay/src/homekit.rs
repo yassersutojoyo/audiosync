@@ -307,6 +307,10 @@ pub enum SetupStep {
     /// A PIN or password pairing ended after M6; a pair-verify with these
     /// credentials follows on the same connection (P65, P153).
     Paired(HomeKitCredentials),
+    /// The receiver turned the PIN down at M4 (P150, error 2). Its code
+    /// stays up, so the next [`PairSetup::submit_pin`] starts again from M1
+    /// on the same connection, with no new `/pair-pin-start`.
+    WrongPin,
     Failed(PairingFailure),
 }
 
@@ -338,8 +342,6 @@ pub struct PairSetup {
     /// B or S of this attempt is shorter than N, so a receiver that pads
     /// them computes another proof (P151).
     short_values: bool,
-    /// The receiver turned the PIN down (P150, error 2).
-    pin_rejected: bool,
     public: Vec<u8>,
     key: Zeroizing<Vec<u8>>,
     server_proof: Vec<u8>,
@@ -386,7 +388,6 @@ impl PairSetup {
             stage: SetupStage::Idle,
             retried: false,
             short_values: false,
-            pin_rejected: false,
             public: Vec::new(),
             key: Zeroizing::new(Vec::new()),
             server_proof: Vec::new(),
@@ -429,7 +430,8 @@ impl PairSetup {
         self.m1()
     }
 
-    /// The PIN as typed, after [`SetupStep::PinRequested`]: gives M1.
+    /// The PIN as typed, after [`SetupStep::PinRequested`] or
+    /// [`SetupStep::WrongPin`]: gives M1.
     pub fn submit_pin(&mut self, pin: &str) -> Option<Request> {
         if self.stage != SetupStage::WaitingForPin {
             return None;
@@ -441,12 +443,6 @@ impl PairSetup {
     /// The last request sent, for the resend after a 401.
     pub fn last_request(&self) -> Option<&Request> {
         self.last.as_ref()
-    }
-
-    /// Whether a PIN pairing failed because the receiver turned the PIN
-    /// down, so the host can start again for a new code (P151).
-    pub fn pin_rejected(&self) -> bool {
-        self.pin_rejected
     }
 
     fn remember(&mut self, request: Request) -> Request {
@@ -480,20 +476,22 @@ impl PairSetup {
     /// Error 2, or an M4 proof that doesn't check (P150).
     fn authentication(&mut self) -> SetupStep {
         let kind = match self.kind {
-            SetupKind::Pin => {
-                self.pin_rejected = true;
-                ErrorKind::PairingFailed
-            }
+            SetupKind::Pin => ErrorKind::PairingFailed,
             SetupKind::Password => ErrorKind::WrongPassword,
             SetupKind::Transient => ErrorKind::PairingRequired,
         };
         self.fail(PairingFailure::new(kind, "authentication"))
     }
 
-    /// An authentication failure after M3: the one P151 retry when B or S
-    /// was short and the pairing isn't a PIN pairing, else P150's mapping.
+    /// An authentication failure after M3: a wrong PIN, the one P151 retry
+    /// when B or S was short, else P150's mapping.
     fn authentication_after_m3(&mut self) -> SetupStep {
-        if self.short_values && !self.retried && self.kind != SetupKind::Pin {
+        if self.kind == SetupKind::Pin {
+            self.stage = SetupStage::WaitingForPin;
+            self.code = None;
+            return SetupStep::WrongPin;
+        }
+        if self.short_values && !self.retried {
             self.retried = true;
             self.stage = SetupStage::Idle;
             return SetupStep::Retry;

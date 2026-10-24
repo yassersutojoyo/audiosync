@@ -218,6 +218,10 @@ pub struct FakeHomeKit {
     pub id: Vec<u8>,
     /// Paired senders: identifier and Ed25519 public key.
     pub paired: Vec<(Vec<u8>, [u8; 32])>,
+    /// A pairing lasts only as long as its connection, as on a receiver set
+    /// to ask for a code every time: the next connection's pair-verify is
+    /// turned down.
+    pub pairing_per_connection: bool,
     /// Hash B and S padded to 384 bytes in M1 and K, as P151's other
     /// reading does.
     pub hash_padded: bool,
@@ -256,6 +260,7 @@ impl FakeHomeKit {
             seed: [0x42; 32],
             id: b"AA:BB:CC:DD:EE:FF".to_vec(),
             paired: Vec::new(),
+            pairing_per_connection: false,
             hash_padded: false,
             zero_led_b: 0,
             answers: Vec::new(),
@@ -289,6 +294,9 @@ impl FakeHomeKit {
 
     pub fn new_connection(&mut self) {
         self.connections += 1;
+        if self.pairing_per_connection {
+            self.paired.clear();
+        }
     }
 
     /// The premaster secret S, padded, a client with this a gets against the

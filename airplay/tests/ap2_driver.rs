@@ -814,22 +814,26 @@ fn the_host_pairs_an_airplay2_speaker_with_a_pin() {
     let device = airplay2_only(&server, 50);
     let key = device.key.clone();
 
-    // A wrong PIN: the host hears it and starts again for a new code.
+    // An every-time receiver: a later connection's pair-verify fails.
+    server.fake().hap.pairing_per_connection = true;
+
+    // A wrong PIN: the receiver asks for it again on the same connection.
     sender.start_pairing(device.clone());
     let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
     assert!(wait_pairing(&mut events, &sender, &key, 1, pin_requested).is_some());
     sender.submit_pin(&key, "1111").expect("digits");
-    let failed = wait_pairing(&mut events, &sender, &key, 1, |event| {
-        matches!(event, PairingEvent::Failed { .. })
-    });
-    let Some(PairingEvent::Failed { error, wrong_pin }) = failed else {
-        panic!("{failed:?}");
-    };
-    assert_eq!(error.kind, ErrorKind::PairingFailed);
-    assert!(wrong_pin);
-
-    sender.start_pairing(device.clone());
     assert!(wait_pairing(&mut events, &sender, &key, 2, pin_requested).is_some());
+    assert!(
+        !events.seen.iter().any(|(_, event)| matches!(
+            event,
+            SenderEvent::Pairing {
+                event: PairingEvent::Failed { .. },
+                ..
+            }
+        )),
+        "{:?}",
+        events.of(&key)
+    );
     sender.submit_pin(&key, "4821").expect("digits");
     let paired = wait_pairing(&mut events, &sender, &key, 1, |event| {
         matches!(event, PairingEvent::HomeKitPaired(_))
@@ -839,10 +843,11 @@ fn the_host_pairs_an_airplay2_speaker_with_a_pin() {
     };
     let keys = server.fake().keys();
     let starts = keys.iter().filter(|k| *k == "POST /pair-pin-start").count();
-    assert_eq!(starts, 2, "{keys:?}");
+    assert_eq!(starts, 1, "{keys:?}");
     assert!(!keys.contains(&"SETUP session".to_owned()), "{keys:?}");
 
-    // The host adds the speaker with them: a pair-verify, no new pairing.
+    // The host adds the speaker with them: its session goes on over the
+    // pairing connection, with no pair-verify the receiver would refuse.
     server.fake().requests.clear();
     let mut paired_options = options();
     paired_options.homekit_credentials = Some(credentials);
@@ -856,8 +861,10 @@ fn the_host_pairs_an_airplay2_speaker_with_a_pin() {
         server.fake().keys()
     );
     let keys = server.fake().keys();
-    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(keys.contains(&"SETUP session".to_owned()), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
     assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    assert_eq!(server.fake().connections, 1);
     sender.shutdown();
 
     // With the switch off the same request reaches nothing AirPlay 2.
@@ -875,5 +882,50 @@ fn the_host_pairs_an_airplay2_speaker_with_a_pin() {
         "{:?}",
         server.fake().keys()
     );
+    sender.shutdown();
+}
+
+// covers: P153
+#[test]
+fn a_pairing_connection_the_host_lets_go_closes_and_the_next_session_verifies() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body =
+        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x8))]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 52);
+    let key = device.key.clone();
+
+    sender.start_pairing(device.clone());
+    let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+    assert!(wait_pairing(&mut events, &sender, &key, 1, pin_requested).is_some());
+    sender.submit_pin(&key, "4821").expect("digits");
+    let paired = wait_pairing(&mut events, &sender, &key, 1, |event| {
+        matches!(event, PairingEvent::HomeKitPaired(_))
+    });
+    let Some(PairingEvent::HomeKitPaired(credentials)) = paired else {
+        panic!("{paired:?} {:?}", server.fake().keys());
+    };
+    sender.cancel_pairing(&key);
+
+    server.fake().requests.clear();
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    sender.add_speaker(device, paired_options);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let keys = server.fake().keys();
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    assert_eq!(server.fake().connections, 2);
     sender.shutdown();
 }
