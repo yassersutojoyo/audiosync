@@ -168,6 +168,10 @@ fn the_whole_system_reaches_mock_airplay_and_cast_receivers() {
 
     let quiet_airplay = airplay_peak(&airplay);
     let quiet_cast = cast_peak(&cast);
+    assert!(
+        quiet_airplay <= AUDIBLE && quiet_cast <= AUDIBLE,
+        "audible before the tone: AirPlay peak {quiet_airplay}, Cast peak {quiet_cast}"
+    );
     let path = tone("receivers", 440.0, 0.5, 30.0);
     let app = detached(&format!("pw-play --latency 1024 {}", path.display()));
     let airplay_heard = wait_until(LONG, || {
