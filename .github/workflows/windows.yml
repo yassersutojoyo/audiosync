@@ -149,10 +149,6 @@ jobs:
             done
             sleep 1
             wpctl status
-            for round in 1 2 3 4 5 6 7 8; do
-              echo "per-app round $round"
-              cargo test --locked -- --ignored --test-threads 1 audio::pipewire::live_tests::one_app || true
-            done
             cargo test --locked -- --ignored --test-threads 1 audio::pipewire::live_tests::
           '
 
