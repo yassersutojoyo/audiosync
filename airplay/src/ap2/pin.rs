@@ -234,7 +234,8 @@ impl PinPairing {
             | Ap2Event::TimingChosen(_)
             | Ap2Event::Ready(_)
             | Ap2Event::Warning(_)
-            | Ap2Event::Trace(_) => {}
+            | Ap2Event::Trace(_)
+            | Ap2Event::VolumeReported(_) => {}
         }
     }
 }

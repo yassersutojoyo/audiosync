@@ -4,5 +4,3 @@
 # test, so this list only shrinks. "Partly done" names what already exists.
 
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
-P183 the initial AirPlay 2 volume after the FLUSH answer, with one resend after an error; the crate still sends it after RECORD or SETPEERS
-P184 AirPlay 2 volume reads on host request, at most every 2 s, stale answers dropped, three failures stop reading; the crate still reports the last set value

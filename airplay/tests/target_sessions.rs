@@ -458,10 +458,18 @@ fn a_target_takes_one_airplay2_place_for_all_its_members() {
 
 // covers: P180
 #[test]
-fn an_airplay2_target_read_back_reports_the_target_volume_under_the_leader() {
+fn an_airplay2_target_read_back_asks_only_the_leader() {
     let _serial = serial();
-    let first = Ap2Server::start(FakeAp2::new());
-    let second = Ap2Server::start(FakeAp2::new());
+    let answering = || {
+        let mut fake = FakeAp2::new();
+        fake.bodies.insert(
+            "GET_PARAMETER".to_owned(),
+            b"volume: -9.000000\r\n".to_vec(),
+        );
+        fake
+    };
+    let first = Ap2Server::start(answering());
+    let second = Ap2Server::start(answering());
     let (sender, _host) = start(true);
     let mut events = Events::default();
     let (da, db) = (
@@ -489,15 +497,13 @@ fn an_airplay2_target_read_back_reports_the_target_volume_under_the_leader() {
     assert!(
         wait_until(LONG, || {
             events.drain(&sender);
-            reported(&events, &da.key) == vec![-12.0]
+            reported(&events, &da.key) == vec![-9.0]
         }),
         "{:?}",
         events.of(&da.key)
     );
     assert!(reported(&events, &db.key).is_empty());
-    for server in [&first, &second] {
-        assert!(!server.fake().keys().contains(&"GET_PARAMETER".to_owned()));
-    }
+    assert!(!second.fake().keys().contains(&"GET_PARAMETER".to_owned()));
     sender.shutdown();
 }
 

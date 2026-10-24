@@ -219,4 +219,7 @@ pub enum Warning {
     /// service runs in plays without PTP; told once per speaker (P158,
     /// P179).
     PtpOutsideFamily,
+    /// Three volume reads in a row failed on an AirPlay 2 session, which
+    /// reads no more; told once per session (P184).
+    VolumeReadsStopped,
 }

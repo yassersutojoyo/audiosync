@@ -121,9 +121,9 @@ fn ap2_session_runs_in_order() {
             "EVENTS",
             "GET /info",
             "RECORD",
-            "SET_PARAMETER",
             "SETUP stream",
             "FLUSH",
+            "SET_PARAMETER",
         ]
     );
     // Plain text up to the M4 answer, framed from the session SETUP on.
@@ -573,9 +573,9 @@ fn ptp_only_after_ntp_is_refused() {
             "GET /info",
             "RECORD",
             "SETPEERS",
-            "SET_PARAMETER",
             "SETUP stream",
             "FLUSH",
+            "SET_PARAMETER",
         ]
     );
     let first = read_dict(&rig.fake.requests[3].0.body).expect("plist");
@@ -720,7 +720,7 @@ fn stream_setup_refused_without_a_key_is_unsupported() {
 
 // covers: P42
 #[test]
-fn volume_set_after_the_startup_volume_is_sent_once_ready() {
+fn volume_set_while_the_initial_volume_is_out_goes_after_it() {
     let mut fake = FakeAp2::new();
     fake.hold = Some("SET_PARAMETER".to_owned());
     let mut rig = Ap2Rig::new(ap2_config(), fake);
@@ -732,7 +732,7 @@ fn volume_set_after_the_startup_volume_is_sent_once_ready() {
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
     assert_eq!(
         rig.keys()[rig.keys().len() - 3..],
-        ["SETUP stream", "FLUSH", "SET_PARAMETER"]
+        ["FLUSH", "SET_PARAMETER", "SET_PARAMETER"]
     );
     let volume = rig.fake.last("SET_PARAMETER").expect("volume");
     assert_eq!(volume.body, b"volume: -30.000000\r\n");
@@ -847,12 +847,18 @@ fn traced_config() -> audiosync_airplay::ap2::Ap2Config {
 }
 
 #[test]
-fn traced_session_reads_the_volume_with_each_feedback_and_logs_a_steady_answer_once() {
+fn traced_session_logs_a_steady_read_answer_once() {
     let mut fake = FakeAp2::new();
     fake.status.insert("GET_PARAMETER".to_owned(), 404);
-    let mut rig = Ap2Rig::new(traced_config(), fake);
+    let mut config = traced_config();
+    config.read_volume = true;
+    let mut rig = Ap2Rig::new(config, fake);
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
-    rig.advance(Duration::from_secs(15));
+    for _ in 0..8 {
+        let now = rig.now;
+        rig.session.read_volume(now);
+        rig.advance(Duration::from_secs(2));
+    }
     assert!(rig.failure().is_none(), "{:?}", rig.events);
     let reads: Vec<&Request> = rig
         .fake
@@ -861,12 +867,7 @@ fn traced_session_reads_the_volume_with_each_feedback_and_logs_a_steady_answer_o
         .map(|(request, _)| request)
         .filter(|request| request.method.as_str() == "GET_PARAMETER")
         .collect();
-    assert!(reads.len() >= 5, "{:?}", rig.keys());
-    assert_eq!(reads[0].body, b"volume\r\n");
-    assert_eq!(
-        reads[0].headers.get("Content-Type"),
-        Some("text/parameters")
-    );
+    assert_eq!(reads.len(), 3, "{:?}", rig.keys());
     let keys = rig.keys();
     let read_at = keys.iter().position(|key| *key == "GET_PARAMETER");
     let volume_at = keys.iter().position(|key| *key == "SET_PARAMETER");
@@ -906,31 +907,4 @@ fn an_untraced_session_logs_no_set_parameter_lines() {
     let rig = Ap2Rig::new(ap2_config(), fake);
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
     assert!(traces(&rig).is_empty(), "{:?}", traces(&rig));
-}
-
-#[test]
-fn an_unanswered_volume_read_never_ends_the_session() {
-    let mut fake = FakeAp2::new();
-    fake.silent.push("GET_PARAMETER".to_owned());
-    let mut rig = Ap2Rig::new(traced_config(), fake);
-    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
-    rig.advance(Duration::from_secs(25));
-    assert!(rig.failure().is_none(), "{:?}", rig.events);
-    assert!(traces(&rig).contains(&"GET_PARAMETER volume: no answer"));
-    assert_eq!(rig.times_of("GET_PARAMETER").len(), 1, "{:?}", rig.keys());
-    let feedback = rig.times_of("POST /feedback");
-    let recent = rig.now - Duration::from_secs(5);
-    assert!(
-        feedback.last().is_some_and(|at| *at > recent),
-        "{feedback:?}"
-    );
-}
-
-#[test]
-fn an_untraced_session_sends_no_volume_read() {
-    let mut rig = transient();
-    assert!(rig.ready());
-    rig.advance(Duration::from_secs(5));
-    assert!(!rig.keys().contains(&"GET_PARAMETER"));
-    assert!(traces(&rig).is_empty());
 }

@@ -252,6 +252,9 @@ struct Speaker {
     ap2_retry: bool,
     /// The target the host added it with (P177).
     target: Option<TargetId>,
+    /// The host asked for its volume (P122), so a new AirPlay 2 session
+    /// reads once after its initial volume (P184).
+    reads_volume: bool,
 }
 
 impl Speaker {
@@ -1395,6 +1398,7 @@ impl Driver {
                     ap2_waiting: false,
                     ap2_refusal: 0,
                     ap2_retry: false,
+                    reads_volume: false,
                     target: None,
                 },
             );
@@ -1671,24 +1675,19 @@ impl Driver {
         }
     }
 
-    /// A read-back of a playing speaker's volume (P122). On the AirPlay 2
-    /// path it reports the last value set instead of asking the receiver.
+    /// A read-back of a playing speaker's volume (P122); on the AirPlay 2
+    /// path it goes with the session's next feedback (P184).
     fn read_volume(&mut self, key: &DeviceKey, now: Instant) {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
-        let last_set = match &mut speaker.phase {
+        speaker.reads_volume = true;
+        match &mut speaker.phase {
             Phase::Active(active) => {
                 active.session.read_volume(now);
-                None
             }
-            Phase::Ap2(active) if active.stream_id.is_some() => {
-                Some(speaker.options.volume.wire_db())
-            }
-            _ => None,
-        };
-        if let Some(db) = last_set {
-            self.emit_speaker(key, SpeakerEvent::VolumeReported(db));
+            Phase::Ap2(active) if active.stream_id.is_some() => active.session.read_volume(now),
+            _ => {}
         }
     }
 
@@ -2126,6 +2125,7 @@ mod tests {
                 ap2_waiting: false,
                 ap2_refusal: 0,
                 ap2_retry: false,
+                reads_volume: false,
                 target: None,
             },
         );
