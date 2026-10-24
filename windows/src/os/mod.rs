@@ -21,6 +21,7 @@ use self::windows as imp;
 pub use imp::data_base;
 pub use imp::{
     Instance, Media, claim_instance, computer_name, create_tray, notice_time, sealer, start,
+    start_with,
 };
 
 /// What [`start`] opened.

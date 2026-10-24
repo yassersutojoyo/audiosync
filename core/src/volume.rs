@@ -63,6 +63,44 @@ pub fn output_gain(local_position: f64, master_position: f64) -> f64 {
     gain_for_position(local_position) * gain_for_position(master_position)
 }
 
+/// The zone position of a speaker in no zone (S71, S249).
+pub const NO_ZONE_POSITION: f64 = 100.0;
+
+/// A local output's renderer gain through its zone: `g(local) × g(zone) ×
+/// g(master)` (S71, S249). At zone 100 the factor is exactly 1, so the gain
+/// is bit-identical to [`output_gain`].
+pub fn zoned_output_gain(local_position: f64, zone_position: f64, master_position: f64) -> f64 {
+    gain_for_position(local_position)
+        * gain_for_position(zone_position)
+        * gain_for_position(master_position)
+}
+
+/// The linear level of three slider stages, own × zone × master, each
+/// `position / 100` clamped to 0…1 (S249): what an AirPlay speaker's volume
+/// spreads over its dB range.
+pub fn stage_level(own_position: f64, zone_position: f64, master_position: f64) -> f64 {
+    (own_position / MAX_POSITION).clamp(0.0, 1.0)
+        * (zone_position / MAX_POSITION).clamp(0.0, 1.0)
+        * (master_position / MAX_POSITION).clamp(0.0, 1.0)
+}
+
+/// [`stage_level`] backwards (S250): the own position, rounded to a whole
+/// step and clamped to 0…100, that plays at `level` (0…1) through the zone
+/// and the master. None when zone × master is 0, where every own position
+/// sounds the same, or `level` isn't finite.
+pub fn own_position_for_level(level: f64, zone_position: f64, master_position: f64) -> Option<f64> {
+    let scale = (master_position / MAX_POSITION).clamp(0.0, 1.0)
+        * (zone_position / MAX_POSITION).clamp(0.0, 1.0);
+    if scale.is_nan() || scale <= 0.0 || !level.is_finite() {
+        return None;
+    }
+    Some(
+        (level.clamp(0.0, 1.0) / scale * MAX_POSITION)
+            .clamp(MIN_POSITION, MAX_POSITION)
+            .round(),
+    )
+}
+
 /// Migrates a legacy linear percentage (0…150) to a position:
 /// `p(pct / 100)`, clamped, so 3.49 % becomes 32.68 and anything from 100 %
 /// up becomes 100 (S75).

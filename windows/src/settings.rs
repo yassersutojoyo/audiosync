@@ -9,7 +9,7 @@
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
 //! auto-connect marks, the names the user gave speakers, the groups, the
-//! equalizer, View > Show Virtual Devices, View > Appearance, the main
+//! zones, the speaker presets, the equalizer, View > Show Virtual Devices, View > Appearance, the main
 //! window's place and size, and File > Web Remote with its port.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
@@ -40,12 +40,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::speaker_names::SpeakerNames;
-use audiosync_core::eq::{BAND_COUNT, EqSettings};
+use audiosync_core::eq::{BAND_COUNT, EqSettings, UserCurve, sanitized_curves};
 use audiosync_core::policy::delay::{
     MAX_DELAY_MS, MAX_OFFSET_MS, MIN_OFFSET_MS, sanitize_airplay_adjustment_ms,
 };
+use audiosync_core::policy::presets::{self, Preset, PresetMember, PresetZone};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::SpeakerKey;
+use audiosync_core::policy::zones::{self, DEFAULT_ZONE_VOLUME, Zone, Zones};
 use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_position};
 use serde::{Deserialize, Serialize};
 
@@ -76,10 +78,21 @@ pub const IGNORED_FILE_NAME: &str = "settings.ignored.json";
 /// `airplay_adjustment_ms` is the AirPlay delay adjustment. In version 1 an
 /// output's `delay_ms` was its own trim, 0 to 20 000 ms, and
 /// [`migrate_delays`] turns it into an offset once.
-pub const VERSION: u32 = 2;
+///
+/// Version 3 (zones, spec S248) adds `speaker_zones` and
+/// `speaker_zones_migrated`. A version 2 file reads as version 3, its groups
+/// becoming zones once ([`Settings::with_zones_migrated`]); the groups stay.
+/// It also keeps `speaker_presets` and `speaker_presets_migrated` (spec
+/// S251, S254): a file without the mark has its groups that lost a member
+/// to the zones become presets once ([`Settings::with_presets_migrated`]).
+pub const VERSION: u32 = 3;
 
 /// The first format version with offsets relative to the reference.
 pub const OFFSETS_VERSION: u32 = 2;
+
+/// The first format version with zones; an older file's groups become zones
+/// as it is read.
+pub const ZONES_VERSION: u32 = 3;
 
 /// The longest own delay an AirPlay speaker takes, in milliseconds: the
 /// sender's limit (P99), the core's delay range.
@@ -235,6 +248,167 @@ pub struct SavedGroup {
     pub members: Vec<String>,
 }
 
+/// A zone (spec S245): its members by speaker key, a Cast speaker's
+/// included, and its volume slider position, 0 to 100.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedZone {
+    pub id: String,
+    pub name: String,
+    pub members: Vec<String>,
+    pub volume: f64,
+}
+
+impl Default for SavedZone {
+    fn default() -> SavedZone {
+        SavedZone {
+            id: String::new(),
+            name: String::new(),
+            members: Vec::new(),
+            volume: DEFAULT_ZONE_VOLUME,
+        }
+    }
+}
+
+impl From<Zone> for SavedZone {
+    fn from(zone: Zone) -> SavedZone {
+        SavedZone {
+            id: zone.id,
+            name: zone.name,
+            members: zone.members,
+            volume: zone.volume,
+        }
+    }
+}
+
+/// One stored member of a speaker preset (spec S251): its key and its own
+/// volume, none for a fixed-volume Cast speaker.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedPresetMember {
+    pub key: String,
+    pub volume: Option<f64>,
+}
+
+/// A zone volume a speaker preset stores, by zone ID (spec S251).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedPresetZone {
+    pub id: String,
+    pub volume: f64,
+}
+
+impl Default for SavedPresetZone {
+    fn default() -> SavedPresetZone {
+        SavedPresetZone {
+            id: String::new(),
+            volume: DEFAULT_ZONE_VOLUME,
+        }
+    }
+}
+
+/// A speaker preset (spec S251): the speakers on at save with their own
+/// volumes, zone volumes, the master volume and the ten equalizer gains.
+/// Never the preamp, the equalizer switch or a delay.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedPreset {
+    pub id: String,
+    pub name: String,
+    pub members: Vec<SavedPresetMember>,
+    pub zones: Vec<SavedPresetZone>,
+    pub master_volume: f64,
+    /// Band 0 (32 Hz) to band 9 (16 kHz), in dB; an entry without ten is
+    /// skipped when read.
+    pub gains_db: [f64; BAND_COUNT],
+}
+
+impl Default for SavedPreset {
+    fn default() -> SavedPreset {
+        SavedPreset {
+            id: String::new(),
+            name: String::new(),
+            members: Vec::new(),
+            zones: Vec::new(),
+            master_volume: DEFAULT_MASTER_POSITION,
+            gains_db: [0.0; BAND_COUNT],
+        }
+    }
+}
+
+impl From<Preset> for SavedPreset {
+    fn from(preset: Preset) -> SavedPreset {
+        SavedPreset {
+            id: preset.id,
+            name: preset.name,
+            members: preset
+                .members
+                .into_iter()
+                .map(|member| SavedPresetMember {
+                    key: member.key,
+                    volume: member.volume,
+                })
+                .collect(),
+            zones: preset
+                .zones
+                .into_iter()
+                .map(|zone| SavedPresetZone {
+                    id: zone.id,
+                    volume: zone.volume,
+                })
+                .collect(),
+            master_volume: preset.master,
+            gains_db: preset.gains_db,
+        }
+    }
+}
+
+impl SavedPreset {
+    /// The core's preset, as stored; [`presets::from_stored`] makes it
+    /// follow S251.
+    pub fn preset(&self) -> Preset {
+        Preset {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            members: self
+                .members
+                .iter()
+                .map(|member| PresetMember {
+                    key: member.key.clone(),
+                    volume: member.volume,
+                })
+                .collect(),
+            zones: self
+                .zones
+                .iter()
+                .map(|zone| PresetZone {
+                    id: zone.id.clone(),
+                    volume: zone.volume,
+                })
+                .collect(),
+            master: self.master_volume,
+            gains_db: self.gains_db,
+        }
+    }
+}
+
+/// A stored list read leniently: an entry that doesn't read is skipped, and
+/// anything that isn't a list reads as none.
+fn entries_that_read<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(entries) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
+}
+
 /// The equalizer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -340,6 +514,93 @@ where
         .collect())
 }
 
+/// A curve the user saved in the equalizer: a name and ten band gains in dB,
+/// band 0 (32 Hz) first (spec S270).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedCurve {
+    pub name: String,
+    pub gains_db: Vec<f64>,
+}
+
+impl SavedCurve {
+    /// The curve with missing bands flat and extra ones dropped; the core
+    /// puts the gains on the controls' steps when the list is read.
+    fn curve(&self) -> UserCurve {
+        let mut gains_db = [0.0; BAND_COUNT];
+        for (gain, saved) in gains_db.iter_mut().zip(&self.gains_db) {
+            *gain = *saved;
+        }
+        UserCurve {
+            name: self.name.clone(),
+            gains_db,
+        }
+    }
+}
+
+impl From<&UserCurve> for SavedCurve {
+    fn from(curve: &UserCurve) -> SavedCurve {
+        SavedCurve {
+            name: curve.name.clone(),
+            gains_db: curve.gains_db.to_vec(),
+        }
+    }
+}
+
+/// The saved curves as stored, read leniently: an entry without a text name
+/// is skipped, a band that is not a number reads as 0 dB, and anything that
+/// isn't a list reads as no curves.
+fn curves_that_read<'de, D>(deserializer: D) -> Result<Vec<SavedCurve>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(entries) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.get("name")?.as_str()?.to_owned();
+            let gains_db = entry
+                .get("gains_db")
+                .and_then(serde_json::Value::as_array)
+                .map(|gains| gains.iter().map(|g| g.as_f64().unwrap_or(0.0)).collect())
+                .unwrap_or_default();
+            Some(SavedCurve { name, gains_db })
+        })
+        .collect())
+}
+
+/// The largest input pair index kept: a device with 1024 channels.
+const MAX_INPUT_PAIR: u64 = 511;
+
+/// The input channel pairs as stored, read leniently: an entry whose pair
+/// isn't a whole number from 1 to [`MAX_INPUT_PAIR`] is skipped, and so is
+/// anything that isn't a map.
+fn pairs_that_read<'de, D>(deserializer: D) -> Result<BTreeMap<String, u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(entries) = value else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(id, pair)| {
+            let pair = pair
+                .as_u64()
+                .filter(|pair| (1..=MAX_INPUT_PAIR).contains(pair))?;
+            Some((id, u16::try_from(pair).ok()?))
+        })
+        .collect())
+}
+
+/// The saved curves cleaned as the core reads them back (spec S270).
+pub fn clamp_curves(saved: &[SavedCurve]) -> Vec<UserCurve> {
+    sanitized_curves(saved.iter().map(SavedCurve::curve))
+}
+
 /// Everything the file keeps. See the module documentation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -352,6 +613,13 @@ pub struct Settings {
     /// The input device chosen as the source, if one is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_device: Option<SavedInput>,
+    /// The channel pair each input device plays, by endpoint ID, as an
+    /// index (1 for channels 3-4); a device without an entry plays 1-2.
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "pairs_that_read"
+    )]
+    pub input_pairs: BTreeMap<String, u16>,
     /// Several apps chosen as the source, if they are; the source above is
     /// the whole system meanwhile.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -378,7 +646,29 @@ pub struct Settings {
     )]
     pub hidden_speakers: Vec<SavedHidden>,
     pub groups: Vec<SavedGroup>,
+    /// The zones, in order, each speaker in at most one (spec S245).
+    #[serde(deserialize_with = "entries_that_read")]
+    pub speaker_zones: Vec<SavedZone>,
+    /// The groups were moved to zones (spec S248). A file without it, as
+    /// every version 2 file, has not been migrated; the defaults have, since
+    /// there are no groups to move.
+    #[serde(default)]
+    pub speaker_zones_migrated: bool,
+    /// The speaker presets, in order (spec S251).
+    #[serde(deserialize_with = "entries_that_read")]
+    pub speaker_presets: Vec<SavedPreset>,
+    /// The groups that lost a member to the zones became presets (spec
+    /// S254). A file without it has not been migrated; the defaults have.
+    #[serde(default)]
+    pub speaker_presets_migrated: bool,
     pub equalizer: SavedEqualizer,
+    /// The equalizer curves the user saved, in the picker's order (spec
+    /// S270); left out of the file while there are none.
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "curves_that_read"
+    )]
+    pub equalizer_curves: Vec<SavedCurve>,
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
     /// View > Appearance.
@@ -407,6 +697,7 @@ impl Default for Settings {
             version: VERSION,
             source: SavedSource::System,
             input_device: None,
+            input_pairs: BTreeMap::new(),
             source_mix: None,
             master_volume: DEFAULT_MASTER_POSITION,
             outputs: BTreeMap::new(),
@@ -415,7 +706,12 @@ impl Default for Settings {
             speaker_names: BTreeMap::new(),
             hidden_speakers: Vec::new(),
             groups: Vec::new(),
+            speaker_zones: Vec::new(),
+            speaker_zones_migrated: true,
+            speaker_presets: Vec::new(),
+            speaker_presets_migrated: true,
             equalizer: SavedEqualizer::default(),
+            equalizer_curves: Vec::new(),
             show_virtual_devices: false,
             appearance: Appearance::System,
             window: None,
@@ -471,19 +767,16 @@ fn usable_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= MAX_TEXT
 }
 
-/// Whether `key` is a speaker key the app can use (`lc:` or `ap:` and an ID).
+/// Whether `key` is a key a group or the auto-connect list can hold: `lc:`
+/// or `ap:` and an ID. Neither switches a Cast speaker yet.
 fn usable_key(key: &str) -> bool {
-    key.len() <= MAX_TEXT && SpeakerKey::parse(key).is_some_and(|key| !key.id().is_empty())
+    usable_name_key(key) && !matches!(SpeakerKey::parse(key), Some(SpeakerKey::Cast(_)))
 }
 
-/// A key a speaker's name may be saved under: a Google Cast speaker can be
-/// renamed too, though the core's keys don't know it.
+/// A key a speaker's name or hidden entry may be saved under: any speaker
+/// key with an ID, a Google Cast speaker's included.
 fn usable_name_key(key: &str) -> bool {
-    usable_key(key)
-        || key.len() <= MAX_TEXT
-            && key
-                .strip_prefix(crate::adapter::CAST_PREFIX)
-                .is_some_and(|id| !id.is_empty())
+    key.len() <= MAX_TEXT && SpeakerKey::parse(key).is_some_and(|key| !key.id().is_empty())
 }
 
 /// The first [`MAX_ENTRIES`] hidden speakers with a usable key, one entry
@@ -554,6 +847,55 @@ impl Settings {
             })
             .take(MAX_ENTRIES)
             .collect();
+        let speaker_zones = Zones::from_stored(
+            self.speaker_zones
+                .into_iter()
+                .filter(|zone| usable_id(&zone.id))
+                .take(MAX_ENTRIES)
+                .map(|zone| Zone {
+                    id: zone.id,
+                    name: cut(zone.name),
+                    members: zone
+                        .members
+                        .into_iter()
+                        .filter(|key| usable_name_key(key))
+                        .take(MAX_ENTRIES)
+                        .collect(),
+                    volume: zone.volume,
+                }),
+        )
+        .into_list()
+        .into_iter()
+        .map(SavedZone::from)
+        .collect();
+        let speaker_presets = presets::from_stored(
+            self.speaker_presets
+                .iter()
+                .filter(|preset| usable_id(&preset.id))
+                .take(MAX_ENTRIES)
+                .map(|saved| {
+                    let preset = saved.preset();
+                    Preset {
+                        name: cut(preset.name),
+                        members: preset
+                            .members
+                            .into_iter()
+                            .filter(|member| usable_name_key(&member.key))
+                            .take(MAX_ENTRIES)
+                            .collect(),
+                        zones: preset
+                            .zones
+                            .into_iter()
+                            .filter(|zone| usable_id(&zone.id))
+                            .take(MAX_ENTRIES)
+                            .collect(),
+                        ..preset
+                    }
+                }),
+        )
+        .into_iter()
+        .map(SavedPreset::from)
+        .collect();
         // A format 1 file kept trims, 0 to 20 000 ms; [`migrate_delays`]
         // turns them into offsets.
         let output_delays = if self.version < OFFSETS_VERSION {
@@ -585,6 +927,14 @@ impl Settings {
             version: VERSION,
             source,
             input_device,
+            input_pairs: self
+                .input_pairs
+                .into_iter()
+                .filter(|(id, pair)| {
+                    usable_id(id) && (1..=MAX_INPUT_PAIR).contains(&u64::from(*pair))
+                })
+                .take(MAX_ENTRIES)
+                .collect(),
             source_mix,
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
             outputs: clamp_speakers(self.outputs, output_delays),
@@ -606,7 +956,15 @@ impl Settings {
             .saved(),
             hidden_speakers: clamp_hidden(self.hidden_speakers),
             groups,
+            speaker_zones,
+            speaker_zones_migrated: self.speaker_zones_migrated,
+            speaker_presets,
+            speaker_presets_migrated: self.speaker_presets_migrated,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
+            equalizer_curves: clamp_curves(&self.equalizer_curves)
+                .iter()
+                .map(SavedCurve::from)
+                .collect(),
             show_virtual_devices: self.show_virtual_devices,
             appearance: self.appearance,
             window: self.window.and_then(clamp_window),
@@ -618,6 +976,79 @@ impl Settings {
             remote: self.remote.clamped(),
             cast_addresses: cast_address::clamped(self.cast_addresses),
             airplay2_experimental: self.airplay2_experimental,
+        }
+    }
+
+    /// The one-time move of the groups to zones (spec S248): without the
+    /// mark, the zones become the groups' ([`zones::zones_from_groups`]) and
+    /// the mark is set; the groups stay. With it, nothing changes.
+    pub fn with_zones_migrated(self) -> Settings {
+        if self.speaker_zones_migrated {
+            return self;
+        }
+        let speaker_zones =
+            zones::zones_from_groups(self.groups.iter().map(|group| zones::SavedGroup {
+                id: &group.id,
+                name: &group.name,
+                members: &group.members,
+            }))
+            .into_list()
+            .into_iter()
+            .map(SavedZone::from)
+            .collect();
+        Settings {
+            speaker_zones,
+            speaker_zones_migrated: true,
+            ..self
+        }
+    }
+
+    /// The one-time move of the groups that lost a member to the zones to
+    /// presets (spec S254), after [`Settings::with_zones_migrated`]: without
+    /// the mark, the presets become [`presets::presets_from_groups`]' and the
+    /// mark is set, both in the next save. With it, nothing changes.
+    pub fn with_presets_migrated(self) -> Settings {
+        if self.speaker_presets_migrated {
+            return self;
+        }
+        let groups: Vec<zones::SavedGroup<'_>> = self
+            .groups
+            .iter()
+            .map(|group| zones::SavedGroup {
+                id: &group.id,
+                name: &group.name,
+                members: &group.members,
+            })
+            .collect();
+        let current = Zones::from_stored(self.speaker_zones.iter().map(|zone| Zone {
+            id: zone.id.clone(),
+            name: zone.name.clone(),
+            members: zone.members.clone(),
+            volume: zone.volume,
+        }));
+        let volume = |key: &str| {
+            match SpeakerKey::parse(key)? {
+                SpeakerKey::Local(endpoint_id) => self.outputs.get(&endpoint_id),
+                SpeakerKey::AirPlay(id) => self.airplay.get(&id),
+                SpeakerKey::Cast(_) => None,
+            }
+            .map(|speaker| speaker.volume)
+        };
+        let saved = presets::Saved {
+            zones: &current,
+            volume: &volume,
+            master: self.master_volume,
+            gains_db: self.equalizer.settings().gains_db,
+        };
+        let speaker_presets = presets::presets_from_groups(&groups, &saved)
+            .into_iter()
+            .take(MAX_ENTRIES)
+            .map(SavedPreset::from)
+            .collect();
+        Settings {
+            speaker_presets,
+            speaker_presets_migrated: true,
+            ..self
         }
     }
 
@@ -657,7 +1088,10 @@ impl Settings {
                 version: VERSION,
                 ..read
             };
-        Ok((clamped, Loaded::Read { version, adjusted }))
+        Ok((
+            clamped.with_zones_migrated().with_presets_migrated(),
+            Loaded::Read { version, adjusted },
+        ))
     }
 }
 
@@ -1055,6 +1489,286 @@ mod tests {
     }
 
     #[test]
+    fn groups_and_auto_connect_keep_leaving_cast_keys_out() {
+        let text = r#"{"version": 2,
+            "groups": [{"id": "g1", "name": "Den", "members": ["cc:attic", "lc:desk"]}],
+            "auto_connect": ["cc:attic", "ap:pair:5A1B"]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(read.groups.len(), 1);
+        assert_eq!(read.groups[0].members, ["lc:desk"]);
+        assert_eq!(
+            read.auto_connect,
+            BTreeSet::from(["ap:pair:5A1B".to_owned()])
+        );
+    }
+
+    // covers: S245, S248
+    #[test]
+    fn a_v2_settings_file_is_read_as_v3_with_its_groups_as_zones() {
+        let text = r#"{"version": 2,
+            "groups": [
+                {"id": "g1", "name": "Living Room", "members": ["lc:desk", "ap:pair:5A1B"]},
+                {"id": "g2", "name": "Group 2", "members": ["ap:pair:5A1B", "ap:kitchen"]}
+            ]
+        }"#;
+        let (read, found) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            found,
+            Loaded::Read {
+                version: 2,
+                adjusted: false
+            }
+        );
+        assert_eq!(read.version, VERSION);
+        assert!(read.speaker_zones_migrated);
+        assert_eq!(read.groups.len(), 2, "the groups stay");
+        let zone = |id: &str, name: &str, members: &[&str]| SavedZone {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            members: members.iter().map(|key| (*key).to_owned()).collect(),
+            volume: 100.0,
+        };
+        assert_eq!(
+            read.speaker_zones,
+            [
+                zone("g1", "Living Room", &["lc:desk", "ap:pair:5A1B"]),
+                zone("g2", "Group 2", &["ap:kitchen"]),
+            ]
+        );
+        // Written as version 3 with the mark, it reads back the same, and the
+        // groups never migrate again.
+        let json = read.to_json();
+        assert!(
+            json.contains("\"version\": 3") && json.contains("\"speaker_zones_migrated\": true")
+        );
+        let (again, _) = Settings::from_json(&json).expect("read");
+        assert_eq!(again, read);
+        let mut changed = read.clone();
+        changed.groups.clear();
+        let (later, _) = Settings::from_json(&changed.to_json()).expect("read");
+        assert_eq!(later.speaker_zones, read.speaker_zones);
+    }
+
+    // covers: S245
+    #[test]
+    fn zones_keep_cast_keys_and_empty_zones_and_each_speaker_once() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true,
+            "speaker_zones": [
+                {"id": "z1", "name": "Den", "members": ["cc:attic", "lc:desk", "lc:desk"], "volume": 140},
+                {"id": "z2", "name": "Empty", "members": [], "volume": -4},
+                {"id": "z3", "name": "Kitchen", "members": ["lc:desk", "bt:x", "ap:kitchen"]},
+                {"id": "z1", "name": "Again", "members": ["ap:other"]},
+                {"id": "", "name": "No ID", "members": ["ap:third"]},
+                {"id": "z4", "volume": "loud"},
+                7
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        let shape: Vec<(&str, Vec<&str>, f64)> = read
+            .speaker_zones
+            .iter()
+            .map(|zone| {
+                (
+                    zone.id.as_str(),
+                    zone.members.iter().map(String::as_str).collect(),
+                    zone.volume,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("z1", vec!["cc:attic", "lc:desk"], 100.0),
+                ("z2", vec![], 0.0),
+                ("z3", vec!["ap:kitchen"], 100.0),
+            ]
+        );
+        assert!(Settings::default().speaker_zones_migrated);
+    }
+
+    // covers: S251, S254
+    #[test]
+    fn a_v3_settings_file_round_trips_presets() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true, "speaker_presets_migrated": true,
+            "speaker_presets": [
+                {"id": "p1", "name": "Evening",
+                 "members": [{"key": "lc:desk", "volume": 140}, {"key": "cc:den", "volume": null},
+                             {"key": "cc:attic", "volume": 20}, {"key": "lc:desk", "volume": 5},
+                             {"key": "bt:x", "volume": 5}],
+                 "zones": [{"id": "z1", "volume": 40}, {"id": "z1", "volume": 90}],
+                 "master_volume": 80, "gains_db": [0.3, 0, 0, 0, 0, 0, 0, 0, 0, 13]},
+                {"id": "p1", "name": "Again"},
+                {"id": "p2", "name": "Short", "gains_db": [1, 2]},
+                {"id": "", "name": "No ID"},
+                7
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            read.speaker_presets,
+            [SavedPreset {
+                id: "p1".to_owned(),
+                name: "Evening".to_owned(),
+                members: vec![
+                    SavedPresetMember {
+                        key: "lc:desk".to_owned(),
+                        volume: Some(100.0),
+                    },
+                    SavedPresetMember {
+                        key: "cc:den".to_owned(),
+                        volume: None,
+                    },
+                ],
+                zones: vec![SavedPresetZone {
+                    id: "z1".to_owned(),
+                    volume: 40.0,
+                }],
+                master_volume: 80.0,
+                gains_db: [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 12.0],
+            }]
+        );
+        let (again, _) = Settings::from_json(&read.to_json()).expect("read");
+        assert_eq!(again, read);
+
+        // A format 3 file written before presets: its groups that lost a
+        // member to the zones become presets once, in the same save.
+        let before = r#"{"version": 3, "speaker_zones_migrated": true,
+            "master_volume": 70,
+            "outputs": {"desk": {"enabled": true, "volume": 30, "delay_ms": 0}},
+            "airplay": {"kitchen": {"enabled": false, "volume": 55, "delay_ms": 0}},
+            "equalizer": {"enabled": true, "preamp_db": 6, "gains_db": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]},
+            "groups": [
+                {"id": "g1", "name": "Desk", "members": ["lc:desk", "ap:kitchen"]},
+                {"id": "g2", "name": "Group 2", "members": ["ap:kitchen", "lc:usb"]}
+            ],
+            "speaker_zones": [
+                {"id": "g1", "name": "Desk", "members": ["lc:desk", "ap:kitchen"], "volume": 100},
+                {"id": "g2", "name": "Group 2", "members": ["lc:usb"], "volume": 60}
+            ]
+        }"#;
+        let (migrated, _) = Settings::from_json(before).expect("read");
+        assert!(migrated.speaker_presets_migrated);
+        let preset = &migrated.speaker_presets;
+        assert_eq!(preset.len(), 1);
+        assert_eq!(
+            (preset[0].id.as_str(), preset[0].name.as_str()),
+            ("g2", "Group 2")
+        );
+        assert_eq!(
+            preset[0].members,
+            [
+                SavedPresetMember {
+                    key: "ap:kitchen".to_owned(),
+                    volume: Some(55.0),
+                },
+                SavedPresetMember {
+                    key: "lc:usb".to_owned(),
+                    volume: None,
+                },
+            ]
+        );
+        let zone_volumes: Vec<(&str, f64)> = preset[0]
+            .zones
+            .iter()
+            .map(|zone| (zone.id.as_str(), zone.volume))
+            .collect();
+        assert_eq!(zone_volumes, [("g1", 100.0), ("g2", 60.0)]);
+        assert_eq!(
+            (preset[0].master_volume, preset[0].gains_db),
+            (70.0, [1.0; 10])
+        );
+        let json = migrated.to_json();
+        assert!(json.contains("\"speaker_presets_migrated\": true"));
+        let mut later = Settings::from_json(&json).expect("read").0;
+        assert_eq!(later.speaker_presets, migrated.speaker_presets);
+        later.groups.clear();
+        later.speaker_presets.clear();
+        let (again, _) = Settings::from_json(&later.to_json()).expect("read");
+        assert!(
+            again.speaker_presets.is_empty(),
+            "migrating twice changes nothing"
+        );
+        assert!(Settings::default().speaker_presets_migrated);
+    }
+
+    // covers: S251
+    #[test]
+    fn a_preset_never_stores_the_preamp() {
+        let preset = SavedPreset {
+            id: "p1".to_owned(),
+            members: vec![SavedPresetMember {
+                key: "lc:desk".to_owned(),
+                volume: Some(30.0),
+            }],
+            zones: vec![SavedPresetZone::default()],
+            ..SavedPreset::default()
+        };
+        let value = serde_json::to_value(&preset).expect("a preset serializes");
+        let keys = |value: &serde_json::Value| -> Vec<String> {
+            let mut keys: Vec<String> = value
+                .as_object()
+                .expect("an object")
+                .keys()
+                .cloned()
+                .collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(
+            keys(&value),
+            [
+                "gains_db",
+                "id",
+                "master_volume",
+                "members",
+                "name",
+                "zones"
+            ]
+        );
+        assert_eq!(keys(&value["members"][0]), ["key", "volume"]);
+        assert_eq!(keys(&value["zones"][0]), ["id", "volume"]);
+    }
+
+    #[test]
+    fn equalizer_curves_are_read_leniently_and_left_out_while_none_is() {
+        let text = r#"{"version": 2, "master_volume": 40, "equalizer_curves": [
+            {"name": "  Desk  ", "gains_db": [1.3, "loud", null, 30, -30]},
+            {"name": "desk", "gains_db": [6, 6, 6, 6, 6, 6, 6, 6, 6, 6]},
+            {"name": "   ", "gains_db": []},
+            {"gains_db": [1, 2]},
+            {"name": "Late", "gains_db": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9]},
+            7
+        ]}"#;
+        let (read, _) = Settings::from_json(text).expect("one odd entry spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        let mut desk = vec![0.0; BAND_COUNT];
+        desk[..5].copy_from_slice(&[1.5, 0.0, 0.0, 12.0, -12.0]);
+        assert_eq!(
+            read.equalizer_curves,
+            [
+                SavedCurve {
+                    name: "Desk".into(),
+                    gains_db: desk,
+                },
+                SavedCurve {
+                    name: "Late".into(),
+                    gains_db: vec![0.0; BAND_COUNT],
+                },
+            ]
+        );
+        let (again, _) = Settings::from_json(&read.to_json()).expect("read");
+        assert_eq!(again.equalizer_curves, read.equalizer_curves);
+        let (read, _) =
+            Settings::from_json(r#"{"version": 2, "equalizer_curves": {}}"#).expect("read");
+        assert!(read.equalizer_curves.is_empty());
+        assert!(
+            !Settings::default().to_json().contains("equalizer_curves"),
+            "no curves, no field"
+        );
+    }
+
+    #[test]
     fn settings_survive_a_save_and_a_load() {
         let file = SettingsFile::at(test_dir("settings-roundtrip").join(FILE_NAME));
         assert_eq!(file.load(), (Settings::default(), Loaded::NoFile));
@@ -1313,6 +2027,42 @@ mod tests {
             }
         );
         assert!(!Settings::default().to_json().contains("input_device"));
+    }
+
+    #[test]
+    fn input_channel_pairs_survive_a_round_trip_and_odd_entries_are_skipped() {
+        let path = test_dir("settings-input-pairs").join(FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        let chosen = Settings {
+            input_pairs: BTreeMap::from([
+                ("{0.0.1.00000000}.{interface}".to_owned(), 1),
+                ("{0.0.1.00000000}.{mixer}".to_owned(), 3),
+            ]),
+            ..sample()
+        };
+        file.save(&chosen).expect("saved");
+        assert_eq!(file.load().0, chosen);
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read")).expect("JSON");
+        assert_eq!(json["input_pairs"]["{0.0.1.00000000}.{interface}"], 1);
+
+        let text = r#"{"version": 2, "master_volume": 40, "input_pairs": {
+            "kept": 2, "first": 0, "negative": -1, "text": "3", "half": 1.5,
+            "beyond": 512, "": 1
+        }}"#;
+        let (read, found) = Settings::from_json(text).expect("one odd entry spoils nothing");
+        assert_eq!(read.master_volume, 40.0);
+        assert_eq!(read.input_pairs, BTreeMap::from([("kept".to_owned(), 2)]));
+        assert_eq!(
+            found,
+            Loaded::Read {
+                version: 2,
+                adjusted: true
+            }
+        );
+        let (read, _) = Settings::from_json(r#"{"version": 2, "input_pairs": [1]}"#).expect("read");
+        assert!(read.input_pairs.is_empty());
+        assert!(!Settings::default().to_json().contains("input_pairs"));
     }
 
     #[test]

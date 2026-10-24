@@ -25,6 +25,9 @@ struct AudioDevices: Sendable {
         /// from the headphone jack (S173) and headphones from speakers for
         /// calibration; nil when it couldn't be read and for input devices.
         var outputTerminal: UInt32? = nil
+        /// An input device's input channels, which decide the channel pairs
+        /// it offers (`InputChannelPair`); 0 for output devices.
+        var inputChannels = 0
         /// For an aggregate input device, the transports of its active
         /// sub-devices that have input channels; empty otherwise.
         var inputSubTransports: [UInt32] = []
@@ -159,17 +162,21 @@ struct AudioDevices: Sendable {
         let transport = HALProperty.uint32(of: id, kAudioDevicePropertyTransportType)
         let composition = transport == kAudioDeviceTransportTypeAggregate
             ? HALProperty.dictionary(of: id, kAudioAggregateDevicePropertyComposition) : nil
+        let channels = HALProperty.channelCount(of: id, in: scope)
         var device = Self.entry(id: id,
                                 alive: HALProperty.uint32(of: id, kAudioDevicePropertyDeviceIsAlive),
-                                channels: HALProperty.channelCount(of: id, in: scope),
+                                channels: channels,
                                 transport: transport,
                                 composition: composition,
                                 uid: HALProperty.string(of: id, kAudioDevicePropertyDeviceUID),
                                 name: HALProperty.string(of: id, kAudioObjectPropertyName))
         if scope == kAudioObjectPropertyScopeOutput {
             device?.outputTerminal = HALProperty.firstStreamTerminal(of: id, in: scope)
-        } else if let kind = transport, device != nil {
-            device?.inputSubTransports = Self.inputSubTransports(of: id, transport: kind)
+        } else {
+            device?.inputChannels = channels
+            if let kind = transport, device != nil {
+                device?.inputSubTransports = Self.inputSubTransports(of: id, transport: kind)
+            }
         }
         return device
     }

@@ -7,6 +7,7 @@
 //! because of them, stays the UI's decision (the session rules in
 //! `audiosync_core::policy::session`).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -18,6 +19,16 @@ use audiosync_core::policy::source_quit::WhenSourceQuits;
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::cast_address::CastAddress;
 use super::routing::DirectPath;
+
+/// The zone volume, 0 to 100, of every speaker in a zone (spec S249), by
+/// kind under the backend's own IDs: endpoint, AirPlay and Cast device IDs.
+/// A speaker not listed is in no zone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ZoneVolumes {
+    pub outputs: BTreeMap<String, f64>,
+    pub airplay: BTreeMap<String, f64>,
+    pub cast: BTreeMap<String, f64>,
+}
 
 /// What AudioSync captures.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -70,6 +81,10 @@ pub struct SourceInfo {
     /// remember a choice by it. Empty for the whole system and for an input
     /// device.
     pub executable: String,
+    /// An input device's channels in the format Windows runs it at, which
+    /// decide the channel pairs it offers; 0 for other sources and when
+    /// Windows doesn't say.
+    pub channels: u16,
 }
 
 /// What kind of device an output is, as Windows describes its endpoint.
@@ -396,6 +411,14 @@ pub struct CastGroup {
     pub members: CastMembers,
 }
 
+/// A stereo pair or home theater group that holds an AirPlay speaker: its
+/// AirPlay ID (`pair:` or `theater:` and more) and its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InTarget {
+    pub id: String,
+    pub name: String,
+}
+
 /// What a Cast group's row knows of its members (spec C94).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum CastMembers {
@@ -680,6 +703,13 @@ pub trait AudioBackend {
     /// The source being captured, or `None` when stopped.
     fn running_source(&self) -> Option<SourceId>;
 
+    /// While an input device is captured, the largest sample magnitude
+    /// captured since the last call (1 is full scale), for the level meter;
+    /// `None` for any other source and while stopped.
+    fn input_peak(&mut self) -> Option<f32> {
+        None
+    }
+
     /// Turns an output on or off. While playing, an output turned on starts
     /// at once if it is connected; if it can't start, it is turned off again
     /// and the error returned.
@@ -717,6 +747,11 @@ pub trait AudioBackend {
     /// output and AirPlay speaker, live. A value that isn't finite is
     /// ignored.
     fn set_master_volume(&mut self, position: f64);
+
+    /// Sets every zone volume (spec S249): playing members get their new
+    /// gain or level at once, as a master change gives them, and a member
+    /// started later starts at it.
+    fn set_zone_volumes(&mut self, zones: ZoneVolumes);
 
     /// The master volume slider position.
     fn master_volume(&self) -> f64;
@@ -787,9 +822,15 @@ pub trait AudioBackend {
     /// The password prompt to show, if one waits and no PIN prompt is open.
     fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
 
-    /// The name of the stereo pair or home theater group that holds the
-    /// AirPlay speaker `id` (see [`AirPlayProblem::PlaysInGroup`]).
-    fn airplay_holding_target(&self, _id: &str) -> Option<String> {
+    /// The stereo pair or home theater group that holds the AirPlay speaker
+    /// `id` (see [`AirPlayProblem::PlaysInGroup`]).
+    fn airplay_holding_target(&self, _id: &str) -> Option<InTarget> {
+        None
+    }
+
+    /// The name the AirPlay speaker `id` was last listed under, also when
+    /// its stereo pair or home theater holds it and it has no row.
+    fn airplay_listed_name(&self, _id: &str) -> Option<String> {
         None
     }
 
@@ -878,6 +919,11 @@ pub trait AudioBackend {
 
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
+
+    /// The channel pair input device `endpoint_id` plays from its next
+    /// start (`InputPair::index`, 0 for channels 1-2). A running capture
+    /// keeps its pair until started again.
+    fn set_input_pair(&mut self, endpoint_id: &str, pair: u16);
 
     /// What a microphone calibration depends on: the session, the outputs
     /// that play, the reference and their hold-backs.

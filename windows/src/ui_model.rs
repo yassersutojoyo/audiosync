@@ -4,21 +4,21 @@
 //! The UI reads an [`AppState`] snapshot from a [`Backend`] and calls the
 //! backend's methods for every user action, then reads a new snapshot. On
 //! Windows the backend is `crate::adapter::AudioAdapter` over the WASAPI audio
-//! backend; elsewhere, with the `mock-backend` feature, [`MockBackend`] stands
-//! in with example data, for work on the UI. Nothing here makes a sound or
-//! opens an audio device.
+//! backend; elsewhere with the `mock-backend` feature, and on Windows for
+//! `AUDIOSYNC_PREVIEW_ZONES`, [`MockBackend`] stands in with example data,
+//! for work on the UI. Nothing here makes a sound or opens an audio device.
 
-use audiosync_core::eq::{self, EqSettings};
+use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
+use audiosync_core::policy::presets::{self as policy_presets, Preset, Scene, SpeakerNow};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
-#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
+use audiosync_core::policy::zones::{Zone, Zones};
 use audiosync_core::volume;
 
-#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 use crate::speaker_names;
-use audiosync_core::calibrate_all::{AirPlayShared, Class, EndReason, RowState};
+use audiosync_core::calibrate_all::{AirPlayMoves, AirPlayShared, Class, EndReason, RowState};
 
-pub use crate::audio::backend::CastMembers;
+pub use crate::audio::backend::{CastMembers, InTarget};
 use crate::audio::calibration::{Failure, Phase};
 pub use crate::audio::outputs::MicKind;
 
@@ -33,7 +33,6 @@ pub const MAX_DELAY_MS: f64 = 20_000.0;
 pub const MIN_DELAY_MS: f64 = -2000.0;
 
 /// The most notices kept at once; the oldest drops off past it.
-#[cfg(test)]
 pub const NOTICE_CAPACITY: usize = 4;
 
 /// Where a source's audio comes from.
@@ -64,6 +63,9 @@ pub struct Source {
     pub id: String,
     pub name: String,
     pub kind: SourceKind,
+    /// An input device's channels, which offer pairs above two; 0 for
+    /// anything else and for a device that doesn't say.
+    pub channels: u16,
 }
 
 /// The kind of output a speaker is, shown as a small icon and read by Narrator.
@@ -213,6 +215,9 @@ pub struct Speaker {
     pub group: Option<crate::audio::backend::AirPlayGroup>,
     /// A local output microphone calibration leaves out by its kind.
     pub mic_left_out: Option<MicKind>,
+    /// The stereo pair or home theater this AirPlay speaker plays only as
+    /// part of, which keeps it off by itself; by the target's speaker ID.
+    pub in_target: Option<InTarget>,
 }
 
 /// A speaker hidden with Hide Speaker, as Speakers > Hidden Speakers lists it.
@@ -226,6 +231,40 @@ pub struct HiddenSpeaker {
     pub kind_text: String,
     /// Its kind while it is listed; `None` while it isn't.
     pub present: Option<SpeakerKind>,
+}
+
+/// A zone member that isn't listed and isn't hidden: its row says it isn't
+/// found and offers only Move to Zone and Remove from Zone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AbsentMember {
+    /// Its speaker key.
+    pub id: String,
+    /// The name the user gave it, else the one it had when last listed in
+    /// this run; empty when neither is known.
+    pub name: String,
+    pub kind: SpeakerKind,
+}
+
+/// A row under a zone's header (spec S245): every member but the hidden ones,
+/// so the rows and the header's count agree.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ZoneRow<'a> {
+    Listed(&'a Speaker),
+    /// Not listed right now, by speaker key.
+    NotFound(&'a str),
+}
+
+/// What a zone member's row says in place of its own note (spec S246, S247).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneNote<'a> {
+    /// A stereo pair or home theater while AirPlay 2 is off.
+    NeedsAirPlay2,
+    /// It plays only as part of this stereo pair or home theater, by name.
+    InTarget(&'a str),
+    NotFound,
+    /// A Cast speaker the zone's click left off: one Cast speaker plays at a
+    /// time.
+    CastStayedOff,
 }
 
 /// A Google Cast speaker's own state. Its delay is the measured offset the
@@ -386,14 +425,6 @@ impl Speaker {
     }
 }
 
-/// A named set of speakers switched together.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Group {
-    pub id: String,
-    pub name: String,
-    pub members: Vec<String>,
-}
-
 /// A problem worth telling the user about. A newer notice about the same
 /// subject replaces the older one.
 #[derive(Clone, Debug, PartialEq)]
@@ -404,6 +435,17 @@ pub struct Notice {
     /// Local time it was posted, in the user's short time format ("09.40",
     /// "9:40 AM").
     pub time: String,
+}
+
+/// A source other than the whole system, as a notice names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceName {
+    /// An app or an input device, by the name shown for it.
+    Named(String),
+    /// Several apps, by name; the UI joins the list.
+    Apps(Vec<String>),
+    /// Every app except the listed ones; the UI words it around the list.
+    AllAppsExcept(Vec<String>),
 }
 
 /// What a notice says. The UI words it (the notice texts in
@@ -447,6 +489,9 @@ pub enum NoticeMessage {
     /// Another app holds a speaker's device for itself (exclusive mode). It
     /// stays on and plays once that app lets go; the notice then clears.
     SpeakerBusy { speaker: String },
+    /// A zone or preset the web remote turned on left this speaker off: it
+    /// asks for a code, which only the PC can answer.
+    PairFirst { speaker: String },
     /// An AirPlay speaker stopped playing; it stays on while AudioSync keeps
     /// trying to reach it.
     AirPlayRetrying {
@@ -494,14 +539,14 @@ pub enum NoticeMessage {
     /// itself once an output is back or no AirPlay speaker is on.
     NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
-    /// is heard twice. `source` is the app's name, or `None` for the whole
+    /// is heard twice. `source` names the app, or is `None` for the whole
     /// system. `mute` names the outputs AudioSync doesn't play to, which the
     /// user may mute; `shared` the ones AudioSync plays to as well, where
     /// only sending the source elsewhere helps. `default_output` is the one
     /// of them that counts because it is Windows' default output (the whole
     /// system only); any other plays the source because an app plays there.
     HeardTwice {
-        source: Option<String>,
+        source: Option<SourceName>,
         mute: Vec<String>,
         shared: Vec<String>,
         default_output: Option<String>,
@@ -528,6 +573,120 @@ pub enum NoticeMessage {
     /// speaker that is on, so they play about `tenths` tenths of a second
     /// ahead of it. Clears itself once they keep up again.
     AirPlayAheadOfCast { speaker: String, tenths: u32 },
+    /// The saved groups became zones at this launch (spec S248); posted once.
+    GroupsBecameZones,
+    /// A preset recall left stored members off (spec S265), each by its
+    /// shown name with why; `nothing_changed`: none could go on, so the
+    /// recall changed nothing.
+    PresetLeftOff {
+        preset: String,
+        left_off: Vec<(String, PresetLeftOff)>,
+        nothing_changed: bool,
+    },
+}
+
+/// Why a preset's member stayed off at recall (spec S252, S265).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PresetLeftOff {
+    NotFound,
+    Hidden,
+    NeedsAirPlay2,
+    /// Plays as part of the stereo pair or home theater with this shown name.
+    InTarget(String),
+    /// A Google Cast speaker another app casts to.
+    Busy,
+    /// The recall switched it on, and it failed to start (spec S266).
+    CantPlay,
+}
+
+/// At most this many presets: the settings file keeps no more (spec S251).
+pub const MAX_PRESETS: usize = crate::settings::MAX_ENTRIES;
+
+/// The speakers on now as a preset sees them (spec S251, S253): list
+/// order, the reference output left out, no own volume for a fixed-volume
+/// Cast speaker. A hidden speaker is never listed, so never captured.
+pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
+    state
+        .speakers
+        .iter()
+        .filter(|speaker| speaker.enabled && !speaker.is_reference())
+        .map(|speaker| SpeakerNow {
+            key: speaker.id.clone(),
+            volume: (!speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed))
+                .then_some(speaker.volume),
+        })
+        .collect()
+}
+
+/// The preset that `state` plays exactly, the first in list order (spec
+/// S253).
+pub fn current_preset(presets: &[Preset], state: &AppState) -> Option<String> {
+    let on = speakers_on_now(state);
+    let zones = Zones::from_stored(state.zones.clone());
+    let scene = Scene {
+        on: &on,
+        zones: &zones,
+        master: state.master_volume,
+        gains_db: state.equalizer.gains_db,
+    };
+    policy_presets::current(presets, &scene).map(|preset| preset.id.clone())
+}
+
+/// What `state` plays now as preset `id` named `name` (spec S251); `None`
+/// with no speaker on.
+pub fn capture_preset(id: &str, name: &str, state: &AppState) -> Option<Preset> {
+    let on = speakers_on_now(state);
+    if on.is_empty() {
+        return None;
+    }
+    let zones = Zones::from_stored(state.zones.clone());
+    let scene = Scene {
+        on: &on,
+        zones: &zones,
+        master: state.master_volume,
+        gains_db: state.equalizer.gains_db,
+    };
+    Some(Preset::capture(id, name, &scene))
+}
+
+/// Fills in `state`'s preset list and the preset it plays now (spec S264).
+pub fn show_presets(state: &mut AppState, presets: &[Preset]) {
+    state.current_preset = current_preset(presets, state);
+    state.presets = presets
+        .iter()
+        .map(|preset| PresetItem {
+            id: preset.id.clone(),
+            name: preset.name.clone(),
+            current: state.current_preset.as_deref() == Some(preset.id.as_str()),
+            members: preset
+                .members
+                .iter()
+                .map(|member| member.key.clone())
+                .collect(),
+        })
+        .collect();
+}
+
+/// An ID no preset in `presets` has.
+pub fn new_preset_id(presets: &[Preset]) -> String {
+    (presets.len() + 1..)
+        .map(|n| format!("preset:{n}"))
+        .find(|id| presets.iter().all(|preset| preset.id != *id))
+        .unwrap_or_default()
+}
+
+/// The preset notice after a recall of `preset` (spec S265); `None` when
+/// the recall left no member off, so the notice clears.
+pub fn preset_notice(
+    preset: &str,
+    left_off: Vec<(String, PresetLeftOff)>,
+    nothing_changed: bool,
+) -> Option<NoticeMessage> {
+    (nothing_changed || !left_off.is_empty()).then(|| NoticeMessage::PresetLeftOff {
+        preset: preset.to_owned(),
+        left_off,
+        nothing_changed,
+    })
 }
 
 /// How a speaker or group row shows: playing only while streaming is on.
@@ -565,6 +724,9 @@ pub struct AppState {
     pub running: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
+    /// The channel pair saved for the chosen input device, as an index (1
+    /// for channels 3-4); 0 for 1-2 and for any other source.
+    pub input_pair: u16,
     /// The several-apps list: the apps to check.
     pub mix_apps: Vec<MixApp>,
     /// The list shows "every app except the checked ones", not "only them".
@@ -575,8 +737,18 @@ pub struct AppState {
     pub speakers: Vec<Speaker>,
     /// The hidden speakers, by name (case-insensitively), then by ID.
     pub hidden: Vec<HiddenSpeaker>,
-    pub groups: Vec<Group>,
+    /// The zones (spec S245), in order.
+    pub zones: Vec<Zone>,
+    /// The zone members that aren't listed and aren't hidden.
+    pub absent: Vec<AbsentMember>,
     pub equalizer: EqSettings,
+    /// The equalizer curves the user saved, in the picker's order (spec S270).
+    pub equalizer_curves: Vec<UserCurve>,
+    /// The speaker presets in list order (spec S259), the current one
+    /// marked (spec S253).
+    pub presets: Vec<PresetItem>,
+    /// The ID of the preset that plays exactly now (spec S253, S264).
+    pub current_preset: Option<String>,
     /// Newest first.
     pub notices: Vec<Notice>,
     /// The PIN prompt to show, while a pairing asks for a PIN.
@@ -607,6 +779,17 @@ pub struct AppState {
     pub calibrate_all: CalibrateAllState,
 }
 
+/// A speaker preset as the windows and the web remote list it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PresetItem {
+    pub id: String,
+    pub name: String,
+    /// The speakers play it exactly now, the first such preset in list order.
+    pub current: bool,
+    /// The stored members' keys, in order.
+    pub members: Vec<String>,
+}
+
 /// Calibrate All Speakers (spec S235 to S240): where a run stands and the
 /// results of the last one.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -622,6 +805,19 @@ pub struct CalibrateAllState {
     pub endings: u64,
     /// The outputs that are on but left out by their kind.
     pub left_out: Vec<LeftOutRow>,
+    /// The zone a Calibrate Zone run measures or measured (spec S255).
+    pub zone: Option<ZoneSheet>,
+}
+
+/// What a Calibrate Zone sheet says besides Calibrate All's (spec S255).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ZoneSheet {
+    /// "Bring the computer into <name>".
+    pub name: String,
+    /// The sheet's rows that are members that were off: "Off".
+    pub off_rows: Vec<usize>,
+    /// Whom the shared AirPlay delay moves besides the zone.
+    pub airplay_moves: AirPlayMoves,
 }
 
 /// An output that is on, which Calibrate All leaves out by its kind unless
@@ -719,20 +915,115 @@ impl AppState {
         }
     }
 
-    /// The members of `group` that are present right now.
-    pub fn available_members<'a>(&'a self, group: &'a Group) -> impl Iterator<Item = &'a Speaker> {
-        group.members.iter().filter_map(|id| self.speaker(id))
+    /// The zone that holds speaker `id`, if one does.
+    pub fn zone_of(&self, id: &str) -> Option<&Zone> {
+        self.zones
+            .iter()
+            .find(|zone| zone.members.iter().any(|member| member == id))
     }
 
-    /// A group is on when all its present members are. Playing, it waits
-    /// when every present member waits, as its first present member does.
-    pub fn group_state(&self, group: &Group) -> SpeakerState {
-        let mut present = self.available_members(group).peekable();
-        let all_on = present.peek().is_some() && present.all(|s| s.enabled);
-        match SpeakerState::new(all_on, self.running) {
+    /// The members of `zone` that are listed right now, in zone order.
+    pub fn zone_members<'a>(&'a self, zone: &'a Zone) -> impl Iterator<Item = &'a Speaker> {
+        zone.members.iter().filter_map(|id| self.speaker(id))
+    }
+
+    /// The rows under `zone`'s header, in zone order: a listed member, the
+    /// virtual outputs View hides included, or one not found; a hidden
+    /// member has none.
+    pub fn zone_rows<'a>(&'a self, zone: &'a Zone) -> Vec<ZoneRow<'a>> {
+        zone.members
+            .iter()
+            .filter(|id| !self.hidden.iter().any(|hidden| hidden.id == **id))
+            .map(|id| {
+                self.speaker(id)
+                    .map_or(ZoneRow::NotFound(id.as_str()), ZoneRow::Listed)
+            })
+            .collect()
+    }
+
+    /// What a zone header counts, from its rows.
+    pub fn zone_counts(&self, zone: &Zone) -> ZoneCounts {
+        let rows = self.zone_rows(zone);
+        let on: Vec<&Speaker> = rows
+            .iter()
+            .filter_map(|row| match row {
+                ZoneRow::Listed(speaker) if speaker.enabled => Some(*speaker),
+                _ => None,
+            })
+            .collect();
+        ZoneCounts {
+            total: rows.len(),
+            present: rows
+                .iter()
+                .filter(|row| matches!(row, ZoneRow::Listed(_)))
+                .count(),
+            on: on.len(),
+            waiting: if self.running {
+                on.iter().filter(|s| s.waiting.is_some()).count()
+            } else {
+                0
+            },
+        }
+    }
+
+    /// Whether zone `zone`'s Calibrate Zone… can be chosen: a member is
+    /// here and no calibration holds the outputs, since a start then does
+    /// nothing (spec S255).
+    pub fn offers_zone_run(&self, zone: &Zone) -> bool {
+        self.zone_counts(zone).present > 0 && !self.calibration.busy
+    }
+
+    /// The note on `row` under `zone`, if it has one. The Cast note needs
+    /// another member on: the click plan switches on one Cast member at most.
+    pub fn zone_note<'a>(&self, zone: &Zone, row: ZoneRow<'a>) -> Option<ZoneNote<'a>> {
+        let speaker = match row {
+            ZoneRow::NotFound(_) => return Some(ZoneNote::NotFound),
+            ZoneRow::Listed(speaker) => speaker,
+        };
+        if speaker.group.is_some() && speaker.availability == Availability::AirPlay2NotYet {
+            return Some(ZoneNote::NeedsAirPlay2);
+        }
+        if let Some(target) = &speaker.in_target {
+            return Some(ZoneNote::InTarget(&target.name));
+        }
+        let other_on = || {
+            self.zone_members(zone)
+                .any(|member| member.enabled && member.id != speaker.id)
+        };
+        (speaker.kind == SpeakerKind::Cast
+            && !speaker.enabled
+            && speaker.availability == Availability::Open
+            && other_on())
+        .then_some(ZoneNote::CastStayedOff)
+    }
+
+    /// The name and kind of zone member `id` while it isn't listed.
+    pub fn absent_member(&self, id: &str) -> Option<&AbsentMember> {
+        self.absent.iter().find(|member| member.id == id)
+    }
+
+    /// A zone is on when a click would switch it off (spec S246): each
+    /// present member it switches on is on, which is every one but those
+    /// playing as part of a stereo pair or home theater, and one Cast
+    /// member when it has any. Playing, it waits when each of those waits.
+    pub fn zone_state(&self, zone: &Zone) -> SpeakerState {
+        let switched: Vec<&Speaker> = self
+            .zone_members(zone)
+            .filter(|s| s.in_target.is_none())
+            .collect();
+        let (cast, others): (Vec<&Speaker>, Vec<&Speaker>) =
+            switched.iter().partition(|s| s.kind == SpeakerKind::Cast);
+        let cast_on: Vec<&Speaker> = cast.iter().copied().filter(|s| s.enabled).collect();
+        let on = !switched.is_empty()
+            && others.iter().all(|s| s.enabled)
+            && (cast.is_empty() || !cast_on.is_empty());
+        match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
-                let waiting: Option<Vec<Waiting>> =
-                    self.available_members(group).map(|s| s.waiting).collect();
+                let waiting: Option<Vec<Waiting>> = others
+                    .iter()
+                    .chain(cast_on.iter().take(1))
+                    .map(|s| s.waiting)
+                    .collect();
                 waiting
                     .and_then(|w| w.first().copied())
                     .map_or(SpeakerState::Playing, SpeakerState::Waiting)
@@ -758,9 +1049,9 @@ impl AppState {
     }
 
     /// Whether the tray flyout lists only the PC's own speakers because
-    /// every connected speaker present is hidden and there is no group.
+    /// every connected speaker present is hidden and there is no zone.
     pub fn connected_all_hidden(&self) -> bool {
-        self.groups.is_empty()
+        self.zones.is_empty()
             && !self.speakers.is_empty()
             && self.speakers.iter().all(|s| s.kind.is_this_pc())
             && self.hidden_in(false)
@@ -814,11 +1105,33 @@ impl CastAddressCheck {
     }
 }
 
-/// Why a new group wasn't made.
+/// What a zone header counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZoneCounts {
+    /// Its members but the hidden ones.
+    pub total: usize,
+    /// Those listed right now.
+    pub present: usize,
+    /// Those switched on.
+    pub on: usize,
+    /// Those on that can't play right now, while streaming is on.
+    pub waiting: usize,
+}
+
+/// Why a new zone wasn't made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GroupError {
-    /// No speaker is on, so the group would be empty.
+pub enum ZoneError {
+    /// No speaker is on, so the zone would be empty.
     NoActiveSpeakers,
+}
+
+/// Why Save as Preset… or Update to Current Settings saved nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresetError {
+    /// No speaker is on, so the preset would hold none (spec S262).
+    NoSpeakerOn,
+    /// There are [`MAX_PRESETS`] already (spec S251).
+    Full,
 }
 
 /// The audio side, as the UI sees it. Every method is called on the UI
@@ -833,6 +1146,9 @@ pub trait Backend {
     fn snapshot(&self) -> AppState;
     fn set_running(&mut self, on: bool);
     fn select_source(&mut self, id: &str);
+    /// Plays channel pair `pair` (1 for channels 3-4) of the chosen input
+    /// device, and keeps it for that device.
+    fn select_input_pair(&mut self, pair: u16);
     /// Checks or unchecks an app of the several-apps list, by executable.
     fn toggle_mix_app(&mut self, executable: &str);
     /// Switches the several-apps list to "all except" (true) or "only" (false).
@@ -883,14 +1199,53 @@ pub trait Backend {
     fn hide_speaker(&mut self, _id: &str, _kind: &str) {}
     /// A Hidden Speakers entry: speaker `id` is listed again, off.
     fn unhide_speaker(&mut self, _id: &str) {}
-    /// Turns every present member on, or all of them off when the group is on.
-    fn toggle_group(&mut self, id: &str);
-    /// Makes a group of the speakers that are on now. The UI names it
-    /// ("Group 2") when the user leaves the name empty.
-    fn new_group(&mut self, name: &str) -> Result<(), GroupError>;
-    fn rename_group(&mut self, id: &str, name: &str);
-    fn delete_group(&mut self, id: &str);
+    /// Switches zone `id`'s members as the core's click plan says (spec
+    /// S246, S247).
+    fn toggle_zone(&mut self, id: &str);
+    /// Makes a zone of the speakers that are on now, each leaving the zone
+    /// that held it (S245). The UI names it ("Zone 2") when the user leaves
+    /// the name empty.
+    fn new_zone(&mut self, name: &str) -> Result<(), ZoneError>;
+    /// New Zone… in a speaker's menu: a zone of speaker `speaker_id` alone.
+    fn new_zone_with(&mut self, speaker_id: &str, name: &str);
+    /// Renames zone `id`; a blank name keeps the old one (S150).
+    fn rename_zone(&mut self, id: &str, name: &str);
+    /// Deletes zone `id`; its members go back to the plain lists.
+    fn delete_zone(&mut self, id: &str);
+    /// Moves speaker `speaker_id` into zone `zone_id`, out of the one that
+    /// held it.
+    fn move_to_zone(&mut self, speaker_id: &str, zone_id: &str);
+    /// Takes speaker `speaker_id` out of its zone.
+    fn remove_from_zone(&mut self, speaker_id: &str);
+    /// Sets zone `id`'s volume, 0 to 100, which scales each member's own
+    /// volume (spec S249).
+    fn set_zone_volume(&mut self, id: &str, volume: f64);
+    /// Use … Instead in a zone's menu: the stereo pair or home theater that
+    /// member `speaker_id` plays as part of takes its place in the zone.
+    fn use_target_instead(&mut self, speaker_id: &str);
+    /// A zone click from the web remote: the members in `keep_off`, which
+    /// ask for a code, stay off with a notice each (spec S257).
+    fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]);
+    /// A recall from the web remote, `keep_off` as for a zone click.
+    fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]);
     fn set_equalizer(&mut self, settings: EqSettings);
+    /// Replaces the saved equalizer curves; the backend keeps them as the
+    /// core cleans a stored list (spec S270).
+    fn set_equalizer_curves(&mut self, curves: Vec<UserCurve>);
+    /// Save as Preset…: what plays now becomes preset `name`, last in the
+    /// list (spec S251, S262). The UI names it ("Preset 2") when the user
+    /// leaves the name empty.
+    fn save_preset(&mut self, name: &str) -> Result<(), PresetError>;
+    /// Renames preset `id`; a blank name keeps the old one (spec S254).
+    fn rename_preset(&mut self, id: &str, name: &str);
+    /// Update to Current Settings: what plays now goes into preset `id`,
+    /// which keeps its ID, name and place.
+    fn update_preset(&mut self, id: &str) -> Result<(), PresetError>;
+    /// Deletes preset `id`; nothing that plays changes.
+    fn delete_preset(&mut self, id: &str);
+    /// Recalls preset `id` (spec S252, S265) and posts or clears the preset
+    /// notice.
+    fn recall_preset(&mut self, id: &str);
     fn dismiss_notice(&mut self, id: u64);
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
@@ -930,6 +1285,11 @@ pub trait Backend {
     /// Calibrate All Speakers: measures every speaker that is on.
     fn start_calibrate_all(&mut self) {}
 
+    /// "Calibrate Zone…" in zone `id`'s Options menu (spec S255): Calibrate
+    /// All over the zone, every other speaker that plays silenced for the
+    /// run.
+    fn start_calibrate_zone(&mut self, _id: &str) {}
+
     /// Cancel on the running Calibrate All or Measure Again: nothing
     /// changes.
     fn cancel_calibrate_all(&mut self) {}
@@ -961,6 +1321,14 @@ pub trait Backend {
     /// snapshot may have changed. The UI calls it about twice a second.
     fn poll(&mut self) -> bool {
         false
+    }
+
+    /// While an input device is captured, the largest sample magnitude
+    /// since the last call (1 is full scale), for the level meter; `None`
+    /// for any other source and while stopped. The UI calls it every
+    /// `METER_POLL_MS` while the meter shows.
+    fn input_peak(&mut self) -> Option<f32> {
+        None
     }
 
     /// The windows' own settings as last saved: what the UI shows them with
@@ -1083,7 +1451,6 @@ pub fn delay_field_text(typed: &str) -> String {
 pub static MOCK_CAST_HOLD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A host under `.invalid` (RFC 6761) stands for one nothing answers.
-#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool {
     #[cfg(test)]
     if address.host().ends_with(".held") {
@@ -1092,30 +1459,49 @@ fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool 
     !address.host().ends_with(".invalid")
 }
 
+/// The subject of the example data's preset notice.
+const PRESETS: &str = "Presets";
+
 /// Example data for UI work and tests: no device is opened, nothing plays.
-#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 pub struct MockBackend {
     state: AppState,
     next_id: u64,
     view: ViewSettings,
     /// The rows of the hidden speakers, to list them again as they were.
     hidden_rows: Vec<Speaker>,
+    presets: Vec<Preset>,
+    /// The preset the preset notice is about.
+    preset_notice: Option<String>,
 }
 
-#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 impl Default for MockBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
 impl MockBackend {
+    /// [`capture_preset`] with the example's members kept: their IDs are no
+    /// speaker keys, so the core's clean-up would drop them all.
+    fn capture_preset(&self, id: &str, name: &str) -> Result<Preset, PresetError> {
+        let state = self.snapshot();
+        let mut preset = capture_preset(id, name, &state).ok_or(PresetError::NoSpeakerOn)?;
+        preset.members = speakers_on_now(&state)
+            .into_iter()
+            .map(|speaker| policy_presets::PresetMember {
+                key: speaker.key,
+                volume: speaker.volume,
+            })
+            .collect();
+        Ok(preset)
+    }
+
     pub fn new() -> Self {
         let source = |id: &str, name: &str, kind| Source {
             id: id.into(),
             name: name.into(),
             kind,
+            channels: 0,
         };
         let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
             id: id.into(),
@@ -1133,6 +1519,7 @@ impl MockBackend {
             cast: None,
             group: None,
             mic_left_out: None,
+            in_target: None,
         };
         let mut speakers = vec![
             // The reference: no delay of its own.
@@ -1196,9 +1583,13 @@ impl MockBackend {
                 source("system", "All System Audio", SourceKind::System),
                 source("app:player", "Music Player", SourceKind::App),
                 source("app:browser", "Web Browser", SourceKind::App),
-                source("input:line", "Line In", SourceKind::Input),
+                Source {
+                    channels: 5,
+                    ..source("input:line", "Line In", SourceKind::Input)
+                },
             ],
             source_id: "system".into(),
+            input_pair: 0,
             mix_apps: vec![
                 MixApp {
                     id: "player.exe".into(),
@@ -1215,12 +1606,12 @@ impl MockBackend {
             master_volume: volume::DEFAULT_MASTER_POSITION,
             speakers,
             hidden: Vec::new(),
-            groups: vec![Group {
-                id: "group:1".into(),
-                name: "Downstairs".into(),
-                members: vec!["airplay:kitchen".into(), "airplay:living".into()],
-            }],
+            zones: Vec::new(),
+            absent: Vec::new(),
             equalizer: EqSettings::default(),
+            equalizer_curves: Vec::new(),
+            presets: Vec::new(),
+            current_preset: None,
             notices: Vec::new(),
             pin_prompt: None,
             password_prompt: None,
@@ -1239,11 +1630,12 @@ impl MockBackend {
             next_id: 1,
             view: ViewSettings::default(),
             hidden_rows: Vec::new(),
+            presets: Vec::new(),
+            preset_notice: None,
         }
     }
 
     /// Posts a notice about `subject`, replacing an older one about it.
-    #[cfg(test)]
     pub fn post(&mut self, subject: &str, message: NoticeMessage, time: &str) {
         self.state.notices.retain(|n| n.subject != subject);
         self.state.notices.insert(
@@ -1287,21 +1679,176 @@ impl MockBackend {
         self.state.airplay_none_found = on;
     }
 
-    /// Keeps only the example speakers `keep` accepts, and the groups.
+    /// Keeps only the example speakers `keep` accepts, and the zones.
     #[cfg(test)]
     pub fn retain_speakers(&mut self, keep: impl Fn(&Speaker) -> bool) {
         self.state.speakers.retain(keep);
     }
 
+    /// Adds preset `id` of the speakers `members` at the master and the
+    /// curve now, with no own volumes.
+    #[cfg(test)]
+    pub fn add_preset(&mut self, id: &str, name: &str, members: &[&str]) {
+        self.presets.push(Preset {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            members: members
+                .iter()
+                .map(|key| policy_presets::PresetMember {
+                    key: (*key).to_owned(),
+                    volume: None,
+                })
+                .collect(),
+            zones: Vec::new(),
+            master: self.state.master_volume,
+            gains_db: self.state.equalizer.gains_db,
+        });
+    }
+
+    /// Adds a zone of the speakers `members`, which leave any other zone.
+    #[cfg(test)]
+    pub fn add_zone(&mut self, id: &str, name: &str, members: &[&str]) {
+        self.zones_mut(|zones| add_zone(zones, id, name, members));
+    }
+
+    /// The example data with zones, for `AUDIOSYNC_PREVIEW_ZONES`: Living
+    /// Room holds a waiting speaker, a stereo pair, a Google Cast speaker,
+    /// a hidden one (not counted) and one not found yet; Upstairs a speaker
+    /// that plays as part of the pair; Office is empty. Streaming is on, and
+    /// the notice of groups that became zones shows.
+    pub fn zones_preview() -> Self {
+        let mut mock = MockBackend::new();
+        let state = &mut mock.state;
+        state.running = true;
+        let template = state.speakers[2].clone();
+        let pair = Speaker {
+            id: "airplay:pair".into(),
+            name: "Living Room Pair".into(),
+            system_name: "Living Room Pair".into(),
+            kind: SpeakerKind::AirPlay2,
+            enabled: true,
+            auto_connect: false,
+            group: Some(crate::audio::backend::AirPlayGroup {
+                kind: crate::audio::backend::AirPlayGroupKind::StereoPair,
+                members: vec!["Left".into(), "Right".into()],
+                missing: Vec::new(),
+                incomplete: false,
+            }),
+            ..template.clone()
+        };
+        let left = Speaker {
+            id: "airplay:left".into(),
+            name: "Left".into(),
+            system_name: "Left".into(),
+            enabled: false,
+            auto_connect: false,
+            in_target: Some(InTarget {
+                id: pair.id.clone(),
+                name: pair.name.clone(),
+            }),
+            ..template.clone()
+        };
+        let attic = Speaker {
+            id: "cc:attic".into(),
+            name: "Attic".into(),
+            system_name: "Attic".into(),
+            kind: SpeakerKind::Cast,
+            enabled: false,
+            auto_connect: false,
+            delay_ms: Some(0.0),
+            cast: Some(CastRow {
+                state: CastState::Idle,
+                muted: false,
+                volume_fixed: false,
+                volume_step: 1.0,
+                group: None,
+                added_by_address: false,
+            }),
+            ..template
+        };
+        state.speakers.extend([pair, left, attic]);
+        if let Some(kitchen) = state
+            .speakers
+            .iter_mut()
+            .find(|s| s.id == "airplay:kitchen")
+        {
+            kitchen.waiting = Some(Waiting::Reconnecting);
+        }
+        state.hidden.push(HiddenSpeaker {
+            id: "airplay:den".into(),
+            name: "Den".into(),
+            kind_text: "AirPlay".into(),
+            present: None,
+        });
+        state.absent.push(AbsentMember {
+            id: "airplay:theater:4C2D".into(),
+            name: "Home Theater".into(),
+            kind: SpeakerKind::AirPlay2,
+        });
+        state.notices.push(Notice {
+            id: 1,
+            subject: "Zones".into(),
+            message: NoticeMessage::GroupsBecameZones,
+            time: "09.40".into(),
+        });
+        mock.next_id = 2;
+        mock.zones_mut(|zones| {
+            add_zone(
+                zones,
+                "zone:living",
+                "Living Room",
+                &[
+                    "airplay:kitchen",
+                    "airplay:pair",
+                    "cc:attic",
+                    "local:desk",
+                    "airplay:den",
+                    "airplay:theater:4C2D",
+                ],
+            );
+            add_zone(
+                zones,
+                "zone:upstairs",
+                "Upstairs",
+                &["airplay:bedroom", "airplay:left"],
+            );
+            add_zone(zones, "zone:office", "Office", &[]);
+        });
+        mock
+    }
+
     fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
         self.state.speakers.iter_mut().find(|s| s.id == id)
     }
+
+    /// Changes the zones through the core's rules (S245).
+    fn zones_mut<R>(&mut self, change: impl FnOnce(&mut Zones) -> R) -> R {
+        let mut zones = Zones::from_stored(std::mem::take(&mut self.state.zones));
+        let changed = change(&mut zones);
+        self.state.zones = zones.into_list();
+        changed
+    }
+
+    fn next_zone_id(&mut self) -> String {
+        let id = format!("zone:{}", self.next_id);
+        self.next_id += 1;
+        id
+    }
 }
 
-#[cfg(any(test, all(feature = "mock-backend", not(os_backend))))]
+/// Adds zone `id` with the speakers `members`, which leave any other zone.
+fn add_zone(zones: &mut Zones, id: &str, name: &str, members: &[&str]) {
+    zones.new_zone(id, name, |n| format!("Zone {n}"));
+    for member in members {
+        zones.move_speaker(member, id);
+    }
+}
+
 impl Backend for MockBackend {
     fn snapshot(&self) -> AppState {
-        self.state.clone()
+        let mut state = self.state.clone();
+        show_presets(&mut state, &self.presets);
+        state
     }
 
     fn view_settings(&self) -> ViewSettings {
@@ -1319,6 +1866,18 @@ impl Backend for MockBackend {
     fn select_source(&mut self, id: &str) {
         if self.state.sources.iter().any(|s| s.id == id) {
             self.state.source_id = id.into();
+            self.state.input_pair = 0;
+        }
+    }
+
+    fn select_input_pair(&mut self, pair: u16) {
+        let chosen = self
+            .state
+            .sources
+            .iter()
+            .find(|source| source.id == self.state.source_id);
+        if chosen.is_some_and(|source| source.kind == SourceKind::Input) {
+            self.state.input_pair = pair;
         }
     }
 
@@ -1361,6 +1920,17 @@ impl Backend for MockBackend {
     fn set_speaker_enabled(&mut self, id: &str, on: bool) {
         if let Some(speaker) = self.speaker_mut(id) {
             speaker.enabled = on;
+        }
+        // Like the adapter: an unpaired speaker that asks for a code prompts for it.
+        if let Some(speaker) = self.state.speaker(id).filter(|speaker| {
+            on && speaker.availability == Availability::NeedsCode && !speaker.paired
+        }) {
+            self.state.pin_prompt = Some(PinPrompt {
+                speaker_id: speaker.id.clone(),
+                name: speaker.name.clone(),
+                phase: PinPhase::Ready,
+                wrong_pin: false,
+            });
         }
         // Like the Mac: turning a speaker on starts streaming.
         if on {
@@ -1426,22 +1996,40 @@ impl Backend for MockBackend {
         }
     }
 
-    fn toggle_group(&mut self, id: &str) {
-        let Some(group) = self.state.groups.iter().find(|g| g.id == id).cloned() else {
+    fn toggle_zone(&mut self, id: &str) {
+        self.toggle_zone_from_phone(id, &[]);
+    }
+
+    fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        let Some(zone) = self.state.zones.iter().find(|z| z.id == id).cloned() else {
             return;
         };
-        let turn_on = self.state.group_state(&group).click_turns_on();
-        for member in &group.members {
-            if let Some(speaker) = self.speaker_mut(member) {
-                speaker.enabled = turn_on;
+        let turn_on = self.state.zone_state(&zone).click_turns_on();
+        let mut cast_on = false;
+        for member in &zone.members {
+            if keep_off.contains(member) {
+                continue;
             }
+            let Some(speaker) = self.speaker_mut(member) else {
+                continue;
+            };
+            if speaker.in_target.is_some() {
+                continue;
+            }
+            if turn_on && speaker.kind == SpeakerKind::Cast {
+                // One Google Cast speaker plays at a time.
+                speaker.enabled |= !cast_on;
+                cast_on = true;
+                continue;
+            }
+            speaker.enabled = turn_on;
         }
         if turn_on {
             self.state.running = true;
         }
     }
 
-    fn new_group(&mut self, name: &str) -> Result<(), GroupError> {
+    fn new_zone(&mut self, name: &str) -> Result<(), ZoneError> {
         let members: Vec<String> = self
             .state
             .speakers
@@ -1450,29 +2038,56 @@ impl Backend for MockBackend {
             .map(|s| s.id.clone())
             .collect();
         if members.is_empty() {
-            return Err(GroupError::NoActiveSpeakers);
+            return Err(ZoneError::NoActiveSpeakers);
         }
-        self.state.groups.push(Group {
-            id: format!("group:{}", self.next_id),
-            name: name.trim().to_string(),
-            members,
-        });
-        self.next_id += 1;
+        let id = self.next_zone_id();
+        let members: Vec<&str> = members.iter().map(String::as_str).collect();
+        self.zones_mut(|zones| add_zone(zones, &id, name, &members));
         Ok(())
     }
 
-    fn rename_group(&mut self, id: &str, name: &str) {
-        let name = name.trim();
-        if name.is_empty() {
-            return;
-        }
-        if let Some(group) = self.state.groups.iter_mut().find(|g| g.id == id) {
-            group.name = name.into();
+    fn new_zone_with(&mut self, speaker_id: &str, name: &str) {
+        let id = self.next_zone_id();
+        self.zones_mut(|zones| add_zone(zones, &id, name, &[speaker_id]));
+    }
+
+    fn rename_zone(&mut self, id: &str, name: &str) {
+        self.zones_mut(|zones| zones.rename(id, name));
+    }
+
+    fn delete_zone(&mut self, id: &str) {
+        self.zones_mut(|zones| zones.delete(id));
+    }
+
+    fn move_to_zone(&mut self, speaker_id: &str, zone_id: &str) {
+        self.zones_mut(|zones| zones.move_speaker(speaker_id, zone_id));
+    }
+
+    fn remove_from_zone(&mut self, speaker_id: &str) {
+        self.zones_mut(|zones| zones.remove_speaker(speaker_id));
+    }
+
+    fn set_zone_volume(&mut self, id: &str, volume: f64) {
+        self.zones_mut(|zones| zones.set_volume(id, volume));
+    }
+
+    /// A zone run holds the outputs as soon as it starts.
+    fn start_calibrate_zone(&mut self, id: &str) {
+        if self.state.zones.iter().any(|zone| zone.id == id) {
+            self.state.calibration.busy = true;
+            self.state.calibrate_all.phase = AllPhase::Running(AllProgress::Preparing);
         }
     }
 
-    fn delete_group(&mut self, id: &str) {
-        self.state.groups.retain(|g| g.id != id);
+    fn use_target_instead(&mut self, speaker_id: &str) {
+        let Some(target) = self
+            .state
+            .speaker(speaker_id)
+            .and_then(|s| s.in_target.clone())
+        else {
+            return;
+        };
+        self.zones_mut(|zones| zones.rename_key(speaker_id, &target.id));
     }
 
     fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
@@ -1517,6 +2132,7 @@ impl Backend for MockBackend {
                 }),
                 group: None,
                 mic_left_out: None,
+                in_target: None,
             });
         }
         Ok(())
@@ -1534,6 +2150,119 @@ impl Backend for MockBackend {
 
     fn set_equalizer(&mut self, settings: EqSettings) {
         self.state.equalizer = settings.quantized();
+    }
+
+    fn save_preset(&mut self, name: &str) -> Result<(), PresetError> {
+        if self.presets.len() >= MAX_PRESETS {
+            return Err(PresetError::Full);
+        }
+        let id = new_preset_id(&self.presets);
+        let preset = self.capture_preset(&id, name)?;
+        self.presets.push(preset);
+        Ok(())
+    }
+
+    fn rename_preset(&mut self, id: &str, name: &str) {
+        let Some(preset) = self.presets.iter_mut().find(|preset| preset.id == id) else {
+            return;
+        };
+        preset.name = policy_presets::renamed_preset(&preset.name, name);
+        let name = preset.name.clone();
+        if self.preset_notice.as_deref() == Some(id)
+            && let Some(notice) = self.state.notices.iter_mut().find(|n| n.subject == PRESETS)
+            && let NoticeMessage::PresetLeftOff { preset, .. } = &mut notice.message
+        {
+            *preset = name;
+        }
+    }
+
+    fn update_preset(&mut self, id: &str) -> Result<(), PresetError> {
+        let Some(index) = self.presets.iter().position(|preset| preset.id == id) else {
+            return Ok(());
+        };
+        let name = self.presets[index].name.clone();
+        self.presets[index] = self.capture_preset(id, &name)?;
+        Ok(())
+    }
+
+    fn delete_preset(&mut self, id: &str) {
+        self.presets.retain(|preset| preset.id != id);
+        if self.preset_notice.as_deref() == Some(id) {
+            self.state.notices.retain(|n| n.subject != PRESETS);
+            self.preset_notice = None;
+        }
+    }
+
+    fn recall_preset(&mut self, id: &str) {
+        self.recall_preset_from_phone(id, &[]);
+    }
+
+    fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        let Some(preset) = self.presets.iter().find(|preset| preset.id == id).cloned() else {
+            return;
+        };
+        let mut left_off = Vec::new();
+        let mut members = Vec::new();
+        // A phone's recall leaves the members that ask for a code off (S257).
+        for member in preset.members.iter().filter(|m| !keep_off.contains(&m.key)) {
+            if let Some(hidden) = self.state.hidden.iter().find(|h| h.id == member.key) {
+                left_off.push((hidden.name.clone(), PresetLeftOff::Hidden));
+            } else if self.state.speaker(&member.key).is_some() {
+                members.push((member.key.clone(), member.volume));
+            } else {
+                left_off.push((member.key.clone(), PresetLeftOff::NotFound));
+            }
+        }
+        let nothing_changed = members.is_empty();
+        if !nothing_changed {
+            for speaker in &mut self.state.speakers {
+                if !speaker.is_reference() && !members.iter().any(|(key, _)| *key == speaker.id) {
+                    speaker.enabled = false;
+                }
+            }
+            // As its own switch does, so one that asks for a code asks.
+            for (key, _) in &members {
+                if self
+                    .state
+                    .speaker(key)
+                    .is_some_and(|speaker| !speaker.enabled)
+                {
+                    self.set_speaker_enabled(key, true);
+                }
+            }
+            for (key, volume) in members {
+                if let (Some(speaker), Some(volume)) = (self.speaker_mut(&key), volume) {
+                    speaker.volume = volume;
+                }
+            }
+            self.zones_mut(|zones| {
+                let volumes: Vec<(String, f64)> =
+                    policy_presets::recall_zone_volumes(&preset, zones)
+                        .into_iter()
+                        .map(|(zone, volume)| (zone.to_owned(), volume))
+                        .collect();
+                for (zone, volume) in volumes {
+                    zones.set_volume(&zone, volume);
+                }
+            });
+            self.state.master_volume = preset.master;
+            self.state.equalizer.gains_db = preset.gains_db;
+            self.state.running = true;
+        }
+        match preset_notice(&preset.name, left_off, nothing_changed) {
+            Some(message) => {
+                self.post(PRESETS, message, "09.41");
+                self.preset_notice = Some(preset.id);
+            }
+            None => {
+                self.state.notices.retain(|n| n.subject != PRESETS);
+                self.preset_notice = None;
+            }
+        }
+    }
+
+    fn set_equalizer_curves(&mut self, curves: Vec<UserCurve>) {
+        self.state.equalizer_curves = eq::sanitized_curves(curves);
     }
 
     fn dismiss_notice(&mut self, id: u64) {
@@ -1565,11 +2294,30 @@ impl Backend for MockBackend {
     }
 }
 
-/// The preset whose gains these settings have, if any (else the UI says "Custom").
-pub fn matching_preset_index(settings: &EqSettings) -> Option<usize> {
-    eq::PRESETS
-        .iter()
-        .position(|preset| preset.gains_db == settings.gains_db)
+/// The curve the equalizer picker shows: the first preset, then the first
+/// saved curve, with the current gains (spec S270).
+pub fn shown_curve(state: &AppState) -> Option<CurveMatch> {
+    eq::matching_curve(&state.equalizer.gains_db, &state.equalizer_curves)
+}
+
+/// `curve`'s entry in the picker, presets first; -1 for none ("Custom").
+pub fn picker_index(curve: Option<CurveMatch>) -> i32 {
+    let index = match curve {
+        Some(CurveMatch::Preset(index)) => index,
+        Some(CurveMatch::User(index)) => eq::PRESETS.len() + index,
+        None => return -1,
+    };
+    i32::try_from(index).unwrap_or(-1)
+}
+
+/// The picker's entry `index` as a curve, presets first.
+pub fn picked_curve(index: i32, saved: usize) -> Option<CurveMatch> {
+    let index = usize::try_from(index).ok()?;
+    match index.checked_sub(eq::PRESETS.len()) {
+        None => Some(CurveMatch::Preset(index)),
+        Some(user) if user < saved => Some(CurveMatch::User(user)),
+        Some(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -1631,6 +2379,7 @@ mod tests {
     #[test]
     fn the_flyout_says_so_when_only_connected_speakers_are_hidden() {
         let mut backend = MockBackend::new();
+        backend.add_zone("zone:1", "Zone 1", &[]);
         let connected: Vec<String> = backend
             .snapshot()
             .speakers
@@ -1642,8 +2391,8 @@ mod tests {
             backend.hide_speaker(id, "AirPlay");
         }
         let state = backend.snapshot();
-        assert!(!state.connected_all_hidden(), "a group is still listed");
-        backend.delete_group("group:1");
+        assert!(!state.connected_all_hidden(), "a zone is still listed");
+        backend.delete_zone("zone:1");
         let state = backend.snapshot();
         assert!(state.connected_all_hidden());
         assert!(!state.all_hidden(), "the PC's own speakers are listed");
@@ -1651,7 +2400,6 @@ mod tests {
         backend.unhide_speaker(&connected[0]);
         assert!(!backend.snapshot().connected_all_hidden());
         let mut only_this_pc = MockBackend::new();
-        only_this_pc.delete_group("group:1");
         only_this_pc.hide_speaker("local:headphones", "Headphones");
         assert!(!only_this_pc.snapshot().connected_all_hidden());
     }
@@ -1724,6 +2472,7 @@ mod tests {
             cast: None,
             group: None,
             mic_left_out: None,
+            in_target: None,
         };
         assert!(!speaker(SpeakerKind::Virtual, false).is_listed(false));
         assert!(speaker(SpeakerKind::Virtual, false).is_listed(true));
@@ -1750,24 +2499,33 @@ mod tests {
     }
 
     #[test]
-    fn a_group_is_on_when_all_its_present_members_are() {
+    fn a_zone_is_on_when_all_its_present_members_are() {
         let mut backend = MockBackend::new();
-        let group = backend.snapshot().groups[0].clone();
-        assert_eq!(backend.snapshot().group_state(&group), SpeakerState::Off);
-        backend.toggle_group(&group.id);
+        backend.add_zone(
+            "zone:a",
+            "Downstairs",
+            &["airplay:kitchen", "airplay:living"],
+        );
+        let zone = backend.snapshot().zones[0].clone();
+        assert_eq!(backend.snapshot().zone_state(&zone), SpeakerState::Off);
+        backend.toggle_zone(&zone.id);
         let state = backend.snapshot();
-        assert_eq!(state.group_state(&group), SpeakerState::Playing);
-        backend.toggle_group(&group.id);
+        assert_eq!(state.zone_state(&zone), SpeakerState::Playing);
+        backend.toggle_zone(&zone.id);
         let state = backend.snapshot();
-        assert!(state.available_members(&group).all(|s| !s.enabled));
+        assert!(state.zone_members(&zone).all(|s| !s.enabled));
     }
 
     #[test]
-    fn a_group_waits_when_all_its_present_members_wait() {
+    fn a_zone_waits_when_all_its_present_members_wait() {
         let mut backend = MockBackend::new();
-        let group = backend.snapshot().groups[0].clone();
-        backend.toggle_group(&group.id);
-        backend.set_running(true);
+        backend.add_zone(
+            "zone:a",
+            "Downstairs",
+            &["airplay:kitchen", "airplay:living"],
+        );
+        let zone = backend.snapshot().zones[0].clone();
+        backend.toggle_zone(&zone.id);
         let mut state = backend.snapshot();
         let wait = |state: &mut AppState, id: &str, waiting| {
             state
@@ -1779,45 +2537,125 @@ mod tests {
         };
         wait(&mut state, "airplay:kitchen", Some(Waiting::Reconnecting));
         assert_eq!(
-            state.group_state(&group),
+            state.zone_state(&zone),
             SpeakerState::Playing,
             "one member still plays"
         );
         wait(&mut state, "airplay:living", Some(Waiting::Reconnecting));
         assert_eq!(
-            state.group_state(&group),
+            state.zone_state(&zone),
             SpeakerState::Waiting(Waiting::Reconnecting),
             "every present member waits"
         );
         state.speakers.retain(|s| s.id != "airplay:living");
         assert_eq!(
-            state.group_state(&group),
+            state.zone_state(&zone),
             SpeakerState::Waiting(Waiting::Reconnecting),
             "a member that went doesn't count"
         );
         assert!(
-            !state.group_state(&group).click_turns_on(),
-            "a click turns a waiting group off"
+            !state.zone_state(&zone).click_turns_on(),
+            "a click turns a waiting zone off"
         );
         state.running = false;
-        assert_eq!(state.group_state(&group), SpeakerState::WillPlay);
+        assert_eq!(state.zone_state(&zone), SpeakerState::WillPlay);
     }
 
     #[test]
-    fn a_new_group_needs_a_speaker_that_is_on() {
+    fn a_zone_counts_its_members_but_the_hidden_ones() {
+        let state = MockBackend::zones_preview().snapshot();
+        let living = &state.zones[0];
+        assert_eq!(
+            state.zone_counts(living),
+            ZoneCounts {
+                total: 5,
+                present: 4,
+                on: 2,
+                waiting: 1
+            },
+            "Den is hidden; the home theater isn't found yet"
+        );
+        let office = &state.zones[2];
+        assert_eq!(state.zone_counts(office), ZoneCounts::default());
+    }
+
+    // covers: S255
+    #[test]
+    fn calibrate_zone_is_offered_while_a_member_is_here_and_no_calibration_holds_the_outputs() {
+        let mut state = MockBackend::zones_preview().snapshot();
+        let (living, office) = (state.zones[0].clone(), state.zones[2].clone());
+        assert!(state.offers_zone_run(&living));
+        assert!(
+            !state.offers_zone_run(&office),
+            "none of its members is here"
+        );
+        state.calibration.busy = true;
+        assert!(
+            !state.offers_zone_run(&living),
+            "a start would do nothing while a calibration holds the outputs"
+        );
+    }
+
+    #[test]
+    fn a_zone_with_a_cast_member_is_on_with_one_cast_speaker() {
         let mut backend = MockBackend::new();
+        backend.add_speaker(Speaker {
+            id: "cc:attic".into(),
+            kind: SpeakerKind::Cast,
+            enabled: false,
+            ..backend.snapshot().speakers[3].clone()
+        });
+        backend.add_speaker(Speaker {
+            id: "cc:porch".into(),
+            kind: SpeakerKind::Cast,
+            enabled: false,
+            ..backend.snapshot().speakers[3].clone()
+        });
+        backend.add_zone(
+            "zone:a",
+            "Garden",
+            &["airplay:bedroom", "cc:attic", "cc:porch"],
+        );
+        backend.toggle_zone("zone:a");
+        let state = backend.snapshot();
+        let on: Vec<&str> = state
+            .speakers
+            .iter()
+            .filter(|s| s.enabled && state.zone_of(&s.id).is_some())
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(on, ["airplay:bedroom", "cc:attic"]);
+        assert_eq!(state.zone_state(&state.zones[0]), SpeakerState::Playing);
+    }
+
+    #[test]
+    fn a_new_zone_needs_a_speaker_that_is_on_and_takes_it_from_its_zone() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:a", "Desk", &["local:desk"]);
         for id in ["local:speakers", "airplay:kitchen"] {
             backend.set_speaker_enabled(id, false);
         }
-        assert_eq!(
-            backend.new_group("Office"),
-            Err(GroupError::NoActiveSpeakers)
-        );
+        assert_eq!(backend.new_zone("Office"), Err(ZoneError::NoActiveSpeakers));
         backend.set_speaker_enabled("local:desk", true);
-        assert_eq!(backend.new_group(" Office "), Ok(()));
-        let group = backend.snapshot().groups.last().cloned().unwrap();
-        assert_eq!(group.name, "Office");
-        assert_eq!(group.members, ["local:desk"]);
+        assert_eq!(backend.new_zone(" Office "), Ok(()));
+        let state = backend.snapshot();
+        let zone = state.zones.last().cloned().unwrap();
+        assert_eq!(zone.name, "Office");
+        assert_eq!(zone.members, ["local:desk"]);
+        assert!(state.zones[0].members.is_empty(), "the empty zone stays");
+    }
+
+    #[test]
+    fn use_target_instead_puts_the_pair_in_its_members_place() {
+        let mut backend = MockBackend::zones_preview();
+        backend.use_target_instead("airplay:left");
+        let state = backend.snapshot();
+        assert_eq!(state.zones[1].members, ["airplay:bedroom"]);
+        assert_eq!(
+            state.zone_of("airplay:pair").map(|zone| zone.id.as_str()),
+            Some("zone:living"),
+            "the pair stays where it was"
+        );
     }
 
     #[test]
@@ -1875,11 +2713,47 @@ mod tests {
     #[test]
     fn the_equalizer_is_quantized_and_matches_presets() {
         let mut backend = MockBackend::new();
+        assert_eq!(
+            shown_curve(&backend.snapshot()),
+            Some(CurveMatch::Preset(0))
+        );
         let mut settings = EqSettings::default();
         settings.gains_db[0] = 3.3;
         backend.set_equalizer(settings);
         assert_eq!(backend.snapshot().equalizer.gains_db[0], 3.5);
-        assert_eq!(matching_preset_index(&EqSettings::default()), Some(0));
-        assert_eq!(matching_preset_index(&backend.snapshot().equalizer), None);
+        assert_eq!(shown_curve(&backend.snapshot()), None);
+        assert_eq!(picker_index(None), -1, "Custom is not an entry");
+    }
+
+    #[test]
+    fn the_picker_lists_the_presets_then_the_saved_curves() {
+        let mut backend = MockBackend::new();
+        let mut gains = [0.0; eq::BAND_COUNT];
+        gains[3] = 2.5;
+        backend.set_equalizer_curves(vec![
+            UserCurve {
+                name: "Desk".into(),
+                gains_db: gains,
+            },
+            UserCurve {
+                name: "desk".into(),
+                gains_db: [1.0; eq::BAND_COUNT],
+            },
+        ]);
+        let state = backend.snapshot();
+        assert_eq!(state.equalizer_curves.len(), 1, "a name is kept once");
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: -4.0,
+            gains_db: gains,
+        });
+        let shown = shown_curve(&backend.snapshot());
+        assert_eq!(shown, Some(CurveMatch::User(0)), "the preamp never counts");
+        let index = picker_index(shown);
+        assert_eq!(index, i32::try_from(eq::PRESETS.len()).unwrap());
+        assert_eq!(picked_curve(index, 1), shown);
+        assert_eq!(picked_curve(0, 1), Some(CurveMatch::Preset(0)));
+        assert_eq!(picked_curve(index + 1, 1), None);
+        assert_eq!(picked_curve(-1, 1), None);
     }
 }

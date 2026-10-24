@@ -7,6 +7,7 @@
 //! allocate (the outputs taking part), so it never runs on an audio thread.
 
 use super::{host_slice, host_slice_mut};
+use crate::lead::{self, OutputKind, SourceKind};
 use crate::policy::delay;
 use crate::reader;
 
@@ -152,6 +153,52 @@ pub unsafe extern "C" fn asc_local_hold_backs_ms(
         *out = value;
     }
     true
+}
+
+/// [`SourceKind::System`] for [`asc_lead_network_wait_ms`].
+pub const LEAD_SOURCE_SYSTEM: u32 = 0;
+/// [`SourceKind::App`].
+pub const LEAD_SOURCE_APP: u32 = 1;
+/// [`SourceKind::Input`].
+pub const LEAD_SOURCE_INPUT: u32 = 2;
+/// [`OutputKind::Local`] for [`asc_lead_network_wait_ms`].
+pub const LEAD_OUTPUT_LOCAL: u32 = 0;
+/// [`OutputKind::AirPlay`].
+pub const LEAD_OUTPUT_AIRPLAY: u32 = 1;
+/// [`OutputKind::Cast`].
+pub const LEAD_OUTPUT_CAST: u32 = 2;
+
+/// [`lead::network_wait_ms`]: true, writing the wait into `wait_ms`, when
+/// the output waits for the network speakers; false, writing nothing, when
+/// it doesn't or `wait_ms` is null. `network_ms` counts only when
+/// `has_network`. An unknown source code counts as the system's mix and an
+/// unknown output code as a network speaker, so neither drops a wait.
+///
+/// # Safety
+///
+/// `wait_ms` is null or points to an aligned, writable double that nothing
+/// else touches during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_lead_network_wait_ms(
+    source: u32,
+    output: u32,
+    has_network: bool,
+    network_ms: f64,
+    wait_ms: *mut f64,
+) -> bool {
+    let source = match source {
+        LEAD_SOURCE_APP => SourceKind::App,
+        LEAD_SOURCE_INPUT => SourceKind::Input,
+        _ => SourceKind::System,
+    };
+    let output = match output {
+        LEAD_OUTPUT_LOCAL => OutputKind::Local,
+        LEAD_OUTPUT_CAST => OutputKind::Cast,
+        _ => OutputKind::AirPlay,
+    };
+    let wait = lead::network_wait_ms(source, output, has_network.then_some(network_ms));
+    // SAFETY: by the caller's contract null or aligned, writable and only ours.
+    unsafe { write_sanitized(wait, wait_ms) }
 }
 
 /// [`delay::sanitize_offset_ms`] (S175): false, writing nothing, for a
@@ -361,6 +408,37 @@ mod tests {
                 ptr::null_mut()
             ));
             assert_eq!(held, [-1.0; 3], "a refused call writes nothing");
+        }
+    }
+
+    #[test]
+    fn the_network_wait_through_the_c_interface_matches_the_rust_one() {
+        let sources = [LEAD_SOURCE_SYSTEM, LEAD_SOURCE_APP, LEAD_SOURCE_INPUT, 9];
+        let outputs = [LEAD_OUTPUT_LOCAL, LEAD_OUTPUT_AIRPLAY, LEAD_OUTPUT_CAST, 9];
+        for source in sources {
+            for output in outputs {
+                let mut wait = -1.0;
+                let live_local = source == LEAD_SOURCE_INPUT && output == LEAD_OUTPUT_LOCAL;
+                // SAFETY: `wait` is a live double; null is allowed.
+                unsafe {
+                    assert_eq!(
+                        asc_lead_network_wait_ms(source, output, true, 2000.0, &mut wait),
+                        !live_local,
+                        "source {source}, output {output}"
+                    );
+                    assert_eq!(wait, if live_local { -1.0 } else { 2000.0 });
+                    assert!(!asc_lead_network_wait_ms(
+                        source, output, false, 2000.0, &mut wait
+                    ));
+                    assert!(!asc_lead_network_wait_ms(
+                        source,
+                        output,
+                        true,
+                        2000.0,
+                        ptr::null_mut()
+                    ));
+                }
+            }
         }
     }
 

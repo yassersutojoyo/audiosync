@@ -12,7 +12,7 @@ import Synchronization
 /// devices that come and go, a second launch) and quitting. The work
 /// sits in the extensions: `+Engine` (streaming on and off, notices, alerts),
 /// `+Outputs` (speaker and source state, local outputs), `+AirPlay` (the
-/// AirPlay list, pairing, sleep and wake, track info), `+Groups` (groups,
+/// AirPlay list, pairing, sleep and wake, track info), `+Zones` (zones,
 /// auto-connect, the login item) and `+Windows` (menus, windows, the model
 /// the views render).
 ///
@@ -126,6 +126,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }
+    /// The zones (S245), migrated from the groups once (S248).
+    var zones: [SpeakerZone] {
+        didSet { if zones != oldValue { store.save(zones: zones); applyZoneVolumes() } }
+    }
+    /// The groups became zones and this launch says so in a notice, once.
+    private let zonesNoticeDue: Bool
+    /// The speaker presets (S251), stored and migrated from the groups.
+    var presets: [SpeakerPreset] {
+        didSet { if presets != oldValue { store.save(presets: presets) } }
+    }
+    /// What the preset notice says, so it follows its preset and members (S262, S265).
+    var presetNotice: PresetNotice.Cause?
     /// Speaker keys switched on as soon as they appear.
     var autoConnect: Set<String> {
         didSet { if autoConnect != oldValue { store.save(ids: autoConnect, forKey: Keys.autoConnect) } }
@@ -154,6 +166,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     var whenSourceQuits: WhenSourceQuits {
         didSet { if whenSourceQuits != oldValue { store.save(whenSourceQuits: whenSourceQuits) } }
+    }
+    /// The channel pair each input device plays (`InputChannelPair.index`), by
+    /// device UID; a device without an entry plays channels 1-2.
+    var inputPairs: [String: Int] {
+        didSet { if inputPairs != oldValue { store.save(inputPairs: inputPairs) } }
     }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
@@ -251,15 +268,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         localDelaysMigrated = saved.localDelaysMigrated
         airplayVolume = saved.airplayVolumes
         groups = saved.groups
+        zones = saved.zones
+        zonesNoticeDue = saved.zonesNoticeDue
+        presets = saved.presets
         autoConnect = saved.autoConnect
-        speakerNames = saved.speakerNames
+        speakerNames = saved.speakerNames.castKeysMoved()
         showVirtualDevices = saved.showVirtualDevices
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits
+        inputPairs = saved.inputPairs
         airPlay2 = saved.airPlay2
         airPlay2AtLaunch = saved.airPlay2
         super.init()
+        // didSet doesn't run in init, so the moved Cast names are saved here, once.
+        if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
         _ = castModel.setMaster(saved.master)
+        _ = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast))
     }
 
     /// The one-time migration of the absolute delays to offsets (S179), with
@@ -314,6 +338,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // so a Local Network prompt they raise comes up in front of it.
         reconcileAirPlaySpeakers()
         webRemote?.startIfEnabled()   // after the window too: listening on the network can raise that prompt
+        if zonesNoticeDue {
+            postNotice(text.groupsBecameZones, subject: Notice.zones)
+            store.zonesNoticeShown()
+        }
         pushModel()
     }
 

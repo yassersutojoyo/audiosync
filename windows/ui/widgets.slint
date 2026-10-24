@@ -1,15 +1,15 @@
 // The pieces the main window and the tray flyout share: cards, section
-// titles, icon buttons, speaker and group rows, the sync controls, notices
+// titles, icon buttons, speaker rows and zone headers, the sync controls, notices
 // and the wordmark.
 //
 // Keyboard and Narrator: every control here is reachable with Tab, shows a
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, Slider, Switch } from "std-widgets.slint";
+import { Button, ComboBox, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Availability, CastState, DeviceVolumeHint, GroupItem, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind } from "types.slint";
+import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 
 import "../../brand/fonts/Poppins-Medium.ttf";
 
@@ -59,12 +59,13 @@ export global Glyphs {
     out property <string> display: "\u{E7F4}";
     out property <string> network: "\u{E701}";
     out property <string> device: "\u{E772}";
-    out property <string> group: "\u{E902}";
+    out property <string> zone: "\u{E902}";
     out property <string> more: "\u{E712}";
     out property <string> dismiss: "\u{E711}";
     out property <string> warning: "\u{E7BA}";
     out property <string> chevron-right: "\u{E76C}";
     out property <string> chevron-down: "\u{E70D}";
+    out property <string> chevron-up: "\u{E70E}";
     out property <string> equalizer: "\u{E9E9}";
     out property <string> timer: "\u{E916}";
     out property <string> auto-connect: "\u{E945}";
@@ -80,6 +81,8 @@ export global Glyphs {
     out property <string> play: "\u{E768}";
     out property <string> pause: "\u{E769}";
     out property <string> microphone: "\u{E720}";
+    out property <string> presets: "\u{E728}";
+    out property <string> check: "\u{E73E}";
 
     // A switched-on output's own volume in Windows: the muted speaker while
     // muted, the speaker with one wave while low (spec S198).
@@ -433,7 +436,7 @@ export component DialogButton inherits FocusScope {
     }
 }
 
-// The round toggle at the start of a speaker or group row: filled while it
+// The round toggle at the start of a speaker row or zone header: filled while it
 // plays, outlined while it waits (for streaming, or for a device or an
 // AirPlay speaker while streaming), grey while off.
 export component SpeakerBadge inherits Rectangle {
@@ -443,9 +446,17 @@ export component SpeakerBadge inherits Rectangle {
     in property <string> description;
     in property <bool> enabled: true;
     in property <length> size: 32px;
+    // What Narrator reads as its value; empty: its state.
+    in property <string> value-text;
+    // A zone header's toggle: Left hides the zone's speakers, Right shows them.
+    in property <bool> expandable;
+    in property <bool> expanded;
     callback toggled();
     // The toggle gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
+    callback expanded-changed(bool);
+    // F2 while it has the focus.
+    callback rename-key();
 
     width: root.size;
     height: root.size;
@@ -463,9 +474,11 @@ export component SpeakerBadge inherits Rectangle {
     accessible-label: root.label;
     accessible-checkable: true;
     accessible-checked: root.state != RowState.off;
-    accessible-value: Strings.value(root.state);
+    accessible-value: root.value-text != "" ? root.value-text : Strings.value(root.state);
     accessible-description: root.description;
     accessible-enabled: root.enabled;
+    accessible-expandable: root.expandable;
+    accessible-expanded: root.expanded;
     accessible-action-default => {
         root.toggled();
     }
@@ -476,6 +489,18 @@ export component SpeakerBadge inherits Rectangle {
         key-pressed(event) => {
             if event.text == " " || event.text == Key.Return {
                 root.toggled();
+                return accept;
+            }
+            if root.expandable && event.text == Key.LeftArrow && root.expanded {
+                root.expanded-changed(false);
+                return accept;
+            }
+            if root.expandable && event.text == Key.RightArrow && !root.expanded {
+                root.expanded-changed(true);
+                return accept;
+            }
+            if event.text == Key.F2 {
+                root.rename-key();
                 return accept;
             }
             return reject;
@@ -561,6 +586,22 @@ export component ToggleSwitch inherits Switch {
     accessible-role: button;
 }
 
+// An input device's channel pair choice. It shows `chosen` again after a
+// pick, so it only moves once the backend took the pick.
+export component PairPicker inherits ComboBox {
+    in property <int> chosen;
+    callback picked(int);
+    current-index: root.chosen;
+    accessible-label: Strings.input-channels-label;
+    changed chosen => {
+        self.current-index = root.chosen;
+    }
+    selected => {
+        root.picked(self.current-index);
+        self.current-index = root.chosen;
+    }
+}
+
 // A volume slider with its value. `changed` reports every move.
 export component VolumeSlider inherits HorizontalLayout {
     in property <float> volume;
@@ -607,6 +648,33 @@ export component VolumeSlider inherits HorizontalLayout {
         vertical-alignment: center;
         wrap: no-wrap;
         font-size: Tokens.font-size-caption;
+    }
+}
+
+// The input level meter: a bar that only reads out, never takes the focus.
+// The fill against its track measures above 3:1 in both themes (contrast.rs).
+export component LevelMeter inherits Rectangle {
+    // 0 to 1.
+    in property <float> level;
+    // The level as Narrator reads it, in steps of 10 percent.
+    in property <int> spoken-percent;
+    in property <string> label;
+
+    height: 4px;
+    border-radius: self.height / 2;
+    background: Tokens.separator;
+    accessible-role: progress-indicator;
+    accessible-label: root.label;
+    accessible-value: Strings.input-level-value(root.spoken-percent);
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 100;
+
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.level, 0, 1);
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: Tokens.teal-text;
     }
 }
 
@@ -1187,6 +1255,12 @@ export component SpeakerRow inherits Rectangle {
     // Remove, for a Google Cast speaker the user added by address.
     callback cast-remove();
     callback hide-requested();
+    // The zones its Move to Zone submenu lists.
+    in property <[ZoneItem]> zones;
+    callback move-to-zone(string);
+    // New Zone… in its menu: a zone of this speaker alone.
+    callback new-zone();
+    callback remove-from-zone();
     // Calibrate with Microphone, and Cancel while it runs.
     callback calibrate();
     callback cancel-calibration();
@@ -1258,7 +1332,7 @@ export component SpeakerRow inherits Rectangle {
     // ("Waiting for device", "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group-note);
     property <string> state-note: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
-    property <string> note: root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
+    property <string> note: root.item.zone-note != "" ? root.item.zone-note : root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
     property <string> caption: Strings.speaker-caption(root.item.show-kind && !root.item.cast-group ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     // A click on the row's box works like its delay button; a row without a
@@ -1299,7 +1373,7 @@ export component SpeakerRow inherits Rectangle {
         }
         menu := ContextMenuArea {
             Menu {
-                MenuItem {
+                if !root.item.missing: MenuItem {
                     title: Strings.rename-speaker;
                     activated => {
                         root.rename-requested();
@@ -1308,7 +1382,7 @@ export component SpeakerRow inherits Rectangle {
 
                 // Auto-connect is for local and AirPlay speakers; a Cast
                 // speaker's menu holds the controls under its volume.
-                if !root.item.cast: MenuItem {
+                if !root.item.cast && !root.item.missing: MenuItem {
                     title: Strings.auto-connect;
                     checkable: true;
                     checked: root.item.auto-connect;
@@ -1345,6 +1419,38 @@ export component SpeakerRow inherits Rectangle {
                     }
                 }
 
+                if root.item.zone-movable && !root.item.missing: MenuSeparator { }
+
+                if root.item.zone-movable: Menu {
+                    title: Strings.move-to-zone;
+                    for zone in root.zones: MenuItem {
+                        title: zone.name;
+                        checkable: true;
+                        checked: zone.id == root.item.zone-id;
+                        activated => {
+                            if zone.id != root.item.zone-id {
+                                root.move-to-zone(zone.id);
+                            }
+                        }
+                    }
+
+                    if root.zones.length > 0: MenuSeparator { }
+
+                    MenuItem {
+                        title: Strings.new-zone-item;
+                        activated => {
+                            root.new-zone();
+                        }
+                    }
+                }
+
+                if root.item.zone-movable && root.item.zone-id != "": MenuItem {
+                    title: Strings.remove-from-zone;
+                    activated => {
+                        root.remove-from-zone();
+                    }
+                }
+
                 if root.item.hideable: MenuSeparator { }
 
                 if root.item.hideable: MenuItem {
@@ -1375,6 +1481,7 @@ export component SpeakerRow inherits Rectangle {
                         badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
+                            enabled: !root.item.missing;
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
                             description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
                             toggled => {
@@ -1382,6 +1489,9 @@ export component SpeakerRow inherits Rectangle {
                             }
                             focus-changed(focused) => {
                                 root.badge-focused = focused;
+                            }
+                            rename-key => {
+                                root.rename-requested();
                             }
                         }
                     }
@@ -1421,7 +1531,7 @@ export component SpeakerRow inherits Rectangle {
                                             text: root.item.name;
                                             font-size: Tokens.font-size-body;
                                             font-weight: root.item.state == RowState.playing ? 600 : 400;
-                                            color: Tokens.text;
+                                            color: root.item.zone-dimmed ? Tokens.secondary-text : Tokens.text;
                                             vertical-alignment: center;
                                             overflow: elide;
                                             accessible-role: none;
@@ -1679,7 +1789,7 @@ export component SpeakerRow inherits Rectangle {
                                     step: root.item.cast ? root.item.volume-step : 1;
                                     label: Strings.volume-of(root.item.name);
                                     description: root.item.cast && root.item.volume-fixed ? Strings.cast-volume-fixed : "";
-                                    enabled: root.item.cast ? root.cast-live && !root.item.volume-fixed : root.item.state != RowState.off;
+                                    enabled: !root.item.missing && (root.item.cast ? root.cast-live && !root.item.volume-fixed : root.item.state != RowState.off);
                                     changed(value) => {
                                         root.volume-changed(value);
                                     }
@@ -1836,31 +1946,41 @@ export component SpeakerRow inherits Rectangle {
     }
 }
 
-// One group, lined up with the speaker rows: its toggle, name and members,
-// and its options (rename, delete).
-export component GroupRow inherits Rectangle {
-    in property <GroupItem> item;
+// A zone's header, lined up with the speaker rows: its toggle, name and
+// count, then its volume, its options and the arrow that shows or hides its
+// speakers. A click on the header toggles the zone; the arrow is left out of
+// the Tab order, as Left and Right on the toggle do its work.
+export component ZoneHeader inherits Rectangle {
+    in property <ZoneItem> item;
     callback toggled();
-    callback blank-clicked();
+    callback expanded-changed(bool);
+    callback volume-changed(float);
     callback rename();
     callback delete();
-    // The part of the row with the keyboard focus changed (its toggle or
-    // its options); none: the row lost it.
+    callback calibrate();
+    // Use <target> Instead, by the member's ID.
+    callback use-target(string);
+    // The part of the header with the keyboard focus changed (its toggle,
+    // volume or options); none: the header lost it.
     callback focus-changed(RowPart);
 
-    // Gives the row the keyboard focus: its toggle, or its options when
-    // `part` is the options or the toggle is off for want of members.
+    // Gives the header the keyboard focus on `part`, or its options when
+    // that part is off for want of members.
     public function take-focus(part: RowPart) {
-        if part == RowPart.toggle && root.item.available > 0 {
+        if part == RowPart.volume && root.live {
+            volume-slider.focus-slider();
+        } else if part == RowPart.toggle && root.live {
             badge.focus();
         } else {
             options.focus();
         }
     }
 
+    // A member is listed: the toggle and the volume work.
+    property <bool> live: root.item.present > 0;
     property <bool> badge-focused;
     property <bool> options-focused;
-    property <RowPart> focused-part: self.options-focused ? RowPart.options : self.badge-focused ? RowPart.toggle : RowPart.none;
+    property <RowPart> focused-part: self.options-focused ? RowPart.options : volume-slider.slider-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : RowPart.none;
     changed focused-part => {
         root.focus-changed(self.focused-part);
     }
@@ -1869,94 +1989,197 @@ export component GroupRow inherits Rectangle {
     background: root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
 
-    // Around the row's content, so the hover fill stays on over the row's
-    // own controls (they still get their clicks and drags first).
     hover := TouchArea {
         clicked => {
-            root.blank-clicked();
+            if root.live {
+                root.toggled();
+            }
         }
         menu := ContextMenuArea {
             Menu {
                 MenuItem {
-                    title: Strings.rename-group;
+                    title: Strings.rename-zone;
                     activated => {
                         root.rename();
                     }
                 }
 
+                for target in root.item.targets: MenuItem {
+                    title: Strings.use-target-instead(target.target);
+                    activated => {
+                        root.use-target(target.member-id);
+                    }
+                }
+
                 MenuItem {
-                    title: Strings.delete-group;
+                    title: Strings.calibrate-zone-item;
+                    enabled: root.item.can-calibrate;
+                    activated => {
+                        root.calibrate();
+                    }
+                }
+
+                MenuSeparator { }
+
+                MenuItem {
+                    title: Strings.delete-zone;
                     activated => {
                         root.delete();
                     }
                 }
             }
 
-            HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 8px;
-                padding-top: 8px;
-                padding-bottom: 8px;
-                spacing: 8px;
-                min-height: Fluent.row-height;
+            // F2 renames the zone from any of its header's controls.
+            FocusScope {
+                focus-on-click: false;
+                focus-on-tab-navigation: false;
+                key-pressed(event) => {
+                    if event.text == Key.F2 {
+                        root.rename();
+                        return accept;
+                    }
+                    return reject;
+                }
 
-                VerticalLayout {
-                    alignment: center;
+                HorizontalLayout {
+                    padding-left: 12px;
                     padding-right: 4px;
-                    badge := SpeakerBadge {
-                        glyph: Glyphs.group;
-                        state: root.item.state;
-                        enabled: root.item.available > 0;
-                        label: root.item.name;
-                        description: Strings.group-members(root.item.available, root.item.total);
-                        toggled => {
-                            root.toggled();
-                        }
-                        focus-changed(focused) => {
-                            root.badge-focused = focused;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 8px;
+                    min-height: Fluent.row-height;
+
+                    VerticalLayout {
+                        alignment: center;
+                        padding-right: 4px;
+                        badge := SpeakerBadge {
+                            glyph: Glyphs.zone;
+                            state: root.item.state;
+                            enabled: root.live;
+                            label: Strings.zone-label(root.item.name);
+                            value-text: Strings.zone-value(root.item.on, root.item.total, root.item.waiting);
+                            description: Strings.row-note(root.item.state);
+                            expandable: true;
+                            expanded: root.item.expanded;
+                            toggled => {
+                                root.toggled();
+                            }
+                            focus-changed(focused) => {
+                                root.badge-focused = focused;
+                            }
+                            expanded-changed(open) => {
+                                root.expanded-changed(open);
+                            }
+                            rename-key => {
+                                root.rename();
+                            }
                         }
                     }
-                }
 
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 1px;
-                    horizontal-stretch: 1;
-                    opacity: root.item.available == 0 ? Tokens.disabled-opacity : 1;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        horizontal-stretch: 1;
 
-                    Text {
-                        text: root.item.name;
-                        font-size: Tokens.font-size-body;
-                        font-weight: root.item.state == RowState.playing ? 600 : 400;
-                        color: Tokens.text;
-                        overflow: elide;
-                        accessible-role: none;
-                    }
-
-                    // The members, and the note of a group whose present
-                    // members all wait ("Waiting for device", "Reconnecting…").
-                    QuietText {
-                        text: Strings.speaker-caption(Strings.group-members(root.item.available, root.item.total), Strings.row-note(root.item.state));
-                        wrap: no-wrap;
-                        overflow: elide;
-                    }
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    options := IconButton {
-                        glyph: Glyphs.more;
-                        label: Strings.speaker-options(root.item.name);
-                        glyph-color: Tokens.teal-text;
-                        clicked => {
-                            // show() takes a point in the menu area, not in this button's layout.
-                            menu.show({
-                                x: self.absolute-position.x - menu.absolute-position.x,
-                                y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                            });
+                        Text {
+                            text: root.item.name;
+                            font-size: Tokens.font-size-body;
+                            font-weight: root.item.state == RowState.playing ? 600 : 400;
+                            color: Tokens.text;
+                            overflow: elide;
+                            accessible-role: none;
                         }
-                        focus-changed(focused) => {
-                            root.options-focused = focused;
+
+                        // The count, and the note of a zone whose members all
+                        // wait ("Waiting for device", "Reconnecting…").
+                        QuietText {
+                            text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
+                            wrap: no-wrap;
+                            overflow: elide;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        volume-slider := VolumeSlider {
+                            width: 140px;
+                            volume: root.item.volume;
+                            enabled: root.live;
+                            label: Strings.zone-volume(root.item.name);
+                            changed(value) => {
+                                root.volume-changed(value);
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        options := IconButton {
+                            glyph: Glyphs.more;
+                            label: Strings.speaker-options(root.item.name);
+                            glyph-color: Tokens.teal-text;
+                            clicked => {
+                                // show() takes a point in the menu area, not in this button's layout.
+                                menu.show({
+                                    x: self.absolute-position.x - menu.absolute-position.x,
+                                    y: self.absolute-position.y - menu.absolute-position.y + self.height,
+                                });
+                            }
+                            focus-changed(focused) => {
+                                root.options-focused = focused;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: Fluent.radius-control;
+                        y: (parent.height - self.height) / 2;
+                        background: arrow.pressed ? Fluent.pressed : arrow.has-hover ? Fluent.hover : transparent;
+                        accessible-role: button;
+                        accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
+                        accessible-expandable: true;
+                        accessible-expanded: root.item.expanded;
+                        accessible-action-default => {
+                            root.expanded-changed(!root.item.expanded);
+                        }
+
+                        arrow := TouchArea {
+                            clicked => {
+                                root.expanded-changed(!root.item.expanded);
+                            }
+
+                            // Narrator reads the same words from the arrow's label.
+                            Tooltip {
+                                Rectangle {
+                                    width: arrow-tip.preferred-width + 16px;
+                                    height: arrow-tip.preferred-height + 10px;
+                                    border-radius: Fluent.radius-control;
+                                    border-width: 1px;
+                                    border-color: Fluent.stroke;
+                                    background: Tokens.surface;
+                                    drop-shadow-blur: 8px;
+                                    drop-shadow-offset-y: 2px;
+                                    drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                    accessible-role: none;
+
+                                    arrow-tip := Text {
+                                        x: 8px;
+                                        text: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
+                                        font-size: Tokens.font-size-caption;
+                                        color: Tokens.text;
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+                                }
+                            }
+                        }
+
+                        Glyph {
+                            glyph: root.item.expanded ? Glyphs.chevron-up : Glyphs.chevron-down;
+                            font-size: 12px;
+                            color: Tokens.secondary-text;
                         }
                     }
                 }

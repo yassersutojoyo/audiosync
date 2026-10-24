@@ -39,6 +39,7 @@ extension AppDelegate {
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
+        native.setZones(nativeZoneVolumes())
         let airPlay2On = AppSettings.airPlay2On(setting: airPlay2AtLaunch,
                                                 environment: ProcessInfo.processInfo.environment)
         native.start(master: masterVolume, airPlay2: airPlay2AtLaunch) { [weak self] started in
@@ -84,12 +85,13 @@ extension AppDelegate {
     }
 
     /// What was saved under the bundled engine's output ID of `receiver`
-    /// (switched on, its volume, its groups, auto-connect) moves to its
+    /// (switched on, its volume, its groups, zones and presets, auto-connect) moves to its
     /// native ID, before its row appears (S204). Nothing is left to move
     /// afterwards, so this runs for every receiver discovery reports.
     private func migrateSavedSpeakerIDs(to receiver: NativeReceiver) {
         let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
-                                             groups: groups, autoConnect: autoConnect)
+                                             groups: groups, autoConnect: autoConnect, zones: zones,
+                                             presets: presets)
         let renames = SpeakerIDMigration.renames(saved, receivers: [receiver.id])
         guard !renames.isEmpty else { return }
         for old in renames.keys.sorted() {
@@ -99,6 +101,8 @@ extension AppDelegate {
         hiddenSpeakers.migrate(airPlay: renames)
         airplayVolume = migrated.airplayVolumes
         groups = migrated.groups
+        zones = migrated.zones
+        presets = migrated.presets
         autoConnect = migrated.autoConnect
         enabledAirPlay = migrated.enabledAirPlay
     }
@@ -382,13 +386,13 @@ extension AppDelegate {
     /// on, it is a new attempt: one that asks for a PIN pairs, and one that
     /// asks for a password AudioSync doesn't have this run prompts for it;
     /// switched off, a pairing under way stops.
-    func setNativeAirPlayEnabled(_ id: String, _ on: Bool) {
-        if on, refusedAsTargetMember(id) { return }
+    func setNativeAirPlayEnabled(_ id: String, _ on: Bool, origin: StartOrigin = .user) {
+        if on, refusedAsTargetMember(id, origin: origin) { return }
         if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
         if on { beginNativeAttempts([id]) } else { endNativeAttempt(id) }
         if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.isRunning) {
-            startEngine(origin: .user)
+            startEngine(origin: origin)
         } else {
             syncNativeSpeakers()
             stopIfIdle()
@@ -398,12 +402,12 @@ extension AppDelegate {
 
     /// A member of a listed stereo pair or home theater group plays only as
     /// part of it (P176): switched on by itself it stays off, and says why.
-    private func refusedAsTargetMember(_ id: String) -> Bool {
+    private func refusedAsTargetMember(_ id: String, origin: StartOrigin) -> Bool {
         guard let receiver = NativeAirPlayID.receiver(id), let native = nativeAirPlay,
               let target = native.model.holdingTarget(receiver, on: enabledAirPlay.contains(id)) else { return false }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: it plays as part of \(nativeLabel(target))")
         notify(text.nativeAirPlayPlaysInGroup(name: shownName(airPlay: id), group: shownName(airPlay: NativeAirPlayID.app(target))),
-               origin: .user, subject: SpeakerKey.make(id: id, airplay: true))
+               origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
         pushModel()
         return true
     }

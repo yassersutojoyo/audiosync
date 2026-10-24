@@ -152,7 +152,7 @@ extension AppDelegate {
 
     /// The user's click on a Cast speaker (app ID). A second one while one
     /// is on stays off with a notice.
-    func setCastEnabled(_ appID: String, _ on: Bool) {
+    func setCastEnabled(_ appID: String, _ on: Bool, origin: StartOrigin = .user) {
         guard let id = CastID.device(appID) else { return }
         if on {
             if let problem = castModel.turnOn(id) {
@@ -164,7 +164,7 @@ extension AppDelegate {
             clearNotices([Notice.cast(id)])
             DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) switched on")
             if StreamingPolicy.startsStreaming(turnedOn: true, streaming: engine.isRunning) {
-                startEngine(origin: .user)
+                startEngine(origin: origin)
             }
         } else if castModel.turnOff(id) {
             DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) switched off")
@@ -326,7 +326,7 @@ extension AppDelegate {
     func castName(_ id: String) -> String {
         let announced = castModel.devices[id]?.name ?? ""
         let shown = announced.isEmpty ? castModel.manualAddresses[id]?.text ?? "" : announced
-        return speakerNames.shown(key: SpeakerKey.make(id: CastID.app(id), airplay: false),
+        return speakerNames.shown(key: CastID.key(id),
                                   system: text.deviceName(shown))
     }
 

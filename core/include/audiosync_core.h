@@ -291,6 +291,44 @@ extern "C" {
 #define ASC_STREAMING_RUNNING 1    /* a session runs */
 #define ASC_STREAMING_REBUILDING 2 /* a session is being rebuilt (a capture format change): counts as on */
 
+/* A zone member's kind (AscZoneMember.kind). */
+#define ASC_ZONE_MEMBER_LOCAL 0    /* a local output */
+#define ASC_ZONE_MEMBER_AIRPLAY 1  /* an AirPlay speaker on AirPlay 1 */
+#define ASC_ZONE_MEMBER_AIRPLAY2 2 /* an AirPlay speaker or target on AirPlay 2: one plays at a time (P169) */
+#define ASC_ZONE_MEMBER_CAST 3     /* a Google Cast speaker or Cast group */
+
+/* What asc_zone_click_plan answers for the zone. */
+#define ASC_ZONE_CLICK_NOTHING 0  /* no member counts: nothing changes */
+#define ASC_ZONE_CLICK_TURN_ON 1  /* members go on; streaming is on */
+#define ASC_ZONE_CLICK_START 2    /* members go on, and streaming starts */
+#define ASC_ZONE_CLICK_TURN_OFF 3 /* every counted member goes off */
+
+/* What asc_zone_click_plan writes for each member. */
+#define ASC_ZONE_STEP_ABSENT 0             /* not listed, or hidden: left alone */
+#define ASC_ZONE_STEP_NEEDS_AIRPLAY2 1     /* a pair or theater target while AirPlay 2 is off: left alone */
+#define ASC_ZONE_STEP_IN_TARGET 2          /* plays as part of a target: left alone */
+#define ASC_ZONE_STEP_ON 3                 /* switched on, or stays on */
+#define ASC_ZONE_STEP_WAITING 4            /* switched on, waiting for the other AirPlay 2 speaker */
+#define ASC_ZONE_STEP_OFF 5                /* switched off, or stays off */
+#define ASC_ZONE_STEP_CAST_ANOTHER_PLAYS 6 /* a Cast member left off: a Cast speaker outside the zone is on */
+#define ASC_ZONE_STEP_CAST_ONE_AT_A_TIME 7 /* a Cast member left off: another Cast member plays */
+#define ASC_ZONE_STEP_CAST_BUSY 8          /* a Cast member left off: it can't start now */
+
+/* What asc_preset_recall_plan answers for the recall. */
+#define ASC_PRESET_RECALL_NOTHING 0 /* no stored member can go on: nothing changes, post the notice */
+#define ASC_PRESET_RECALL_APPLY 1   /* carry the plan out; streaming is on */
+#define ASC_PRESET_RECALL_START 2   /* carry the plan out, and start streaming */
+
+/* What asc_preset_recall_plan writes for each stored member. */
+#define ASC_PRESET_STEP_ON 0             /* switched on, or stays on */
+#define ASC_PRESET_STEP_WAITING 1        /* switched on, waiting for the other AirPlay 2 speaker */
+#define ASC_PRESET_STEP_NOT_FOUND 2      /* left off: no speaker with its key is listed */
+#define ASC_PRESET_STEP_HIDDEN 3         /* left off: hidden */
+#define ASC_PRESET_STEP_NEEDS_AIRPLAY2 4 /* left off: a pair or theater target while AirPlay 2 is off */
+#define ASC_PRESET_STEP_IN_TARGET 5      /* left off: plays as part of a target */
+#define ASC_PRESET_STEP_BUSY 6           /* left off: a Cast speaker that can't start now */
+#define ASC_PRESET_STEP_IGNORED 7        /* a Cast key after the first: left alone, not in the notice */
+
 /* The port the web remote listens on unless its configuration names another (unassigned at IANA). */
 #define ASC_REMOTE_DEFAULT_PORT 7655
 
@@ -318,6 +356,11 @@ double asc_volume_position(double gain);
 
 /* A local output's linear gain: asc_volume_gain(local) * asc_volume_gain(master). */
 double asc_output_gain(double local_position, double master_position);
+
+/* A local output's linear gain through its zone (100 outside a zone):
+ * asc_volume_gain(local) * asc_volume_gain(zone) * asc_volume_gain(master);
+ * at zone 100 bit-identical to asc_output_gain. */
+double asc_zone_output_gain(double local_position, double zone_position, double master_position);
 
 /*
  * Multiplies frames x 2 interleaved samples by gain, in place. Gain 0 (or a
@@ -448,6 +491,39 @@ bool asc_ring_supports_rate(const AscRing *ring, uint32_t rate);
 
 /* Any thread: frames written since the last reset (the session's frames captured). */
 uint64_t asc_ring_frames_written(const AscRing *ring);
+
+/*
+ * Any thread: the largest sample magnitude written since the last call (1 is
+ * full scale; non-finite samples don't count), for one level meter polling at
+ * its own pace; 0 for NULL.
+ */
+float asc_ring_take_peak(const AscRing *ring);
+
+/* How often the UI polls asc_ring_take_peak for the input level meter, in ms. */
+#define ASC_METER_POLL_MS 100
+
+/*
+ * The input level meter's length, 0 to 1, after a poll that took `peak` while
+ * it showed `previous`: the peak on a dB scale from -60 to 0 dBFS, or the
+ * previous length less 0.15 when that is longer. Non-finite values count as
+ * silence. Pure function for the UI thread.
+ */
+float asc_meter_level(float previous, float peak);
+
+/*
+ * The input level meter's length as a screen reader reads it: whole percent
+ * in steps of 10, so the value changes a few times per word instead of at every
+ * poll. A non-finite length counts as 0. Pure function.
+ */
+uint32_t asc_meter_spoken_percent(float level);
+
+/*
+ * Any thread: the session lead of the ring's renderers in capture frames, into
+ * *frames, once every counted renderer has published its start lead (S208).
+ * False, writing nothing, before that, while none counts, or for a NULL
+ * argument. For the debug log.
+ */
+bool asc_ring_session_lead_frames(const AscRing *ring, int64_t *frames);
 
 /* Takes the ring's only writer; NULL while another writer exists. */
 AscRingWriter *asc_ring_writer_create(AscRing *ring);
@@ -843,6 +919,25 @@ typedef struct AscLocalOutput {
  */
 bool asc_local_hold_backs_ms(const AscLocalOutput *outputs, size_t count, bool airplay_chosen, double airplay_latency_ms, double *hold_backs_ms);
 
+/* asc_lead_network_wait_ms's source and output kinds. */
+#define ASC_LEAD_SOURCE_SYSTEM 0  /* the system's mix */
+#define ASC_LEAD_SOURCE_APP 1     /* one app or several */
+#define ASC_LEAD_SOURCE_INPUT 2   /* an input device: live */
+#define ASC_LEAD_OUTPUT_LOCAL 0   /* a device the local renderer plays, Bluetooth included */
+#define ASC_LEAD_OUTPUT_AIRPLAY 1
+#define ASC_LEAD_OUTPUT_CAST 2
+
+/*
+ * Whether an output of `output` kind waits for the network speakers while
+ * the session captures `source`: true, writing the wait into wait_ms, when it
+ * does; false, writing nothing, when it doesn't or wait_ms is NULL. A local
+ * output skips the wait for an input source, so a live voice is heard at its
+ * device's start lead; every other pair waits network_ms, which counts only
+ * when has_network. An unknown source counts as the system, an unknown output
+ * as a network speaker. Pure function for the control thread.
+ */
+bool asc_lead_network_wait_ms(uint32_t source, uint32_t output, bool has_network, double network_ms, double *wait_ms);
+
 /*
  * An offset input from the user, ready to store: clamped to -2000...20 000 ms
  * into *sanitized_ms. False, writing nothing, for a non-finite value (which
@@ -978,6 +1073,106 @@ const char *asc_device_volume_decision_name(uint32_t decision_code);
  */
 uint32_t asc_source_quit_decide(const char *setting, const char *source, const char *quit_app, uint32_t streaming);
 
+/* ---- Zones ---------------------------------------------------------------- */
+
+/* One zone member as the host sees it when the zone is clicked. */
+typedef struct AscZoneMember {
+    uint32_t kind;       /* an ASC_ZONE_MEMBER_ code; an unknown one is absent */
+    bool listed;         /* listed now and not hidden */
+    bool on;             /* switched on */
+    bool busy;           /* a Cast speaker the host can't start now */
+    bool needs_airplay2; /* a pair or theater target while the AirPlay 2 switch is off */
+    bool in_target;      /* plays as part of a stereo pair or home theater target now */
+} AscZoneMember;
+
+/*
+ * The plan of a click on a zone (S246, S247): an ASC_ZONE_CLICK_ code, with
+ * one ASC_ZONE_STEP_ code per member written into `steps`, in zone order.
+ * At most one Cast member goes on: the one on already, else the first not
+ * busy, and none while `cast_on_elsewhere`. NULL arrays with a count above
+ * 0 answer ASC_ZONE_CLICK_NOTHING and write nothing. Pure function for the
+ * control thread.
+ */
+uint32_t asc_zone_click_plan(const AscZoneMember *members, size_t count, bool streaming, bool cast_on_elsewhere, bool airplay2_playing_elsewhere, uint32_t *steps);
+
+/*
+ * The one-time migration of groups to zones (S248): `keys` holds every
+ * saved group's member keys, group after group in saved order; `keep[i]`
+ * becomes false for a key that comes earlier in the list, and for a NULL or
+ * non-UTF-8 one, else true. Does nothing for a NULL array. Pure function
+ * for the control thread.
+ */
+void asc_zone_migration_keeps(const char *const *keys, size_t count, bool *keep);
+
+/* ---- Speaker presets ------------------------------------------------------ */
+
+/* One stored member as the host sees it at recall, matched by its key. */
+typedef struct AscPresetMember {
+    uint32_t kind;       /* an ASC_ZONE_MEMBER_ code; an unknown one is not found */
+    bool found;          /* a speaker with its key is listed now, hidden or not */
+    bool hidden;         /* hidden with Hide Speaker */
+    bool on;             /* switched on */
+    bool busy;           /* a Cast speaker the host can't start now */
+    bool needs_airplay2; /* a pair or theater target while the AirPlay 2 switch is off */
+    bool in_target;      /* plays as part of a stereo pair or home theater target now */
+    bool fixed_volume;   /* a Cast speaker whose volume can't be changed from here */
+    bool has_volume;     /* the preset stores an own volume for it */
+} AscPresetMember;
+
+/* A speaker outside the preset at recall. */
+typedef struct AscPresetOther {
+    bool on;        /* switched on */
+    bool reference; /* the reference output, which a recall leaves alone */
+} AscPresetOther;
+
+/* One stored member as the current-preset check sees it; NaN is no volume. */
+typedef struct AscPresetMemberNow {
+    bool on;              /* the speaker is on now */
+    double stored_volume; /* the preset's own volume for it */
+    double volume;        /* its own volume now */
+} AscPresetMemberNow;
+
+/* One stored zone volume as the current-preset check sees it. */
+typedef struct AscPresetZoneNow {
+    double stored; /* the preset's volume for the zone */
+    double volume; /* the zone's volume now; NaN once the zone is deleted */
+} AscPresetZoneNow;
+
+/*
+ * Which stored member keys a preset keeps (S251): `keep[i]` becomes false
+ * for a key that isn't a speaker key with an ID, one earlier in the list, a
+ * Cast key after the first, and a NULL or non-UTF-8 one, else true. Does
+ * nothing for a NULL array. Pure function for the control thread.
+ */
+void asc_preset_member_keeps(const char *const *keys, size_t count, bool *keep);
+
+/*
+ * A preset's levels as stored (S251), in place: member volumes clamped to
+ * 0...100 (NaN, no volume, stays; infinity becomes NaN), zone volumes as a
+ * zone's, the master clamped (100 when it isn't a number), and the ten
+ * gains in `gains_db` on the controls' 0.5 dB steps within +-12 dB (S23).
+ * A NULL array is skipped. Pure function for the control thread.
+ */
+void asc_preset_levels(double *volumes, size_t count, double *zone_volumes, size_t zone_count, double *master, double *gains_db);
+
+/*
+ * The plan of a preset recall (S252), a full scene: an ASC_PRESET_RECALL_
+ * code, with one ASC_PRESET_STEP_ code and one set-volume flag per stored
+ * member in `steps` and `set_volume`, in preset order, and one flag per
+ * speaker outside the preset in `switch_off`. NULL arrays with a count
+ * above 0 answer ASC_PRESET_RECALL_NOTHING and write nothing. Pure function
+ * for the control thread.
+ */
+uint32_t asc_preset_recall_plan(const AscPresetMember *members, size_t count, const AscPresetOther *others, size_t other_count, bool streaming, uint32_t *steps, bool *set_volume, bool *switch_off);
+
+/*
+ * Whether the host plays a preset exactly (S253): `on_now` speakers are on,
+ * the reference output left out; the gains are ten each. False for a NULL
+ * array with a count above 0, or NULL gains. Pure function for the control
+ * thread.
+ */
+bool asc_preset_matches(const AscPresetMemberNow *members, size_t count, size_t on_now, const AscPresetZoneNow *zones, size_t zone_count, double stored_master, const double *stored_gains_db, double master, const double *gains_db);
+
 /* ---- Microphone calibration ---------------------------------------------- */
 
 /*
@@ -1099,6 +1294,14 @@ typedef struct AscCalibrationChange {
  */
 AscCalibrationRun *asc_calibration_run_create(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference);
 
+/*
+ * asc_calibration_run_create for Calibrate Zone: each speaker whose `off`
+ * entry is true is a zone member that is off, listed on the sheet and never
+ * swept; `off` NULL means none. NULL too when no speaker is left besides
+ * the reference and the off ones.
+ */
+AscCalibrationRun *asc_calibration_run_create_listing(uint32_t rate, const AscCalibrationSpeaker *speakers, size_t count, size_t reference, const bool *off);
+
 /* The next step into *step; false, writing nothing, once the run is over or for a NULL argument. */
 bool asc_calibration_run_step(const AscCalibrationRun *run, AscCalibrationStep *step);
 
@@ -1150,6 +1353,17 @@ uint32_t asc_calibration_sheet_apply(AscCalibrationSheet *sheet, AscCalibrationC
  */
 AscCalibrationRun *asc_calibration_sheet_measure_again(const AscCalibrationSheet *sheet, size_t index);
 
+/* Whether row `index` is a zone member that was off, listed and not measured; false out of range or for NULL. */
+bool asc_calibration_sheet_row_off(const AscCalibrationSheet *sheet, size_t index);
+
+/*
+ * Measure Again on an off row, with the speaker's stored delay (none when
+ * has_offset is false) and expected arrival as the host reads them now.
+ * NULL for a row that isn't off and as asc_calibration_sheet_measure_again;
+ * asc_calibration_sheet_measure_again refuses an off row.
+ */
+AscCalibrationRun *asc_calibration_sheet_measure_again_off(const AscCalibrationSheet *sheet, size_t index, bool has_offset, double offset_ms, double latency_ms);
+
 /*
  * Puts the row of a Measure Again sheet in place of the old one and frees
  * `again`. False, leaving `sheet` and its rows as they were, for an `again`
@@ -1161,6 +1375,29 @@ bool asc_calibration_sheet_replace(AscCalibrationSheet *sheet, AscCalibrationShe
 
 /* Frees a sheet. */
 void asc_calibration_sheet_destroy(AscCalibrationSheet *sheet);
+
+/* What asc_calibration_zone_plan answers. */
+#define ASC_CALIBRATION_ZONE_OK 0                 /* rows, off and silenced hold the plan */
+#define ASC_CALIBRATION_ZONE_NO_REFERENCE 1       /* the reference isn't present and on */
+#define ASC_CALIBRATION_ZONE_NOTHING_TO_MEASURE 2 /* no member besides it is present and on */
+#define ASC_CALIBRATION_ZONE_INVALID 3            /* a NULL argument or a key that isn't UTF-8 */
+
+/* A speaker the host lists, as asc_calibration_zone_plan sorts it. */
+typedef struct AscCalibrationZoneSpeaker {
+    const char *key; /* its speaker key (S149) */
+    bool present;    /* listed, not hidden and not held by a target (S246) */
+    bool on;         /* on and playing */
+} AscCalibrationZoneSpeaker;
+
+/*
+ * The plan of Calibrate Zone (S255) over the zone keyed `members`, in zone
+ * order: the rows, each an index into `speakers`, go into `rows` with one
+ * `off` flag each (for asc_calibration_run_create_listing), *row_count says
+ * how many, and silenced[i] whether speaker i plays silenced for the run.
+ * `rows`, `off` and `silenced` hold `count` elements. Answers an
+ * ASC_CALIBRATION_ZONE_ code. Pure function for the control thread.
+ */
+uint32_t asc_calibration_zone_plan(const char *const *members, size_t member_count, const char *reference, const AscCalibrationZoneSpeaker *speakers, size_t count, size_t *rows, bool *off, size_t *row_count, bool *silenced);
 
 /*
  * A Cast speaker's expected arrival (AscCalibrationSpeaker.latency_ms), which
@@ -1335,6 +1572,15 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
  * volume isn't finite.
  */
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
+
+/*
+ * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
+ * plays at its own position times the zone's times the master, live once
+ * added and from its start when added later, and a level read back from it
+ * moves its own position by the zone and the master. Returns false, changing
+ * nothing, when the handle or id is NULL or zone isn't finite.
+ */
+bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zone);
 
 /*
  * Asks every speaker added for its own volume, which someone may have changed
@@ -1774,6 +2020,17 @@ bool asc_cast_step_volume(AscCast *cast, bool up);
 double asc_cast_device_level(double master, double own);
 double asc_cast_own_level(double reported, double master, double own);
 double asc_cast_start_own_level(double master, bool has_own, double own, double reported);
+
+/*
+ * The same three with the speaker's zone level (0 to 1, 1 outside a zone)
+ * as a stage between the master and the own level: the level to send is
+ * master * zone * own; a report means reported / (master * zone), and leaves
+ * `own` as it is when master * zone is 0. At zone 1 each is bit-identical to
+ * the function above without the zone.
+ */
+double asc_cast_zone_level(double master, double zone, double own);
+double asc_cast_zone_own_level(double reported, double master, double zone, double own);
+double asc_cast_zone_start_own_level(double master, double zone, bool has_own, double own, double reported);
 bool asc_cast_level_answers(double sent, double reported);
 
 /*
@@ -1895,8 +2152,9 @@ typedef struct AscRemote AscRemote;
  * The host's command callback, on a server thread, one call at a time:
  * command_json is NUL-terminated UTF-8 valid during the call only, either
  * {"type":"speaker","id":...} with the posted "on", "volume" (0 to 100) and
- * "delay_ms" among the fields, or {"type":"master","volume":...}. Every
- * value was checked against the last snapshot's ranges.
+ * "delay_ms" among the fields, {"type":"master","volume":...}, or
+ * {"type":"source","id":...}, a source the last snapshot listed as
+ * available. Every value was checked against the last snapshot's ranges.
  */
 typedef void (*AscRemoteCommand)(void *context, const char *command_json);
 
@@ -1921,8 +2179,13 @@ uint32_t asc_remote_port(AscRemote *remote);
  * Publishes the snapshot in state_json: {"computer_name", "master": {"volume"},
  * "now_playing": {"title", "artist", "source"} or null, "speakers": [{"id",
  * "name", "kind", "on", "volume", "delay_ms", "delay_min_ms", "delay_max_ms",
- * "available", "notice"}]}, volumes 0 to 100, ids unique; computer_name is
- * the name the page's footer shows, empty when left out. The server numbers
+ * "available", "notice"}], "sources": [{"id", "name", "kind" ("system",
+ * "app" or "input"), "available", "notice"}], "source_id"}, volumes 0 to
+ * 100, ids unique and not empty; computer_name is the name the page's footer
+ * shows, empty when left out. sources is the source picker's list in its
+ * order (none when left out; available is true when left out), and
+ * source_id the one in use, or null; one the list doesn't hold counts as
+ * null. The server numbers
  * it and streams it to the open pages; an unchanged snapshot sends nothing.
  * Returns false when it doesn't read; the previous one then stays. Neither
  * the snapshot nor the name ever reaches the log.

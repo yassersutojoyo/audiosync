@@ -15,10 +15,11 @@
 //! ancestry can be captured. Where they can't be read, or AudioSync is
 //! missing from the snapshot, AudioSync refuses rather than capture itself.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use audiosync_core::channels::input_to_stereo;
+use audiosync_core::channels::{InputPair, pair_to_stereo};
 use audiosync_core::clock;
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::resample::Resampler;
@@ -70,21 +71,28 @@ pub enum CaptureTarget {
     Input {
         /// The endpoint ID.
         endpoint_id: String,
+        /// The channel pair it plays ([`InputPair::index`]); 0 is channels
+        /// 1-2, captured as Windows mixes the device to stereo, as before
+        /// pairs could be chosen.
+        pair: u16,
     },
 }
 
-/// The capture for `source`: an input device's own endpoint, or the process
-/// loopback capture [`decide_activation`] decides on. Several apps are
-/// decided from their top processes only; [`decide_apps_capture`] adds the
-/// instances that have an audio session.
+/// The capture for `source`: an input device's own endpoint, playing the
+/// channel pair `input_pairs` keeps for it, or the process loopback capture
+/// [`decide_activation`] decides on. Several apps are decided from their top
+/// processes only; [`decide_apps_capture`] adds the instances that have an
+/// audio session.
 pub fn decide_capture(
     source: &SourceId,
     own_pid: u32,
     processes: &ProcessTable,
+    input_pairs: &BTreeMap<String, u16>,
 ) -> Result<CaptureTarget, BackendError> {
     match source {
         SourceId::Input { endpoint_id } => Ok(CaptureTarget::Input {
             endpoint_id: endpoint_id.clone(),
+            pair: input_pairs.get(endpoint_id).copied().unwrap_or(0),
         }),
         SourceId::Apps { root_pids, .. } => decide_mix(root_pids, own_pid, processes),
         _ => decide_activation(source, own_pid, processes).map(CaptureTarget::Loopback),
@@ -314,6 +322,7 @@ pub fn source_list(
             id: source,
             name: display_name(&executable),
             executable,
+            channels: 0,
         });
     }
     apps.sort_by(|a, b| {
@@ -327,6 +336,7 @@ pub fn source_list(
         id: SourceId::WholeSystem,
         name: WHOLE_SYSTEM_NAME.to_owned(),
         executable: String::new(),
+        channels: 0,
     });
     sources.extend(apps);
     sources
@@ -354,6 +364,7 @@ pub fn input_sources(readings: Vec<EndpointReading>) -> Vec<SourceInfo> {
                 id: SourceId::Input { endpoint_id },
                 name,
                 executable: String::new(),
+                channels: properties.channels.unwrap_or(0),
             })
         })
         .collect();
@@ -398,6 +409,7 @@ pub fn running_app(
         id: SourceId::App { root_pid },
         name: display_name(&executable),
         executable,
+        channels: 0,
     })
 }
 
@@ -445,6 +457,8 @@ pub struct CaptureAttempt {
     /// Whether to let Windows convert to that format
     /// (`AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM`).
     pub autoconvert: bool,
+    /// The channels that play as L and R.
+    pub pair: InputPair,
 }
 
 /// The ways a capture is initialized, tried in order until Windows accepts
@@ -459,6 +473,7 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
             channels: 2,
         },
         autoconvert: true,
+        pair: InputPair::FIRST,
     },
     CaptureAttempt {
         format: StreamFormat {
@@ -467,6 +482,7 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
             channels: 2,
         },
         autoconvert: false,
+        pair: InputPair::FIRST,
     },
     CaptureAttempt {
         format: StreamFormat {
@@ -475,6 +491,7 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
             channels: 2,
         },
         autoconvert: false,
+        pair: InputPair::FIRST,
     },
     CaptureAttempt {
         format: StreamFormat {
@@ -483,8 +500,45 @@ pub const CAPTURE_ATTEMPTS: [CaptureAttempt; 4] = [
             channels: 2,
         },
         autoconvert: false,
+        pair: InputPair::FIRST,
     },
 ];
+
+/// The ways an input device's capture is tried before [`CAPTURE_ATTEMPTS`]
+/// when it plays a pair other than 1-2, on a device whose mix format has
+/// `channels` channels at `mix_rate`: all its channels as float, at the
+/// session rate converted by Windows, then at its own rate without
+/// conversion, since Windows' mix to stereo would lose the pair. None when
+/// `saved` resolves to 1-2, which keeps the stereo attempts and the
+/// stereo mix Windows has always made of such a device.
+pub fn pair_attempts(saved: u16, channels: u16, mix_rate: u32) -> Vec<CaptureAttempt> {
+    let (pair, _) = InputPair::resolve(saved, channels);
+    if pair.index == 0 {
+        return Vec::new();
+    }
+    [(SESSION_RATE, true), (mix_rate, false)]
+        .into_iter()
+        .filter(|&(rate, _)| is_supported_rate(rate))
+        .map(|(rate, autoconvert)| CaptureAttempt {
+            format: StreamFormat {
+                sample: SampleType::F32,
+                rate,
+                channels,
+            },
+            autoconvert,
+            pair,
+        })
+        .collect()
+}
+
+/// The channels of an input pair as the log shows them, numbered from 1.
+pub fn describe_pair(pair: InputPair) -> String {
+    if pair.is_mono() {
+        format!("channel {}", pair.left + 1)
+    } else {
+        format!("channels {}-{}", pair.left + 1, pair.right + 1)
+    }
+}
 
 /// Frames converted per step; bounds the converter's buffers.
 pub(crate) const CONVERT_CHUNK: usize = 1024;
@@ -576,9 +630,18 @@ pub struct CaptureConverter {
     stereo: Box<[f32]>,
     /// Resampler output, stereo.
     resampled: Box<[f32]>,
+    /// The channels that play as L and R.
+    pair: InputPair,
 }
 
 impl CaptureConverter {
+    /// The converter playing `pair`'s channels as L and R, instead of the
+    /// first two.
+    pub fn reading(mut self, pair: InputPair) -> CaptureConverter {
+        self.pair = pair;
+        self
+    }
+
     /// A converter for packets in `format`, writing through `writer` after
     /// `equalizer`, whose control half publishes settings designed for
     /// [`SESSION_RATE`], and handing the same audio to `feeds`.
@@ -611,6 +674,7 @@ impl CaptureConverter {
             decoded: vec![0.0; CONVERT_CHUNK * usize::from(format.channels)].into_boxed_slice(),
             stereo: vec![0.0; CONVERT_CHUNK * 2].into_boxed_slice(),
             resampled: vec![0.0; resampled_frames * 2].into_boxed_slice(),
+            pair: InputPair::FIRST,
         })
     }
 
@@ -644,11 +708,14 @@ impl CaptureConverter {
             } else {
                 let bytes = &data[done * block..(done + n) * block];
                 decode(self.format.sample, bytes, &mut self.decoded[..n * channels]);
-                input_to_stereo(
+                let converted = pair_to_stereo(
                     &self.decoded[..n * channels],
                     channels,
+                    self.pair,
                     &mut self.stereo[..n * 2],
                 );
+                // A pair beyond the format's channels converts nothing: silence, not stale samples.
+                self.stereo[converted * 2..n * 2].fill(0.0);
             }
             written += self.write_stereo(n, arrived, &mut signal);
             done += n;
@@ -996,9 +1063,10 @@ mod tests {
             endpoint_id: "usb".to_owned(),
         };
         assert_eq!(
-            decide_capture(&source, OWN_PID, &ProcessTable::default()),
+            decide_capture(&source, OWN_PID, &ProcessTable::default(), &BTreeMap::new()),
             Ok(CaptureTarget::Input {
-                endpoint_id: "usb".to_owned()
+                endpoint_id: "usb".to_owned(),
+                pair: 0,
             })
         );
         assert_eq!(
@@ -1006,12 +1074,100 @@ mod tests {
             Err(BackendError::NotAnApp)
         );
         assert_eq!(
-            decide_capture(&SourceId::WholeSystem, OWN_PID, &desktop()),
+            decide_capture(
+                &SourceId::WholeSystem,
+                OWN_PID,
+                &desktop(),
+                &BTreeMap::new()
+            ),
             Ok(CaptureTarget::Loopback(Activation {
                 mode: LoopbackMode::ExcludeTree,
                 target_pid: OWN_PID,
             }))
         );
+    }
+
+    #[test]
+    fn an_input_device_is_captured_with_the_pair_saved_for_it() {
+        let pairs = BTreeMap::from([("interface".to_owned(), 1)]);
+        let input = |id: &str| SourceId::Input {
+            endpoint_id: id.to_owned(),
+        };
+        assert_eq!(
+            decide_capture(&input("interface"), OWN_PID, &desktop(), &pairs),
+            Ok(CaptureTarget::Input {
+                endpoint_id: "interface".to_owned(),
+                pair: 1,
+            })
+        );
+        assert_eq!(
+            decide_capture(&input("usb"), OWN_PID, &desktop(), &pairs),
+            Ok(CaptureTarget::Input {
+                endpoint_id: "usb".to_owned(),
+                pair: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn pair_attempts_capture_every_channel_and_leave_one_two_to_the_stereo_mix() {
+        assert!(pair_attempts(0, 8, 48_000).is_empty());
+        assert!(
+            pair_attempts(4, 8, 48_000).is_empty(),
+            "8 channels have 4 pairs"
+        );
+        let attempts = pair_attempts(1, 8, 44_100);
+        let third_and_fourth = InputPair {
+            index: 1,
+            left: 2,
+            right: 3,
+        };
+        assert_eq!(
+            attempts,
+            [
+                CaptureAttempt {
+                    format: StreamFormat {
+                        sample: SampleType::F32,
+                        rate: SESSION_RATE,
+                        channels: 8,
+                    },
+                    autoconvert: true,
+                    pair: third_and_fourth,
+                },
+                CaptureAttempt {
+                    format: StreamFormat {
+                        sample: SampleType::F32,
+                        rate: 44_100,
+                        channels: 8,
+                    },
+                    autoconvert: false,
+                    pair: third_and_fourth,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_converter_reading_a_pair_plays_its_two_channels() {
+        let format = StreamFormat {
+            sample: SampleType::F32,
+            rate: SESSION_RATE,
+            channels: 4,
+        };
+        let (ring, writer) = session_ring_after_lead_in();
+        let mut converter = new_converter(format, writer)
+            .expect("float at the session rate is accepted")
+            .reading(InputPair {
+                index: 1,
+                left: 2,
+                right: 3,
+            });
+        converter.push(
+            &f32_bytes(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]),
+            2,
+            false,
+        );
+        assert_eq!(newest(&ring, 2), [0.3, 0.4, 0.7, 0.8]);
     }
 
     #[test]
@@ -1230,6 +1386,7 @@ mod tests {
                 id: SourceId::WholeSystem,
                 name: WHOLE_SYSTEM_NAME.to_owned(),
                 executable: String::new(),
+                channels: 0,
             }]
         );
     }
@@ -1283,6 +1440,7 @@ mod tests {
                 },
                 99,
                 &table,
+                &BTreeMap::new(),
             )
         };
         assert_eq!(
@@ -1309,6 +1467,7 @@ mod tests {
             },
             99,
             &table,
+            &BTreeMap::new(),
         ) else {
             panic!("a mix");
         };
@@ -1388,6 +1547,7 @@ mod tests {
             id: app(200),
             name: "Browser".to_owned(),
             executable: "browser.exe".to_owned(),
+            channels: 0,
         };
         let table = desktop();
         assert_eq!(

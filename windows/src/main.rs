@@ -86,6 +86,11 @@ const PREVIEW_THEME_VAR: &str = "AUDIOSYNC_PREVIEW_THEME";
 /// or after a wrong one (`view::App::preview_pin`). Nothing is paired.
 const PREVIEW_PIN_VAR: &str = "AUDIOSYNC_PREVIEW_PIN";
 
+/// With the debug log on, `1` here shows example speakers in zones instead
+/// of the real ones, one zone collapsed (`ui_model::MockBackend::zones_preview`).
+/// Nothing plays.
+const PREVIEW_ZONES_VAR: &str = "AUDIOSYNC_PREVIEW_ZONES";
+
 fn main() -> ExitCode {
     let Some(instance) = os::claim_instance() else {
         return ExitCode::SUCCESS;
@@ -166,8 +171,19 @@ impl From<slint::PlatformError> for StartError {
 
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
-    let os::Started { backend, media } = os::start(log)?;
+    let zones_preview = log.enabled() && std::env::var(PREVIEW_ZONES_VAR).as_deref() == Ok("1");
+    let os::Started { backend, media } = if zones_preview {
+        log.log(|| {
+            format!("audio: example speakers in zones from the mock backend; nothing plays ({PREVIEW_ZONES_VAR})")
+        });
+        os::start_with(log, Box::new(ui_model::MockBackend::zones_preview()))
+    } else {
+        os::start(log)?
+    };
     let app = view::App::new(backend, log.clone())?;
+    if zones_preview {
+        app.set_zone_expanded("zone:upstairs", false);
+    }
     media.attach(&app);
     instance.listen(&app, log);
 
@@ -319,7 +335,12 @@ mod tests {
             "Control + Q",
             "Ctrl+Q",
         ),
-        ("New Group, Command-N", "new-group", "Control + N", "Ctrl+N"),
+        (
+            "New Zone from Active Speakers, Command-N",
+            "new-zone",
+            "Control + N",
+            "Ctrl+N",
+        ),
         ("Refresh Devices, Command-R", "refresh-devices", "F5", "F5"),
         (
             "Equalizer, Option-Command-E",
@@ -601,9 +622,9 @@ mod tests {
                 "more-notices-focused",
             ),
             (
-                "for group in root.groups: FlyoutRow {",
+                "for zone in root.zones: VerticalLayout {",
                 "focus-changed(focused)",
-                "group-focused",
+                "zone-focused",
             ),
             (
                 "for speaker in root.speakers: FlyoutRow {",

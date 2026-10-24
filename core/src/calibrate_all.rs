@@ -12,6 +12,7 @@ use crate::calibrate::{self, GUARD_MS, MAX_RECORDING_FRAMES, Recording, Refusal,
 use crate::policy::delay::{
     self, DEFAULT_AIRPLAY_DELAY_MS, MAX_DELAY_MS, MAX_HOLD_BACK_MS, MAX_OFFSET_MS, MIN_OFFSET_MS,
 };
+use crate::policy::zones::{Zone, Zones};
 use audiosync_cast::audio::Codec;
 
 /// Recorded past the end of the sweep's expected arrival.
@@ -274,6 +275,9 @@ pub struct Run {
     reference: usize,
     order: Vec<usize>,
     states: Vec<RowState>,
+    /// Rows listed on the sheet and never swept: a zone member that is off
+    /// (S255).
+    off: Vec<bool>,
     reference_ms: f64,
     next: Next,
     ended: Option<EndReason>,
@@ -283,6 +287,19 @@ impl Run {
     /// A run over `speakers`, the reference first and then the others in
     /// the order given.
     pub fn new(rate: u32, reference_id: &str, speakers: Vec<Speaker>) -> Result<Run, PlanError> {
+        Run::listing(rate, reference_id, speakers, &[])
+    }
+
+    /// [`Run::new`], with each speaker whose `off` entry is true listed on
+    /// the sheet as not measured and never swept, its window left out of the
+    /// too-long check (S255). The reference is swept whatever its entry; a
+    /// missing entry is false.
+    pub fn listing(
+        rate: u32,
+        reference_id: &str,
+        speakers: Vec<Speaker>,
+        off: &[bool],
+    ) -> Result<Run, PlanError> {
         let signal = calibrate::signal(rate).ok_or(PlanError::UnsupportedRate)?;
         for (i, speaker) in speakers.iter().enumerate() {
             if speakers[..i].iter().any(|other| other.id == speaker.id) {
@@ -293,7 +310,12 @@ impl Run {
             .iter()
             .position(|s| s.id == reference_id && s.class == Class::Local)
             .ok_or(PlanError::NoReference)?;
-        let order: Vec<usize> = (0..speakers.len()).filter(|i| *i != reference).collect();
+        let off: Vec<bool> = (0..speakers.len())
+            .map(|i| i != reference && off.get(i).copied().unwrap_or(false))
+            .collect();
+        let order: Vec<usize> = (0..speakers.len())
+            .filter(|i| *i != reference && !off[*i])
+            .collect();
         if order.is_empty() {
             return Err(PlanError::NothingToMeasure);
         }
@@ -307,12 +329,15 @@ impl Run {
             reference,
             order,
             states,
+            off,
             reference_ms: 0.0,
             next: Next::Reference,
             ended: None,
         };
         let cut = (0..run.speakers.len()).any(|row| {
-            !run.unknown_cast(row) && run.frames(run.expected_ms(row)) > MAX_RECORDING_FRAMES
+            !run.off[row]
+                && !run.unknown_cast(row)
+                && run.frames(run.expected_ms(row)) > MAX_RECORDING_FRAMES
         });
         if cut {
             return Err(PlanError::TooLong);
@@ -427,6 +452,7 @@ impl Run {
             speakers: self.speakers,
             reference: self.reference,
             rows: Vec::new(),
+            off: self.off,
             airplay: None,
             ended: self.ended,
             applied: false,
@@ -442,7 +468,7 @@ impl Run {
                 state,
             })
             .collect();
-        sheet.airplay = shared(&sheet.rows);
+        sheet.airplay = shared(&sheet.rows, &sheet.off);
         sheet
     }
 
@@ -553,8 +579,15 @@ fn moved(class: Class, stored_ms: Option<f64>, difference_ms: f64) -> (f64, bool
     (new, new != wanted)
 }
 
-fn shared(rows: &[Row]) -> Option<AirPlayShared> {
-    let airplay: Vec<&Row> = rows.iter().filter(|r| r.class == Class::AirPlay).collect();
+/// The shared delay from the AirPlay rows that took part: an off row's old
+/// value was read while it didn't play.
+fn shared(rows: &[Row], off: &[bool]) -> Option<AirPlayShared> {
+    let airplay: Vec<&Row> = rows
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| r.class == Class::AirPlay && !off.get(*i).copied().unwrap_or(false))
+        .map(|(_, r)| r)
+        .collect();
     let old_ms = airplay.first()?.old_ms;
     let mut differences: Vec<f64> = airplay
         .iter()
@@ -603,6 +636,7 @@ pub struct Sheet {
     speakers: Vec<Speaker>,
     reference: usize,
     rows: Vec<Row>,
+    off: Vec<bool>,
     airplay: Option<AirPlayShared>,
     ended: Option<EndReason>,
     applied: bool,
@@ -612,6 +646,12 @@ impl Sheet {
     /// One row per speaker, in the order the run was given them.
     pub fn rows(&self) -> &[Row] {
         &self.rows
+    }
+
+    /// Whether row `row` is a zone member that was off (S255): listed, not
+    /// measured, until a Measure Again measures it.
+    pub fn is_off(&self, row: usize) -> bool {
+        self.off.get(row).copied().unwrap_or(false)
     }
 
     /// The shared AirPlay delay; `None` without AirPlay speakers.
@@ -687,9 +727,33 @@ impl Sheet {
 
     /// A run of the reference and the speaker on `row` alone, with the
     /// values the sheet started from; its steps name the sheet's rows.
-    /// `None` for the reference's row, a row out of range, an ended sheet
-    /// or one already applied.
+    /// `None` for the reference's row, a row out of range, an off row
+    /// ([`Sheet::measure_again_off`]), an ended sheet or one already
+    /// applied.
     pub fn measure_again(&self, row: usize) -> Option<Run> {
+        if self.is_off(row) {
+            return None;
+        }
+        self.again(row, None)
+    }
+
+    /// Measure Again on an off row (S255): the speaker, turned on since,
+    /// with its stored delay and expected arrival as the host reads them
+    /// now, since the sheet read them while it didn't play. `None` for a
+    /// row that isn't off and as [`Sheet::measure_again`].
+    pub fn measure_again_off(
+        &self,
+        row: usize,
+        offset_ms: Option<f64>,
+        latency_ms: f64,
+    ) -> Option<Run> {
+        if !self.is_off(row) {
+            return None;
+        }
+        self.again(row, Some((offset_ms, latency_ms)))
+    }
+
+    fn again(&self, row: usize, now: Option<(Option<f64>, f64)>) -> Option<Run> {
         if self.ended.is_some()
             || self.applied
             || row == self.reference
@@ -698,7 +762,12 @@ impl Sheet {
             return None;
         }
         let reference = &self.speakers[self.reference];
-        let speakers = vec![reference.clone(), self.speakers[row].clone()];
+        let mut measured = self.speakers[row].clone();
+        if let Some((offset_ms, latency_ms)) = now {
+            measured.offset_ms = offset_ms;
+            measured.latency_ms = latency_ms;
+        }
+        let speakers = vec![reference.clone(), measured];
         let mut run = Run::new(self.rate, &reference.id, speakers).ok()?;
         run.rows = vec![self.reference, row];
         Some(run)
@@ -725,8 +794,107 @@ impl Sheet {
         {
             return false;
         }
+        if self.is_off(at) {
+            self.speakers[at] = again.speakers[1].clone();
+            self.off[at] = false;
+        }
         self.rows[at] = measured.clone();
-        self.airplay = shared(&self.rows);
+        self.airplay = shared(&self.rows, &self.off);
         true
+    }
+}
+
+/// A speaker the host lists, as a Calibrate Zone run (S255) sorts it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZoneSpeaker {
+    /// Its speaker key (S149), as a zone holds it.
+    pub key: String,
+    /// Listed now, not hidden, not a target that needs AirPlay 2 and not
+    /// playing as part of a target (S246, S247).
+    pub present: bool,
+    /// On and playing, so the run can sweep it.
+    pub on: bool,
+}
+
+/// What a Calibrate Zone run (S255) lists, measures and silences, each by
+/// its index in the speakers the host gave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZonePlan {
+    /// The sheet's rows: the reference, then the zone's present members in
+    /// zone order.
+    pub rows: Vec<usize>,
+    /// One per row: a member that is off, listed and never swept, the
+    /// `off` of [`Run::listing`].
+    pub off: Vec<bool>,
+    /// The speakers that are on and that the run doesn't measure, silenced
+    /// in the mix send for the run.
+    pub silenced: Vec<usize>,
+}
+
+/// The plan of Calibrate Zone (S255) over the zone whose member keys are
+/// `members`, in zone order, with the reference keyed `reference`. Refused
+/// as [`PlanError::NoReference`] while the reference isn't present and on,
+/// and as [`PlanError::NothingToMeasure`] when no member besides it is
+/// present and on.
+pub fn zone_plan(
+    members: &[String],
+    reference: &str,
+    speakers: &[ZoneSpeaker],
+) -> Result<ZonePlan, PlanError> {
+    let find = |key: &str| speakers.iter().position(|s| s.key == key);
+    let reference_at = find(reference)
+        .filter(|&i| speakers[i].present && speakers[i].on)
+        .ok_or(PlanError::NoReference)?;
+    let mut rows = vec![reference_at];
+    let mut off = vec![false];
+    for key in members {
+        let Some(at) = find(key).filter(|&i| i != reference_at && speakers[i].present) else {
+            continue;
+        };
+        if !rows.contains(&at) {
+            rows.push(at);
+            off.push(!speakers[at].on);
+        }
+    }
+    if !off.iter().skip(1).any(|is_off| !is_off) {
+        return Err(PlanError::NothingToMeasure);
+    }
+    let silenced = (0..speakers.len())
+        .filter(|i| speakers[*i].on && !rows.contains(i))
+        .collect();
+    Ok(ZonePlan {
+        rows,
+        off,
+        silenced,
+    })
+}
+
+/// Whom the shared AirPlay delay of a Calibrate Zone sheet moves besides
+/// the zone (S237, S255).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AirPlayMoves {
+    /// The other zones with a listed AirPlay speaker, by name, in zone order.
+    pub zones: Vec<String>,
+    /// A listed AirPlay speaker is in no zone.
+    pub no_zone: bool,
+}
+
+/// What the AirPlay line of a sheet measured over zone `measured` names,
+/// `airplay` being the keys of every AirPlay speaker listed now.
+pub fn airplay_moves<'a>(
+    zones: &Zones,
+    measured: &str,
+    airplay: impl IntoIterator<Item = &'a str>,
+) -> AirPlayMoves {
+    let airplay: Vec<&str> = airplay.into_iter().collect();
+    let holds = |zone: &Zone| zone.members.iter().any(|m| airplay.contains(&m.as_str()));
+    AirPlayMoves {
+        zones: zones
+            .list()
+            .iter()
+            .filter(|zone| zone.id != measured && holds(zone))
+            .map(|zone| zone.name.clone())
+            .collect(),
+        no_zone: airplay.iter().any(|key| zones.zone_of(key).is_none()),
     }
 }

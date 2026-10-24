@@ -25,7 +25,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
-    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window: audio source, now playing, master volume and equalizer on the left; on the right, the MacBook Pro speakers under This Mac, a speaker group, then Connected Speakers listed by name, each with a small AirPlay, USB or wireless icon for its kind, with volume and, for local outputs, a sync delay">
+    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window: audio source, now playing, master volume and equalizer on the left; on the right, the MacBook Pro speakers under This Mac, a zone with its speakers, then Connected Speakers listed by name, each with a small AirPlay, USB or wireless icon for its kind, with volume and, for local outputs, a sync delay">
   </picture>
 </p>
 
@@ -65,7 +65,7 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 - Source: all system audio, one app, or an input device (mic, audio interface).
 - Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything macOS can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
 - A delay per local speaker (−2 to +20 s), plus one AirPlay delay.
-- Volume per speaker and master, a 10-band EQ, groups, auto-connect, launch at login, Now Playing for Spotify and Music.
+- Volume per speaker and master, a 10-band EQ, zones (speakers that switch on and off together, with a volume of their own), auto-connect, launch at login, Now Playing for Spotify and Music.
 
 Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
 

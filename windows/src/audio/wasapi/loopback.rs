@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU64, Ordering};
 use std::thread;
 
+use audiosync_core::channels::InputPair;
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
@@ -41,6 +42,7 @@ use windows::Win32::Media::Audio::{
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
     IAudioCaptureClient, IAudioClient, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+    WAVEFORMATEX,
 };
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{BLOB, CLSCTX_ALL};
@@ -51,8 +53,9 @@ use windows::core::{HRESULT, HSTRING, IUnknown, Interface, Ref};
 use windows_core::implement;
 
 use super::com::{
-    Apartment, Event, NOT_FOUND, ProAudioTask, Ready, Worker, device_code_error, device_error,
-    input_code_error, spawn_worker, system_error, wave_format,
+    Apartment, ComMemory, Event, NOT_FOUND, ProAudioTask, Ready, Worker, device_code_error,
+    device_error, float_format, input_code_error, read_mix_format, spawn_worker, system_error,
+    wave_format,
 };
 use super::devices::enumerator;
 use super::processes::ProcessWatch;
@@ -60,11 +63,12 @@ use crate::audio::SESSION_RATE;
 use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
     Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, CaptureTarget, GapFill,
-    LoopbackMode, MAX_MIX_APPS, SampleType, StreamFormat,
+    LoopbackMode, MAX_MIX_APPS, SampleType, StreamFormat, pair_attempts,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::mix::{LaneInput, LaneStream, MixLanes, MixPlan, Opened, as_bytes};
 use crate::audio::outputs::HNS_PER_MS;
+use crate::audio::outputs::RenderFormat;
 
 /// The buffer a capture stream asks for, 100 ms: room for the capture thread
 /// to be late without losing packets.
@@ -302,7 +306,7 @@ fn run(
         Err(error) => return ready.fail(error),
     };
     let mut converter = match CaptureConverter::new(stream.format, writer, equalizer, feeds) {
-        Ok(converter) => converter,
+        Ok(converter) => converter.reading(stream.pair),
         Err(error) => return ready.fail(error),
     };
     let _task = ProAudioTask::join();
@@ -313,6 +317,7 @@ fn run(
     let waited = ready.ok(CaptureAttempt {
         format: stream.format,
         autoconvert: stream.autoconvert,
+        pair: stream.pair,
     });
     if !waited {
         // Nobody waits for this capture anymore, and nothing would stop it:
@@ -340,13 +345,24 @@ struct CaptureStream {
     format: StreamFormat,
     /// Whether Windows converts to `format`.
     autoconvert: bool,
+    /// The channels that play as L and R.
+    pair: InputPair,
 }
 
 /// Activates and initializes a capture, trying each format of
-/// [`CAPTURE_ATTEMPTS`] until one is accepted.
+/// [`CAPTURE_ATTEMPTS`] until one is accepted. An input device playing a
+/// pair other than 1-2 first tries its own channel count
+/// ([`pair_attempts`]); when Windows takes none of those, it plays 1-2.
 fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
     let mut first_error = None;
-    for attempt in CAPTURE_ATTEMPTS {
+    let (mut attempts, channel_mask) = match target {
+        CaptureTarget::Input { endpoint_id, pair } if *pair != 0 => {
+            input_pair_attempts(endpoint_id, *pair)?
+        }
+        _ => (Vec::new(), 0),
+    };
+    attempts.extend(CAPTURE_ATTEMPTS);
+    for attempt in attempts {
         let (client, mut flags) = match target {
             CaptureTarget::Loopback(activation) => (
                 activate(*activation)?,
@@ -354,23 +370,36 @@ fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
             ),
             // `run_mix` opens each of a mix's loopbacks on its own.
             CaptureTarget::Mix(_) => return Err(BackendError::NotAnApp),
-            CaptureTarget::Input { endpoint_id } => (
+            CaptureTarget::Input { endpoint_id, .. } => (
                 activate_input(endpoint_id)?,
                 AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
             ),
         };
-        let format = wave_format(attempt.format);
+        let plain = wave_format(attempt.format);
+        // Windows wants an extensible format, with its speaker mask, past two channels.
+        let extensible = float_format(RenderFormat {
+            rate: attempt.format.rate,
+            channels: attempt.format.channels,
+            channel_mask,
+            convert: attempt.autoconvert,
+        });
+        let format: *const WAVEFORMATEX = if attempt.format.channels > 2 {
+            (&raw const extensible).cast()
+        } else {
+            &raw const plain
+        };
         if attempt.autoconvert {
             flags |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
         }
-        // SAFETY: `format` lives through the call, which copies it.
+        // SAFETY: `format` points to `plain` or `extensible`, which live
+        // through the call, which copies it.
         let initialized = unsafe {
             client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
                 flags,
                 CAPTURE_BUFFER_HNS,
                 0,
-                &format,
+                format,
                 None,
             )
         };
@@ -409,7 +438,33 @@ fn finish_stream(
         event,
         format: attempt.format,
         autoconvert: attempt.autoconvert,
+        pair: attempt.pair,
     })
+}
+
+/// The attempts that capture every channel of input device `endpoint_id`
+/// for the pair stored as `saved`, from its mix format, and the speaker mask
+/// they name. None, and the stereo attempts alone, when the mix format can't
+/// be read or the pair is gone (the log notes that, [`CaptureAttempt::pair`]).
+fn input_pair_attempts(
+    endpoint_id: &str,
+    saved: u16,
+) -> Result<(Vec<CaptureAttempt>, u32), BackendError> {
+    let client = activate_input(endpoint_id)?;
+    // SAFETY: a call on a live client; the mix format is freed by ComMemory
+    // after `read_mix_format` copied what it needs.
+    let mix = match unsafe { client.GetMixFormat() } {
+        Ok(format) => {
+            let memory = ComMemory::new(format);
+            // SAFETY: GetMixFormat gives a readable format with its extra bytes.
+            unsafe { read_mix_format(memory.as_ptr()) }
+        }
+        Err(_) => return Ok((Vec::new(), 0)),
+    };
+    Ok((
+        pair_attempts(saved, mix.channels, mix.rate),
+        mix.channel_mask,
+    ))
 }
 
 /// An `IAudioClient` for the input device of capture endpoint `endpoint_id`:
@@ -938,10 +993,12 @@ fn run_mix(
         CaptureAttempt {
             format: MIX_FORMAT,
             autoconvert: false,
+            pair: InputPair::FIRST,
         },
         |lane| CaptureAttempt {
             format: lane.stream.stream.format,
             autoconvert: lane.stream.stream.autoconvert,
+            pair: InputPair::FIRST,
         },
     );
     let now = now_hns(frequency);
@@ -1114,6 +1171,7 @@ mod tests {
             let capture = start(
                 CaptureTarget::Input {
                     endpoint_id: endpoint_id.clone(),
+                    pair: 0,
                 },
                 writer,
                 processor,
