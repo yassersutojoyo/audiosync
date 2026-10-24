@@ -88,6 +88,22 @@ impl Playback {
                 .map(|value| value.load(Ordering::Relaxed)),
         )
     }
+
+    /// The renderer's state and counters, for a failure message.
+    pub fn render_report(&self) -> String {
+        let control = &self.control;
+        format!(
+            "fade {:?}, lag {}, late max {} ns, shortfall {}, shortage {}, slowed {}, sped {}, {:?}",
+            control.fade_state(),
+            control.lag_frames(),
+            control.late_max_ns(),
+            control.shortfall_frames(),
+            control.shortage_frames(),
+            control.slowed_frames(),
+            control.sped_frames(),
+            control.counters()
+        )
+    }
 }
 
 impl RendererHandle for Playback {
