@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
-use image::{ExtendedColorType, ImageReader, Limits, RgbaImage};
+use image::{DynamicImage, ExtendedColorType, ImageReader, Limits, RgbaImage};
 
 use crate::audio::now_playing::fit_jpeg;
 use crate::debug_log::DebugLog;
@@ -17,7 +17,7 @@ use crate::now_playing_card::{ARTWORK_SIDE, CardArtwork, cover_size};
 pub const ICON_PNG: &[u8] = include_bytes!("../../../res/audiosync-256.png");
 
 /// The largest side decoded; cover art is a few thousand pixels at most.
-const SIDE_LIMIT: u32 = 8192;
+const SIDE_LIMIT: u32 = 4096;
 
 /// The most memory one decode may take.
 const DECODE_LIMIT: u64 = 256 << 20;
@@ -40,11 +40,15 @@ pub fn fitted_icon(log: &DebugLog) -> Option<Arc<[u8]>> {
 
 /// An encoded image as fitted receiver artwork.
 pub fn fit_image(image: &[u8]) -> Result<Option<Vec<u8>>, String> {
-    let decoded = decode(image)?;
+    fit_decoded(&decode(image)?)
+}
+
+/// A decoded image as fitted receiver artwork.
+pub fn fit_decoded(decoded: &RgbaImage) -> Result<Option<Vec<u8>>, String> {
     let (width, height) = decoded.dimensions();
     let mut failure = None;
     let fitted = fit_jpeg(width, height, |width, height, quality| match encode_scaled(
-        &decoded, width, height, quality,
+        decoded, width, height, quality,
     ) {
         Ok(jpeg) => Some(jpeg),
         Err(error) => {
@@ -60,20 +64,20 @@ pub fn fit_image(image: &[u8]) -> Result<Option<Vec<u8>>, String> {
 
 /// An encoded image scaled to cover the card's tile and cropped to it;
 /// `None` for an empty image.
+#[cfg(test)]
 pub fn card_artwork(image: &[u8]) -> Result<Option<CardArtwork>, String> {
-    let decoded = decode(image)?;
+    Ok(card_decoded(&decode(image)?))
+}
+
+/// A decoded image as the card's tile; `None` for an empty image.
+pub fn card_decoded(decoded: &RgbaImage) -> Option<CardArtwork> {
     let (width, height) = decoded.dimensions();
     if width == 0 || height == 0 {
-        return Ok(None);
+        return None;
     }
     let side = ARTWORK_SIDE;
     let (scaled_width, scaled_height) = cover_size(width, height, side);
-    let scaled = imageops::resize(
-        &decoded,
-        scaled_width,
-        scaled_height,
-        FilterType::CatmullRom,
-    );
+    let scaled = imageops::resize(decoded, scaled_width, scaled_height, FilterType::CatmullRom);
     let tile = imageops::crop_imm(
         &scaled,
         (scaled_width - side) / 2,
@@ -89,13 +93,14 @@ pub fn card_artwork(image: &[u8]) -> Result<Option<CardArtwork>, String> {
             *channel = over_black(*channel, alpha);
         }
     }
-    Ok(Some(CardArtwork {
+    Some(CardArtwork {
         side,
         rgba: Arc::from(rgba),
-    }))
+    })
 }
 
-fn decode(image: &[u8]) -> Result<RgbaImage, String> {
+/// An encoded image decoded as RGBA, within the side and memory limits.
+pub fn decode(image: &[u8]) -> Result<RgbaImage, String> {
     let mut reader = ImageReader::new(Cursor::new(image))
         .with_guessed_format()
         .map_err(|error| error.to_string())?;
@@ -106,7 +111,7 @@ fn decode(image: &[u8]) -> Result<RgbaImage, String> {
     reader.limits(limits);
     reader
         .decode()
-        .map(|decoded| decoded.to_rgba8())
+        .map(DynamicImage::into_rgba8)
         .map_err(|error| error.to_string())
 }
 

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -364,4 +365,31 @@ fn reads_this_desktops_players() {
     if let Some(shown) = shown.unwrap() {
         println!("card: {} / {}", shown.title, shown.subtitle());
     }
+}
+
+#[test]
+fn a_fifo_as_artwork_shows_none_and_holds_nothing_up() {
+    let fifo = std::env::temp_dir().join(format!("audiosync-test-art-{}", std::process::id()));
+    let _ = std::fs::remove_file(&fifo);
+    let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(made.success());
+    let name = format!("{}a", prefix("fifo"));
+    let _fake = serve(
+        &name,
+        FakePlayer {
+            art_url: Some(format!("file://{}", fifo.display())),
+            ..player("Playing", "Song")
+        },
+    );
+    let (sent, read) = mpsc::channel();
+    thread::spawn(move || {
+        let mut players = players("fifo");
+        let listed = players.list().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let _ = sent.send(players.thumbnail(&listed[0].1, deadline));
+    });
+    let thumbnail = read.recv_timeout(Duration::from_secs(5));
+    let _ = std::fs::remove_file(&fifo);
+    let thumbnail = thumbnail.expect("reading the artwork doesn't wait on the FIFO");
+    assert!(thumbnail.is_err(), "no artwork: {thumbnail:?}");
 }

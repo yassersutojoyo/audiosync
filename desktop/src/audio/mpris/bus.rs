@@ -3,13 +3,15 @@
 //! timeout, so a player that hangs costs the reading thread that wait and no
 //! more; proxies never cache, so every reading asks the player.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Read;
 use std::sync::Arc;
 use std::time::Instant;
 
+use image::RgbaImage;
 use zbus::blocking::Connection;
 use zbus::blocking::fdo::{DBusProxy, PropertiesProxy};
 use zbus::names::{BusName, InterfaceName};
@@ -54,6 +56,9 @@ pub(super) struct Players {
     prefix: String,
     bus: Bus,
     connection: Option<Connection>,
+    /// The last thumbnail decoded and its bytes: the receivers' artwork and
+    /// the card's tile are made from the same thumbnail, decoded once.
+    decoded: RefCell<Option<(Vec<u8>, RgbaImage)>>,
 }
 
 /// One listed player.
@@ -69,6 +74,7 @@ impl Players {
             prefix: prefix.to_owned(),
             bus,
             connection: None,
+            decoded: RefCell::default(),
         }
     }
 
@@ -86,6 +92,28 @@ impl Players {
             .map_err(|error| format!("the session bus can't be reached: {error}"))?;
         self.connection = Some(connection.clone());
         Ok(connection)
+    }
+}
+
+impl Players {
+    /// `make` applied to `image` decoded, decoding it only when it differs
+    /// from the last one.
+    fn with_decoded<T>(
+        &self,
+        image: &[u8],
+        make: impl FnOnce(&RgbaImage) -> T,
+    ) -> Result<T, String> {
+        let mut decoded = self.decoded.borrow_mut();
+        if let Some((bytes, kept)) = decoded.as_ref()
+            && bytes.as_slice() == image
+        {
+            return Ok(make(kept));
+        }
+        *decoded = None;
+        let fresh = artwork::decode(image)?;
+        let made = make(&fresh);
+        *decoded = Some((image.to_vec(), fresh));
+        Ok(made)
     }
 }
 
@@ -177,6 +205,10 @@ impl SessionList for Players {
         let Some(path) = entry.player.art_url.as_deref().and_then(fields::art_path) else {
             return Ok(None);
         };
+        // Opening a FIFO would wait for a writer, maybe for good.
+        if !fs::metadata(&path).map_err(message)?.is_file() {
+            return Err("the artwork isn't a regular file".to_owned());
+        }
         let mut image = Vec::new();
         File::open(path)
             .and_then(|file| file.take(THUMBNAIL_LIMIT + 1).read_to_end(&mut image))
@@ -222,11 +254,11 @@ impl SessionList for Players {
     }
 
     fn fit_image(&self, image: &[u8]) -> Result<Option<Vec<u8>>, String> {
-        artwork::fit_image(image)
+        self.with_decoded(image, artwork::fit_decoded)?
     }
 
     fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String> {
-        artwork::card_artwork(image)
+        self.with_decoded(image, artwork::card_decoded)
     }
 
     fn icon(&self, log: &DebugLog) -> Option<Arc<[u8]>> {
