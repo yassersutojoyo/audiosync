@@ -2381,8 +2381,8 @@ do {
                 && several.offsetMs(row: "D", of: ["D"]) == 120,
               "S284 airplay latency: several AirPlay 2 receivers share E, and a target uses its largest member")
         several.holdTargets(["pair:1": ["R"]], canChange: false)
-        let leaving = several.updateEstimate(rows: [["R"]], canChange: false)
-        check(leaving == .held && several.estimateMs == 220 && several.offsetMs(row: "pair:1", of: ["R"]) == 0,
+        let oneLeft = several.updateEstimate(rows: [["R"]], canChange: false)
+        check(oneLeft == .held && several.estimateMs == 220 && several.offsetMs(row: "pair:1", of: ["R"]) == 0,
               "S284 airplay latency: a receiver leaving while others sound changes no offset")
         several.holdTargets(["pair:1": ["R"]], canChange: true)
         _ = several.updateEstimate(rows: [["R"]], canChange: true)
