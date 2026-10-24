@@ -4,3 +4,15 @@
 # test, so this list only shrinks. "Partly done" names what already exists.
 
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
+
+# Remote control from the receiver (DACP), specified for 0.8.0 and built in a later stage.
+P186 DACP command server not built yet
+P187 DACP command server not built yet
+P188 DACP command server not built yet
+P189 DACP command server not built yet
+P190 DACP command server not built yet
+P191 DACP command server not built yet
+P192 DACP command server not built yet
+P193 DACP command server not built yet
+P194 DACP command server not built yet
+P195 DACP command server not built yet
