@@ -17,7 +17,7 @@ use zbus::zvariant::{OwnedValue, Value};
 use super::bus::{Bus, OBJECT_PATH, Players, field};
 use super::fields::Field;
 use super::read_media_sessions;
-use crate::audio::media_sessions::{SessionList, spawn};
+use crate::audio::media_sessions::{APP_WAIT, SessionList, spawn};
 use crate::audio::now_playing::{Follow, TrackReader};
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{CardSource, MediaControls, Transport};
@@ -28,6 +28,8 @@ struct FakePlayer {
     art_url: Option<String>,
     can_go_next: bool,
     nexts: Arc<AtomicUsize>,
+    /// How long the player takes to answer, as a hung player would.
+    stall: Duration,
 }
 
 fn owned(value: impl Into<Value<'static>>) -> OwnedValue {
@@ -38,6 +40,7 @@ fn owned(value: impl Into<Value<'static>>) -> OwnedValue {
 impl FakePlayer {
     #[zbus(property)]
     fn playback_status(&self) -> String {
+        thread::sleep(self.stall);
         self.status.to_owned()
     }
 
@@ -103,6 +106,7 @@ fn player(status: &'static str, title: &'static str) -> FakePlayer {
         art_url: None,
         can_go_next: true,
         nexts: Arc::default(),
+        stall: Duration::ZERO,
     }
 }
 
@@ -234,6 +238,28 @@ fn a_fake_that_exits_drops_out() {
         assert!(Instant::now() < deadline, "the player is still listed");
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn hung_players_together_cost_a_listing_one_wait() {
+    let base = prefix("hung");
+    let hung = |name: &str| {
+        serve(
+            &format!("{base}{name}"),
+            FakePlayer {
+                stall: APP_WAIT * 4,
+                ..player("Playing", "Hung")
+            },
+        )
+    };
+    let _hung = [hung("a"), hung("b"), hung("c")];
+    let _answering = serve(&format!("{base}d"), player("Playing", "Song"));
+    let mut players = players("hung");
+    let started = Instant::now();
+    let listed = titles(&mut players);
+    let took = started.elapsed();
+    assert!(took < APP_WAIT * 2, "took {took:?}");
+    assert_eq!(listed, vec![(format!("{base}d"), "Song".to_owned())]);
 }
 
 #[test]
