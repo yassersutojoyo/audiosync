@@ -115,7 +115,7 @@ jobs:
             sleep 1
             wpctl status
             for level in loud quiet; do
-              pw-play --target 0 -P "{ node.name = ci-$level-tone }" "$RUNNER_TEMP/$level.wav" &
+              pw-play --target 0 --latency 1024 -P "{ node.name = ci-$level-tone }" "$RUNNER_TEMP/$level.wav" &
             done
             sleep 1
             for level in loud quiet; do
