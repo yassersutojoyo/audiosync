@@ -117,7 +117,7 @@ A Windows 11 version (x64 and ARM64) is on the way, with the same Rust engine an
 
 ## Linux
 
-There's a Linux preview too, built from the same code as the Windows app. Not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details. It captures the whole system or one app through PipeWire and plays to AirPlay and Google Cast speakers and to your local PipeWire outputs. It sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't. Its data lives in `$XDG_DATA_HOME/audiosync`, launch at login is an XDG autostart entry, and now playing comes from MPRIS players.
+There's a Linux preview too, built from the same code as the Windows app. Not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details. It captures the whole system or one app through PipeWire and plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on Windows) and to your local PipeWire outputs. Like the Windows build, it hasn't been tried on a real speaker yet. It sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't. Its data lives in `$XDG_DATA_HOME/audiosync`, launch at login is an XDG autostart entry, and now playing comes from MPRIS players.
 
 ## License and credits
 
