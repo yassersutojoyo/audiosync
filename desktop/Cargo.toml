@@ -100,6 +100,15 @@ windows-future = "0.3.2"
 # The notification-area icon and its menu (MIT OR Apache-2.0).
 tray-icon = { version = "0.26.1", default-features = false }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# PipeWire's client API (MIT): the whole system's sound from the default
+# output's monitor. libpipewire comes from the host at run time; the v1_0_0
+# feature makes PipeWire 1.0 the oldest the app runs on.
+pipewire = { version = "0.10.1", features = ["v1_0_0"] }
+# clock_gettime(CLOCK_MONOTONIC), the clock PipeWire's graph times count in
+# (MIT OR Apache-2.0, already in the build).
+libc = "0.2.191"
+
 [build-dependencies]
 embed-resource = "3.0.12"
 # The same Slint as the slint dependency, pinned for the same reason.

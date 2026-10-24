@@ -64,11 +64,15 @@ jobs:
           rustup default stable
           rustc --version
 
-      # Slint's fonts and windows, and the Cast sender's native-tls (OpenSSL).
+      # Slint's fonts and windows, the Cast sender's native-tls (OpenSSL), and
+      # the PipeWire client library with libclang for its bindings. The
+      # daemon, WirePlumber and the pw-* tools run the capture's smoke test.
       - name: System libraries
         run: >-
           sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
           libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
+          libpipewire-0.3-dev clang libclang-dev
+          pipewire pipewire-bin wireplumber dbus dbus-user-session
 
       - name: Format
         run: cargo fmt --check
@@ -84,6 +88,30 @@ jobs:
       - name: Tests
         if: ${{ !cancelled() }}
         run: cargo test --locked
+
+      # A PipeWire daemon of its own, with a null sink as the only (so the
+      # default) output playing a 440 Hz tone, and the ignored test that
+      # captures that output's monitor.
+      - name: PipeWire capture smoke test
+        if: ${{ !cancelled() }}
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          python3 -c "
+          import math, struct, wave
+          with wave.open('$RUNNER_TEMP/tone.wav', 'wb') as f:
+              f.setnchannels(2); f.setsampwidth(2); f.setframerate(48000)
+              f.writeframes(b''.join(struct.pack('<hh', s, s) for s in (int(12000 * math.sin(2 * math.pi * 440 * n / 48000)) for n in range(48000 * 120))))
+          "
+          dbus-run-session -- bash -euo pipefail -c '
+            pipewire & sleep 1
+            wireplumber & sleep 2
+            pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=ci-sink media.class=Audio/Sink object.linger=true audio.position=[FL FR] }"
+            sleep 1
+            wpctl status
+            pw-play "$RUNNER_TEMP/tone.wav" & sleep 1
+            cargo test --locked -- --ignored --exact audio::pipewire::stream::tests::the_monitor_of_a_playing_output_is_captured
+          '
 
   build:
     name: Release build (${{ matrix.arch }})

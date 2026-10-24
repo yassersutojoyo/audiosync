@@ -3,16 +3,21 @@
 //! is the single-instance lock and [`create_tray`] the notification-area
 //! icon. The data folder's base, the pairing file's sealer, the computer's
 //! name and the notice clock come from here too. `windows` is the Windows 11
-//! app; `other` is the UI-only build on hosts without a backend yet.
+//! app; `linux` is the PipeWire backend over the rest of `other`, the UI-only
+//! build on hosts without a backend yet.
 
 #[cfg(os_backend)]
 mod engine;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(not(windows))]
 mod other;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+use self::linux as imp;
+#[cfg(not(any(windows, target_os = "linux")))]
 use self::other as imp;
 #[cfg(windows)]
 use self::windows as imp;

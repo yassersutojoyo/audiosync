@@ -6,13 +6,15 @@
 
 use std::rc::Rc;
 
+#[cfg(not(target_os = "linux"))]
 use super::Started;
+#[cfg(not(target_os = "linux"))]
 use crate::StartError;
 use crate::audio::pairings::{Seal, Sealer};
 use crate::debug_log::DebugLog;
 use crate::view::App;
 
-#[cfg(feature = "mock-backend")]
+#[cfg(all(feature = "mock-backend", not(target_os = "linux")))]
 pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     log.log(|| "audio: example speakers from the mock backend; nothing plays".to_owned());
     Ok(Started {
@@ -21,7 +23,7 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     })
 }
 
-#[cfg(not(feature = "mock-backend"))]
+#[cfg(not(any(feature = "mock-backend", target_os = "linux")))]
 pub fn start(_log: &DebugLog) -> Result<Started, StartError> {
     Err(StartError::Audio(
         "this system has no audio backend yet (the mock-backend feature shows example speakers)"
@@ -30,7 +32,7 @@ pub fn start(_log: &DebugLog) -> Result<Started, StartError> {
 }
 
 /// `backend` as it is: there is nothing else to open.
-#[cfg(feature = "mock-backend")]
+#[cfg(all(feature = "mock-backend", not(target_os = "linux")))]
 pub fn start_with(_log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     Started {
         backend,
@@ -39,9 +41,11 @@ pub fn start_with(_log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -
 }
 
 /// No playing track and no now-playing card.
+#[cfg(not(target_os = "linux"))]
 #[cfg_attr(not(feature = "mock-backend"), allow(dead_code))]
 pub struct Media;
 
+#[cfg(not(target_os = "linux"))]
 impl Media {
     pub fn attach(self, _app: &Rc<App>) {}
 }

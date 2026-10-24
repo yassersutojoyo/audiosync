@@ -136,6 +136,16 @@ The Windows app reads and writes its settings file with `serde` and
 and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the
 app already contained.
 
+The same crate also builds for Linux, which isn't released yet. That build
+captures through PipeWire with `pipewire`, `pipewire-sys`, `libspa`,
+`libspa-sys`, `cookie-factory` and `nom` (MIT), `bitflags` and `libc` (MIT OR
+Apache-2.0) and `rustix` (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR
+MIT). Their bindings are generated at build time with `bindgen`
+(BSD-3-Clause), `clang-sys` (Apache-2.0), `libloading` (ISC), `system-deps`
+and `cc` (MIT OR Apache-2.0) and `target-lexicon` (Apache-2.0 WITH
+LLVM-exception), none of which goes into the program. PipeWire's own library
+isn't bundled: the app uses the one the system has.
+
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in
 `desktop/deny.toml`. Each Windows test build CI uploads comes with a

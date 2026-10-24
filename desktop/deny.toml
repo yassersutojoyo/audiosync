@@ -49,6 +49,10 @@ exceptions = [
     # Slint's core (i-slint-core) shows a system tray through it on Linux; the
     # Unlicense is a public-domain dedication with no conditions.
     { crate = "ksni", allow = ["Unlicense"] },
+    # A build-time dependency of the PipeWire bindings' pkg-config lookup
+    # (system-deps through cfg-expr) on Linux; the LLVM exception only waives
+    # Apache-2.0 conditions for compiled code.
+    { crate = "target-lexicon", allow = ["Apache-2.0 WITH LLVM-exception"] },
 ]
 include-dev = true
 include-build = true
