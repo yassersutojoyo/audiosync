@@ -1402,7 +1402,8 @@ double asc_calibration_cast_wait_ms(bool has_offset, double offset_ms, double ho
  * sender adds for the speaker, plus 500 ms. shown_ms, the AirPlay delay the
  * field shows, counts instead of the sender's latency when it is longer.
  * Each value is clamped to 0 to 20 000 ms; one that is not a number counts
- * as 0, a sender latency that is not a number or 0 as none.
+ * as 0; a sender latency that is not a number or not above 0 counts as
+ * none.
  */
 double asc_calibration_airplay_wait_ms(bool has_sender, double sender_latency_ms, double shown_ms, double hold_back_ms);
 

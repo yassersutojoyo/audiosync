@@ -5915,26 +5915,42 @@ mod tests {
 
     #[test]
     fn an_airplay_speaker_at_l_1750_with_delay_0_gets_a_calibration_window_of_at_least_l() {
-        use audiosync_core::calibrate_all::Class;
+        let (mut backend, _fake) = playing_airplay_for_calibration();
+        backend.set_airplay_adjustment(-1750.0);
+        let airplay = airplay_member(&backend);
+        assert_eq!(airplay.offset_ms, Some(0.0), "the field shows 0");
+        assert_eq!(
+            airplay.latency_ms,
+            1750.0 + 0.0 + 500.0,
+            "L_s, hold-back, allowance"
+        );
+    }
 
+    #[test]
+    fn an_airplay_speaker_joins_calibration_at_the_paths_upper_bound_while_the_sender_reports_no_latency()
+     {
+        let (mut backend, fake) = playing_airplay_for_calibration();
+        // A sender that reports no latency yet reaches the controller as 0.
+        fake.set_latency(Duration::ZERO);
+        backend.poll();
+        assert_eq!(airplay_member(&backend).latency_ms, 3000.0 + 500.0);
+    }
+
+    fn playing_airplay_for_calibration() -> (MockBackend, FakeAirPlay) {
         let (mut backend, fake, kitchen) = local_delay_with_airplay();
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
         backend.start(&SourceId::WholeSystem).unwrap();
         fake.state(&kitchen, SpeakerState::Playing);
         backend.poll();
-        backend.set_airplay_adjustment(-1750.0);
-        let airplay = crate::audio::calibrate_all::lineup(&backend)
+        (backend, fake)
+    }
+
+    fn airplay_member(backend: &MockBackend) -> crate::audio::calibrate_all::Member {
+        crate::audio::calibrate_all::lineup(backend)
             .members
             .into_iter()
-            .find(|member| member.class == Class::AirPlay)
-            .expect("the speaker plays");
-        assert_eq!(airplay.offset_ms, Some(0.0), "the field shows 0");
-        // The window is the expected arrival plus the sweep and 1 s (S235).
-        assert!(
-            airplay.latency_ms + 750.0 + 1000.0 >= 1750.0 + 750.0 + 1000.0,
-            "{}",
-            airplay.latency_ms
-        );
+            .find(|member| member.class == audiosync_core::calibrate_all::Class::AirPlay)
+            .expect("the speaker plays")
     }
 
     #[test]

@@ -73,7 +73,8 @@ pub const AIRPLAY_UNKNOWN_LATENCY_MS: f64 = 3000.0;
 /// plus the hold-back the sender adds for that speaker, plus
 /// [`AIRPLAY_LATENCY_ALLOWANCE_MS`]. The AirPlay delay the field shows
 /// counts instead of L_s when it is longer: its adjustment moves only the
-/// local outputs, so a field below L_s never shortens the window.
+/// local outputs, so a field below L_s never shortens the window. A sender
+/// latency that is not a number or not above 0 counts as none.
 pub fn airplay_wait_ms(sender_latency_ms: Option<f64>, shown_ms: f64, hold_back_ms: f64) -> f64 {
     let in_range = |ms: f64| {
         if ms.is_finite() {
