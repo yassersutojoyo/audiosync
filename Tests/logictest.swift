@@ -2119,7 +2119,7 @@ do {
         check(m.apply(.pairingFailed(id: "B2", wrongPin: true, .refused, detail: "")) == .startPairing("B2")
                 && m.apply(.pinNeeded(id: "B2")) == .prompt
                 && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
-              "native pairing: a wrong PIN starts a new pairing (a new PIN on the TV) and asks again")
+              "native pairing: a wrong PIN starts a new pairing (the TV shows a PIN again) and asks again")
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "5678") == .submitPin
                 && m.apply(.pinNeeded(id: "B2")) == .prompt
                 && m.stages["B2"] == .askingPin(wrong: true)

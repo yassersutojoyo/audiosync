@@ -355,7 +355,8 @@ pub struct PairSetup {
     stage: SetupStage,
     retried: bool,
     /// A wrong PIN was tried again with the code still shown; the next
-    /// wrong one asks the receiver for a new code (P150).
+    /// wrong one sends `/pair-pin-start` again, which may keep the same
+    /// code up (P150).
     same_code_retried: bool,
     /// B or S of this attempt is shorter than N, so a receiver that pads
     /// them computes another proof (P151).

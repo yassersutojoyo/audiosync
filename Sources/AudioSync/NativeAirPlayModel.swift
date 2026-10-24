@@ -138,7 +138,7 @@ enum NativeSpeakerEvent: Equatable {
     /// one given, which the sender forgot.
     case passwordNeeded(id: String, wrong: Bool)
     /// A pairing ended without credentials: the PIN was turned down
-    /// (`wrongPin`, a new pairing shows a new PIN), or `problem`.
+    /// (`wrongPin`, a new pairing shows a PIN again), or `problem`.
     case pairingFailed(id: String, wrongPin: Bool, Problem, detail: String)
     /// A pairing succeeded and its credentials are stored; `storeNote` is
     /// empty, or why they last only until AudioSync quits.

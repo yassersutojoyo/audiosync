@@ -227,7 +227,7 @@ pub struct AirPlayPinPrompt {
     pub name: String,
     /// Where the pairing is.
     pub phase: PairingPhase,
-    /// The Apple TV turned the last PIN down; it shows a new one.
+    /// The Apple TV turned the last PIN down; it shows a PIN again.
     pub wrong_pin: bool,
 }
 
