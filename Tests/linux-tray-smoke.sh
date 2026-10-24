@@ -54,7 +54,7 @@ if [ "${1:-}" = "--case" ]; then
     echo "[$name] no item registered with the watcher" >&2
     status=1
   fi
-  if [ -n "$log" ] && grep -i -E 'error|warning|panic|cannot run' "$log" >&2; then
+  if [ -n "$log" ] && grep -i -E 'error|warning|panic|cannot run|app id: not set' "$log" >&2; then
     echo "[$name] the log has the errors or warnings above" >&2
     status=1
   fi

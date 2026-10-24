@@ -190,12 +190,13 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     };
     #[cfg(not(feature = "mock-backend"))]
     let os::Started { backend, media } = os::start(log)?;
-    // Before the first window: Wayland matches windows to the .desktop file by it.
+    let app = view::App::new(backend, log.clone())?;
+    // Needs the platform the windows above set up, and must come before the
+    // first one shows: Wayland matches windows to the .desktop file by it.
     #[cfg(target_os = "linux")]
     if let Err(error) = slint::set_xdg_app_id(APP_ID) {
         log.log(|| format!("app id: not set ({error})"));
     }
-    let app = view::App::new(backend, log.clone())?;
     #[cfg(feature = "mock-backend")]
     if zones_preview {
         app.set_zone_expanded("zone:upstairs", false);
