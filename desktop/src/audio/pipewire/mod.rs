@@ -135,7 +135,12 @@ mod driver {
                 CaptureTarget::Loopback(Activation {
                     mode: LoopbackMode::ExcludeTree,
                     ..
-                }) => stream::start(writer, equalizer, feeds),
+                }) => stream::start(
+                    stream::Wiring::DefaultOutputMonitor,
+                    writer,
+                    equalizer,
+                    feeds,
+                ),
                 _ => Err(BackendError::NotOffered),
             }
         }

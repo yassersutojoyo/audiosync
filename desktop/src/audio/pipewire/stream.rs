@@ -1,4 +1,7 @@
 //! The capture stream on the default output's monitor, on its own thread.
+//! A [`Wiring`] says what the stream links to; for the monitor it watches
+//! the `default` metadata and links the stream again when the default
+//! output changes.
 //!
 //! Every PipeWire object of a capture (main loop, context, connection,
 //! stream and listeners) is made, run and dropped on one thread,
@@ -12,7 +15,7 @@
 //! [`GapFill`] are then only ever used on one thread, without a lock; the
 //! callback never allocates, locks, blocks or logs.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -23,6 +26,7 @@ use std::time::Duration;
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 use pipewire as pw;
+use pw::metadata::{Metadata, MetadataListener};
 use pw::spa;
 use pw::spa::param::ParamType;
 use pw::spa::param::audio::{AudioFormat, AudioInfoRaw};
@@ -31,7 +35,8 @@ use pw::spa::param::format_utils;
 use pw::spa::pod::serialize::PodSerializer;
 use pw::spa::pod::{Object, Pod, Value};
 use pw::spa::utils::{Direction, SpaTypes};
-use pw::stream::{StreamBox, StreamFlags, StreamState};
+use pw::stream::{StreamFlags, StreamRc, StreamState};
+use pw::types::ObjectType;
 
 use super::format::{self, CAPTURE_FORMAT, Negotiated};
 use super::timing::{self, PacketClock};
@@ -123,10 +128,77 @@ impl Drop for MonitorCapture {
     }
 }
 
-/// Starts capturing the default output's monitor into `writer` through
+/// What the capture stream is linked to. Only this decides how the stream
+/// connects and what it follows; from the process callback on, the path of
+/// the buffers is the same for every wiring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wiring {
+    /// The default output's monitor, moving to the new default when it
+    /// changes.
+    DefaultOutputMonitor,
+}
+
+impl Wiring {
+    fn flags(self) -> StreamFlags {
+        match self {
+            Wiring::DefaultOutputMonitor => StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
+        }
+    }
+
+    /// The node to connect to; `None` leaves it to the session manager.
+    fn target(self) -> Option<u32> {
+        match self {
+            Wiring::DefaultOutputMonitor => None,
+        }
+    }
+
+    /// Whether the stream records what an output plays rather than an input.
+    fn captures_output(self) -> bool {
+        match self {
+            Wiring::DefaultOutputMonitor => true,
+        }
+    }
+
+    /// Whether the stream reconnects when the default output changes: the
+    /// session manager leaves an already linked stream where it is.
+    fn follows_default(self) -> bool {
+        match self {
+            Wiring::DefaultOutputMonitor => true,
+        }
+    }
+}
+
+/// The metadata key that names the default output in effect.
+const DEFAULT_SINK_KEY: &str = "default.audio.sink";
+
+/// The default output as the `default` metadata last named it.
+#[derive(Default)]
+struct DefaultOutput {
+    /// Whether a value came yet: the first is the default the stream was
+    /// linked to, not a change.
+    known: bool,
+    name: Option<String>,
+}
+
+impl DefaultOutput {
+    /// Records `value` and tells whether the stream should move: a new
+    /// default after the first, not one that went away.
+    fn changed(&mut self, value: Option<&str>) -> bool {
+        let differs = self.name.as_deref() != value;
+        let moves = self.known && differs && value.is_some();
+        self.known = true;
+        if differs {
+            self.name = value.map(str::to_owned);
+        }
+        moves
+    }
+}
+
+/// Starts capturing what `wiring` links to into `writer` through
 /// `equalizer`, handing the same audio to `feeds`. Returns once PipeWire
 /// agreed on the format and the stream is linked, or with why it couldn't.
 pub fn start(
+    wiring: Wiring,
     writer: RingWriter,
     equalizer: EqProcessor,
     feeds: Feeds,
@@ -139,7 +211,14 @@ pub fn start(
     let thread = std::thread::Builder::new()
         .name("audiosync-pw".to_owned())
         .spawn(move || {
-            if let Err(error) = serve(converter, stop_receiver, ready.clone(), &thread_status) {
+            let served = serve(
+                wiring,
+                converter,
+                stop_receiver,
+                ready.clone(),
+                &thread_status,
+            );
+            if let Err(error) = served {
                 thread_status.fail(&error);
                 let _ = ready.send(Err(error));
             }
@@ -263,6 +342,7 @@ fn enum_format() -> Result<Vec<u8>, BackendError> {
 /// stream fails. Reports through `ready` once the stream is linked, or why
 /// it couldn't be; an `Err` returned is a failure before the loop ran.
 fn serve(
+    wiring: Wiring,
     converter: CaptureConverter,
     stop: pw::channel::Receiver<()>,
     ready: mpsc::Sender<Result<(), BackendError>>,
@@ -299,8 +379,7 @@ fn serve(
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Capture",
         *pw::keys::MEDIA_ROLE => "Music",
-        // What the default output plays, not what an input records.
-        *pw::keys::STREAM_CAPTURE_SINK => "true",
+        *pw::keys::STREAM_CAPTURE_SINK => if wiring.captures_output() { "true" } else { "false" },
         *pw::keys::NODE_NAME => NODE_NAME,
         *pw::keys::APP_NAME => "AudioSync",
         *pw::keys::NODE_LATENCY => NODE_LATENCY,
@@ -308,7 +387,10 @@ fn serve(
         *pw::keys::NODE_PASSIVE => "true",
     };
     let stream =
-        StreamBox::new(&core, NODE_NAME, properties).map_err(|_| BackendError::DeviceGone)?;
+        StreamRc::new(core.clone(), NODE_NAME, properties).map_err(|_| BackendError::DeviceGone)?;
+    // Set while the stream is taken down to link it again, so the
+    // disconnect isn't reported as a lost output.
+    let relinking = Rc::new(Cell::new(false));
 
     let feed = Rc::new(RefCell::new(Feed {
         converter,
@@ -323,10 +405,13 @@ fn serve(
             let main_loop = main_loop.clone();
             let status = Arc::clone(status);
             let ready = ready.clone();
+            let relinking = Rc::clone(&relinking);
             move |_stream, _, old, new| match new {
                 StreamState::Paused | StreamState::Streaming => {
+                    relinking.set(false);
                     let _ = ready.send(Ok(()));
                 }
+                StreamState::Unconnected if relinking.get() => {}
                 StreamState::Error(_) => {
                     status.fail(&BackendError::DeviceGone);
                     let _ = ready.send(Err(BackendError::DeviceGone));
@@ -390,16 +475,66 @@ fn serve(
         .register()
         .map_err(|_| BackendError::DeviceGone)?;
 
-    let format = enum_format()?;
-    let format = Pod::from_bytes(&format).ok_or(BackendError::UnsupportedFormat)?;
-    stream
-        .connect(
-            Direction::Input,
-            None,
-            StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
-            &mut [format],
-        )
-        .map_err(|_| BackendError::DeviceGone)?;
+    let format: Rc<[u8]> = enum_format()?.into();
+    connect(&stream, wiring, &format)?;
+
+    // The `default` metadata, bound once the registry announces it, and
+    // what it last named the default output.
+    let defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>> = Rc::default();
+    let registry = core
+        .get_registry_rc()
+        .map_err(|_| BackendError::ServiceNotRunning)?;
+    let registry_listener = wiring.follows_default().then(|| {
+        registry
+            .add_listener_local()
+            .global({
+                let registry = registry.clone();
+                let defaults = Rc::clone(&defaults);
+                let stream = stream.clone();
+                let format = Rc::clone(&format);
+                let relinking = Rc::clone(&relinking);
+                let main_loop = main_loop.clone();
+                let status = Arc::clone(status);
+                move |global| {
+                    let is_default = global.type_ == ObjectType::Metadata
+                        && global
+                            .props
+                            .is_some_and(|props| props.get("metadata.name") == Some("default"));
+                    if !is_default || defaults.borrow().is_some() {
+                        return;
+                    }
+                    let Ok(metadata) = registry.bind::<Metadata, _>(global) else {
+                        return;
+                    };
+                    let output = RefCell::new(DefaultOutput::default());
+                    let stream = stream.clone();
+                    let format = Rc::clone(&format);
+                    let relinking = Rc::clone(&relinking);
+                    let main_loop = main_loop.clone();
+                    let status = Arc::clone(&status);
+                    let listener = metadata
+                        .add_listener_local()
+                        .property(move |subject, key, _type, value| {
+                            if subject != pw::core::PW_ID_CORE
+                                || key != Some(DEFAULT_SINK_KEY)
+                                || !output.borrow_mut().changed(value)
+                            {
+                                return 0;
+                            }
+                            relinking.set(true);
+                            let _ = stream.disconnect();
+                            if connect(&stream, wiring, &format).is_err() {
+                                status.fail(&BackendError::DeviceGone);
+                                main_loop.quit();
+                            }
+                            0
+                        })
+                        .register();
+                    *defaults.borrow_mut() = Some((metadata, listener));
+                }
+            })
+            .register()
+    });
 
     let idle_feed = Rc::clone(&feed);
     let timer = main_loop.loop_().add_timer(move |_| {
@@ -414,8 +549,24 @@ fn serve(
         move |()| main_loop.quit()
     });
     main_loop.run();
+    // The metadata's listener holds the stream; it goes first.
+    drop(registry_listener);
+    defaults.borrow_mut().take();
     let _ = stream.disconnect();
     Ok(())
+}
+
+/// Connects `stream` the way `wiring` says, asking for `format`.
+fn connect(stream: &StreamRc, wiring: Wiring, format: &[u8]) -> Result<(), BackendError> {
+    let format = Pod::from_bytes(format).ok_or(BackendError::UnsupportedFormat)?;
+    stream
+        .connect(
+            Direction::Input,
+            wiring.target(),
+            wiring.flags(),
+            &mut [format],
+        )
+        .map_err(|_| BackendError::DeviceGone)
 }
 
 #[cfg(test)]
@@ -425,6 +576,30 @@ mod tests {
 
     use super::*;
     use crate::audio::SESSION_RATE;
+
+    #[test]
+    fn only_a_new_default_after_the_first_moves_the_stream() {
+        let loud = Some(r#"{ "name": "ci-loud" }"#);
+        let quiet = Some(r#"{ "name": "ci-quiet" }"#);
+        let mut output = DefaultOutput::default();
+        assert!(!output.changed(loud));
+        assert!(!output.changed(loud));
+        assert!(output.changed(quiet));
+        // A default that goes away leaves the stream to the session manager;
+        // the next one moves it.
+        assert!(!output.changed(None));
+        assert!(output.changed(loud));
+    }
+
+    #[test]
+    fn the_monitor_wiring_follows_the_default_output() {
+        let wiring = Wiring::DefaultOutputMonitor;
+        assert_eq!(wiring.target(), None);
+        assert!(wiring.flags().contains(StreamFlags::AUTOCONNECT));
+        assert!(!wiring.flags().contains(StreamFlags::RT_PROCESS));
+        assert!(wiring.captures_output());
+        assert!(wiring.follows_default());
+    }
 
     #[test]
     fn the_first_failure_is_the_one_reported() {
@@ -461,7 +636,13 @@ mod tests {
         let ring = Ring::for_rate(SESSION_RATE).unwrap();
         let writer = ring.writer().unwrap();
         let (_control, processor) = equalizer();
-        let capture = start(writer, processor, Feeds::default()).unwrap();
+        let capture = start(
+            Wiring::DefaultOutputMonitor,
+            writer,
+            processor,
+            Feeds::default(),
+        )
+        .unwrap();
         std::thread::sleep(Duration::from_secs(2));
         assert_eq!(capture.state(), CaptureState::Running);
         assert_eq!(capture.setup(), Some(format::SETUP));
@@ -504,7 +685,13 @@ mod tests {
         let ring = Ring::for_rate(SESSION_RATE).unwrap();
         let writer = ring.writer().unwrap();
         let (_control, processor) = equalizer();
-        let capture = start(writer, processor, Feeds::default()).unwrap();
+        let capture = start(
+            Wiring::DefaultOutputMonitor,
+            writer,
+            processor,
+            Feeds::default(),
+        )
+        .unwrap();
         std::thread::sleep(Duration::from_secs(1));
         let loud = ring.take_peak();
         assert!(loud > 0.3, "peak {loud} on the first default");
