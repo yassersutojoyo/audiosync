@@ -1031,6 +1031,12 @@ fn dacp_events_name_the_speaker() {
     // server answers 403 or answers 204 and the driver then drops it
     // depends on which comes first.
     sender.remove_speaker(&a_key);
+    // A command that reaches the driver before the removal still counts.
+    assert!(
+        events
+            .wait_state(&sender, &a_key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
     let mut client = Client::connect(LOOPBACK, port);
     let reply = client.request("/ctrl-int/1/playpause", Some(&a_remote));
     assert!(matches!(reply.status, 204 | 403), "{reply:?}");
