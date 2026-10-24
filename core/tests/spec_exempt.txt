@@ -105,3 +105,6 @@ S266 Hosts only: a recall's focus and the phone's start origin; the Mac logic su
 S267 Hosts only: keyboard reach and focus of the preset controls; the Windows tests check it, the Mac by hand.
 S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests check it, the Mac by screenshot.
 S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Windows).
+S280 Hosts only: keeping each speaker's reported latency and setting the session's L; the rule is the AirPlay crate's (AirPlay spec P200); the Windows tests and the Mac logic suite check it.
+S281 Hosts only: re-timing on a new L reported by the AirPlay sender, through S177 and S178, which the core covers.
+S282 Hosts only: the debug log lines for reported latencies and L.

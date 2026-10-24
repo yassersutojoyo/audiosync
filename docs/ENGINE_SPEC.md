@@ -299,6 +299,9 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
   - *Native sender* (AirPlay spec P98, P113, P114). The sender reports its base latency L_s, counted on the sender clock from c(n) as P114 says (before its first report, the configured Lf, P98, 1750 ms by default), and the setting is an adjustment A on top of it: −2000 to +20 000 ms, 0 by default, with `L = clamp(L_s + A, 0, 20 000)`. A is relative, so it stays right when L_s changes; no absolute latency is ever stored for this sender, since it would go stale with the next Lf change or timeline restart. A covers receivers that sound later (or earlier) than L_s says. This replaces P114's L + d_local with d_local = clamp(configured − L, 0, 3000): the trim is now the offset, which may be negative down to −L and isn't capped at 3000 ms (only h is capped, S176), and P114's one-time migration is replaced by S179 and S180. An AirPlay speaker's own delay d_s (P99) is unaffected and still moves that speaker alone.
   - *Retired with the bundled engine (2026-10-20); kept as a record.* The two settings are separate. The Mac, which could use either sender, kept both, and switching senders switched settings; neither was ever converted into the other. The Mac now reads only the native sender's adjustment; S179 still stores the bundled engine's value once, for older builds.
   - A change of L (the user edits the AirPlay delay; the native sender reports a new L_s after an Lf change or a timeline restart, P98, P143) re-times every output taking part (S177).
+- **S280** *Required* (AirPlay spec P199 to P202). The session's AirPlay latency, on both hosts. The host keeps, per AirPlay speaker, the latest R_s the crate's latency events reported in this run (in memory, keyed by receiver ID, never stored, dropped when the speaker leaves discovery), and computes Lf with the core's one function (`asc_airplay_session_latency_frames`, P200) over the speakers that are in the stream or being added to it, every member of a target included. It calls `asc_airplay_set_latency` with the result whenever the result changes: before adding speakers to a stream that has none, at every latency event, and when a speaker leaves the stream; the crate decides when the value takes effect (P201). One latency for all AirPlay speakers stays the rule (S178, S237): R_s never sets a speaker's own delay d_s and never moves the AirPlay delay A.
+- **S281** *Required.* A new L and the local outputs. When the crate's timeline event reports a new L_s, S178 computes L from it and the unchanged adjustment A, and S177 re-times every output taking part, as for any change of L; the network wait of S176 and S244 takes the new L the same way (with a Cast speaker playing, the local outputs wait for the longer of L and its wait). A is relative to L_s and every d_s relative to L (P96), so an offset, the AirPlay delay and each speaker's delay measured by calibration (S237) stay right when a later session runs at another L_s, and the AirPlay delay field shows the new L. Since the crate changes Lf only before any AirPlay speaker sounds or when none plays (P201), the local outputs see no change of L while AirPlay speakers sound. A raise in a stream's first seconds that comes within L of the AirPlay switch-on lengthens the silence S177 inserted for that switch-on; a later one inserts one more silence of the difference, with S187's fades.
+- **S282** *Required.* Debug log (S201's logs). One line per latency event: the speaker as the log names it, L + d_s, and "reports R ms (Audio-Latency, audioLatencies, arrivalToRender)" with the sources that gave a value, or "reports nothing"; one line when the host sets a new Lf, with the value and the speakers it was computed over; one line when the crate holds a value as pending and when it applies it; the warnings of P200 and P201 as warnings. No line on the real-time path.
 - **S179** *Required.* Mac migration, once. Before this model the Mac stored an absolute delay per device UID (S77, the `localDelayMsByUID` defaults key) that applied only while an AirPlay speaker was chosen, and played outputs without one at D0: the legacy single delay (the `delayMs` key) clamped to 0 to 20 000, else 2000. The first time a build with this model has both its stored values and a device list, it takes R from S173 and D_R, the reference's stored delay, or D0 when it has none or there is no reference, and stores:
   - the bundled engine's AirPlay delay (S178), L_new = D_R when D_R ≥ 1000 ms, a value tuned against AirPlay; else 2000 ms, since a smaller value can only have been meant to line local outputs up with each other;
   - for every other UID x with a stored delay D_x: o(x) = clamp(D_x − D_R, −2000, 20 000);
@@ -1714,3 +1717,22 @@ The checks for S256 to S258 in the remote crate (`remote/src/state.rs`, `remote/
 | web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip | S257 |
 | web remote: the Mac refuses every command that arrives during a microphone run | S258 |
 | remote: a start from the phone shows no alert, only a notice for the failed speaker | S120 |
+
+### Receiver latency: AirPlay crate, core, Windows and Mac (`cargo test` in `airplay/`, `core/` and `desktop/`, the logic suite)
+
+The crate's checks are in AirPlay spec section 12. The rule and the C interface (`core/tests/airplay_latency.rs`, `core/src/ffi/airplay.rs`; the P clauses are the AirPlay spec's):
+
+| Test | Clauses |
+|---|---|
+| the_c_session_latency_matches_the_crate (a null array and a count of 0 give 77 175; negative entries are unknown) | P200, P202 |
+| latency_event_carries_receiver_latency_us_and_sources | P202 |
+| set_latency_clamps_and_ignores_a_null_handle | P202 |
+
+The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suite as "airplay latency: …" with the same wording):
+
+| Test | Clauses |
+|---|---|
+| airplay_latency_is_set_from_known_reports_before_speakers_are_added | S280 |
+| airplay_latency_follows_a_report_and_a_speaker_leaving | S280 |
+| airplay_latency_covers_every_member_of_a_target | S280 |
+| a_new_airplay_latency_retimes_the_local_outputs_and_keeps_the_adjustment | S281, S178, S177 |
