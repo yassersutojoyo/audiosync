@@ -6,7 +6,8 @@
 //! Windows the backend is `crate::adapter::AudioAdapter` over the WASAPI audio
 //! backend. [`MockBackend`], built only with the `mock-backend` feature, stands
 //! in with example data for UI work: off Windows always, on Windows for
-//! `AUDIOSYNC_PREVIEW_ZONES`. Nothing here makes a sound or opens an audio
+//! `AUDIOSYNC_PREVIEW_ZONES` and `AUDIOSYNC_PREVIEW_PRESETS`. Nothing here
+//! makes a sound or opens an audio
 //! device.
 
 use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
@@ -1516,8 +1517,13 @@ pub enum PresetsPreview {
 #[cfg(any(test, feature = "mock-backend"))]
 impl PresetsPreview {
     /// The preview a value of `AUDIOSYNC_PREVIEW_PRESETS` asks for.
-    pub fn from_value(_value: &str) -> Option<Self> {
-        None
+    pub fn from_value(value: &str) -> Option<Self> {
+        match value {
+            "list" => Some(PresetsPreview::List),
+            "left-off" => Some(PresetsPreview::LeftOff),
+            "empty" => Some(PresetsPreview::Empty),
+            _ => None,
+        }
     }
 }
 
@@ -1750,7 +1756,6 @@ impl MockBackend {
 
     /// Adds preset `id` of the speakers `members` at the master and the
     /// curve now, with no own volumes.
-    #[cfg(test)]
     pub fn add_preset(&mut self, id: &str, name: &str, members: &[&str]) {
         self.presets.push(Preset {
             id: id.to_owned(),
@@ -1880,9 +1885,49 @@ impl MockBackend {
         mock
     }
 
-    /// The example data with presets, for `AUDIOSYNC_PREVIEW_PRESETS`.
-    pub fn presets_preview(_which: PresetsPreview) -> Self {
-        MockBackend::new()
+    /// The example data with presets, for `AUDIOSYNC_PREVIEW_PRESETS`:
+    /// Evening plays now, Movie Night and Whole House don't. For
+    /// [`PresetsPreview::LeftOff`], Whole House was recalled with Den hidden
+    /// and Patio not found.
+    pub fn presets_preview(which: PresetsPreview) -> Self {
+        let mut mock = MockBackend::new();
+        if which == PresetsPreview::Empty {
+            return mock;
+        }
+        mock.state.running = true;
+        mock.save_preset("Evening")
+            .expect("the example has speakers on");
+        mock.add_preset(
+            "preset:2",
+            "Movie Night",
+            &["local:speakers", "airplay:living"],
+        );
+        mock.add_preset(
+            "preset:3",
+            "Whole House",
+            &[
+                "airplay:kitchen",
+                "airplay:bedroom",
+                "local:desk",
+                "airplay:den",
+                "airplay:patio",
+            ],
+        );
+        if which == PresetsPreview::LeftOff {
+            mock.state.hidden.push(HiddenSpeaker {
+                id: "airplay:den".into(),
+                name: "Den".into(),
+                kind_text: "AirPlay".into(),
+                present: None,
+            });
+            mock.state.absent.push(AbsentMember {
+                id: "airplay:patio".into(),
+                name: "Patio".into(),
+                kind: SpeakerKind::AirPlay,
+            });
+            mock.recall_preset("preset:3");
+        }
+        mock
     }
 
     fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
@@ -2281,7 +2326,11 @@ impl Backend for MockBackend {
             } else if self.state.speaker(&member.key).is_some() {
                 members.push((member.key.clone(), member.volume));
             } else {
-                left_off.push((member.key.clone(), PresetLeftOff::NotFound));
+                let name = self
+                    .state
+                    .absent_member(&member.key)
+                    .map_or_else(|| member.key.clone(), |absent| absent.name.clone());
+                left_off.push((name, PresetLeftOff::NotFound));
             }
         }
         let nothing_changed = members.is_empty();

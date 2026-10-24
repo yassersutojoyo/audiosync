@@ -8534,6 +8534,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_presets_previews_fill_the_card_and_the_notice() {
+        use crate::ui_model::PresetsPreview;
+        let app = app_over(MockBackend::presets_preview(PresetsPreview::List));
+        assert_eq!(
+            preset_rows(&app),
+            [
+                ("Evening".to_owned(), true),
+                ("Movie Night".to_owned(), false),
+                ("Whole House".to_owned(), false)
+            ]
+        );
+        assert_eq!(app.main.get_notices().row_count(), 0);
+
+        let app = app_over(MockBackend::presets_preview(PresetsPreview::LeftOff));
+        let notice = app.main.get_notices().row_data(0).expect("a notice");
+        assert!(
+            notice.message.contains("Whole House")
+                && notice.message.contains("Den")
+                && notice.message.contains("Patio"),
+            "{}",
+            notice.message
+        );
+
+        let app = app_over(MockBackend::presets_preview(PresetsPreview::Empty));
+        assert!(
+            preset_rows(&app).is_empty(),
+            "the card shows its empty line"
+        );
+    }
+
     fn preset_rows(app: &App) -> Vec<(String, bool)> {
         app.main
             .get_presets()

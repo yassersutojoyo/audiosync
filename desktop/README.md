@@ -258,7 +258,8 @@ cargo check --target aarch64-pc-windows-msvc
 - `src/ui_model.rs`: what the windows show and can ask for (the `Backend`
   trait) and the mock backend, built only with the `mock-backend` feature
   (off Windows it runs the window, on Windows it backs the
-  `AUDIOSYNC_PREVIEW_ZONES` preview), unit-tested
+  `AUDIOSYNC_PREVIEW_ZONES` and `AUDIOSYNC_PREVIEW_PRESETS` previews),
+  unit-tested
 - `src/adapter.rs`: the `Backend` on Windows. It turns what the window asks
   for into audio backend calls, with the session rules of `audiosync-core`
   (switching a speaker on starts streaming, a source that quits stops it), and
