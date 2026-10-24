@@ -210,6 +210,9 @@ pub struct SpeakerOptions {
     /// HomeKit credentials of an earlier pairing on the AirPlay 2 path
     /// (P152): its sessions pair-verify with them (P61). Never logged.
     pub homekit_credentials: Option<HomeKitCredentials>,
+    /// The host keeps a debug log: an AirPlay 2 session reports
+    /// [`SpeakerEvent::Trace`] lines and reads the receiver's volume once.
+    pub trace: bool,
 }
 
 impl SpeakerOptions {
@@ -222,6 +225,7 @@ impl SpeakerOptions {
             pcm: false,
             credentials: None,
             homekit_credentials: None,
+            trace: false,
         }
     }
 }
@@ -400,6 +404,8 @@ pub enum SpeakerEvent {
     /// (P154): the sender dropped its copy, and the host deletes the stored
     /// one, so the next start pairs again. A PairingRequired error follows.
     HomeKitRejected,
+    /// A line for the host's debug log, only with [`SpeakerOptions::trace`].
+    Trace(String),
 }
 
 /// What the sender reports.

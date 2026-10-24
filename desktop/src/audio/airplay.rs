@@ -2181,6 +2181,7 @@ impl AirPlaySpeakers {
         options.homekit_credentials = self.store.homekit(id).cloned();
         options.password = self.password(id);
         options.pcm = self.pcm_devices.contains(id);
+        options.trace = self.log.enabled();
         options
     }
 
@@ -3090,6 +3091,11 @@ impl AirPlaySpeakers {
                         self.label(id)
                     )
                 });
+                false
+            }
+            SpeakerEvent::Trace(line) => {
+                self.log
+                    .log(|| format!("AirPlay speaker {} trace: {line}", self.label(id)));
                 false
             }
             SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) => false,

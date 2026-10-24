@@ -128,6 +128,7 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only */
 #define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
+#define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
 
 /* What a warning reports (AscAirPlayEvent.warning). */
 #define ASC_AIRPLAY_WARNING_JACK_DISCONNECTED 1          /* nothing is plugged into its audio jack */
