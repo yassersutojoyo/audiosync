@@ -77,6 +77,9 @@ pub struct Ap2Config {
     /// `/pair-pin-start`, waits for [`Ap2Session::submit_pin`], then pair-setup
     /// M1 to M6 and a pair-verify (P153), and ends there without a session.
     pub pin_pairing: bool,
+    /// The host keeps a debug log: the session reports [`Ap2Event::Trace`]
+    /// lines and asks the receiver its volume once after RECORD.
+    pub trace: bool,
 }
 
 impl Ap2Config {
@@ -93,6 +96,7 @@ impl Ap2Config {
             ptp: None,
             members: Vec::new(),
             pin_pairing: false,
+            trace: false,
         }
     }
 }
@@ -162,6 +166,8 @@ pub enum Ap2Event {
     /// The stream is set up and flushed (P42).
     Ready(StreamPorts),
     Warning(Warning),
+    /// A line for the host's debug log, only with [`Ap2Config::trace`].
+    Trace(String),
     Failed(SessionError),
     /// The session ended after a teardown.
     Closed,
@@ -192,6 +198,7 @@ enum Kind {
     Record,
     SetPeers,
     Volume(Volume),
+    VolumeRead,
     Metadata(Metadata),
     StreamSetup,
     Flush,
@@ -209,6 +216,7 @@ impl Kind {
             Kind::Record => Method::Record,
             Kind::SetPeers => Method::SetPeers,
             Kind::Volume(_) | Kind::Metadata(_) => Method::SetParameter,
+            Kind::VolumeRead => Method::GetParameter,
             Kind::Flush => Method::Flush,
             Kind::TeardownStream | Kind::TeardownSession => Method::Teardown,
         }
@@ -309,6 +317,12 @@ pub struct Ap2Session {
     flush_pending: bool,
     /// Unreachable UDP sends in a row (P141).
     udp_failures: u8,
+    /// The traced volume read is still to go out (only with
+    /// [`Ap2Config::trace`]).
+    volume_read_wanted: bool,
+    volume_read_sent: bool,
+    /// The CSeq of a volume read that timed out, whose answer is ignored.
+    late_volume_read: Option<u32>,
 }
 
 type Output = Ap2Output;
@@ -390,6 +404,9 @@ impl Ap2Session {
             flush_point: (0, 0),
             flush_pending: false,
             udp_failures: 0,
+            volume_read_wanted: false,
+            volume_read_sent: false,
+            late_volume_read: None,
         };
         session.flush_point = (session.ids.first_seq, session.ids.first_rtptime);
         if drawn.is_err() {
@@ -668,6 +685,19 @@ impl Ap2Session {
             match events.parser.next_message() {
                 Ok(None) => break,
                 Ok(Some(Message::Request(request))) => {
+                    if self.config.trace {
+                        let line = format!(
+                            "event channel {} {} ({}): {}",
+                            request.method.as_str(),
+                            request.uri,
+                            request.headers.get("Content-Type").unwrap_or("no type"),
+                            bodies::trace_text(&request.body)
+                        );
+                        self.event(Ap2Event::Trace(line));
+                    }
+                    let Some(events) = self.events.as_mut() else {
+                        return;
+                    };
                     let answer = event_answer(&request);
                     let sealed = events.framing.seal(&answer);
                     self.outputs.push_back(Output::SendEvents(sealed));
@@ -745,6 +775,17 @@ impl Ap2Session {
             } else {
                 self.feedback_wanted = true;
             }
+        }
+        if let Some(in_flight) = &self.in_flight
+            && in_flight.kind == Kind::VolumeRead
+            && now >= in_flight.sent_at + RESPONSE_TIMEOUT
+        {
+            // The debug probe never ends a session; a late answer is dropped.
+            self.late_volume_read = Some(in_flight.cseq);
+            self.in_flight = None;
+            self.event(Ap2Event::Trace(
+                "GET_PARAMETER volume: no answer".to_owned(),
+            ));
         }
         if let Some(in_flight) = &self.in_flight
             && in_flight.kind != Kind::Feedback
@@ -990,6 +1031,11 @@ impl Ap2Session {
                 if let Some(volume) = self.pending_volume.take() {
                     return self.send(Kind::Volume(volume), now, false);
                 }
+                if self.volume_read_wanted {
+                    self.volume_read_wanted = false;
+                    self.volume_read_sent = true;
+                    return self.send(Kind::VolumeRead, now, false);
+                }
                 if let Some(metadata) = self.metadata_queue.pop_front() {
                     self.send(Kind::Metadata(metadata), now, false);
                 }
@@ -1063,6 +1109,10 @@ impl Ap2Session {
             Kind::Volume(volume) => {
                 request.headers.push("Content-Type", "text/parameters");
                 request.body = volume.parameter_body().into_bytes();
+            }
+            Kind::VolumeRead => {
+                request.headers.push("Content-Type", "text/parameters");
+                request.body = crate::volume::READ_BODY.as_bytes().to_vec();
             }
             Kind::Metadata(metadata) => {
                 request
@@ -1141,6 +1191,10 @@ impl Ap2Session {
     }
 
     fn on_response(&mut self, response: Response, now: Instant) {
+        if self.late_volume_read.is_some() && response.cseq() == self.late_volume_read {
+            self.late_volume_read = None;
+            return;
+        }
         let Some(in_flight) = self.in_flight.take() else {
             return self.fail(
                 ErrorKind::ProtocolError,
@@ -1198,6 +1252,13 @@ impl Ap2Session {
                     self.warn(method, code);
                     InfoAnswer::default()
                 };
+                if self.config.trace {
+                    let line = match answer.initial_volume {
+                        Some(db) => format!("/info initialVolume {db} dB"),
+                        None => format!("/info initialVolume absent (status {code})"),
+                    };
+                    self.event(Ap2Event::Trace(line));
+                }
                 self.event(Ap2Event::Info(answer.clone()));
                 self.start_pairing(&answer, now);
             }
@@ -1215,6 +1276,9 @@ impl Ap2Session {
                     return self.fail(ErrorKind::Refused, Some(method), Some(code), None);
                 }
                 self.recorded = true;
+                if self.config.trace && !self.volume_read_sent {
+                    self.volume_read_wanted = true;
+                }
                 // SETPEERS only under PTP (P165).
                 if self.timing == Timing::Ptp {
                     self.send(Kind::SetPeers, now, false);
@@ -1280,6 +1344,16 @@ impl Ap2Session {
                 if !success {
                     self.warn(method, code);
                 }
+            }
+            // A debug probe: whatever the answer, the stream goes on.
+            Kind::VolumeRead => {
+                let level = crate::volume::parse_reported(&response.body)
+                    .map_or("no level".to_owned(), |db| format!("{db} dB"));
+                let line = format!(
+                    "GET_PARAMETER volume: status {code}, {level}, body {}",
+                    bodies::trace_text(&response.body)
+                );
+                self.event(Ap2Event::Trace(line));
             }
             Kind::Feedback => {
                 if success {

@@ -496,6 +496,10 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_EVENT_WARNING:
             return .warning(id: id, ptpPortsTaken: raw.warning == ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN,
                             detail: text(raw.detail))
+        case ASC_AIRPLAY_EVENT_TRACE:
+            // Debug-log evidence only; the model never sees it.
+            DebugTrace.log("[AirPlay] trace \(id): \(text(raw.detail))")
+            return nil
         default:
             return nil
         }

@@ -1087,6 +1087,7 @@ mod tests {
                 "ASC_AIRPLAY_EVENT_WARNING",
                 AIRPLAY_EVENT_WARNING.to_string(),
             ),
+            ("ASC_AIRPLAY_EVENT_TRACE", AIRPLAY_EVENT_TRACE.to_string()),
             (
                 "ASC_AIRPLAY_WARNING_JACK_DISCONNECTED",
                 AIRPLAY_WARNING_JACK_DISCONNECTED.to_string(),

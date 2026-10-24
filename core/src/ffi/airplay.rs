@@ -223,6 +223,15 @@ pub const AIRPLAY_EVENT_VOLUME: i32 = 10;
 /// on. [`AscAirPlayEvent::warning`] says what, the detail says more, for a
 /// debug log.
 pub const AIRPLAY_EVENT_WARNING: i32 = 11;
+/// A line for the debug log about a speaker's session
+/// ([`AscAirPlayEvent::detail`]); sent only while `AUDIOSYNC_DEBUG` is `1`.
+pub const AIRPLAY_EVENT_TRACE: i32 = 12;
+
+/// Whether the host keeps its debug log, which turns on the sender's trace
+/// lines ([`SpeakerOptions::trace`]).
+fn debug_trace_on() -> bool {
+    std::env::var("AUDIOSYNC_DEBUG").as_deref() == Ok("1")
+}
 
 /// What a warning reports ([`AscAirPlayEvent::warning`]): the receiver says
 /// nothing is plugged into its audio jack (P24).
@@ -589,6 +598,7 @@ fn target_options(
     let mut options = SpeakerOptions::new(speaker_volume(position, zone, airplay.master));
     options.delay = airplay.hold_back;
     options.pcm = pcm_debug_allows(id, pcm_list);
+    options.trace = debug_trace_on();
     options
 }
 
@@ -842,6 +852,10 @@ impl AscAirPlay {
                 }
                 if let SpeakerEvent::Warning(warning) = event {
                     self.warned(id, warning);
+                    return;
+                }
+                if let SpeakerEvent::Trace(_) = &event {
+                    self.queue_event(Pending::Speaker(id, event));
                     return;
                 }
                 self.member_event(&id, &event);
@@ -1418,6 +1432,10 @@ impl AscAirPlay {
                 event.latency_ms = millis(arrival_to_sound);
                 event.receiver_latency_frames = receiver_latency_frames.map_or(-1, i64::from);
                 (id, String::new())
+            }
+            Pending::Speaker(id, SpeakerEvent::Trace(line)) => {
+                event.kind = AIRPLAY_EVENT_TRACE;
+                (id, line)
             }
             // Never queued (see `pump`).
             Pending::Speaker(id, _) => (id, String::new()),
@@ -2062,6 +2080,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
             options.homekit_credentials = airplay.identity.get(id).cloned();
+            options.trace = debug_trace_on();
             options.pcm = pcm_debug_allows(
                 id,
                 std::env::var(audiosync_airplay::sender::AIRPLAY_PCM_ENV)
