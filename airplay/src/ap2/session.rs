@@ -321,6 +321,8 @@ pub struct Ap2Session {
     /// [`Ap2Config::trace`]).
     volume_read_wanted: bool,
     volume_read_sent: bool,
+    /// The CSeq of a volume read that timed out, whose answer is ignored.
+    late_volume_read: Option<u32>,
 }
 
 type Output = Ap2Output;
@@ -404,6 +406,7 @@ impl Ap2Session {
             udp_failures: 0,
             volume_read_wanted: false,
             volume_read_sent: false,
+            late_volume_read: None,
         };
         session.flush_point = (session.ids.first_seq, session.ids.first_rtptime);
         if drawn.is_err() {
@@ -774,6 +777,17 @@ impl Ap2Session {
             }
         }
         if let Some(in_flight) = &self.in_flight
+            && in_flight.kind == Kind::VolumeRead
+            && now >= in_flight.sent_at + RESPONSE_TIMEOUT
+        {
+            // The debug probe never ends a session; a late answer is dropped.
+            self.late_volume_read = Some(in_flight.cseq);
+            self.in_flight = None;
+            self.event(Ap2Event::Trace(
+                "GET_PARAMETER volume: no answer".to_owned(),
+            ));
+        }
+        if let Some(in_flight) = &self.in_flight
             && in_flight.kind != Kind::Feedback
             && now >= in_flight.sent_at + RESPONSE_TIMEOUT
         {
@@ -1014,13 +1028,13 @@ impl Ap2Session {
                 if self.state != Ap2State::Ready {
                     return;
                 }
+                if let Some(volume) = self.pending_volume.take() {
+                    return self.send(Kind::Volume(volume), now, false);
+                }
                 if self.volume_read_wanted {
                     self.volume_read_wanted = false;
                     self.volume_read_sent = true;
                     return self.send(Kind::VolumeRead, now, false);
-                }
-                if let Some(volume) = self.pending_volume.take() {
-                    return self.send(Kind::Volume(volume), now, false);
                 }
                 if let Some(metadata) = self.metadata_queue.pop_front() {
                     self.send(Kind::Metadata(metadata), now, false);
@@ -1177,6 +1191,10 @@ impl Ap2Session {
     }
 
     fn on_response(&mut self, response: Response, now: Instant) {
+        if self.late_volume_read.is_some() && response.cseq() == self.late_volume_read {
+            self.late_volume_read = None;
+            return;
+        }
         let Some(in_flight) = self.in_flight.take() else {
             return self.fail(
                 ErrorKind::ProtocolError,

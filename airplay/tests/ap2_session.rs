@@ -829,3 +829,85 @@ fn volume_set_before_the_startup_volume_goes_out_once() {
         .collect();
     assert_eq!(volumes, [b"volume: -30.000000\r\n".as_slice()]);
 }
+
+fn traces(rig: &Ap2Rig) -> Vec<&str> {
+    rig.events
+        .iter()
+        .filter_map(|event| match event {
+            Ap2Event::Trace(line) => Some(line.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn traced_config() -> audiosync_airplay::ap2::Ap2Config {
+    let mut config = ap2_config();
+    config.trace = true;
+    config
+}
+
+#[test]
+fn traced_session_reads_the_volume_once_and_survives_a_refusal() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert("GET_PARAMETER".to_owned(), 404);
+    let mut rig = Ap2Rig::new(traced_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    rig.advance(Duration::from_secs(15));
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+    let reads: Vec<&Request> = rig
+        .fake
+        .requests
+        .iter()
+        .map(|(request, _)| request)
+        .filter(|request| request.method.as_str() == "GET_PARAMETER")
+        .collect();
+    assert_eq!(reads.len(), 1, "{:?}", rig.keys());
+    assert_eq!(reads[0].body, b"volume\r\n");
+    assert_eq!(
+        reads[0].headers.get("Content-Type"),
+        Some("text/parameters")
+    );
+    let keys = rig.keys();
+    let read_at = keys.iter().position(|key| *key == "GET_PARAMETER");
+    let volume_at = keys.iter().position(|key| *key == "SET_PARAMETER");
+    assert!(volume_at < read_at, "{keys:?}");
+    let lines = traces(&rig);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("/info initialVolume")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("GET_PARAMETER volume: status 404")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn an_unanswered_volume_read_never_ends_the_session() {
+    let mut fake = FakeAp2::new();
+    fake.silent.push("GET_PARAMETER".to_owned());
+    let mut rig = Ap2Rig::new(traced_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    rig.advance(Duration::from_secs(25));
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+    assert!(traces(&rig).contains(&"GET_PARAMETER volume: no answer"));
+    let feedback = rig.times_of("POST /feedback");
+    let recent = rig.now - Duration::from_secs(5);
+    assert!(
+        feedback.last().is_some_and(|at| *at > recent),
+        "{feedback:?}"
+    );
+}
+
+#[test]
+fn an_untraced_session_sends_no_volume_read() {
+    let mut rig = transient();
+    assert!(rig.ready());
+    rig.advance(Duration::from_secs(5));
+    assert!(!rig.keys().contains(&"GET_PARAMETER"));
+    assert!(traces(&rig).is_empty());
+}
