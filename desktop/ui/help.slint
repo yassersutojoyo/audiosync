@@ -173,7 +173,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-start-title;
-                            body: Strings.help-start;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-start-linux : Strings.help-start;
                         }
 
                         HelpSection {
@@ -214,7 +214,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-more-title;
-                            body: Strings.help-more;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-more-linux : Strings.help-more;
                         }
 
                         HelpSection {
@@ -244,7 +244,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-double-title;
-                            body: Strings.help-double;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-double-linux : Strings.help-double;
 
                             if root.show-how-shown: HorizontalLayout {
                                 alignment: start;

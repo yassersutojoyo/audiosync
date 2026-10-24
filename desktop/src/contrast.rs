@@ -621,11 +621,13 @@ fn no_text_promises_airplay() {
                 || [
                     "help-intro",
                     "help-start",
+                    "help-start-linux",
                     "help-sync",
                     "help-sync-cast",
                     "help-art-classes",
                     "help-volume",
                     "help-more",
+                    "help-more-linux",
                     "help-airplay-title",
                     "help-airplay",
                     "help-calibration",
@@ -804,6 +806,32 @@ fn the_double_audio_guide_is_wired_and_worded_in_strings() {
     }
 }
 
+/// What Linux shows in place of a Windows text (a `-linux` Guide text, or the
+/// Linux branch of a string) names nothing only Windows has.
+#[test]
+fn linux_texts_name_no_windows_places() {
+    let strings = include_str!("../ui/strings.slint");
+    let mut linux: Vec<&str> = strings
+        .lines()
+        .filter(|line| line.contains("-linux: @tr(\""))
+        .collect();
+    for (at, _) in strings.match_indices("OperatingSystemType.linux") {
+        let rest = &strings[at..];
+        let end = ["\n        }", " : @tr("]
+            .iter()
+            .filter_map(|marker| rest.find(marker))
+            .min()
+            .expect("a Linux branch ends");
+        linux.push(&rest[..end]);
+    }
+    assert!(linux.len() >= 15, "{} Linux texts", linux.len());
+    for text in linux {
+        for windows_only in ["Windows", "Volume mixer", "Start menu", "notification area"] {
+            assert!(!text.contains(windows_only), "{windows_only} in: {text}");
+        }
+    }
+}
+
 /// Help > AudioSync Guide (F1) opens the Guide, which spells out no text of
 /// its own, closes on Escape, and keeps every paragraph's full height.
 #[test]
@@ -845,7 +873,8 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
             .and_then(|rest| rest.split(':').next())
             .unwrap_or_default();
         assert!(
-            help.contains(&format!("Strings.help-{name};")),
+            help.contains(&format!("Strings.help-{name};"))
+                || help.contains(&format!("Strings.help-{name} :")),
             "help.slint shows help-{name}"
         );
     }
