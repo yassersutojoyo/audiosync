@@ -587,6 +587,12 @@ final class ZoneDisclosure: ObservableObject {
     }
 }
 
+/// Whether a speaker row's volume slider is held. An object rather than
+/// @State, for the same reason as ZoneDisclosure; nothing redraws on it.
+final class VolumeDrag: ObservableObject {
+    var held = false
+}
+
 /// One zone: its header (disclosure, switch, volume, options), then its
 /// members as speaker rows, dimmed while they can't play with it.
 private struct ZoneCard: View {
@@ -778,7 +784,7 @@ struct SpeakerRow: View {
     /// The switch, which takes the focus when a neighbouring row is hidden.
     @FocusState private var switchFocused: Bool
     /// The volume slider is held; a row closed mid-drag never sees the release.
-    @State private var volumeDragging = false
+    @StateObject private var volumeDrag = VolumeDrag()
 
     var body: some View {
         let t = model.text
@@ -848,12 +854,12 @@ struct SpeakerRow: View {
                     HStack(spacing: 8) {
                         Slider(value: Binding(get: { speaker.volume }, set: { model.setVolume(speaker, $0) }),
                                in: 0...100, onEditingChanged: { editing in
-                                   volumeDragging = editing
+                                   volumeDrag.held = editing
                                    model.setVolumeDragging(speaker, editing)
                                })
                             .onDisappear {
-                                if volumeDragging {
-                                    volumeDragging = false
+                                if volumeDrag.held {
+                                    volumeDrag.held = false
                                     model.setVolumeDragging(speaker, false)
                                 }
                             }
