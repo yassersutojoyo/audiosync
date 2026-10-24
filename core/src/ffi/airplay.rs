@@ -5253,20 +5253,34 @@ mod tests {
         let mut handle = create_with(quiet);
         let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x60]));
         add_for_volume(handle, "02005E005360", key.clone(), 50.0);
+        // The live sender's timeline can post at any moment; only the
+        // speaker's own events are under test.
+        let speaker_events = |handle: *mut AscAirPlay| {
+            inside(handle)
+                .events
+                .iter()
+                .filter(|(_, p)| !matches!(p, Pending::Timeline { .. }))
+                .count()
+        };
         // Nobody asked: an answer that isn't the host's is dropped.
         report_volume(handle, &key, -6.0);
-        assert!(inside(handle).events.is_empty());
+        assert_eq!(speaker_events(handle), 0);
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_read_volumes(handle) };
         assert!(inside(handle).added["02005E005360"].reading);
         // Its own level back (−15 dB at 50 with the master at 100), within
         // the speaker's rounding: nothing moved.
         report_volume(handle, &key, -15.2);
-        assert!(inside(handle).events.is_empty());
+        assert_eq!(speaker_events(handle), 0);
         // SAFETY: as above.
         unsafe { asc_airplay_read_volumes(handle) };
         report_volume(handle, &key, -6.0);
-        let events = events_until(handle, |events| !events.is_empty());
+        let events: Vec<Event> = events_until(handle, |events| {
+            events.iter().any(|e| e.kind != AIRPLAY_EVENT_TIMELINE)
+        })
+        .into_iter()
+        .filter(|e| e.kind != AIRPLAY_EVENT_TIMELINE)
+        .collect();
         assert_eq!(events.len(), 1, "{events:?}");
         assert_eq!(events[0].kind, AIRPLAY_EVENT_VOLUME);
         assert_eq!(events[0].id, "02005E005360");
@@ -5278,7 +5292,7 @@ mod tests {
         // SAFETY: as above.
         unsafe { asc_airplay_read_volumes(handle) };
         report_volume(handle, &key, -6.0);
-        assert!(inside(handle).events.is_empty());
+        assert_eq!(speaker_events(handle), 0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
