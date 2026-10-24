@@ -100,6 +100,14 @@ windows-future = "0.3.2"
 # The notification-area icon and its menu (MIT OR Apache-2.0).
 tray-icon = { version = "0.26.1", default-features = false }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Now playing from the MPRIS players on the session bus (MIT), the version
+# Slint's Linux backends already bring into the build (src/audio/mpris).
+zbus = "5.19"
+# MPRIS artwork decoded, scaled and encoded as a JPEG (MIT OR Apache-2.0),
+# already in the build through Slint.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+
 [build-dependencies]
 embed-resource = "3.0.12"
 # The same Slint as the slint dependency, pinned for the same reason.

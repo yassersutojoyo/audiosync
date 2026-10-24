@@ -1,7 +1,7 @@
 //! What AirPlay receivers with a screen, such as a TV, show while AudioSync
 //! streams to them: the playing track's title, artist, album and artwork,
 //! read from the media sessions Windows lists (the system media transport
-//! controls), as the Mac app reads its players.
+//! controls) or the MPRIS players on Linux, as the Mac app reads its players.
 //!
 //! A [`TrackReader`] reads the sessions every [`POLL_INTERVAL`] on a thread
 //! of its own, only while AirPlay receivers play; [`TrackInfo`] turns its
@@ -91,10 +91,10 @@ impl SharedLabels {
     }
 }
 
-/// A media session as Windows lists it.
+/// A media session as the system lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediaSession {
-    /// The app's user model ID, as the session reports it.
+    /// The app's user model ID on Windows, the player's bus name on Linux.
     pub app_id: String,
     pub title: String,
     pub artist: String,
@@ -107,15 +107,20 @@ pub struct MediaSession {
 pub enum Follow {
     /// The whole system: any app's.
     AnyApp,
-    /// One app, by its executable's file name: its own only.
-    App { executable: String },
+    /// One app, by its executable's file name: its own only. Where the
+    /// system tells which process a session belongs to, the source's
+    /// process ID (`pid`) tells it first.
+    App {
+        executable: String,
+        pid: Option<u32>,
+    },
 }
 
 impl Follow {
     fn admits(&self, app_id: &str) -> bool {
         match self {
             Follow::AnyApp => true,
-            Follow::App { executable } => app_matches(app_id, executable),
+            Follow::App { executable, .. } => app_matches(app_id, executable),
         }
     }
 }
@@ -746,6 +751,7 @@ mod tests {
         TrackSource {
             follow: Follow::App {
                 executable: executable.to_owned(),
+                pid: None,
             },
             name: Some(name.to_owned()),
         }
@@ -807,10 +813,12 @@ mod tests {
         ];
         let spotify = Follow::App {
             executable: "spotify.exe".to_owned(),
+            pid: None,
         };
         assert_eq!(pick(&sessions, &spotify), Some(1));
         let vlc = Follow::App {
             executable: "vlc.exe".to_owned(),
+            pid: None,
         };
         assert_eq!(pick(&sessions, &vlc), None);
     }
@@ -851,6 +859,7 @@ mod tests {
         let unnamed = TrackSource {
             follow: Follow::App {
                 executable: String::new(),
+                pid: None,
             },
             name: Some("  ".to_owned()),
         };

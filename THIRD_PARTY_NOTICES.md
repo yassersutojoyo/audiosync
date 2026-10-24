@@ -131,6 +131,13 @@ contained, and draws the remote's address as a QR code with `qrcode` (MIT OR
 Apache-2.0), built without its optional features, so it brings in no other
 crate.
 
+The same crate's Linux build, which isn't released yet, reads the playing
+track from the MPRIS media players over D-Bus with `zbus` and its own
+`zbus_macros`, `zbus_names` and `zvariant` crates (MIT), and decodes their
+artwork with `image` (MIT OR Apache-2.0). Both were already in
+`desktop/Cargo.lock`; every crate they bring in is under a license
+`desktop/deny.toml` allows, which CI checks.
+
 The Windows app reads and writes its settings file with `serde` and
 `serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
 and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the

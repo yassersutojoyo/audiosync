@@ -817,6 +817,7 @@ impl<D: Driver> Controller<D> {
                     return Some(TrackSource {
                         follow: Follow::App {
                             executable: String::new(),
+                            pid: Some(*root_pid),
                         },
                         name: None,
                     });
@@ -827,7 +828,10 @@ impl<D: Driver> Controller<D> {
                     .unwrap_or_default();
                 TrackSource {
                     name: (!executable.is_empty()).then(|| display_name(&executable)),
-                    follow: Follow::App { executable },
+                    follow: Follow::App {
+                        executable,
+                        pid: Some(*root_pid),
+                    },
                 }
             }
             // An input device has no media session; receivers get the
@@ -836,6 +840,7 @@ impl<D: Driver> Controller<D> {
                 let unnamed = TrackSource {
                     follow: Follow::App {
                         executable: String::new(),
+                        pid: None,
                     },
                     name: None,
                 };
@@ -6000,7 +6005,8 @@ mod tests {
         assert_eq!(
             reader.following(),
             Some(Follow::App {
-                executable: "player.exe".to_owned()
+                executable: "player.exe".to_owned(),
+                pid: Some(PLAYER_PID),
             })
         );
         reader.read(Some(track("player.exe", "Song", false, Some(b"cover"))));
