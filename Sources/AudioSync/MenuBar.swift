@@ -771,7 +771,7 @@ struct MenuBarView: View {
         if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
         if offersCastAdd { height += 20 }
         if PresetPanel.showsRow(model.presets) { height += 38 }
-        if model.liveInputAirPlayHint != nil { height += 40 }
+        if model.liveInputAirPlayHint != nil { height += 48 }
         return height
     }
 
