@@ -222,4 +222,10 @@ pub enum Warning {
     /// Three volume reads in a row failed on an AirPlay 2 session, which
     /// reads no more; told once per session (P184).
     VolumeReadsStopped,
+    /// The remote-control server couldn't listen on the session's local
+    /// address, so the session plays without remote control (P190).
+    RemoteControlUnavailable,
+    /// The remote-control server's `_dacp._tcp` record couldn't be
+    /// registered; the sessions play on (P188).
+    RemoteControlNotAdvertised,
 }

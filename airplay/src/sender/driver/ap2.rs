@@ -110,7 +110,7 @@ impl Driver {
             }
             return;
         }
-        let Ok(ids) = SessionIds::generate(&mut OsEntropy) else {
+        let Ok(ids) = self.session_ids() else {
             let mut error = SessionError::new(ErrorKind::Unreachable);
             error.detail = Some("the random number source is unavailable");
             return self.refuse(key, error, now);
@@ -202,6 +202,7 @@ impl Driver {
         };
         let events_key = SessionKey(self.next_session);
         self.next_session += 1;
+        let mut pairing_connection = None;
         let (session_key, session, attempt, io, verifying) = match claimed {
             Some(Claimed {
                 key: session_key,
@@ -210,6 +211,7 @@ impl Driver {
                 io,
                 connection,
             }) => {
+                pairing_connection = Some(connection);
                 session.proceed(config, connection, now);
                 (session_key, session, attempt, Some(io), false)
             }
@@ -220,6 +222,7 @@ impl Driver {
                 (session_key, session, 0, None, verifying)
             }
         };
+        let remote = session.ids().active_remote;
         speaker.phase = Phase::Ap2(Box::new(Ap2Active {
             key: session_key,
             events_key,
@@ -233,6 +236,12 @@ impl Driver {
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
+        self.remote_open(key, remote, now);
+        // A session that goes on over its PIN pairing's connection attaches
+        // that connection's address (P190).
+        if let (Some(Connection { local, .. }), Some(peer)) = (pairing_connection, held_remote) {
+            self.remote_attach(key, remote, SocketAddr::new(local, 0), peer.ip());
+        }
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
     }
 
