@@ -6912,24 +6912,12 @@ do {
           "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
 }
 
-// MARK: Live input: the lead per source and output, and the input level meter (LocalDelay.swift, InputLevel.swift)
+// MARK: The lead the debug log names, and the input level meter (LocalDelay.swift, InputLevel.swift)
 do {
-    let sources: [AudioSource] = [.system, .app(bundleID: "com.example.player"), .input(uid: "mic")]
-    let outputs: [LocalDelay.LeadOutput] = [.local, .airPlay, .cast]
-    for source in sources {
-        for output in outputs {
-            let liveLocal = source == .input(uid: "mic") && output == .local
-            let wait = LocalDelay.networkWaitMs(source: source, output: output, networkMs: 1750)
-            check(wait == (liveLocal ? nil : 1750), "lead: \(source) on \(output) waits \(String(describing: wait)) ms")
-            check(LocalDelay.networkWaitMs(source: source, output: output, networkMs: nil) == nil,
-                  "lead: \(source) on \(output) waits for nothing without network speakers")
-        }
-    }
-    let live = LocalDelay.leadDescription(source: .input(uid: "mic"), networkMs: 2000)
-    let recorded = LocalDelay.leadDescription(source: .system, networkMs: 2000)
-    check(live.contains("live input") && live.contains("start lead") && live.contains("2000 ms"),
-          "lead: the debug log says live input skips the wait: \(live)")
-    check(recorded == "lead: local speakers wait 2000 ms for the network speakers", "lead: \(recorded)")
+    let waiting = LocalDelay.leadDescription(networkMs: 2000)
+    let alone = LocalDelay.leadDescription(networkMs: nil)
+    check(waiting == "lead: local speakers wait 2000 ms for the network speakers", "lead: \(waiting)")
+    check(alone.contains("start lead") && !alone.contains("wait"), "lead: \(alone)")
 
     let meter = InputLevel()
     check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden without an input")

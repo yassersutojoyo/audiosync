@@ -137,10 +137,9 @@ extension AppDelegate {
     /// The hold-back of every local speaker taking part: switched on and
     /// listed now (S172, S176). They wait for L while an AirPlay speaker is
     /// chosen, for the Cast speaker's offset while one is, and for the
-    /// longer of the two when both are; an input device as the source keeps
-    /// them off that wait (live input).
+    /// longer of the two when both are, whatever the source (S244).
     func localHoldBackTargets() -> [String: Double] {
-        let wait = LocalDelay.networkWaitMs(source: audioSource, output: .local, networkMs: networkWaitMs)
+        let wait = networkWaitMs
         return LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
                                     offsets: localOffsetMs, airPlayChosen: wait != nil,
                                     latencyMs: wait ?? airPlayLatencyMs)
