@@ -117,17 +117,18 @@ struct MainView: View {
             header(t)
             NoticeStack(model: model)
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
-                VStack(spacing: BrandTokens.Spacing.cardGap) {
-                    sourceCard(t)
-                    if let track = model.nowPlaying { nowPlayingCard(track, t) }
-                    volumeCard(t)
-                    PresetsCard(model: model)
-                    equalizerCard(t)
-                    Card { CalibrateAllButton(model: model) }
-                    Spacer(minLength: 0)
+                FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
+                    VStack(spacing: BrandTokens.Spacing.cardGap) {
+                        sourceCard(t)
+                        if let track = model.nowPlaying { nowPlayingCard(track, t) }
+                        volumeCard(t)
+                        PresetsCard(model: model)
+                        equalizerCard(t)
+                        Card { CalibrateAllButton(model: model) }
+                    }
                 }
                 .frame(width: 280)
-                GeometryReader { viewport in ScrollView {
+                FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
                     let all = model.layout
                     let layout = model.zonelessLayout
                     VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
@@ -148,17 +149,7 @@ struct MainView: View {
                                        localNetworkHint: model.localNetworkHint)
                     }
                     .padding(.bottom, 4)
-                    // At rest the cards sit clear of the faded edges.
-                    .padding(.vertical, Self.scrollFade)
-                    // Blank space under a short list is outside every row too.
-                    .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.closeDelayPanels() }
-                } }
-                // Cards scrolling under the header fade out instead of
-                // meeting a hard edge; the fade lies in the gap above the list.
-                .mask(ScrollEdgeFade(height: Self.scrollFade))
-                .padding(.vertical, -Self.scrollFade)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -185,10 +176,6 @@ struct MainView: View {
             Color.clear.sheet(isPresented: $model.castAddShown) { CastAddressSheet(model: model).tint(accent) }
         }
     }
-
-    /// The scroll list's soft top and bottom edge, shorter than the gap
-    /// between the header and the list (14 pt) and the window's bottom margin.
-    private static let scrollFade: CGFloat = 12
 
     // MARK: Header
 
@@ -1464,6 +1451,39 @@ private extension NSMenu {
     func popUp(under view: NSView) {
         let below = view.isFlipped ? view.bounds.maxY + 4 : view.bounds.minY - 4
         _ = popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
+    }
+}
+
+/// A main-window column that scrolls when the window is too short for it.
+/// Cards scrolling under the header fade out instead of meeting a hard edge;
+/// the fade lies in the gap above the column and in the window's bottom margin.
+private struct FadingScroll<Content: View>: View {
+    let onBlankTap: () -> Void
+    let content: Content
+
+    init(onBlankTap: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.onBlankTap = onBlankTap
+        self.content = content()
+    }
+
+    /// Shorter than the gap between the header and the columns (14 pt) and
+    /// the window's bottom margin.
+    private static let fade: CGFloat = 12
+
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollView {
+                content
+                    // At rest the cards sit clear of the faded edges.
+                    .padding(.vertical, Self.fade)
+                    // Blank space under a short column is outside every control too.
+                    .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onBlankTap)
+            }
+        }
+        .mask(ScrollEdgeFade(height: Self.fade))
+        .padding(.vertical, -Self.fade)
     }
 }
 
