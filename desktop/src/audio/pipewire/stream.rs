@@ -496,7 +496,7 @@ fn serve(
         *pw::keys::NODE_PASSIVE => "true",
     };
     let mut properties = properties;
-    if wiring != Wiring::DefaultOutputMonitor {
+    if !matches!(wiring, Wiring::DefaultOutputMonitor) {
         properties.insert("node.dont-reconnect", "true");
     }
     if let Some(serial) = &plan.serial {

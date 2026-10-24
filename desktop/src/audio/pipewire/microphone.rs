@@ -139,10 +139,8 @@ impl Recording {
             self.clock
                 .packet(before, rate, now_ns, age_ns, false, discontinuity);
             let room = self.capacity.saturating_sub(before);
-            for sample in bytes.chunks_exact(4).take(room) {
-                self.samples.push(f32::from_le_bytes([
-                    sample[0], sample[1], sample[2], sample[3],
-                ]));
+            for sample in bytes.as_chunks::<4>().0.iter().take(room) {
+                self.samples.push(f32::from_le_bytes(*sample));
             }
             self.status
                 .frames

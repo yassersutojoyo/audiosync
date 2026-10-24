@@ -284,10 +284,11 @@ fn serve(
                     shared.outputs_changed.store(true, Ordering::Release);
                 }
                 let followed = class == SINK_CLASS || class == STREAM_CLASS;
-                if kind == Kind::Node && followed {
-                    if let Some(node) = bind_node(&registry, global, &shared, class == SINK_CLASS) {
-                        bound.borrow_mut().insert(global.id, node);
-                    }
+                if kind == Kind::Node
+                    && followed
+                    && let Some(node) = bind_node(&registry, global, &shared, class == SINK_CLASS)
+                {
+                    bound.borrow_mut().insert(global.id, node);
                 }
             }
         })

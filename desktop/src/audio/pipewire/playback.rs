@@ -226,7 +226,7 @@ impl Render {
         self.pipeline
             .render_timed(samples, now_ns + latency.unwrap_or(0), now_ns);
         if let Some(bytes) = data.data() {
-            for (out, sample) in bytes.chunks_exact_mut(4).zip(samples.iter()) {
+            for (out, sample) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(samples.iter()) {
                 out.copy_from_slice(&sample.to_le_bytes());
             }
         }
