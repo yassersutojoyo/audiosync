@@ -3,3 +3,10 @@
 # space, what is missing. tests/spec_coverage.rs fails once a clause listed here
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
+S273 the decision for remote commands from AirPlay speakers (DACP) is not built yet
+S274 remote transport commands are not built yet
+S275 remote volume steps are not built yet
+S276 remote device volume is not built yet
+S277 remote mute toggle is not built yet
+S278 remote commands for targets and repeated presses are not built yet
+S279 the log line for remote commands is not built yet
