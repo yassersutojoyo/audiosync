@@ -56,7 +56,6 @@ use std::time::{Duration, Instant};
 
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
-use audiosync_core::lead::SourceKind;
 use audiosync_core::policy::delay::native_airplay_latency_ms;
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
@@ -680,7 +679,6 @@ impl<D: Driver> Controller<D> {
         if let Some(speakers) = self.cast.as_mut() {
             speakers.set_hold_back(cast);
         }
-        // Logged apart from the local outputs' re-timing, which live input skips.
         if (airplay, cast) != self.network_hold_backs {
             self.network_hold_backs = (airplay, cast);
             self.log.log(|| {
@@ -817,6 +815,7 @@ impl<D: Driver> Controller<D> {
                     return Some(TrackSource {
                         follow: Follow::App {
                             executable: String::new(),
+                            pid: Some(*root_pid),
                         },
                         name: None,
                     });
@@ -827,7 +826,10 @@ impl<D: Driver> Controller<D> {
                     .unwrap_or_default();
                 TrackSource {
                     name: (!executable.is_empty()).then(|| display_name(&executable)),
-                    follow: Follow::App { executable },
+                    follow: Follow::App {
+                        executable,
+                        pid: Some(*root_pid),
+                    },
                 }
             }
             // An input device has no media session; receivers get the
@@ -836,6 +838,7 @@ impl<D: Driver> Controller<D> {
                 let unnamed = TrackSource {
                     follow: Follow::App {
                         executable: String::new(),
+                        pid: None,
                     },
                     name: None,
                 };
@@ -1776,7 +1779,6 @@ impl<D: Driver> Controller<D> {
             airplay.restart_timeline();
         }
         self.sessions_started += 1;
-        self.policy.set_source_kind(lead_source(source));
         self.log.log(|| self.policy.describe_lead());
         self.session = Some(Session {
             source: source.clone(),
@@ -2384,6 +2386,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn set_airplay_volume_dragging(&mut self, id: &str, dragging: bool) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_volume_dragging(id, dragging);
+        }
+    }
+
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_delay(id, delay_ms);
@@ -2656,7 +2664,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
         // What the AirPlay sender reported.
         if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_playback(self.track_info.playback());
             let events = airplay.poll();
+            for control in airplay.take_remote_controls() {
+                self.track_info.send(control);
+            }
             self.pending.extend(events);
             self.sync_airplay_rule();
         }
@@ -2931,17 +2943,6 @@ fn describe_source(source: &SourceId) -> String {
             format!("All apps except {}", executables.join(", "))
         }
         SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
-    }
-}
-
-/// A source as the lead choice tells sources apart.
-fn lead_source(source: &SourceId) -> SourceKind {
-    match source {
-        SourceId::WholeSystem => SourceKind::System,
-        SourceId::App { .. } | SourceId::Apps { .. } | SourceId::AppsExcept { .. } => {
-            SourceKind::App
-        }
-        SourceId::Input { .. } => SourceKind::Input,
     }
 }
 
@@ -5068,7 +5069,7 @@ mod tests {
             &[
                 "lead: local outputs play at their device's start lead",
                 "starting: capturing the input device mic",
-                "lead: live input: local outputs play at their device's start lead",
+                "lead: local outputs play at their device's start lead",
             ],
         );
     }
@@ -5787,6 +5788,24 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
     }
 
+    // covers: S244
+    #[test]
+    fn live_input_waits_for_an_airplay_speaker_like_any_source() {
+        let (mut backend, _fake, kitchen) = local_delay_with_airplay();
+        backend.connect_input("mic", "Microphone", "USB");
+        let mic = SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        };
+        backend.start(&mic).unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)], "no wait");
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        backend.start(&mic).unwrap();
+        assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+    }
+
     #[test]
     fn airplay_speakers_wait_for_a_cast_speaker_whose_offset_is_longer_than_l() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
@@ -5905,6 +5924,46 @@ mod tests {
     }
 
     #[test]
+    fn an_airplay_speaker_at_l_1750_with_delay_0_gets_a_calibration_window_of_at_least_l() {
+        let (mut backend, _fake) = playing_airplay_for_calibration();
+        backend.set_airplay_adjustment(-1750.0);
+        let airplay = airplay_member(&backend);
+        assert_eq!(airplay.offset_ms, Some(0.0), "the field shows 0");
+        assert_eq!(
+            airplay.latency_ms,
+            1750.0 + 0.0 + 500.0,
+            "L_s, hold-back, allowance"
+        );
+    }
+
+    #[test]
+    fn an_airplay_speaker_joins_calibration_at_the_paths_upper_bound_while_the_sender_reports_no_latency()
+     {
+        let (mut backend, fake) = playing_airplay_for_calibration();
+        // A sender that reports no latency yet reaches the controller as 0.
+        fake.set_latency(Duration::ZERO);
+        backend.poll();
+        assert_eq!(airplay_member(&backend).latency_ms, 3000.0 + 500.0);
+    }
+
+    fn playing_airplay_for_calibration() -> (MockBackend, FakeAirPlay) {
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        backend.poll();
+        (backend, fake)
+    }
+
+    fn airplay_member(backend: &MockBackend) -> crate::audio::calibrate_all::Member {
+        crate::audio::calibrate_all::lineup(backend)
+            .members
+            .into_iter()
+            .find(|member| member.class == audiosync_core::calibrate_all::Class::AirPlay)
+            .expect("the speaker plays")
+    }
+
+    #[test]
     fn an_airplay_speaker_on_moves_local_outputs_to_l_plus_their_delay_and_off_back() {
         let (mut backend, fake, kitchen) = with_airplay();
         let id = id_of(&kitchen);
@@ -6000,7 +6059,8 @@ mod tests {
         assert_eq!(
             reader.following(),
             Some(Follow::App {
-                executable: "player.exe".to_owned()
+                executable: "player.exe".to_owned(),
+                pid: Some(PLAYER_PID),
             })
         );
         reader.read(Some(track("player.exe", "Song", false, Some(b"cover"))));
@@ -6012,7 +6072,13 @@ mod tests {
             track_sent.title, "Song",
             "a paused track of the source app counts"
         );
-        assert_eq!(sent[0].artwork.as_deref(), Some(&b"cover"[..]));
+        assert_eq!(
+            sent[0]
+                .artwork
+                .as_ref()
+                .map(|artwork| artwork.large.as_slice()),
+            Some(&b"cover"[..])
+        );
 
         reader.read(Some(track("player.exe", "Song", false, Some(b"cover"))));
         backend.poll();
@@ -6023,7 +6089,13 @@ mod tests {
         let sent = now_playing_sent(&fake);
         let track_sent = sent[0].track.as_ref().expect("labels");
         assert_eq!(
-            (track_sent.artist.as_str(), sent[0].artwork.as_deref()),
+            (
+                track_sent.artist.as_str(),
+                sent[0]
+                    .artwork
+                    .as_ref()
+                    .map(|artwork| artwork.large.as_slice())
+            ),
             ("Player", Some(&b"icon"[..])),
             "with no session, the source's name and AudioSync's icon"
         );
@@ -6347,5 +6419,61 @@ mod tests {
         backend.retry_airplay();
         assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
         assert!(backend.airplay_speakers().is_empty());
+    }
+
+    // covers: S281, S178, S177
+    #[test]
+    fn a_new_airplay_latency_retimes_the_local_outputs_and_keeps_the_adjustment() {
+        use audiosync_airplay::latency::LatencySources;
+
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_airplay_adjustment(250.0);
+        assert_eq!(held(&backend), [Some(2000), Some(2150), Some(1750)]);
+        fake.report_latency(&kitchen, 220_000, LatencySources::AUDIO_LATENCY);
+        backend.poll();
+        assert_eq!(backend.airplay_sender_latency_ms(), Some(1970.0), "L_s + E");
+        assert_eq!(held(&backend), [Some(2220), Some(2370), Some(1970)]);
+        fake.set_latency(Duration::from_secs(2));
+        backend.poll();
+        assert_eq!(backend.airplay_sender_latency_ms(), Some(2220.0));
+        assert_eq!(backend.airplay_adjustment(), 250.0, "A stays");
+        assert_eq!(held(&backend), [Some(2470), Some(2620), Some(2220)]);
+    }
+
+    // covers: S283, S237
+    #[test]
+    fn calibrate_all_measures_relative_to_the_reported_latency() {
+        use audiosync_airplay::latency::LatencySources;
+        use audiosync_core::calibrate_all::{AIRPLAY_LATENCY_ALLOWANCE_MS, Class};
+        use audiosync_core::policy::delay::native_airplay_adjustment_ms;
+
+        use crate::audio::calibrate_all::lineup;
+
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        fake.report_latency(&kitchen, 220_000, LatencySources::AUDIO_LATENCY);
+        backend.poll();
+        let member = lineup(&backend)
+            .members
+            .into_iter()
+            .find(|member| member.class == Class::AirPlay)
+            .expect("Kitchen is measured");
+        assert_eq!(member.offset_ms, Some(1970.0), "the field: L_s + E + A");
+        assert_eq!(
+            member.latency_ms,
+            1970.0 + 220.0 + AIRPLAY_LATENCY_ALLOWANCE_MS,
+            "the window adds R_s"
+        );
+        // Heard 30 ms after the reference, Kitchen moves A by those 30 ms
+        // alone: E is already in L_s + E.
+        let sender_ms = backend.airplay_sender_latency_ms().expect("a sender");
+        assert_eq!(
+            native_airplay_adjustment_ms(1970.0 + 30.0, sender_ms),
+            Some(30.0)
+        );
     }
 }

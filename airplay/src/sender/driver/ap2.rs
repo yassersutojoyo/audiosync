@@ -14,12 +14,22 @@ use crate::ap2::session::{FEATURE_PTP, with_port};
 use crate::ap2::{Ap2Config, Ap2Event, Ap2Output, Ap2Session, Ap2State, PtpPeer, Timing};
 use crate::error::{UnsupportedReason, Warning};
 use crate::ptp::{MessageType, PtpService, clock_identity};
-use crate::session::MediaDestinations;
+use crate::session::{Connection, MediaDestinations};
 use crate::stream::Ap2Audio;
 use crate::transport::PtpIo;
 
 /// How often a session waiting for the old PTP service's ports looks again.
 const PTP_PORTS_POLL: Duration = Duration::from_millis(10);
+
+/// The connection of an AirPlay 2 PIN pairing that paired, framed and
+/// waiting for the speaker's session (P153).
+pub(super) struct Held {
+    key: SessionKey,
+    attempt: u32,
+    session: Ap2Session,
+    io: RtspIo,
+    pub(super) until: Instant,
+}
 
 /// What a session to start gets from the PTP service (P158).
 enum PtpBind {
@@ -45,6 +55,15 @@ impl PtpRun {
         self.io
             .set_peers(self.service.peers().iter().map(SocketAddr::ip));
     }
+}
+
+/// A held pairing connection taken over by the speaker's session.
+struct Claimed {
+    key: SessionKey,
+    attempt: u32,
+    session: Ap2Session,
+    io: SessionIo,
+    connection: Connection,
 }
 
 /// An AirPlay 2 session that is starting, ready or closing.
@@ -91,7 +110,7 @@ impl Driver {
             }
             return;
         }
-        let Ok(ids) = SessionIds::generate(&mut OsEntropy) else {
+        let Ok(ids) = self.session_ids() else {
             let mut error = SessionError::new(ErrorKind::Unreachable);
             error.detail = Some("the random number source is unavailable");
             return self.refuse(key, error, now);
@@ -108,6 +127,11 @@ impl Driver {
             .get(key)
             .map(|speaker| speaker.device.airplay_socket_addrs())
             .unwrap_or_default();
+        // The session goes on over the connection its PIN pairing left open.
+        let held_remote = self.held.get(key).and_then(|held| held.session.remote());
+        if let Some(remote) = held_remote {
+            addresses.sort_by_key(|address| *address != remote);
+        }
         if matches!(restart, Some(Some(_))) {
             self.ptp_retrying.insert(key.clone());
         } else {
@@ -123,6 +147,7 @@ impl Driver {
             self.ptp_moved.remove(key);
         }
         let mut ptp = None;
+        let mut ptp_v6 = None;
         if wants && let Some(v6) = restart.flatten().or_else(|| self.ptp_v6(key)) {
             let in_family = |address: &SocketAddr| address.ip().to_canonical().is_ipv6() == v6;
             match addresses.iter().copied().find(in_family) {
@@ -130,7 +155,10 @@ impl Driver {
                     // The session goes over the service's family first (P158).
                     addresses.sort_by_key(|address| !in_family(address));
                     match self.ptp_peer(key, address.ip()) {
-                        PtpBind::Peer(peer) => ptp = Some(peer),
+                        PtpBind::Peer(peer) => {
+                            ptp = Some(peer);
+                            ptp_v6 = Some(v6);
+                        }
                         PtpBind::Without => {}
                         PtpBind::Later => return self.start_ap2_later(key, restart, now),
                     }
@@ -143,11 +171,14 @@ impl Driver {
             }
         }
         let members = self.other_member_addresses(key);
+        let claimed = self.claim_held(key, ptp_v6);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
         let device = &speaker.device;
         let mut config = Ap2Config::new(addresses, speaker.options.volume);
+        config.trace = speaker.options.trace;
+        config.read_volume = speaker.reads_volume;
         config.txt_flags = device
             .airplay_txt
             .as_ref()
@@ -169,27 +200,92 @@ impl Driver {
         } else {
             Timing::Ntp
         };
-        let session_key = SessionKey(self.next_session);
-        let events_key = SessionKey(self.next_session + 1);
-        self.next_session += 2;
+        let events_key = SessionKey(self.next_session);
+        self.next_session += 1;
+        let mut pairing_connection = None;
+        let (session_key, session, attempt, io, verifying) = match claimed {
+            Some(Claimed {
+                key: session_key,
+                attempt,
+                mut session,
+                io,
+                connection,
+            }) => {
+                pairing_connection = Some(connection);
+                session.proceed(config, connection, now);
+                (session_key, session, attempt, Some(io), false)
+            }
+            None => {
+                let session_key = SessionKey(self.next_session);
+                self.next_session += 1;
+                let session = Ap2Session::new(config, ids, Box::new(OsEntropy), now);
+                (session_key, session, 0, None, verifying)
+            }
+        };
+        let remote = session.ids().active_remote;
         speaker.phase = Phase::Ap2(Box::new(Ap2Active {
             key: session_key,
             events_key,
-            session: Ap2Session::new(config, ids, Box::new(OsEntropy), now),
-            attempt: 0,
+            session,
+            attempt,
             events_attempt: 0,
-            io: None,
+            io,
             events_io: None,
             stream_id: None,
             verifying,
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
+        self.remote_open(key, remote, now);
+        // A session that goes on over its PIN pairing's connection attaches
+        // that connection's address (P190).
+        if let (Some(Connection { local, .. }), Some(peer)) = (pairing_connection, held_remote) {
+            self.remote_attach(key, remote, SocketAddr::new(local, 0), peer.ip());
+        }
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
     }
 
+    /// Takes the connection a PIN pairing with the device left open and
+    /// opens the session's UDP sockets next to it, unless it goes to an
+    /// address outside the family of the PTP service in `ptp_v6` (P158).
+    fn claim_held(&mut self, key: &DeviceKey, ptp_v6: Option<bool>) -> Option<Claimed> {
+        let remote = self.held.get(key)?.session.remote()?;
+        let counters = match self.speakers.get(key) {
+            Some(speaker) if ptp_v6.is_none_or(|v6| remote.ip().to_canonical().is_ipv6() == v6) => {
+                speaker.counters.clone()
+            }
+            _ => {
+                self.drop_held(key);
+                return None;
+            }
+        };
+        let Held {
+            key: session_key,
+            attempt,
+            session,
+            io,
+            ..
+        } = self.held.remove(key)?;
+        self.pairing_sessions.remove(&session_key);
+        let notify = self.notify();
+        let clock = self.stream.clock();
+        match SessionIo::adopt(io, session_key, attempt, clock, counters, notify) {
+            Ok((io, connection)) => Some(Claimed {
+                key: session_key,
+                attempt,
+                session,
+                io,
+                connection,
+            }),
+            Err(threads) => {
+                self.retired.extend(threads);
+                None
+            }
+        }
+    }
+
     /// The PIN pairing the host asked for with a device on the AirPlay 2
-    /// path (P61, P153), on a connection of its own.
+    /// path (P61, P153), on a connection the speaker's session takes over.
     pub(super) fn pin_pairing(
         &self,
         device: &Device,
@@ -207,6 +303,50 @@ impl Driver {
         config.password = password;
         config.device_id = self.device_id;
         PinPairing::new(config, ids, Box::new(OsEntropy), now)
+    }
+
+    /// Keeps the open connection of a PIN pairing that paired, still
+    /// reporting under `session_key`, for the speaker's session.
+    pub(super) fn hold(
+        &mut self,
+        key: &DeviceKey,
+        session_key: SessionKey,
+        attempt: u32,
+        session: Ap2Session,
+        io: RtspIo,
+        now: Instant,
+    ) {
+        self.drop_held(key);
+        let held = Held {
+            key: session_key,
+            attempt,
+            session,
+            io,
+            until: now + self.held_for,
+        };
+        self.held.insert(key.clone(), held);
+    }
+
+    /// Closes a held pairing connection: unclaimed in time, given up by the
+    /// host, or ended by the receiver. The speaker's next session verifies.
+    pub(super) fn drop_held(&mut self, key: &DeviceKey) {
+        if let Some(held) = self.held.remove(key) {
+            self.pairing_sessions.remove(&held.key);
+            self.retired.extend(held.io.close());
+        }
+    }
+
+    /// The receiver closed a held connection, or wrote on it unasked.
+    pub(super) fn held_io_event(&mut self, key: &DeviceKey, event: &IoEvent) {
+        let ours = self.held.get(key).is_some_and(|held| match event {
+            IoEvent::Rtsp { attempt, .. } | IoEvent::RtspClosed { attempt, .. } => {
+                *attempt == held.attempt
+            }
+            _ => false,
+        });
+        if ours {
+            self.drop_held(key);
+        }
     }
 
     /// Keeps the credentials a PIN pairing gave, so a session started before
@@ -487,6 +627,7 @@ impl Driver {
             ids.first_rtptime,
         );
         config.delay = speaker.options.delay;
+        config.reported_latency = active.session.reported_latency();
         config.airplay2 = Some(Ap2Audio {
             key: active.session.stream_key(),
             clock_identity: clock_identity.filter(|_| ptp),
@@ -580,6 +721,10 @@ impl Driver {
                 self.send_now_playing(key, now);
             }
             Ap2Event::Warning(warning) => self.emit_speaker(key, SpeakerEvent::Warning(warning)),
+            Ap2Event::Trace(line) => self.emit_speaker(key, SpeakerEvent::Trace(line)),
+            Ap2Event::VolumeReported(db) => {
+                self.emit_speaker(key, SpeakerEvent::VolumeReported(db))
+            }
             Ap2Event::Failed(error) => {
                 let verifying = self.ap2_active(key).is_some_and(|active| active.verifying);
                 let member = self

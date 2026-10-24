@@ -69,6 +69,30 @@ final class NowPlayingMonitor {
         }
     }
 
+    /// Whether a reading that finds no track replaces the track shown, kept
+    /// apart from AppKit so the logic suite can drive it.
+    struct EmptyReadings {
+        // A player can answer a read or two with nothing after a long pause
+        // (Spotify after five paused minutes); three in a row is about 4 s at the 2 s poll.
+        static let dropAfter = 3
+        private(set) var inARow = 0
+
+        /// The track to show after a reading: `reading` when it found one;
+        /// else `last` while `lastPlayerRuns` (its player still runs and is
+        /// still a candidate) and fewer than `dropAfter` readings in a row
+        /// found nothing. A player that quit drops its track at once.
+        mutating func next(reading: Track?, last: Track?, lastPlayerRuns: Bool) -> Track? {
+            guard reading == nil, let last, lastPlayerRuns else {
+                inARow = 0
+                return reading
+            }
+            inARow += 1
+            return inARow < Self.dropAfter ? last : nil
+        }
+
+        mutating func reset() { inARow = 0 }
+    }
+
     enum Command { case playPause, next, previous }
 
     static let spotify = "com.spotify.client"
@@ -104,11 +128,13 @@ final class NowPlayingMonitor {
     /// The players were read since polling started, so `track` is current
     /// (until then it is the one from before).
     private(set) var hasReading = false
+    /// The track shown; a short run of empty readings keeps it (`EmptyReadings`).
     private(set) var track: Track?
     /// The latest reading since polling started, with its fresh position;
     /// `track` keeps the position of the last change.
     private(set) var reading: Track?
     private var refreshing = false
+    private var emptyReadings = EmptyReadings()
 
     // Scripts queue only.
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
@@ -119,6 +145,7 @@ final class NowPlayingMonitor {
         guard timer == nil else { return }
         startedAt = Date()
         hasReading = false
+        emptyReadings.reset()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in self?.refresh() }
     }
@@ -131,8 +158,12 @@ final class NowPlayingMonitor {
         reading = nil
     }
 
+    /// The player `send` drives now, by bundle ID: the one read, else the
+    /// first supported player that runs; nil for none (main thread).
+    var controlledBundleID: String? { track?.bundleID ?? candidates().first(where: Self.isRunning) }
+
     func send(_ command: Command) {
-        guard let bundleID = track?.bundleID ?? candidates().first else { return }
+        guard let bundleID = controlledBundleID else { return }
         let verb: String
         switch command {
         case .playPause: verb = "playpause"
@@ -173,7 +204,11 @@ final class NowPlayingMonitor {
             DispatchQueue.main.async {
                 self.refreshing = false
                 if self.isRunning { self.reading = next }
-                self.publish(next, reading: true)
+                let last = self.track
+                let lastPlayerRuns = last.map { self.candidates().contains($0.bundleID) && Self.isRunning($0.bundleID) }
+                    ?? false
+                self.publish(self.emptyReadings.next(reading: next, last: last, lastPlayerRuns: lastPlayerRuns),
+                             reading: true)
             }
         }
     }

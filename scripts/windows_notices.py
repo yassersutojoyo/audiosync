@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Write THIRD-PARTY-NOTICES.txt for a Windows build of AudioSync.
+"""Write THIRD-PARTY-NOTICES.txt for a Windows or Linux build of AudioSync.
 
     python3 -I scripts/windows_notices.py <target triple> [--output <file>]
 
-The file covers everything compiled into audiosync.exe for that target:
+The target is a Windows triple (x86_64-pc-windows-msvc, aarch64-pc-windows-msvc)
+or x86_64-unknown-linux-gnu. The file covers everything compiled into the
+executable (audiosync.exe, or audiosync on Linux) for that target:
 AudioSync's own code (the app, audiosync-core, audiosync-airplay,
 audiosync-cast and audiosync-remote, under the
 license their Cargo.toml declares), the Rust standard library, Slint (used
@@ -11,8 +13,8 @@ under GPL-3.0-only), the fonts
 and icons the interface embeds, and every crate in the app's normal dependency
 graph, read from desktop/Cargo.lock. For each crate it gives the name, version, license
 expression and repository, then the full text of every license or notice file
-in the crate's package (LICENSE*, LICENCE*, COPYING*, NOTICE*, COPYRIGHT*).
-A crate without such a file gets the standard text of its license with the
+in the crate's package (LICENSE*, LICENCE*, COPYING*, NOTICE*, COPYRIGHT*, or
+UNLICENSE* when there is none of those). A crate without such a file gets the standard text of its license with the
 crate's authors as the copyright holders. Identical texts are written once and
 referenced afterwards.
 
@@ -39,8 +41,9 @@ exceptions), so the notices and the CI license check can't drift apart. It
 needs only cargo, rustc (whose rustc component ships the standard library's
 copyright notices) and the Python standard library.
 
-The default output is THIRD-PARTY-NOTICES.txt next to audiosync.exe:
-desktop/target/<target>/release/ (or under CARGO_TARGET_DIR when it is set).
+The default output is THIRD-PARTY-NOTICES.txt next to the executable:
+desktop/target/<target>/release/ (or under CARGO_TARGET_DIR when it is set),
+with Windows line endings for Windows and Unix ones for Linux.
 """
 import argparse
 import html.parser
@@ -54,6 +57,10 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOWS = os.path.join(REPO, "desktop")
 ROOT_PACKAGE = "audiosync-desktop"
 NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
+# The Unlicense has no standard text below, so a crate under it alone (ksni)
+# must ship this file; crates that also ship another license keep theirs.
+UNLICENSE_PREFIX = "UNLICENSE"
+LINUX_TARGET = "x86_64-unknown-linux-gnu"
 # Slint's crates are "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
 # LicenseRef-Slint-Software-3.0"; public builds take the GPL-3.0-only option.
 SLINT_ELECTED = "GPL-3.0-only"
@@ -700,7 +707,8 @@ def notice_files(package, expression):
     directory = os.path.dirname(package["manifest_path"])
     rejected = set(expression.ids) - {SLINT_ELECTED} if slint_elected(package, expression) else set()
     found = []
-    for name in sorted(os.listdir(directory), key=str.lower):
+    names = sorted(os.listdir(directory), key=str.lower)
+    for name in names:
         if not name.upper().startswith(NOTICE_PREFIXES):
             continue
         path = os.path.join(directory, name)
@@ -713,6 +721,10 @@ def notice_files(package, expression):
                     continue
                 if os.path.isfile(os.path.join(path, inner)):
                     found.append((name + "/" + inner, os.path.join(path, inner)))
+    if not found:
+        found = [(name, os.path.join(directory, name)) for name in names
+                 if name.upper().startswith(UNLICENSE_PREFIX)
+                 and os.path.isfile(os.path.join(directory, name))]
     declared = package.get("license_file")
     if declared:
         path = os.path.normpath(os.path.join(directory, declared))
@@ -806,6 +818,7 @@ def ijg_notice(package, paths):
 # (label, text) notices to add to that crate's entry.
 SUPPLEMENTS = {
     ("accesskit", "LICENSE.chromium"): chromium_notice,
+    ("accesskit_atspi_common", "LICENSE.chromium"): chromium_notice,
     ("accesskit_consumer", "LICENSE.chromium"): chromium_notice,
     ("accesskit_windows", "LICENSE.chromium"): chromium_notice,
     ("image", "IJG"): ijg_notice,
@@ -1027,14 +1040,16 @@ def build(target):
                   for name in sorted(os.listdir(os.path.join(WINDOWS, "ui"))) if name.endswith(".slint"))
 
     own = own_license(local)
+    linux = target == LINUX_TARGET
     out = Notices()
     out.add(
-        "AudioSync for Windows: third-party notices",
+        "AudioSync for {}: third-party notices".format("Linux" if linux else "Windows"),
         "",
         "Target: {}".format(target),
         "Generated from desktop/Cargo.lock by scripts/windows_notices.py.",
         "",
-        "audiosync.exe is AudioSync's own code ({}) compiled together with the".format(own),
+        "{} is AudioSync's own code ({}) compiled together with the".format(
+            "audiosync" if linux else "audiosync.exe", own),
         "components below. Each is listed with its license; the full license and",
         "notice texts follow. The crates are those compiled into the executable",
         "for this target; build tools and procedural macros are left out.",
@@ -1088,9 +1103,16 @@ def build(target):
     out.add("", "", "The Made with Slint logo, (c) SixtyFPS GmbH, shown unchanged by the",
             "AboutSlint widget. Creative Commons Attribution-NoDerivatives 4.0.")
     out.text("LICENSES/CC-BY-ND-4.0.txt", read_text(logo_license), "i-slint-compiler {}".format(compiler["version"]))
-    out.add("", "", "The icons inside the app's controls come from Segoe Fluent Icons, the",
-            "icon font Windows 11 ships; the app uses the installed font and doesn't",
-            "include it.")
+    if linux:
+        out.add("", "", "Text uses the system's font, found through fontconfig; the icons",
+                "inside the app's controls use the Segoe Fluent Icons font where it is",
+                "installed. The app includes neither. fontconfig, PipeWire, OpenSSL and",
+                "the X11, Wayland and OpenGL libraries come from the system at run",
+                "time and aren't part of the executable.")
+    else:
+        out.add("", "", "The icons inside the app's controls come from Segoe Fluent Icons, the",
+                "icon font Windows 11 ships; the app uses the installed font and doesn't",
+                "include it.")
 
     out.heading("5. Rust crates ({})".format(len(crates)))
     write_crates(out, policy, crates, expressions, supplements)
@@ -1104,12 +1126,12 @@ def default_output(target):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Write THIRD-PARTY-NOTICES.txt for a Windows build.")
-    parser.add_argument("target", help="Rust target triple, e.g. x86_64-pc-windows-msvc")
-    parser.add_argument("--output", help="file to write (default: next to audiosync.exe)")
+    parser = argparse.ArgumentParser(description="Write THIRD-PARTY-NOTICES.txt for a Windows or Linux build.")
+    parser.add_argument("target", help="Rust target triple, e.g. x86_64-pc-windows-msvc or " + LINUX_TARGET)
+    parser.add_argument("--output", help="file to write (default: next to the executable)")
     args = parser.parse_args()
-    if not re.match(r"^[a-z0-9_]+-pc-windows-[a-z0-9]+$", args.target):
-        parser.error("'{}' isn't a Windows target triple".format(args.target))
+    if not (re.match(r"^[a-z0-9_]+-pc-windows-[a-z0-9]+$", args.target) or args.target == LINUX_TARGET):
+        parser.error("'{}' isn't a Windows target triple or {}".format(args.target, LINUX_TARGET))
     output = args.output or default_output(args.target)
     try:
         lines, count = build(args.target)
@@ -1117,7 +1139,8 @@ def main():
         print("windows_notices.py: {}".format(error), file=sys.stderr)
         return 1
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-    with open(output, "w", encoding="utf-8", newline="\r\n") as handle:
+    newline = "\n" if args.target == LINUX_TARGET else "\r\n"
+    with open(output, "w", encoding="utf-8", newline=newline) as handle:
         handle.write("\n".join(lines))
     print("Wrote {}: {} crates, the Rust standard library, Slint, fonts and icons".format(
         output, count))

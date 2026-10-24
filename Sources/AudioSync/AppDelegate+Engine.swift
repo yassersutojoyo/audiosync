@@ -59,7 +59,7 @@ extension AppDelegate {
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
         syncCast()   // the Cast speaker that is on connects
         syncLocalOutputs(origin: origin)
-        DebugTrace.log("[AudioSync] " + LocalDelay.leadDescription(source: audioSource, networkMs: networkWaitMs))
+        DebugTrace.log("[AudioSync] " + LocalDelay.leadDescription(networkMs: networkWaitMs))
         logSessionLead(session: session)
         startInputLevel()
         verifyAudioFlowing(origin: origin)
@@ -224,6 +224,18 @@ extension AppDelegate {
     /// Refresh everything that shows the streaming state: the window, the
     /// menu bar panel and the menu bar icon.
     func refreshStreamingViews() { pushModel() }
+
+    /// Holds a user-initiated activity exactly while streaming runs.
+    func syncStreamingActivity() {
+        // App Nap throttles a background app's timers, which read Now Playing and feed the receivers.
+        if engine.isRunning, streamingActivity == nil {
+            streamingActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                                      reason: "Streaming audio to speakers")
+        } else if !engine.isRunning, let activity = streamingActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            streamingActivity = nil
+        }
+    }
 
     /// A modal alert with one OK button. `style` says how serious it is:
     /// `.informational` (a next step), `.warning` (something failed) or

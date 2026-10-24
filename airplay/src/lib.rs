@@ -28,6 +28,8 @@
 //!   sync, resend and timing packets ([`rtp`]) on the sender clock
 //!   ([`clock`]), the arrival model and send margin ([`rate`]) and the shared
 //!   payload stores ([`store`]), with per-speaker delay.
+//! - [`latency`]: the latency a receiver reports and the stream's Lf the
+//!   host derives from it.
 //! - [`sender`]: what a host app drives. It runs the state machines on the
 //!   crate's own threads with real sockets (TCP for RTSP, UDP for audio,
 //!   control and timing), browses the network with
@@ -37,6 +39,9 @@
 //!   with SHA-512, the HKDF and ChaCha20-Poly1305 steps), which only the
 //!   AirPlay 2 session uses.
 //!
+//! - [`dacp`]: remote control from the receiver: the DACP ID and
+//!   Active-Remote values, the `_dacp._tcp` record, and how the command
+//!   server reads and answers a receiver's HTTP commands.
 //! - [`ap2`]: the AirPlay 2 session from `GET /info` to TEARDOWN, with the
 //!   encrypted framing, the event connection and the `/feedback`
 //!   keep-alive, behind the hidden switch (P2), which is off by default
@@ -46,12 +51,14 @@ pub mod alac;
 pub mod ap2;
 pub mod audio;
 pub mod clock;
+pub mod dacp;
 pub mod digest;
 pub mod discovery;
 pub mod error;
 pub mod homekit;
 pub mod ids;
 pub mod input;
+pub mod latency;
 pub mod metadata;
 pub mod pairing;
 pub mod ptp;

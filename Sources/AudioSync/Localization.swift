@@ -519,6 +519,11 @@ struct UIStrings {
     /// for VoiceOver: its name, and how full the bar is in steps of 10%.
     let inputLevel = "Input level"
     func inputLevelValue(_ spokenPercent: Int) -> String { percent(spokenPercent) }
+    /// The note under the source while an input device plays and an AirPlay
+    /// speaker is on (`LiveInputAirPlayHint`); `tenths` of a second, shown as "1.8".
+    func liveInputAirPlayHint(tenths: Int) -> String {
+        "AirPlay adds a \(tenths / 10).\(tenths % 10) s delay to every speaker. For live sound, use only speakers on this Mac."
+    }
     let sourceSeveralApps = "Several Apps"
     let sourceMixOnly = "Only the Checked Apps"
     let sourceMixAllExcept = "All Apps Except the Checked Ones"
@@ -671,7 +676,7 @@ struct UIStrings {
     }
 
     /// The native PIN prompt again, after a PIN that didn't work (the
-    /// receiver then shows a new one).
+    /// receiver shows a code again, a new one or the same).
     func nativePairWrongPINMessage(name: String) -> String {
         "That PIN didn't work. Enter the PIN \(name) shows now. "
             + "Cancel turns the speaker off; turn it on again to retry."
@@ -680,6 +685,10 @@ struct UIStrings {
     /// In an AirPlay speaker's menu while AudioSync keeps its PIN pairing.
     let forgetPairing = "Forget Pairing"
     let forgetPairingHelp = "Removes the pairing AudioSync keeps, so the speaker asks for a PIN the next time you turn it on"
+    /// In an AirPlay speaker's menu while AudioSync holds the password typed
+    /// for it, until AudioSync quits.
+    let forgetPassword = "Forget Password"
+    let forgetPasswordHelp = "Removes the password AudioSync holds, so the speaker asks for it the next time you turn it on"
     let pairPINOnlyPlaceholder = "PIN"
     let pairPasswordPlaceholder = "Password"
     func pairPINFieldLabel(name: String) -> String { "PIN for \(name)" }

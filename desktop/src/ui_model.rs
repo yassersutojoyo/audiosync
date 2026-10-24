@@ -52,6 +52,16 @@ pub enum SourceKind {
     AppsExcept,
 }
 
+/// How long the AirPlay speakers make every speaker wait, as the live input
+/// note names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPlayWait {
+    /// In tenths of a second.
+    Tenths(u32),
+    /// No AirPlay sender reports its delay yet.
+    Unknown,
+}
+
 /// An app the several-apps list offers, by executable file name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MixApp {
@@ -203,6 +213,9 @@ pub struct Speaker {
     /// An Apple TV AudioSync keeps pairing credentials for, which the user
     /// can forget.
     pub paired: bool,
+    /// An AirPlay speaker whose password AudioSync holds until it quits,
+    /// which the user can forget.
+    pub holds_password: bool,
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
@@ -390,7 +403,7 @@ pub struct PinPrompt {
     /// The speaker's name.
     pub name: String,
     pub phase: PinPhase,
-    /// The Apple TV turned the last PIN down and shows a new one.
+    /// The Apple TV turned the last PIN down and shows a PIN again.
     pub wrong_pin: bool,
 }
 
@@ -1062,6 +1075,27 @@ impl AppState {
         self.speakers.iter().filter(|s| s.enabled).count()
     }
 
+    /// The note under the source while an input device plays and an AirPlay
+    /// speaker is on: every speaker then waits the AirPlay delay, which is
+    /// too late for live sound. `None` hides the note.
+    pub fn live_input_airplay_wait(&self) -> Option<AirPlayWait> {
+        let input = self
+            .sources
+            .iter()
+            .any(|s| s.id == self.source_id && s.kind == SourceKind::Input);
+        let airplay_on = self
+            .speakers
+            .iter()
+            .any(|s| s.enabled && matches!(s.kind, SpeakerKind::AirPlay | SpeakerKind::AirPlay2));
+        if !input || !airplay_on {
+            return None;
+        }
+        Some(match self.airplay_delay_ms {
+            Some(ms) => AirPlayWait::Tenths((ms.max(0.0) / 100.0).round() as u32),
+            None => AirPlayWait::Unknown,
+        })
+    }
+
     /// The speaker lists both windows show: the PC's own outputs in their
     /// order, then every other speaker by name, case-insensitively.
     pub fn layout(&self) -> (Vec<&Speaker>, Vec<&Speaker>) {
@@ -1156,6 +1190,8 @@ pub trait Backend {
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
+    /// The speaker's volume slider is held (true) or let go (false).
+    fn set_speaker_volume_editing(&mut self, _id: &str, _on: bool) {}
     fn set_speaker_delay(&mut self, id: &str, ms: f64);
     /// Mutes or unmutes a Google Cast speaker on the speaker itself.
     fn set_speaker_muted(&mut self, _id: &str, _muted: bool) {}
@@ -1519,6 +1555,7 @@ impl MockBackend {
             auto_connect: false,
             availability: Availability::Open,
             paired: false,
+            holds_password: false,
             device_volume: None,
             waiting: None,
             cast: None,
@@ -2127,6 +2164,7 @@ impl Backend for MockBackend {
                 auto_connect: false,
                 availability: Availability::Open,
                 paired: false,
+                holds_password: false,
                 device_volume: None,
                 waiting: None,
                 cast: Some(CastRow {
@@ -2384,6 +2422,40 @@ mod tests {
     }
 
     #[test]
+    fn the_live_input_note_shows_only_while_an_input_plays_through_airplay() {
+        let mut state = MockBackend::new().snapshot();
+        let airplay = |s: &Speaker| matches!(s.kind, SpeakerKind::AirPlay | SpeakerKind::AirPlay2);
+        for speaker in &mut state.speakers {
+            speaker.enabled = !airplay(speaker);
+        }
+        state.source_id = "input:line".to_owned();
+        state.airplay_delay_ms = Some(1750.0);
+        assert_eq!(
+            state.live_input_airplay_wait(),
+            None,
+            "no AirPlay speaker is on"
+        );
+
+        let first = state
+            .speakers
+            .iter()
+            .position(airplay)
+            .expect("an AirPlay speaker");
+        state.speakers[first].enabled = true;
+        assert_eq!(
+            state.live_input_airplay_wait(),
+            Some(AirPlayWait::Tenths(18))
+        );
+        state.airplay_delay_ms = None;
+        assert_eq!(state.live_input_airplay_wait(), Some(AirPlayWait::Unknown));
+
+        for other in ["system", "app:player"] {
+            state.source_id = other.to_owned();
+            assert_eq!(state.live_input_airplay_wait(), None, "{other}");
+        }
+    }
+
+    #[test]
     fn the_flyout_says_so_when_only_connected_speakers_are_hidden() {
         let mut backend = MockBackend::new();
         backend.add_zone("zone:1", "Zone 1", &[]);
@@ -2474,6 +2546,7 @@ mod tests {
             auto_connect: false,
             availability: Availability::Open,
             paired: false,
+            holds_password: false,
             device_volume: None,
             waiting: None,
             cast: None,

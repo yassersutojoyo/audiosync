@@ -359,7 +359,22 @@ extension AppDelegate {
             localOffsets: localOffsetMs, holdBacks: localHoldBacks, cast: cast,
             airPlay: appModel.airplay.filter { playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
             airPlayDelayMs: airPlayLatencyMs, airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),
-            leftOut: leftOut, includedAnyway: appModel.calibrateAll.includedAnyway)
+            airPlaySenderMs: (nativeAirPlay?.model).flatMap {
+                $0.latencyMs > 0 ? $0.latencyMs + $0.receiverLatency.estimateMs : nil
+            },
+            leftOut: leftOut, includedAnyway: appModel.calibrateAll.includedAnyway,
+            airPlayReportedMs: calibrateAirPlayReportedMs())
+    }
+
+    /// R_s of each AirPlay row in the stream by app ID (S235, S283).
+    private func calibrateAirPlayReportedMs() -> [String: Double] {
+        guard let model = nativeAirPlay?.model else { return [:] }
+        var reported: [String: Double] = [:]
+        for id in enabledAirPlay {
+            guard let receiver = NativeAirPlayID.receiver(id) else { continue }
+            reported[id] = model.receiverLatency.estimateMs(of: model.sessions(of: receiver))
+        }
+        return reported
     }
 
     /// Every speaker playing now: local outputs running, AirPlay speakers the

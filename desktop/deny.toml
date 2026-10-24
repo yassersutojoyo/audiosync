@@ -46,8 +46,8 @@ exceptions = [
     { crate = "slint", allow = ["GPL-3.0-only"] },
     { crate = "slint-build", allow = ["GPL-3.0-only"] },
     { crate = "slint-macros", allow = ["GPL-3.0-only"] },
-    # Slint's core (i-slint-core) shows a system tray through it on Linux; the
-    # Unlicense is a public-domain dedication with no conditions.
+    # tray-icon shows the Linux tray icon through it; the Unlicense is a
+    # public-domain dedication with no conditions.
     { crate = "ksni", allow = ["Unlicense"] },
     # A build-time dependency of the PipeWire bindings' pkg-config lookup
     # (system-deps through cfg-expr) on Linux; the LLVM exception only waives

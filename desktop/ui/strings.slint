@@ -84,6 +84,12 @@ export global Strings {
     public pure function input-level-value(percent: int) -> string {
         return @tr("{}%", percent);
     }
+    // The note under the source while an input device plays and an AirPlay
+    // speaker is on. `seconds` has one decimal, such as "1.8".
+    public pure function live-input-airplay(seconds: string) -> string {
+        return @tr("AirPlay adds a {} s delay to every speaker. For live sound, use only speakers on this PC.", seconds);
+    }
+    out property <string> live-input-airplay-unknown: @tr("AirPlay adds a delay to every speaker. For live sound, use only speakers on this PC.");
     out property <string> equalizer: @tr("Equalizer");
     // The Now Playing card: its name for Narrator, and its buttons.
     out property <string> now-playing: @tr("Now Playing");
@@ -158,18 +164,20 @@ export global Strings {
     out property <string> pin-field-placeholder: @tr("PIN");
     out property <string> pair: @tr("Pair");
     out property <string> forget-pairing: @tr("Forget Pairing");
+    out property <string> forget-password: @tr("Forget Password");
     // The made-up Apple TV of the PIN dialog preview (debug only).
     out property <string> pin-preview-speaker: @tr("Living Room");
 
     // What the dialog says while the TV is asked for a PIN, shows one, or
-    // checks the one typed; after a wrong PIN the TV shows a new one.
+    // checks the one typed; after a wrong PIN the TV shows a PIN again,
+    // which may be the same one.
     public pure function pin-message(speaker: string, phase: PinPhase, wrong-pin: bool) -> string {
         if phase == PinPhase.checking {
             return @tr("Checking the PIN with {}…", speaker);
         }
         if phase == PinPhase.starting {
             if wrong-pin {
-                return @tr("That PIN didn't work. Asking {} for a new one…", speaker);
+                return @tr("That PIN didn't work. Asking {} to show a PIN…", speaker);
             }
             return @tr("Asking {} to show a PIN…", speaker);
         }

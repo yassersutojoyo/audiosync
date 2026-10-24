@@ -11,6 +11,7 @@ use plist::{Dictionary, Integer, Value};
 
 use crate::discovery::Features;
 use crate::discovery::txt::{AirPlayTxt, Txt};
+use crate::latency;
 
 pub const PLIST_CONTENT_TYPE: &str = "application/x-apple-binary-plist";
 pub const PEERS_CONTENT_TYPE: &str = "/peer-list-changed";
@@ -297,6 +298,8 @@ pub struct InfoAnswer {
     pub source_version: Option<String>,
     /// From the second `/info`.
     pub initial_volume: Option<f64>,
+    /// The largest usable `outputLatencyMicros` of `audioLatencies` (P197).
+    pub audio_latencies_us: Option<u64>,
 }
 
 /// A TXT record in DNS wire form: each string a length byte, then the
@@ -333,6 +336,7 @@ pub fn read_info(body: &[u8]) -> InfoAnswer {
                 .as_real()
                 .or_else(|| value.as_signed_integer().map(|v| v as f64))
         }),
+        audio_latencies_us: latency::read_audio_latencies(&dictionary),
     };
     if let Some(data) = dictionary.get("txtAirPlay").and_then(Value::as_data) {
         let txt = AirPlayTxt::read(&Txt::parse(&wire_strings(data)));
@@ -381,23 +385,110 @@ pub struct StreamSetupAnswer {
     pub data_port: Option<u16>,
     pub control_port: Option<u16>,
     pub stream_id: Option<i64>,
+    /// `arrivalToRenderLatencyMs` in microseconds (P198).
+    pub arrival_to_render_us: Option<u64>,
 }
 
 pub fn read_stream_setup(body: &[u8]) -> StreamSetupAnswer {
-    let stream = read_dictionary(body).and_then(|dictionary| {
-        dictionary
-            .get("streams")?
-            .as_array()?
-            .first()?
-            .as_dictionary()
-            .cloned()
-    });
-    let Some(stream) = stream else {
+    let Some(dictionary) = read_dictionary(body) else {
         return StreamSetupAnswer::default();
     };
+    let arrival_to_render_us = latency::read_arrival_to_render(&dictionary);
+    let stream = dictionary
+        .get("streams")
+        .and_then(Value::as_array)
+        .and_then(|streams| streams.first())
+        .and_then(Value::as_dictionary);
+    let Some(stream) = stream else {
+        return StreamSetupAnswer {
+            arrival_to_render_us,
+            ..StreamSetupAnswer::default()
+        };
+    };
     StreamSetupAnswer {
-        data_port: port(&stream, "dataPort"),
-        control_port: port(&stream, "controlPort"),
+        data_port: port(stream, "dataPort"),
+        control_port: port(stream, "controlPort"),
         stream_id: stream.get("streamID").and_then(Value::as_signed_integer),
+        arrival_to_render_us,
+    }
+}
+
+/// The longest [`trace_text`], in bytes.
+pub const TRACE_LIMIT: usize = 2048;
+
+/// A body as one line for a debug log: a binary plist dictionary as its
+/// values, printable UTF-8 as quoted text, anything else as hex, cut to
+/// [`TRACE_LIMIT`] bytes.
+pub fn trace_text(body: &[u8]) -> String {
+    if body.is_empty() {
+        return "(empty)".to_owned();
+    }
+    let text = if let Some(dictionary) = read_dictionary(body) {
+        format!("plist {dictionary:?}")
+    } else if let Ok(text) = std::str::from_utf8(body)
+        && !text
+            .chars()
+            .any(|c| c.is_control() && !c.is_ascii_whitespace())
+    {
+        format!("text {text:?}")
+    } else {
+        let mut hex = format!("hex[{}] ", body.len());
+        for byte in body.iter().take(TRACE_LIMIT / 2) {
+            hex.push_str(&format!("{byte:02x}"));
+        }
+        hex
+    };
+    cut_trace(text, body.len())
+}
+
+fn cut_trace(mut text: String, body_len: usize) -> String {
+    if text.len() <= TRACE_LIMIT {
+        return text;
+    }
+    let suffix = format!(" ... ({body_len} bytes)");
+    let mut end = TRACE_LIMIT - suffix.len();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text.push_str(&suffix);
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_text_reads_a_binary_plist_as_values() {
+        let mut dictionary = Dictionary::new();
+        dictionary.insert("volume".to_owned(), Value::Real(-12.5));
+        let mut body = Vec::new();
+        Value::Dictionary(dictionary)
+            .to_writer_binary(&mut body)
+            .expect("a plist");
+        let text = trace_text(&body);
+        assert!(text.starts_with("plist "), "{text}");
+        assert!(text.contains("volume") && text.contains("-12.5"), "{text}");
+    }
+
+    #[test]
+    fn trace_text_quotes_text_and_hexes_the_rest() {
+        assert_eq!(trace_text(b""), "(empty)");
+        assert_eq!(
+            trace_text(b"volume: -20.0\r\n"),
+            "text \"volume: -20.0\\r\\n\""
+        );
+        assert_eq!(trace_text(&[0, 1, 0xab]), "hex[3] 0001ab");
+    }
+
+    #[test]
+    fn trace_text_stays_within_the_limit() {
+        let text = trace_text(&[0xff; 5000]);
+        assert!(text.len() <= TRACE_LIMIT, "{}", text.len());
+        assert!(text.ends_with(" ... (5000 bytes)"), "{text}");
+        let text = trace_text("é".repeat(3000).as_bytes());
+        assert!(text.len() <= TRACE_LIMIT, "{}", text.len());
+        assert!(text.ends_with(" ... (6000 bytes)"), "{text}");
     }
 }

@@ -1041,10 +1041,14 @@ mod tests {
         assert!(peak > 0.01, "peak {peak}\n{}", graph());
     }
 
-    /// The links and the `default` metadata, for a failing test's message.
+    /// The links, the `default` metadata and the graph, for a failing test's message.
     fn graph() -> String {
         let mut text = String::new();
-        for (tool, args) in [("pw-link", &["-l"][..]), ("pw-metadata", &[][..])] {
+        for (tool, args) in [
+            ("pw-link", &["-l"][..]),
+            ("pw-metadata", &[][..]),
+            ("pw-top", &["-b", "-n", "2"][..]),
+        ] {
             if let Ok(output) = std::process::Command::new(tool).args(args).output() {
                 text.push_str(&String::from_utf8_lossy(&output.stdout));
             }

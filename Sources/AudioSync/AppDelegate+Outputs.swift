@@ -113,12 +113,14 @@ extension AppDelegate {
     }
 
     /// The native sender's latency L_s (its configured default until it
-    /// reports one).
+    /// reports one) plus E, the largest latency the AirPlay speakers in the
+    /// stream reported (S283).
     var nativeSenderLatencyMs: Double {
+        let estimate = nativeAirPlay?.model.receiverLatency.estimateMs ?? 0
         guard let reported = nativeAirPlay?.model.latencyMs, reported > 0 else {
-            return LocalDelay.senderDefaultLatencyMs
+            return LocalDelay.senderDefaultLatencyMs + estimate
         }
-        return reported
+        return reported + estimate
     }
 
     /// L, what the AirPlay delay field shows and local speakers wait for
@@ -137,10 +139,9 @@ extension AppDelegate {
     /// The hold-back of every local speaker taking part: switched on and
     /// listed now (S172, S176). They wait for L while an AirPlay speaker is
     /// chosen, for the Cast speaker's offset while one is, and for the
-    /// longer of the two when both are; an input device as the source keeps
-    /// them off that wait (live input).
+    /// longer of the two when both are, whatever the source (S244).
     func localHoldBackTargets() -> [String: Double] {
-        let wait = LocalDelay.networkWaitMs(source: audioSource, output: .local, networkMs: networkWaitMs)
+        let wait = networkWaitMs
         return LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
                                     offsets: localOffsetMs, airPlayChosen: wait != nil,
                                     latencyMs: wait ?? airPlayLatencyMs)

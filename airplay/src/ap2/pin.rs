@@ -1,8 +1,11 @@
 //! A PIN pairing on the AirPlay 2 path that the host asked for (P61, P153):
 //! an [`Ap2Session`] that runs `GET /info`, `/pair-pin-start`, pair-setup M1
-//! to M6 and a pair-verify on one connection and ends there, reported with
-//! the legacy pairing's states and events so a host drives both the same
-//! way (P46).
+//! to M6 and a pair-verify on one connection, reported with the legacy
+//! pairing's states and events so a host drives both the same way (P46).
+//! A wrong PIN asks for the code again on that connection. Once paired, the
+//! connection stays open for the speaker's session ([`PinPairing::into_session`]):
+//! a receiver set to ask for a code every time takes no pair-verify on
+//! another connection.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -10,20 +13,22 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Instant;
 
 use crate::error::{ErrorKind, SessionError};
-use crate::homekit::HomeKitCredentials;
+use crate::homekit::{self, HomeKitCredentials};
 use crate::ids::{Entropy, SessionIds};
 use crate::pairing::{self, Output, PairingEvent, PairingState, PinError};
 use crate::session::Connection;
 
-use super::session::{Ap2Config, Ap2Event, Ap2Output, Ap2Session};
+use super::session::{Ap2Config, Ap2Event, Ap2Output, Ap2Session, Ap2State};
 
 /// See the module documentation.
 pub struct PinPairing {
     session: Ap2Session,
     state: PairingState,
     credentials: Option<HomeKitCredentials>,
+    txt_flags: Option<u64>,
+    /// Flags bit 3 in the `/info` answer: nothing to store (P182).
+    every_time: bool,
     verified: bool,
-    wrong_pin: bool,
     cancelled: bool,
     outputs: VecDeque<Output>,
 }
@@ -50,12 +55,14 @@ impl PinPairing {
         config.pin_pairing = true;
         config.credentials = None;
         config.ptp = None;
+        let txt_flags = config.txt_flags;
         let mut pairing = PinPairing {
             session: Ap2Session::new(config, ids, entropy, now),
             state: PairingState::Connecting,
             credentials: None,
+            txt_flags,
+            every_time: false,
             verified: false,
-            wrong_pin: false,
             cancelled: false,
             outputs: VecDeque::new(),
         };
@@ -65,6 +72,12 @@ impl PinPairing {
 
     pub fn state(&self) -> PairingState {
         self.state
+    }
+
+    /// Whether the session takes the host's PIN now: not while the next M1
+    /// is held for a back-off (P150).
+    pub fn waiting_for_pin(&self) -> bool {
+        self.session.waiting_for_pin()
     }
 
     pub fn poll_output(&mut self) -> Option<Output> {
@@ -121,6 +134,12 @@ impl PinPairing {
         Ok(())
     }
 
+    /// The session of a pairing that paired, its connection still open and
+    /// framed, for [`Ap2Session::proceed`] (P153).
+    pub fn into_session(self) -> Option<Ap2Session> {
+        (self.verified && self.session.state() == Ap2State::Paired).then_some(self.session)
+    }
+
     /// Stops the pairing; [`PairingEvent::Stopped`] follows.
     pub fn cancel(&mut self, now: Instant) {
         if self.state == PairingState::Closed {
@@ -159,9 +178,34 @@ impl PinPairing {
                 self.state = PairingState::WaitingForPin;
                 self.event(PairingEvent::PinRequested);
             }
-            Ap2Event::WrongPin => self.wrong_pin = true,
+            // The receiver's code stays up, so the prompt comes back (P150).
+            Ap2Event::WrongPin => {
+                self.state = PairingState::WaitingForPin;
+                self.event(PairingEvent::PinRequested);
+            }
             Ap2Event::Credentials(credentials) => self.credentials = Some(credentials),
-            Ap2Event::Verified => self.verified = true,
+            Ap2Event::Info(info) => {
+                let flags = homekit::status_flags(info.status_flags, self.txt_flags);
+                self.every_time = homekit::asks_code_every_time(flags);
+            }
+            Ap2Event::Verified => {
+                self.state = PairingState::Closed;
+                let event = match self.credentials.clone() {
+                    Some(_) if self.every_time => {
+                        self.verified = true;
+                        PairingEvent::PairedForSession
+                    }
+                    Some(credentials) => {
+                        self.verified = true;
+                        PairingEvent::HomeKitPaired(credentials)
+                    }
+                    None => PairingEvent::Failed {
+                        error: unfinished(),
+                        wrong_pin: false,
+                    },
+                };
+                self.event(event);
+            }
             Ap2Event::Failed(error) => {
                 self.state = PairingState::Closed;
                 let event = if self.cancelled {
@@ -169,32 +213,35 @@ impl PinPairing {
                 } else {
                     PairingEvent::Failed {
                         error,
-                        wrong_pin: self.wrong_pin,
+                        wrong_pin: false,
                     }
                 };
                 self.event(event);
             }
             Ap2Event::Closed => {
                 self.state = PairingState::Closed;
-                let event = match self.credentials.take() {
-                    _ if self.cancelled => PairingEvent::Stopped,
-                    Some(credentials) if self.verified => PairingEvent::HomeKitPaired(credentials),
-                    _ => {
-                        let mut error = SessionError::new(ErrorKind::PairingFailed);
-                        error.detail = Some("the connection ended before the pairing did");
-                        PairingEvent::Failed {
-                            error,
-                            wrong_pin: false,
-                        }
+                let event = if self.cancelled {
+                    PairingEvent::Stopped
+                } else {
+                    PairingEvent::Failed {
+                        error: unfinished(),
+                        wrong_pin: false,
                     }
                 };
                 self.event(event);
             }
-            Ap2Event::Info(_)
-            | Ap2Event::Server(_)
+            Ap2Event::Server(_)
             | Ap2Event::TimingChosen(_)
             | Ap2Event::Ready(_)
-            | Ap2Event::Warning(_) => {}
+            | Ap2Event::Warning(_)
+            | Ap2Event::Trace(_)
+            | Ap2Event::VolumeReported(_) => {}
         }
     }
+}
+
+fn unfinished() -> SessionError {
+    let mut error = SessionError::new(ErrorKind::PairingFailed);
+    error.detail = Some("the connection ended before the pairing did");
+    error
 }

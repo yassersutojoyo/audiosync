@@ -35,6 +35,8 @@ final class AppModel: ObservableObject {
         var waitingForAirPlay2 = false
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
+        /// An AirPlay speaker whose password AudioSync holds until it quits.
+        var holdsPassword = false
         /// A stereo pair or home theater group: its kind and members (P176).
         var airPlayTarget: AirPlayTargetRow? = nil
         /// Why a local speaker sits out of microphone calibration: headphones
@@ -119,6 +121,7 @@ final class AppModel: ObservableObject {
         var setMaster: (Double) -> Void = { _ in }
         var setAirPlayEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
+        var setAirPlayVolumeDragging: (String, Bool) -> Void = { _, _ in }
         var forgetAirPlayPairing: (String) -> Void = { _ in }
         var setLocalEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
@@ -352,6 +355,14 @@ final class AppModel: ObservableObject {
 
     var currentSource: Source? { sources.first { $0.id == sourceID } }
 
+    /// The note under the source while an input device plays through an AirPlay speaker.
+    var liveInputAirPlayHint: String? {
+        LiveInputAirPlayHint.tenths(source: AudioSource(defaultsValue: sourceID),
+                                    airPlayOn: airplay.contains { $0.enabled },
+                                    airPlayDelayMs: airPlayDelayMs)
+            .map(text.liveInputAirPlayHint(tenths:))
+    }
+
     /// How a row shows `speaker`: playing only while streaming is on.
     func state(of speaker: Speaker) -> SpeakerState {
         SpeakerState(enabled: speaker.enabled, streaming: running)
@@ -405,6 +416,11 @@ final class AppModel: ObservableObject {
     func delete(_ zone: Zone) {
         actions.deleteZone(zone.id)
         AccessibilityNotification.Announcement(text.zoneDeleted(zone.name)).post()
+    }
+
+    /// While an AirPlay speaker's slider is dragged, levels read back from it are ignored.
+    func setVolumeDragging(_ speaker: Speaker, _ dragging: Bool) {
+        if speaker.tag == .airplay { actions.setAirPlayVolumeDragging(speaker.id, dragging) }
     }
 
     func setVolume(_ speaker: Speaker, _ position: Double) {
@@ -763,6 +779,7 @@ struct MenuBarView: View {
         if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
         if offersCastAdd { height += 20 }
         if PresetPanel.showsRow(model.presets) { height += 38 }
+        if model.liveInputAirPlayHint != nil { height += 48 }
         return height
     }
 
@@ -782,6 +799,9 @@ struct MenuBarView: View {
             header(t)
             NoticeStack(model: model, compact: true)
             SourcePicker(model: model)
+            if let hint = model.liveInputAirPlayHint {
+                LiveInputAirPlayNote(message: hint, font: .caption).padding(.top, -4)
+            }
             if PresetPanel.showsRow(model.presets) { PresetPicker(model: model) }
             // The Mac's own speakers belong with the volume, above the one
             // divider, drawn tight together as one block.
@@ -1392,6 +1412,22 @@ struct InputLevelMeter: View {
         .accessibilityValue(text.inputLevelValue(level.spokenPercent))
         .accessibilityAddTraits(.updatesFrequently)
         .accessibilityHidden(!level.shown)
+    }
+}
+
+/// The note under the source while an input device plays through an AirPlay
+/// speaker (`AppModel.liveInputAirPlayHint`), lined up with the picker's text.
+struct LiveInputAirPlayNote: View {
+    let message: String
+    var font: Font = .callout
+
+    var body: some View {
+        Text(message)
+            .font(font)
+            .foregroundStyle(Brand.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
     }
 }
 

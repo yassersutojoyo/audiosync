@@ -41,3 +41,8 @@ mdns-sd = { version = "0.21.5", default-features = false }
 # writes must decode back to the input. Without default features it pulls
 # in nothing else.
 alac = { version = "0.5.0", default-features = false }
+# A client socket bound to a chosen loopback source address, which the
+# remote-control tests need to play a connection from an unknown peer
+# (P190); std can't bind a TCP socket before it connects. Already in the
+# tree through mdns-sd.
+socket2 = "0.6.5"

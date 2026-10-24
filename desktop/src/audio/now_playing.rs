@@ -1,7 +1,7 @@
 //! What AirPlay receivers with a screen, such as a TV, show while AudioSync
 //! streams to them: the playing track's title, artist, album and artwork,
 //! read from the media sessions Windows lists (the system media transport
-//! controls), as the Mac app reads its players.
+//! controls) or the MPRIS players on Linux, as the Mac app reads its players.
 //!
 //! A [`TrackReader`] reads the sessions every [`POLL_INTERVAL`] on a thread
 //! of its own, only while AirPlay receivers play; [`TrackInfo`] turns its
@@ -22,8 +22,9 @@
 //!   session's thumbnail a moment after its title;
 //! - right after reading starts, nothing goes out until the first reading,
 //!   for at most [`READING_WAIT`], so a track from before never does;
-//! - artwork goes out as a JPEG of at most [`ARTWORK_LIMIT`] bytes and
-//!   [`ARTWORK_SIDE`] pixels a side ([`fit_jpeg`]);
+//! - artwork goes out as two JPEGs, [`LARGE_ARTWORK`] for AirPlay 2
+//!   receivers and [`SMALL_ARTWORK`] for AirPlay 1 receivers and after a
+//!   refusal ([`fit_artwork`]); the sender picks per receiver;
 //! - a playing track whose session reports its length gets its progress
 //!   ([`Timeline`]); a live stream, a paused track and AudioSync's labels
 //!   get none. The receiver counts on by itself, so progress goes out again
@@ -39,12 +40,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use audiosync_airplay::metadata::TrackInfo as TrackFields;
+use audiosync_airplay::metadata::{Artwork as SenderArtwork, TrackInfo as TrackFields};
 use audiosync_airplay::sender::{NowPlaying, Progress};
 use audiosync_cast::media::Metadata;
 
 use super::cast::CastTrack;
 use crate::debug_log::DebugLog;
+use crate::now_playing_card::Transport;
 
 /// How often the sessions are read while AirPlay receivers play.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -52,16 +54,55 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub const ARTWORK_WAIT: Duration = Duration::from_secs(5);
 /// How long track info waits for the first reading once reading starts.
 pub const READING_WAIT: Duration = Duration::from_secs(3);
-/// At most this many bytes of JPEG per image: a cover that every receiver
-/// takes at once, well under the 512 KiB the sender accepts (P125).
-pub const ARTWORK_LIMIT: usize = 6060;
-/// At most this many pixels a side, as large as a receiver shows a cover.
-pub const ARTWORK_SIDE: u32 = 600;
+/// The image for AirPlay 2 receivers: large enough for a TV-sized cover
+/// (S272).
+pub const LARGE_ARTWORK: ArtworkLimits = ArtworkLimits {
+    side: 1024,
+    bytes: 128 * 1024,
+};
+/// The image for AirPlay 1 receivers, and for any receiver that refused the
+/// large one (S272).
+pub const SMALL_ARTWORK: ArtworkLimits = ArtworkLimits {
+    side: 600,
+    bytes: 40 * 1024,
+};
 /// How far a track's position may stray from where the progress sent last
 /// puts it by now before progress goes out again.
 pub const PROGRESS_SLACK: Duration = Duration::from_secs(1);
 const SMALLEST_SIDE: u32 = 64;
 const JPEG_QUALITIES: [f32; 3] = [0.65, 0.5, 0.4];
+
+/// The most an artwork JPEG may be: its longest side in pixels, and bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArtworkLimits {
+    pub side: u32,
+    pub bytes: usize,
+}
+
+/// One picture fitted for receivers ([`fit_artwork`]); a picture within
+/// the small limits is the same bytes in both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FittedArtwork {
+    pub large: Arc<[u8]>,
+    pub small: Arc<[u8]>,
+}
+
+impl FittedArtwork {
+    /// One encoding for both images.
+    pub fn single(jpeg: Arc<[u8]>) -> FittedArtwork {
+        FittedArtwork {
+            large: jpeg.clone(),
+            small: jpeg,
+        }
+    }
+
+    pub fn for_sender(&self) -> SenderArtwork {
+        SenderArtwork {
+            large: self.large.to_vec(),
+            small: self.small.to_vec(),
+        }
+    }
+}
 
 /// What receivers show while no track counts, worded by the UI
 /// (`receiver-*` and `source-system` in ui/strings.slint).
@@ -91,10 +132,10 @@ impl SharedLabels {
     }
 }
 
-/// A media session as Windows lists it.
+/// A media session as the system lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediaSession {
-    /// The app's user model ID, as the session reports it.
+    /// The app's user model ID on Windows, the player's bus name on Linux.
     pub app_id: String,
     pub title: String,
     pub artist: String,
@@ -107,15 +148,20 @@ pub struct MediaSession {
 pub enum Follow {
     /// The whole system: any app's.
     AnyApp,
-    /// One app, by its executable's file name: its own only.
-    App { executable: String },
+    /// One app, by its executable's file name: its own only. Where the
+    /// system tells which process a session belongs to, the source's
+    /// process ID (`pid`) tells it first.
+    App {
+        executable: String,
+        pid: Option<u32>,
+    },
 }
 
 impl Follow {
     fn admits(&self, app_id: &str) -> bool {
         match self {
             Follow::AnyApp => true,
-            Follow::App { executable } => app_matches(app_id, executable),
+            Follow::App { executable, .. } => app_matches(app_id, executable),
         }
     }
 }
@@ -165,9 +211,9 @@ pub fn pick(sessions: &[MediaSession], follow: &Follow) -> Option<usize> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Track {
     pub session: MediaSession,
-    /// Its artwork, already fitted ([`fit_jpeg`]); `None` while the session
-    /// has none, or it couldn't be fitted.
-    pub artwork: Option<Arc<[u8]>>,
+    /// Its artwork, already fitted ([`fit_artwork`]); `None` while the
+    /// session has none, or it couldn't be fitted.
+    pub artwork: Option<FittedArtwork>,
     /// Where the track stands; `None` when its length is unknown.
     pub timeline: Option<Timeline>,
 }
@@ -263,7 +309,11 @@ pub trait TrackReader {
 
     /// AudioSync's icon, fitted as artwork is; `None` until it is made, or
     /// when it can't be.
-    fn icon(&mut self) -> Option<Arc<[u8]>>;
+    fn icon(&mut self) -> Option<FittedArtwork>;
+
+    /// Sends `command` to the session that counts for what it follows, as
+    /// the card's buttons do; nothing while it follows nothing.
+    fn send(&mut self, command: Transport);
 }
 
 /// What the source looks like to track info.
@@ -278,7 +328,7 @@ pub struct TrackSource {
 /// The artwork receivers should show.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Artwork {
-    Track(Arc<[u8]>),
+    Track(FittedArtwork),
     /// AudioSync's icon: no track counts.
     Icon,
     /// The track has no artwork yet: none until [`ARTWORK_WAIT`] is over,
@@ -310,7 +360,7 @@ pub fn decide(track: Option<&Track>, source: &TrackSource, labels: &ReceiverLabe
             artwork: track
                 .artwork
                 .as_ref()
-                .map_or(Artwork::Wait, |jpeg| Artwork::Track(jpeg.clone())),
+                .map_or(Artwork::Wait, |artwork| Artwork::Track(artwork.clone())),
         };
     }
     let artist = source
@@ -355,33 +405,60 @@ pub fn cast_track(track: Option<&Track>, follow: &Follow) -> CastTrack {
             album_name: field(&session.album),
             images: Vec::new(),
         },
-        artwork: track.artwork.clone(),
+        // Cast has its own limits (C53), which the small image keeps to.
+        artwork: track.artwork.as_ref().map(|artwork| artwork.small.clone()),
     }
 }
 
-/// An image of `width` × `height` pixels as a JPEG of at most
-/// [`ARTWORK_LIMIT`] bytes, as large and sharp as fits: the longest side up
-/// to [`ARTWORK_SIDE`], scaled down until it fits. `encode` makes the JPEG
-/// at a size and quality (0 to 1), or fails. `None` when not even the
-/// smallest fits, or `encode` failed.
-pub fn fit_jpeg(
+/// An image of `width` × `height` pixels as both receiver images of S272:
+/// [`LARGE_ARTWORK`] and [`SMALL_ARTWORK`], the large one's bytes for both
+/// when they fit the small limits. `encode` makes a JPEG at a size and
+/// quality (0 to 1), or fails. `None` when not even the smallest small
+/// image fits, or `encode` failed.
+pub fn fit_artwork(
     width: u32,
     height: u32,
     mut encode: impl FnMut(u32, u32, f32) -> Option<Vec<u8>>,
-) -> Option<Vec<u8>> {
+) -> Option<FittedArtwork> {
+    let large = fit_jpeg(width, height, LARGE_ARTWORK, &mut encode);
+    if let Some((jpeg, side)) = &large
+        && *side <= SMALL_ARTWORK.side
+        && jpeg.len() <= SMALL_ARTWORK.bytes
+    {
+        return Some(FittedArtwork::single(jpeg.as_slice().into()));
+    }
+    let (small, _) = fit_jpeg(width, height, SMALL_ARTWORK, &mut encode)?;
+    let small: Arc<[u8]> = small.into();
+    Some(FittedArtwork {
+        large: large.map_or_else(|| small.clone(), |(jpeg, _)| jpeg.into()),
+        small,
+    })
+}
+
+/// An image of `width` × `height` pixels as a JPEG within `limits`, with
+/// its longest side: as large and sharp as fits, the longest side up to
+/// `limits.side`, each side tried at every quality, best first, before the
+/// side steps down. `encode` makes the JPEG at a size and quality (0 to 1),
+/// or fails. `None` when not even the smallest fits, or `encode` failed.
+fn fit_jpeg(
+    width: u32,
+    height: u32,
+    limits: ArtworkLimits,
+    encode: &mut impl FnMut(u32, u32, f32) -> Option<Vec<u8>>,
+) -> Option<(Vec<u8>, u32)> {
     if width == 0 || height == 0 {
         return None;
     }
     let longest = width.max(height);
-    let mut side = longest.min(ARTWORK_SIDE);
+    let mut side = longest.min(limits.side);
     loop {
         let (scaled_width, scaled_height) =
             (scale(width, side, longest), scale(height, side, longest));
         let mut smallest = usize::MAX;
         for quality in JPEG_QUALITIES {
             let jpeg = encode(scaled_width, scaled_height, quality)?;
-            if jpeg.len() <= ARTWORK_LIMIT {
-                return Some(jpeg);
+            if jpeg.len() <= limits.bytes {
+                return Some((jpeg, scaled_width.max(scaled_height)));
             }
             smallest = smallest.min(jpeg.len());
         }
@@ -390,7 +467,7 @@ pub fn fit_jpeg(
         }
         // The size grows about with the pixel count: aim at a side that
         // should fit, but always step down.
-        let aim = f64::from(side) * (ARTWORK_LIMIT as f64 / smallest as f64).sqrt();
+        let aim = f64::from(side) * (limits.bytes as f64 / smallest as f64).sqrt();
         side = (aim as u32).min(side * 85 / 100).max(SMALLEST_SIDE);
     }
 }
@@ -454,6 +531,24 @@ impl TrackInfo {
         Some(cast_track(track, follow))
     }
 
+    /// The session that counts in the newest reading, by app ID, and whether
+    /// it plays: what a speaker's remote controls (S274). `None` while
+    /// nothing is followed or no session counts.
+    pub fn playback(&self) -> Option<(String, bool)> {
+        self.following.as_ref()?;
+        let track = self.reading.as_ref()?.track.as_ref()?;
+        Some((track.session.app_id.clone(), track.session.playing))
+    }
+
+    /// Sends a speaker remote's control to the session that counts.
+    pub fn send(&mut self, command: Transport) {
+        if self.following.is_some()
+            && let Some(reader) = self.reader.as_mut()
+        {
+            reader.send(command);
+        }
+    }
+
     /// Words what receivers show while no track counts.
     pub fn set_labels(&mut self, labels: SharedLabels) {
         self.labels = labels;
@@ -512,7 +607,7 @@ impl TrackInfo {
             }
             Artwork::Wait => None,
         };
-        let artwork = artwork.map(|jpeg| jpeg.to_vec());
+        let artwork = artwork.map(|artwork| artwork.for_sender());
         let progress = self.timelines.progress(track, &shown.fields, now);
         let next = NowPlaying {
             track: Some(shown.fields),
@@ -610,7 +705,14 @@ fn describe(now_playing: &NowPlaying, track: Option<&Track>) -> String {
         |track| format!("the session of {}", track.session.app_id),
     );
     let artwork = match &now_playing.artwork {
-        Some(jpeg) => format!("{} bytes of artwork", jpeg.len()),
+        Some(artwork) if artwork.large == artwork.small => {
+            format!("artwork of {} bytes", artwork.large.len())
+        }
+        Some(artwork) => format!(
+            "artwork of {} and {} bytes",
+            artwork.large.len(),
+            artwork.small.len()
+        ),
         None => "no artwork".to_owned(),
     };
     let progress = match &now_playing.progress {
@@ -635,7 +737,10 @@ pub mod fake {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use super::{Follow, MediaSession, Reading, ReceiverLabels, SharedLabels, Track, TrackReader};
+    use super::{
+        FittedArtwork, Follow, MediaSession, Reading, ReceiverLabels, SharedLabels, Track,
+        TrackReader, Transport,
+    };
 
     /// Labels unlike the UI's, so a test sees they come from the strings.
     pub fn labels() -> ReceiverLabels {
@@ -659,6 +764,7 @@ pub mod fake {
         follows: Vec<Option<Follow>>,
         reading: Option<Reading>,
         icon: Option<Arc<[u8]>>,
+        sent: Vec<Transport>,
     }
 
     /// A reader whose readings a test makes.
@@ -685,6 +791,11 @@ pub mod fake {
             self.0.borrow().follow.clone()
         }
 
+        /// Every control sent so far, and forgets them.
+        pub fn take_sent(&self) -> Vec<Transport> {
+            std::mem::take(&mut self.0.borrow_mut().sent)
+        }
+
         /// Every follow change so far, and forgets them.
         pub fn take_follows(&self) -> Vec<Option<Follow>> {
             std::mem::take(&mut self.0.borrow_mut().follows)
@@ -703,8 +814,12 @@ pub mod fake {
             self.0.borrow_mut().reading.take()
         }
 
-        fn icon(&mut self) -> Option<Arc<[u8]>> {
-            self.0.borrow().icon.clone()
+        fn icon(&mut self) -> Option<FittedArtwork> {
+            self.0.borrow().icon.clone().map(FittedArtwork::single)
+        }
+
+        fn send(&mut self, command: Transport) {
+            self.0.borrow_mut().sent.push(command);
         }
     }
 
@@ -721,7 +836,7 @@ pub mod fake {
     pub fn track(app_id: &str, title: &str, playing: bool, artwork: Option<&[u8]>) -> Track {
         Track {
             session: session(app_id, title, playing),
-            artwork: artwork.map(Into::into),
+            artwork: artwork.map(|jpeg| FittedArtwork::single(jpeg.into())),
             timeline: None,
         }
     }
@@ -735,6 +850,14 @@ mod tests {
     const ICON: &[u8] = b"icon jpeg";
     const COVER: &[u8] = b"cover jpeg";
 
+    /// The large image `now_playing` hands the sender.
+    fn large_of(now_playing: &NowPlaying) -> Option<&[u8]> {
+        now_playing
+            .artwork
+            .as_ref()
+            .map(|artwork| artwork.large.as_slice())
+    }
+
     fn whole_system() -> TrackSource {
         TrackSource {
             follow: Follow::AnyApp,
@@ -746,6 +869,7 @@ mod tests {
         TrackSource {
             follow: Follow::App {
                 executable: executable.to_owned(),
+                pid: None,
             },
             name: Some(name.to_owned()),
         }
@@ -764,6 +888,26 @@ mod tests {
         info.set_reader(reader.reader());
         info.set_labels(shared_labels());
         info
+    }
+
+    // covers: S274
+    #[test]
+    fn a_remote_control_goes_to_the_session_track_info_follows() {
+        let reader = FakeReader::default();
+        let mut info = track_info(&reader);
+        let now = Instant::now();
+        info.send(Transport::Next);
+        assert!(reader.take_sent().is_empty(), "nothing is followed");
+        assert_eq!(info.playback(), None);
+        info.sync(Some(&whole_system()), now);
+        reader.read(Some(track("Spotify.exe", "Song", false, None)));
+        info.sync(Some(&whole_system()), now);
+        assert_eq!(info.playback(), Some(("Spotify.exe".to_owned(), false)));
+        info.send(Transport::PlayPause);
+        assert_eq!(reader.take_sent(), [Transport::PlayPause]);
+        reader.read(None);
+        info.sync(Some(&whole_system()), now);
+        assert_eq!(info.playback(), None, "no session counts");
     }
 
     #[test]
@@ -807,10 +951,12 @@ mod tests {
         ];
         let spotify = Follow::App {
             executable: "spotify.exe".to_owned(),
+            pid: None,
         };
         assert_eq!(pick(&sessions, &spotify), Some(1));
         let vlc = Follow::App {
             executable: "vlc.exe".to_owned(),
+            pid: None,
         };
         assert_eq!(pick(&sessions, &vlc), None);
     }
@@ -837,7 +983,10 @@ mod tests {
             Some(shown.fields),
             fields("Song", "Song artist", "Song album")
         );
-        assert_eq!(shown.artwork, Artwork::Track(COVER.into()));
+        assert_eq!(
+            shown.artwork,
+            Artwork::Track(FittedArtwork::single(COVER.into()))
+        );
     }
 
     #[test]
@@ -851,6 +1000,7 @@ mod tests {
         let unnamed = TrackSource {
             follow: Follow::App {
                 executable: String::new(),
+                pid: None,
             },
             name: Some("  ".to_owned()),
         };
@@ -875,7 +1025,7 @@ mod tests {
         reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
         let sent = info.sync(Some(&whole_system()), start).expect("it is sent");
         assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
-        assert_eq!(sent.artwork.as_deref(), Some(COVER));
+        assert_eq!(large_of(&sent), Some(COVER));
         assert_eq!(sent.progress, None);
     }
 
@@ -911,7 +1061,7 @@ mod tests {
             sent.track,
             fields("Second", "Second artist", "Second album")
         );
-        assert_eq!(sent.artwork.as_deref(), Some(&b"second"[..]));
+        assert_eq!(large_of(&sent), Some(&b"second"[..]));
     }
 
     #[test]
@@ -928,7 +1078,7 @@ mod tests {
             sent.track,
             fields("Title label", "Whole system label", "Album label")
         );
-        assert_eq!(sent.artwork.as_deref(), Some(ICON));
+        assert_eq!(large_of(&sent), Some(ICON));
     }
 
     #[test]
@@ -1008,7 +1158,7 @@ mod tests {
         let sent = info
             .sync(Some(&whole_system()), start + ARTWORK_WAIT)
             .expect("the icon goes");
-        assert_eq!(sent.artwork.as_deref(), Some(ICON));
+        assert_eq!(large_of(&sent), Some(ICON));
     }
 
     #[test]
@@ -1023,7 +1173,7 @@ mod tests {
         let sent = info
             .sync(Some(&whole_system()), start + POLL_INTERVAL)
             .expect("the cover goes");
-        assert_eq!(sent.artwork.as_deref(), Some(COVER));
+        assert_eq!(large_of(&sent), Some(COVER));
     }
 
     #[test]
@@ -1122,7 +1272,7 @@ mod tests {
         let sent = info
             .sync(Some(&whole_system()), restart + ARTWORK_WAIT)
             .expect("then the icon");
-        assert_eq!(sent.artwork.as_deref(), Some(ICON));
+        assert_eq!(large_of(&sent), Some(ICON));
     }
 
     #[test]
@@ -1415,45 +1565,101 @@ mod tests {
         assert_eq!(info.sync(None, start), Some(NowPlaying::default()));
     }
 
-    /// A fake JPEG encoder whose output grows with the pixel count and
-    /// shrinks with the quality; records each try.
-    fn encoder(tries: &mut Vec<(u32, u32, f32)>) -> impl FnMut(u32, u32, f32) -> Option<Vec<u8>> {
+    /// A fake JPEG encoder whose output grows with the pixel count, by
+    /// `per_pixel` bytes at full quality, and shrinks with the quality;
+    /// records each try.
+    fn encoder(
+        tries: &mut Vec<(u32, u32, f32)>,
+        per_pixel: f64,
+    ) -> impl FnMut(u32, u32, f32) -> Option<Vec<u8>> {
         move |width, height, quality| {
             tries.push((width, height, quality));
-            let bytes = f64::from(width * height) * f64::from(quality) * 0.1;
+            let bytes = f64::from(width * height) * f64::from(quality) * per_pixel;
             Some(vec![0; bytes as usize])
         }
     }
 
-    #[test]
-    fn small_artwork_fits_at_once_at_its_own_size() {
-        let mut tries = Vec::new();
-        let jpeg = fit_jpeg(200, 100, encoder(&mut tries)).expect("it fits");
-        assert_eq!(tries, [(200, 100, 0.65)]);
-        assert!(jpeg.len() <= ARTWORK_LIMIT);
+    /// Every quality at the first side, best first, then a smaller side of
+    /// the same shape: the quality goes down before the side does.
+    fn assert_quality_before_side(tries: &[(u32, u32, f32)], first: (u32, u32)) {
+        let at_first: Vec<_> = tries.iter().take_while(|t| (t.0, t.1) == first).collect();
+        assert_eq!(
+            at_first.iter().map(|t| t.2).collect::<Vec<_>>(),
+            JPEG_QUALITIES,
+            "{tries:?}"
+        );
+        let (width, height, _) = tries[at_first.len()];
+        // Each side is scaled on its own, so the shape holds to a pixel.
+        assert!(
+            width < first.0 && width.abs_diff(height * first.0 / first.1) <= 1,
+            "{tries:?}"
+        );
     }
 
+    // covers: S272
     #[test]
-    fn large_artwork_is_capped_then_scaled_down_until_it_fits() {
+    fn the_large_image_is_at_most_1024_px_a_side_and_128_kib() {
         let mut tries = Vec::new();
-        let jpeg = fit_jpeg(3000, 1500, encoder(&mut tries)).expect("it fits");
-        assert!(jpeg.len() <= ARTWORK_LIMIT);
-        assert_eq!(tries[0], (600, 300, 0.65), "the longest side starts at 600");
-        assert_eq!(
-            &tries[..3].iter().map(|t| t.2).collect::<Vec<_>>(),
-            &JPEG_QUALITIES
+        let (jpeg, side) =
+            fit_jpeg(3000, 1500, LARGE_ARTWORK, &mut encoder(&mut tries, 1.0)).expect("it fits");
+        assert!(
+            jpeg.len() <= 128 * 1024 && side < 1024,
+            "{} bytes",
+            jpeg.len()
         );
-        let (width, height, _) = *tries.last().unwrap();
-        assert!(width < 600 && width == height * 2, "smaller, same shape");
+        assert_quality_before_side(&tries, (1024, 512));
+    }
+
+    // covers: S272
+    #[test]
+    fn the_small_image_is_at_most_600_px_a_side_and_40_kib() {
+        let mut tries = Vec::new();
+        let (jpeg, side) =
+            fit_jpeg(3000, 1500, SMALL_ARTWORK, &mut encoder(&mut tries, 1.0)).expect("it fits");
+        assert!(
+            jpeg.len() <= 40 * 1024 && side < 600,
+            "{} bytes",
+            jpeg.len()
+        );
+        assert_quality_before_side(&tries, (600, 300));
+    }
+
+    // covers: S272
+    #[test]
+    fn a_busy_cover_takes_a_lower_quality_before_a_smaller_side() {
+        let mut tries = Vec::new();
+        // At 0.65 it is over 128 KiB, at 0.5 just within.
+        let (jpeg, side) =
+            fit_jpeg(1024, 1024, LARGE_ARTWORK, &mut encoder(&mut tries, 0.25)).expect("it fits");
+        assert_eq!(side, 1024);
+        assert_eq!(tries, [(1024, 1024, 0.65), (1024, 1024, 0.5)]);
+        assert!(jpeg.len() <= LARGE_ARTWORK.bytes);
+    }
+
+    // covers: S272
+    #[test]
+    fn an_image_within_the_small_limits_is_one_encoding_for_both() {
+        let mut tries = Vec::new();
+        let artwork = fit_artwork(200, 100, encoder(&mut tries, 0.1)).expect("it fits");
+        assert_eq!(tries, [(200, 100, 0.65)], "a small image isn't scaled up");
+        assert!(Arc::ptr_eq(&artwork.large, &artwork.small));
+    }
+
+    // covers: S272
+    #[test]
+    fn a_larger_picture_gets_a_large_and_a_small_image() {
+        let mut tries = Vec::new();
+        let artwork = fit_artwork(3000, 1500, encoder(&mut tries, 0.1)).expect("it fits");
+        assert_eq!(tries, [(1024, 512, 0.65), (600, 300, 0.65)]);
+        assert!(artwork.large.len() > artwork.small.len());
+        assert!(artwork.small.len() <= SMALL_ARTWORK.bytes);
     }
 
     #[test]
     fn artwork_that_never_fits_or_fails_to_encode_is_none() {
-        assert_eq!(
-            fit_jpeg(500, 500, |_, _, _| Some(vec![0; ARTWORK_LIMIT + 1])),
-            None
-        );
-        assert_eq!(fit_jpeg(500, 500, |_, _, _| None), None);
-        assert_eq!(fit_jpeg(0, 500, |_, _, _| Some(Vec::new())), None);
+        let too_big = |_, _, _| Some(vec![0; LARGE_ARTWORK.bytes + 1]);
+        assert_eq!(fit_artwork(500, 500, too_big), None);
+        assert_eq!(fit_artwork(500, 500, |_, _, _| None), None);
+        assert_eq!(fit_artwork(0, 500, |_, _, _| Some(Vec::new())), None);
     }
 }

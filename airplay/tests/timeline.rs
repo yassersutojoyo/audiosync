@@ -228,13 +228,18 @@ fn host_contract_local_alignment() {
     let before = check(&rig, 0.0);
     assert!((before - 2.05).abs() < 1e-9, "L + d_local");
 
-    // Lf changes: the stream reports the new L, the local output takes it.
+    // Lf changes, held while the speaker sounds and applied at the next
+    // restart (P201): the stream reports the new L, the local output takes
+    // it.
     rig.stream.set_latency(44_100, rig.now);
+    rig.drain();
+    assert_eq!(rig.stream.pending_latency_frames(), Some(44_100));
+    rig.stream.restart(rig.now);
     rig.drain();
     let changed = rig.t();
     assert!(rig.events.iter().any(|event| matches!(
         event,
-        StreamEvent::Timeline { restarted: false, latency, .. }
+        StreamEvent::Timeline { restarted: true, latency, .. }
             if *latency == Duration::from_secs(1)
     )));
     rig.run_for(Duration::from_secs(3));

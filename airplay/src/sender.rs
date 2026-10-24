@@ -56,24 +56,26 @@
 //! (P46, P58).
 
 mod driver;
+mod remote;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::clock::SenderClock;
+use crate::dacp::{DacpAdvertiser, RemoteCommand};
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
 use crate::discovery::{Browser, Device, DeviceKey, ProtocolPath};
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::homekit::HomeKitCredentials;
 use crate::input::InputWriter;
-use crate::metadata::{Metadata, MetadataError, TrackInfo};
+use crate::metadata::{Artwork, MetadataError, TrackInfo};
 use crate::pairing::{self, Credentials, PairingEvent, PinError};
 pub use crate::ptp::PtpPorts;
 use crate::rate::NOMINAL_RATE;
@@ -87,6 +89,7 @@ use crate::targets::{Target, TargetChange, TargetId};
 use crate::volume::Volume;
 
 use driver::{Command, Driver, Input};
+pub use remote::DacpCounters;
 
 /// How a sender starts.
 #[derive(Debug, Clone, Copy)]
@@ -112,7 +115,13 @@ pub struct SenderConfig {
     pub ptp_ports: PtpPorts,
     /// The receiver's PTP ports it sends to, 319 and 320 (P158).
     pub ptp_receiver_ports: PtpPorts,
+    /// How long the connection of a PIN pairing that paired waits for the
+    /// host to start its speaker, 30 s (P153); a test picks a shorter one.
+    pub pairing_hold: Duration,
 }
+
+/// [`SenderConfig::pairing_hold`]'s default (P153).
+const PAIRING_HOLD: Duration = Duration::from_secs(30);
 
 /// The environment variable a host reads for [`SenderConfig::airplay2`].
 pub const AIRPLAY2_SWITCH_ENV: &str = "AUDIOSYNC_AIRPLAY2";
@@ -188,6 +197,7 @@ impl Default for SenderConfig {
             airplay2_device_id: None,
             ptp_ports: PtpPorts::default(),
             ptp_receiver_ports: PtpPorts::default(),
+            pairing_hold: PAIRING_HOLD,
         }
     }
 }
@@ -210,6 +220,9 @@ pub struct SpeakerOptions {
     /// HomeKit credentials of an earlier pairing on the AirPlay 2 path
     /// (P152): its sessions pair-verify with them (P61). Never logged.
     pub homekit_credentials: Option<HomeKitCredentials>,
+    /// The host keeps a debug log: an AirPlay 2 session reports
+    /// [`SpeakerEvent::Trace`] lines and reads the receiver's volume once.
+    pub trace: bool,
 }
 
 impl SpeakerOptions {
@@ -222,6 +235,7 @@ impl SpeakerOptions {
             pcm: false,
             credentials: None,
             homekit_credentials: None,
+            trace: false,
         }
     }
 }
@@ -258,8 +272,8 @@ pub struct Progress {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NowPlaying {
     pub track: Option<TrackInfo>,
-    /// A JPEG of at most 512 KiB (P125).
-    pub artwork: Option<Vec<u8>>,
+    /// Two JPEGs of at most 512 KiB each (P125), one per path (P185).
+    pub artwork: Option<Artwork>,
     /// Only when the host knows the track's start and length (P126), and
     /// only while the track plays: a speaker that starts later gets it
     /// carried on by the time since it was set.
@@ -374,10 +388,11 @@ pub enum SpeakerEvent {
     Error(SpeakerError),
     /// Something to show; the session goes on.
     Warning(Warning),
-    /// Its latencies, sent when it starts playing and whenever its first
-    /// sound time moves (a delay change, an Lf change, a restart): L + d_s,
-    /// the receiver's own `Audio-Latency`, and when its first packet is due
-    /// to be heard (P110, P113, P115).
+    /// Its latencies, sent when it starts playing, before its first audio
+    /// packet, and whenever its first sound time moves (a delay change, an
+    /// Lf change, a restart): L + d_s, the receiver's reported latency R_s
+    /// with its sources and raw `Audio-Latency`, and when its first packet
+    /// is due to be heard (P110, P113, P115, P199).
     Latency(SpeakerLatency),
     /// The OPTIONS answer's methods (P27).
     Methods(Vec<String>),
@@ -400,6 +415,8 @@ pub enum SpeakerEvent {
     /// (P154): the sender dropped its copy, and the host deletes the stored
     /// one, so the next start pairs again. A PairingRequired error follows.
     HomeKitRejected,
+    /// A line for the host's debug log, only with [`SpeakerOptions::trace`].
+    Trace(String),
 }
 
 /// What the sender reports.
@@ -425,6 +442,12 @@ pub enum SenderEvent {
         origin: i64,
         restarted: bool,
     },
+    /// The host set an Lf while a speaker sounds: it is held, and comes as
+    /// a [`SenderEvent::Timeline`] once the stream has no speaker or the
+    /// timeline restarts (P201).
+    LatencyHeld {
+        frames: u32,
+    },
     /// Discovery stopped for good: its browser can never report anything
     /// again ([`Browser::is_dead`]), which only a bug in the browser causes.
     /// Every receiver it listed was reported gone just before. Speakers keep
@@ -438,6 +461,19 @@ pub enum SenderEvent {
         id: TargetId,
         missing: Vec<DeviceKey>,
     },
+    /// A command a receiver sent through DACP, already answered (P192,
+    /// P193): `key` is the speaker whose session it named, and `target` the
+    /// stereo pair or home theater group that speaker plays in, which the
+    /// command is then for (P176).
+    Remote {
+        key: DeviceKey,
+        target: Option<TargetId>,
+        command: RemoteCommand,
+    },
+    /// A line for the host's debug log about a remote-control request the
+    /// sender didn't hand on (P195). It never holds the DACP ID or an
+    /// Active-Remote value.
+    RemoteLog(String),
 }
 
 /// The sender: one stream, any number of speakers, optional discovery.
@@ -448,7 +484,9 @@ pub struct Sender {
     clock: SenderClock,
     stream_counters: Arc<StreamCounters>,
     latency_frames: Arc<AtomicU32>,
+    sounding: Arc<AtomicBool>,
     speaker_counters: RefCell<HashMap<DeviceKey, Arc<SpeakerCounters>>>,
+    dacp_counters: Arc<DacpCounters>,
 }
 
 impl fmt::Debug for Sender {
@@ -475,6 +513,7 @@ impl Sender {
         let (stream, writer) = Stream::new(stream_config, clock, Instant::now());
         let stream_counters = stream.counters();
         let latency_frames = Arc::new(AtomicU32::new(stream.latency_frames()));
+        let sounding = Arc::new(AtomicBool::new(false));
         let (inputs, receiver) = mpsc::channel();
         let (events_out, events) = mpsc::channel();
         let driver = Driver::new(
@@ -485,7 +524,10 @@ impl Sender {
             latency_frames.clone(),
         )
         .with_airplay2(config.airplay2, config.airplay2_device_id)
-        .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports);
+        .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
+        .with_pairing_hold(config.pairing_hold)
+        .with_sounding(sounding.clone());
+        let dacp_counters = driver.dacp_counters();
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
             .spawn(move || driver.run())?;
@@ -496,7 +538,9 @@ impl Sender {
             clock,
             stream_counters,
             latency_frames,
+            sounding,
             speaker_counters: RefCell::new(HashMap::new()),
+            dacp_counters,
         };
         Ok((sender, writer))
     }
@@ -508,6 +552,13 @@ impl Sender {
     /// The sender clock: the host schedules its local outputs on it (P89).
     pub fn clock(&self) -> SenderClock {
         self.clock
+    }
+
+    /// True once a speaker of the stream reached its first-sound time: an
+    /// Lf set now is held (P201). Read without locks; it trails the driver
+    /// by at most one of its turns.
+    pub fn sounding(&self) -> bool {
+        self.sounding.load(Ordering::Relaxed)
     }
 
     /// L, the base latency (P98, P113). Read without locks.
@@ -530,6 +581,20 @@ impl Sender {
         let (reply, answer) = mpsc::sync_channel(1);
         self.command(Command::ArrivalTime(n, reply));
         answer.recv_timeout(Duration::from_secs(1)).ok()
+    }
+
+    /// The remote-control command server's counters and port (P144,
+    /// P195).
+    pub fn dacp_counters(&self) -> Arc<DacpCounters> {
+        self.dacp_counters.clone()
+    }
+
+    /// Registers the command server's `_dacp._tcp` record through
+    /// `advertiser` from now on (P188):
+    /// [`MdnsAdvertiser`](crate::discovery::mdns::MdnsAdvertiser) on the
+    /// network. Without one the server runs unregistered.
+    pub fn set_dacp_advertiser(&self, advertiser: Box<dyn DacpAdvertiser + Send>) {
+        self.command(Command::SetDacpAdvertiser(advertiser));
     }
 
     /// The stream's counters (P144), read without locks.
@@ -725,22 +790,21 @@ impl Sender {
     }
 
     /// Sets what is playing and sends it to every speaker that lists the
-    /// type, now and when a speaker (re)starts (P123 to P127). Artwork that
-    /// isn't a JPEG of at most 512 KiB is refused here.
+    /// type, now and when a speaker (re)starts (P123 to P127). Artwork
+    /// whose images aren't both JPEGs of at most 512 KiB is refused here.
     pub fn set_now_playing(&self, now_playing: NowPlaying) -> Result<(), MetadataError> {
-        if let Some(jpeg) = &now_playing.artwork {
-            Metadata::Artwork {
-                jpeg: jpeg.clone(),
-                rtptime: 0,
-            }
-            .validate()?;
+        if let Some(artwork) = &now_playing.artwork {
+            artwork.validate()?;
         }
         self.command(Command::SetNowPlaying(now_playing));
         Ok(())
     }
 
-    /// Sets Lf, 11 025 to 88 200 frames; every speaker is flushed and the
-    /// new L comes as a [`SenderEvent::Timeline`] (P98).
+    /// Sets Lf, 11 025 to 88 200 frames (P98). While no speaker has reached
+    /// its first-sound time every speaker is flushed and the new L comes as
+    /// a [`SenderEvent::Timeline`]; later the value is held
+    /// ([`SenderEvent::LatencyHeld`]) until the stream has no speaker or the
+    /// timeline restarts (P201).
     pub fn set_latency(&self, frames: u32) {
         self.command(Command::SetLatency(frames));
     }

@@ -38,7 +38,9 @@ extension AppDelegate {
         let native = NativeAirPlay(
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
+        native.onRemote = { [weak self] command in self?.nowPlaying.send(command) }
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
+        sendPlayback()
         native.setZones(nativeZoneVolumes())
         let airPlay2On = AppSettings.airPlay2On(setting: airPlay2AtLaunch,
                                                 environment: ProcessInfo.processInfo.environment)
@@ -135,6 +137,10 @@ extension AppDelegate {
         case .senderFailed:
             nativeSenderFailed()
         case .startPairing(let receiver):
+            startNativePairing(receiver)
+        case .repair(let receiver):
+            nativeAirPlay?.forgetPairing(receiver)   // the sender's queue runs it before the pairing starts
+            DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) refused its stored pairing; forgotten, pairing again")
             startNativePairing(receiver)
         case .cancelPairing(let receiver):
             nativeAirPlay?.cancelPairing(receiver)
@@ -412,14 +418,17 @@ extension AppDelegate {
         return true
     }
 
-    /// Forget Pairing on a native speaker's row: its credentials go, AirPlay 2
-    /// ones included, so it asks for a PIN again; a speaker that is on goes
-    /// off, as on Windows.
+    /// Forget Pairing or Forget Password on a native speaker's row: its
+    /// credentials go, AirPlay 2 ones included, and so does the password
+    /// typed for it, so it asks for a PIN or password again; a speaker that
+    /// is on goes off, as on Windows.
     func forgetNativePairing(_ id: String) {
         guard let receiver = NativeAirPlayID.receiver(id) else { return }
         endNativeAttempt(id)
         nativeAirPlay?.forgetPairing(receiver)
-        DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing forgotten")
+        nativeAirPlay?.setPassword(receiver, nil)
+        nativeAirPlay?.model.forgetPassword(receiver)
+        DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing and password forgotten")
         if enabledAirPlay.remove(id) != nil {
             syncNativeSpeakers()
             stopIfIdle()
@@ -436,6 +445,13 @@ extension AppDelegate {
             nativeAirPlay?.setVolume(receiver, volume: position)
         }
         pushModel()
+    }
+
+    /// A native speaker's slider drag began or ended: the core ignores read-backs during it.
+    func setNativeAirPlayVolumeDragging(_ id: String, _ dragging: Bool) {
+        if let receiver = NativeAirPlayID.receiver(id) {
+            nativeAirPlay?.setVolumeDragging(receiver, dragging)
+        }
     }
 
     /// A new session started (P143): the speakers start over on a new timeline.

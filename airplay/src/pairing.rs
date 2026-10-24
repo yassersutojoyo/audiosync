@@ -312,7 +312,8 @@ pub fn check_pin(pin: &str) -> Result<(), PinError> {
 pub enum PairingEvent {
     /// The Apple TV shows a PIN: ask the user for it and hand it to
     /// [`Pairing::submit_pin`]. The pairing waits for it without a timeout
-    /// (P48, P51).
+    /// (P48, P51). On the AirPlay 2 path it comes again after a wrong PIN,
+    /// with the same code still shown (P150).
     PinRequested,
     /// Pairing succeeded: store these credentials for the receiver (P54).
     Paired(Credentials),
@@ -321,6 +322,11 @@ pub enum PairingEvent {
     /// hand them back in `SpeakerOptions::homekit_credentials` (P152).
     /// `Debug` shows the identifiers only.
     HomeKitPaired(HomeKitCredentials),
+    /// A PIN pairing with an AirPlay 2 receiver that asks for a code every
+    /// time (flags bit 3) passed, with nothing to store: it turns every
+    /// later pair-verify down. The speaker plays when the host starts it
+    /// while the pairing connection is held (P153, P182).
+    PairedForSession,
     /// Pairing ended with an error (P58, P136): PairingFailed for a 470 or
     /// another failure status at a pairing step, Busy for a 409 (P137),
     /// Unsupported when the OPTIONS answer shows a receiver that can't take
@@ -329,9 +335,9 @@ pub enum PairingEvent {
     /// turns the password down (P39, P46, P135), PairingCancelled when the
     /// Apple TV closed the connection while the PIN was awaited, or the
     /// connection errors of P134 and P140. `wrong_pin` says the Apple TV
-    /// turned the PIN down (470 to the proof, P52; error 2 on the AirPlay 2
-    /// path, P150); a new pairing starts again from `/pair-pin-start` and
-    /// shows a new PIN.
+    /// turned the PIN down (470 to the proof, P52); a new pairing starts
+    /// again from `/pair-pin-start` and shows a PIN again. On the AirPlay 2
+    /// path a wrong PIN is a second [`PairingEvent::PinRequested`] (P150).
     Failed {
         error: SessionError,
         wrong_pin: bool,

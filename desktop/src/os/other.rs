@@ -2,16 +2,21 @@
 //! `mock-backend` feature the windows show example speakers and nothing
 //! plays; without it the app says it can't start. There is no
 //! single-instance lock, tray icon or pairing sealer here, and no data
-//! folder: settings and pairings last until AudioSync quits.
+//! folder: settings and pairings last until AudioSync quits. Linux takes
+//! only the computer's name and the notice clock from here.
 
+#[cfg(not(target_os = "linux"))]
 use std::rc::Rc;
 
 #[cfg(not(target_os = "linux"))]
 use super::Started;
 #[cfg(not(target_os = "linux"))]
 use crate::StartError;
+#[cfg(not(target_os = "linux"))]
 use crate::audio::pairings::{Seal, Sealer};
+#[cfg(not(target_os = "linux"))]
 use crate::debug_log::DebugLog;
+#[cfg(not(target_os = "linux"))]
 use crate::view::App;
 
 #[cfg(all(feature = "mock-backend", not(target_os = "linux")))]
@@ -50,13 +55,16 @@ impl Media {
     pub fn attach(self, _app: &Rc<App>) {}
 }
 
+#[cfg(not(target_os = "linux"))]
 /// Every launch runs: there is no lock to hand over through.
 pub struct Instance;
 
+#[cfg(not(target_os = "linux"))]
 pub fn claim_instance() -> Option<Instance> {
     Some(Instance)
 }
 
+#[cfg(not(target_os = "linux"))]
 impl Instance {
     pub fn log_state(&self, _log: &DebugLog) {}
 
@@ -64,23 +72,29 @@ impl Instance {
 }
 
 /// No tray icon: closing the main window quits.
+#[cfg(not(target_os = "linux"))]
 pub enum Tray {}
 
+#[cfg(not(target_os = "linux"))]
 pub fn create_tray(_app: &Rc<App>, _log: &DebugLog) -> Option<Tray> {
     None
 }
 
+#[cfg(not(target_os = "linux"))]
 /// Nothing can be sealed, so nothing is stored.
 pub fn sealer() -> Sealer {
     Sealer::new(&Unsupported)
 }
 
+#[cfg(not(target_os = "linux"))]
 struct Unsupported;
 
+#[cfg(not(target_os = "linux"))]
 fn unsupported() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Unsupported, "no sealer on this system")
 }
 
+#[cfg(not(target_os = "linux"))]
 impl Seal for Unsupported {
     fn seal(&self, _plain: &[u8]) -> std::io::Result<Vec<u8>> {
         Err(unsupported())

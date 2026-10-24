@@ -2216,6 +2216,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             auto_connect: false,
             availability: Availability::Open,
             paired: false,
+            holds_password: false,
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
                 .then_some(Waiting::Reconnecting),
@@ -3377,6 +3378,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 availability(speaker.availability)
             },
             paired: speaker.paired,
+            holds_password: speaker.holds_password,
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
             waiting: self
@@ -3421,6 +3423,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             delay_ms: (!output.is_reference).then_some(output.delay_ms),
             availability: Availability::Open,
             paired: false,
+            holds_password: false,
             // Read only while the output is on (S192).
             device_volume: output
                 .device_volume
@@ -3745,6 +3748,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }
             Some(SpeakerKey::Cast(cast_id)) => self.audio.set_cast_volume(&cast_id, position),
             None => {}
+        }
+    }
+
+    fn set_speaker_volume_editing(&mut self, id: &str, on: bool) {
+        if let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) {
+            self.audio.set_airplay_volume_dragging(&airplay_id, on);
         }
     }
 

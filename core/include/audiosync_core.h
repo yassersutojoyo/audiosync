@@ -119,7 +119,7 @@ extern "C" {
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
 #define ASC_AIRPLAY_EVENT_ERROR 2    /* an error ended a speaker's session: .error */
-#define ASC_AIRPLAY_EVENT_LATENCY 3  /* a speaker's latencies: .latency_ms, .receiver_latency_frames */
+#define ASC_AIRPLAY_EVENT_LATENCY 3  /* a speaker's latencies: .latency_ms, .receiver_latency_us and _sources, .receiver_latency_frames */
 #define ASC_AIRPLAY_EVENT_TIMELINE 4 /* the base latency L or the timeline changed: .latency_ms */
 #define ASC_AIRPLAY_EVENT_FAILED 5   /* the sender or its discovery stopped working (a bug); destroy it, create a new one; .detail where a panic was, or "" */
 #define ASC_AIRPLAY_EVENT_PIN_NEEDED 6      /* a pairing's Apple TV shows a PIN: ask the user, then asc_airplay_submit_pin */
@@ -128,6 +128,24 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only */
 #define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
+#define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
+#define ASC_AIRPLAY_EVENT_REMOTE 13         /* a speaker's remote asked for .remote: send it through the now-playing control */
+
+/* AscAirPlayEvent.remote: the transport control a speaker's remote asked for */
+#define ASC_AIRPLAY_REMOTE_PLAY_PAUSE 1
+#define ASC_AIRPLAY_REMOTE_NEXT 2
+#define ASC_AIRPLAY_REMOTE_PREVIOUS 3
+
+/* asc_airplay_set_playback: what the app the now-playing control follows does */
+#define ASC_AIRPLAY_PLAYBACK_UNKNOWN 0
+#define ASC_AIRPLAY_PLAYBACK_PLAYING 1
+#define ASC_AIRPLAY_PLAYBACK_PAUSED 2
+#define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
+
+/* Which reports gave a speaker's latency (AscAirPlayEvent.receiver_latency_sources bits). */
+#define ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY 1     /* Audio-Latency of a RECORD answer */
+#define ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCIES 2   /* audioLatencies of /info */
+#define ASC_AIRPLAY_LATENCY_SOURCE_ARRIVAL_TO_RENDER 4 /* arrivalToRenderLatencyMs of the stream SETUP answer */
 
 /* What a warning reports (AscAirPlayEvent.warning). */
 #define ASC_AIRPLAY_WARNING_JACK_DISCONNECTED 1          /* nothing is plugged into its audio jack */
@@ -136,6 +154,11 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID 4 /* its pair-verify signature didn't check out */
 #define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
 #define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
+#define ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED 7       /* three volume reads in a row failed on an AirPlay 2 session: it isn't asked again */
+#define ASC_AIRPLAY_WARNING_ARTWORK_REFUSED 8            /* an artwork image was refused or unanswered: the small one or none follows; once per session */
+#define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE 9 /* no remote control port could be bound for the session: its remote buttons do nothing */
+#define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED 10 /* the remote control's _dacp._tcp record couldn't be registered */
+#define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 11         /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -154,7 +177,7 @@ extern "C" {
 #define ASC_AIRPLAY_ERROR_WRONG_PASSWORD 7    /* it rejected the password */
 #define ASC_AIRPLAY_ERROR_PAIRING_REQUIRED 8  /* it needs pairing, or rejected or cancelled it */
 #define ASC_AIRPLAY_ERROR_UNSUPPORTED 9       /* the sender can't drive it; .unsupported says why */
-#define ASC_AIRPLAY_ERROR_WRONG_PIN 10        /* a pairing's Apple TV turned the PIN down; a new pairing shows a new one */
+#define ASC_AIRPLAY_ERROR_WRONG_PIN 10        /* a pairing's Apple TV turned the PIN down; a new pairing shows a PIN again */
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
@@ -919,25 +942,6 @@ typedef struct AscLocalOutput {
  */
 bool asc_local_hold_backs_ms(const AscLocalOutput *outputs, size_t count, bool airplay_chosen, double airplay_latency_ms, double *hold_backs_ms);
 
-/* asc_lead_network_wait_ms's source and output kinds. */
-#define ASC_LEAD_SOURCE_SYSTEM 0  /* the system's mix */
-#define ASC_LEAD_SOURCE_APP 1     /* one app or several */
-#define ASC_LEAD_SOURCE_INPUT 2   /* an input device: live */
-#define ASC_LEAD_OUTPUT_LOCAL 0   /* a device the local renderer plays, Bluetooth included */
-#define ASC_LEAD_OUTPUT_AIRPLAY 1
-#define ASC_LEAD_OUTPUT_CAST 2
-
-/*
- * Whether an output of `output` kind waits for the network speakers while
- * the session captures `source`: true, writing the wait into wait_ms, when it
- * does; false, writing nothing, when it doesn't or wait_ms is NULL. A local
- * output skips the wait for an input source, so a live voice is heard at its
- * device's start lead; every other pair waits network_ms, which counts only
- * when has_network. An unknown source counts as the system, an unknown output
- * as a network speaker. Pure function for the control thread.
- */
-bool asc_lead_network_wait_ms(uint32_t source, uint32_t output, bool has_network, double network_ms, double *wait_ms);
-
 /*
  * An offset input from the user, ready to store: clamped to -2000...20 000 ms
  * into *sanitized_ms. False, writing nothing, for a non-finite value (which
@@ -1412,6 +1416,22 @@ uint32_t asc_calibration_zone_plan(const char *const *members, size_t member_cou
  */
 double asc_calibration_cast_wait_ms(bool has_offset, double offset_ms, double hold_back_ms, int32_t format);
 
+/*
+ * An AirPlay speaker's expected arrival (AscCalibrationSpeaker.latency_ms),
+ * which is also how long the music sent to it plays out, in ms: the
+ * sender's latency for the session (sender_latency_ms, read at run start),
+ * or 3000 ms while has_sender is false, plus hold_back_ms, the hold-back the
+ * sender adds for the speaker, plus reported_ms, the latency the receiver
+ * reported (0 when it reported nothing), plus 500 ms. shown_ms, the AirPlay
+ * delay the field shows, counts instead of the sender's latency when it is
+ * longer.
+ * Each value is clamped to 0 to 20 000 ms; one that is not a number counts
+ * as 0; a sender latency that is not a number or not above 0 counts as
+ * none.
+ */
+double asc_calibration_airplay_wait_ms(bool has_sender, double sender_latency_ms, double shown_ms, double hold_back_ms,
+                                       double reported_ms);
+
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 
 /*
@@ -1486,6 +1506,9 @@ typedef struct AscAirPlayEvent {
     const char *detail;              /* an error or warning event's text, a failure event's panic location; for a debug log (no secrets) */
     double volume;                   /* a volume event's slider position, 0 to 100 */
     int32_t warning;                 /* a warning event's ASC_AIRPLAY_WARNING_* */
+    int32_t remote;                  /* a remote event's ASC_AIRPLAY_REMOTE_* */
+    int64_t receiver_latency_us;     /* a latency event's reported latency R_s in microseconds; 0 when no source gave one */
+    uint32_t receiver_latency_sources; /* a latency event's ASC_AIRPLAY_LATENCY_SOURCE_* bits; 0 when none */
 } AscAirPlayEvent;
 
 /*
@@ -1574,6 +1597,14 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
 
 /*
+ * Tells whether the user is dragging the volume slider of the speaker added
+ * under `id`: while it is, a level read back from the speaker is ignored.
+ * Returns false when the handle or id is NULL or no speaker was added under
+ * id.
+ */
+bool asc_airplay_set_volume_dragging(AscAirPlay *airplay, const char *id, bool dragging);
+
+/*
  * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
  * plays at its own position times the zone's times the master, live once
  * added and from its start when added later, and a level read back from it
@@ -1588,10 +1619,11 @@ bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zon
  * Only playing sessions answer. A level that moves a slider comes as
  * ASC_AIRPLAY_EVENT_VOLUME, already the speaker's level in the sender, so a
  * reconnect or a member that starts late plays at it and the host doesn't
- * set it again; a level read before the host last set the volume, or within
- * 1 s of it, is dropped.
- * Speakers that leave volume to the sender, and ones that turned a read down
- * once, aren't asked.
+ * set it again. Dropped: a level read before the host last set the volume,
+ * one that comes while the slider is dragged, and one within 0.5 dB of the
+ * level sent in the 3 s after a set. Speakers that leave volume to the
+ * sender, and ones that turned a read down or whose reads stopped, aren't
+ * asked.
  */
 void asc_airplay_read_volumes(AscAirPlay *airplay);
 
@@ -1624,6 +1656,37 @@ double asc_airplay_latency_ms(const AscAirPlay *airplay);
  * starts over; a timeline event follows.
  */
 void asc_airplay_restart_timeline(AscAirPlay *airplay);
+
+/*
+ * Sets the stream's base latency Lf in frames, clamped to 11025 to 88200.
+ * While no speaker sounds it applies at once and a timeline event reports
+ * the new L; later it is held (ASC_AIRPLAY_EVENT_LATENCY_HELD) until the
+ * stream has no speaker or the capture restarts. NULL does nothing.
+ */
+void asc_airplay_set_latency(AscAirPlay *airplay, uint32_t frames);
+
+/*
+ * True once a speaker of the stream reached its first-sound time, so an Lf
+ * set now is held; false for a NULL or dead handle.
+ */
+bool asc_airplay_sounding(const AscAirPlay *airplay);
+
+/*
+ * The stream's Lf in frames from every speaker's reported latency, count
+ * values in microseconds (a negative one counts as 0):
+ * clamp(max(77175, R_max + 22050), 11025, 88200). NULL or a count of 0
+ * gives 77175.
+ */
+uint32_t asc_airplay_session_latency_frames(const int64_t *reported_us, size_t count);
+
+/*
+ * Gives the speaker added under id a delay of its own on top of the
+ * hold-back (the host's E - e_s for a receiver that reports less latency
+ * than the largest), offset_ms clamped to 0 to ASC_AIRPLAY_MAX_DELAY_MS and
+ * the sum capped there; not finite counts as 0. Returns the offset applied
+ * in ms, -1 for a NULL handle or id or an id not added.
+ */
+double asc_airplay_set_speaker_offset(AscAirPlay *airplay, const char *id, double offset_ms);
 
 /*
  * A speaker's counters, as asc_airplay_speaker_counters copies them: one
@@ -1671,16 +1734,19 @@ bool asc_airplay_stream_counters(const AscAirPlay *airplay, AscAirPlayStreamCoun
 
 /*
  * Sets what is playing, for the receivers that show it: the track's title,
- * artist and album as UTF-8 text, and its artwork as a JPEG of at most
- * 512 KiB. Every speaker that lists the type gets it now, and every speaker
- * that starts or restarts later gets it too. A NULL text is an empty one,
- * and three NULL texts send no track information; NULL artwork, or a length
- * of 0, sends none. Returns false, changing nothing, for a NULL or dead
- * handle, a text that isn't UTF-8, a NULL artwork with a length, or artwork
- * the sender refuses (not a JPEG, or too large).
+ * artist and album as UTF-8 text, and its artwork as two JPEGs of at most
+ * 512 KiB each: large for AirPlay 2 sessions, small for AirPlay 1 sessions
+ * and after a refusal. Every speaker that lists the type gets it now, and
+ * every speaker that starts or restarts later gets it too. A NULL text is an
+ * empty one, and three NULL texts send no track information; one image alone
+ * serves both paths, and none (NULL or a length of 0) sends no artwork.
+ * Returns false, changing nothing, for a NULL or dead handle, a text that
+ * isn't UTF-8, a NULL image with a length, or an image the sender refuses
+ * (not a JPEG, or too large).
  */
 bool asc_airplay_set_now_playing(AscAirPlay *airplay, const char *title, const char *artist,
-                                 const char *album, const uint8_t *artwork, size_t artwork_len);
+                                 const char *album, const uint8_t *large, size_t large_len,
+                                 const uint8_t *small, size_t small_len);
 
 /*
  * Sets how far into the track the audio arriving now is, and how long the
@@ -1693,6 +1759,16 @@ bool asc_airplay_set_now_playing(AscAirPlay *airplay, const char *title, const c
  * NULL or dead handle.
  */
 bool asc_airplay_set_progress(AscAirPlay *airplay, double elapsed_ms, double length_ms);
+
+/*
+ * Tells which app the now-playing control follows, by a name for the debug
+ * log (UTF-8), and what it does (ASC_AIRPLAY_PLAYBACK_*), so a speaker
+ * remote's Play or Pause goes as play-pause only when that changes something.
+ * A NULL or empty app is no app to control: remote transport commands then do
+ * nothing. Returns false, changing nothing, for a NULL or dead handle or an
+ * app that isn't UTF-8.
+ */
+bool asc_airplay_set_playback(AscAirPlay *airplay, const char *app, int32_t playback);
 
 /*
  * Opens the pairing store kept in the file at `path` (UTF-8), meant for

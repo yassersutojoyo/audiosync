@@ -17,7 +17,7 @@ use audiosync_airplay::discovery::{
     BrowseEvent, Browser, DeviceId, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
-use audiosync_airplay::metadata::TrackInfo;
+use audiosync_airplay::metadata::{Artwork, TrackInfo};
 use audiosync_airplay::rtp::{RtpHeader, SyncPacket};
 use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
@@ -552,13 +552,14 @@ fn a_lost_speaker_is_retried_after_one_then_two_seconds_and_the_schedule_resets(
         second_retry >= Duration::from_millis(1900) && second_retry <= Duration::from_millis(3500),
         "second retry after {second_retry:?}"
     );
-    // Each retry is a complete new session (new identifiers).
+    // Each retry is a complete new session: a fresh Active-Remote, while
+    // Client-Instance stays for the run (P22).
     let instances: Vec<String> = receiver
         .log()
         .requests
         .iter()
         .filter(|(_, r)| r.method == Method::Options)
-        .filter_map(|(_, r)| r.headers.get("Client-Instance").map(str::to_owned))
+        .filter_map(|(_, r)| r.headers.get("Active-Remote").map(str::to_owned))
         .collect();
     let unique: std::collections::BTreeSet<&String> = instances.iter().collect();
     assert_eq!(unique.len(), instances.len(), "fresh identifiers each time");
@@ -805,7 +806,7 @@ fn shutdown_keeps_its_bound_when_a_receiver_stops_reading() {
     jpeg[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
     sender
         .set_now_playing(NowPlaying {
-            artwork: Some(jpeg),
+            artwork: Some(Artwork::single(jpeg)),
             ..NowPlaying::default()
         })
         .expect("valid artwork");
@@ -915,6 +916,8 @@ fn the_host_reads_latency_and_first_sound_and_restarts_the_timeline() {
         Duration::from_secs_f64(1.75) + Duration::from_millis(500)
     );
     assert_eq!(latency.receiver_latency_frames, Some(2205));
+    assert_eq!(latency.receiver_latency_us, 50_000);
+    assert_eq!(latency.receiver_latency_sources.bits(), 1);
     assert!(latency.first_sound > Instant::now());
     assert!(sender.arrival_time(44_100).is_some(), "c(n) on request");
 
@@ -930,6 +933,10 @@ fn the_host_reads_latency_and_first_sound_and_restarts_the_timeline() {
     assert!(
         wait_until(LONG, || receiver.log().count("FLUSH") >= 1),
         "an Lf change flushes"
+    );
+    assert!(
+        wait_until(LONG, || sender.sounding()),
+        "it sounds once its first-sound time passed"
     );
     sender.restart_timeline();
     let restarted = events.wait_for(&sender, LONG, |e| {

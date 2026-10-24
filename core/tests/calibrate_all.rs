@@ -4,7 +4,7 @@
 use audiosync_core::calibrate::{self, MAX_RECORDING_FRAMES, Recording, Refusal, Refused};
 use audiosync_core::calibrate_all::{
     ApplyRefusal, Class, EndReason, Measurement, PlanError, Row, RowState, Run, SharedState, Sheet,
-    Speaker, Step, Take, Target,
+    Speaker, Step, Take, Target, airplay_wait_ms,
 };
 use audiosync_core::policy::delay::DEFAULT_AIRPLAY_DELAY_MS;
 
@@ -388,6 +388,42 @@ fn a_cast_speaker_without_an_offset_searches_the_longest_window_first() {
     let sheet = run.finish();
     assert_eq!(measured(&sheet.rows()[1]).0, 3001.0);
     assert_eq!(sheet.rows()[1].old_ms, None);
+}
+
+// covers: S235
+#[test]
+fn an_airplay_speaker_at_l_1750_with_delay_0_gets_a_window_of_at_least_l_plus_sweep_plus_1_s() {
+    let speakers = vec![
+        speaker("ref", Class::Local, None, 50.0),
+        speaker(
+            "tv",
+            Class::AirPlay,
+            Some(0.0),
+            airplay_wait_ms(Some(1750.0), 0.0, 0.0, 0.0),
+        ),
+    ];
+    let mut run = Run::new(RATE, "ref", speakers).unwrap();
+    let steps = drive(
+        &mut run,
+        arrivals(&[(1, [Heard::At(1800.0), Heard::At(1800.0)])]),
+    );
+    let at_least = ((1750.0 + 750.0 + 1000.0) * 48.0) as usize;
+    assert!(steps[1].window_frames >= at_least && steps[2].window_frames >= at_least);
+    assert_eq!(
+        airplay_wait_ms(Some(1750.0), 2500.0, 300.0, 0.0),
+        2500.0 + 300.0 + 500.0
+    );
+}
+
+// covers: S235
+#[test]
+fn an_airplay_speaker_without_a_sender_latency_waits_the_paths_upper_bound() {
+    assert_eq!(airplay_wait_ms(None, 0.0, 0.0, 0.0), 3000.0 + 500.0);
+    assert_eq!(airplay_wait_ms(Some(0.0), 1750.0, 0.0, 0.0), 3000.0 + 500.0);
+    assert_eq!(
+        airplay_wait_ms(Some(f64::NAN), f64::NAN, f64::NAN, f64::NAN),
+        3000.0 + 500.0
+    );
 }
 
 // covers: S238
@@ -1055,4 +1091,17 @@ fn a_cast_speaker_stored_at_0_ms_searches_like_one_without_an_offset() {
         assert_eq!(steps[1].window_frames, MAX_RECORDING_FRAMES);
         assert!(!steps[2].searching);
     }
+}
+
+// covers: S235
+#[test]
+fn calibrate_all_window_grows_with_the_reported_latency() {
+    let without = airplay_wait_ms(Some(1750.0), 0.0, 0.0, 0.0);
+    let with = airplay_wait_ms(Some(1750.0), 0.0, 0.0, 220.0);
+    assert_eq!(with - without, 220.0);
+    assert_eq!(
+        airplay_wait_ms(None, 0.0, 0.0, 220.0),
+        3000.0 + 220.0 + 500.0
+    );
+    assert_eq!(airplay_wait_ms(Some(1750.0), 0.0, 0.0, -5.0), without);
 }

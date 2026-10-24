@@ -14,8 +14,9 @@
 //! the rest (P112).
 //!
 //! A host that is far behind, or that stays behind while it delivers at
-//! real-time pace, didn't fall behind: its capture paused and resumed (a
-//! loopback delivers nothing while the source is silent). Its frames are
+//! real-time pace, or whose very first write is behind, didn't fall behind:
+//! its capture paused and resumed (a loopback delivers nothing while the
+//! source is silent) or started after the stream did. Its frames are
 //! then no longer late copies of the cut positions but new audio, so the
 //! write moves up to the first position not yet cut, the skipped positions
 //! stay the silence the stream inserted (P96), and the stream places the
@@ -172,7 +173,9 @@ impl InputWriter {
             at.saturating_duration_since(previous).as_secs_f64() * f64::from(SAMPLE_RATE)
                 >= size as f64 / 2.0
         });
-        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced);
+        // A first write that is behind is a capture that started after the
+        // stream did: its frames were never late, so it starts the audio.
+        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced || start == 0);
         // Otherwise frames whose positions were already cut are late:
         // dropped, their positions kept, so later frames stay where they
         // belong (P112).

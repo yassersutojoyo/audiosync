@@ -14,7 +14,7 @@
 //! The card keeps the last track while the window is hidden, so it shows at
 //! once when the window comes back, and changes with the first new reading.
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -25,8 +25,12 @@ use crate::ui_model::AppState;
 pub enum CardSource {
     /// The whole system: any app's session.
     AnyApp,
-    /// One app, by its executable's file name: its own session only.
-    App { executable: String },
+    /// One app, by its executable's file name and its process ID: its own
+    /// session only.
+    App {
+        executable: String,
+        pid: Option<u32>,
+    },
 }
 
 impl CardSource {
@@ -38,9 +42,10 @@ impl CardSource {
             return Some(CardSource::AnyApp);
         }
         // App sources are `app:<pid>:<executable>`.
-        let executable = id.strip_prefix("app:")?.split_once(':')?.1;
+        let (pid, executable) = id.strip_prefix("app:")?.split_once(':')?;
         Some(CardSource::App {
             executable: executable.to_owned(),
+            pid: pid.parse().ok(),
         })
     }
 }
@@ -61,12 +66,12 @@ pub struct CardArtwork {
 }
 
 /// How many pixels a side the card's artwork has: its 56 px tile at 200 %.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub const ARTWORK_SIDE: u32 = 112;
 
 /// The size an image of `width` × `height` is scaled to so that it covers a
 /// `side` × `side` square, the rest cropped evenly, as the Mac's tile fills.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub fn cover_size(width: u32, height: u32, side: u32) -> (u32, u32) {
     let shorter = width.min(height).max(1);
     let scaled = |length: u32| {
@@ -77,20 +82,20 @@ pub fn cover_size(width: u32, height: u32, side: u32) -> (u32, u32) {
 }
 
 /// Artwork kept for at most this many tracks.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 const ARTWORK_CACHE: usize = 32;
 
 /// The card's artwork, made once per track by key. A failed attempt isn't
 /// kept, so the next reading tries again; only a track's first failure is
 /// handed back to be logged.
 #[derive(Default)]
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub struct ArtworkCache {
     made: HashMap<String, Option<CardArtwork>>,
     failed: HashSet<String>,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 impl ArtworkCache {
     /// What was made for `key`, if an attempt worked.
     pub fn get(&self, key: &str) -> Option<Option<CardArtwork>> {
@@ -148,9 +153,13 @@ impl CardTrack {
 
 /// An app's name from its session's user model ID: the executable's name
 /// without `.exe` (`Spotify.exe`), the last part of a path, or a packaged
-/// app's own name after `!`.
+/// app's own name after `!`; or from an MPRIS player's bus name, the part
+/// after the MPRIS prefix (`org.mpris.MediaPlayer2.vlc`).
 pub fn app_name(app_id: &str) -> String {
-    let last = app_id.rsplit(['\\', '/', '!']).next().unwrap_or(app_id);
+    let last = match app_id.strip_prefix(MPRIS_PREFIX) {
+        Some(player) => player.split('.').next().unwrap_or(player),
+        None => app_id.rsplit(['\\', '/', '!']).next().unwrap_or(app_id),
+    };
     let stem = match last.len().checked_sub(4) {
         Some(cut) if last.is_char_boundary(cut) && last[cut..].eq_ignore_ascii_case(".exe") => {
             &last[..cut]
@@ -164,7 +173,10 @@ pub fn app_name(app_id: &str) -> String {
     }
 }
 
-/// Windows' media sessions, as the card reads and drives them.
+/// The bus name prefix of every MPRIS media player.
+pub const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
+
+/// The system's media sessions, as the card reads and drives them.
 pub trait MediaControls {
     /// Reads the sessions from now on for `source`, or stops (`None`). A
     /// reading made for an earlier source is dropped.
@@ -316,6 +328,7 @@ mod tests {
     fn player() -> Option<CardSource> {
         Some(CardSource::App {
             executable: "player.exe".into(),
+            pid: Some(2000),
         })
     }
 
@@ -452,6 +465,11 @@ mod tests {
         assert_eq!(
             named("SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"),
             "Spotify"
+        );
+        assert_eq!(named("org.mpris.MediaPlayer2.vlc"), "Vlc");
+        assert_eq!(
+            named("org.mpris.MediaPlayer2.firefox.instance_1_42"),
+            "Firefox"
         );
         assert_eq!(named(""), "");
     }

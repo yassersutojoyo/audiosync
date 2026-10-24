@@ -136,6 +136,7 @@ impl Driver {
                 ap2_waiting: false,
                 ap2_refusal: 0,
                 ap2_retry: false,
+                reads_volume: false,
                 target: Some(id.clone()),
             },
         );
@@ -214,7 +215,7 @@ impl Driver {
     }
 
     /// Asks the leader, or the first member that plays (P180); on the
-    /// AirPlay 2 path that member reports the target's last set volume.
+    /// AirPlay 2 path only that member's session reads (P184).
     pub(super) fn read_target_volume(&mut self, id: &TargetId, now: Instant) {
         let Some(run) = self.driven.get(id) else {
             return;

@@ -23,7 +23,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use audiosync_core::lead::{self, SourceKind};
 use audiosync_core::policy::delay::{
     Participant, hold_backs, native_airplay_latency_ms, sanitize_airplay_adjustment_ms,
     sanitize_offset_ms,
@@ -460,9 +459,6 @@ pub struct OutputPolicy {
     /// The measured offset of the Google Cast speaker that is on (spec
     /// C77); `None` while none is.
     cast_offset: Option<Duration>,
-    /// What the session captures: an input device keeps the local outputs
-    /// off the network wait.
-    source: SourceKind,
 }
 
 impl OutputPolicy {
@@ -478,58 +474,28 @@ impl OutputPolicy {
             listed: BTreeSet::new(),
             reference: None,
             cast_offset: None,
-            source: SourceKind::System,
         }
-    }
-
-    /// Sets what the session captures. Returns whether the local outputs'
-    /// hold-backs change.
-    pub fn set_source_kind(&mut self, source: SourceKind) -> bool {
-        let before = self.local_network_wait_ms();
-        self.source = source;
-        before != self.local_network_wait_ms()
-    }
-
-    /// How long the local outputs wait for the network speakers, in ms;
-    /// `None` when they play at their device's start lead alone.
-    pub fn local_network_wait_ms(&self) -> Option<f64> {
-        lead::network_wait_ms(
-            self.source,
-            lead::OutputKind::Local,
-            self.network_latency_ms(),
-        )
     }
 
     /// The lead the local outputs play at, as the debug log names it.
     pub fn describe_lead(&self) -> String {
-        let live = if self.source == SourceKind::Input {
-            "live input: "
-        } else {
-            ""
-        };
-        match (self.local_network_wait_ms(), self.network_latency_ms()) {
-            (Some(wait), _) => format!(
-                "lead: {live}local outputs wait {} ms for the network speakers",
+        match self.network_latency_ms() {
+            Some(wait) => format!(
+                "lead: local outputs wait {} ms for the network speakers",
                 wait.round()
             ),
-            (None, Some(network)) => format!(
-                "lead: {live}local outputs play at their device's start lead (logged in ms \
-                 once measured), AirPlay and Google Cast at {} ms",
-                network.round()
-            ),
-            (None, None) => format!(
-                "lead: {live}local outputs play at their device's start lead (logged in ms \
-                 once measured)"
-            ),
+            None => "lead: local outputs play at their device's start lead (logged in ms once \
+                     measured)"
+                .to_owned(),
         }
     }
 
     /// Sets the Cast speaker's measured offset, or `None` while none is
     /// on. Returns whether the local outputs' hold-backs change.
     pub fn set_cast_offset(&mut self, offset: Option<Duration>) -> bool {
-        let before = self.local_network_wait_ms();
+        let before = self.network_latency_ms();
         self.cast_offset = offset;
-        before != self.local_network_wait_ms()
+        before != self.network_latency_ms()
     }
 
     /// What local outputs wait for: L while an AirPlay speaker is chosen,
@@ -633,7 +599,7 @@ impl OutputPolicy {
             .map(|(other, _)| participant(other));
         let mut taking_part = vec![participant(id)];
         taking_part.extend(others);
-        hold_backs(&taking_part, self.local_network_wait_ms())
+        hold_backs(&taking_part, self.network_latency_ms())
             .first()
             .map_or(0.0, |(_, held)| *held)
     }
@@ -1520,30 +1486,6 @@ mod tests {
         assert!(policy.set_cast_offset(None));
         assert_eq!(policy.params("a").delay_frames, 7_200);
         assert_eq!(policy.params("b").delay_frames, 0);
-    }
-
-    #[test]
-    fn live_input_keeps_local_outputs_off_the_network_wait() {
-        let mut policy = policy_with(&["a", "b"]);
-        policy.set_delay_ms("a", 150.0);
-        policy.set_airplay(sender(true, L));
-        policy.set_cast_offset(Some(Duration::from_millis(500)));
-        assert_eq!(policy.params("b").delay_frames, 84_000, "L");
-        assert!(policy.describe_lead().contains("wait 1750 ms"));
-
-        assert!(policy.set_source_kind(SourceKind::Input));
-        assert_eq!(policy.params("a").delay_frames, 7_200, "only its offset");
-        assert_eq!(policy.params("b").delay_frames, 0);
-        assert_eq!(policy.airplay_hold_back_ms(), 0.0, "AirPlay keeps L");
-        assert_eq!(policy.cast_hold_back_ms(), 1250.0, "Cast meets L");
-        assert!(!policy.set_cast_offset(Some(Duration::from_secs(3))));
-        assert_eq!(policy.params("b").delay_frames, 0);
-        assert!(policy.describe_lead().contains("live input"));
-        assert!(policy.describe_lead().contains("at 3000 ms"));
-
-        assert!(!policy.set_source_kind(SourceKind::Input));
-        assert!(policy.set_source_kind(SourceKind::App));
-        assert_eq!(policy.params("b").delay_frames, 144_000, "back on the wait");
     }
 
     #[test]

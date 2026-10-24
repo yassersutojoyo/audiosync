@@ -44,8 +44,16 @@ struct CalibrateAllButton: View {
     }
 }
 
-/// The measured height of the sheet's scrolling rows; nil until the first layout.
-final class CalibrateAllListHeight: ObservableObject {
+/// The heights the Calibrate All sheet measures to fit its rows between the
+/// fixed top and bottom; the rows' height is nil until the first layout.
+final class CalibrateAllLayout: ObservableObject {
+    @Published var list: CGFloat?
+    @Published var top: CGFloat = 0
+    @Published var bottom: CGFloat = 0
+}
+
+/// The main window's content height: a sheet on the window is cut off past it.
+final class SheetRoom: ObservableObject {
     @Published var height: CGFloat?
 }
 
@@ -54,69 +62,89 @@ final class CalibrateAllListHeight: ObservableObject {
 /// Undo and Measure Again (S238, S239).
 struct CalibrateAllSheetView: View {
     @ObservedObject var model: AppModel
+    /// The main window's content height, nil until it was measured.
+    let room: CGFloat?
     /// An object rather than @State: the Command Line Tools can't expand @State.
-    @StateObject private var list = CalibrateAllListHeight()
+    @StateObject private var layout = CalibrateAllLayout()
 
-    /// Keeps Apply and Close on a 13-inch screen with a dozen or more rows.
-    private static let maxListHeight: CGFloat = 420
+    /// Until the window's height is known: keeps Apply and Close on a
+    /// 13-inch screen with a dozen or more rows.
+    private static let fallbackListHeight: CGFloat = 420
+    /// Two or three rows stay readable in the smallest main window.
+    private static let minListHeight: CGFloat = 120
+    private static let margin: CGFloat = 20
+    private static let spacing: CGFloat = 14
+
+    private var listCap: CGFloat {
+        guard let room else { return Self.fallbackListHeight }
+        let fixed = layout.top + layout.bottom + 2 * Self.spacing + 2 * Self.margin
+        return max(Self.minListHeight, room - fixed)
+    }
 
     var body: some View {
         let t = model.text
         let status = model.calibrateAll
-        VStack(alignment: .leading, spacing: 14) {
-            Text(status.zone == nil ? t.calibrateAll : t.calibrateZone)
-                .font(.title3.weight(.semibold))
-                .accessibilityAddTraits(.isHeader)
-            if let zone = status.zone {
-                Text(t.calibrateZoneBring(zone.name))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if status.sheet == nil {
-                Text(t.calibrateAllIntro)
-                    .foregroundStyle(Brand.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let progress = status.progress {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityHidden(true)
-                    Text(t.calibrateAllProgress(progress))
+        VStack(alignment: .leading, spacing: Self.spacing) {
+            VStack(alignment: .leading, spacing: Self.spacing) {
+                Text(status.zone == nil ? t.calibrateAll : t.calibrateZone)
+                    .font(.title3.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                if let zone = status.zone {
+                    Text(t.calibrateZoneBring(zone.name))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if status.sheet == nil {
+                    Text(t.calibrateAllIntro)
+                        .foregroundStyle(Brand.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { layout.top = $0 }
             if status.sheet != nil || !visibleLeftOut(status).isEmpty {
-                // The sheet can't be dismissed by hand, so a long list must never push the buttons off screen.
+                // The sheet can't be dismissed by hand and is cut off at the
+                // window's bottom, so only the rows scroll and the buttons stay.
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: Self.spacing) {
                         if let sheet = status.sheet {
                             results(sheet, status: status, t: t)
                         }
                         leftOutRows(status, t: t)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { list.height = $0 }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { layout.list = $0 }
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                .frame(height: list.height.map { min($0, Self.maxListHeight) })
+                .frame(height: layout.list.map { min($0, listCap) })
             }
-            if status.sheet == nil, !status.isRunning, status.line == nil, let blocker = status.blocker {
-                Text(t.calibrateAllSheetBlocker(blocker))
-                    .foregroundStyle(Brand.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: Self.spacing) {
+                if let progress = status.progress {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityHidden(true)
+                        Text(t.calibrateAllProgress(progress))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if status.sheet == nil, !status.isRunning, status.line == nil, let blocker = status.blocker {
+                    Text(t.calibrateAllSheetBlocker(blocker))
+                        .foregroundStyle(Brand.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let line = status.line {
+                    Text(t.calibrateAllLine(line))
+                        .foregroundStyle(isProblem(line) ? Brand.errorText : Brand.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let finished = finishedLine(status, t: t) {
+                    Text(finished)
+                        .foregroundStyle(Brand.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                buttons(status, t: t)
             }
-            if let line = status.line {
-                Text(t.calibrateAllLine(line))
-                    .foregroundStyle(isProblem(line) ? Brand.errorText : Brand.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if let finished = finishedLine(status, t: t) {
-                Text(finished)
-                    .foregroundStyle(Brand.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            buttons(status, t: t)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { layout.bottom = $0 }
         }
-        .padding(20)
+        .padding(Self.margin)
         .frame(width: 600, alignment: .leading)
         .interactiveDismissDisabled()
         .onChange(of: status.progress) { _, now in

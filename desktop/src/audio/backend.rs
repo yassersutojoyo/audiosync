@@ -183,11 +183,17 @@ pub struct AirPlayInfo {
     pub volume: f64,
     /// Its own delay d_s in milliseconds, 0 to 20 000.
     pub delay_ms: f64,
+    /// The latency it reported in this run, R_s in ms (a group's largest
+    /// member's), 0 when it reported nothing (S283).
+    pub reported_latency_ms: f64,
     /// Whether it plays right now.
     pub playing: bool,
     /// Whether AudioSync keeps credentials from pairing with it, on
     /// AirPlay 1 or AirPlay 2.
     pub paired: bool,
+    /// Whether AudioSync holds the password the user typed for it, until
+    /// AudioSync quits.
+    pub holds_password: bool,
     /// Whether a pairing with it is running.
     pub pairing: bool,
     /// AudioSync reaches it over AirPlay 2, which happens only while the
@@ -227,7 +233,7 @@ pub struct AirPlayPinPrompt {
     pub name: String,
     /// Where the pairing is.
     pub phase: PairingPhase,
-    /// The Apple TV turned the last PIN down; it shows a new one.
+    /// The Apple TV turned the last PIN down; it shows a PIN again.
     pub wrong_pin: bool,
 }
 
@@ -853,6 +859,10 @@ pub trait AudioBackend {
     /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
     /// value that isn't finite is ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);
+
+    /// The AirPlay speaker's volume slider is held (true) or let go
+    /// (false): a level it reads back meanwhile is ignored (S271).
+    fn set_airplay_volume_dragging(&mut self, _id: &str, _dragging: bool) {}
 
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
     /// that isn't finite is ignored; others are clamped to 0 to 20 000.

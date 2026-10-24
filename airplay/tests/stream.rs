@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use audiosync_airplay::alac;
 use audiosync_airplay::audio::{FRAMES_PER_PACKET, Frame, PCM_PAYLOAD_BYTES};
+use audiosync_airplay::latency::ReportedLatency;
 use audiosync_airplay::rtp::{RESEND_PREFIX_BYTES, ResendRequest, SyncPacket};
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::session::{MediaDestinations, ReceiverPorts};
@@ -296,6 +297,35 @@ fn underrun_and_overrun() {
     assert_eq!(decode(Codec::Pcm, &packet.payload)[0], host_frame(n));
 }
 
+// covers: P112
+#[test]
+fn a_capture_that_starts_after_the_stream_loses_no_frames() {
+    // A microphone opened after the stream: its first two 470-frame blocks
+    // come 300 ms in, back to back, after the stream already sent silence
+    // for their positions. They start the audio instead of being dropped.
+    let mut rig = Rig::new(StreamConfig::default());
+    let mut host = Host::new(0.3);
+    host.block = 470;
+    host.stalls = vec![(0, 0.011)];
+    rig.host = Some(host);
+    let id = rig.add(speaker(1, Codec::Pcm));
+    rig.run_for(Duration::from_secs(2));
+
+    assert_eq!(rig.stream.counters().input_frames_dropped(), 0);
+    let frames: Vec<Frame> = rig
+        .audio(id)
+        .iter()
+        .flat_map(|packet| decode(Codec::Pcm, &packet.payload))
+        .collect();
+    let first = frames
+        .iter()
+        .position(|frame| *frame != [0, 0])
+        .expect("audio");
+    for (k, frame) in frames[first..first + 44_100].iter().enumerate() {
+        assert_eq!(*frame, host_frame(k as u64), "frame {k}");
+    }
+}
+
 // covers: P111
 #[test]
 fn buffers_are_sized_by_the_spec_and_allocated_at_the_start() {
@@ -530,7 +560,10 @@ fn sync_latency_and_times() {
         });
         assert_eq!(rig.stream.latency_frames(), got);
     }
-    // A change flushes every speaker, and the syncs state the new value.
+    // Before any speaker sounds (P201), a change flushes every speaker,
+    // and the syncs state the new value.
+    let mut rig = Rig::with_host();
+    let id = rig.add(speaker(1, Codec::Alac));
     let other = rig.add(speaker(2, Codec::Alac));
     rig.run_for(Duration::from_millis(500));
     rig.stream.set_latency(200_000, rig.now);
@@ -725,7 +758,7 @@ fn join_mid_stream() {
 fn latency_reporting() {
     let mut rig = Rig::with_host();
     let mut config = speaker(1, Codec::Alac);
-    config.audio_latency = Some(2_205);
+    config.reported_latency = ReportedLatency::from_audio_latency(Some(2_205));
     config.delay = Duration::from_millis(250);
     let reported = rig.add(config);
     let plain = rig.add(speaker(2, Codec::Alac));

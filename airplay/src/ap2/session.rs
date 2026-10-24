@@ -19,7 +19,10 @@ use crate::homekit::{
     VerifyStep,
 };
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
-use crate::metadata::{Metadata, MetadataError, MetadataSupport};
+use crate::latency::ReportedLatency;
+use crate::metadata::{
+    Artwork, ArtworkLadder, ArtworkSize, Metadata, MetadataError, MetadataSupport, Queued,
+};
 use crate::rtsp::{Message, Method, Parser, Request, Response};
 use crate::secret::Secret;
 use crate::session::{
@@ -39,6 +42,8 @@ pub const FEEDBACK_INTERVAL: Duration = Duration::from_secs(2);
 /// Missing or failed feedback answers in a row that mean the speaker is
 /// lost (P132).
 pub const FEEDBACK_MISSES: u8 = 3;
+/// Failed volume reads in a row after which a session stops reading (P184).
+pub const VOLUME_READ_FAILURES: u8 = 3;
 /// Retries of a refused event connection, and the wait between them (P70).
 pub const EVENTS_RETRIES: u32 = 5;
 pub const EVENTS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -75,8 +80,16 @@ pub struct Ap2Config {
     pub members: Vec<IpAddr>,
     /// The host asked for a PIN pairing (P61): the connection runs
     /// `/pair-pin-start`, waits for [`Ap2Session::submit_pin`], then pair-setup
-    /// M1 to M6 and a pair-verify (P153), and ends there without a session.
+    /// M1 to M6 and a pair-verify (P153), and waits in [`Ap2State::Paired`]
+    /// for [`Ap2Session::proceed`].
     pub pin_pairing: bool,
+    /// The host keeps a debug log: the session reports [`Ap2Event::Trace`]
+    /// lines.
+    pub trace: bool,
+    /// The host reads this speaker's volume, so the session reads it once
+    /// after the initial volume is answered (P184); later reads wait for
+    /// [`Ap2Session::read_volume`].
+    pub read_volume: bool,
 }
 
 impl Ap2Config {
@@ -93,6 +106,8 @@ impl Ap2Config {
             ptp: None,
             members: Vec::new(),
             pin_pairing: false,
+            trace: false,
+            read_volume: false,
         }
     }
 }
@@ -119,6 +134,9 @@ pub enum Ap2State {
     /// The first `GET /info` is out.
     Info,
     Pairing,
+    /// A PIN pairing passed its pair-verify: the framed connection waits
+    /// for [`Ap2Session::proceed`] (P153).
+    Paired,
     /// The session SETUP is out; framing has started.
     SessionSetup,
     /// From the session SETUP answer to the FLUSH answer.
@@ -150,18 +168,22 @@ pub enum Ap2Event {
     /// `/pair-pin-start` was answered: the receiver shows a code, which the
     /// host passes to [`Ap2Session::submit_pin`] (P61).
     PinRequested,
-    /// The receiver turned the PIN down (P150, error 2); a Failed event
-    /// follows, and a new pairing shows a new code (P151).
+    /// The receiver turned the PIN down (P150, error 2). The code it shows
+    /// stays, and the session waits for another [`Ap2Session::submit_pin`].
     WrongPin,
     /// The PIN pairing's new credentials passed the pair-verify on the same
-    /// connection (P153), which then closes.
+    /// connection (P153), which waits for [`Ap2Session::proceed`].
     Verified,
     /// A session SETUP with this timing was answered 200; the host
     /// remembers PTP for the device (P157).
     TimingChosen(Timing),
     /// The stream is set up and flushed (P42).
     Ready(StreamPorts),
+    /// A volume read's level, one the user set on the speaker (P184).
+    VolumeReported(f64),
     Warning(Warning),
+    /// A line for the host's debug log, only with [`Ap2Config::trace`].
+    Trace(String),
     Failed(SessionError),
     /// The session ended after a teardown.
     Closed,
@@ -185,13 +207,18 @@ pub enum Ap2Output {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Kind {
-    Info { first: bool },
+    Info {
+        first: bool,
+    },
     PairSetup,
     PairVerify,
     SessionSetup,
     Record,
     SetPeers,
     Volume(Volume),
+    /// Carries the volume generation it was sent in, so an answer older
+    /// than the latest host value is dropped (P184).
+    VolumeRead(u32),
     Metadata(Metadata),
     StreamSetup,
     Flush,
@@ -209,10 +236,23 @@ impl Kind {
             Kind::Record => Method::Record,
             Kind::SetPeers => Method::SetPeers,
             Kind::Volume(_) | Kind::Metadata(_) => Method::SetParameter,
+            Kind::VolumeRead(_) => Method::GetParameter,
             Kind::Flush => Method::Flush,
             Kind::TeardownStream | Kind::TeardownSession => Method::Teardown,
         }
     }
+}
+
+/// The one resend of a refused volume (P183).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VolumeRetry {
+    /// The latest host value hasn't been refused.
+    Idle,
+    /// Refused once: it goes again with the next feedback.
+    Due,
+    Resent,
+    /// Refused twice: nothing more until the host sets a new value.
+    Spent,
 }
 
 struct InFlight {
@@ -284,12 +324,21 @@ pub struct Ap2Session {
     set_up: bool,
     /// RECORD was answered 200 (P137).
     recorded: bool,
-    /// The startup SET_PARAMETER with `initial_volume` went out (P42).
+    /// The initial volume went out after the FLUSH answer (P183).
     startup_volume_sent: bool,
+    /// The initial volume is out; its answer starts the first read (P184).
+    startup_read_due: bool,
+    /// One warning per session for refused volume requests (P183).
+    volume_warned: bool,
+    volume_retry: VolumeRetry,
     event_port: Option<u16>,
     events: Option<Events>,
     events_attempts: u32,
     events_retry_at: Option<Instant>,
+    /// When a PIN pairing's M1 may go out after a back-off answer (P150).
+    pin_not_before: Option<Instant>,
+    /// M1 is ready and waits for `pin_not_before`.
+    pin_held: bool,
     /// The volume is answered and the stream SETUP waits for the event
     /// connection (P70).
     stream_setup_waiting: bool,
@@ -300,7 +349,9 @@ pub struct Ap2Session {
     feedback_wanted: bool,
     feedback_misses: u8,
     pending_volume: Option<Volume>,
-    metadata_queue: VecDeque<Metadata>,
+    metadata_queue: VecDeque<Queued>,
+    /// P185: an AirPlay 2 session sends the large image.
+    artwork: ArtworkLadder,
     teardown_deadline: Option<Instant>,
     last_timing_request: Option<Instant>,
     server: Option<String>,
@@ -309,6 +360,22 @@ pub struct Ap2Session {
     flush_pending: bool,
     /// Unreachable UDP sends in a row (P141).
     udp_failures: u8,
+    /// The host asked for a read since the last one went out (P184).
+    volume_read_asked: bool,
+    volume_read_wanted: bool,
+    /// Bumped by every host volume, so a read older than it is stale.
+    volume_generation: u32,
+    /// Failed reads in a row; three stop the reads (P184).
+    volume_read_failures: u8,
+    /// CSeqs of reads given up at a feedback tick and of artwork given up
+    /// after the usual wait, whose answers are dropped.
+    late_answers: Vec<u32>,
+    volume_reads_stopped: bool,
+    /// What the receiver reported of its latency in this session (P196
+    /// to P198).
+    reported_latency: ReportedLatency,
+    /// The last volume trace line, so a steady level logs once.
+    last_volume_trace: Option<String>,
 }
 
 type Output = Ap2Output;
@@ -371,10 +438,15 @@ impl Ap2Session {
             set_up: false,
             recorded: false,
             startup_volume_sent: false,
+            startup_read_due: false,
+            volume_warned: false,
+            volume_retry: VolumeRetry::Idle,
             event_port: None,
             events: None,
             events_attempts: 0,
             events_retry_at: None,
+            pin_not_before: None,
+            pin_held: false,
             stream_setup_waiting: false,
             stream: None,
             stream_torn_down: false,
@@ -384,12 +456,21 @@ impl Ap2Session {
             feedback_misses: 0,
             pending_volume: None,
             metadata_queue: VecDeque::new(),
+            artwork: ArtworkLadder::new(ArtworkSize::Large),
             teardown_deadline: None,
             last_timing_request: None,
             server: None,
             flush_point: (0, 0),
             flush_pending: false,
             udp_failures: 0,
+            volume_read_asked: false,
+            volume_read_wanted: false,
+            volume_generation: 0,
+            volume_read_failures: 0,
+            late_answers: Vec::new(),
+            volume_reads_stopped: false,
+            reported_latency: ReportedLatency::default(),
+            last_volume_trace: None,
         };
         session.flush_point = (session.ids.first_seq, session.ids.first_rtptime);
         if drawn.is_err() {
@@ -421,6 +502,13 @@ impl Ap2Session {
         &self.ids
     }
 
+    /// Volume reads and artwork requests given up on whose answers may
+    /// still come.
+    #[doc(hidden)]
+    pub fn late_answers(&self) -> usize {
+        self.late_answers.len()
+    }
+
     /// The timing of the current or last session SETUP.
     pub fn timing(&self) -> Timing {
         self.timing
@@ -429,6 +517,12 @@ impl Ap2Session {
     /// The receiver's `timingPeerInfo` from a PTP session SETUP (P164).
     pub fn receiver_timing_peer(&self) -> Option<&plist::Dictionary> {
         self.receiver_timing_peer.as_ref()
+    }
+
+    /// The receiver's latency reports of this session so far (P196 to
+    /// P199); complete once the stream is ready.
+    pub fn reported_latency(&self) -> ReportedLatency {
+        self.reported_latency
     }
 
     /// The stream as set up, once the stream SETUP is answered.
@@ -511,6 +605,9 @@ impl Ap2Session {
         times.extend(self.teardown_deadline);
         times.extend(self.last_timing_request.map(|at| at + TIMING_SILENCE));
         times.extend(self.events_retry_at);
+        if self.pin_held {
+            times.extend(self.pin_not_before);
+        }
         if self.state != Ap2State::TearingDown {
             times.extend(self.feedback_due);
         }
@@ -527,14 +624,21 @@ impl Ap2Session {
             return;
         };
         if setup.submit_pin(pin).is_some() {
+            if self.pin_not_before.is_some_and(|at| now < at) {
+                self.pin_held = true;
+                return;
+            }
+            self.pin_not_before = None;
             self.send(Kind::PairSetup, now, false);
         }
     }
 
-    /// Whether a PIN pairing waits for the host's PIN.
+    /// Whether a PIN pairing waits for the host's PIN; one whose next M1 is
+    /// held for a back-off has it already.
     pub fn waiting_for_pin(&self) -> bool {
         self.state == Ap2State::Pairing
             && self.in_flight.is_none()
+            && !self.pin_held
             && matches!(self.pairing, Some(Pairing::Setup(_)))
     }
 
@@ -579,7 +683,7 @@ impl Ap2Session {
             Ap2State::TearingDown => self.finish(),
             Ap2State::Connecting => self.fail(ErrorKind::Unreachable, None, None, None),
             // The receiver stopped showing its code (P136).
-            _ if self.waiting_for_pin() => self.fail(
+            _ if self.waiting_for_pin() || self.pin_held => self.fail(
                 ErrorKind::PairingCancelled,
                 Some(Method::Post),
                 None,
@@ -668,6 +772,19 @@ impl Ap2Session {
             match events.parser.next_message() {
                 Ok(None) => break,
                 Ok(Some(Message::Request(request))) => {
+                    if self.config.trace {
+                        let line = format!(
+                            "event channel {} {} ({}): {}",
+                            request.method.as_str(),
+                            request.uri,
+                            request.headers.get("Content-Type").unwrap_or("no type"),
+                            bodies::trace_text(&request.body)
+                        );
+                        self.event(Ap2Event::Trace(line));
+                    }
+                    let Some(events) = self.events.as_mut() else {
+                        return;
+                    };
                     let answer = event_answer(&request);
                     let sealed = events.framing.seal(&answer);
                     self.outputs.push_back(Output::SendEvents(sealed));
@@ -710,6 +827,11 @@ impl Ap2Session {
         if self.teardown_deadline.is_some_and(|at| now >= at) {
             return self.finish();
         }
+        if self.pin_held && self.pin_not_before.is_none_or(|at| now >= at) {
+            self.pin_held = false;
+            self.pin_not_before = None;
+            return self.send(Kind::PairSetup, now, false);
+        }
         if self
             .last_timing_request
             .is_some_and(|at| now >= at + TIMING_SILENCE)
@@ -734,6 +856,19 @@ impl Ap2Session {
             && now >= due
         {
             self.feedback_due = Some(now + FEEDBACK_INTERVAL);
+            if let Some(in_flight) = &self.in_flight
+                && matches!(in_flight.kind, Kind::VolumeRead(_))
+            {
+                // P184: an unanswered read fails here instead of ending the
+                // session (P134), and its late answer is dropped.
+                let cseq = in_flight.cseq;
+                self.in_flight = None;
+                self.late_answers.push(cseq);
+                self.volume_read_failed();
+            }
+            if self.state == Ap2State::Ready {
+                self.volume_tick();
+            }
             let waiting = self
                 .in_flight
                 .as_ref()
@@ -750,10 +885,51 @@ impl Ap2Session {
             && in_flight.kind != Kind::Feedback
             && now >= in_flight.sent_at + RESPONSE_TIMEOUT
         {
-            let method = in_flight.kind.method();
-            return self.fail(ErrorKind::Timeout, Some(method), None, None);
+            if let Kind::Metadata(Metadata::Artwork { .. }) = in_flight.kind {
+                // P185: a refusal, never the end of the session (P134).
+                let cseq = in_flight.cseq;
+                self.in_flight = None;
+                self.late_answers.push(cseq);
+                self.artwork_answered(false, None);
+            } else {
+                let method = in_flight.kind.method();
+                return self.fail(ErrorKind::Timeout, Some(method), None, None);
+            }
         }
         self.drive(now);
+    }
+
+    /// The feedback tick's volume work in a playing stream: the one resend
+    /// of a refused volume (P183) and a read the host asked for (P184).
+    fn volume_tick(&mut self) {
+        if self.volume_retry == VolumeRetry::Due && self.pending_volume.is_none() {
+            self.volume_retry = VolumeRetry::Resent;
+            self.pending_volume = Some(self.config.initial_volume);
+        }
+        let reading = self
+            .in_flight
+            .as_ref()
+            .is_some_and(|f| matches!(f.kind, Kind::VolumeRead(_)));
+        if self.volume_read_asked
+            && !self.volume_reads_stopped
+            && !self.volume_read_wanted
+            && !reading
+        {
+            self.volume_read_asked = false;
+            self.volume_read_wanted = true;
+        }
+    }
+
+    /// A read with an error status, without a level or left unanswered
+    /// until the next feedback tick (P184).
+    fn volume_read_failed(&mut self) {
+        self.volume_read_failures = self.volume_read_failures.saturating_add(1);
+        if self.volume_read_failures >= VOLUME_READ_FAILURES && !self.volume_reads_stopped {
+            self.volume_reads_stopped = true;
+            self.volume_read_wanted = false;
+            self.volume_read_asked = false;
+            self.event(Ap2Event::Warning(Warning::VolumeReadsStopped));
+        }
     }
 
     /// One more missing or failed feedback answer; true when that made the
@@ -818,26 +994,32 @@ impl Ap2Session {
         self.drive(now);
     }
 
-    /// Sets the speaker volume: before the first volume request it replaces
-    /// the initial one, later the newest value waits for its turn. NaN is
+    /// Sets the speaker volume: before the FLUSH answer it replaces the
+    /// initial one (P183), later the newest value waits for its turn. NaN is
     /// ignored.
     pub fn set_volume(&mut self, volume: Volume, now: Instant) {
         if matches!(volume, Volume::Db(db) if db.is_nan()) {
             return;
         }
-        match self.state {
-            Ap2State::Ready => {
-                self.pending_volume = Some(volume);
-                self.drive(now);
-            }
-            Ap2State::Closed | Ap2State::TearingDown => {}
-            _ => {
-                self.config.initial_volume = volume;
-                // The startup volume is already out; Ready sends this one.
-                if self.startup_volume_sent {
-                    self.pending_volume = Some(volume);
-                }
-            }
+        if matches!(self.state, Ap2State::Closed | Ap2State::TearingDown) {
+            return;
+        }
+        self.config.initial_volume = volume;
+        self.volume_generation = self.volume_generation.wrapping_add(1);
+        self.volume_retry = VolumeRetry::Idle;
+        if self.startup_volume_sent {
+            self.pending_volume = Some(volume);
+            self.drive(now);
+        }
+    }
+
+    /// The host wants the receiver's volume: a read goes with the next
+    /// feedback while the stream plays (P184). The level comes as
+    /// [`Ap2Event::VolumeReported`]; after three failed reads none comes.
+    pub fn read_volume(&mut self, _now: Instant) {
+        self.config.read_volume = true;
+        if !self.volume_reads_stopped {
+            self.volume_read_asked = true;
         }
     }
 
@@ -853,9 +1035,42 @@ impl Ap2Session {
             return Err(MetadataError::NotListed);
         }
         metadata.validate()?;
-        self.metadata_queue.push_back(metadata);
+        self.metadata_queue.push_back(Queued::new(metadata));
         self.drive(now);
         Ok(())
+    }
+
+    /// Queues artwork when features bit 15 is set (P123, P125, P185): the
+    /// image this session's place on the ladder calls for goes when its
+    /// turn comes.
+    pub fn send_artwork(
+        &mut self,
+        artwork: Artwork,
+        rtptime: u32,
+        now: Instant,
+    ) -> Result<(), MetadataError> {
+        if matches!(self.state, Ap2State::Closed | Ap2State::TearingDown) {
+            return Err(MetadataError::SessionEnded);
+        }
+        if !MetadataSupport::from_features(self.config.features).artwork {
+            return Err(MetadataError::NotListed);
+        }
+        artwork.validate()?;
+        self.metadata_queue
+            .push_back(Queued::Artwork { artwork, rtptime });
+        self.drive(now);
+        Ok(())
+    }
+
+    /// The artwork request in flight was answered or given up on (P185).
+    fn artwork_answered(&mut self, success: bool, status: Option<u16>) {
+        let (resend, warning) = self.artwork.answered(success, status);
+        if let Some(resend) = resend {
+            self.metadata_queue.push_front(resend);
+        }
+        if let Some(warning) = warning {
+            self.event(Ap2Event::Warning(warning));
+        }
     }
 
     /// Ends the session: TEARDOWN of the stream, then of the session, at
@@ -870,6 +1085,7 @@ impl Ap2Session {
                 self.state = Ap2State::TearingDown;
                 self.teardown_deadline = Some(now + TEARDOWN_TIMEOUT);
                 self.pending_volume = None;
+                self.volume_read_wanted = false;
                 self.metadata_queue.clear();
                 self.feedback_wanted = false;
                 self.stream_setup_waiting = false;
@@ -916,6 +1132,7 @@ impl Ap2Session {
     fn close(&mut self) {
         self.state = Ap2State::Closed;
         self.in_flight = None;
+        self.artwork.forget();
         self.teardown_deadline = None;
         self.last_timing_request = None;
         self.feedback_due = None;
@@ -947,6 +1164,8 @@ impl Ap2Session {
         self.shared = None;
         self.next_cseq = 0;
         self.in_flight = None;
+        self.artwork.forget();
+        self.late_answers.clear();
         self.auth = None;
         self.set_up = false;
         self.metadata_queue.clear();
@@ -954,6 +1173,7 @@ impl Ap2Session {
         self.feedback_wanted = false;
         self.feedback_misses = 0;
         self.last_timing_request = None;
+        self.reported_latency = ReportedLatency::default();
         self.attempt_started = now;
         self.outputs.push_back(Output::Connect(address));
     }
@@ -990,8 +1210,18 @@ impl Ap2Session {
                 if let Some(volume) = self.pending_volume.take() {
                     return self.send(Kind::Volume(volume), now, false);
                 }
-                if let Some(metadata) = self.metadata_queue.pop_front() {
-                    self.send(Kind::Metadata(metadata), now, false);
+                if self.volume_read_wanted && !self.volume_reads_stopped {
+                    self.volume_read_wanted = false;
+                    return self.send(Kind::VolumeRead(self.volume_generation), now, false);
+                }
+                while let Some(queued) = self.metadata_queue.pop_front() {
+                    let metadata = match queued {
+                        Queued::Item(metadata) => Some(metadata),
+                        Queued::Artwork { artwork, rtptime } => self.artwork.send(artwork, rtptime),
+                    };
+                    if let Some(metadata) = metadata {
+                        return self.send(Kind::Metadata(metadata), now, false);
+                    }
                 }
             }
             _ => {}
@@ -1063,6 +1293,10 @@ impl Ap2Session {
             Kind::Volume(volume) => {
                 request.headers.push("Content-Type", "text/parameters");
                 request.body = volume.parameter_body().into_bytes();
+            }
+            Kind::VolumeRead(_) => {
+                request.headers.push("Content-Type", "text/parameters");
+                request.body = crate::volume::READ_BODY.as_bytes().to_vec();
             }
             Kind::Metadata(metadata) => {
                 request
@@ -1141,6 +1375,15 @@ impl Ap2Session {
     }
 
     fn on_response(&mut self, response: Response, now: Instant) {
+        // Answers come in request order, so one for a later request means
+        // the reads given up before it will never be answered.
+        if let Some(cseq) = response.cseq()
+            && let Some(at) = self.late_answers.iter().position(|&c| c == cseq)
+        {
+            self.late_answers.drain(..=at);
+            return;
+        }
+        self.late_answers.clear();
         let Some(in_flight) = self.in_flight.take() else {
             return self.fail(
                 ErrorKind::ProtocolError,
@@ -1173,6 +1416,9 @@ impl Ap2Session {
             }
             return;
         }
+        if self.config.trace {
+            self.trace_set_parameter(&in_flight.kind, &response);
+        }
         let code = response.code;
         if code == STATUS_CONFLICT && !self.recorded {
             // Before RECORD is answered, pairing included (P137).
@@ -1198,11 +1444,29 @@ impl Ap2Session {
                     self.warn(method, code);
                     InfoAnswer::default()
                 };
+                if self.config.trace {
+                    let line = match answer.initial_volume {
+                        Some(db) => format!("/info initialVolume {db} dB"),
+                        None => format!("/info initialVolume absent (status {code})"),
+                    };
+                    self.event(Ap2Event::Trace(line));
+                }
+                self.reported_latency.audio_latencies_us = answer.audio_latencies_us;
                 self.event(Ap2Event::Info(answer.clone()));
                 self.start_pairing(&answer, now);
             }
             Kind::Info { first: false } => {
-                if !success {
+                if success {
+                    // A later answer that carries the key replaces the
+                    // earlier one (P197); the usual second answer holds
+                    // only the volume.
+                    let carries = bodies::read_dictionary(&response.body)
+                        .is_some_and(|answer| answer.contains_key("audioLatencies"));
+                    if carries {
+                        self.reported_latency.audio_latencies_us =
+                            bodies::read_info(&response.body).audio_latencies_us;
+                    }
+                } else {
                     self.warn(method, code);
                 }
                 self.send(Kind::Record, now, false);
@@ -1215,25 +1479,44 @@ impl Ap2Session {
                     return self.fail(ErrorKind::Refused, Some(method), Some(code), None);
                 }
                 self.recorded = true;
+                self.reported_latency.audio_latency_frames = response
+                    .headers
+                    .get("Audio-Latency")
+                    .and_then(crate::rtsp::audio_latency);
                 // SETPEERS only under PTP (P165).
                 if self.timing == Timing::Ptp {
                     self.send(Kind::SetPeers, now, false);
                 } else {
-                    self.send_startup_volume(now);
+                    self.stream_setup_waiting = true;
                 }
             }
             Kind::SetPeers => {
                 if !success {
                     self.warn(method, code);
                 }
-                self.send_startup_volume(now);
+                self.stream_setup_waiting = true;
             }
             Kind::Volume(_) => {
-                if !success {
-                    self.warn(method, code);
+                if success {
+                    if self.volume_retry == VolumeRetry::Resent {
+                        self.volume_retry = VolumeRetry::Idle;
+                    }
+                } else {
+                    if !self.volume_warned {
+                        self.volume_warned = true;
+                        self.warn(method, code);
+                    }
+                    self.volume_retry = match self.volume_retry {
+                        VolumeRetry::Idle => VolumeRetry::Due,
+                        _ => VolumeRetry::Spent,
+                    };
                 }
-                if self.state == Ap2State::Starting && self.stream.is_none() {
-                    self.stream_setup_waiting = true;
+                if self.startup_read_due {
+                    self.startup_read_due = false;
+                    if self.config.read_volume && !self.volume_reads_stopped {
+                        self.volume_read_asked = false;
+                        self.volume_read_wanted = true;
+                    }
                 }
             }
             Kind::StreamSetup => {
@@ -1241,6 +1524,7 @@ impl Ap2Session {
                     return self.fail(ErrorKind::Refused, Some(method), Some(code), None);
                 }
                 let answer = bodies::read_stream_setup(&response.body);
+                self.reported_latency.arrival_to_render_us = answer.arrival_to_render_us;
                 let Some(data_port) = answer.data_port else {
                     // P43: no audio without a FairPlay key on this receiver.
                     return self.fail(
@@ -1273,12 +1557,44 @@ impl Ap2Session {
                     && let Some(stream) = self.stream
                 {
                     self.state = Ap2State::Ready;
+                    // Ahead of the audio and of metadata (P183): a receiver
+                    // may refuse a volume sent before the stream SETUP.
+                    self.startup_volume_sent = true;
+                    self.startup_read_due = true;
+                    self.send(Kind::Volume(self.config.initial_volume), now, false);
                     self.event(Ap2Event::Ready(stream));
                 }
+            }
+            Kind::Metadata(Metadata::Artwork { .. }) => {
+                self.artwork_answered(success, Some(code));
             }
             Kind::Metadata(_) => {
                 if !success {
                     self.warn(method, code);
+                }
+            }
+            // Whatever the answer, the stream goes on (P184).
+            Kind::VolumeRead(generation) => {
+                let level = crate::volume::parse_reported(&response.body).filter(|_| success);
+                if self.config.trace {
+                    let shown = level.map_or("no level".to_owned(), |db| format!("{db} dB"));
+                    let line = format!(
+                        "GET_PARAMETER volume: status {code}, {shown}, body {}",
+                        bodies::trace_text(&response.body)
+                    );
+                    if self.last_volume_trace.as_ref() != Some(&line) {
+                        self.last_volume_trace = Some(line.clone());
+                        self.event(Ap2Event::Trace(line));
+                    }
+                }
+                match level {
+                    Some(db) => {
+                        self.volume_read_failures = 0;
+                        if generation == self.volume_generation {
+                            self.event(Ap2Event::VolumeReported(db));
+                        }
+                    }
+                    None => self.volume_read_failed(),
                 }
             }
             Kind::Feedback => {
@@ -1292,11 +1608,6 @@ impl Ap2Session {
         }
     }
 
-    fn send_startup_volume(&mut self, now: Instant) {
-        self.startup_volume_sent = true;
-        self.send(Kind::Volume(self.config.initial_volume), now, false);
-    }
-
     /// A stream SETUP answered after `teardown()`: the stream exists on the
     /// receiver, so it gets its own TEARDOWN (P42).
     fn record_stream(&mut self, response: &Response) {
@@ -1308,6 +1619,22 @@ impl Ap2Session {
                 stream_id: answer.stream_id.unwrap_or(i64::from(self.ids.session_id)),
             });
         }
+    }
+
+    /// Every answered SET_PARAMETER, refused ones included: a refusal warns
+    /// with its status only, so the body sent is what tells them apart.
+    fn trace_set_parameter(&mut self, kind: &Kind, response: &Response) {
+        let (content_type, body) = match kind {
+            Kind::Volume(volume) => ("text/parameters", volume.parameter_body().into_bytes()),
+            Kind::Metadata(metadata) => (metadata.content_type(), metadata.body()),
+            _ => return,
+        };
+        let line = format!(
+            "SET_PARAMETER {content_type}: status {}, body {}",
+            response.code,
+            bodies::trace_text(&body)
+        );
+        self.event(Ap2Event::Trace(line));
     }
 
     fn warn(&mut self, method: Method, status: u16) {
@@ -1422,7 +1749,6 @@ impl Ap2Session {
         };
         let mut entropy = Draw(self.entropy.as_mut());
         let step = setup.handle_response(response, &mut entropy);
-        let pin_rejected = setup.pin_rejected();
         match step {
             SetupStep::Send(_) => self.send(Kind::PairSetup, now, false),
             SetupStep::Retry => self.reconnect(Restart::PairingRetry, now),
@@ -1446,13 +1772,13 @@ impl Ap2Session {
                     ),
                 }
             }
-            SetupStep::Failed(failure) => {
-                if pin_rejected {
-                    self.event(Ap2Event::WrongPin);
-                }
-                self.fail_with(failure.error)
-            }
+            SetupStep::Failed(failure) => self.fail_with(failure.error),
             SetupStep::PinRequested => self.event(Ap2Event::PinRequested),
+            SetupStep::WrongPin => self.event(Ap2Event::WrongPin),
+            SetupStep::BackOff(wait) => {
+                self.pin_not_before = Some(now + wait);
+                self.event(Ap2Event::WrongPin);
+            }
             SetupStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,
                 Some(Method::Post),
@@ -1491,12 +1817,40 @@ impl Ap2Session {
             );
         }
         self.pairing = None;
-        if self.config.pin_pairing {
-            self.event(Ap2Event::Verified);
-            return self.finish();
-        }
         self.framing = Some(Framing::control(secret.expose()));
         self.shared = Some(secret);
+        if self.config.pin_pairing {
+            self.state = Ap2State::Paired;
+            return self.event(Ap2Event::Verified);
+        }
+        self.send(Kind::SessionSetup, now, false);
+    }
+
+    /// Goes on from a PIN pairing's pair-verify to the session SETUP on the
+    /// same connection (P153), with `config` in place of the pairing's own,
+    /// except for the addresses, features and credentials the connection
+    /// already used. `connection` gives the UDP ports the session names.
+    /// Ignored unless the session is [`Ap2State::Paired`].
+    pub fn proceed(&mut self, config: Ap2Config, connection: Connection, now: Instant) {
+        if self.state != Ap2State::Paired {
+            return;
+        }
+        let addresses = std::mem::take(&mut self.config.addresses);
+        let credentials = self.config.credentials.take();
+        let features = self.config.features;
+        self.config = Ap2Config {
+            addresses,
+            features,
+            credentials,
+            pin_pairing: false,
+            ..config
+        };
+        self.timing = match (self.config.timing, &self.config.ptp) {
+            (Timing::Ptp, Some(_)) => Timing::Ptp,
+            _ => Timing::Ntp,
+        };
+        self.ptp_retried = self.timing == Timing::Ptp;
+        self.connection = Some(connection);
         self.send(Kind::SessionSetup, now, false);
     }
 

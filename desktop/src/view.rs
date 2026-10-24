@@ -39,9 +39,9 @@ use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
-    self, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS, MainWindowShows,
-    NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, SourceKind,
-    SourceName, SpeakerState, ViewSettings, WindowFrame,
+    self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
+    MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
+    SourceKind, SourceName, SpeakerState, ViewSettings, WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
@@ -263,7 +263,7 @@ const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
 
 /// The most UTF-16 units a tray icon's tooltip holds (128 with the
 /// terminating null).
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 const TOOLTIP_MAX_UNITS: usize = 127;
 
 /// A listed notice, as the announcer compares them.
@@ -893,7 +893,7 @@ impl App {
             meter_level: Cell::new(0.0),
             login: RefCell::new(LaunchAtLogin::new(
                 launch_at_login::system_store(),
-                std::env::current_exe().ok(),
+                launch_at_login::own_exe(),
             )),
             login_timer: Timer::default(),
             now_playing: RefCell::default(),
@@ -1792,8 +1792,16 @@ impl App {
         self.show_pin_prompt(state.pin_prompt.as_ref());
         self.show_password_prompt(state.password_prompt.as_ref());
 
+        let live_hint = match state.live_input_airplay_wait() {
+            Some(AirPlayWait::Tenths(tenths)) => {
+                strings.invoke_live_input_airplay(format!("{}.{}", tenths / 10, tenths % 10).into())
+            }
+            Some(AirPlayWait::Unknown) => strings.get_live_input_airplay_unknown(),
+            None => SharedString::new(),
+        };
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
+            window.show_live_input_hint(&live_hint);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
@@ -2099,6 +2107,13 @@ impl App {
         main.on_speaker_volume_changed(move |id, volume| {
             with_app(&w, |app| {
                 app.update(|b| b.set_speaker_volume(&id, volume.into()))
+            })
+        });
+        let w = weak.clone();
+        main.on_speaker_volume_editing(move |id, on| {
+            // Nothing shown changes, so no refresh.
+            with_app(&w, |app| {
+                app.backend.borrow_mut().set_speaker_volume_editing(&id, on)
             })
         });
         let w = weak.clone();
@@ -3635,6 +3650,7 @@ impl App {
 /// The properties the main window and the flyout share.
 trait WindowState {
     fn show_state(&self, state: &AppState, status: &SharedString, source_index: i32);
+    fn show_live_input_hint(&self, hint: &SharedString);
 }
 
 impl WindowState for MainWindow {
@@ -3645,6 +3661,10 @@ impl WindowState for MainWindow {
         self.set_master_volume(state.master_volume as f32);
         self.set_switch_source_on_quit(state.when_source_quits == WhenSourceQuits::SwitchToSystem);
     }
+
+    fn show_live_input_hint(&self, hint: &SharedString) {
+        self.set_live_input_hint(hint.clone());
+    }
 }
 
 impl WindowState for TrayFlyout {
@@ -3653,6 +3673,10 @@ impl WindowState for TrayFlyout {
         self.set_status(status.clone());
         self.set_source_index(source_index);
         self.set_master_volume(state.master_volume as f32);
+    }
+
+    fn show_live_input_hint(&self, hint: &SharedString) {
+        self.set_live_input_hint(hint.clone());
     }
 }
 
@@ -3712,7 +3736,7 @@ fn clear_announcement(main: &slint::Weak<MainWindow>, flyout: &slint::Weak<TrayF
 /// The tray icon's tooltip: AudioSync and its status, then the newest
 /// notice's title on a second line while there is a notice, so Narrator
 /// reads it on the tray icon even with every window closed.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState) -> String {
     let speakers = count(state.active_speakers());
     let text = match state.notices.iter().max_by_key(|n| n.id) {
@@ -3727,7 +3751,7 @@ pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState) -> String {
 }
 
 /// `text` cut to what a tray tooltip holds, ending in "…" when cut.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn fit_tooltip(text: &str) -> String {
     if text.encode_utf16().count() <= TOOLTIP_MAX_UNITS {
         return text.to_owned();
@@ -3977,6 +4001,7 @@ pub fn speaker_item(
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
         paired: speaker.paired,
+        holds_password: speaker.holds_password,
         device_volume,
         device_volume_percent,
         cast: speaker.cast.is_some(),

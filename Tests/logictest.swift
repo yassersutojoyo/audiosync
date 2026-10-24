@@ -340,7 +340,10 @@ do {
     let first = store.load()
     check(first.zones == expected && first.groups == groups,
           "zones: the first launch moves the groups to zones and leaves the saved groups as they are", "\(first.zones)")
-    check(stored.order.last == Keys.zonesMigrated && stored.values[Keys.zonesMigrated] as? Bool == true,
+    // The presets' own migration follows S248 in the same load, so "last" means last of the zone writes.
+    let zoneWrites = stored.order.prefix { ![Keys.presets, Keys.presetsMigrated].contains($0) }
+    check(zoneWrites.last == Keys.zonesMigrated && zoneWrites.contains(Keys.zones)
+            && stored.values[Keys.zonesMigrated] as? Bool == true,
           "zones: the migrated mark is written last", "\(stored.order)")
     stored.values[Keys.zonesMigrated] = nil
     stored.values[Keys.zones] = nil
@@ -2106,6 +2109,12 @@ do {
         check(m.answered(password!, code: "secret") == .sendPassword(pair: false)
                 && m.plan(streaming: true, enabled: ["native:C3"]).add == ["C3"],
               "native pairing: with its password, a receiver joins")
+        check(m.holdsPassword("C3") && !m.isPaired("C3") && !m.holdsPassword("A1"),
+              "native pairing: a receiver whose password was typed offers Forget Password in its row menu")
+        var forgot = m
+        forgot.forgetPassword("C3")
+        check(!forgot.holdsPassword("C3") && forgot.plan(streaming: true, enabled: ["native:C3"]).add.isEmpty,
+              "native pairing: after Forget Password the receiver no longer joins with the old password")
         let pin = m.nextPrompt()
         check(pin == NativePrompt(id: "B2", password: false, wrong: false), "native pairing: then the PIN prompt opens")
         check(m.answered(pin!, code: "12a4") == .askAgain && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
@@ -2116,8 +2125,13 @@ do {
         check(m.apply(.pairingFailed(id: "B2", wrongPin: true, .refused, detail: "")) == .startPairing("B2")
                 && m.apply(.pinNeeded(id: "B2")) == .prompt
                 && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
-              "native pairing: a wrong PIN starts a new pairing (a new PIN on the TV) and asks again")
+              "native pairing: a wrong PIN starts a new pairing (the TV shows a PIN again) and asks again")
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "5678") == .submitPin
+                && m.apply(.pinNeeded(id: "B2")) == .prompt
+                && m.stages["B2"] == .askingPin(wrong: true)
+                && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
+              "native pairing: an AirPlay 2 receiver that turns the PIN down asks again in the same pairing")
+        check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "4821") == .submitPin
                 && m.apply(.paired(id: "B2", storeNote: "")) == .paired("native:B2"),
               "native pairing: once paired, the speaker joins")
         check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,
@@ -2152,15 +2166,28 @@ do {
         check(m.apply(.pinNeeded(id: "B2")) == .cancelPairing("B2"),
               "native pairing: a PIN request nobody waits for cancels its pairing")
 
-        // A refused stored pairing pairs again, once per attempt.
         m.removed("B2")
-        check(m.turnedOnByUser("B2") == nil, "native pairing: a paired Apple TV just joins")
+        check(m.refusedOff == ["B2"]
+                && m.joinable(["native:B2"], after: [], stopped: false).isEmpty
+                && m.plan(streaming: true, enabled: ["native:B2"]).add.isEmpty,
+              "native pairing: turned off for a refused pairing, neither auto-connect nor the plan adds it again")
+        let recalled = m.plan(streaming: true, enabled: ["native:B2"])
+        check(recalled.add.isEmpty && recalled.turnOff == [.init(id: "B2", reason: .needsCode)],
+              "native pairing: a refused speaker switched on without a new attempt (a recalled preset) goes off again with a notice")
+
+        // A refused stored pairing is forgotten and pairs again, once per attempt.
+        check(m.turnedOnByUser("B2") == nil && m.refusedOff.isEmpty, "native pairing: a paired Apple TV just joins")
         m.added("B2")
+        check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .repair("B2")
+                && m.stages["B2"] == .pairing(afterWrongPin: false),
+              "native pairing: within the user's attempt, a refused stored pairing is forgotten and pairs again, though still listed as paired")
         m.apply(.changed(receiver("B2", "B2", .needsPin)))   // the sender forgot the pairing it turned down
-        check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .startPairing("B2"),
-              "native pairing: within the user's attempt, a refused stored pairing pairs again")
+        m.removed("B2")   // it leaves the sender while it pairs
+        check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,
+              "native pairing: while it pairs again, the speaker waits instead of going off")
         check(m.apply(.paired(id: "B2", storeNote: "")) == .paired("native:B2"), "native pairing: paired again")
         m.apply(.changed(receiver("B2", "B2", .available)))
+        m.added("B2")
         check(m.apply(.state(id: "B2", .playing, retryMs: nil)) == .playingChanged("native:B2", playing: true)
                 && m.attempts.isEmpty,
               "native pairing: once it plays, the user's attempt is over")
@@ -2264,10 +2291,79 @@ do {
             == "[AudioSync] native AirPlay: Z9 error: not responding (Unreachable); it needs the user",
           "native airplay: an error's log line")
     check(NativeSpeakerEvent.latency(id: "A1", ms: 1750, receiverFrames: 2205).logLine(name: names)
-            == "[AudioSync] native AirPlay: Kitchen (A1) latency: L + d_s = 1750 ms, the receiver reports 2205 frames"
+            == "[AudioSync] native AirPlay: Kitchen (A1) latency: L + d_s = 1750 ms, the receiver reports 2205 frames; "
+                + "reports nothing"
             && NativeSpeakerEvent.timeline(latencyMs: 1750, restarted: true).logLine(name: names)
             == "[AudioSync] native AirPlay: timeline: L = 1750 ms, restarted",
           "native airplay: latency and timeline log lines")
+
+    // covers: S280, S282, S283 (the Mac host; the Windows tests carry the same names)
+    do {
+        let rule: ([Int64]) -> UInt32 = { reported in
+            reported.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
+        }
+        var known = NativeReceiverLatency()
+        known.report("D2", us: 1_300_000)
+        let leaving = known.newFrames(over: [], rule: rule)
+        let joining = known.newFrames(over: ["A1", "D2"], rule: rule)
+        check(leaving == nil && joining == 79_380 && known.newFrames(over: ["A1", "D2"], rule: rule) == nil,
+              "airplay latency: is set from known reports before speakers are added",
+              "\(String(describing: leaving)) \(String(describing: joining))")
+
+        var follows = NativeReceiverLatency()
+        follows.report("A1", us: 200_000)
+        let small = follows.newFrames(over: ["A1", "D2"], rule: rule)
+        follows.report("D2", us: 1_300_000)
+        let large = follows.newFrames(over: ["A1", "D2"], rule: rule)
+        let left = follows.newFrames(over: ["A1"], rule: rule)
+        check(small == nil && large == 79_380 && left == 77_175,
+              "airplay latency: follows a report and a speaker leaving",
+              "\(String(describing: small)) \(String(describing: large)) \(String(describing: left))")
+
+        var pair = NativeAirPlayModel()
+        pair.apply(.appeared(NativeReceiver(id: "L1", name: "Left", model: "", availability: .available, reason: nil,
+                                            hints: [], target: "pair:5f0c")))
+        pair.apply(.appeared(NativeReceiver(id: "R1", name: "Right", model: "", availability: .available, reason: nil,
+                                            hints: [], target: "pair:5f0c")))
+        pair.receiverLatency.report("R1", us: 1_600_000)
+        let members = pair.sessions(of: "pair:5f0c")
+        check(members == ["L1", "R1"] && pair.receiverLatency.newFrames(over: members, rule: rule) == 88_200
+                && pair.receiverLatency.estimateMs(of: members) == 1600,
+              "airplay latency: covers every member of a target", "\(members)")
+
+        var estimate = NativeReceiverLatency()
+        estimate.report("A1", us: 220_000)
+        let one = estimate.updateEstimate(rows: [["A1"]], canChange: true)
+        let oneOffset = estimate.offsetMs(of: ["A1"])
+        estimate.report("B2", us: 50_000)
+        let two = estimate.updateEstimate(rows: [["A1"], ["B2"]], canChange: true)
+        check(one == .applied && oneOffset == 0 && two == .unchanged && estimate.estimateMs == 220
+                && estimate.offsetMs(of: ["B2"]) == 170,
+              "airplay latency: a reported latency is the speaker's starting estimate (one at 220 ms: offset 0, "
+                + "L = L_s + 220 + A; 220 and 50 ms: the second gets 170 ms more)")
+
+        var nothing = NativeAirPlayModel()
+        let outcome = nothing.apply(.latency(id: "A1", ms: 1750, receiverFrames: nil, reportedUs: 0, sources: 0))
+        check(outcome == nil && nothing.receiverLatency.estimateMs(of: ["A1"]) == 0
+                && nothing.receiverLatency.newFrames(over: ["A1"], rule: rule) == nil
+                && NativeReceiverLatency.reportText(us: 0, sources: 0) == "reports nothing"
+                && NativeReceiverLatency.reportText(us: 220_400, sources: 5) == "reports 220 ms (Audio-Latency, arrivalToRender)",
+              "airplay latency: a receiver reporting nothing starts at zero without a warning")
+
+        var waits = NativeReceiverLatency()
+        waits.report("A1", us: 220_000)
+        _ = waits.updateEstimate(rows: [["A1"]], canChange: true)
+        waits.report("J9", us: 300_000)
+        let held = waits.updateEstimate(rows: [["A1"], ["J9"]], canChange: false)
+        let heldAgain = waits.updateEstimate(rows: [["A1"], ["J9"]], canChange: false)
+        let late = waits.lateMs(of: ["J9"])
+        let joinerOffset = waits.offsetMs(of: ["J9"])
+        let applied = waits.updateEstimate(rows: [["A1"], ["J9"]], canChange: true)
+        check(held == .held && heldAgain == .unchanged && late == 80 && joinerOffset == 0 && applied == .applied
+                && waits.estimateMs == 300 && waits.offsetMs(of: ["A1"]) == 80 && waits.heldMs == nil,
+              "airplay latency: the estimate waits while an airplay speaker sounds (a joiner at 300 ms with E = 220 "
+                + "plays 80 ms late until the stream is empty)")
+    }
 
     var volumes = NativeAirPlayModel()
     volumes.apply(.appeared(receiver("A1", "Kitchen", .available)))
@@ -2661,7 +2757,8 @@ do {
           "EC12 network loss: an empty list with Local Network allowed shows no permission hint")
 }
 
-// MARK: Track info — artwork scaled to a small JPEG
+// MARK: Track info — artwork scaled to a large and a small JPEG
+// covers: S217, S272
 do {
     func artwork(_ width: Int, _ height: Int) -> CGImage {
         let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -2681,20 +2778,34 @@ do {
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
         return (image.width, image.height)
     }
-    let big = artwork(1200, 800)
-    let jpeg = TrackMetadata.jpeg(big)
-    let (w, h) = size(jpeg) ?? (0, 0)
-    check(jpeg.map { $0.starts(with: [0xFF, 0xD8]) && $0.count <= TrackMetadata.artworkLimit } == true,
-          "artwork: a JPEG within the artwork limit", "\(jpeg?.count ?? -1) bytes, \(w)×\(h)")
-    check(w > 0 && w <= TrackMetadata.artworkSide && h <= TrackMetadata.artworkSide && abs(Double(w) / Double(h) - 1.5) < 0.05,
-          "artwork: at most 600 px a side, aspect kept", "\(w)×\(h)")
-    let tight = TrackMetadata.jpeg(big, maxBytes: 2500)
+    let big = artwork(1600, 1200)
+    let pair = TrackMetadata.artwork(big)
+    let (lw, lh) = size(pair?.large) ?? (0, 0)
+    let (sw, sh) = size(pair?.small) ?? (0, 0)
+    let large = TrackMetadata.largeArtwork, small = TrackMetadata.smallArtwork
+    check(large == .init(side: 1024, bytes: 131_072) && small == .init(side: 600, bytes: 40_960),
+          "artwork: the limits are 1024 px and 128 KiB, 600 px and 40 KiB")
+    check(pair.map { $0.large.starts(with: [0xFF, 0xD8]) && $0.large.count <= large.bytes } == true
+            && lw > small.side && lw <= large.side && lh <= large.side && abs(Double(lw) / Double(lh) - 4.0 / 3) < 0.05,
+          "artwork: the large image is at most 1024 px a side and 128 KiB",
+          "\(pair?.large.count ?? -1) bytes, \(lw)×\(lh)")
+    check(pair.map { $0.small.starts(with: [0xFF, 0xD8]) && $0.small.count <= small.bytes } == true
+            && sw > 0 && sw <= small.side && sh <= small.side && abs(Double(sw) / Double(sh) - 4.0 / 3) < 0.05,
+          "artwork: the small image is at most 600 px a side and 40 KiB",
+          "\(pair?.small.count ?? -1) bytes, \(sw)×\(sh)")
+    let modest = TrackMetadata.artwork(artwork(300, 200))
+    check(modest.map { $0.large == $0.small } == true && size(modest?.small).map { $0 == (300, 200) } == true,
+          "artwork: an image within the small limits is one encoding for both")
+    let jpeg = TrackMetadata.jpeg(big, maxSide: small.side, maxBytes: small.bytes)
+    let w = size(jpeg)?.0 ?? 0
+    let tight = TrackMetadata.jpeg(big, maxSide: small.side, maxBytes: 2500)
     check(tight.map { $0.count <= 2500 } == true && (size(tight)?.0 ?? .max) < w,
           "artwork: a tighter limit gives a smaller image", "\(tight?.count ?? -1) bytes")
-    check(TrackMetadata.jpeg(big, maxBytes: 100) == nil, "artwork: nothing when not even the smallest image fits")
-    check(size(TrackMetadata.jpeg(artwork(100, 100))).map { $0 == (100, 100) } == true,
+    check(TrackMetadata.jpeg(big, maxSide: small.side, maxBytes: 100) == nil,
+          "artwork: nothing when not even the smallest image fits")
+    check(size(TrackMetadata.artwork(artwork(100, 100))?.large).map { $0 == (100, 100) } == true,
           "artwork: a small image isn't scaled up")
-    check(TrackMetadata.jpeg(NSImage(cgImage: big, size: NSSize(width: 1200, height: 800))) != nil,
+    check(TrackMetadata.artwork(NSImage(cgImage: big, size: NSSize(width: 1600, height: 1200))) != nil,
           "artwork: an NSImage (a player's artwork, AudioSync's icon) is encoded too")
 }
 
@@ -2704,6 +2815,36 @@ check(NowPlayingMonitor.meansNoTrack(-1728) && NowPlayingMonitor.meansNoTrack(-1
 check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(nil)
       && !NowPlayingMonitor.meansNoTrack(-2753),
       "AppleScript: Automation refused (-1743) and other errors are still logged")
+
+// MARK: Track info — a paused player keeps its track on receivers until it quits or stays empty
+do {
+    let spotify = NowPlayingMonitor.spotify
+    let source = AudioSource.app(bundleID: spotify)
+    let untitled = TrackMetadata.Fields(title: "AudioSync", artist: "Spotify", album: "From your Mac")
+    let paused = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Song", artist: "Band",
+                                         album: "Record", isPlaying: false,
+                                         artwork: NSImage(size: NSSize(width: 1, height: 1)))
+    func shows(_ t: NowPlayingMonitor.Track?) -> ReceiverInfo {
+        ReceiverInfo.decide(track: t, source: source, sourceName: "Spotify", untitled: untitled)
+    }
+    var empty = NowPlayingMonitor.EmptyReadings()
+    var shown = empty.next(reading: paused, last: nil, lastPlayerRuns: true)
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
+          "now playing: one empty reading of a paused player keeps its track and cover, not the fallback")
+    shown = empty.next(reading: paused, last: shown, lastPlayerRuns: true)
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    check(shows(shown).fields.title == "Song",
+          "now playing: a real reading in between starts the count of empty readings again")
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral,
+          "now playing: \(NowPlayingMonitor.EmptyReadings.dropAfter) empty readings in a row send the fallback")
+    var quit = NowPlayingMonitor.EmptyReadings()
+    shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
+    check(shown == nil && shows(shown).fields == untitled,
+          "now playing: a player that quit sends the fallback at the first empty reading")
+}
 
 // MARK: Track info — what AirPlay receivers with a screen show
 do {
@@ -2797,7 +2938,8 @@ do {
 // MARK: Track info on AudioSync's own sender — a new track never goes out with the last one's cover
 do {
     let song = TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record")
-    let cover = Data([0xFF, 0xD8, 0xFF, 0x01]), nextCover = Data([0xFF, 0xD8, 0xFF, 0x02])
+    let cover = TrackMetadata.Artwork(large: Data([0xFF, 0xD8, 0xFF, 0x01]), small: Data([0xFF, 0xD8, 0xFF, 0x03]))
+    let nextCover = TrackMetadata.Artwork(large: Data([0xFF, 0xD8, 0xFF, 0x02]), small: Data([0xFF, 0xD8, 0xFF, 0x02]))
     var playing = NativeNowPlaying()
     playing.setTrack(song)
     playing.setArtwork(cover)
@@ -3612,9 +3754,11 @@ do {
     let first = store.migrateLocalDelays(listed: [r, usb], reference: r)
     let writes = stored.writes
     let second = store.migrateLocalDelays(listed: [r, usb, tv], reference: r)
+    // Read before load(), whose zone and preset migrations (S248, S254) write marks of their own.
+    let secondWrote = stored.writes != writes
     let loaded = store.load()
     check(first?.offsets == [usb: 100, bt: -200] && first?.airPlayDelayMs == 2000
-            && second == nil && stored.writes == writes
+            && second == nil && !secondWrote
             && stored.values[Keys.localDelays] as? [String: Double] == [r: 2000, usb: 2100]
             && stored.values[Keys.legacyDelayMs] as? Double == 1800
             && stored.values[Keys.localDelaysMigrated] as? Bool == true
@@ -5059,7 +5203,7 @@ do {
         localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
         cast: (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 0, format: ASC_CAST_FORMAT_WAV),
         airPlay: [(id: "native:a", name: "Kitchen"), (id: "native:b", name: "Bedroom")],
-        airPlayDelayMs: 1750, airPlayHoldBackMs: 0)
+        airPlayDelayMs: 1750, airPlayHoldBackMs: 0, airPlaySenderMs: 1750)
     let planned = (try? CalibrateAllFlow.plan(inputs).get()) ?? []
     check(planned.map(\.id) == ["mac", "usb", "cast:tv", "native:a", "native:b"]
             && planned[0].offsetMs == nil && planned[1].offsetMs == 150 && planned[1].latencyMs == 2400
@@ -5071,6 +5215,34 @@ do {
     check(CalibrateAllFlow.quietSeconds(planned) == 3 && CalibrateAllFlow.settleSeconds(planned[3]) == 3,
           "calibrate all: the music on its way plays out before the first sweep, a Cast speaker's unknown latency included",
           "\(CalibrateAllFlow.quietSeconds(planned))")
+
+    // A sitting: a Samsung TV at L_s 1750 ms was missed with the AirPlay delay field at 0.
+    var fieldAtZero = inputs
+    fieldAtZero.cast = nil
+    fieldAtZero.airPlayDelayMs = 0
+    var noSender = fieldAtZero
+    noSender.airPlaySenderMs = nil
+    let atZero = (try? CalibrateAllFlow.plan(fieldAtZero).get())?.last
+    let unknown = (try? CalibrateAllFlow.plan(noSender).get())?.last
+    let windowMs = { (speaker: CalibrateAllSpeaker?) in
+        (speaker?.latencyMs ?? 0) + CalibrateAllFlow.sweepSeconds * 1000 + 1000 }
+    check(atZero?.kind == .airPlay && windowMs(atZero) >= 1750 + 750 + 1000 && atZero?.latencyMs == 2250
+            && unknown?.latencyMs == 3500,
+          "calibrate all: an AirPlay speaker at L=1750 with delay 0 gets a window of at least 1750 + 750 + 1000 ms, "
+            + "from the sender's latency, or the path's 3000 ms bound while the sender reports none (S235)",
+          "\(String(describing: atZero)) \(String(describing: unknown))")
+
+    // covers: S235, S283
+    var reportedWindow = fieldAtZero
+    reportedWindow.airPlaySenderMs = 1750 + 220
+    reportedWindow.airPlayReportedMs = [atZero?.id ?? "": 220]
+    let reportedSpeaker = (try? CalibrateAllFlow.plan(reportedWindow).get())?.last
+    var excessMs = 0.0
+    let excessMoved = asc_local_native_adjustment_ms(1970 + 30, 1970, &excessMs)
+    check(reportedSpeaker?.latencyMs == 1750 + 220 + 220 + 500 && excessMoved && excessMs == 30,
+          "airplay latency: calibrate all measures relative to the reported latency (the window adds R_s on top of "
+            + "L_s + E; the AirPlay delay moves only by the measured excess)",
+          "\(String(describing: reportedSpeaker))")
 
     var held = inputs
     held.cast = (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 1750, format: ASC_CAST_FORMAT_FLAC)
@@ -5326,13 +5498,15 @@ do {
                 let zoneSheet = zoneRun.finish()
                     .map { CalibrateAllSheetHandle($0, speakers: zoneSpeakers, rate: 48_000, microphone: nil) }
                 let listed = zoneSheet?.read(ended: nil).rows ?? []
+                // Asked while the row is still off: once measured, a plain Measure Again is allowed again.
+                let plainRefused = zoneSheet?.measureAgain(2) == nil
                 let onNow = CalibrateAllSpeaker(id: "attic", name: "attic", kind: .local, offsetMs: 60, latencyMs: 100)
                 let again = zoneSheet?.measureAgainOff(2, now: onNow)
                 let againSteps = again.map { play($0, arrivals: { row, _ in row == 0 ? 4_800 : 7_200 }) } ?? []
                 let replaced = again?.finish().map { zoneSheet?.replace($0) ?? false } ?? false
                 let after = zoneSheet?.read(ended: nil).rows ?? []
                 check(zoneSteps == ["0.0", "1.1", "1.2"] && listed.count == 3 && listed[2].off
-                        && listed[2].result == .notMeasured && zoneSheet?.measureAgain(2) == nil
+                        && listed[2].result == .notMeasured && plainRefused
                         && againSteps == ["0.0", "2.1", "2.2"] && replaced
                         && after.count == 3 && !after[2].off && after[2].oldMs == 60 && after[2].measured,
                       "calibrate zone: a member that is off is listed and never swept, and Measure Again measures it "
@@ -5480,7 +5654,7 @@ do {
         localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
         cast: (id: "cast:tv", name: "TV", offsetMs: 500, waitMs: 0, format: ASC_CAST_FORMAT_WAV),
         airPlay: [(id: "native:a", name: "Kitchen"), (id: "native:b", name: "Bedroom")],
-        airPlayDelayMs: 1750, airPlayHoldBackMs: 0)
+        airPlayDelayMs: 1750, airPlayHoldBackMs: 0, airPlaySenderMs: 1750)
     let attic = CalibrateAllSpeaker(id: "attic", name: "Attic", kind: .local, offsetMs: 40, latencyMs: 0)
     let scope = CalibrateZoneScope(id: "z1", name: "Upstairs",
                                    members: ["ap:native:b", "lc:usb", "lc:attic", "lc:hidden", "lc:usb"],
@@ -6905,24 +7079,12 @@ do {
           "hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204)")
 }
 
-// MARK: Live input: the lead per source and output, and the input level meter (LocalDelay.swift, InputLevel.swift)
+// MARK: The lead the debug log names, and the input level meter (LocalDelay.swift, InputLevel.swift)
 do {
-    let sources: [AudioSource] = [.system, .app(bundleID: "com.example.player"), .input(uid: "mic")]
-    let outputs: [LocalDelay.LeadOutput] = [.local, .airPlay, .cast]
-    for source in sources {
-        for output in outputs {
-            let liveLocal = source == .input(uid: "mic") && output == .local
-            let wait = LocalDelay.networkWaitMs(source: source, output: output, networkMs: 1750)
-            check(wait == (liveLocal ? nil : 1750), "lead: \(source) on \(output) waits \(String(describing: wait)) ms")
-            check(LocalDelay.networkWaitMs(source: source, output: output, networkMs: nil) == nil,
-                  "lead: \(source) on \(output) waits for nothing without network speakers")
-        }
-    }
-    let live = LocalDelay.leadDescription(source: .input(uid: "mic"), networkMs: 2000)
-    let recorded = LocalDelay.leadDescription(source: .system, networkMs: 2000)
-    check(live.contains("live input") && live.contains("start lead") && live.contains("2000 ms"),
-          "lead: the debug log says live input skips the wait: \(live)")
-    check(recorded == "lead: local speakers wait 2000 ms for the network speakers", "lead: \(recorded)")
+    let waiting = LocalDelay.leadDescription(networkMs: 2000)
+    let alone = LocalDelay.leadDescription(networkMs: nil)
+    check(waiting == "lead: local speakers wait 2000 ms for the network speakers", "lead: \(waiting)")
+    check(alone.contains("start lead") && !alone.contains("wait"), "lead: \(alone)")
 
     let meter = InputLevel()
     check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden without an input")
@@ -6951,6 +7113,21 @@ do {
     }
 }
 
+// MARK: The live input note while an AirPlay speaker is on (InputLevel.swift)
+do {
+    let mic = AudioSource.input(uid: "BuiltInMicrophoneDevice")
+    check(LiveInputAirPlayHint.tenths(source: mic, airPlayOn: true, airPlayDelayMs: 1750) == 18,
+          "live input note: shows the AirPlay delay, rounded to a tenth")
+    check(LiveInputAirPlayHint.tenths(source: mic, airPlayOn: false, airPlayDelayMs: 1750) == nil,
+          "live input note: hidden with no AirPlay speaker on")
+    check(LiveInputAirPlayHint.tenths(source: .system, airPlayOn: true, airPlayDelayMs: 1750) == nil
+            && LiveInputAirPlayHint.tenths(source: .app(bundleID: "com.apple.Music"), airPlayOn: true,
+                                           airPlayDelayMs: 1750) == nil,
+          "live input note: hidden for any source but an input device")
+    let note = UIStrings(locale: Locale(identifier: "en_US")).liveInputAirPlayHint(tenths: 18)
+    check(note.hasPrefix("AirPlay adds a 1.8 s delay") && !note.contains("\u{2014}"), "live input note: \(note)")
+}
+
 // MARK: Microphone permission request (MicrophoneRequestGate.swift)
 do {
     var gate = MicrophoneRequestGate()
@@ -6963,6 +7140,62 @@ do {
           "microphone: after the answer, a new start may ask again")
     var unasked = MicrophoneRequestGate()
     check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
+}
+
+// MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)
+do {
+    let ms: UInt64 = 1_000_000
+    var limiter = LogRateLimiter()
+    var logged = 0
+    var closedCounts: [Int] = []
+    for event in 0..<25 {
+        let decision = limiter.admit(1, atNs: 5_000 * ms + UInt64(event) * 40 * ms)
+        logged += decision.admitted
+        if let closed = decision.closed { closedCounts.append(closed) }
+    }
+    check(logged == 10 && closedCounts.isEmpty, "late callbacks: 25 in one second log 10 lines",
+          "\(logged) logged, closed \(closedCounts)")
+    let after = limiter.admit(0, atNs: 6_000 * ms)
+    check(after.closed == 15 && after.admitted == 0, "late callbacks: then one line counts the 15 suppressed",
+          "\(after)")
+    check(limiter.admit(0, atNs: 7_000 * ms).closed == nil, "late callbacks: the suppressed count comes once")
+
+    var twoSeconds = LogRateLimiter()
+    var firstLogged = 0
+    for event in 0..<12 { firstLogged += twoSeconds.admit(1, atNs: UInt64(event) * 50 * ms).admitted }
+    let next = twoSeconds.admit(1, atNs: 1_500 * ms)
+    var secondLogged = next.admitted
+    for event in 1..<12 { secondLogged += twoSeconds.admit(1, atNs: 1_500 * ms + UInt64(event) * 50 * ms).admitted }
+    check(firstLogged == 10 && next.closed == 2 && secondLogged == 10,
+          "late callbacks: a new second opens a new window of 10",
+          "first \(firstLogged), closed \(String(describing: next.closed)), second \(secondLogged)")
+
+    var dropped = LogRateLimiter()
+    _ = dropped.admit(1, atNs: 0)
+    dropped.drop(3, atNs: 10 * ms)
+    check(dropped.admit(0, atNs: 1_000 * ms).closed == 3,
+          "late callbacks: callbacks whose details were overwritten count as suppressed")
+
+    let slot = LateCallbackLog.pack(startNs: 123_456 * ms + 789, lateNs: 12_345_678)
+    let unpacked = LateCallbackLog.unpack(slot)
+    check(unpacked.startMs == 123_456 && unpacked.lateUs == 12_345, "late callbacks: a slot keeps start ms and lateness µs")
+    check(LateCallbackLog.unpack(LateCallbackLog.pack(startNs: 0, lateNs: 60 * 1_000 * ms)).lateUs
+            == LateCallbackLog.latenessMaskUs, "late callbacks: a huge lateness saturates instead of spilling")
+    let wall = Date(timeIntervalSince1970: 1_800_000_000)
+    let line = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 123_706 * ms, wallNow: wall)
+    check(line == "[AudioSync] late output callback at 2027-01-15T07:59:59.750Z on \"Speaker\": 12.3 ms late",
+          "late callbacks: the line names the buffer's wall-clock start, the output and the lateness", line)
+    // The buffer's host time lies ahead of now by the output lead, so a poll can come before it.
+    let ahead = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 123_426 * ms, wallNow: wall)
+    check(ahead.contains(" at 2027-01-15T08:00:00.0"), "late callbacks: a buffer starting 30 ms after now is stamped ahead", ahead)
+    let far = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 0, wallNow: wall)
+    check(far.contains(" at 2027-01-15T08:02:03.45"), "late callbacks: a start far ahead of now does not trap", far)
+    var stopping = LogRateLimiter()
+    for event in 0..<12 { _ = stopping.admit(1, atNs: UInt64(event) * ms) }
+    check(stopping.flush() == 2 && stopping.flush() == nil,
+          "late callbacks: the last output's stop flushes the pending suppressed count once")
+    check(LateCallbackLog.suppressedLine(15) == "[AudioSync] 15 more late callbacks suppressed",
+          "late callbacks: suppressed-count line")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

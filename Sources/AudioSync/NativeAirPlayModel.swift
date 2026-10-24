@@ -122,8 +122,15 @@ enum NativeSpeakerEvent: Equatable {
     /// `retryMs`: when its next session starts, nil when the user must act;
     /// `detail`: the error, for the debug log.
     case error(id: String, Problem, retryMs: Int64?, detail: String)
-    /// L + d_s, and the receiver's own latency in frames when it sent one.
-    case latency(id: String, ms: Double, receiverFrames: Int64?)
+    /// L + d_s, the receiver's own latency in frames when it sent one, and
+    /// R_s in microseconds with the `ASC_AIRPLAY_LATENCY_SOURCE_*` bits of
+    /// the reports that gave it (0 and 0 when none did).
+    case latency(id: String, ms: Double, receiverFrames: Int64?, reportedUs: Int64 = 0, sources: UInt32 = 0)
+    /// The sender holds an Lf set while a speaker sounds (`ms`: that Lf)
+    /// until the stream is empty or the capture restarts (P201).
+    case latencyHeld(ms: Double)
+    /// The app set a new Lf or E (S282), as its debug line says.
+    case estimate(detail: String)
     /// The base latency L, after a start, a change or a restart.
     case timeline(latencyMs: Double, restarted: Bool)
     /// The sender stopped working after an internal error (a panic in it):
@@ -138,7 +145,7 @@ enum NativeSpeakerEvent: Equatable {
     /// one given, which the sender forgot.
     case passwordNeeded(id: String, wrong: Bool)
     /// A pairing ended without credentials: the PIN was turned down
-    /// (`wrongPin`, a new pairing shows a new PIN), or `problem`.
+    /// (`wrongPin`, a new pairing shows a PIN again), or `problem`.
     case pairingFailed(id: String, wrongPin: Bool, Problem, detail: String)
     /// A pairing succeeded and its credentials are stored; `storeNote` is
     /// empty, or why they last only until AudioSync quits.
@@ -165,9 +172,14 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)): \(state.rawValue)" + (state == .retrying ? ", " + retry(retryMs) : "")
         case .error(let id, let problem, let retryMs, let detail):
             line = "\(label(id)) error: \(problem.rawValue) (\(detail)); \(retry(retryMs))"
-        case .latency(let id, let ms, let frames):
+        case .latency(let id, let ms, let frames, let reportedUs, let sources):
             line = "\(label(id)) latency: L + d_s = \(String(format: "%.0f", ms)) ms, the receiver reports "
-                + (frames.map { "\($0) frames" } ?? "nothing")
+                + (frames.map { "\($0) frames" } ?? "nothing") + "; "
+                + NativeReceiverLatency.reportText(us: reportedUs, sources: sources)
+        case .latencyHeld(let ms):
+            line = String(format: "Lf %.0f ms held while a speaker sounds, until the stream is empty or restarts", ms)
+        case .estimate(let detail):
+            line = detail
         case .timeline(let ms, let restarted):
             line = String(format: "timeline: L = %.0f ms", ms) + (restarted ? ", restarted" : "")
         case .failed(let detail):
@@ -302,6 +314,9 @@ enum NativeAirPlayOutcome: Equatable {
     case senderFailed
     /// Start a PIN pairing with the receiver (receiver ID).
     case startPairing(String)
+    /// Forget the receiver's stored pairing, which it refused, then start a
+    /// PIN pairing with it (receiver ID).
+    case repair(String)
     /// Stop the pairing with the receiver (receiver ID): nobody waits for it.
     case cancelPairing(String)
     /// A PIN or password prompt was queued: show the next one.
@@ -329,8 +344,22 @@ struct NativeAirPlayModel {
     private(set) var receivers: [String: NativeReceiver] = [:]
     /// The speakers in the sender, by receiver ID.
     private(set) var states: [String: NativeSpeakerEvent.State] = [:]
-    /// The base latency L in ms (P113); 0 until the sender reports it.
+    /// The base latency L_s in ms (P113); 0 until the sender reports it.
     var latencyMs: Double = 0
+    /// The receivers' reported latencies and the Lf and E made of them
+    /// (S280, S283).
+    var receiverLatency = NativeReceiverLatency()
+    /// A speaker of the stream reached its first-sound time, as the last
+    /// poll found.
+    var sounding = false
+
+    /// The sessions a row in the sender plays: a target's members as last
+    /// listed, or the speaker itself.
+    func sessions(of row: String) -> [String] {
+        guard NativeTarget.kind(row) != nil else { return [row] }
+        let members = memberOf.filter { $0.value == row }.map(\.key).sorted()
+        return members.isEmpty ? [row] : members
+    }
     /// The last name of every receiver seen, for rows and notices.
     private(set) var names: [String: String] = [:]
     /// This Mac's computer name: a receiver announced under it is this Mac's
@@ -354,6 +383,7 @@ struct NativeAirPlayModel {
             }
         case .gone(let id, _):
             receivers.removeValue(forKey: id)
+            receiverLatency.forget(id)
         }
         pruneMembers()
     }
@@ -409,6 +439,13 @@ struct NativeAirPlayModel {
     /// offers Forget Pairing.
     func isPaired(_ id: String) -> Bool { receivers[id]?.paired == true }
 
+    /// Whether the sender holds a password the user typed for the listed
+    /// receiver `id` this run: its row offers Forget Password.
+    func holdsPassword(_ id: String) -> Bool { passwords.contains(id) }
+
+    /// Forget Password: the next attempt asks for the password again.
+    mutating func forgetPassword(_ id: String) { passwords.remove(id) }
+
     /// The speaker list's rows, as app IDs: every receiver it shows
     /// (`NativeReceiver.access`), and any that still plays while its
     /// announcement lapsed; by name, then ID. A target in the sender stays
@@ -437,7 +474,8 @@ struct NativeAirPlayModel {
     func joinable(_ rows: [String], after known: Set<String>, stopped: Bool) -> [String] {
         guard !stopped else { return [] }
         return rows.filter { id in
-            guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id) else { return false }
+            guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
+                  !refusedOff.contains(receiver) else { return false }
             return receivers[receiver]?.availability == .available
         }
     }
@@ -467,6 +505,10 @@ struct NativeAirPlayModel {
     /// Attempts that paired already: refused again, they go off instead of
     /// pairing in a loop.
     private(set) var pairedInAttempt: Set<String> = []
+    /// Receivers turned off because they refused a pairing: neither
+    /// auto-connect nor the plan adds them again until the user turns them
+    /// on, so a refusal never loops.
+    private(set) var refusedOff: Set<String> = []
     /// The target each member's password prompt is for (P176): the prompt
     /// names the member, and its answer restarts the target.
     private(set) var promptTargets: [String: String] = [:]
@@ -487,6 +529,7 @@ struct NativeAirPlayModel {
     mutating func turnedOnByUser(_ id: String) -> NativeAirPlayOutcome? {
         endAttempt(id)
         attempts.insert(id)
+        refusedOff.remove(id)
         if NativeTarget.kind(id) != nil {
             var outcome: NativeAirPlayOutcome?
             for member in members(of: id)
@@ -618,21 +661,25 @@ struct NativeAirPlayModel {
     }
 
     /// A speaker's session asked for a password or a pairing (`problem`):
-    /// within the user's attempt, a password is asked for (again) and an
-    /// Apple TV whose stored pairing it turned down pairs again, once;
-    /// otherwise it goes off with why.
+    /// within the user's attempt, a password is asked for (again) and a
+    /// receiver that turned its stored pairing down forgets it and pairs
+    /// again, once, whatever its listing still says; otherwise it goes off
+    /// with why, and one refused pairing stays off (`refusedOff`).
     private mutating func accessNeeded(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome {
         let app = NativeAirPlayID.app(id)
         if problem == .wrongPassword || problem == .passwordRequired { passwords.remove(id) }
+        if problem == .pairingRequired && (!attempts.contains(id) || pairedInAttempt.contains(id)) {
+            refusedOff.insert(id)
+        }
         guard attempts.contains(id) else { return .turnOff(app, problem.turnOff) }
         switch problem {
         case .passwordRequired, .wrongPassword:
             return ask(id, .askingPassword(wrong: problem == .wrongPassword))
         case .pairingRequired where pairedInAttempt.contains(id):
             return .turnOff(app, .stillNeedsCode)
-        case .pairingRequired where receivers[id]?.availability == .needsPin:
+        case .pairingRequired:
             stages[id] = .pairing(afterWrongPin: false)
-            return .startPairing(id)
+            return .repair(id)
         default:
             return .turnOff(app, problem.turnOff)
         }
@@ -657,6 +704,9 @@ struct NativeAirPlayModel {
     private mutating func pairingEvent(_ event: NativeSpeakerEvent) -> NativeAirPlayOutcome? {
         switch event {
         case .pinNeeded(let id):
+            // An AirPlay 2 receiver that turned the PIN down asks again on
+            // the same connection, with the same code (P150).
+            if stages[id] == .checkingPin { return ask(id, .askingPin(wrong: true)) }
             guard case .pairing(let afterWrongPin)? = stages[id] else { return .cancelPairing(id) }
             return ask(id, .askingPin(wrong: afterWrongPin))
         case .passwordNeeded(let id, let wrong):
@@ -666,7 +716,8 @@ struct NativeAirPlayModel {
         case .pairingFailed(let id, let wrongPin, let problem, _):
             guard stages[id]?.pairingRuns == true else { return nil }
             if wrongPin {
-                // The receiver shows a new PIN for a new pairing (P52).
+                // An AirPlay 1 pairing ends at a wrong PIN and starts again
+                // from `/pair-pin-start` (P52).
                 stages[id] = .pairing(afterWrongPin: true)
                 return .startPairing(id)
             }
@@ -716,6 +767,9 @@ struct NativeAirPlayModel {
             // A target waits while a member's password prompt is open.
             if promptTargets.values.contains(id) { continue }
             switch receivers[id]?.availability {
+            case .available? where refusedOff.contains(id):
+                // Switched on without a new attempt (a recalled preset): off again, once.
+                plan.turnOff.append(.init(id: id, reason: .needsCode))
             case .available?:
                 plan.add.append(id)
             case .needsPin? where stages[id] == nil && !pairedInAttempt.contains(id):
@@ -779,7 +833,10 @@ struct NativeAirPlayModel {
             default:
                 return .turnOff(NativeAirPlayID.app(id), problem.turnOff)
             }
-        case .latency:
+        case .latency(let id, _, _, let reportedUs, _):
+            receiverLatency.report(id, us: reportedUs)
+            return nil
+        case .latencyHeld, .estimate:
             return nil
         case .timeline(let ms, _):
             guard ms != latencyMs else { return nil }
@@ -906,16 +963,16 @@ struct NativeSenderStarts {
 struct NativeNowPlaying: Equatable {
     /// The track's title, artist and album, once one was set.
     private(set) var fields: TrackMetadata.Fields?
-    /// The artwork as a JPEG, once one was set for this track.
-    private(set) var artwork: Data?
+    /// The artwork in both sizes, once one was set for this track.
+    private(set) var artwork: TrackMetadata.Artwork?
 
     mutating func setTrack(_ track: TrackMetadata.Fields) {
         if track != fields { artwork = nil }
         fields = track
     }
 
-    mutating func setArtwork(_ jpeg: Data) {
-        artwork = jpeg
+    mutating func setArtwork(_ artwork: TrackMetadata.Artwork) {
+        self.artwork = artwork
     }
 }
 
@@ -1076,5 +1133,89 @@ enum NativeAirPlayStatus {
                 + ", \(counters.foreignDatagrams) datagrams from other addresses dropped"
         }
         return text
+    }
+}
+
+/// Each AirPlay speaker's reported latency R_s and what the app makes of it
+/// (engine spec S280, S283): the stream's Lf from the core's rule, E (the
+/// largest R_s among the speakers in the stream, held while one sounds) and
+/// each row's offset E - e_s on top of the hold-back. Main queue.
+struct NativeReceiverLatency {
+    /// The sender's Lf until the app sets another: 1.75 s at 44.1 kHz.
+    static let defaultFrames: UInt32 = 77_175
+    /// The `ASC_AIRPLAY_LATENCY_SOURCE_*` bits, as the debug log names them.
+    static let sourceNames: [(bit: UInt32, name: String)] = [
+        (1, "Audio-Latency"), (2, "audioLatencies"), (4, "arrivalToRender"),
+    ]
+
+    enum EstimateChange: Equatable {
+        case unchanged
+        /// E took a new value: every row's offset and L move.
+        case applied
+        /// A new E waits until no speaker sounds; once per value.
+        case held
+    }
+
+    /// R_s in microseconds by receiver ID, from this run's latency events;
+    /// never stored, and dropped when discovery loses the receiver.
+    private(set) var reportedUs: [String: Int64] = [:]
+    /// The Lf last given to the sender.
+    private(set) var frames: UInt32 = defaultFrames
+    /// E in ms, as it applies now.
+    private(set) var estimateMs: Double = 0
+    /// The E waiting while a speaker sounds.
+    private(set) var heldMs: Double?
+
+    mutating func report(_ id: String, us: Int64) { reportedUs[id] = max(0, us) }
+
+    mutating func forget(_ id: String) { reportedUs.removeValue(forKey: id) }
+
+    /// R_s of a receiver in ms, 0 when it reported nothing.
+    func reportedMs(_ id: String) -> Double { Double(reportedUs[id] ?? 0) / 1000 }
+
+    /// e_s of a row whose sessions are `members`: the largest R_s among
+    /// them, since a target plays its members at one offset.
+    func estimateMs(of members: [String]) -> Double { members.map(reportedMs).max() ?? 0 }
+
+    /// The Lf `rule` gives over `members` (the core's
+    /// `asc_airplay_session_latency_frames`), or nil when it is the one set last.
+    mutating func newFrames(over members: [String], rule: ([Int64]) -> UInt32) -> UInt32? {
+        let next = rule(members.map { reportedUs[$0] ?? 0 })
+        guard next != frames else { return nil }
+        frames = next
+        return next
+    }
+
+    /// E over `rows` (each row's members): applied when `canChange` (no
+    /// speaker sounds, the stream is empty or the capture restarted),
+    /// otherwise held (P201).
+    mutating func updateEstimate(rows: [[String]], canChange: Bool) -> EstimateChange {
+        let wanted = rows.map { estimateMs(of: $0) }.max() ?? 0
+        guard wanted != estimateMs else {
+            heldMs = nil
+            return .unchanged
+        }
+        guard canChange else {
+            guard heldMs != wanted else { return .unchanged }
+            heldMs = wanted
+            return .held
+        }
+        estimateMs = wanted
+        heldMs = nil
+        return .applied
+    }
+
+    /// A row's offset on top of the hold-back, E - e_s; 0 for one that
+    /// reports more than E, which plays late until E may change.
+    func offsetMs(of members: [String]) -> Double { max(0, estimateMs - estimateMs(of: members)) }
+
+    /// How much later than E a row plays while E is held, in ms.
+    func lateMs(of members: [String]) -> Double { max(0, estimateMs(of: members) - estimateMs) }
+
+    /// What a receiver reported, as the debug log says it (S282).
+    static func reportText(us: Int64, sources: UInt32) -> String {
+        let names = sourceNames.filter { sources & $0.bit != 0 }.map(\.name)
+        guard !names.isEmpty else { return "reports nothing" }
+        return String(format: "reports %.0f ms (", Double(max(0, us)) / 1000) + names.joined(separator: ", ") + ")"
     }
 }

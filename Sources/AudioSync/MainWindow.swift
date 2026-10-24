@@ -109,6 +109,7 @@ struct MainView: View {
     @ObservedObject var model: AppModel
     @StateObject private var gearAnchor = MenuAnchor.Box()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
+    @StateObject private var sheetRoom = SheetRoom()
 
     var body: some View {
         let t = model.text
@@ -116,17 +117,18 @@ struct MainView: View {
             header(t)
             NoticeStack(model: model)
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
-                VStack(spacing: BrandTokens.Spacing.cardGap) {
-                    sourceCard(t)
-                    if let track = model.nowPlaying { nowPlayingCard(track, t) }
-                    volumeCard(t)
-                    PresetsCard(model: model)
-                    equalizerCard(t)
-                    Card { CalibrateAllButton(model: model) }
-                    Spacer(minLength: 0)
+                FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
+                    VStack(spacing: BrandTokens.Spacing.cardGap) {
+                        sourceCard(t)
+                        if let track = model.nowPlaying { nowPlayingCard(track, t) }
+                        volumeCard(t)
+                        PresetsCard(model: model)
+                        equalizerCard(t)
+                        Card { CalibrateAllButton(model: model) }
+                    }
                 }
                 .frame(width: 280)
-                GeometryReader { viewport in ScrollView {
+                FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
                     let all = model.layout
                     let layout = model.zonelessLayout
                     VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
@@ -147,17 +149,7 @@ struct MainView: View {
                                        localNetworkHint: model.localNetworkHint)
                     }
                     .padding(.bottom, 4)
-                    // At rest the cards sit clear of the faded edges.
-                    .padding(.vertical, Self.scrollFade)
-                    // Blank space under a short list is outside every row too.
-                    .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.closeDelayPanels() }
-                } }
-                // Cards scrolling under the header fade out instead of
-                // meeting a hard edge; the fade lies in the gap above the list.
-                .mask(ScrollEdgeFade(height: Self.scrollFade))
-                .padding(.vertical, -Self.scrollFade)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -165,6 +157,7 @@ struct MainView: View {
         .padding(.top, 4)
         .padding(.bottom, 20)
         .frame(minWidth: 720, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity, alignment: .topLeading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sheetRoom.height = $0 }
         // A click no row or control takes closes the delay panels, applying
         // what was typed. Behind everything, so the header can still drag
         // the window.
@@ -176,17 +169,13 @@ struct MainView: View {
         .tint(accent)
         .sheet(isPresented: Binding(get: { model.calibrateAll.shown },
                                     set: { if !$0 { model.actions.closeCalibrateAll() } })) {
-            CalibrateAllSheetView(model: model).tint(accent)
+            CalibrateAllSheetView(model: model, room: sheetRoom.height).tint(accent)
         }
         // On the content, not the window's root: one view holds one sheet.
         .background {
             Color.clear.sheet(isPresented: $model.castAddShown) { CastAddressSheet(model: model).tint(accent) }
         }
     }
-
-    /// The scroll list's soft top and bottom edge, shorter than the gap
-    /// between the header and the list (14 pt) and the window's bottom margin.
-    private static let scrollFade: CGFloat = 12
 
     // MARK: Header
 
@@ -240,6 +229,7 @@ struct MainView: View {
                 SectionTitle(t.sourceLabel)
                 SourcePicker(model: model, large: true)
                 InputLevelMeter(level: model.inputLevel, text: t)
+                if let hint = model.liveInputAirPlayHint { LiveInputAirPlayNote(message: hint) }
             }
         }
     }
@@ -597,6 +587,12 @@ final class ZoneDisclosure: ObservableObject {
     }
 }
 
+/// Whether a speaker row's volume slider is held. An object rather than
+/// @State, for the same reason as ZoneDisclosure; nothing redraws on it.
+final class VolumeDrag: ObservableObject {
+    var held = false
+}
+
 /// One zone: its header (disclosure, switch, volume, options), then its
 /// members as speaker rows, dimmed while they can't play with it.
 private struct ZoneCard: View {
@@ -787,6 +783,8 @@ struct SpeakerRow: View {
     @FocusState private var nameFocused: Bool
     /// The switch, which takes the focus when a neighbouring row is hidden.
     @FocusState private var switchFocused: Bool
+    /// The volume slider is held; a row closed mid-drag never sees the release.
+    @StateObject private var volumeDrag = VolumeDrag()
 
     var body: some View {
         let t = model.text
@@ -855,7 +853,16 @@ struct SpeakerRow: View {
                     }
                     HStack(spacing: 8) {
                         Slider(value: Binding(get: { speaker.volume }, set: { model.setVolume(speaker, $0) }),
-                               in: 0...100)
+                               in: 0...100, onEditingChanged: { editing in
+                                   volumeDrag.held = editing
+                                   model.setVolumeDragging(speaker, editing)
+                               })
+                            .onDisappear {
+                                if volumeDrag.held {
+                                    volumeDrag.held = false
+                                    model.setVolumeDragging(speaker, false)
+                                }
+                            }
                             .controlSize(.small)
                             .disabled(!volumeAdjustable)
                             .accessibilityLabel(t.volume(of: speaker.name))
@@ -968,6 +975,9 @@ struct SpeakerRow: View {
             if speaker.paired {
                 Button(t.forgetPairing) { model.actions.forgetAirPlayPairing(speaker.id) }
                     .help(t.forgetPairingHelp)
+            } else if speaker.holdsPassword {
+                Button(t.forgetPassword) { model.actions.forgetAirPlayPairing(speaker.id) }
+                    .help(t.forgetPasswordHelp)
             }
         }
         Divider()
@@ -1459,6 +1469,39 @@ private extension NSMenu {
     func popUp(under view: NSView) {
         let below = view.isFlipped ? view.bounds.maxY + 4 : view.bounds.minY - 4
         _ = popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
+    }
+}
+
+/// A main-window column that scrolls when the window is too short for it.
+/// Cards scrolling under the header fade out instead of meeting a hard edge;
+/// the fade lies in the gap above the column and in the window's bottom margin.
+private struct FadingScroll<Content: View>: View {
+    let onBlankTap: () -> Void
+    let content: Content
+
+    init(onBlankTap: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.onBlankTap = onBlankTap
+        self.content = content()
+    }
+
+    /// Shorter than the gap between the header and the columns (14 pt) and
+    /// the window's bottom margin.
+    private static var fade: CGFloat { 12 }
+
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollView {
+                content
+                    // At rest the cards sit clear of the faded edges.
+                    .padding(.vertical, Self.fade)
+                    // Blank space under a short column is outside every control too.
+                    .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onBlankTap)
+            }
+        }
+        .mask(ScrollEdgeFade(height: Self.fade))
+        .padding(.vertical, -Self.fade)
     }
 }
 

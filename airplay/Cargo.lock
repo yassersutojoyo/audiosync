@@ -63,6 +63,7 @@ dependencies = [
  "plist",
  "sha1",
  "sha2",
+ "socket2",
  "subtle",
  "x25519-dalek",
  "zeroize",

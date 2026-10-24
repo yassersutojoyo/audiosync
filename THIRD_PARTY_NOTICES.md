@@ -87,7 +87,8 @@ carries an icon from Microsoft's Fluent UI System Icons (MIT, © Microsoft Corpo
 
 The icons inside the Windows app's controls come from Segoe Fluent Icons, the
 icon font Windows 11 ships; the app uses the installed font and doesn't bundle
-it. The app and tray icons in `desktop/res/` are generated from AudioSync's own
+it. On Linux and macOS those icons are AudioSync's own work, drawn as
+hand-written paths in `desktop/ui/widgets.slint`. The app and tray icons in `desktop/res/` are generated from AudioSync's own
 brand mark (`scripts/brand/windows-icons.sh`).
 
 The Windows app also contains AudioSync's own AirPlay sender (`airplay/`,
@@ -136,17 +137,6 @@ The Windows app reads and writes its settings file with `serde` and
 and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the
 app already contained.
 
-The same crate also builds for Linux, which isn't released yet. That build
-captures through PipeWire with `pipewire`, `pipewire-sys`, `libspa`,
-`libspa-sys`, `cookie-factory` and `nom` (MIT), `bitflags` and `libc` (MIT OR
-Apache-2.0) and `rustix` (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR
-MIT). Their bindings are generated at build time with `bindgen`
-(BSD-3-Clause), `clang-sys` (Apache-2.0), `libloading` (ISC),
-`version-compare` (MIT), `system-deps`, `cfg-expr`, `annotate-snippets` and
-`cc` (MIT OR Apache-2.0) and `target-lexicon` (Apache-2.0 WITH
-LLVM-exception), none of which goes into the program. PipeWire's own library
-isn't bundled: the app uses the one the system has.
-
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in
 `desktop/deny.toml`. Each Windows test build CI uploads comes with a
@@ -162,6 +152,51 @@ code based on the work of the Independent JPEG Group. The script fails when a
 crate's license isn't allowed by `desktop/deny.toml`, or when a crate's source
 points to a license file the package doesn't ship and the script doesn't
 supply.
+
+## Linux app and AppImage (in development)
+
+The Linux build of `desktop/` shows its tray icon as a StatusNotifier item
+through tray-icon's ksni backend: [ksni](https://github.com/iovxw/ksni)
+(Unlicense) and [zbus](https://github.com/dbus2/zbus) 5 (MIT), with `png`
+(MIT OR Apache-2.0) for the icon. Its text uses the system's font through
+fontconfig, and the app includes no font for it. fontconfig, PipeWire,
+OpenSSL and the X11, Wayland and OpenGL libraries come from the system at run
+time; none of them is part of the program or the AppImage. CI writes the
+build's `THIRD-PARTY-NOTICES.txt` with `scripts/windows_notices.py
+x86_64-unknown-linux-gnu`, and the AppImage carries it in
+`usr/share/doc/audiosync/`.
+
+It captures the whole system's sound through PipeWire with `pipewire`,
+`pipewire-sys`, `libspa`, `libspa-sys`, `cookie-factory` and `nom` (MIT),
+`bitflags` and `libc` (MIT OR Apache-2.0) and `rustix` (Apache-2.0 WITH
+LLVM-exception OR Apache-2.0 OR MIT). Their bindings are generated at build
+time with `bindgen` (BSD-3-Clause), `clang-sys` (Apache-2.0), `libloading`
+(ISC), `version-compare` (MIT), `system-deps`, `cfg-expr`,
+`annotate-snippets` and `cc` (MIT OR Apache-2.0) and `target-lexicon`
+(Apache-2.0 WITH LLVM-exception), none of which goes into the program.
+
+It reads the playing track from the MPRIS media players over D-Bus with
+`zbus` and its own `zbus_macros`, `zbus_names` and `zvariant` crates (MIT),
+and decodes their artwork with `image` (MIT OR Apache-2.0). Every crate
+these bring in is under a license `desktop/deny.toml` allows, which CI
+checks.
+
+The AppImage file also contains the AppImage runtime, a separate program
+that mounts the app and starts it:
+[type2-runtime](https://github.com/AppImage/type2-runtime) release 20251108
+(MIT, Copyright (c) 2004-23 probonopd). It is linked statically with
+[musl](https://musl.libc.org/) (MIT), [libfuse](https://github.com/libfuse/libfuse)
+3.15.0 (its library under LGPL-2.1), [squashfuse](https://github.com/vasi/squashfuse)
+0.5.2 (BSD-2-Clause), [zstd](https://github.com/facebook/zstd)
+(BSD-3-Clause OR GPL-2.0, used under BSD-3-Clause),
+[zlib](https://zlib.net) (Zlib) and [mimalloc](https://github.com/microsoft/mimalloc)
+(MIT). musl, zstd, zlib and mimalloc come from Alpine Linux 3.21 packages.
+The AppImage carries their copyright lines and license texts in
+`usr/share/doc/audiosync/RUNTIME-NOTICES.txt` (from
+`desktop/linux/RUNTIME-NOTICES.txt`). Each release that ships an AppImage
+also carries the source of that runtime release, with its patch to libfuse's
+`mount.c`, and of libfuse 3.15.0. appimagetool, which builds the file, isn't
+part of it.
 
 ## AudioSync's own Google Cast sender
 

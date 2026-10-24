@@ -184,6 +184,26 @@ pub extern "C" fn asc_calibration_cast_wait_ms(
     calibrate_all::cast_wait_ms(has_offset.then_some(offset_ms), hold_back_ms, codec)
 }
 
+/// [`calibrate_all::airplay_wait_ms`] (S235): an AirPlay speaker's expected
+/// arrival and play-out. `has_sender` false while the sender reports no
+/// latency for the session; `shown_ms` is the AirPlay delay the field shows;
+/// `reported_ms` the receiver's reported latency R_s, 0 when none (S283).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_calibration_airplay_wait_ms(
+    has_sender: bool,
+    sender_latency_ms: f64,
+    shown_ms: f64,
+    hold_back_ms: f64,
+    reported_ms: f64,
+) -> f64 {
+    calibrate_all::airplay_wait_ms(
+        has_sender.then_some(sender_latency_ms),
+        shown_ms,
+        hold_back_ms,
+        reported_ms,
+    )
+}
+
 /// Starts a run over `count` speakers, `reference` the index of the
 /// reference, a local output: null for an unsupported rate, a reference
 /// that isn't a local output among them, only the reference, an expected
@@ -825,6 +845,18 @@ mod tests {
             6000.0
         );
         assert_eq!(asc_calibration_cast_wait_ms(false, 0.0, 0.0, 0), 6000.0);
+    }
+
+    #[test]
+    fn the_airplay_wait_reads_a_missing_sender_latency() {
+        assert_eq!(
+            asc_calibration_airplay_wait_ms(true, 1750.0, 0.0, 0.0, 0.0),
+            2250.0
+        );
+        assert_eq!(
+            asc_calibration_airplay_wait_ms(false, 1750.0, 0.0, 0.0, 0.0),
+            3500.0
+        );
     }
 
     fn heard_at(frames: usize, at_ms: f64) -> Vec<f32> {

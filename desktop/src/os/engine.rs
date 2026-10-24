@@ -152,5 +152,8 @@ fn open_pairings(log: &DebugLog) -> audio::pairings::PairingStore {
     };
     let (store, loaded) = PairingStore::open(path, super::sealer());
     log.log(|| format!("AirPlay pairings: {loaded}"));
+    if let Some(tightened) = store.tightened() {
+        log.log(|| format!("AirPlay pairings: {tightened}"));
+    }
     store
 }

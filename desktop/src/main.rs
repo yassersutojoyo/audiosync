@@ -4,8 +4,10 @@
 //! tray icon with its flyout, and the About dialog, laid out like the macOS
 //! app. The data comes through the `Backend` trait in `ui_model`, which
 //! `os::start` opens. On Windows that is the adapter over the WASAPI audio
-//! backend, which captures and plays for real. On other hosts, where the UI
-//! is worked on, the `mock-backend` feature gives a mock with example
+//! backend, which captures and plays for real; on Linux it is the adapter
+//! over PipeWire, which captures the whole system's sound for the network
+//! speakers. On other hosts, where the UI is worked on, the `mock-backend`
+//! feature gives a mock with example
 //! speakers: nothing plays and no audio device is opened.
 //!
 //! With `AUDIOSYNC_DEBUG=1` in the environment, the app writes what it does
@@ -34,7 +36,7 @@ mod adapter;
     all(target_os = "linux", not(test)),
     expect(
         dead_code,
-        reason = "the PipeWire driver has no app capture, mix, local output or media sessions yet"
+        reason = "the PipeWire driver has no app capture, mix or local output yet"
     )
 )]
 mod audio;
@@ -53,7 +55,7 @@ mod placement;
 mod platform;
 mod remote;
 mod settings;
-#[cfg(any(windows, test))]
+#[cfg(any(os_backend, target_os = "linux", test))]
 mod single_instance;
 mod speaker_names;
 // Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
@@ -71,6 +73,11 @@ use slint::ComponentHandle;
 use debug_log::DebugLog;
 
 slint::include_modules!();
+
+/// The app's id on Linux: the Wayland app id and X11 window class, and the
+/// name of its .desktop and AppStream files.
+#[cfg(any(target_os = "linux", test))]
+const APP_ID: &str = "io.github.yassersutojoyo.audiosync";
 
 /// How long the app waits, as it stops, for the debug log to reach its file.
 const LOG_FLUSH_AT_EXIT: Duration = Duration::from_secs(1);
@@ -193,6 +200,12 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     #[cfg(not(feature = "mock-backend"))]
     let os::Started { backend, media } = os::start(log)?;
     let app = view::App::new(backend, log.clone())?;
+    // Needs the platform the windows above set up, and must come before the
+    // first one shows: Wayland matches windows to the .desktop file by it.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = slint::set_xdg_app_id(APP_ID) {
+        log.log(|| format!("app id: not set ({error})"));
+    }
     #[cfg(feature = "mock-backend")]
     if zones_preview {
         app.set_zone_expanded("zone:upstairs", false);
@@ -281,6 +294,30 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
 
 #[cfg(test)]
 mod tests {
+    /// The Wayland app id, the .desktop file's window class and name, and
+    /// the AppStream id and launchable must agree, or the desktop shows the
+    /// window without its icon and name.
+    #[test]
+    fn the_linux_desktop_files_name_the_app_id() {
+        let desktop = include_str!("../linux/io.github.yassersutojoyo.audiosync.desktop");
+        let metainfo = include_str!("../linux/io.github.yassersutojoyo.audiosync.metainfo.xml");
+        for line in [
+            format!("StartupWMClass={}", super::APP_ID),
+            format!("Icon={}", super::APP_ID),
+            "Exec=audiosync".to_owned(),
+        ] {
+            assert!(desktop.lines().any(|l| l == line), "{line}");
+        }
+        assert!(metainfo.contains(&format!("<id>{}</id>", super::APP_ID)));
+        assert!(metainfo.contains(&format!(
+            "<launchable type=\"desktop-id\">{}.desktop</launchable>",
+            super::APP_ID
+        )));
+        let build = include_str!("../../scripts/build_appimage.sh");
+        let id_line = format!("id={}", super::APP_ID);
+        assert!(build.lines().any(|l| l == id_line));
+    }
+
     /// A quit first waits for the outputs' fade-outs, at most the cap of
     /// S186, and then for the AirPlay sender's teardown, while the Google
     /// Cast host shuts down on a thread of its own; then the debug log

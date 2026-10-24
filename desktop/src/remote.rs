@@ -674,6 +674,7 @@ mod tests {
             auto_connect: false,
             availability: Availability::Open,
             paired: false,
+            holds_password: false,
             device_volume: None,
             waiting: None,
             cast: None,

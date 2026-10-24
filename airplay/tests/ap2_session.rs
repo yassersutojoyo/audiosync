@@ -121,9 +121,9 @@ fn ap2_session_runs_in_order() {
             "EVENTS",
             "GET /info",
             "RECORD",
-            "SET_PARAMETER",
             "SETUP stream",
             "FLUSH",
+            "SET_PARAMETER",
         ]
     );
     // Plain text up to the M4 answer, framed from the session SETUP on.
@@ -573,9 +573,9 @@ fn ptp_only_after_ntp_is_refused() {
             "GET /info",
             "RECORD",
             "SETPEERS",
-            "SET_PARAMETER",
             "SETUP stream",
             "FLUSH",
+            "SET_PARAMETER",
         ]
     );
     let first = read_dict(&rig.fake.requests[3].0.body).expect("plist");
@@ -720,7 +720,7 @@ fn stream_setup_refused_without_a_key_is_unsupported() {
 
 // covers: P42
 #[test]
-fn volume_set_after_the_startup_volume_is_sent_once_ready() {
+fn volume_set_while_the_initial_volume_is_out_goes_after_it() {
     let mut fake = FakeAp2::new();
     fake.hold = Some("SET_PARAMETER".to_owned());
     let mut rig = Ap2Rig::new(ap2_config(), fake);
@@ -732,7 +732,7 @@ fn volume_set_after_the_startup_volume_is_sent_once_ready() {
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
     assert_eq!(
         rig.keys()[rig.keys().len() - 3..],
-        ["SETUP stream", "FLUSH", "SET_PARAMETER"]
+        ["FLUSH", "SET_PARAMETER", "SET_PARAMETER"]
     );
     let volume = rig.fake.last("SET_PARAMETER").expect("volume");
     assert_eq!(volume.body, b"volume: -30.000000\r\n");
@@ -828,4 +828,83 @@ fn volume_set_before_the_startup_volume_goes_out_once() {
         .map(|(request, _)| request.body.as_slice())
         .collect();
     assert_eq!(volumes, [b"volume: -30.000000\r\n".as_slice()]);
+}
+
+fn traces(rig: &Ap2Rig) -> Vec<&str> {
+    rig.events
+        .iter()
+        .filter_map(|event| match event {
+            Ap2Event::Trace(line) => Some(line.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn traced_config() -> audiosync_airplay::ap2::Ap2Config {
+    let mut config = ap2_config();
+    config.trace = true;
+    config
+}
+
+#[test]
+fn traced_session_logs_a_steady_read_answer_once() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert("GET_PARAMETER".to_owned(), 404);
+    let mut config = traced_config();
+    config.read_volume = true;
+    let mut rig = Ap2Rig::new(config, fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    for _ in 0..8 {
+        let now = rig.now;
+        rig.session.read_volume(now);
+        rig.advance(Duration::from_secs(2));
+    }
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+    let reads: Vec<&Request> = rig
+        .fake
+        .requests
+        .iter()
+        .map(|(request, _)| request)
+        .filter(|request| request.method.as_str() == "GET_PARAMETER")
+        .collect();
+    assert_eq!(reads.len(), 3, "{:?}", rig.keys());
+    let keys = rig.keys();
+    let read_at = keys.iter().position(|key| *key == "GET_PARAMETER");
+    let volume_at = keys.iter().position(|key| *key == "SET_PARAMETER");
+    assert!(volume_at < read_at, "{keys:?}");
+    let lines = traces(&rig);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("/info initialVolume")),
+        "{lines:?}"
+    );
+    let refusals = lines
+        .iter()
+        .filter(|line| line.starts_with("GET_PARAMETER volume: status 404"))
+        .count();
+    assert_eq!(refusals, 1, "{lines:?}");
+}
+
+#[test]
+fn traced_session_shows_a_refused_set_parameter_with_its_body() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert("SET_PARAMETER".to_owned(), 500);
+    let rig = Ap2Rig::new(traced_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let lines = traces(&rig);
+    assert!(
+        lines.iter().any(|line| line
+            .starts_with("SET_PARAMETER text/parameters: status 500, body text \"volume: -")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn an_untraced_session_logs_no_set_parameter_lines() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert("SET_PARAMETER".to_owned(), 500);
+    let rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    assert!(traces(&rig).is_empty(), "{:?}", traces(&rig));
 }

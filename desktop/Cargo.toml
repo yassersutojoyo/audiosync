@@ -37,7 +37,17 @@ qrcode = { version = "0.14.1", default-features = false }
 # unstable-winit-030: the winit window behind a Slint window, to focus it and
 # to close the tray flyout when it loses focus. Pinned exactly: the brand accent
 # goes through Slint's private_unstable_api (src/view.rs), which any release may change.
-slint = { version = "=1.18.1", features = ["unstable-winit-030"] }
+# Slint's defaults without system-tray: the app's tray is tray-icon, so one
+# tray stack ships.
+slint = { version = "=1.18.1", default-features = false, features = [
+    "std",
+    "backend-default",
+    "renderer-femtovg",
+    "renderer-software",
+    "accessibility",
+    "compat-1-2",
+    "unstable-winit-030",
+] }
 # The settings file in the app's data folder, as JSON (both MIT OR
 # Apache-2.0); Slint's crates already bring serde into the app.
 serde = { version = "1.0.229", features = ["derive"] }
@@ -101,6 +111,18 @@ windows-future = "0.3.2"
 tray-icon = { version = "0.26.1", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# The tray icon as a StatusNotifier item over D-Bus (ksni), with no GTK.
+tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
+# The session bus (MIT): whether a StatusNotifier host runs, and now playing
+# from the MPRIS players (src/audio/mpris); version 5, the one ksni and
+# Slint's Linux backends bring, so the build has one zbus.
+zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+# MPRIS artwork decoded, scaled and encoded as a JPEG (MIT OR Apache-2.0),
+# already in the build through Slint.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+# Decodes the app icon for the tray (MIT OR Apache-2.0), already a
+# dependency of tray-icon on Linux.
+png = "0.18.1"
 # PipeWire's client API (MIT): the whole system's sound from the default
 # output's monitor. libpipewire comes from the host at run time; the v1_0_0
 # feature makes PipeWire 1.0 the oldest the app runs on.

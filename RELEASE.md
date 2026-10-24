@@ -40,6 +40,10 @@ The Windows build can ride along with a Mac release as an unsigned preview, but 
 
 Say plainly in the release notes that it's an unsigned preview (SmartScreen will warn on first launch), Windows 11 only, and what its AirPlay reaches: receivers that take AirPlay 1, with a password prompt for a receiver that has one and a PIN prompt for an Apple TV that asks for a code, while AirPlay 2 stays experimental and off unless File > AirPlay 2 (Experimental) is on (and whether each was tried on a real speaker or Apple TV). The app carries Slint's attribution in its About dialog (see `THIRD_PARTY_NOTICES.md`), so the release notes need no badge.
 
+## Linux AppImage
+
+A release with a Linux build attaches, from the Linux CI run of the release commit, the `AudioSync-$VERSION-x86_64.AppImage` and its `.sha256` from `audiosync-linux-x86_64`, and both files from `appimage-runtime-sources`: `type2-runtime-20251108.tar.gz` (the runtime's source with its libfuse patch) and `fuse-3.15.0.tar.xz` (libfuse, LGPL-2.1). The runtime inside the AppImage links libfuse statically, so its source goes with every copy. Add all of them to the `shasum` and `gh release create` commands above.
+
 ## Sources and license obligations
 
 The Mac app bundles no third-party GPL or LGPL code: it is AudioSync's own code (GPL-3.0-or-later), the Rust standard library and the crates the audio core compiles in, and the Poppins font, the third-party parts all under permissive licenses. Every release ships `THIRD_PARTY_NOTICES.md` (it's also inside the app, with the license files). A new dependency gets its license checked and its entry in the notices before it ships.

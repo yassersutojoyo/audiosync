@@ -46,8 +46,8 @@ jobs:
       - name: Tests
         run: cargo test --locked
 
-  # The same crate on Linux: the UI-only build without an audio backend, the
-  # mock-backend build, and the tests.
+  # The same crate on Linux: the PipeWire build, the mock-backend build, the
+  # tests and the capture's smoke test.
   linux:
     name: Linux (format, clippy and tests)
     runs-on: ubuntu-24.04
@@ -65,6 +65,7 @@ jobs:
           rustc --version
 
       # Slint's fonts and windows, the Cast sender's native-tls (OpenSSL), and
+      # dbus-run-session for the now-playing tests' private session bus, and
       # the PipeWire client library with libclang for its bindings. The
       # daemon, WirePlumber and the pw-* tools run the live tests; the
       # PulseAudio server and paplay play the PulseAudio-API app.
@@ -86,15 +87,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo clippy --locked --all-targets --features mock-backend -- -D warnings
 
+      # The MPRIS tests serve fake players on a session bus of their own.
       - name: Tests
         if: ${{ !cancelled() }}
-        run: cargo test --locked
+        run: dbus-run-session -- cargo test --locked
 
       # A PipeWire daemon of its own with two null sinks, each playing a 440 Hz
       # tone of its own level, and the ignored tests that capture the default
       # output's monitor and follow a change of the default. The tones are
       # linked by hand: WirePlumber moves even a targeted pw-play to a new
-      # default output.
+      # default output. They ask for the capture's 1024-frame quantum: at
+      # pw-play's default 100 ms they failed every cycle and played silence.
       - name: PipeWire capture smoke test
         if: ${{ !cancelled() }}
         run: |
@@ -116,7 +119,7 @@ jobs:
             sleep 1
             wpctl status
             for level in loud quiet; do
-              pw-play --target 0 -P "{ node.name = ci-$level-tone }" "$RUNNER_TEMP/$level.wav" &
+              pw-play --target 0 --latency 1024 -P "{ node.name = ci-$level-tone }" "$RUNNER_TEMP/$level.wav" &
             done
             sleep 1
             for level in loud quiet; do

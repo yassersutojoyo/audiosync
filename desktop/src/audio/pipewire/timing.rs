@@ -10,8 +10,9 @@
 //! from it; one further away starts a gap (a suspended output, an xrun).
 //! The newest buffer may still lag its cycle by a buffer or two (a lost
 //! one, or one the main loop hasn't seen yet); the idle timer then waits
-//! that much longer, see [`PacketClock::settle`]. Closer than [`GAP_JUMP_HNS`] the cycle's time counts, so the device
-//! clock's drift never adds up.
+//! that much longer, see [`PacketClock::settle`]. Closer than
+//! [`GAP_JUMP_HNS`] the cycle's time counts, so the device clock's drift
+//! never adds up.
 
 /// 100 ns units per second.
 const HNS_PER_SECOND: u64 = 10_000_000;

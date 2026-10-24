@@ -1087,6 +1087,29 @@ mod tests {
                 "ASC_AIRPLAY_EVENT_WARNING",
                 AIRPLAY_EVENT_WARNING.to_string(),
             ),
+            ("ASC_AIRPLAY_EVENT_TRACE", AIRPLAY_EVENT_TRACE.to_string()),
+            ("ASC_AIRPLAY_EVENT_REMOTE", AIRPLAY_EVENT_REMOTE.to_string()),
+            (
+                "ASC_AIRPLAY_REMOTE_PLAY_PAUSE",
+                AIRPLAY_REMOTE_PLAY_PAUSE.to_string(),
+            ),
+            ("ASC_AIRPLAY_REMOTE_NEXT", AIRPLAY_REMOTE_NEXT.to_string()),
+            (
+                "ASC_AIRPLAY_REMOTE_PREVIOUS",
+                AIRPLAY_REMOTE_PREVIOUS.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PLAYBACK_UNKNOWN",
+                AIRPLAY_PLAYBACK_UNKNOWN.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PLAYBACK_PLAYING",
+                AIRPLAY_PLAYBACK_PLAYING.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PLAYBACK_PAUSED",
+                AIRPLAY_PLAYBACK_PAUSED.to_string(),
+            ),
             (
                 "ASC_AIRPLAY_WARNING_JACK_DISCONNECTED",
                 AIRPLAY_WARNING_JACK_DISCONNECTED.to_string(),
@@ -1110,6 +1133,42 @@ mod tests {
             (
                 "ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY",
                 AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED",
+                AIRPLAY_WARNING_VOLUME_READS_STOPPED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_ARTWORK_REFUSED",
+                AIRPLAY_WARNING_ARTWORK_REFUSED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE",
+                AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED",
+                AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL",
+                AIRPLAY_WARNING_LATENCY_SHORTFALL.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_EVENT_LATENCY_HELD",
+                AIRPLAY_EVENT_LATENCY_HELD.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY",
+                AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCIES",
+                AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCIES.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_LATENCY_SOURCE_ARRIVAL_TO_RENDER",
+                AIRPLAY_LATENCY_SOURCE_ARRIVAL_TO_RENDER.to_string(),
             ),
             (
                 "ASC_AIRPLAY_PAIRINGS_FAILED",
@@ -1320,12 +1379,6 @@ mod tests {
             ("ASC_PRESET_STEP_BUSY", PRESET_STEP_BUSY.to_string()),
             ("ASC_PRESET_STEP_IGNORED", PRESET_STEP_IGNORED.to_string()),
             ("ASC_METER_POLL_MS", crate::meter::METER_POLL_MS.to_string()),
-            ("ASC_LEAD_SOURCE_SYSTEM", LEAD_SOURCE_SYSTEM.to_string()),
-            ("ASC_LEAD_SOURCE_APP", LEAD_SOURCE_APP.to_string()),
-            ("ASC_LEAD_SOURCE_INPUT", LEAD_SOURCE_INPUT.to_string()),
-            ("ASC_LEAD_OUTPUT_LOCAL", LEAD_OUTPUT_LOCAL.to_string()),
-            ("ASC_LEAD_OUTPUT_AIRPLAY", LEAD_OUTPUT_AIRPLAY.to_string()),
-            ("ASC_LEAD_OUTPUT_CAST", LEAD_OUTPUT_CAST.to_string()),
             ("ASC_CAST_RATE", CAST_RATE.to_string()),
             ("ASC_CAST_APPEARED", CAST_APPEARED.to_string()),
             ("ASC_CAST_CHANGED", CAST_CHANGED.to_string()),

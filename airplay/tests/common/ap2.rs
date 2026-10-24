@@ -204,7 +204,9 @@ pub struct FakeAp2 {
     pub requests: Vec<(Request, bool)>,
     /// A status in place of 200, by request key.
     pub status: HashMap<String, u16>,
-    /// A status in place of 200 for the next request with the key only.
+    /// A status in place of 200 for the next request with the key only; a
+    /// key followed by a content type ("SET_PARAMETER image/jpeg") matches
+    /// only requests carrying that type.
     pub status_once: HashMap<String, u16>,
     /// A digest challenge (`WWW-Authenticate` value) for every request with
     /// the key that carries no `Authorization`.
@@ -221,6 +223,11 @@ pub struct FakeAp2 {
     pub pause: HashMap<String, Duration>,
     /// A body in place of the usual answer, by key.
     pub bodies: HashMap<String, Vec<u8>>,
+    /// The body of the answer to the second `/info`, in place of the
+    /// initial volume alone.
+    pub second_info_body: Option<Vec<u8>>,
+    /// Headers added to the RECORD answer, such as `Audio-Latency`.
+    pub record_headers: Vec<(String, String)>,
     /// The stream SETUP answer leaves out `dataPort`.
     pub no_data_port: bool,
     /// The `dataPort` and `controlPort` of the stream SETUP answer.
@@ -259,6 +266,8 @@ impl FakeAp2 {
             held: Vec::new(),
             pause: HashMap::new(),
             bodies: HashMap::new(),
+            second_info_body: None,
+            record_headers: Vec::new(),
             no_data_port: false,
             data_port: DATA_PORT,
             control_port: RECEIVER_CONTROL_PORT,
@@ -329,7 +338,13 @@ impl FakeAp2 {
             let challenged = self.challenge.as_ref().is_some_and(|(wanted, _)| {
                 *wanted == key && !request.headers.contains("Authorization")
             });
-            let once = self.status_once.remove(&key);
+            let typed = request
+                .headers
+                .get("Content-Type")
+                .map(|kind| format!("{key} {kind}"));
+            let once = typed
+                .and_then(|typed| self.status_once.remove(&typed))
+                .or_else(|| self.status_once.remove(&key));
             let pairing = request.uri.starts_with("/pair-");
             if request.uri == "/pair-setup" {
                 let items = untlv(&request.body);
@@ -391,7 +406,10 @@ impl FakeAp2 {
         response.body = match key {
             _ if body.is_some() => body.unwrap_or_default(),
             "GET /info" if !request.body.is_empty() => self.info_body.clone(),
-            "GET /info" => plist(dict(&[("initialVolume", Value::Real(-20.0))])),
+            "GET /info" => self
+                .second_info_body
+                .clone()
+                .unwrap_or_else(|| plist(dict(&[("initialVolume", Value::Real(-20.0))]))),
             "SETUP session" => {
                 let ptp = read_dict(&request.body).and_then(|d| d.get("timingProtocol").cloned())
                     == Some(Value::String("PTP".to_owned()));
@@ -430,6 +448,11 @@ impl FakeAp2 {
             response
                 .headers
                 .push("Content-Type", "application/x-apple-binary-plist");
+        }
+        if key == "RECORD" {
+            for (name, value) in &self.record_headers {
+                response.headers.push(name.as_str(), value.clone());
+            }
         }
         response
     }
@@ -528,6 +551,23 @@ impl Ap2Rig {
         };
         rig.pump();
         rig
+    }
+
+    /// Wires `session`, already connected to `fake`, as it stands at `now`.
+    pub fn with_session(session: Ap2Session, fake: FakeAp2, now: Instant) -> Ap2Rig {
+        Ap2Rig {
+            session,
+            fake,
+            now,
+            events: Vec::new(),
+            connects: Vec::new(),
+            event_connects: Vec::new(),
+            refuse_events: 0,
+            event_answers: Vec::new(),
+            closes: 0,
+            trace: Vec::new(),
+            close_on: None,
+        }
     }
 
     pub fn pump(&mut self) {
