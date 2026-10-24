@@ -104,11 +104,14 @@ fn the_defaults_are_followed_again_after_the_session_manager_restarts() {
 fn the_graph_comes_back_after_the_daemon_restarts() {
     let registry = Registry::start().unwrap();
     assert!(until(5, || has(registry.graph(), "as-a")));
+    registry.take_outputs_changed();
     run("pkill", &["-x", "pipewire"]);
     assert!(until(5, || matches!(
         registry.graph(),
         Err(BackendError::ServiceNotRunning)
     )));
+    // The lost connection is a change, so the controller lists again.
+    assert!(registry.take_outputs_changed());
     detached("pipewire");
     std::thread::sleep(Duration::from_secs(1));
     if !running("wireplumber") {

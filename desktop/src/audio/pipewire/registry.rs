@@ -513,6 +513,8 @@ fn connect(
             let lost = Rc::clone(&lost);
             move |id, _seq, res, _message| {
                 if super::connection_lost(id, res) {
+                    // Before `failed`, so whoever sees the failure finds the change too.
+                    shared.outputs_changed.store(true, Ordering::Release);
                     shared.failed.store(true, Ordering::Release);
                     lost.set(true);
                 }
