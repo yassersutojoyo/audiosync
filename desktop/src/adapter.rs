@@ -4172,7 +4172,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn retry_airplay(&mut self) {
         self.log
             .log(|| "the user asked to start AirPlay again (Retry)".to_owned());
-        self.notices.clear(&[NoticeSubject::AirPlay]);
+        // A new sender binds the PTP ports anew and reports a clash itself.
+        self.ptp_taken = None;
+        self.notices
+            .clear(&[NoticeSubject::AirPlay, NoticeSubject::AirPlayPtp]);
         self.audio.retry_airplay();
         self.take_events();
     }
@@ -7372,6 +7375,40 @@ mod tests {
         assert!(
             shown(&adapter),
             "a speaker refused in an earlier episode raises it again in a new one"
+        );
+    }
+
+    #[test]
+    fn a_new_sender_ends_the_ptp_port_episode() {
+        use audiosync_airplay::error::{UnsupportedReason, Warning};
+
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let next = FakeAirPlay::new();
+        let started = next.clone();
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            Some(StartedSender::browsing(started.link(), None))
+        }));
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(Warning::PtpUnavailable),
+        });
+        adapter.poll();
+        fake.stop_running();
+        adapter.poll();
+        adapter.retry_airplay();
+        assert!(
+            !messages(&adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken),
+            "Retry starts a sender that binds PTP anew"
+        );
+        next.appear(&kitchen);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        next.fail(&kitchen, ErrorKind::Unsupported(UnsupportedReason::Timing));
+        adapter.poll();
+        assert!(
+            !messages(&adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken),
+            "a refusal the new sender reported no clash for names none"
         );
     }
 
