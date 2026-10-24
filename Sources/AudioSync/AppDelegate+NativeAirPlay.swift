@@ -306,7 +306,7 @@ extension AppDelegate {
         nativeAirPlay = nil
         nativeStarts.senderFailed()
         // Nothing starts a waiting speaker once its sender is gone.
-        clearNotices(native.model.waiting.map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
+        clearNotices(native.model.waiting.keys.map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
         native.discard()
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
