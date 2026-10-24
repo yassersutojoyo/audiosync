@@ -1888,7 +1888,7 @@ impl MockBackend {
     /// The example data with presets, for `AUDIOSYNC_PREVIEW_PRESETS`:
     /// Evening plays now, Movie Night and Whole House don't. For
     /// [`PresetsPreview::LeftOff`], Whole House was recalled with Den hidden
-    /// and Patio not found.
+    /// and Patio, the Outdoors zone's only member, not found.
     pub fn presets_preview(which: PresetsPreview) -> Self {
         let mut mock = MockBackend::new();
         if which == PresetsPreview::Empty {
@@ -1924,6 +1924,9 @@ impl MockBackend {
                 id: "airplay:patio".into(),
                 name: "Patio".into(),
                 kind: SpeakerKind::AirPlay,
+            });
+            mock.zones_mut(|zones| {
+                add_zone(zones, "zone:outdoors", "Outdoors", &["airplay:patio"])
             });
             mock.recall_preset("preset:3");
         }
@@ -2967,6 +2970,14 @@ mod tests {
                 nothing_changed: false,
             }]
         );
+        assert!(
+            state
+                .zones
+                .iter()
+                .any(|zone| zone.members.iter().any(|m| m == "airplay:patio")),
+            "Patio is a zone member not found, as the real adapter lists one"
+        );
+        assert!(state.absent_member("airplay:patio").is_some());
         for id in ["airplay:kitchen", "airplay:bedroom", "local:desk"] {
             assert!(state.speaker(id).is_some_and(|s| s.enabled), "{id} is on");
         }
