@@ -1117,6 +1117,10 @@ mod tests {
                 AIRPLAY_WARNING_VOLUME_READS_STOPPED.to_string(),
             ),
             (
+                "ASC_AIRPLAY_WARNING_ARTWORK_REFUSED",
+                AIRPLAY_WARNING_ARTWORK_REFUSED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_PAIRINGS_FAILED",
                 AIRPLAY_PAIRINGS_FAILED.to_string(),
             ),
