@@ -213,6 +213,9 @@ pub struct Speaker {
     /// An Apple TV AudioSync keeps pairing credentials for, which the user
     /// can forget.
     pub paired: bool,
+    /// An AirPlay speaker whose password AudioSync holds until it quits,
+    /// which the user can forget.
+    pub holds_password: bool,
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
@@ -1550,6 +1553,7 @@ impl MockBackend {
             auto_connect: false,
             availability: Availability::Open,
             paired: false,
+            holds_password: false,
             device_volume: None,
             waiting: None,
             cast: None,
@@ -2158,6 +2162,7 @@ impl Backend for MockBackend {
                 auto_connect: false,
                 availability: Availability::Open,
                 paired: false,
+                holds_password: false,
                 device_volume: None,
                 waiting: None,
                 cast: Some(CastRow {
@@ -2539,6 +2544,7 @@ mod tests {
             auto_connect: false,
             availability: Availability::Open,
             paired: false,
+            holds_password: false,
             device_volume: None,
             waiting: None,
             cast: None,

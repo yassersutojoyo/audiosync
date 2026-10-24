@@ -109,6 +109,7 @@ struct MainView: View {
     @ObservedObject var model: AppModel
     @StateObject private var gearAnchor = MenuAnchor.Box()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
+    @StateObject private var sheetRoom = SheetRoom()
 
     var body: some View {
         let t = model.text
@@ -165,6 +166,7 @@ struct MainView: View {
         .padding(.top, 4)
         .padding(.bottom, 20)
         .frame(minWidth: 720, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity, alignment: .topLeading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sheetRoom.height = $0 }
         // A click no row or control takes closes the delay panels, applying
         // what was typed. Behind everything, so the header can still drag
         // the window.
@@ -176,7 +178,7 @@ struct MainView: View {
         .tint(accent)
         .sheet(isPresented: Binding(get: { model.calibrateAll.shown },
                                     set: { if !$0 { model.actions.closeCalibrateAll() } })) {
-            CalibrateAllSheetView(model: model).tint(accent)
+            CalibrateAllSheetView(model: model, room: sheetRoom.height).tint(accent)
         }
         // On the content, not the window's root: one view holds one sheet.
         .background {
@@ -969,6 +971,9 @@ struct SpeakerRow: View {
             if speaker.paired {
                 Button(t.forgetPairing) { model.actions.forgetAirPlayPairing(speaker.id) }
                     .help(t.forgetPairingHelp)
+            } else if speaker.holdsPassword {
+                Button(t.forgetPassword) { model.actions.forgetAirPlayPairing(speaker.id) }
+                    .help(t.forgetPasswordHelp)
             }
         }
         Divider()

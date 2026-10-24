@@ -412,6 +412,13 @@ struct NativeAirPlayModel {
     /// offers Forget Pairing.
     func isPaired(_ id: String) -> Bool { receivers[id]?.paired == true }
 
+    /// Whether the sender holds a password the user typed for the listed
+    /// receiver `id` this run: its row offers Forget Password.
+    func holdsPassword(_ id: String) -> Bool { passwords.contains(id) }
+
+    /// Forget Password: the next attempt asks for the password again.
+    mutating func forgetPassword(_ id: String) { passwords.remove(id) }
+
     /// The speaker list's rows, as app IDs: every receiver it shows
     /// (`NativeReceiver.access`), and any that still plays while its
     /// announcement lapsed; by name, then ID. A target in the sender stays

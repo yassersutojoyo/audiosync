@@ -2109,6 +2109,12 @@ do {
         check(m.answered(password!, code: "secret") == .sendPassword(pair: false)
                 && m.plan(streaming: true, enabled: ["native:C3"]).add == ["C3"],
               "native pairing: with its password, a receiver joins")
+        check(m.holdsPassword("C3") && !m.isPaired("C3") && !m.holdsPassword("A1"),
+              "native pairing: a receiver whose password was typed offers Forget Password in its row menu")
+        var forgot = m
+        forgot.forgetPassword("C3")
+        check(!forgot.holdsPassword("C3") && forgot.plan(streaming: true, enabled: ["native:C3"]).add.isEmpty,
+              "native pairing: after Forget Password the receiver no longer joins with the old password")
         let pin = m.nextPrompt()
         check(pin == NativePrompt(id: "B2", password: false, wrong: false), "native pairing: then the PIN prompt opens")
         check(m.answered(pin!, code: "12a4") == .askAgain && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),

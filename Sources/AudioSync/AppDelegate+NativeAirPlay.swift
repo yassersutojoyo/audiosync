@@ -416,14 +416,17 @@ extension AppDelegate {
         return true
     }
 
-    /// Forget Pairing on a native speaker's row: its credentials go, AirPlay 2
-    /// ones included, so it asks for a PIN again; a speaker that is on goes
-    /// off, as on Windows.
+    /// Forget Pairing or Forget Password on a native speaker's row: its
+    /// credentials go, AirPlay 2 ones included, and so does the password
+    /// typed for it, so it asks for a PIN or password again; a speaker that
+    /// is on goes off, as on Windows.
     func forgetNativePairing(_ id: String) {
         guard let receiver = NativeAirPlayID.receiver(id) else { return }
         endNativeAttempt(id)
         nativeAirPlay?.forgetPairing(receiver)
-        DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing forgotten")
+        nativeAirPlay?.setPassword(receiver, nil)
+        nativeAirPlay?.model.forgetPassword(receiver)
+        DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing and password forgotten")
         if enabledAirPlay.remove(id) != nil {
             syncNativeSpeakers()
             stopIfIdle()

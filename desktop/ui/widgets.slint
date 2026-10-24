@@ -1568,6 +1568,13 @@ export component SpeakerRow inherits Rectangle {
                     }
                 }
 
+                if !root.item.paired && root.item.holds-password: MenuItem {
+                    title: Strings.forget-password;
+                    activated => {
+                        root.forget-pairing();
+                    }
+                }
+
                 if root.item.cast-added-by-address: MenuItem {
                     title: Strings.cast-remove;
                     activated => {
