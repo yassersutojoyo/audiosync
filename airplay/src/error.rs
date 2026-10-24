@@ -226,6 +226,12 @@ pub enum Warning {
     /// the session falls back to the small image or sends no more artwork,
     /// and plays on. Told once per session (P185).
     ArtworkRefused { status: Option<u16> },
+    /// The remote-control server couldn't listen on the session's local
+    /// address, so the session plays without remote control (P190).
+    RemoteControlUnavailable,
+    /// The remote-control server's `_dacp._tcp` record couldn't be
+    /// registered; the sessions play on (P188).
+    RemoteControlNotAdvertised,
     /// The receiver's reported latency R_s needs a larger Lf than the
     /// sounding stream it joined can take: it plays in step at that Lf;
     /// told once per session (P201).

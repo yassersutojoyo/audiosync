@@ -552,13 +552,14 @@ fn a_lost_speaker_is_retried_after_one_then_two_seconds_and_the_schedule_resets(
         second_retry >= Duration::from_millis(1900) && second_retry <= Duration::from_millis(3500),
         "second retry after {second_retry:?}"
     );
-    // Each retry is a complete new session (new identifiers).
+    // Each retry is a complete new session: a fresh Active-Remote, while
+    // Client-Instance stays for the run (P22).
     let instances: Vec<String> = receiver
         .log()
         .requests
         .iter()
         .filter(|(_, r)| r.method == Method::Options)
-        .filter_map(|(_, r)| r.headers.get("Client-Instance").map(str::to_owned))
+        .filter_map(|(_, r)| r.headers.get("Active-Remote").map(str::to_owned))
         .collect();
     let unique: std::collections::BTreeSet<&String> = instances.iter().collect();
     assert_eq!(unique.len(), instances.len(), "fresh identifiers each time");

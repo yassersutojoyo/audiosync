@@ -13,6 +13,7 @@
 //! meanwhile wait at most that long.
 
 mod ap2;
+mod dacp;
 mod targets;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -104,6 +105,7 @@ pub(crate) enum Command {
     SetTargetDelay(TargetId, Duration),
     SetTargetVolume(TargetId, Volume),
     ReadTargetVolume(TargetId),
+    SetDacpAdvertiser(Box<dyn crate::dacp::DacpAdvertiser + Send>),
     Shutdown,
 }
 
@@ -112,6 +114,7 @@ pub(crate) enum Input {
     /// Boxed: a speaker's options carry its HomeKit credentials.
     Command(Box<Command>),
     Io(IoEvent),
+    Remote(super::remote::RemoteInput),
 }
 
 /// A session that is starting, playing or closing.
@@ -335,6 +338,8 @@ pub(crate) struct Driver {
     /// Speakers whose current session is the restart after a move, so a
     /// fallback in it goes to NTP instead of moving the service back.
     ptp_retrying: BTreeSet<DeviceKey>,
+    /// The remote-control command server (P186 to P195).
+    dacp: super::remote::Server,
 }
 
 impl Driver {
@@ -345,6 +350,10 @@ impl Driver {
         events: mpsc::Sender<SenderEvent>,
         latency_frames: Arc<AtomicU32>,
     ) -> Driver {
+        let sink = io_sink.clone();
+        let dacp = super::remote::Server::new(Arc::new(move |input| {
+            sink.send(Input::Remote(input)).is_ok()
+        }));
         Driver {
             stream,
             inputs,
@@ -383,6 +392,7 @@ impl Driver {
             ptp_restart: BTreeMap::new(),
             ptp_moved: BTreeMap::new(),
             ptp_retrying: BTreeSet::new(),
+            dacp,
         }
     }
 
@@ -400,6 +410,10 @@ impl Driver {
     pub(crate) fn with_sounding(mut self, sounding: Arc<AtomicBool>) -> Driver {
         self.sounding = sounding;
         self
+    }
+
+    pub(crate) fn dacp_counters(&self) -> Arc<super::DacpCounters> {
+        self.dacp.counters()
     }
 
     pub(crate) fn with_pairing_hold(mut self, hold: Duration) -> Driver {
@@ -425,6 +439,7 @@ impl Driver {
             let now = Instant::now();
             self.run_timers(now);
             self.flush(now);
+            self.remote_turn(now);
             self.report_missing_members();
             if self.finished(Instant::now()) {
                 break;
@@ -506,6 +521,7 @@ impl Driver {
         match input {
             Input::Command(command) => self.command(*command, now),
             Input::Io(event) => self.io_event(event, now),
+            Input::Remote(input) => self.remote_input(input),
         }
     }
 
@@ -546,6 +562,9 @@ impl Driver {
         }
         if let Some(stopping) = self.stopping {
             next = next.min(stopping);
+        }
+        if let Some(at) = self.dacp.poll_timeout() {
+            next = next.min(at);
         }
         next
     }
@@ -809,7 +828,7 @@ impl Driver {
         self.end_pairing(&key);
         let mut entropy = OsEntropy;
         let mut client = [0u8; 8];
-        let ids = SessionIds::generate(&mut entropy);
+        let ids = self.session_ids();
         let (Ok(ids), Ok(())) = (ids, entropy.fill(&mut client)) else {
             let mut error = SessionError::new(ErrorKind::PairingFailed);
             error.detail = Some("the random number source is unavailable");
@@ -1268,6 +1287,12 @@ impl Driver {
         let Some(key) = self.sessions.get(&session).cloned() else {
             return;
         };
+        if let IoEvent::Connected {
+            attempt, stream, ..
+        } = &event
+        {
+            self.remote_connected(&key, session, *attempt, stream);
+        }
         if self
             .speakers
             .get(&key)
@@ -1404,6 +1429,7 @@ impl Driver {
             Command::RemoveTarget(id) => self.remove_target(&id, now),
             Command::SetTargetDelay(id, delay) => self.set_target_delay(&id, delay, now),
             Command::SetTargetVolume(id, volume) => self.set_target_volume(&id, volume, now),
+            Command::SetDacpAdvertiser(advertiser) => self.set_dacp_advertiser(advertiser),
             Command::ReadTargetVolume(id) => self.read_target_volume(&id, now),
             Command::Shutdown => self.shutdown(now),
         }
@@ -1579,7 +1605,7 @@ impl Driver {
             Err(kind) => return self.refuse(key, SessionError::new(kind), now),
         };
         let mut entropy = OsEntropy;
-        let Ok(ids) = SessionIds::generate(&mut entropy) else {
+        let Ok(ids) = self.session_ids() else {
             let mut error = SessionError::new(ErrorKind::Unreachable);
             error.detail = Some("the random number source is unavailable");
             return self.refuse(key, error, now);
@@ -1627,6 +1653,7 @@ impl Driver {
         }
         let session_key = SessionKey(self.next_session);
         self.next_session += 1;
+        let remote = ids.active_remote;
         speaker.phase = Phase::Active(Box::new(Active {
             key: session_key,
             session: Session::new(config, ids, now),
@@ -1638,6 +1665,7 @@ impl Driver {
             stream_id: None,
         }));
         self.sessions.insert(session_key, key.clone());
+        self.remote_open(key, remote, now);
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
     }
 
@@ -1885,6 +1913,7 @@ impl Driver {
 
     /// Closes whatever is still open when the loop ends.
     fn close_all(&mut self) {
+        self.stop_remote();
         let pairings: Vec<DeviceKey> = self
             .pairings
             .keys()

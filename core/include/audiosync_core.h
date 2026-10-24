@@ -129,7 +129,18 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
 #define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
-#define ASC_AIRPLAY_EVENT_LATENCY_HELD 13   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
+#define ASC_AIRPLAY_EVENT_REMOTE 13         /* a speaker's remote asked for .remote: send it through the now-playing control */
+
+/* AscAirPlayEvent.remote: the transport control a speaker's remote asked for */
+#define ASC_AIRPLAY_REMOTE_PLAY_PAUSE 1
+#define ASC_AIRPLAY_REMOTE_NEXT 2
+#define ASC_AIRPLAY_REMOTE_PREVIOUS 3
+
+/* asc_airplay_set_playback: what the app the now-playing control follows does */
+#define ASC_AIRPLAY_PLAYBACK_UNKNOWN 0
+#define ASC_AIRPLAY_PLAYBACK_PLAYING 1
+#define ASC_AIRPLAY_PLAYBACK_PAUSED 2
+#define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
 
 /* Which reports gave a speaker's latency (AscAirPlayEvent.receiver_latency_sources bits). */
 #define ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY 1     /* Audio-Latency of a RECORD answer */
@@ -145,6 +156,8 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
 #define ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED 7       /* three volume reads in a row failed on an AirPlay 2 session: it isn't asked again */
 #define ASC_AIRPLAY_WARNING_ARTWORK_REFUSED 8            /* an artwork image was refused or unanswered: the small one or none follows; once per session */
+#define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE 9 /* no remote control port could be bound for the session: its remote buttons do nothing */
+#define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED 10 /* the remote control's _dacp._tcp record couldn't be registered */
 #define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 11         /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
 
 /* A speaker's state (AscAirPlayEvent.state). */
@@ -1493,6 +1506,7 @@ typedef struct AscAirPlayEvent {
     const char *detail;              /* an error or warning event's text, a failure event's panic location; for a debug log (no secrets) */
     double volume;                   /* a volume event's slider position, 0 to 100 */
     int32_t warning;                 /* a warning event's ASC_AIRPLAY_WARNING_* */
+    int32_t remote;                  /* a remote event's ASC_AIRPLAY_REMOTE_* */
     int64_t receiver_latency_us;     /* a latency event's reported latency R_s in microseconds; 0 when no source gave one */
     uint32_t receiver_latency_sources; /* a latency event's ASC_AIRPLAY_LATENCY_SOURCE_* bits; 0 when none */
 } AscAirPlayEvent;
@@ -1745,6 +1759,16 @@ bool asc_airplay_set_now_playing(AscAirPlay *airplay, const char *title, const c
  * NULL or dead handle.
  */
 bool asc_airplay_set_progress(AscAirPlay *airplay, double elapsed_ms, double length_ms);
+
+/*
+ * Tells which app the now-playing control follows, by a name for the debug
+ * log (UTF-8), and what it does (ASC_AIRPLAY_PLAYBACK_*), so a speaker
+ * remote's Play or Pause goes as play-pause only when that changes something.
+ * A NULL or empty app is no app to control: remote transport commands then do
+ * nothing. Returns false, changing nothing, for a NULL or dead handle or an
+ * app that isn't UTF-8.
+ */
+bool asc_airplay_set_playback(AscAirPlay *airplay, const char *app, int32_t playback);
 
 /*
  * Opens the pairing store kept in the file at `path` (UTF-8), meant for

@@ -72,7 +72,8 @@ use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::SAMPLE_RATE;
-use audiosync_airplay::discovery::mdns::MdnsBrowser;
+use audiosync_airplay::dacp::{DacpAdvertiser, RemoteCommand};
+use audiosync_airplay::discovery::mdns::{MdnsAdvertiser, MdnsBrowser};
 use audiosync_airplay::discovery::{Browser, Device, DeviceKey, ProtocolPath, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
 use audiosync_airplay::homekit::HomeKitCredentials;
@@ -97,6 +98,9 @@ use super::{host_slice, stereo_samples};
 use crate::airplay_pairings::{Loaded, PairingStore};
 use crate::airplay2_identity::IdentityStore;
 use crate::fade::InputFade;
+use crate::policy::remote::{
+    Action, App, Command, Control, Event as RemoteEvent, MUTED_DB, OwnVolume, Playback, Remote,
+};
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{NO_ZONE_POSITION, own_position_for_level, stage_level};
@@ -231,11 +235,30 @@ pub const AIRPLAY_EVENT_WARNING: i32 = 11;
 /// A line for the debug log about a speaker's session
 /// ([`AscAirPlayEvent::detail`]); sent only while `AUDIOSYNC_DEBUG` is `1`.
 pub const AIRPLAY_EVENT_TRACE: i32 = 12;
+/// A speaker's remote asked for a transport control
+/// ([`AscAirPlayEvent::remote`]): the host sends it through its now-playing
+/// control to the app that control follows (S274).
+pub const AIRPLAY_EVENT_REMOTE: i32 = 13;
+
+/// A remote event's control ([`AscAirPlayEvent::remote`]): play-pause.
+pub const AIRPLAY_REMOTE_PLAY_PAUSE: i32 = 1;
+/// Next track.
+pub const AIRPLAY_REMOTE_NEXT: i32 = 2;
+/// Previous track.
+pub const AIRPLAY_REMOTE_PREVIOUS: i32 = 3;
+
+/// What the app the host's now-playing control follows does, for
+/// [`asc_airplay_set_playback`]: no reading says.
+pub const AIRPLAY_PLAYBACK_UNKNOWN: i32 = 0;
+/// It plays.
+pub const AIRPLAY_PLAYBACK_PLAYING: i32 = 1;
+/// It is paused.
+pub const AIRPLAY_PLAYBACK_PAUSED: i32 = 2;
 /// The host set an Lf while a speaker sounds: the sender holds it
 /// ([`AscAirPlayEvent::latency_ms`] is the held L) until the stream has no
 /// speaker or the capture restarts, when a timeline event reports it
 /// (P201).
-pub const AIRPLAY_EVENT_LATENCY_HELD: i32 = 13;
+pub const AIRPLAY_EVENT_LATENCY_HELD: i32 = 14;
 
 /// [`AscAirPlayEvent::receiver_latency_sources`] bits: `Audio-Latency` of a
 /// RECORD answer (P196).
@@ -274,6 +297,13 @@ pub const AIRPLAY_WARNING_VOLUME_READS_STOPPED: i32 = 7;
 /// falls back to the small image or sends no more artwork, and plays on;
 /// once per session (P185).
 pub const AIRPLAY_WARNING_ARTWORK_REFUSED: i32 = 8;
+/// The receiver's remote control can't reach AudioSync from this speaker:
+/// no command server port could be bound on the session's local address
+/// (P190).
+pub const AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE: i32 = 9;
+/// The `_dacp._tcp` record couldn't be registered, so receivers may not
+/// find the remote control (P188).
+pub const AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED: i32 = 10;
 /// The receiver's reported latency needs a larger Lf than the sounding
 /// stream it joined can take: it plays in step at the stream's Lf; the
 /// detail names R_s and Lf (P201).
@@ -384,6 +414,8 @@ pub struct AscAirPlayEvent {
     pub volume: f64,
     /// A warning event's `AIRPLAY_WARNING_*`.
     pub warning: i32,
+    /// A remote event's `AIRPLAY_REMOTE_*`.
+    pub remote: i32,
     /// A latency event's R_s in microseconds, 0 when no source gave a
     /// value (P199, P202).
     pub receiver_latency_us: i64,
@@ -480,6 +512,8 @@ enum Pending {
     /// A slider position the speaker's own volume change led to.
     Volume(String, f64),
     Warning(String, Warning),
+    /// A transport control a speaker's remote asked for, by the row's ID.
+    Remote(String, Control),
     Timeline {
         latency: Duration,
         restarted: bool,
@@ -595,6 +629,15 @@ pub struct AscAirPlay {
     /// Opens the browser [`asc_airplay_start_discovery`] starts discovery
     /// with.
     open_browser: OpenBrowser,
+    /// The remote control's `_dacp._tcp` record has its advertiser (P188).
+    advertising: bool,
+    /// What speakers' remotes asked for so far (S273 to S279).
+    remote: Remote,
+    /// The app the host's now-playing control follows, and what it does
+    /// ([`asc_airplay_set_playback`]); `None` with no app to control.
+    playback: Option<(String, Playback)>,
+    /// The clock the remote decisions count on.
+    created_at: Instant,
 }
 
 /// Opens the browser discovery runs on; `None` when it can't start.
@@ -613,6 +656,17 @@ fn live_browser() -> Option<Box<dyn Browser + Send>> {
     #[cfg(test)]
     let browser = None::<MdnsBrowser>;
     Some(Box::new(browser?))
+}
+
+/// The remote control's advertiser for the app, set up with discovery. Its
+/// multicast DNS daemon starts with the first session, and never in the
+/// core's tests, for the same firewall reason as [`live_browser`].
+fn live_advertiser() -> Option<Box<dyn DacpAdvertiser + Send>> {
+    #[cfg(not(test))]
+    let advertiser = Some(MdnsAdvertiser::new());
+    #[cfg(test)]
+    let advertiser = None::<MdnsAdvertiser>;
+    Some(Box::new(advertiser?))
 }
 
 /// The ID a receiver goes by, the one the Windows app uses too: its device
@@ -813,6 +867,8 @@ fn warning_code(warning: &Warning) -> i32 {
         Warning::PtpOutsideFamily => AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY,
         Warning::VolumeReadsStopped => AIRPLAY_WARNING_VOLUME_READS_STOPPED,
         Warning::ArtworkRefused { .. } => AIRPLAY_WARNING_ARTWORK_REFUSED,
+        Warning::RemoteControlUnavailable => AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE,
+        Warning::RemoteControlNotAdvertised => AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED,
         Warning::LatencyShortfall { .. } => AIRPLAY_WARNING_LATENCY_SHORTFALL,
     }
 }
@@ -951,6 +1007,18 @@ impl AscAirPlay {
             // Discovery's browser died (a bug in it): the sender no
             // longer lists anything new, so it counts as dead too.
             SenderEvent::DiscoveryFailed => self.death.dead.store(true, Ordering::Release),
+            SenderEvent::Remote {
+                key,
+                target,
+                command,
+            } => self.remote_command(&key, target.as_ref(), command),
+            // The command server's lines name their speaker themselves.
+            SenderEvent::RemoteLog(line) => {
+                if debug_trace_on() {
+                    let event = SpeakerEvent::Trace(line);
+                    self.queue_event(Pending::Speaker(String::new(), event));
+                }
+            }
             // The listing turns incomplete; the members' own events say
             // which ones play.
             SenderEvent::TargetMissing { id, missing } => {
@@ -1057,6 +1125,106 @@ impl AscAirPlay {
         // the tolerance, so this isn't reported back.
         added.set_volume(&self.sender, speaker_volume(position, zone, master));
         self.queue_event(Pending::Volume(owner, position));
+    }
+
+    /// A speaker's remote asked for `command` (P193): the core's decision
+    /// (S273 to S279) acts on the speaker's row, or its target's, and its
+    /// line goes to the debug log.
+    fn remote_command(
+        &mut self,
+        key: &DeviceKey,
+        target: Option<&TargetId>,
+        command: RemoteCommand,
+    ) {
+        let id = receiver_id(key);
+        let row = match target.map(ToString::to_string) {
+            Some(target) if self.added.contains_key(&target) => Some(target),
+            _ if self.added.contains_key(&id) => Some(id.clone()),
+            _ => None,
+        };
+        let command = match command {
+            RemoteCommand::PlayPause => Command::PlayPause,
+            RemoteCommand::Play => Command::Play,
+            RemoteCommand::Pause => Command::Pause,
+            RemoteCommand::Next => Command::Next,
+            RemoteCommand::Previous => Command::Previous,
+            RemoteCommand::VolumeUp => Command::VolumeUp,
+            RemoteCommand::VolumeDown => Command::VolumeDown,
+            RemoteCommand::MuteToggle => Command::MuteToggle,
+            RemoteCommand::DeviceVolume(Volume::Muted) => Command::DeviceVolume(MUTED_DB),
+            RemoteCommand::DeviceVolume(Volume::Db(db)) => Command::DeviceVolume(db),
+        };
+        let name = self
+            .listed
+            .get(&id)
+            .map_or_else(|| id.clone(), |info| info.device.name.clone());
+        let volume = self.own_volume(row.as_deref(), command);
+        let event = RemoteEvent {
+            speaker: &name,
+            row: row.as_deref(),
+            member: target.is_some(),
+            command,
+            app: self.playback.as_ref().map(|(name, playback)| App {
+                name,
+                playback: *playback,
+            }),
+            volume,
+            at: self.created_at.elapsed().as_secs_f64(),
+        };
+        let decision = self.remote.decide(&event);
+        if debug_trace_on() {
+            let line = SpeakerEvent::Trace(decision.line);
+            self.queue_event(Pending::Speaker(id, line));
+        }
+        match (decision.action, row) {
+            (Action::Send(control), Some(row)) => {
+                self.queue_event(Pending::Remote(row, control));
+            }
+            (Action::Move { to, .. }, Some(row)) => self.move_own(&row, to),
+            _ => {}
+        }
+    }
+
+    /// The own volume of the added speaker or target `row` as a remote
+    /// decision sees it; for a DeviceVolume with S271's echo window and the
+    /// position its level plays at.
+    fn own_volume(&self, row: Option<&str>, command: Command) -> OwnVolume {
+        let mut own = OwnVolume {
+            position: 0.0,
+            dragging: false,
+            echo: false,
+            reported: None,
+        };
+        let Some((row, added)) = row.and_then(|row| Some((row, self.added.get(row)?))) else {
+            return own;
+        };
+        own.position = added.position;
+        own.dragging = added.dragging;
+        if let Command::DeviceVolume(db) = command {
+            let zone = zone_in(&self.zones, row);
+            let recent = added
+                .volume_set_at
+                .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
+            let sent = speaker_volume(added.position, zone, self.master).wire_db();
+            own.echo = recent && (db - sent).abs() < VOLUME_TOLERANCE_DB;
+            own.reported = slider_position(db, zone, self.master);
+        }
+        own
+    }
+
+    /// A remote moved `row`'s own volume to `position`: as at the end of a
+    /// drag, the speaker gets its new level, which starts S271's window, and
+    /// the host shows the position without sending it back (S275 to S277).
+    fn move_own(&mut self, row: &str, position: f64) {
+        let master = self.master;
+        let zone = zone_in(&self.zones, row);
+        let Some(added) = self.added.get_mut(row) else {
+            return;
+        };
+        added.position = position;
+        added.volume_set();
+        added.set_volume(&self.sender, speaker_volume(position, zone, master));
+        self.queue_event(Pending::Volume(row.to_owned(), position));
     }
 
     /// A speaker's warning goes to the host. One that turned a volume read
@@ -1476,10 +1644,20 @@ impl AscAirPlay {
             detail: ptr::null(),
             volume: 0.0,
             warning: 0,
+            remote: 0,
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
         };
         let (id, detail) = match pending {
+            Pending::Remote(id, control) => {
+                event.kind = AIRPLAY_EVENT_REMOTE;
+                event.remote = match control {
+                    Control::PlayPause => AIRPLAY_REMOTE_PLAY_PAUSE,
+                    Control::Next => AIRPLAY_REMOTE_NEXT,
+                    Control::Previous => AIRPLAY_REMOTE_PREVIOUS,
+                };
+                (id, String::new())
+            }
             Pending::Speaker(id, SpeakerEvent::State(state)) => {
                 event.kind = AIRPLAY_EVENT_STATE;
                 event.state = match state {
@@ -1931,6 +2109,10 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 panics_before,
                 failure_reported: false,
                 open_browser,
+                advertising: false,
+                remote: Remote::default(),
+                playback: None,
+                created_at: Instant::now(),
             })),
             Err(_) => ptr::null_mut(),
         }
@@ -1988,6 +2170,12 @@ pub unsafe extern "C" fn asc_airplay_start_discovery(airplay: *mut AscAirPlay) -
         live(airplay, false, |airplay| match (airplay.open_browser)() {
             Some(browser) => {
                 airplay.sender.start_discovery_with(browser);
+                if !airplay.advertising
+                    && let Some(advertiser) = live_advertiser()
+                {
+                    airplay.sender.set_dacp_advertiser(advertiser);
+                    airplay.advertising = true;
+                }
                 true
             }
             None => false,
@@ -2171,6 +2359,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                         .collect(),
                 );
                 airplay.added.insert(id.to_owned(), added);
+                airplay.remote.forget(id);
                 return true;
             }
             let Some(info) = airplay.listed.get(id) else {
@@ -2201,6 +2390,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 vec![(id.to_owned(), counters)],
             );
             airplay.added.insert(id.to_owned(), added);
+            airplay.remote.forget(id);
             true
         })
     }
@@ -2288,6 +2478,7 @@ pub unsafe extern "C" fn asc_airplay_set_volume(
                 &airplay.sender,
                 speaker_volume(added.position, zone, master),
             );
+            airplay.remote.forget(id);
             true
         })
     }
@@ -2853,6 +3044,48 @@ pub unsafe extern "C" fn asc_airplay_set_progress(
                 ..airplay.now_playing.clone()
             };
             airplay.give_now_playing(now_playing, Instant::now())
+        })
+    }
+}
+
+/// Tells which app the host's now-playing control follows, by a name for
+/// the debug log (UTF-8), and whether it plays (`AIRPLAY_PLAYBACK_*`), so a
+/// speaker remote's Play or Pause goes as play-pause only when that changes
+/// something (S274). A null or empty `app` is no app to control: transport
+/// commands then do nothing. An unknown `playback` counts as no reading.
+/// False, changing nothing, for a null or dead handle or an `app` that
+/// isn't UTF-8.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `app` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_playback(
+    airplay: *mut AscAirPlay,
+    app: *const c_char,
+    playback: i32,
+) -> bool {
+    let app = if app.is_null() {
+        None
+    } else {
+        // SAFETY: by the caller's contract a NUL-terminated string.
+        match unsafe { host_text(app) } {
+            Some(app) => Some(app.to_owned()),
+            None => return false,
+        }
+    };
+    let playback = match playback {
+        AIRPLAY_PLAYBACK_PLAYING => Playback::Playing,
+        AIRPLAY_PLAYBACK_PAUSED => Playback::Paused,
+        _ => Playback::Unknown,
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            airplay.playback = app.filter(|app| !app.is_empty()).map(|app| (app, playback));
+            true
         })
     }
 }
@@ -3794,6 +4027,7 @@ mod tests {
         detail: String,
         volume: f64,
         warning: i32,
+        remote: i32,
         receiver_latency_us: i64,
         receiver_latency_sources: u32,
     }
@@ -3812,6 +4046,7 @@ mod tests {
             detail: ptr::null(),
             volume: 0.0,
             warning: 0,
+            remote: 0,
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
         }
@@ -3839,6 +4074,7 @@ mod tests {
                     detail: text(raw.detail),
                     volume: raw.volume,
                     warning: raw.warning,
+                    remote: raw.remote,
                     receiver_latency_us: raw.receiver_latency_us,
                     receiver_latency_sources: raw.receiver_latency_sources,
                 });
@@ -4123,6 +4359,7 @@ mod tests {
                 detail: String::new(),
                 volume: 0.0,
                 warning: 0,
+                remote: 0,
                 receiver_latency_us: 0,
                 receiver_latency_sources: 0,
             }
@@ -5409,6 +5646,7 @@ mod tests {
             detail: String::new(),
             volume: 0.0,
             warning: 0,
+            remote: 0,
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
         }
@@ -5918,6 +6156,359 @@ mod tests {
             std::mem::offset_of!(AscAirPlayEvent, receiver_latency_sources),
             96
         );
+        assert_eq!(std::mem::offset_of!(AscAirPlayEvent, remote), 84);
+    }
+
+    fn remote(
+        handle: *mut AscAirPlay,
+        key: &DeviceKey,
+        target: Option<&str>,
+        command: RemoteCommand,
+    ) {
+        inside(handle).take_in(SenderEvent::Remote {
+            key: key.clone(),
+            target: target.map(|id| TargetId::parse(id).expect("a target ID")),
+            command,
+        });
+    }
+
+    /// The volume events waiting, as row and position; every waiting event
+    /// is taken.
+    fn volume_events(handle: *mut AscAirPlay) -> Vec<(String, f64)> {
+        inside(handle)
+            .events
+            .drain(..)
+            .filter_map(|(_, pending)| match pending {
+                Pending::Volume(id, position) => Some((id, position)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether a remote control or volume event waits; other events, such
+    /// as the stream's timeline, are passed over.
+    fn acted(handle: *mut AscAirPlay) -> bool {
+        inside(handle)
+            .events
+            .iter()
+            .any(|(_, pending)| matches!(pending, Pending::Remote(..) | Pending::Volume(..)))
+    }
+
+    /// Whether the host's last set of `id`, its own or a remote's, was just
+    /// now: the speaker got a level and S271's window runs.
+    fn just_sent(handle: *mut AscAirPlay, id: &str) -> bool {
+        inside(handle).added[id]
+            .volume_set_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+    }
+
+    fn speaker_key(last: u8) -> DeviceKey {
+        DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x54, last]))
+    }
+
+    // covers: S274
+    #[test]
+    fn a_remote_transport_reaches_the_host_as_a_remote_event() {
+        let mut handle = create_with(quiet);
+        let key = speaker_key(0x01);
+        add_for_volume(handle, "02005E005401", key.clone(), 50.0);
+        remote(handle, &key, None, RemoteCommand::Next);
+        assert!(!acted(handle), "no app to control");
+        let app = c_string("Music");
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert!(asc_airplay_set_playback(
+                handle,
+                app.as_ptr(),
+                AIRPLAY_PLAYBACK_PAUSED
+            ));
+        }
+        remote(handle, &key, None, RemoteCommand::Pause);
+        assert!(!acted(handle), "already paused");
+        remote(handle, &key, None, RemoteCommand::Play);
+        let events = events_until(handle, |events| !events.is_empty());
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].kind, AIRPLAY_EVENT_REMOTE);
+        assert_eq!(events[0].id, "02005E005401");
+        assert_eq!(events[0].remote, AIRPLAY_REMOTE_PLAY_PAUSE);
+        // SAFETY: as above; null is no app.
+        unsafe {
+            assert!(asc_airplay_set_playback(handle, ptr::null(), 0));
+            assert!(!asc_airplay_set_playback(ptr::null_mut(), ptr::null(), 0));
+        }
+        remote(handle, &key, None, RemoteCommand::Previous);
+        assert!(!acted(handle));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // The Mac stops reading the player when nothing shows the track: the
+    // paused state it read last no longer holds.
+    // covers: S274
+    #[test]
+    fn a_remote_pause_after_the_reading_stopped_goes_as_play_pause() {
+        let mut handle = create_with(quiet);
+        let key = speaker_key(0x07);
+        add_for_volume(handle, "02005E005407", key.clone(), 50.0);
+        let app = c_string("Music");
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert!(asc_airplay_set_playback(
+                handle,
+                app.as_ptr(),
+                AIRPLAY_PLAYBACK_PAUSED
+            ));
+            assert!(asc_airplay_set_playback(
+                handle,
+                app.as_ptr(),
+                AIRPLAY_PLAYBACK_UNKNOWN
+            ));
+        }
+        remote(handle, &key, None, RemoteCommand::Pause);
+        let events = events_until(handle, |events| !events.is_empty());
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].kind, AIRPLAY_EVENT_REMOTE);
+        assert_eq!(events[0].remote, AIRPLAY_REMOTE_PLAY_PAUSE);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S275, S250
+    #[test]
+    fn a_remote_volume_up_moves_only_that_speakers_own_volume_by_5() {
+        let mut handle = create_with(quiet);
+        let kitchen = speaker_key(0x02);
+        add_for_volume(handle, "02005E005402", kitchen.clone(), 40.0);
+        add_for_volume(handle, "02005E005403", speaker_key(0x03), 60.0);
+        inside(handle).master = 80.0;
+        remote(handle, &kitchen, None, RemoteCommand::VolumeUp);
+        assert_eq!(
+            volume_events(handle),
+            vec![("02005E005402".to_owned(), 45.0)]
+        );
+        let inner = inside(handle);
+        assert_eq!(inner.added["02005E005402"].position, 45.0);
+        assert_eq!(inner.added["02005E005403"].position, 60.0);
+        assert_eq!(inner.master, 80.0);
+        assert!(!just_sent(handle, "02005E005403"));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S275, S271
+    #[test]
+    fn a_remote_volume_step_is_sent_and_starts_the_3_s_window() {
+        let mut handle = create_with(quiet);
+        let key = speaker_key(0x04);
+        let id = "02005E005404";
+        add_for_volume(handle, id, key.clone(), 50.0);
+        remote(handle, &key, None, RemoteCommand::VolumeDown);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 45.0)]);
+        assert!(just_sent(handle, id));
+        // Sent −16.5 dB; the receiver echoes it 0.3 dB off, by DACP or a read.
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-16.2)),
+        );
+        read_back(handle, &key, -16.8);
+        assert!(volume_events(handle).is_empty());
+        assert_eq!(inside(handle).added[id].position, 45.0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276, S271
+    #[test]
+    fn a_device_volume_near_the_sent_level_is_ignored_for_3_s_only() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005405";
+        let c_id = c_string(id);
+        let key = speaker_key(0x05);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 10.0)) };
+        // Sent −27 dB; within 0.5 dB of it is the echo.
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-27.3)),
+        );
+        set_ago(handle, id, Duration::from_millis(2_900));
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-26.7)),
+        );
+        assert!(volume_events(handle).is_empty());
+        assert_eq!(inside(handle).added[id].position, 10.0);
+        // After 3 s the same level is the receiver's own: level 0.09, so 9.
+        set_ago(handle, id, Duration::from_secs(3));
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-27.3)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 9.0)]);
+        // Within 3 s, a level further than 0.5 dB off counts at once.
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-26.4)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 12.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276
+    #[test]
+    fn a_device_volume_while_the_slider_is_dragged_is_ignored() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005406";
+        let c_id = c_string(id);
+        let key = speaker_key(0x06);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_volume_dragging(handle, c_id.as_ptr(), true)) };
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
+        );
+        assert!(volume_events(handle).is_empty());
+        assert_eq!(inside(handle).added[id].position, 50.0);
+        // SAFETY: as above.
+        unsafe {
+            assert!(asc_airplay_set_volume_dragging(
+                handle,
+                c_id.as_ptr(),
+                false
+            ))
+        };
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 80.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276, S250
+    #[test]
+    fn a_device_volume_moves_the_own_volume_and_is_sent_back() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005407";
+        let key = speaker_key(0x07);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        add_for_volume(handle, "02005E005408", speaker_key(0x08), 50.0);
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 80.0)]);
+        assert!(just_sent(handle, id), "sent back as after a drag");
+        let inner = inside(handle);
+        assert_eq!(inner.added["02005E005408"].position, 50.0);
+        assert_eq!(inner.master, 100.0);
+        // A level that rounds to the position changes nothing.
+        set_ago(handle, id, Duration::from_secs(3));
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-6.1)),
+        );
+        assert!(volume_events(handle).is_empty());
+        assert!(!just_sent(handle, id));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276
+    #[test]
+    fn a_muted_device_volume_sets_the_own_volume_to_0() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005409";
+        let key = speaker_key(0x09);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Muted),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 0.0)]);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-30.0)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 0.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S277
+    #[test]
+    fn a_users_volume_change_forgets_the_muted_position() {
+        let mut handle = create_with(quiet);
+        let id = "02005E00540A";
+        let c_id = c_string(id);
+        let key = speaker_key(0x0A);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        remote(handle, &key, None, RemoteCommand::MuteToggle);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 0.0)]);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 0.0)) };
+        remote(handle, &key, None, RemoteCommand::MuteToggle);
+        assert!(volume_events(handle).is_empty());
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S278
+    #[test]
+    fn a_members_command_moves_the_targets_row() {
+        let mut handle = create_with(quiet);
+        let member = speaker_key(0x0B);
+        let pair = "pair:remote-pair";
+        let added = Added::new(
+            DeviceKey::Instance(ServiceKind::AirPlay, pair.to_owned()),
+            40.0,
+            Some(TargetId::parse(pair).expect("a target ID")),
+            vec!["02005E00540B".to_owned()],
+            Vec::new(),
+        );
+        inside(handle).added.insert(pair.to_owned(), added);
+        remote(handle, &member, Some(pair), RemoteCommand::VolumeUp);
+        assert_eq!(volume_events(handle), vec![(pair.to_owned(), 45.0)]);
+        let app = c_string("Music");
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_playback(handle, app.as_ptr(), 1)) };
+        remote(handle, &member, Some(pair), RemoteCommand::Next);
+        let events = events_until(handle, |events| !events.is_empty());
+        assert_eq!(events[0].kind, AIRPLAY_EVENT_REMOTE);
+        assert_eq!(events[0].id, pair);
+        // A target that is no longer added does nothing.
+        inside(handle).added.remove(pair);
+        remote(handle, &member, Some(pair), RemoteCommand::VolumeUp);
+        assert!(!acted(handle));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
     }
 
     #[test]
@@ -6800,6 +7391,7 @@ mod tests {
                 detail: text(raw.detail),
                 volume: raw.volume,
                 warning: raw.warning,
+                remote: raw.remote,
                 receiver_latency_us: raw.receiver_latency_us,
                 receiver_latency_sources: raw.receiver_latency_sources,
             });

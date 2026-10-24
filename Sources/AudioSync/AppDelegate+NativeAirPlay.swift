@@ -38,7 +38,9 @@ extension AppDelegate {
         let native = NativeAirPlay(
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
+        native.onRemote = { [weak self] command in self?.nowPlaying.send(command) }
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
+        sendPlayback()
         native.setZones(nativeZoneVolumes())
         let airPlay2On = AppSettings.airPlay2On(setting: airPlay2AtLaunch,
                                                 environment: ProcessInfo.processInfo.environment)

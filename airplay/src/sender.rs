@@ -56,6 +56,7 @@
 //! (P46, P58).
 
 mod driver;
+mod remote;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -68,6 +69,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::clock::SenderClock;
+use crate::dacp::{DacpAdvertiser, RemoteCommand};
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
 use crate::discovery::{Browser, Device, DeviceKey, ProtocolPath};
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
@@ -87,6 +89,7 @@ use crate::targets::{Target, TargetChange, TargetId};
 use crate::volume::Volume;
 
 use driver::{Command, Driver, Input};
+pub use remote::DacpCounters;
 
 /// How a sender starts.
 #[derive(Debug, Clone, Copy)]
@@ -458,6 +461,19 @@ pub enum SenderEvent {
         id: TargetId,
         missing: Vec<DeviceKey>,
     },
+    /// A command a receiver sent through DACP, already answered (P192,
+    /// P193): `key` is the speaker whose session it named, and `target` the
+    /// stereo pair or home theater group that speaker plays in, which the
+    /// command is then for (P176).
+    Remote {
+        key: DeviceKey,
+        target: Option<TargetId>,
+        command: RemoteCommand,
+    },
+    /// A line for the host's debug log about a remote-control request the
+    /// sender didn't hand on (P195). It never holds the DACP ID or an
+    /// Active-Remote value.
+    RemoteLog(String),
 }
 
 /// The sender: one stream, any number of speakers, optional discovery.
@@ -470,6 +486,7 @@ pub struct Sender {
     latency_frames: Arc<AtomicU32>,
     sounding: Arc<AtomicBool>,
     speaker_counters: RefCell<HashMap<DeviceKey, Arc<SpeakerCounters>>>,
+    dacp_counters: Arc<DacpCounters>,
 }
 
 impl fmt::Debug for Sender {
@@ -510,6 +527,7 @@ impl Sender {
         .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
         .with_pairing_hold(config.pairing_hold)
         .with_sounding(sounding.clone());
+        let dacp_counters = driver.dacp_counters();
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
             .spawn(move || driver.run())?;
@@ -522,6 +540,7 @@ impl Sender {
             latency_frames,
             sounding,
             speaker_counters: RefCell::new(HashMap::new()),
+            dacp_counters,
         };
         Ok((sender, writer))
     }
@@ -562,6 +581,20 @@ impl Sender {
         let (reply, answer) = mpsc::sync_channel(1);
         self.command(Command::ArrivalTime(n, reply));
         answer.recv_timeout(Duration::from_secs(1)).ok()
+    }
+
+    /// The remote-control command server's counters and port (P144,
+    /// P195).
+    pub fn dacp_counters(&self) -> Arc<DacpCounters> {
+        self.dacp_counters.clone()
+    }
+
+    /// Registers the command server's `_dacp._tcp` record through
+    /// `advertiser` from now on (P188):
+    /// [`MdnsAdvertiser`](crate::discovery::mdns::MdnsAdvertiser) on the
+    /// network. Without one the server runs unregistered.
+    pub fn set_dacp_advertiser(&self, advertiser: Box<dyn DacpAdvertiser + Send>) {
+        self.command(Command::SetDacpAdvertiser(advertiser));
     }
 
     /// The stream's counters (P144), read without locks.

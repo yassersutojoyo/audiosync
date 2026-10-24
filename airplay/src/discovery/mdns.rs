@@ -12,15 +12,18 @@
 //!
 //! The daemon binds UDP port 5353 with address (and, on Unix, port) reuse,
 //! so it shares the port with the system's own mDNS responder (Bonjour,
-//! Avahi or the Windows DNS client). It only queries; it announces nothing.
+//! Avahi or the Windows DNS client). The browser only queries;
+//! [`MdnsAdvertiser`] announces the one record the sender has, its
+//! remote-control service (P188), on a daemon of its own.
 
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent};
+use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 
 use super::{BrowseEvent, Browser, ScopedAddr, ServiceKind, ServiceRecord};
+use crate::dacp::{AdvertiseError, DacpAdvertiser, DacpRecord, SERVICE_TYPE};
 
 /// The live browser could not start.
 #[derive(Debug)]
@@ -271,4 +274,86 @@ pub fn instance_name(fullname: &str, kind: ServiceKind) -> Option<String> {
         }
     }
     Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Registers the remote-control service `_dacp._tcp` on the network
+/// (P188), on an `mdns-sd` daemon it starts at the first registration. The
+/// record carries the addresses of every interface, which the daemon keeps
+/// current; a receiver takes only its port and sends to the address its
+/// RTSP connection came from.
+#[derive(Default)]
+pub struct MdnsAdvertiser {
+    daemon: Option<ServiceDaemon>,
+    /// The registered record's full name.
+    registered: Option<String>,
+}
+
+impl fmt::Debug for MdnsAdvertiser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MdnsAdvertiser")
+            .field("live", &self.daemon.is_some())
+            .field("registered", &self.registered.is_some())
+            .finish()
+    }
+}
+
+impl MdnsAdvertiser {
+    pub fn new() -> MdnsAdvertiser {
+        MdnsAdvertiser::default()
+    }
+}
+
+impl DacpAdvertiser for MdnsAdvertiser {
+    fn register(&mut self, record: &DacpRecord) -> Result<(), AdvertiseError> {
+        let failed = |error: mdns_sd::Error| AdvertiseError(error.to_string());
+        if self.daemon.is_none() {
+            DAEMONS_STARTED.fetch_add(1, Ordering::SeqCst);
+            self.daemon = Some(ServiceDaemon::new().map_err(failed)?);
+        }
+        let Some(daemon) = self.daemon.as_ref() else {
+            return Err(AdvertiseError("no daemon".to_owned()));
+        };
+        // A host name of its own, made from the random DACP ID only (P5).
+        let id = record
+            .instance
+            .rsplit('_')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let host = format!("audiosync-{id}.local.");
+        let txt: Vec<(&str, &str)> = record
+            .txt
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        let info = ServiceInfo::new(
+            SERVICE_TYPE,
+            &record.instance,
+            &host,
+            (),
+            record.port,
+            &txt[..],
+        )
+        .map_err(failed)?
+        .enable_addr_auto();
+        let fullname = info.get_fullname().to_owned();
+        daemon.register(info).map_err(failed)?;
+        self.registered = Some(fullname);
+        Ok(())
+    }
+
+    fn withdraw(&mut self) {
+        if let (Some(daemon), Some(name)) = (self.daemon.as_ref(), self.registered.take()) {
+            let _ = daemon.unregister(&name);
+        }
+    }
+}
+
+impl Drop for MdnsAdvertiser {
+    fn drop(&mut self) {
+        self.withdraw();
+        if let Some(daemon) = self.daemon.take() {
+            let _ = daemon.shutdown();
+        }
+    }
 }

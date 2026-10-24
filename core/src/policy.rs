@@ -16,6 +16,7 @@
 //! - [`speakers`]: speaker keys, groups, device lists, layout and notices (S149 to S153).
 //! - [`zones`]: zones, their click plan and the migration from groups (S150, S245 to S248).
 //! - [`presets`]: speaker presets, their recall plan, the current-preset check and the migration from groups (S251 to S254).
+//! - [`remote`]: remote commands from AirPlay speakers (S273 to S279).
 
 #![forbid(unsafe_code)]
 
@@ -26,6 +27,7 @@ pub mod capture;
 pub mod delay;
 pub mod device_volume;
 pub mod presets;
+pub mod remote;
 pub mod session;
 pub mod source;
 pub mod source_quit;
