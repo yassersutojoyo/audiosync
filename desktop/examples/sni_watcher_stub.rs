@@ -43,12 +43,9 @@ mod stub {
             #[zbus(header)] header: Header<'_>,
         ) {
             // An item may register by object path; its bus name is then the sender.
-            let service = if service.starts_with('/') {
-                header
-                    .sender()
-                    .map_or(service, |sender| format!("{sender}{service}"))
-            } else {
-                service
+            let service = match header.sender() {
+                Some(sender) if service.starts_with('/') => format!("{sender}{service}"),
+                _ => service,
             };
             println!("registered {service}");
             self.items.push(service);
