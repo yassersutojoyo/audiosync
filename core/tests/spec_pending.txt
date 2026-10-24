@@ -3,3 +3,4 @@
 # space, what is missing. tests/spec_coverage.rs fails once a clause listed here
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
+S271 the 3 s window around the 0.5 dB echo tolerance and ignoring reads during a drag; the core still ignores every read for 1 s after a set and any read within 0.5 dB of it
