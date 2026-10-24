@@ -527,6 +527,7 @@ dependencies = [
  "audiosync-core",
  "audiosync-remote",
  "embed-resource",
+ "image",
  "qrcode",
  "serde",
  "serde_json",
@@ -536,6 +537,7 @@ dependencies = [
  "windows",
  "windows-core",
  "windows-future",
+ "zbus",
  "zeroize",
 ]
 

@@ -64,11 +64,12 @@ jobs:
           rustup default stable
           rustc --version
 
-      # Slint's fonts and windows, and the Cast sender's native-tls (OpenSSL).
+      # Slint's fonts and windows, the Cast sender's native-tls (OpenSSL), and
+      # dbus-run-session for the now-playing tests' private session bus.
       - name: System libraries
         run: >-
           sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
-          libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
+          libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config dbus
 
       - name: Format
         run: cargo fmt --check
@@ -81,9 +82,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo clippy --locked --all-targets --features mock-backend -- -D warnings
 
+      # The MPRIS tests serve fake players on a session bus of their own.
       - name: Tests
         if: ${{ !cancelled() }}
-        run: cargo test --locked
+        run: dbus-run-session -- cargo test --locked
 
   build:
     name: Release build (${{ matrix.arch }})

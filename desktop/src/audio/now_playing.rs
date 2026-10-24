@@ -107,15 +107,20 @@ pub struct MediaSession {
 pub enum Follow {
     /// The whole system: any app's.
     AnyApp,
-    /// One app, by its executable's file name: its own only.
-    App { executable: String },
+    /// One app, by its executable's file name: its own only. Where the
+    /// system tells which process a session belongs to, the source's
+    /// process ID (`pid`) tells it first.
+    App {
+        executable: String,
+        pid: Option<u32>,
+    },
 }
 
 impl Follow {
     fn admits(&self, app_id: &str) -> bool {
         match self {
             Follow::AnyApp => true,
-            Follow::App { executable } => app_matches(app_id, executable),
+            Follow::App { executable, .. } => app_matches(app_id, executable),
         }
     }
 }
@@ -746,6 +751,7 @@ mod tests {
         TrackSource {
             follow: Follow::App {
                 executable: executable.to_owned(),
+                pid: None,
             },
             name: Some(name.to_owned()),
         }
@@ -807,10 +813,12 @@ mod tests {
         ];
         let spotify = Follow::App {
             executable: "spotify.exe".to_owned(),
+            pid: None,
         };
         assert_eq!(pick(&sessions, &spotify), Some(1));
         let vlc = Follow::App {
             executable: "vlc.exe".to_owned(),
+            pid: None,
         };
         assert_eq!(pick(&sessions, &vlc), None);
     }
@@ -851,6 +859,7 @@ mod tests {
         let unnamed = TrackSource {
             follow: Follow::App {
                 executable: String::new(),
+                pid: None,
             },
             name: Some("  ".to_owned()),
         };
