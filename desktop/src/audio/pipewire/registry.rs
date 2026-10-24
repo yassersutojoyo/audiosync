@@ -13,6 +13,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use pipewire as pw;
+use pw::client::{Client as ClientProxy, ClientChangeMask, ClientListener};
 use pw::device::{Device as DeviceProxy, DeviceListener};
 use pw::metadata::{Metadata, MetadataListener};
 use pw::node::{Node as NodeProxy, NodeChangeMask, NodeListener, NodeState};
@@ -56,6 +57,37 @@ pub fn kind(type_: &ObjectType) -> Option<Kind> {
         ObjectType::Client => Some(Kind::Client),
         _ => None,
     }
+}
+
+/// A client bound to follow its properties.
+pub struct FollowedClient {
+    _proxy: ClientProxy,
+    _listener: ClientListener,
+}
+
+/// Binds client `global` and hands its properties to `changed` each time
+/// they change: the registry's copy is taken when the client connects,
+/// before the PulseAudio server names the app's process.
+pub fn follow_client(
+    registry: &pw::registry::RegistryRc,
+    global: &pw::registry::GlobalObject<&DictRef>,
+    changed: impl Fn(BTreeMap<String, String>) + 'static,
+) -> Option<FollowedClient> {
+    let proxy: ClientProxy = registry.bind(global).ok()?;
+    let listener = proxy
+        .add_listener_local()
+        .info(move |info| {
+            if info.change_mask().contains(ClientChangeMask::PROPS)
+                && let Some(props) = info.props()
+            {
+                changed(owned(props));
+            }
+        })
+        .register();
+    Some(FollowedClient {
+        _proxy: proxy,
+        _listener: listener,
+    })
 }
 
 /// What the controller shares with the graph thread.
@@ -259,6 +291,7 @@ fn serve(
 
     let bound: Rc<RefCell<HashMap<u32, Bound>>> = Rc::default();
     let devices: Rc<RefCell<HashMap<u32, Routes>>> = Rc::default();
+    let clients: Rc<RefCell<HashMap<u32, FollowedClient>>> = Rc::default();
     let defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>> = Rc::default();
 
     let _registry_listener = registry
@@ -268,6 +301,7 @@ fn serve(
             let shared = Arc::clone(shared);
             let bound = Rc::clone(&bound);
             let devices = Rc::clone(&devices);
+            let clients = Rc::clone(&clients);
             let defaults = Rc::clone(&defaults);
             move |global| {
                 let Some(props) = global.props else { return };
@@ -292,6 +326,17 @@ fn serve(
                 if locked(&shared.graph).add(global.id, kind, props) {
                     shared.outputs_changed.store(true, Ordering::Release);
                 }
+                if kind == Kind::Client {
+                    let id = global.id;
+                    let shared = Arc::clone(&shared);
+                    let followed = follow_client(&registry, global, move |props| {
+                        locked(&shared.graph).add(id, Kind::Client, props);
+                    });
+                    if let Some(followed) = followed {
+                        clients.borrow_mut().insert(id, followed);
+                    }
+                    return;
+                }
                 let followed = class == SINK_CLASS || class == STREAM_CLASS;
                 if kind == Kind::Node
                     && followed
@@ -305,9 +350,11 @@ fn serve(
             let shared = Arc::clone(shared);
             let bound = Rc::clone(&bound);
             let devices = Rc::clone(&devices);
+            let clients = Rc::clone(&clients);
             move |id| {
                 bound.borrow_mut().remove(&id);
                 devices.borrow_mut().remove(&id);
+                clients.borrow_mut().remove(&id);
                 if locked(&shared.graph).remove(id) {
                     shared.outputs_changed.store(true, Ordering::Release);
                 }
@@ -373,6 +420,7 @@ fn serve(
     main_loop.run();
     bound.borrow_mut().clear();
     devices.borrow_mut().clear();
+    clients.borrow_mut().clear();
     defaults.borrow_mut().take();
     Ok(())
 }

@@ -72,9 +72,13 @@ pub struct Playback {
 
 #[cfg(test)]
 impl Playback {
-    /// The latency last handed to the renderer.
-    pub fn reported_latency_ns(&self) -> u64 {
-        self.status.latency_ns.load(Ordering::Relaxed)
+    /// The latency in use and, when the window turned it down, the one the
+    /// stream reported.
+    pub fn reported_latency_ns(&self) -> (u64, Option<u64>) {
+        (
+            self.status.latency_ns.load(Ordering::Relaxed),
+            self.control.rejected_latency_ns(),
+        )
     }
 }
 

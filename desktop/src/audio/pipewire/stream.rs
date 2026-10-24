@@ -745,6 +745,7 @@ struct Linker {
 struct Following {
     linker: Rc<RefCell<Linker>>,
     _listener: pw::registry::Listener,
+    _clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>>,
 }
 
 /// Each root of `filter` with its start time, as `/proc` has it now.
@@ -788,10 +789,13 @@ impl Linker {
             dirty: true,
             turns: 0,
         }));
+        let clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>> = Rc::default();
         let listener = registry
             .add_listener_local()
             .global({
                 let linker = Rc::clone(&linker);
+                let clients = Rc::clone(&clients);
+                let bind = registry.clone();
                 move |global| {
                     let (Some(kind), Some(props)) = (registry::kind(&global.type_), global.props)
                     else {
@@ -801,11 +805,26 @@ impl Linker {
                         linker.graph.add(global.id, kind, registry::owned(props));
                         linker.dirty = true;
                     }
+                    if kind == graph::Kind::Client {
+                        let id = global.id;
+                        let linker = Rc::clone(&linker);
+                        let followed = registry::follow_client(&bind, global, move |props| {
+                            if let Ok(mut linker) = linker.try_borrow_mut() {
+                                linker.graph.add(id, graph::Kind::Client, props);
+                                linker.dirty = true;
+                            }
+                        });
+                        if let Some(followed) = followed {
+                            clients.borrow_mut().insert(id, followed);
+                        }
+                    }
                 }
             })
             .global_remove({
                 let linker = Rc::clone(&linker);
+                let clients = Rc::clone(&clients);
                 move |id| {
+                    clients.borrow_mut().remove(&id);
                     if let Ok(mut linker) = linker.try_borrow_mut() {
                         linker.graph.remove(id);
                         linker.dirty = true;
@@ -816,6 +835,7 @@ impl Linker {
         Following {
             linker,
             _listener: listener,
+            _clients: clients,
         }
     }
 
