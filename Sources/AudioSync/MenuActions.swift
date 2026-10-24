@@ -27,5 +27,12 @@ extension NSMenu {
         _ = popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
     }
 
-    func keepUntilNextPopUp() {}
+    /// Holds the menu, its items and their targets until the next menu opens:
+    /// AppKit can send the chosen item's action after the pop-up call returns.
+    func keepUntilNextPopUp() { OpenMenu.current = self }
+}
+
+@MainActor
+private enum OpenMenu {
+    static var current: NSMenu?
 }
