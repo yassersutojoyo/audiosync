@@ -352,6 +352,14 @@ final class AppModel: ObservableObject {
 
     var currentSource: Source? { sources.first { $0.id == sourceID } }
 
+    /// The note under the source while an input device plays through an AirPlay speaker.
+    var liveInputAirPlayHint: String? {
+        LiveInputAirPlayHint.tenths(source: AudioSource(defaultsValue: sourceID),
+                                    airPlayOn: airplay.contains { $0.enabled },
+                                    airPlayDelayMs: airPlayDelayMs)
+            .map(text.liveInputAirPlayHint(tenths:))
+    }
+
     /// How a row shows `speaker`: playing only while streaming is on.
     func state(of speaker: Speaker) -> SpeakerState {
         SpeakerState(enabled: speaker.enabled, streaming: running)
@@ -763,6 +771,7 @@ struct MenuBarView: View {
         if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
         if offersCastAdd { height += 20 }
         if PresetPanel.showsRow(model.presets) { height += 38 }
+        if model.liveInputAirPlayHint != nil { height += 40 }
         return height
     }
 
@@ -782,6 +791,9 @@ struct MenuBarView: View {
             header(t)
             NoticeStack(model: model, compact: true)
             SourcePicker(model: model)
+            if let hint = model.liveInputAirPlayHint {
+                LiveInputAirPlayNote(message: hint, font: .caption).padding(.top, -4)
+            }
             if PresetPanel.showsRow(model.presets) { PresetPicker(model: model) }
             // The Mac's own speakers belong with the volume, above the one
             // divider, drawn tight together as one block.
@@ -1392,6 +1404,22 @@ struct InputLevelMeter: View {
         .accessibilityValue(text.inputLevelValue(level.spokenPercent))
         .accessibilityAddTraits(.updatesFrequently)
         .accessibilityHidden(!level.shown)
+    }
+}
+
+/// The note under the source while an input device plays through an AirPlay
+/// speaker (`AppModel.liveInputAirPlayHint`), lined up with the picker's text.
+struct LiveInputAirPlayNote: View {
+    let message: String
+    var font: Font = .callout
+
+    var body: some View {
+        Text(message)
+            .font(font)
+            .foregroundStyle(Brand.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
     }
 }
 

@@ -566,7 +566,8 @@ fn keyboard_shortcuts_are_declared() {
 /// note on a zone's stereo pair or home theater that needs it.
 /// The calibration results' AirPlay lines, a zone run's line on whom the
 /// shared AirPlay delay moves included, show only when an AirPlay speaker
-/// took part, so the sender ran.
+/// took part, so the sender ran. The live input note shows only while an
+/// AirPlay speaker is on, and steers live sound away from AirPlay.
 /// An empty Connected Speakers list otherwise says just that it's empty, or
 /// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
 /// name AirPlay too, with the receivers the sender plays, the ones it can't
@@ -596,6 +597,10 @@ fn no_text_promises_airplay() {
                 )
                 || line.contains(
                     "return @tr(\"AirPlay speakers can wait at most 20 s for a Google Cast speaker,"
+                )
+                || line.contains("return @tr(\"AirPlay adds a {} s delay to every speaker.")
+                || line.contains(
+                    "live-input-airplay-unknown: @tr(\"AirPlay adds a delay to every speaker."
                 )
                 || line.contains("return @tr(\"AirPlay ahead of {}\", name);")
                 || line.contains("return @tr(\"AirPlay delay: was {}. New: {} ms")

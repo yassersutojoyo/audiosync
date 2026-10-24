@@ -47,3 +47,14 @@ final class InputLevel: ObservableObject {
         timer = poll
     }
 }
+
+/// The note under the source while an input device plays and an AirPlay
+/// speaker is on: every speaker then waits the AirPlay delay, which is too
+/// late for live sound.
+enum LiveInputAirPlayHint {
+    /// The AirPlay delay to name, in tenths of a second; nil hides the note.
+    static func tenths(source: AudioSource, airPlayOn: Bool, airPlayDelayMs: Double) -> Int? {
+        guard case .input = source, airPlayOn else { return nil }
+        return Int((max(0, airPlayDelayMs) / 100).rounded())
+    }
+}

@@ -240,6 +240,7 @@ struct MainView: View {
                 SectionTitle(t.sourceLabel)
                 SourcePicker(model: model, large: true)
                 InputLevelMeter(level: model.inputLevel, text: t)
+                if let hint = model.liveInputAirPlayHint { LiveInputAirPlayNote(message: hint) }
             }
         }
     }

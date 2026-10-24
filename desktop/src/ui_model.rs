@@ -52,6 +52,16 @@ pub enum SourceKind {
     AppsExcept,
 }
 
+/// How long the AirPlay speakers make every speaker wait, as the live input
+/// note names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AirPlayWait {
+    /// In tenths of a second.
+    Tenths(u32),
+    /// No AirPlay sender reports its delay yet.
+    Unknown,
+}
+
 /// An app the several-apps list offers, by executable file name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MixApp {
@@ -1060,6 +1070,27 @@ impl AppState {
     /// Speakers switched on right now.
     pub fn active_speakers(&self) -> usize {
         self.speakers.iter().filter(|s| s.enabled).count()
+    }
+
+    /// The note under the source while an input device plays and an AirPlay
+    /// speaker is on: every speaker then waits the AirPlay delay, which is
+    /// too late for live sound. `None` hides the note.
+    pub fn live_input_airplay_wait(&self) -> Option<AirPlayWait> {
+        let input = self
+            .sources
+            .iter()
+            .any(|s| s.id == self.source_id && s.kind == SourceKind::Input);
+        let airplay_on = self
+            .speakers
+            .iter()
+            .any(|s| s.enabled && matches!(s.kind, SpeakerKind::AirPlay | SpeakerKind::AirPlay2));
+        if !input || !airplay_on {
+            return None;
+        }
+        Some(match self.airplay_delay_ms {
+            Some(ms) => AirPlayWait::Tenths((ms.max(0.0) / 100.0).round() as u32),
+            None => AirPlayWait::Unknown,
+        })
     }
 
     /// The speaker lists both windows show: the PC's own outputs in their
@@ -2381,6 +2412,40 @@ mod tests {
         // Hidden or minimized: what was kept stays.
         let kept = Some(frame(100, 1000.0, true));
         assert_eq!(frame_to_keep(MainWindowShows::Not, kept), kept);
+    }
+
+    #[test]
+    fn the_live_input_note_shows_only_while_an_input_plays_through_airplay() {
+        let mut state = MockBackend::new().snapshot();
+        let airplay = |s: &Speaker| matches!(s.kind, SpeakerKind::AirPlay | SpeakerKind::AirPlay2);
+        for speaker in &mut state.speakers {
+            speaker.enabled = !airplay(speaker);
+        }
+        state.source_id = "input:line".to_owned();
+        state.airplay_delay_ms = Some(1750.0);
+        assert_eq!(
+            state.live_input_airplay_wait(),
+            None,
+            "no AirPlay speaker is on"
+        );
+
+        let first = state
+            .speakers
+            .iter()
+            .position(airplay)
+            .expect("an AirPlay speaker");
+        state.speakers[first].enabled = true;
+        assert_eq!(
+            state.live_input_airplay_wait(),
+            Some(AirPlayWait::Tenths(18))
+        );
+        state.airplay_delay_ms = None;
+        assert_eq!(state.live_input_airplay_wait(), Some(AirPlayWait::Unknown));
+
+        for other in ["system", "app:player"] {
+            state.source_id = other.to_owned();
+            assert_eq!(state.live_input_airplay_wait(), None, "{other}");
+        }
     }
 
     #[test]

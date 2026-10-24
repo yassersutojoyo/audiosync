@@ -84,6 +84,12 @@ export global Strings {
     public pure function input-level-value(percent: int) -> string {
         return @tr("{}%", percent);
     }
+    // The note under the source while an input device plays and an AirPlay
+    // speaker is on. `seconds` has one decimal, such as "1.8".
+    public pure function live-input-airplay(seconds: string) -> string {
+        return @tr("AirPlay adds a {} s delay to every speaker. For live sound, use only speakers on this PC.", seconds);
+    }
+    out property <string> live-input-airplay-unknown: @tr("AirPlay adds a delay to every speaker. For live sound, use only speakers on this PC.");
     out property <string> equalizer: @tr("Equalizer");
     // The Now Playing card: its name for Narrator, and its buttons.
     out property <string> now-playing: @tr("Now Playing");

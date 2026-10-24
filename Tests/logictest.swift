@@ -6962,6 +6962,21 @@ do {
     }
 }
 
+// MARK: The live input note while an AirPlay speaker is on (InputLevel.swift)
+do {
+    let mic = AudioSource.input(uid: "BuiltInMicrophoneDevice")
+    check(LiveInputAirPlayHint.tenths(source: mic, airPlayOn: true, airPlayDelayMs: 1750) == 18,
+          "live input note: shows the AirPlay delay, rounded to a tenth")
+    check(LiveInputAirPlayHint.tenths(source: mic, airPlayOn: false, airPlayDelayMs: 1750) == nil,
+          "live input note: hidden with no AirPlay speaker on")
+    check(LiveInputAirPlayHint.tenths(source: .system, airPlayOn: true, airPlayDelayMs: 1750) == nil
+            && LiveInputAirPlayHint.tenths(source: .app(bundleID: "com.apple.Music"), airPlayOn: true,
+                                           airPlayDelayMs: 1750) == nil,
+          "live input note: hidden for any source but an input device")
+    let note = UIStrings(locale: Locale(identifier: "en_US")).liveInputAirPlayHint(tenths: 18)
+    check(note.hasPrefix("AirPlay adds a 1.8 s delay") && !note.contains("\u{2014}"), "live input note: \(note)")
+}
+
 // MARK: Microphone permission request (MicrophoneRequestGate.swift)
 do {
     var gate = MicrophoneRequestGate()

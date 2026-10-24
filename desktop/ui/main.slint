@@ -1108,6 +1108,9 @@ export component MainWindow inherits Window {
     in property <float> input-level;
     // The level as Narrator reads it, in steps of 10 percent.
     in property <int> input-level-spoken;
+    // The note under the source while an input device plays through an
+    // AirPlay speaker; empty hides it.
+    in property <string> live-input-hint;
     // The several-apps list under the source menu.
     in property <[MixAppItem]> mix-apps;
     in property <bool> mix-all-except;
@@ -1775,6 +1778,10 @@ export component MainWindow inherits Window {
                                 level: root.input-level;
                                 spoken-percent: root.input-level-spoken;
                                 label: Strings.input-level;
+                            }
+
+                            if root.live-input-hint != "": SecondaryText {
+                                text: root.live-input-hint;
                             }
                         }
                     }

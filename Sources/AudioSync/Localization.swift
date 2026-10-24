@@ -519,6 +519,11 @@ struct UIStrings {
     /// for VoiceOver: its name, and how full the bar is in steps of 10%.
     let inputLevel = "Input level"
     func inputLevelValue(_ spokenPercent: Int) -> String { percent(spokenPercent) }
+    /// The note under the source while an input device plays and an AirPlay
+    /// speaker is on (`LiveInputAirPlayHint`); `tenths` of a second, shown as "1.8".
+    func liveInputAirPlayHint(tenths: Int) -> String {
+        "AirPlay adds a \(tenths / 10).\(tenths % 10) s delay to every speaker. For live sound, use only speakers on this Mac."
+    }
     let sourceSeveralApps = "Several Apps"
     let sourceMixOnly = "Only the Checked Apps"
     let sourceMixAllExcept = "All Apps Except the Checked Ones"
