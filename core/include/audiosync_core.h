@@ -130,6 +130,7 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
 #define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
 #define ASC_AIRPLAY_EVENT_REMOTE 13         /* a speaker's remote asked for .remote: send it through the now-playing control */
+#define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
 
 /* AscAirPlayEvent.remote: the transport control a speaker's remote asked for */
 #define ASC_AIRPLAY_REMOTE_PLAY_PAUSE 1
@@ -140,7 +141,6 @@ extern "C" {
 #define ASC_AIRPLAY_PLAYBACK_UNKNOWN 0
 #define ASC_AIRPLAY_PLAYBACK_PLAYING 1
 #define ASC_AIRPLAY_PLAYBACK_PAUSED 2
-#define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
 
 /* Which reports gave a speaker's latency (AscAirPlayEvent.receiver_latency_sources bits). */
 #define ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY 1     /* Audio-Latency of a RECORD answer */
