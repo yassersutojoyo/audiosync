@@ -387,8 +387,8 @@ fn toggles_report_keyboard_focus_to_narrator() {
 /// Icons and other decorative pieces stay out of Narrator's way. Slint 1.18
 /// exposes every instance of a component whose root is a Text or Image,
 /// whatever `accessible-role` says, so a decorative component wraps its Text
-/// or Image (set to `none`) in a layout or Rectangle, and the icon font is
-/// drawn only by Glyph.
+/// or Image (set to `none`) in a layout or Rectangle, and the icon font (or,
+/// off Windows, its drawn stand-in) is drawn only by Glyph.
 #[test]
 fn decorative_pieces_are_hidden_from_narrator() {
     let widgets = include_str!("../ui/widgets.slint");
@@ -442,6 +442,85 @@ fn decorative_pieces_are_hidden_from_narrator() {
             .count(),
         1,
         "only Glyph draws the icon font"
+    );
+    for (file, source) in UI_FILES {
+        if *file != "widgets.slint" {
+            assert!(
+                !source.contains("Glyphs.outline") && !source.contains("Glyphs.solid"),
+                "{file}: icon drawings are drawn by Glyph"
+            );
+        }
+    }
+}
+
+/// Segoe Fluent Icons ships only with Windows; elsewhere its code points
+/// would render as empty boxes, so Glyph uses the font only on Windows and
+/// every icon has a drawing of its own for the other systems.
+#[test]
+fn every_icon_has_a_drawing_off_windows() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let glyph = component_body(widgets, "Glyph");
+    let font = glyph
+        .find("if Platform.os == OperatingSystemType.windows: Text {")
+        .expect("the icon font draws only on Windows");
+    assert!(glyph[font..].contains("font-family: \"Segoe Fluent Icons\";"));
+    let drawing = glyph
+        .find("if Platform.os != OperatingSystemType.windows && root.glyph != \"\": Rectangle {")
+        .expect("the drawing stands in everywhere else");
+    let drawing = &glyph[drawing..];
+    assert!(drawing.contains("commands: Glyphs.outline(root.glyph);"));
+    assert!(drawing.contains("stroke: root.color;"));
+    assert!(drawing.contains("commands: Glyphs.solid(root.glyph);"));
+    assert!(drawing.contains("fill: root.color;"));
+
+    let start = widgets.find("export global Glyphs {").expect("Glyphs");
+    let glyphs = &widgets[start..];
+    let glyphs = &glyphs[..glyphs.find("\n}").expect("it ends")];
+    let mut icons = 0;
+    for line in glyphs.lines().map(str::trim) {
+        let Some(rest) = line.strip_prefix("out property <string> ") else {
+            continue;
+        };
+        let name = rest.split(':').next().unwrap_or_default();
+        icons += 1;
+        assert!(
+            glyphs.contains(&format!("if glyph == root.{name} {{")),
+            "Glyphs.{name} has no drawing"
+        );
+    }
+    assert!(icons > 25, "the check found the icons ({icons})");
+
+    let mut drawings = 0;
+    for line in glyphs.lines().map(str::trim) {
+        let Some(commands) = line
+            .strip_prefix("return \"")
+            .and_then(|rest| rest.strip_suffix("\";"))
+        else {
+            continue;
+        };
+        if commands.is_empty() {
+            continue;
+        }
+        drawings += 1;
+        assert!(
+            commands.starts_with('M'),
+            "a drawing starts with a move: `{commands}`"
+        );
+        for token in commands.split_whitespace() {
+            let number = token.trim_start_matches(|c| "MLHVAQZ".contains(c));
+            assert!(
+                token.len() - number.len() <= 1
+                    && (number.is_empty()
+                        || number
+                            .parse::<f32>()
+                            .is_ok_and(|n| (0.0..=16.0).contains(&n))),
+                "`{token}` is not a path command or a coordinate on the 16-unit grid"
+            );
+        }
+    }
+    assert!(
+        drawings > icons,
+        "the check found the drawings ({drawings})"
     );
 }
 
