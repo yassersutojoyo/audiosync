@@ -1468,7 +1468,7 @@ private struct FadingScroll<Content: View>: View {
 
     /// Shorter than the gap between the header and the columns (14 pt) and
     /// the window's bottom margin.
-    private static let fade: CGFloat = 12
+    private static var fade: CGFloat { 12 }
 
     var body: some View {
         GeometryReader { viewport in
