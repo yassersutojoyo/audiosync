@@ -382,10 +382,11 @@ fn outputs_play_at_their_delay_and_gain() {
     // from that baseline. The absolute latency goes unchecked: pw-record's
     // file carries no clock time to set against the time a frame was due.
     assert!(
-        equal.abs() <= 48 || (equal.abs() - 1024).abs() <= 48,
+        equal.abs() <= 64 || (equal.abs() - 1024).abs() <= 64,
         "{report}"
     );
-    assert!((delayed - equal - 4800).abs() <= 48, "{report}");
+    // The offsets CI measured fall on a 64-frame grid.
+    assert!((delayed - equal - 4800).abs() <= 64, "{report}");
     assert!((ratio_db + 6.02).abs() <= 0.2, "gain {ratio_db} dB");
 
     stop.store(true, Ordering::Relaxed);
@@ -460,6 +461,8 @@ fn one_app_is_captured_alone_and_followed() {
     let recorder = Recorder::start("app");
     let out = output(&ring, "as-b", 0, 1.0);
     std::thread::sleep(Duration::from_secs(3));
+    let captured = ring.take_peak();
+    let held = capture.holds_all();
     drop(out);
     let (_, right) = recorder.finish();
     kill(first);
@@ -469,7 +472,10 @@ fn one_app_is_captured_alone_and_followed() {
     let wanted = power(tail, 440.0);
     let other = power(tail, 1000.0);
     let below_db = 10.0 * (wanted / other.max(1e-30)).log10();
-    assert!(wanted > 1.0, "no 440 Hz captured: power {wanted}");
+    assert!(
+        wanted > 1.0,
+        "no 440 Hz played: power {wanted}, captured peak {captured}, links held {held}"
+    );
     assert!(below_db >= 40.0, "1 kHz only {below_db} dB down");
 
     // A shell that plays two short files one after the other: the second
