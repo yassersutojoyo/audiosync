@@ -25,6 +25,8 @@ use crate::audio::capture::Feeds;
 use crate::audio::controller::{CaptureHandle, CaptureState, RendererHandle};
 use crate::audio::routing::EndpointVolume;
 
+mod receivers;
+
 const RATE: usize = SESSION_RATE as usize;
 
 fn run(program: &str, args: &[&str]) -> String {
