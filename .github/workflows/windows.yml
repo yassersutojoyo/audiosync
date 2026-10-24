@@ -89,28 +89,34 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo test --locked
 
-      # A PipeWire daemon of its own, with a null sink as the only (so the
-      # default) output playing a 440 Hz tone, and the ignored test that
-      # captures that output's monitor.
+      # A PipeWire daemon of its own with two null sinks, each playing a 440 Hz
+      # tone of its own level through a stream pinned to it, and the ignored
+      # tests that capture the default output's monitor and follow a change
+      # of the default.
       - name: PipeWire capture smoke test
         if: ${{ !cancelled() }}
         run: |
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
           mkdir -p -m 700 "$XDG_RUNTIME_DIR"
           python3 -c "
-          import math, struct, wave
-          with wave.open('$RUNNER_TEMP/tone.wav', 'wb') as f:
-              f.setnchannels(2); f.setsampwidth(2); f.setframerate(48000)
-              f.writeframes(b''.join(struct.pack('<hh', s, s) for s in (int(12000 * math.sin(2 * math.pi * 440 * n / 48000)) for n in range(48000 * 120))))
-          "
+          import math, struct, sys, wave
+          for name, level in (('loud', 16000), ('quiet', 3000)):
+              with wave.open(sys.argv[1] + '/' + name + '.wav', 'wb') as f:
+                  f.setnchannels(2); f.setsampwidth(2); f.setframerate(48000)
+                  f.writeframes(b''.join(struct.pack('<hh', s, s) for s in (int(level * math.sin(2 * math.pi * 440 * n / 48000)) for n in range(48000 * 120))))
+          " "$RUNNER_TEMP"
           dbus-run-session -- bash -euo pipefail -c '
             pipewire & sleep 1
             wireplumber & sleep 2
-            pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=ci-sink media.class=Audio/Sink object.linger=true audio.position=[FL FR] }"
+            for sink in ci-loud ci-quiet; do
+              pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=$sink media.class=Audio/Sink object.linger=true audio.position=[FL FR] }"
+            done
             sleep 1
             wpctl status
-            pw-play "$RUNNER_TEMP/tone.wav" & sleep 1
-            cargo test --locked -- --ignored --exact audio::pipewire::stream::tests::the_monitor_of_a_playing_output_is_captured
+            pw-play --target ci-loud "$RUNNER_TEMP/loud.wav" &
+            pw-play --target ci-quiet "$RUNNER_TEMP/quiet.wav" &
+            sleep 1
+            cargo test --locked -- --ignored --test-threads 1 audio::pipewire::stream::tests::
           '
 
   build:

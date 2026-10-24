@@ -471,4 +471,51 @@ mod tests {
         let peak = ring.take_peak();
         assert!(peak > 0.01, "peak {peak}");
     }
+
+    /// The ID of the node named `name`, from `pw-dump`.
+    fn node_id(name: &str) -> u64 {
+        let dump = std::process::Command::new("pw-dump").output().unwrap();
+        let objects: serde_json::Value = serde_json::from_slice(&dump.stdout).unwrap();
+        objects
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|object| object["info"]["props"]["node.name"] == name)
+            .and_then(|object| object["id"].as_u64())
+            .unwrap_or_else(|| panic!("no node {name}"))
+    }
+
+    fn set_default(name: &str) {
+        let id = node_id(name).to_string();
+        let status = std::process::Command::new("wpctl")
+            .args(["set-default", &id])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::thread::sleep(Duration::from_secs(1));
+    }
+
+    /// Needs the CI job's two null sinks, `ci-loud` and `ci-quiet`, each
+    /// playing a tone of its own level through a stream pinned to it.
+    #[test]
+    #[ignore = "needs a running PipeWire daemon with the CI job's two sinks"]
+    fn the_capture_follows_a_new_default_output() {
+        set_default("ci-loud");
+        let ring = Ring::for_rate(SESSION_RATE).unwrap();
+        let writer = ring.writer().unwrap();
+        let (_control, processor) = equalizer();
+        let capture = start(writer, processor, Feeds::default()).unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        let loud = ring.take_peak();
+        assert!(loud > 0.3, "peak {loud} on the first default");
+        set_default("ci-quiet");
+        ring.take_peak();
+        std::thread::sleep(Duration::from_secs(1));
+        let quiet = ring.take_peak();
+        assert_eq!(capture.state(), CaptureState::Running);
+        assert!(
+            (0.05..0.2).contains(&quiet),
+            "peak {quiet} after the default changed"
+        );
+    }
 }
