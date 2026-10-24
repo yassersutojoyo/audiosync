@@ -1,7 +1,6 @@
 //! The capture stream on the default output's monitor, on its own thread.
 //! A [`Wiring`] says what the stream links to; for the monitor it watches
-//! the `default` metadata and links the stream again when the default
-//! output changes.
+//! the `default` metadata and moves the stream to the new default output.
 //!
 //! Every PipeWire object of a capture (main loop, context, connection,
 //! stream and listeners) is made, run and dropped on one thread,
@@ -15,7 +14,7 @@
 //! [`GapFill`] are then only ever used on one thread, without a lock; the
 //! callback never allocates, locks, blocks or logs.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -159,7 +158,7 @@ impl Wiring {
         }
     }
 
-    /// Whether the stream reconnects when the default output changes: the
+    /// Whether the stream is moved when the default output changes: the
     /// session manager leaves an already linked stream where it is.
     fn follows_default(self) -> bool {
         match self {
@@ -170,6 +169,16 @@ impl Wiring {
 
 /// The metadata key that names the default output in effect.
 const DEFAULT_SINK_KEY: &str = "default.audio.sink";
+
+/// The metadata key, on a stream's node, that asks the session manager to
+/// link the stream to the node it names.
+const TARGET_KEY: &str = "target.object";
+
+/// The node name in a [`DEFAULT_SINK_KEY`] value, `{ "name": "..." }`.
+fn sink_name(value: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(value).ok()?;
+    value.get("name")?.as_str().map(str::to_owned)
+}
 
 /// The default output as the `default` metadata last named it.
 #[derive(Default)]
@@ -388,9 +397,6 @@ fn serve(
     };
     let stream =
         StreamRc::new(core.clone(), NODE_NAME, properties).map_err(|_| BackendError::DeviceGone)?;
-    // Set while the stream is taken down to link it again, so the
-    // disconnect isn't reported as a lost output.
-    let relinking = Rc::new(Cell::new(false));
 
     let feed = Rc::new(RefCell::new(Feed {
         converter,
@@ -405,13 +411,10 @@ fn serve(
             let main_loop = main_loop.clone();
             let status = Arc::clone(status);
             let ready = ready.clone();
-            let relinking = Rc::clone(&relinking);
             move |_stream, _, old, new| match new {
                 StreamState::Paused | StreamState::Streaming => {
-                    relinking.set(false);
                     let _ = ready.send(Ok(()));
                 }
-                StreamState::Unconnected if relinking.get() => {}
                 StreamState::Error(_) => {
                     status.fail(&BackendError::DeviceGone);
                     let _ = ready.send(Err(BackendError::DeviceGone));
@@ -475,11 +478,9 @@ fn serve(
         .register()
         .map_err(|_| BackendError::DeviceGone)?;
 
-    let format: Rc<[u8]> = enum_format()?.into();
-    connect(&stream, wiring, &format)?;
+    connect(&stream, wiring, &enum_format()?)?;
 
-    // The `default` metadata, bound once the registry announces it, and
-    // what it last named the default output.
+    // The `default` metadata and its listener, once the registry announces it.
     let defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>> = Rc::default();
     let registry = core
         .get_registry_rc()
@@ -491,10 +492,6 @@ fn serve(
                 let registry = registry.clone();
                 let defaults = Rc::clone(&defaults);
                 let stream = stream.clone();
-                let format = Rc::clone(&format);
-                let relinking = Rc::clone(&relinking);
-                let main_loop = main_loop.clone();
-                let status = Arc::clone(status);
                 move |global| {
                     let is_default = global.type_ == ObjectType::Metadata
                         && global
@@ -508,10 +505,8 @@ fn serve(
                     };
                     let output = RefCell::new(DefaultOutput::default());
                     let stream = stream.clone();
-                    let format = Rc::clone(&format);
-                    let relinking = Rc::clone(&relinking);
-                    let main_loop = main_loop.clone();
-                    let status = Arc::clone(&status);
+                    // Weak: the listener lives in `defaults` itself.
+                    let defaults_weak = Rc::downgrade(&defaults);
                     let listener = metadata
                         .add_listener_local()
                         .property(move |subject, key, _type, value| {
@@ -521,11 +516,21 @@ fn serve(
                             {
                                 return 0;
                             }
-                            relinking.set(true);
-                            let _ = stream.disconnect();
-                            if connect(&stream, wiring, &format).is_err() {
-                                status.fail(&BackendError::DeviceGone);
-                                main_loop.quit();
+                            let Some(name) = value.and_then(sink_name) else {
+                                return 0;
+                            };
+                            let Some(defaults) = defaults_weak.upgrade() else {
+                                return 0;
+                            };
+                            // Moving the linked node keeps it and its format;
+                            // the session manager relinks it to the new output.
+                            if let Some((metadata, _)) = defaults.borrow().as_ref() {
+                                metadata.set_property(
+                                    stream.node_id(),
+                                    TARGET_KEY,
+                                    None,
+                                    Some(name.as_str()),
+                                );
                             }
                             0
                         })
@@ -589,6 +594,16 @@ mod tests {
         // the next one moves it.
         assert!(!output.changed(None));
         assert!(output.changed(loud));
+    }
+
+    #[test]
+    fn the_default_value_names_the_sink() {
+        assert_eq!(
+            sink_name(r#"{ "name": "ci-quiet" }"#).as_deref(),
+            Some("ci-quiet")
+        );
+        assert_eq!(sink_name("ci-quiet"), None);
+        assert_eq!(sink_name(r#"{ "id": 38 }"#), None);
     }
 
     #[test]
