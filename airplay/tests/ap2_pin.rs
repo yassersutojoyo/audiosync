@@ -8,7 +8,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use audiosync_airplay::ap2::PinPairing;
+use audiosync_airplay::ap2::{Ap2Event, PinPairing};
 use audiosync_airplay::error::ErrorKind;
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::pairing::{Output, PairingEvent, PairingState, PinError};
@@ -103,11 +103,22 @@ impl PinRig {
     }
 }
 
-/// A receiver that shows `PIN` and sets the PIN flag (P61).
+/// A receiver that shows `PIN` and asks for a pairing the first time only
+/// (flags bit 9, P61), as one TV does with 0x244.
 fn pin_receiver() -> FakeAp2 {
     let mut fake = FakeAp2::new();
     fake.hap.code = PIN.to_owned();
-    fake.info_body = plist(dict(&[("statusFlags", int(0x8))]));
+    fake.info_body = plist(dict(&[("statusFlags", int(0x244))]));
+    fake
+}
+
+/// A receiver that shows `PIN` and asks for a code every time (flags bit
+/// 3, 0x4c as the same TV sets it): a pairing lasts as long as its
+/// connection.
+fn every_time_receiver() -> FakeAp2 {
+    let mut fake = pin_receiver();
+    fake.info_body = plist(dict(&[("statusFlags", int(0x4c))]));
+    fake.hap.pairing_per_connection = true;
     fake
 }
 
@@ -182,14 +193,17 @@ fn pin_pairing_runs_on_one_connection() {
     assert!(!keys.contains(&"POST /pair-pin-start"), "{keys:?}");
 }
 
-// covers: P153
+// covers: P153, P182
 #[test]
 fn the_session_goes_on_over_the_pairing_connection() {
-    let mut fake = pin_receiver();
-    fake.hap.pairing_per_connection = true;
-    let mut rig = PinRig::new(fake);
+    let mut rig = PinRig::new(every_time_receiver());
     assert_eq!(rig.submit(PIN), Ok(()));
-    assert!(rig.credentials().is_some());
+    // Nothing to store: the receiver turns every later pair-verify down.
+    assert_eq!(rig.credentials(), None);
+    assert_eq!(
+        rig.events,
+        [PairingEvent::PinRequested, PairingEvent::PairedForSession]
+    );
     let PinRig {
         pairing, fake, now, ..
     } = rig;
@@ -209,6 +223,27 @@ fn the_session_goes_on_over_the_pairing_connection() {
         .find(|(request, _)| request.method == Method::Setup)
         .expect("SETUP");
     assert!(framed, "{}", setup.uri);
+}
+
+// covers: P61
+#[test]
+fn stored_credentials_never_verify_with_a_receiver_that_asks_every_time() {
+    let mut rig = PinRig::new(pin_receiver());
+    assert_eq!(rig.submit(PIN), Ok(()));
+    let credentials = rig.credentials().expect("paired");
+    let mut fake = every_time_receiver();
+    fake.hap.paired = rig.fake.hap.paired.clone();
+    let mut config = ap2_config();
+    config.credentials = Some(credentials);
+    let session = Ap2Rig::new(config, fake);
+    let keys = session.keys();
+    assert!(!keys.contains(&"POST /pair-verify"), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-pin-start"), "{keys:?}");
+    let failed = session.events.iter().find_map(|event| match event {
+        Ap2Event::Failed(error) => Some(error.kind),
+        _ => None,
+    });
+    assert_eq!(failed, Some(ErrorKind::PairingRequired));
 }
 
 // covers: P58, P150
@@ -240,6 +275,40 @@ fn a_wrong_pin_is_asked_for_again_on_the_same_connection() {
     assert_eq!(starts, 1, "{keys:?}");
     assert_eq!(rig.connects, 1);
     assert_eq!(rig.closes, 0);
+
+    // Wrong twice in a row: the receiver is asked for a new code, then the
+    // prompt comes back.
+    let mut rig = PinRig::new(pin_receiver());
+    assert_eq!(rig.submit("1111"), Ok(()));
+    assert_eq!(rig.submit("2222"), Ok(()));
+    let keys = rig.fake.keys();
+    let starts = keys.iter().filter(|k| *k == "POST /pair-pin-start").count();
+    assert_eq!(starts, 2, "{keys:?}");
+    assert_eq!(keys.last().map(String::as_str), Some("POST /pair-pin-start"));
+    assert_eq!(rig.pairing.state(), PairingState::WaitingForPin);
+    assert_eq!(rig.failure(), None);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert!(rig.credentials().is_some(), "{:?}", rig.events);
+    assert_eq!(rig.connects, 1);
+
+    // A back-off answer asks again and holds M1 back for its wait.
+    let mut fake = pin_receiver();
+    fake.hap.back_off = Some(5);
+    fake.hap
+        .answers
+        .push((("/pair-setup", 1), Answer::Error(3)));
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert_eq!(rig.failure(), None);
+    assert_eq!(rig.pairing.state(), PairingState::WaitingForPin);
+    rig.fake.hap.answers.clear();
+    rig.fake.requests.clear();
+    assert_eq!(rig.submit(PIN), Ok(()));
+    rig.advance(Duration::from_secs(4));
+    assert!(rig.fake.requests.is_empty(), "{:?}", rig.fake.keys());
+    rig.advance(Duration::from_secs(2));
+    assert!(rig.credentials().is_some(), "{:?}", rig.fake.keys());
+    assert!(!rig.fake.keys().contains(&"POST /pair-pin-start".to_owned()));
 
     // A 470 at any step is PairingFailed, not a wrong PIN (P58).
     let mut fake = pin_receiver();

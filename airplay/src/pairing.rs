@@ -322,6 +322,11 @@ pub enum PairingEvent {
     /// hand them back in `SpeakerOptions::homekit_credentials` (P152).
     /// `Debug` shows the identifiers only.
     HomeKitPaired(HomeKitCredentials),
+    /// A PIN pairing with an AirPlay 2 receiver that asks for a code every
+    /// time (flags bit 3) passed, with nothing to store: it turns every
+    /// later pair-verify down. The speaker plays when the host starts it
+    /// while the pairing connection is held (P153, P182).
+    PairedForSession,
     /// Pairing ended with an error (P58, P136): PairingFailed for a 470 or
     /// another failure status at a pairing step, Busy for a 409 (P137),
     /// Unsupported when the OPTIONS answer shows a receiver that can't take
