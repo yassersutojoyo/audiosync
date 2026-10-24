@@ -131,10 +131,6 @@ pub enum Availability {
     PairingNotYet,
     /// Only AirPlay 2 can play it, which AudioSync for Windows doesn't speak
     /// yet.
-    #[cfg_attr(
-        all(not(os_backend), not(test)),
-        expect(dead_code, reason = "only the Windows backend lists real receivers")
-    )]
     AirPlay2NotYet,
     /// It wants an encryption, codec or format AudioSync can't send.
     #[cfg_attr(

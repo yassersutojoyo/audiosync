@@ -8826,7 +8826,13 @@ mod tests {
         let id = preset_ids(&app)[0].clone();
         let window = app.main.window();
 
-        for open in [&[Key::Menu][..], &[Key::Shift, Key::F10][..]] {
+        // Slint maps Shift+F10 to the menu on Windows only.
+        let opens: &[&[Key]] = if cfg!(windows) {
+            &[&[Key::Menu], &[Key::Shift, Key::F10]]
+        } else {
+            &[&[Key::Menu]]
+        };
+        for &open in opens {
             app.main.set_focus_preset_id(id.clone().into());
             draw_frames();
             for key in open {
