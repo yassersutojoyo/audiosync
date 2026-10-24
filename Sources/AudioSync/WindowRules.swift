@@ -34,7 +34,10 @@ struct ScrollEdgeFades: Equatable {
     /// coordinates; `fade` is the height over which an edge reaches full strength.
     static func of(contentHeight: CGFloat, visibleTop: CGFloat, visibleHeight: CGFloat,
                    fade: CGFloat) -> ScrollEdgeFades {
-        ScrollEdgeFades(top: 1, bottom: 1)
+        guard fade > 0 else { return .none }
+        func strength(_ hidden: CGFloat) -> CGFloat { min(max(hidden / fade, 0), 1) }
+        return ScrollEdgeFades(top: strength(visibleTop),
+                               bottom: strength(contentHeight - visibleTop - visibleHeight))
     }
 }
 
