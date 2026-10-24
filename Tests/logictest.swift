@@ -1976,7 +1976,11 @@ do {
             firstTarget = item.target
             firstAction = item.action
         }
-        if let target = firstTarget as? NSObject, let action = firstAction { _ = target.perform(action, with: nil) }
+        check(firstAction == #selector(MenuAction.choose(_:)), "Gear menu: each item sends its own action to its target",
+              firstAction.map(NSStringFromSelector) ?? "none")
+        if let target = firstTarget as? NSObject, let action = firstAction, target.responds(to: action) {
+            _ = target.perform(action, with: nil)
+        }
         check(chosen == 1,
               "Gear menu: an item chosen after the pop-up call returns still runs its action once nothing else holds the menu")
         autoreleasepool { NSMenu().keepUntilNextPopUp() }

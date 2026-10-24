@@ -5,12 +5,13 @@ import AppKit
 final class MenuAction: NSObject {
     let run: () -> Void
     init(_ run: @escaping () -> Void) { self.run = run }
-    @objc func perform(_ sender: Any?) { run() }
+    // Not named perform(_:): in a static method that name resolves to NSObject's performSelector:.
+    @objc func choose(_ sender: Any?) { run() }
 
     /// A menu item that runs `run`, checked when `on` is given and true.
     static func item(_ title: String, on: Bool? = nil, _ run: @escaping () -> Void) -> NSMenuItem {
         let action = MenuAction(run)
-        let item = NSMenuItem(title: title, action: #selector(perform(_:)), keyEquivalent: "")
+        let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
         item.target = action
         item.representedObject = action   // the target is weak
         if let on { item.state = on ? .on : .off }
