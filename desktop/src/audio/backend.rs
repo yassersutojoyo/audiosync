@@ -188,6 +188,9 @@ pub struct AirPlayInfo {
     /// Whether AudioSync keeps credentials from pairing with it, on
     /// AirPlay 1 or AirPlay 2.
     pub paired: bool,
+    /// Whether AudioSync holds the password the user typed for it, until
+    /// AudioSync quits.
+    pub holds_password: bool,
     /// Whether a pairing with it is running.
     pub pairing: bool,
     /// AudioSync reaches it over AirPlay 2, which happens only while the

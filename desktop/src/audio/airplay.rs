@@ -1412,6 +1412,7 @@ impl AirPlaySpeakers {
                         delay_ms: settings.delay_ms,
                         playing: self.is_playing(id),
                         paired: false,
+                        holds_password: false,
                         pairing: false,
                         airplay2: target
                             .members
@@ -1435,6 +1436,7 @@ impl AirPlaySpeakers {
                     delay_ms: settings.delay_ms,
                     playing: self.is_playing(id),
                     paired: self.store.contains(id) || self.store.homekit(id).is_some(),
+                    holds_password: self.passwords.contains_key(id),
                     pairing: self.pairings.contains_key(id),
                     airplay2: self.over_airplay2(id),
                     group: None,
@@ -1644,18 +1646,24 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Forgets the speaker's credentials: it is turned off, and pairs again
-    /// the next time the user switches it on.
+    /// Forgets the speaker's credentials and the password typed for it: it
+    /// is turned off, and pairs or asks for the password again the next time
+    /// the user switches it on.
     pub fn forget_pairing(&mut self, id: &str) {
         self.stop_pairing(id, "the user forgot the pairing");
-        let homekit = self.forget_homekit(id);
+        let password = self.passwords.remove(id).is_some();
+        if password {
+            self.log
+                .log(|| format!("AirPlay {}: password forgotten", self.label(id)));
+        }
+        let homekit_or_password = self.forget_homekit(id) || password;
         match self.store.remove(id) {
             Ok(true) => {
                 self.store_written(true);
                 self.log
                     .log(|| format!("AirPlay pairing {}: credentials forgotten", self.label(id)));
             }
-            Ok(false) if !homekit => return,
+            Ok(false) if !homekit_or_password => return,
             Ok(false) => {}
             Err(error) => {
                 self.store_written(false);
@@ -5140,6 +5148,31 @@ pub mod tests {
             .set_enabled(&id, true)
             .expect("no prompt the second time");
         assert_eq!(fake.take_calls(), joined_with(&id, "hunter2"));
+    }
+
+    #[test]
+    fn forget_password_drops_the_typed_password_and_turns_the_speaker_off() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let study = password_asked(&fake, &mut airplay);
+        let id = id_of(&study);
+        assert!(!airplay.speakers()[0].holds_password);
+        assert!(airplay.submit_password(&id, "hunter2"));
+        let row = &airplay.speakers()[0];
+        assert!(
+            row.holds_password && !row.paired,
+            "its menu offers Forget Password, not Forget Pairing"
+        );
+        fake.take_calls();
+
+        airplay.forget_pairing(&id);
+        assert!(!airplay.speakers()[0].holds_password);
+        assert!(airplay.enabled_ids().is_empty(), "it goes off");
+        assert_eq!(
+            airplay.set_enabled(&id, true),
+            Err(AirPlayProblem::NeedsPassword),
+            "switched on again, it asks for the password"
+        );
     }
 
     #[test]

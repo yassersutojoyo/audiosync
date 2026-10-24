@@ -3977,6 +3977,7 @@ pub fn speaker_item(
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
         paired: speaker.paired,
+        holds_password: speaker.holds_password,
         device_volume,
         device_volume_percent,
         cast: speaker.cast.is_some(),
