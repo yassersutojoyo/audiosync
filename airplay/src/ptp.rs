@@ -1,8 +1,9 @@
 //! The PTP service of the AirPlay 2 path (P158 to P163, P167), sans-I/O:
-//! the sender is the unicast grandmaster of its one PTP receiver, or of
-//! every member of its one target (P179), sending each Announce once a
+//! the sender is the unicast grandmaster of every AirPlay 2 receiver that
+//! takes PTP, on one timeline (P205), sending each Announce once a
 //! second and a two-step Sync with its Follow_Up eight times a second, and
-//! answering their Delay_Req. Every
+//! answering their Delay_Req; a served receiver whose Announce outranks the
+//! sender is reported (P206). Every
 //! timestamp is the sender clock read as PTP time (P163). Message layouts
 //! follow IEEE 1588-2008 version 2.
 
@@ -389,13 +390,7 @@ impl PtpService {
 
     /// Announce (P160).
     fn announce(&self, sequence_id: u16) -> Vec<u8> {
-        let mut out = self.header(
-            MessageType::Announce,
-            ANNOUNCE_BYTES,
-            FLAGS,
-            sequence_id,
-            0,
-        );
+        let mut out = self.header(MessageType::Announce, ANNOUNCE_BYTES, FLAGS, sequence_id, 0);
         out.extend_from_slice(&[0; TIMESTAMP_BYTES]); // originTimestamp
         out.extend_from_slice(&0i16.to_be_bytes()); // currentUtcOffset
         out.push(0);

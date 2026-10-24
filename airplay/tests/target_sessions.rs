@@ -731,7 +731,7 @@ fn ptp_fake() -> FakeAp2 {
     fake
 }
 
-// covers: P179
+// covers: P179, P207
 #[test]
 fn under_ptp_every_member_is_served_and_named_to_the_others_in_setpeers() {
     let _serial = serial();
@@ -759,6 +759,17 @@ fn under_ptp_every_member_is_served_and_named_to_the_others_in_setpeers() {
             events.of(key)
         );
     }
+    // A member whose RECORD was answered first names the other through an
+    // update within 1 s of the other's RECORD answer (P207, P209).
+    let full = |server: &Ap2Server| {
+        server
+            .fake()
+            .last("SETPEERS")
+            .and_then(|peers| read_value(&peers.body))
+            .and_then(|value| value.into_array())
+            .is_some_and(|list| list.len() == 3)
+    };
+    assert!(wait_until(Duration::from_secs(3), || full(&first) && full(&second)));
     let mut groups = Vec::new();
     for server in [&first, &second] {
         let fake = server.fake();
@@ -919,6 +930,93 @@ fn ipv6_loopback() -> Option<IpAddr> {
 /// returned without running because the runner can't host it.
 fn skipped(reason: &str) {
     let _ = writeln!(std::io::stderr(), "SKIPPED ({reason})");
+}
+
+fn peer_warnings(events: &Events, key: &DeviceKey) -> usize {
+    events
+        .of(key)
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                SpeakerEvent::Warning(Warning::PeersUpdateRefused { .. })
+            )
+        })
+        .count()
+}
+
+fn playing_count(events: &Events, key: &DeviceKey) -> usize {
+    states_of(events, key)
+        .iter()
+        .filter(|state| **state == SpeakerState::Playing)
+        .count()
+}
+
+// covers: P208, P210
+#[test]
+fn a_refused_update_that_added_a_receiver_sets_up_only_that_session_again_once() {
+    let _serial = serial();
+    let first = Ap2Server::start(ptp_fake());
+    let second = Ap2Server::start(ptp_fake());
+    let config = SenderConfig {
+        airplay2: true,
+        ptp_ports: free_ptp_ports(),
+        ptp_receiver_ports: free_ptp_ports(),
+        ..SenderConfig::default()
+    };
+    let (sender, writer) = Sender::start(config).expect("the sender starts");
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10240"),
+        airplay2_only(&second, 2, "0x0,0x10240"),
+    );
+    sender.add_speaker(da.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &da.key, 1),
+        "{:?}",
+        events.of(&da.key)
+    );
+    first.fake().status_once.insert("SETPEERS".to_owned(), 501);
+    let connections = first.fake().connections;
+    sender.add_speaker(db.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &db.key, 1),
+        "{:?}",
+        events.of(&db.key)
+    );
+    assert!(
+        playing(&mut events, &sender, &da.key, 2),
+        "set up again: {:?}",
+        events.of(&da.key)
+    );
+    assert!(first.fake().connections > connections);
+    assert_eq!(peer_warnings(&events, &da.key), 1);
+    let rejoined = first.fake().last("SETPEERS").cloned().expect("SETPEERS");
+    let list = read_value(&rejoined.body)
+        .and_then(|value| value.into_array())
+        .expect("an array");
+    assert_eq!(list.len(), 3, "it rejoins with the full list: {list:?}");
+
+    // A refused update that only removed a receiver sets nothing up again.
+    first.fake().status_once.insert("SETPEERS".to_owned(), 501);
+    let connections = first.fake().connections;
+    sender.remove_speaker(&db.key);
+    std::thread::sleep(Duration::from_millis(2500));
+    events.drain(&sender);
+    assert_eq!(first.fake().connections, connections);
+    assert_eq!(
+        playing_count(&events, &da.key),
+        2,
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(
+        playing_count(&events, &db.key),
+        1,
+        "the other session was never set up again"
+    );
+    sender.shutdown();
 }
 
 fn ptp_warnings(events: &Events, key: &DeviceKey) -> usize {

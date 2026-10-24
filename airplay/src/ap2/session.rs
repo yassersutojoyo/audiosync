@@ -675,13 +675,15 @@ impl Ap2Session {
             self.event(Ap2Event::Warning(Warning::PeersUpdateRefused { status }));
         }
         let mut had = self.peers_accepted.clone();
-        let added = list.iter().any(|ip| match had.iter().position(|old| old == ip) {
-            Some(at) => {
-                had.swap_remove(at);
-                false
-            }
-            None => true,
-        });
+        let added = list
+            .iter()
+            .any(|ip| match had.iter().position(|old| old == ip) {
+                Some(at) => {
+                    had.swap_remove(at);
+                    false
+                }
+                None => true,
+            });
         self.event(Ap2Event::PeersRefused {
             status,
             added,
@@ -1574,7 +1576,14 @@ impl Ap2Session {
                 // SETPEERS only under PTP (P165, P207).
                 if self.timing == Timing::Ptp {
                     let list = self.config.peers.clone();
-                    self.send(Kind::SetPeers { list, update: false }, now, false);
+                    self.send(
+                        Kind::SetPeers {
+                            list,
+                            update: false,
+                        },
+                        now,
+                        false,
+                    );
                 } else {
                     self.stream_setup_waiting = true;
                 }
