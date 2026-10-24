@@ -36,6 +36,7 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
 
 /// `backend` in place of the WASAPI one, for a preview: the media sessions
 /// still feed the now-playing card.
+#[cfg(feature = "mock-backend")]
 pub fn start_with(log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     let (_track_reader, card_reader) = audio::wasapi::read_media_sessions(log.clone());
     Started {

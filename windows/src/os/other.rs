@@ -30,6 +30,7 @@ pub fn start(_log: &DebugLog) -> Result<Started, StartError> {
 }
 
 /// `backend` as it is: there is nothing else to open.
+#[cfg(feature = "mock-backend")]
 pub fn start_with(_log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     Started {
         backend,
@@ -38,6 +39,7 @@ pub fn start_with(_log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -
 }
 
 /// No playing track and no now-playing card.
+#[cfg_attr(not(feature = "mock-backend"), allow(dead_code))]
 pub struct Media;
 
 impl Media {

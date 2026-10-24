@@ -19,9 +19,10 @@ use self::windows as imp;
 
 #[cfg(os_backend)]
 pub use imp::data_base;
+#[cfg(feature = "mock-backend")]
+pub use imp::start_with;
 pub use imp::{
     Instance, Media, claim_instance, computer_name, create_tray, notice_time, sealer, start,
-    start_with,
 };
 
 /// What [`start`] opened.

@@ -256,8 +256,9 @@ cargo check --target aarch64-pc-windows-msvc
 - `src/single_instance.rs`: one copy per Windows session; a second launch
   asks the running copy to show its main window, then exits (unit-tested)
 - `src/ui_model.rs`: what the windows show and can ask for (the `Backend`
-  trait) and the mock backend the window runs on off Windows with the
-  `mock-backend` feature, unit-tested
+  trait) and the mock backend, built only with the `mock-backend` feature
+  (off Windows it runs the window, on Windows it backs the
+  `AUDIOSYNC_PREVIEW_ZONES` preview), unit-tested
 - `src/adapter.rs`: the `Backend` on Windows. It turns what the window asks
   for into audio backend calls, with the session rules of `audiosync-core`
   (switching a speaker on starts streaming, a source that quits stops it), and

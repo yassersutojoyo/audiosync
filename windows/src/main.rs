@@ -89,6 +89,7 @@ const PREVIEW_PIN_VAR: &str = "AUDIOSYNC_PREVIEW_PIN";
 /// With the debug log on, `1` here shows example speakers in zones instead
 /// of the real ones, one zone collapsed (`ui_model::MockBackend::zones_preview`).
 /// Nothing plays.
+#[cfg(feature = "mock-backend")]
 const PREVIEW_ZONES_VAR: &str = "AUDIOSYNC_PREVIEW_ZONES";
 
 fn main() -> ExitCode {
@@ -171,7 +172,9 @@ impl From<slint::PlatformError> for StartError {
 
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
+    #[cfg(feature = "mock-backend")]
     let zones_preview = log.enabled() && std::env::var(PREVIEW_ZONES_VAR).as_deref() == Ok("1");
+    #[cfg(feature = "mock-backend")]
     let os::Started { backend, media } = if zones_preview {
         log.log(|| {
             format!("audio: example speakers in zones from the mock backend; nothing plays ({PREVIEW_ZONES_VAR})")
@@ -180,7 +183,10 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     } else {
         os::start(log)?
     };
+    #[cfg(not(feature = "mock-backend"))]
+    let os::Started { backend, media } = os::start(log)?;
     let app = view::App::new(backend, log.clone())?;
+    #[cfg(feature = "mock-backend")]
     if zones_preview {
         app.set_zone_expanded("zone:upstairs", false);
     }

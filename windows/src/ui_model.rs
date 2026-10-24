@@ -4,17 +4,20 @@
 //! The UI reads an [`AppState`] snapshot from a [`Backend`] and calls the
 //! backend's methods for every user action, then reads a new snapshot. On
 //! Windows the backend is `crate::adapter::AudioAdapter` over the WASAPI audio
-//! backend; elsewhere with the `mock-backend` feature, and on Windows for
-//! `AUDIOSYNC_PREVIEW_ZONES`, [`MockBackend`] stands in with example data,
-//! for work on the UI. Nothing here makes a sound or opens an audio device.
+//! backend. [`MockBackend`], built only with the `mock-backend` feature, stands
+//! in with example data for UI work: off Windows always, on Windows for
+//! `AUDIOSYNC_PREVIEW_ZONES`. Nothing here makes a sound or opens an audio
+//! device.
 
 use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::presets::{self as policy_presets, Preset, Scene, SpeakerNow};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::zones::{Zone, Zones};
+#[cfg(any(test, feature = "mock-backend"))]
 use audiosync_core::volume;
 
+#[cfg(any(test, feature = "mock-backend"))]
 use crate::speaker_names;
 use audiosync_core::calibrate_all::{AirPlayMoves, AirPlayShared, Class, EndReason, RowState};
 
@@ -33,6 +36,7 @@ pub const MAX_DELAY_MS: f64 = 20_000.0;
 pub const MIN_DELAY_MS: f64 = -2000.0;
 
 /// The most notices kept at once; the oldest drops off past it.
+#[cfg(any(test, feature = "mock-backend"))]
 pub const NOTICE_CAPACITY: usize = 4;
 
 /// Where a source's audio comes from.
@@ -1451,6 +1455,7 @@ pub fn delay_field_text(typed: &str) -> String {
 pub static MOCK_CAST_HOLD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// A host under `.invalid` (RFC 6761) stands for one nothing answers.
+#[cfg(any(test, feature = "mock-backend"))]
 fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool {
     #[cfg(test)]
     if address.host().ends_with(".held") {
@@ -1460,9 +1465,11 @@ fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool 
 }
 
 /// The subject of the example data's preset notice.
+#[cfg(any(test, feature = "mock-backend"))]
 const PRESETS: &str = "Presets";
 
 /// Example data for UI work and tests: no device is opened, nothing plays.
+#[cfg(any(test, feature = "mock-backend"))]
 pub struct MockBackend {
     state: AppState,
     next_id: u64,
@@ -1474,12 +1481,14 @@ pub struct MockBackend {
     preset_notice: Option<String>,
 }
 
+#[cfg(any(test, feature = "mock-backend"))]
 impl Default for MockBackend {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(any(test, feature = "mock-backend"))]
 impl MockBackend {
     /// [`capture_preset`] with the example's members kept: their IDs are no
     /// speaker keys, so the core's clean-up would drop them all.
@@ -1837,6 +1846,7 @@ impl MockBackend {
 }
 
 /// Adds zone `id` with the speakers `members`, which leave any other zone.
+#[cfg(any(test, feature = "mock-backend"))]
 fn add_zone(zones: &mut Zones, id: &str, name: &str, members: &[&str]) {
     zones.new_zone(id, name, |n| format!("Zone {n}"));
     for member in members {
@@ -1844,6 +1854,7 @@ fn add_zone(zones: &mut Zones, id: &str, name: &str, members: &[&str]) {
     }
 }
 
+#[cfg(any(test, feature = "mock-backend"))]
 impl Backend for MockBackend {
     fn snapshot(&self) -> AppState {
         let mut state = self.state.clone();
