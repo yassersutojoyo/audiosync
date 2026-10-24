@@ -249,7 +249,8 @@ pub struct SavedGroup {
 }
 
 /// A zone (spec S245): its members by speaker key, a Cast speaker's
-/// included, and its volume slider position, 0 to 100.
+/// included, its volume slider position, 0 to 100, and the name each member
+/// was last listed under (S284), left out of the file while empty.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedZone {
@@ -257,6 +258,8 @@ pub struct SavedZone {
     pub name: String,
     pub members: Vec<String>,
     pub volume: f64,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub member_names: BTreeMap<String, String>,
 }
 
 impl Default for SavedZone {
@@ -266,6 +269,7 @@ impl Default for SavedZone {
             name: String::new(),
             members: Vec::new(),
             volume: DEFAULT_ZONE_VOLUME,
+            member_names: BTreeMap::new(),
         }
     }
 }
@@ -277,6 +281,7 @@ impl From<Zone> for SavedZone {
             name: zone.name,
             members: zone.members,
             volume: zone.volume,
+            member_names: zone.member_names,
         }
     }
 }
@@ -862,6 +867,11 @@ impl Settings {
                         .take(MAX_ENTRIES)
                         .collect(),
                     volume: zone.volume,
+                    member_names: zone
+                        .member_names
+                        .into_iter()
+                        .map(|(key, name)| (key, cut(name)))
+                        .collect(),
                 }),
         )
         .into_list()
@@ -1025,6 +1035,7 @@ impl Settings {
             name: zone.name.clone(),
             members: zone.members.clone(),
             volume: zone.volume,
+            member_names: zone.member_names.clone(),
         }));
         let volume = |key: &str| {
             match SpeakerKey::parse(key)? {
@@ -1528,6 +1539,7 @@ mod tests {
             name: name.to_owned(),
             members: members.iter().map(|key| (*key).to_owned()).collect(),
             volume: 100.0,
+            member_names: BTreeMap::new(),
         };
         assert_eq!(
             read.speaker_zones,
