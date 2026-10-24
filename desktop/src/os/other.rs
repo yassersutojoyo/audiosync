@@ -61,7 +61,7 @@ impl Instance {
 }
 
 #[cfg(target_os = "linux")]
-pub use super::status_notifier::{Tray, create_tray};
+pub use super::status_notifier::create_tray;
 
 /// No tray icon: closing the main window quits.
 #[cfg(not(target_os = "linux"))]

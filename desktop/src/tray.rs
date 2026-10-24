@@ -15,6 +15,7 @@ use std::rc::{Rc, Weak};
 #[cfg(windows)]
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
 use slint::ComponentHandle;
 #[cfg(windows)]
 use slint::winit_030::winit::event::WindowEvent;
