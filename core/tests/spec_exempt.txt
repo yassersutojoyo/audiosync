@@ -108,3 +108,4 @@ S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Window
 S280 Hosts only: keeping each speaker's reported latency and setting the session's L; the rule is the AirPlay crate's (AirPlay spec P200); the Windows tests and the Mac logic suite check it.
 S281 Hosts only: re-timing on a new L reported by the AirPlay sender, through S177 and S178, which the core covers.
 S282 Hosts only: the debug log lines for reported latencies and L.
+S283 Hosts only: each AirPlay speaker's reported latency as its starting estimate, the per-speaker delay and L the host derives from it; S235's window part is the core's `airplay_wait_ms`, covered there.
