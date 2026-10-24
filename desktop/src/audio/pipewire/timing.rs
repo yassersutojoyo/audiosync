@@ -8,9 +8,9 @@
 //! in the same callback, and then look one cycle late. So a buffer that
 //! starts up to [`SNAP_HNS`] after the end of the one before it follows on
 //! from it; one further away starts a gap (a suspended output, an xrun).
-//! A callback's newest buffer ends at its cycle, so when even that one
-//! snapped back, a buffer was lost: [`PacketClock::settle`] makes it a gap.
-//! Closer than [`GAP_JUMP_HNS`] the cycle's time counts, so the device
+//! The newest buffer may still lag its cycle by a buffer or two (a lost
+//! one, or one the main loop hasn't seen yet); the idle timer then waits
+//! that much longer, see [`PacketClock::settle`]. Closer than [`GAP_JUMP_HNS`] the cycle's time counts, so the device
 //! clock's drift never adds up.
 
 /// 100 ns units per second.
@@ -38,6 +38,8 @@ pub struct PacketClock {
     end: Option<u64>,
     /// How long the last buffer lasts.
     last_length: u64,
+    /// How far the last callback's newest buffer ended before its cycle.
+    lag: u64,
 }
 
 impl PacketClock {
@@ -46,6 +48,7 @@ impl PacketClock {
             rate,
             end: None,
             last_length: 0,
+            lag: 0,
         }
     }
 
@@ -70,23 +73,24 @@ impl PacketClock {
     }
 
     /// After the last buffer of a callback whose cycle ran at `cycle_hns`.
-    /// Only older buffers follow on: when even the newest was snapped back,
-    /// a buffer was lost, and the next one starts from the cycle, so the gap
-    /// is filled and the drift never adds up.
+    /// The positions only ever move back to the cycle, never ahead of it: a
+    /// cycle past the newest buffer is a lost buffer or one still on its
+    /// way, and only the buffer's own time could tell them apart.
     pub fn settle(&mut self, cycle_hns: u64) {
-        if let Some(end) = self.end
-            && cycle_hns > end.saturating_add(GAP_JUMP_HNS)
-        {
+        let Some(end) = self.end else { return };
+        if end > cycle_hns {
             self.end = Some(cycle_hns);
         }
+        self.lag = cycle_hns.saturating_sub(end).min(SNAP_HNS);
     }
 
     /// The `now` to hand [`GapFill::idle`](crate::audio::capture::GapFill::idle)
-    /// at `now_hns`: two buffers' length earlier. GapFill counts a gap 25 ms
-    /// after the last frame, but PipeWire's buffers can each last that long
-    /// or more, so the next one would always find silence already written.
+    /// at `now_hns`: two buffers' length earlier, and as far again as the
+    /// positions run behind the cycle. GapFill counts a gap 25 ms after the
+    /// last frame, but PipeWire's buffers can each last that long or more,
+    /// so the next one would always find silence already written.
     pub fn idle_now(&self, now_hns: u64) -> u64 {
-        now_hns.saturating_sub(2 * self.last_length)
+        now_hns.saturating_sub(2 * self.last_length + self.lag)
     }
 }
 
@@ -140,18 +144,41 @@ mod tests {
     }
 
     #[test]
-    fn a_lost_cycle_is_a_gap_and_the_cycles_lead_again() {
+    fn a_cycle_ahead_of_its_buffer_keeps_the_buffers_in_a_row() {
+        // The main loop runs each callback after the next cycle already
+        // started, so every callback's newest buffer is one cycle old.
+        let mut clock = PacketClock::new(RATE);
+        let mut cycle = 10 * HNS_PER_SECOND;
+        let mut end = clock.place(cycle, 1024) + QUANTUM;
+        clock.settle(cycle);
+        cycle += 2 * QUANTUM;
+        for _ in 0..100 {
+            let start = clock.place(cycle, 1024);
+            clock.settle(cycle);
+            assert_eq!(start, end);
+            end = start + QUANTUM;
+            cycle += QUANTUM;
+        }
+    }
+
+    #[test]
+    fn after_lost_cycles_the_idle_timer_waits_for_the_next_buffer() {
         let mut clock = PacketClock::new(RATE);
         let mut cycle = 10 * HNS_PER_SECOND;
         clock.place(cycle, 1024);
-        // One cycle's buffer never comes: the next one is the only buffer
-        // of its callback.
-        cycle += 2 * QUANTUM;
+        clock.settle(cycle);
+        // Two cycles' buffers never come: the positions run two buffers
+        // behind the cycles from then on.
+        cycle += 3 * QUANTUM;
         clock.place(cycle, 1024);
         clock.settle(cycle);
         for _ in 0..100 {
-            cycle += QUANTUM;
-            assert_eq!(clock.place(cycle, 1024), cycle - QUANTUM);
+            let next = cycle + QUANTUM;
+            assert!(clock.idle_now(next - 1) <= clock.end.unwrap());
+            let start = clock.place(next, 1024);
+            clock.settle(next);
+            assert_eq!(start + QUANTUM, clock.end.unwrap());
+            cycle = next;
         }
     }
 
