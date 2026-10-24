@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::{
@@ -63,10 +63,14 @@ fn airplay2_only(server: &Ap2Server, id: u8) -> Device {
 }
 
 fn start() -> (Sender, HostAudio) {
+    start_with(SenderConfig::default())
+}
+
+fn start_with(config: SenderConfig) -> (Sender, HostAudio) {
     let config = SenderConfig {
         airplay2: true,
         airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
-        ..SenderConfig::default()
+        ..config
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");
     (sender, HostAudio::start(writer))
@@ -939,6 +943,158 @@ fn a_pairing_connection_the_host_lets_go_closes_and_the_next_session_verifies() 
     assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
     assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
     assert_eq!(server.fake().connections, 2);
+    sender.shutdown();
+}
+
+/// Pairs with a receiver that asks for a code the first time only and
+/// returns the credentials, with the pairing connection still held.
+fn pair_and_hold(
+    server: &Ap2Server,
+    sender: &Sender,
+    events: &mut Events,
+    device: &Device,
+) -> HomeKitCredentials {
+    let key = device.key.clone();
+    sender.start_pairing(device.clone());
+    let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+    assert!(wait_pairing(events, sender, &key, 1, pin_requested).is_some());
+    sender.submit_pin(&key, "4821").expect("digits");
+    let paired = wait_pairing(events, sender, &key, 1, |event| {
+        matches!(event, PairingEvent::HomeKitPaired(_))
+    });
+    let Some(PairingEvent::HomeKitPaired(credentials)) = paired else {
+        panic!("{paired:?} {:?}", server.fake().keys());
+    };
+    credentials
+}
+
+/// Starts the paired speaker and checks that its session opened a fresh
+/// connection and verified the stored credentials on it, with no failed
+/// attempt over the closed one first.
+fn assert_next_session_verifies(
+    server: &Ap2Server,
+    sender: &Sender,
+    events: &mut Events,
+    device: Device,
+    credentials: HomeKitCredentials,
+) {
+    let key = device.key.clone();
+    server.fake().requests.clear();
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    sender.add_speaker(device, paired_options);
+    assert!(
+        events
+            .wait_state(sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let keys = server.fake().keys();
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    assert_eq!(server.fake().connections, 2);
+    assert!(errors(events, &key).is_empty(), "{:?}", events.of(&key));
+}
+
+fn ask_once_receiver() -> Ap2Server {
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x244),
+    )]));
+    Ap2Server::start(fake)
+}
+
+// covers: P153
+#[test]
+fn a_pairing_connection_unclaimed_in_time_closes_and_the_next_session_verifies() {
+    let _serial = serial();
+    let server = ask_once_receiver();
+    let (sender, _host) = start_with(SenderConfig {
+        pairing_hold: Duration::from_millis(300),
+        ..SenderConfig::default()
+    });
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 56);
+    let credentials = pair_and_hold(&server, &sender, &mut events, &device);
+
+    std::thread::sleep(Duration::from_secs(1));
+    assert_next_session_verifies(&server, &sender, &mut events, device, credentials);
+    sender.shutdown();
+}
+
+// covers: P153
+#[test]
+fn a_pairing_connection_the_receiver_closes_is_not_reused() {
+    let _serial = serial();
+    let server = ask_once_receiver();
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 57);
+    let credentials = pair_and_hold(&server, &sender, &mut events, &device);
+
+    server.cut();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_next_session_verifies(&server, &sender, &mut events, device, credentials);
+    sender.shutdown();
+}
+
+// covers: P153, P158
+#[test]
+fn a_pairing_connection_outside_the_ptp_family_is_not_claimed() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x244),
+    )]));
+    let server = Ap2Server::start_on(IpAddr::V6(Ipv6Addr::LOCALHOST), fake);
+    let (sender, _host) = start_with(SenderConfig {
+        ptp_ports: common::net::free_ptp_ports(),
+        ptp_receiver_ports: common::net::free_ptp_ports(),
+        ..SenderConfig::default()
+    });
+    let mut events = Events::default();
+    // PTP-capable with IPv4 first, so the PTP service goes to IPv4, while
+    // only IPv6 answers: the pairing connection is outside its family.
+    let id = 58;
+    let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
+    let mut record = airplay_record(server.address.port(), id);
+    record.txt[0] = b"features=0x0,0x10240".to_vec();
+    record.addresses = vec![
+        ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        ScopedAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST)),
+    ];
+    let device =
+        Device::from_records(DeviceKey::Id(device_id), None, Some(&record)).expect("device");
+    let key = device.key.clone();
+    let credentials = pair_and_hold(&server, &sender, &mut events, &device);
+    let connections = server.fake().connections;
+
+    server.fake().requests.clear();
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    sender.add_speaker(device, paired_options);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let keys = server.fake().keys();
+    let verify = keys.iter().position(|k| k == "POST /pair-verify");
+    let setup = keys.iter().position(|k| k == "SETUP session");
+    assert!(
+        verify.is_some_and(|v| setup.is_some_and(|s| v < s)),
+        "{keys:?}"
+    );
+    assert!(server.fake().connections > connections);
     sender.shutdown();
 }
 
