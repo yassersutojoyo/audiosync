@@ -502,7 +502,13 @@ fn the_default_input_is_recorded() {
     let opened_ns = audiosync_core::clock::now_ns();
     let mut microphone = microphone::open(node.name().to_owned(), None, 4.0).unwrap();
     let path = tone("mic", 440.0, 0.5, 1.0);
-    detached(&format!("pw-play --target mic-feed {}", path.display()));
+    // Linked by hand: the session manager links playback to outputs only.
+    detached(&format!(
+        "pw-play --target 0 -P '{{ node.name = ci-mic-tone }}' {}",
+        path.display()
+    ));
+    std::thread::sleep(Duration::from_millis(300));
+    run("pw-link", &["ci-mic-tone", "mic-feed"]);
     std::thread::sleep(Duration::from_secs(3));
     assert_eq!(microphone.id().device, "mic-feed");
     assert!(microphone.id().rate > 0);
