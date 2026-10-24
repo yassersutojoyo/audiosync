@@ -1088,6 +1088,28 @@ mod tests {
                 AIRPLAY_EVENT_WARNING.to_string(),
             ),
             ("ASC_AIRPLAY_EVENT_TRACE", AIRPLAY_EVENT_TRACE.to_string()),
+            ("ASC_AIRPLAY_EVENT_REMOTE", AIRPLAY_EVENT_REMOTE.to_string()),
+            (
+                "ASC_AIRPLAY_REMOTE_PLAY_PAUSE",
+                AIRPLAY_REMOTE_PLAY_PAUSE.to_string(),
+            ),
+            ("ASC_AIRPLAY_REMOTE_NEXT", AIRPLAY_REMOTE_NEXT.to_string()),
+            (
+                "ASC_AIRPLAY_REMOTE_PREVIOUS",
+                AIRPLAY_REMOTE_PREVIOUS.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PLAYBACK_UNKNOWN",
+                AIRPLAY_PLAYBACK_UNKNOWN.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PLAYBACK_PLAYING",
+                AIRPLAY_PLAYBACK_PLAYING.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PLAYBACK_PAUSED",
+                AIRPLAY_PLAYBACK_PAUSED.to_string(),
+            ),
             (
                 "ASC_AIRPLAY_WARNING_JACK_DISCONNECTED",
                 AIRPLAY_WARNING_JACK_DISCONNECTED.to_string(),
@@ -1115,6 +1137,14 @@ mod tests {
             (
                 "ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED",
                 AIRPLAY_WARNING_VOLUME_READS_STOPPED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE",
+                AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED",
+                AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED.to_string(),
             ),
             (
                 "ASC_AIRPLAY_PAIRINGS_FAILED",

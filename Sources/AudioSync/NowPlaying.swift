@@ -131,6 +131,9 @@ final class NowPlayingMonitor {
         reading = nil
     }
 
+    /// The player `send` drives now, by bundle ID; nil for none (main thread).
+    var controlledBundleID: String? { track?.bundleID ?? candidates().first }
+
     func send(_ command: Command) {
         guard let bundleID = track?.bundleID ?? candidates().first else { return }
         let verb: String

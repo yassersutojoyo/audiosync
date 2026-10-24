@@ -62,6 +62,7 @@ mod tests {
             detail: ptr::null(),
             volume: 0.0,
             warning: 0,
+            remote: 0,
         };
         // SAFETY: as above; a local out struct, whose strings stay valid
         // until the next call on the handle.

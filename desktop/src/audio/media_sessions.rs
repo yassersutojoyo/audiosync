@@ -117,6 +117,9 @@ struct State {
     card_generation: u64,
     card_reading: Option<Option<CardTrack>>,
     commands: Vec<Transport>,
+    /// Controls a speaker's remote asked for, sent to the session that
+    /// counts for `track`.
+    remote: Vec<Transport>,
     /// The readers not dropped yet.
     readers: u8,
 }
@@ -145,6 +148,7 @@ impl TrackReader for MediaSessionReader {
             state.track = follow;
             state.track_generation += 1;
             state.track_reading = None;
+            state.remote.clear();
             self.shared.wake.notify_all();
         }
     }
@@ -155,6 +159,14 @@ impl TrackReader for MediaSessionReader {
 
     fn icon(&mut self) -> Option<Arc<[u8]>> {
         self.shared.lock().icon.clone()
+    }
+
+    fn send(&mut self, command: Transport) {
+        let mut state = self.shared.lock();
+        if state.track.is_some() {
+            state.remote.push(command);
+            self.shared.wake.notify_all();
+        }
     }
 }
 
@@ -250,7 +262,7 @@ fn run<L: SessionList>(
     shared.lock().icon = sessions.icon(log);
     let mut reader = Reader::new(sessions);
     loop {
-        let (track, track_generation, card, card_generation, commands) = {
+        let (track, track_generation, card, card_generation, commands, remote) = {
             let mut state = shared
                 .wake
                 .wait_while(shared.lock(), |state| {
@@ -261,14 +273,22 @@ fn run<L: SessionList>(
                 return;
             }
             let commands = std::mem::take(&mut state.commands);
+            let remote = std::mem::take(&mut state.remote);
             (
                 state.track.clone(),
                 state.track_generation,
                 state.card.clone().map(follow_for),
                 state.card_generation,
                 commands,
+                remote,
             )
         };
+        // The host logged the command already (S279), so the send stays quiet.
+        if let Some(track) = &track {
+            for command in &remote {
+                reader.send(track, *command, &DebugLog::default());
+            }
+        }
         if let Some(card) = &card {
             for command in &commands {
                 reader.send(card, *command, log);
@@ -292,17 +312,16 @@ fn run<L: SessionList>(
             }
         }
         let state = shared.lock();
-        let wait = if card.is_some() && !commands.is_empty() {
-            AFTER_COMMAND
-        } else {
-            poll
-        };
+        let sent =
+            (card.is_some() && !commands.is_empty()) || (track.is_some() && !remote.is_empty());
+        let wait = if sent { AFTER_COMMAND } else { poll };
         let _ = shared
             .wake
             .wait_timeout_while(state, wait, |state| {
                 state.track_generation == track_generation
                     && state.card_generation == card_generation
                     && state.commands.is_empty()
+                    && state.remote.is_empty()
                     && state.readers > 0
             })
             .unwrap_or_else(PoisonError::into_inner);

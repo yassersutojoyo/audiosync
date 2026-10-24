@@ -45,6 +45,7 @@ use audiosync_cast::media::Metadata;
 
 use super::cast::CastTrack;
 use crate::debug_log::DebugLog;
+use crate::now_playing_card::Transport;
 
 /// How often the sessions are read while AirPlay receivers play.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -269,6 +270,10 @@ pub trait TrackReader {
     /// AudioSync's icon, fitted as artwork is; `None` until it is made, or
     /// when it can't be.
     fn icon(&mut self) -> Option<Arc<[u8]>>;
+
+    /// Sends `command` to the session that counts for what it follows, as
+    /// the card's buttons do; nothing while it follows nothing.
+    fn send(&mut self, command: Transport);
 }
 
 /// What the source looks like to track info.
@@ -459,6 +464,24 @@ impl TrackInfo {
         Some(cast_track(track, follow))
     }
 
+    /// The session that counts in the newest reading, by app ID, and whether
+    /// it plays: what a speaker's remote controls (S274). `None` while
+    /// nothing is followed or no session counts.
+    pub fn playback(&self) -> Option<(String, bool)> {
+        self.following.as_ref()?;
+        let track = self.reading.as_ref()?.track.as_ref()?;
+        Some((track.session.app_id.clone(), track.session.playing))
+    }
+
+    /// Sends a speaker remote's control to the session that counts.
+    pub fn send(&mut self, command: Transport) {
+        if self.following.is_some()
+            && let Some(reader) = self.reader.as_mut()
+        {
+            reader.send(command);
+        }
+    }
+
     /// Words what receivers show while no track counts.
     pub fn set_labels(&mut self, labels: SharedLabels) {
         self.labels = labels;
@@ -640,7 +663,9 @@ pub mod fake {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use super::{Follow, MediaSession, Reading, ReceiverLabels, SharedLabels, Track, TrackReader};
+    use super::{
+        Follow, MediaSession, Reading, ReceiverLabels, SharedLabels, Track, TrackReader, Transport,
+    };
 
     /// Labels unlike the UI's, so a test sees they come from the strings.
     pub fn labels() -> ReceiverLabels {
@@ -664,6 +689,7 @@ pub mod fake {
         follows: Vec<Option<Follow>>,
         reading: Option<Reading>,
         icon: Option<Arc<[u8]>>,
+        sent: Vec<Transport>,
     }
 
     /// A reader whose readings a test makes.
@@ -690,6 +716,11 @@ pub mod fake {
             self.0.borrow().follow.clone()
         }
 
+        /// Every control sent so far, and forgets them.
+        pub fn take_sent(&self) -> Vec<Transport> {
+            std::mem::take(&mut self.0.borrow_mut().sent)
+        }
+
         /// Every follow change so far, and forgets them.
         pub fn take_follows(&self) -> Vec<Option<Follow>> {
             std::mem::take(&mut self.0.borrow_mut().follows)
@@ -710,6 +741,10 @@ pub mod fake {
 
         fn icon(&mut self) -> Option<Arc<[u8]>> {
             self.0.borrow().icon.clone()
+        }
+
+        fn send(&mut self, command: Transport) {
+            self.0.borrow_mut().sent.push(command);
         }
     }
 
@@ -770,6 +805,26 @@ mod tests {
         info.set_reader(reader.reader());
         info.set_labels(shared_labels());
         info
+    }
+
+    // covers: S274
+    #[test]
+    fn a_remote_control_goes_to_the_session_track_info_follows() {
+        let reader = FakeReader::default();
+        let mut info = track_info(&reader);
+        let now = Instant::now();
+        info.send(Transport::Next);
+        assert!(reader.take_sent().is_empty(), "nothing is followed");
+        assert_eq!(info.playback(), None);
+        info.sync(Some(&whole_system()), now);
+        reader.read(Some(track("Spotify.exe", "Song", false, None)));
+        info.sync(Some(&whole_system()), now);
+        assert_eq!(info.playback(), Some(("Spotify.exe".to_owned(), false)));
+        info.send(Transport::PlayPause);
+        assert_eq!(reader.take_sent(), [Transport::PlayPause]);
+        reader.read(None);
+        info.sync(Some(&whole_system()), now);
+        assert_eq!(info.playback(), None, "no session counts");
     }
 
     #[test]

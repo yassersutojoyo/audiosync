@@ -66,6 +66,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 #[cfg(os_backend)]
+use audiosync_airplay::dacp::RemoteCommand;
 use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ProtocolPath, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
@@ -84,6 +85,9 @@ use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, StreamCounters};
 use audiosync_airplay::targets::{Target, TargetChange, TargetId, TargetKind};
 use audiosync_airplay::volume::{MIN_DB, MUTED_DB, Volume};
 use audiosync_core::fade::InputFade;
+use audiosync_core::policy::remote::{
+    Action, App, Command, Control, Event as RemoteEvent, OwnVolume, Playback, Remote,
+};
 use audiosync_core::resample::Resampler;
 use audiosync_core::volume::{
     DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION, own_position_for_level, sanitize_position,
@@ -97,6 +101,7 @@ use super::backend::{
 };
 use super::pairings::PairingStore;
 use crate::debug_log::DebugLog;
+use crate::now_playing_card::Transport;
 
 /// The sender's input rate (P72).
 const AIRPLAY_RATE: u32 = audiosync_airplay::audio::SAMPLE_RATE;
@@ -253,10 +258,16 @@ impl SenderLink {
         Ok((SenderLink { sender, airplay2 }, input))
     }
 
-    /// Starts browsing for receivers.
+    /// Starts browsing for receivers, and gives the remote control its
+    /// `_dacp._tcp` advertiser, whose daemon starts with the first session
+    /// (P188).
     #[cfg(os_backend)]
     pub fn start_discovery(&self) -> Result<(), DiscoveryError> {
-        self.sender.start_discovery()
+        self.sender.start_discovery()?;
+        self.sender.set_dacp_advertiser(Box::new(
+            audiosync_airplay::discovery::mdns::MdnsAdvertiser::new(),
+        ));
+        Ok(())
     }
 }
 
@@ -986,6 +997,16 @@ pub struct AirPlaySpeakers {
     now_playing: Option<NowPlaying>,
     /// The speaker IDs [`AIRPLAY_PCM_ENV`] allows PCM for (spec P74, G10).
     pcm_devices: BTreeSet<String>,
+    /// What speakers' remotes asked for so far (S273 to S279).
+    remote: Remote,
+    /// The session the now-playing control follows, by app ID, and whether
+    /// it plays; `None` with no app to control.
+    playback: Option<(String, bool)>,
+    /// Transport controls speakers' remotes asked for, for the now-playing
+    /// control.
+    remote_controls: Vec<Transport>,
+    /// The clock the remote decisions count on.
+    created_at: Instant,
     log: DebugLog,
 }
 
@@ -1035,6 +1056,10 @@ impl AirPlaySpeakers {
             store_kept_aside: None,
             now_playing: None,
             pcm_devices: pcm_debug_devices(std::env::var(AIRPLAY_PCM_ENV).ok().as_deref()),
+            remote: Remote::default(),
+            playback: None,
+            remote_controls: Vec::new(),
+            created_at: Instant::now(),
             log,
         };
         speakers.open_airplay2();
@@ -1956,6 +1981,7 @@ impl AirPlaySpeakers {
             added.read.set(Instant::now());
             added.set_volume(self.link.as_mut(), volume);
         }
+        self.remote.forget(id);
     }
 
     /// The speaker's slider is held (true) or let go (false); a read asked
@@ -2074,6 +2100,121 @@ impl AirPlaySpeakers {
                 added.read_volume(self.link.as_mut());
             }
         }
+    }
+
+    /// What the now-playing control follows: the session that counts, by
+    /// app ID, and whether it plays (S274). Set before each poll.
+    pub fn set_playback(&mut self, playback: Option<(String, bool)>) {
+        self.playback = playback;
+    }
+
+    /// The transport controls speakers' remotes asked for since the last
+    /// call, for the now-playing control (S274).
+    pub fn take_remote_controls(&mut self) -> Vec<Transport> {
+        std::mem::take(&mut self.remote_controls)
+    }
+
+    /// A speaker's remote asked for `command` (P193): the core's decision
+    /// (S273 to S279) acts on the speaker's row, or its target's, and its
+    /// line goes to the debug log. Returns whether the speaker list changed.
+    fn remote_command(
+        &mut self,
+        key: &DeviceKey,
+        target: Option<&TargetId>,
+        command: RemoteCommand,
+        now: Instant,
+    ) -> bool {
+        let id = speaker_id(key);
+        let row = match target.map(ToString::to_string) {
+            Some(target) if self.added.contains_key(&target) => Some(target),
+            _ if self.added.contains_key(&id) => Some(id.clone()),
+            _ => None,
+        };
+        let command = match command {
+            RemoteCommand::PlayPause => Command::PlayPause,
+            RemoteCommand::Play => Command::Play,
+            RemoteCommand::Pause => Command::Pause,
+            RemoteCommand::Next => Command::Next,
+            RemoteCommand::Previous => Command::Previous,
+            RemoteCommand::VolumeUp => Command::VolumeUp,
+            RemoteCommand::VolumeDown => Command::VolumeDown,
+            RemoteCommand::MuteToggle => Command::MuteToggle,
+            RemoteCommand::DeviceVolume(Volume::Muted) => Command::DeviceVolume(MUTED_DB),
+            RemoteCommand::DeviceVolume(Volume::Db(db)) => Command::DeviceVolume(db),
+        };
+        let name = self.label(&id);
+        let volume = self.own_volume(row.as_deref(), command, now);
+        let event = RemoteEvent {
+            speaker: &name,
+            row: row.as_deref(),
+            member: target.is_some(),
+            command,
+            app: self.playback.as_ref().map(|(app, playing)| App {
+                name: app,
+                playback: if *playing {
+                    Playback::Playing
+                } else {
+                    Playback::Paused
+                },
+            }),
+            volume,
+            at: now.saturating_duration_since(self.created_at).as_secs_f64(),
+        };
+        let decision = self.remote.decide(&event);
+        let line = decision.line;
+        self.log.log(|| line);
+        match (decision.action, row) {
+            (Action::Send(control), Some(_)) => {
+                self.remote_controls.push(match control {
+                    Control::PlayPause => Transport::PlayPause,
+                    Control::Next => Transport::Next,
+                    Control::Previous => Transport::Previous,
+                });
+                false
+            }
+            (Action::Move { to, .. }, Some(row)) => self.remote_move(&row, to, now),
+            _ => false,
+        }
+    }
+
+    /// The own volume of the added row as a remote decision sees it; for a
+    /// DeviceVolume with S271's echo window and the position its level plays
+    /// at.
+    fn own_volume(&self, row: Option<&str>, command: Command, now: Instant) -> OwnVolume {
+        let mut own = OwnVolume {
+            position: 0.0,
+            dragging: false,
+            echo: false,
+            reported: None,
+        };
+        let Some((row, added)) = row.and_then(|row| Some((row, self.added.get(row)?))) else {
+            return own;
+        };
+        own.position = self.settings(row).volume;
+        own.dragging = added.read.dragging;
+        if let Command::DeviceVolume(db) = command {
+            let has = added
+                .read
+                .level
+                .unwrap_or_else(|| self.volume_of(row))
+                .wire_db();
+            own.echo = added.read.recent(now) && (db - has).abs() < VOLUME_TOLERANCE_DB;
+            own.reported = slider_position(db, self.zone(row), self.master);
+        }
+        own
+    }
+
+    /// A remote moved `row`'s own volume to `position`: as at the end of a
+    /// drag, the speaker gets its new level, which starts S271's window
+    /// (S275 to S277). Returns true: the speaker list shows the position.
+    fn remote_move(&mut self, row: &str, position: f64, now: Instant) -> bool {
+        self.entry(row).volume = position;
+        let volume = self.volume_of(row);
+        if let Some(added) = self.added.get_mut(row) {
+            added.read.set(now);
+            added.set_volume(self.link.as_mut(), volume);
+        }
+        true
     }
 
     /// The added row `id` reports for: itself, or the target it's a member
@@ -2317,6 +2458,7 @@ impl AirPlaySpeakers {
                     Added::speaker(key, counters)
                 }
             };
+            self.remote.forget(&id);
             self.added.insert(id, added);
         }
     }
@@ -2438,6 +2580,12 @@ impl AirPlaySpeakers {
                     });
                     self.mark_stopped(&mut events);
                 }
+                SenderEvent::Remote {
+                    key,
+                    target,
+                    command,
+                } => changed |= self.remote_command(&key, target.as_ref(), command, Instant::now()),
+                SenderEvent::RemoteLog(line) => self.log.log(|| line),
                 SenderEvent::TargetMissing { id, missing } => {
                     let id = id.to_string();
                     let missing: Vec<String> = missing.iter().map(speaker_id).collect();
@@ -5678,6 +5826,104 @@ pub mod tests {
         settle(&mut airplay, &id);
         fake.take_calls();
         (airplay, kitchen, id)
+    }
+
+    /// The volumes sent, rounded to 0.1 dB; `None` for muted.
+    fn sent_levels(fake: &FakeAirPlay) -> Vec<(String, Option<f64>)> {
+        fake.take_calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Volume(id, Volume::Db(db)) => Some((id, Some((db * 10.0).round() / 10.0))),
+                Call::Volume(id, Volume::Muted) => Some((id, None)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn remote(fake: &FakeAirPlay, device: &Device, command: RemoteCommand) {
+        fake.push(SenderEvent::Remote {
+            key: device.key.clone(),
+            target: None,
+            command,
+        });
+    }
+
+    // covers: S274
+    #[test]
+    fn a_remote_transport_goes_to_the_now_playing_control() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        remote(&fake, &kitchen, RemoteCommand::Next);
+        airplay.poll();
+        assert!(
+            airplay.take_remote_controls().is_empty(),
+            "no app to control"
+        );
+        airplay.set_playback(Some(("Spotify.exe".to_owned(), false)));
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        assert!(airplay.take_remote_controls().is_empty(), "already paused");
+        remote(&fake, &kitchen, RemoteCommand::Play);
+        airplay.poll();
+        assert_eq!(airplay.take_remote_controls(), [Transport::PlayPause]);
+        assert!(fake.take_calls().is_empty(), "no volume moved");
+    }
+
+    // covers: S275, S271
+    #[test]
+    fn a_remote_volume_step_is_sent_and_starts_the_3_s_window() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        remote(&fake, &kitchen, RemoteCommand::VolumeUp);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 55.0);
+        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-13.5))]);
+        // The receiver's echo of that send, by DACP or by a read.
+        remote(
+            &fake,
+            &kitchen,
+            RemoteCommand::DeviceVolume(Volume::Db(-13.2)),
+        );
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -13.8);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 55.0);
+    }
+
+    // covers: S276, S277
+    #[test]
+    fn a_device_volume_or_mute_from_the_remote_moves_the_own_volume_and_is_sent() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_volume_dragging(&id, true);
+        remote(
+            &fake,
+            &kitchen,
+            RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
+        );
+        assert!(airplay.poll().is_empty(), "the slider is held");
+        airplay.set_volume_dragging(&id, false);
+        remote(
+            &fake,
+            &kitchen,
+            RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
+        );
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 80.0);
+        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-6.0))]);
+        remote(&fake, &kitchen, RemoteCommand::MuteToggle);
+        airplay.poll();
+        assert_eq!(airplay.speakers()[0].volume, 0.0);
+        assert_eq!(sent_levels(&fake), [(id.clone(), None)]);
+        remote(&fake, &kitchen, RemoteCommand::MuteToggle);
+        airplay.poll();
+        assert_eq!(airplay.speakers()[0].volume, 80.0, "restored");
+        fake.take_calls();
+        settle(&mut airplay, &id);
+        remote(&fake, &kitchen, RemoteCommand::DeviceVolume(Volume::Muted));
+        airplay.poll();
+        assert_eq!(airplay.speakers()[0].volume, 0.0);
+        assert_eq!(sent_levels(&fake), [(id.clone(), None)]);
     }
 
     #[test]

@@ -214,6 +214,15 @@ extension AppDelegate {
         if airPlayStarts || castStarts { sendTrackInfo() }
     }
 
+    /// Tells the native sender which player a speaker's remote controls and
+    /// whether it plays (S274).
+    func sendPlayback() {
+        let controlled = nowPlaying.controlledBundleID
+        let reading = nowPlaying.hasReading ? nowPlaying.track : nil
+        let playing = reading.flatMap { $0.bundleID == controlled ? $0.isPlaying : nil }
+        nativeAirPlay?.setPlayback(app: controlled, playing: playing)
+    }
+
     /// A new sender knows nothing of what plays: send everything again.
     func resendTrackInfo() {
         if trackInfoFeed.senderStarted(sending: sendsTrackInfo) { sendTrackInfo() }
@@ -221,6 +230,7 @@ extension AppDelegate {
 
     /// Sends the senders what changed in what their receivers should show.
     func sendTrackInfo() {
+        sendPlayback()
         let now = Date()
         let step = trackInfoFeed.send(sending: sendsTrackInfo, now: now, pollingSince: nowPlaying.startedAt,
                                       hasReading: nowPlaying.hasReading, icon: NSApp.applicationIconImage,

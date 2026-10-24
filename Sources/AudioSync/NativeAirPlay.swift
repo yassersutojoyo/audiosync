@@ -45,6 +45,11 @@ final class NativeAirPlay {
     private var pollsSinceVolumeRead = 0
     /// What the receivers that show it get as playing (queue only).
     private var nowPlaying = NativeNowPlaying()
+    /// The player a speaker's remote controls and what it does (queue only;
+    /// `setPlayback`).
+    private var playback: (app: String?, state: Int32) = (nil, ASC_AIRPLAY_PLAYBACK_UNKNOWN)
+    /// Gets each transport control a speaker's remote asked for (main queue).
+    var onRemote: ((NowPlayingMonitor.Command) -> Void)?
     /// The hold-back last asked for (main queue), and the one the sender
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
@@ -133,6 +138,19 @@ final class NativeAirPlay {
     /// Holds every speaker back by `ms` on top of L, live; the sender caps
     /// it at `NetworkHoldBack.airPlayLimitMs`. Main queue. False when it was set already.
     @discardableResult
+    /// The player the now-playing control drives, nil for none, and whether
+    /// it plays, nil without a reading: a speaker remote's Play or Pause
+    /// goes as play-pause only when it changes something (S274). Main queue.
+    func setPlayback(app: String?, playing: Bool?) {
+        let state: Int32 = playing.map { $0 ? ASC_AIRPLAY_PLAYBACK_PLAYING : ASC_AIRPLAY_PLAYBACK_PAUSED }
+            ?? ASC_AIRPLAY_PLAYBACK_UNKNOWN
+        queue.async { [weak self] in
+            guard let self, self.playback.app != app || self.playback.state != state else { return }
+            self.playback = (app, state)
+            if let handle = self.handle { _ = asc_airplay_set_playback(handle, app, state) }
+        }
+    }
+
     func setHoldBack(_ ms: Double) -> Bool {
         guard ms != holdBackMs else { return false }
         holdBackMs = ms
@@ -340,6 +358,7 @@ final class NativeAirPlay {
         asc_airplay_set_master(created, master)
         for (id, zone) in zoneVolumes { _ = asc_airplay_set_zone_volume(created, id, zone) }
         _ = asc_airplay_set_hold_back(created, queuedHoldBackMs)
+        _ = asc_airplay_set_playback(created, playback.app, playback.state)
         if let taken = asc_airplay_take_input(created) {
             input = taken
             NativeAirPlayTap.install(taken)
@@ -423,12 +442,32 @@ final class NativeAirPlay {
             changes.append(Self.change(raw))
         }
         var events: [NativeSpeakerEvent] = []
+        var remotes: [NowPlayingMonitor.Command] = []
         var rawEvent = AscAirPlayEvent()
         while asc_airplay_next_event(handle, &rawEvent) {
-            if let event = Self.event(rawEvent) { events.append(event) }
+            if rawEvent.kind == ASC_AIRPLAY_EVENT_REMOTE {
+                if let command = Self.remote(rawEvent.remote) { remotes.append(command) }
+            } else if let event = Self.event(rawEvent) {
+                events.append(event)
+            }
         }
-        guard !changes.isEmpty || !events.isEmpty else { return }
-        DispatchQueue.main.async { [weak self] in self?.apply(changes, events) }
+        guard !changes.isEmpty || !events.isEmpty || !remotes.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.apply(changes, events)
+            guard self.active else { return }
+            for command in remotes { self.onRemote?(command) }
+        }
+    }
+
+    /// The now-playing control a remote event asks for.
+    static func remote(_ code: Int32) -> NowPlayingMonitor.Command? {
+        switch code {
+        case ASC_AIRPLAY_REMOTE_PLAY_PAUSE: return .playPause
+        case ASC_AIRPLAY_REMOTE_NEXT: return .next
+        case ASC_AIRPLAY_REMOTE_PREVIOUS: return .previous
+        default: return nil
+        }
     }
 
     // MARK: - On the main queue

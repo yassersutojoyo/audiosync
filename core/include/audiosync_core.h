@@ -129,6 +129,17 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
 #define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
+#define ASC_AIRPLAY_EVENT_REMOTE 13         /* a speaker's remote asked for .remote: send it through the now-playing control */
+
+/* AscAirPlayEvent.remote: the transport control a speaker's remote asked for */
+#define ASC_AIRPLAY_REMOTE_PLAY_PAUSE 1
+#define ASC_AIRPLAY_REMOTE_NEXT 2
+#define ASC_AIRPLAY_REMOTE_PREVIOUS 3
+
+/* asc_airplay_set_playback: what the app the now-playing control follows does */
+#define ASC_AIRPLAY_PLAYBACK_UNKNOWN 0
+#define ASC_AIRPLAY_PLAYBACK_PLAYING 1
+#define ASC_AIRPLAY_PLAYBACK_PAUSED 2
 
 /* What a warning reports (AscAirPlayEvent.warning). */
 #define ASC_AIRPLAY_WARNING_JACK_DISCONNECTED 1          /* nothing is plugged into its audio jack */
@@ -138,6 +149,8 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
 #define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
 #define ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED 7       /* three volume reads in a row failed on an AirPlay 2 session: it isn't asked again */
+#define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE 8 /* no remote control port could be bound for the session: its remote buttons do nothing */
+#define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED 9 /* the remote control's _dacp._tcp record couldn't be registered */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -1482,6 +1495,7 @@ typedef struct AscAirPlayEvent {
     const char *detail;              /* an error or warning event's text, a failure event's panic location; for a debug log (no secrets) */
     double volume;                   /* a volume event's slider position, 0 to 100 */
     int32_t warning;                 /* a warning event's ASC_AIRPLAY_WARNING_* */
+    int32_t remote;                  /* a remote event's ASC_AIRPLAY_REMOTE_* */
 } AscAirPlayEvent;
 
 /*
@@ -1698,6 +1712,16 @@ bool asc_airplay_set_now_playing(AscAirPlay *airplay, const char *title, const c
  * NULL or dead handle.
  */
 bool asc_airplay_set_progress(AscAirPlay *airplay, double elapsed_ms, double length_ms);
+
+/*
+ * Tells which app the now-playing control follows, by a name for the debug
+ * log (UTF-8), and what it does (ASC_AIRPLAY_PLAYBACK_*), so a speaker
+ * remote's Play or Pause goes as play-pause only when that changes something.
+ * A NULL or empty app is no app to control: remote transport commands then do
+ * nothing. Returns false, changing nothing, for a NULL or dead handle or an
+ * app that isn't UTF-8.
+ */
+bool asc_airplay_set_playback(AscAirPlay *airplay, const char *app, int32_t playback);
 
 /*
  * Opens the pairing store kept in the file at `path` (UTF-8), meant for
