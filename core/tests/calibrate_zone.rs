@@ -211,6 +211,7 @@ fn the_airplay_line_names_the_other_zones_it_moves() {
         name: name.to_owned(),
         members: keys(members),
         volume: 100.0,
+        member_names: Default::default(),
     };
     let zones = Zones::from_stored([
         zone("z1", "Upstairs", &["ap:bedroom", "lc:usb"]),

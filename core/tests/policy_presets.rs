@@ -24,12 +24,14 @@ fn zones() -> Zones {
             name: "Downstairs".to_owned(),
             members: vec!["lc:desk".to_owned(), "ap:kitchen".to_owned()],
             volume: 70.0,
+            member_names: Default::default(),
         },
         Zone {
             id: "z2".to_owned(),
             name: "Den".to_owned(),
             members: vec!["cc:den".to_owned()],
             volume: 40.0,
+            member_names: Default::default(),
         },
     ])
 }

@@ -6,19 +6,23 @@
 //! Members are speaker keys as text (S149), the form the hosts store, so a
 //! key this build can't parse still stays in its zone.
 
+use std::collections::BTreeMap;
+
 use super::speakers::{new_group_name, renamed_group};
 
 /// A new zone's volume, and a migrated group's (S245, S248).
 pub const DEFAULT_ZONE_VOLUME: f64 = 100.0;
 
 /// One zone (S245): its ID, its name (S150), its members' speaker keys in
-/// order, and its volume slider position, 0 to 100.
+/// order, its volume slider position, 0 to 100, and the name each member
+/// was last listed under (S284), by key.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Zone {
     pub id: String,
     pub name: String,
     pub members: Vec<String>,
     pub volume: f64,
+    pub member_names: BTreeMap<String, String>,
 }
 
 /// A zone volume as stored: clamped to 0 to 100; one that isn't a number is
@@ -40,8 +44,9 @@ pub struct Zones {
 impl Zones {
     /// The zones as stored, made to follow S245: a key already in an earlier
     /// zone, or earlier in the same one, is left out; a zone whose ID an
-    /// earlier zone has is dropped; volumes go through [`zone_volume`]. An
-    /// empty zone stays.
+    /// earlier zone has is dropped; volumes go through [`zone_volume`]; a
+    /// name kept for a key that isn't a member, or a blank one, is dropped.
+    /// An empty zone stays.
     pub fn from_stored(zones: impl IntoIterator<Item = Zone>) -> Zones {
         let mut out = Zones::default();
         for zone in zones {
@@ -54,9 +59,12 @@ impl Zones {
                     members.push(key);
                 }
             }
+            let mut member_names = zone.member_names;
+            member_names.retain(|key, name| members.contains(key) && !name.trim().is_empty());
             out.list.push(Zone {
                 members,
                 volume: zone_volume(zone.volume),
+                member_names,
                 ..zone
             });
         }
@@ -82,6 +90,33 @@ impl Zones {
             .find(|zone| zone.members.iter().any(|member| member == key))
     }
 
+    /// The name member `key` was last listed under (S284), kept by the zone
+    /// that holds it.
+    pub fn member_name(&self, key: &str) -> Option<&str> {
+        self.zone_of(key)?.member_names.get(key).map(String::as_str)
+    }
+
+    /// Keeps `name` as the one member `key` was last listed under (S284).
+    /// A blank name, and a key in no zone, change nothing. True when the
+    /// kept name changed, so the host saves it.
+    pub fn remember_name(&mut self, key: &str, name: &str) -> bool {
+        if name.trim().is_empty() {
+            return false;
+        }
+        let Some(zone) = self
+            .list
+            .iter_mut()
+            .find(|zone| zone.members.iter().any(|member| member == key))
+        else {
+            return false;
+        };
+        if zone.member_names.get(key).is_some_and(|kept| kept == name) {
+            return false;
+        }
+        zone.member_names.insert(key.to_owned(), name.to_owned());
+        true
+    }
+
     /// Adds an empty zone at the end, named as S150 says: the typed name,
     /// trimmed, else `default_name(n)` with n one more than the number of
     /// zones, counting up past names in use. Nothing is added for an ID a
@@ -102,6 +137,7 @@ impl Zones {
             name,
             members: Vec::new(),
             volume: DEFAULT_ZONE_VOLUME,
+            member_names: BTreeMap::new(),
         });
         &self.list[self.list.len() - 1]
     }
@@ -117,8 +153,9 @@ impl Zones {
     }
 
     /// Moves `key` into zone `to`, after its members, taking it out of the
-    /// zone that held it (S245). A key already in `to` keeps its place.
-    /// False, changing nothing, when no zone has that ID.
+    /// zone that held it (S245), with its kept name (S284). A key already in
+    /// `to` keeps its place. False, changing nothing, when no zone has that
+    /// ID.
     pub fn move_speaker(&mut self, key: &str, to: &str) -> bool {
         let Some(target) = self.list.iter().position(|zone| zone.id == to) else {
             return false;
@@ -126,18 +163,26 @@ impl Zones {
         if self.list[target].members.iter().any(|member| member == key) {
             return true;
         }
+        let name = self
+            .zone_of(key)
+            .and_then(|zone| zone.member_names.get(key).cloned());
         self.remove_speaker(key);
         self.list[target].members.push(key.to_owned());
+        if let Some(name) = name {
+            self.list[target].member_names.insert(key.to_owned(), name);
+        }
         true
     }
 
-    /// Takes `key` out of its zone, leaving it in none. The zone stays, even
+    /// Takes `key` out of its zone, with its kept name, leaving it in none.
+    /// The zone stays, even
     /// when it is empty now (S245). False when no zone held it.
     pub fn remove_speaker(&mut self, key: &str) -> bool {
         let mut removed = false;
         for zone in &mut self.list {
             let before = zone.members.len();
             zone.members.retain(|member| member != key);
+            zone.member_names.remove(key);
             removed |= zone.members.len() != before;
         }
         removed
@@ -162,8 +207,8 @@ impl Zones {
     }
 
     /// A speaker's key changed from `from` to `to` (S204): `to` takes
-    /// `from`'s place, unless a zone holds `to` already, which then keeps it
-    /// and `from` goes.
+    /// `from`'s place and kept name, unless a zone holds `to` already, which
+    /// then keeps it and `from` goes.
     pub fn rename_key(&mut self, from: &str, to: &str) {
         if from == to {
             return;
@@ -177,6 +222,9 @@ impl Zones {
                 if member == from {
                     *member = to.to_owned();
                 }
+            }
+            if let Some(name) = zone.member_names.remove(from) {
+                zone.member_names.insert(to.to_owned(), name);
             }
         }
     }
@@ -201,6 +249,7 @@ pub fn zones_from_groups<'a>(groups: impl IntoIterator<Item = SavedGroup<'a>>) -
         name: group.name.to_owned(),
         members: group.members.to_vec(),
         volume: DEFAULT_ZONE_VOLUME,
+        member_names: BTreeMap::new(),
     }))
 }
 

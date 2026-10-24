@@ -19,6 +19,7 @@ fn zone(id: &str, name: &str, members: &[&str]) -> Zone {
         name: name.to_owned(),
         members: keys(members),
         volume: 100.0,
+        member_names: Default::default(),
     }
 }
 
@@ -167,6 +168,49 @@ fn deleting_a_zone_leaves_its_members_in_no_zone() {
     assert!(zones.set_volume("a", f64::NAN));
     assert_eq!(zones.list()[0].volume, 100.0);
     assert!(!zones.set_volume("b", 50.0));
+}
+
+// covers: S284
+#[test]
+fn an_absent_members_last_listed_name_survives_a_reload() {
+    let mut zones = Zones::from_stored([zone("a", "Kitchen", &["ap:native:X", "lc:usb"])]);
+    assert!(zones.remember_name("ap:native:X", "Kitchen HomePod"));
+    assert!(!zones.remember_name("ap:native:X", "Kitchen HomePod"));
+    // A blank name keeps the last one; a key in no zone keeps none.
+    assert!(!zones.remember_name("ap:native:X", "  "));
+    assert!(!zones.remember_name("ap:native:Y", "Porch"));
+    assert_eq!(zones.member_name("ap:native:Y"), None);
+    let reloaded = Zones::from_stored(zones.into_list());
+    assert_eq!(reloaded.member_name("ap:native:X"), Some("Kitchen HomePod"));
+    assert_eq!(reloaded.member_name("lc:usb"), None);
+}
+
+// covers: S284
+#[test]
+fn a_members_name_follows_it_and_leaves_with_it() {
+    let mut zones = Zones::from_stored([zone("a", "A", &["ap:1", "ap:2"]), zone("b", "B", &[])]);
+    assert!(zones.remember_name("ap:1", "Den"));
+    assert!(zones.remember_name("ap:2", "Hall"));
+    assert!(zones.move_speaker("ap:1", "b"));
+    assert_eq!(zones.member_name("ap:1"), Some("Den"));
+    assert!(!zones.get("a").unwrap().member_names.contains_key("ap:1"));
+    // The S204 key change carries the name; a key a zone holds already keeps its own.
+    zones.rename_key("ap:1", "ap:native:D");
+    assert_eq!(zones.member_name("ap:native:D"), Some("Den"));
+    assert_eq!(zones.member_name("ap:1"), None);
+    assert!(zones.remove_speaker("ap:2"));
+    assert!(zones.get("a").unwrap().member_names.is_empty());
+    // A stored name without its member is dropped on load.
+    let mut stray = zone("c", "C", &["lc:usb"]);
+    stray
+        .member_names
+        .insert("ap:9".to_owned(), "Gone".to_owned());
+    stray
+        .member_names
+        .insert("lc:usb".to_owned(), "USB DAC".to_owned());
+    let loaded = Zones::from_stored([stray]);
+    assert_eq!(loaded.member_name("ap:9"), None);
+    assert_eq!(loaded.member_name("lc:usb"), Some("USB DAC"));
 }
 
 // covers: S246
