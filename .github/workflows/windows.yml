@@ -124,7 +124,12 @@ jobs:
               done
             done
             pw-link -l
-            cargo test --locked -- --ignored --test-threads 1 --nocapture audio::pipewire::stream::tests::
+            failed=0
+            for round in 1 2 3 4; do
+              echo "round $round"
+              cargo test --locked -- --ignored --test-threads 1 --nocapture audio::pipewire::stream::tests:: || failed=1
+            done
+            exit $failed
           '
 
   build:
