@@ -39,7 +39,8 @@ enum TrackMetadata {
     }
 
     /// `image` as a large and a small JPEG, each as large and sharp as its
-    /// limits allow. Nil if either can't be made to fit. Any thread.
+    /// limits allow; the small one serves as both when the large one can't be
+    /// made. Nil if the small one can't be made either. Any thread.
     static func artwork(_ image: NSImage) -> Artwork? {
         var rect = CGRect(x: 0, y: 0, width: largeArtwork.side, height: largeArtwork.side)
         guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
@@ -47,12 +48,12 @@ enum TrackMetadata {
     }
 
     static func artwork(_ image: CGImage) -> Artwork? {
-        guard let large = fit(image, maxSide: largeArtwork.side, maxBytes: largeArtwork.bytes) else { return nil }
-        if large.side <= smallArtwork.side && large.data.count <= smallArtwork.bytes {
+        let large = fit(image, maxSide: largeArtwork.side, maxBytes: largeArtwork.bytes)
+        if let large, large.side <= smallArtwork.side && large.data.count <= smallArtwork.bytes {
             return Artwork(large: large.data, small: large.data)
         }
         guard let small = fit(image, maxSide: smallArtwork.side, maxBytes: smallArtwork.bytes) else { return nil }
-        return Artwork(large: large.data, small: small.data)
+        return Artwork(large: large?.data ?? small.data, small: small.data)
     }
 
     /// `image` as a JPEG of at most `maxBytes`, as large and sharp as fits: the

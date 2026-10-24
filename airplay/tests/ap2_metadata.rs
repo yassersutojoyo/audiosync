@@ -668,7 +668,8 @@ fn a_refused_small_image_ends_artwork_while_text_and_progress_still_go() {
     assert!(rig.failure().is_none(), "{:?}", rig.events);
     assert!(rig.ready());
 
-    // A new session starts again from its path's image.
+    // A new session starts again from its path's image; through the
+    // driver in `a_restarted_session_starts_again_from_its_paths_image`.
     let mut rig = artwork_rig();
     let now = rig.now;
     assert_eq!(rig.session.send_artwork(two_sizes(), 3000, now), Ok(()));
@@ -805,5 +806,88 @@ fn each_speaker_gets_its_own_paths_image() {
     );
     assert_eq!(image_bodies(&server.fake()), [two_sizes().large]);
     assert_eq!(ap1_images(), [two_sizes().small]);
+    sender.shutdown();
+}
+
+fn image_now_playing() -> NowPlaying {
+    NowPlaying {
+        artwork: Some(two_sizes()),
+        ..NowPlaying::default()
+    }
+}
+
+// covers: P185
+#[test]
+fn a_restarted_session_starts_again_from_its_paths_image() {
+    let _serial = serial();
+    let mut fake = fake_with(TEXT | ARTWORK | PROGRESS);
+    fake.status_once
+        .insert("SET_PARAMETER image/jpeg".to_owned(), 413);
+    let server = Ap2Server::start(fake);
+    let mut behavior = Behavior::default();
+    behavior
+        .status
+        .insert("SET_PARAMETER image/jpeg".to_owned(), 500);
+    let receiver = NetReceiver::start(behavior);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let airplay2 = airplay2_only(&server, 65, "0x38000,0x10040");
+    let airplay1 = receiver.device(66, AP1_TXT);
+    let devices = [airplay2, airplay1];
+    let ap1_images = || {
+        receiver
+            .log()
+            .requests
+            .iter()
+            .filter(|(_, request)| request.headers.get("Content-Type") == Some("image/jpeg"))
+            .map(|(_, request)| request.body.clone())
+            .collect::<Vec<_>>()
+    };
+    sender
+        .set_now_playing(image_now_playing())
+        .expect("valid artwork");
+    let playing = |s: &SpeakerState| *s == SpeakerState::Playing;
+    for (nth, round) in [(1, "first"), (2, "restarted")] {
+        for device in &devices {
+            sender.add_speaker(device.clone(), SpeakerOptions::new(Volume::Db(-20.0)));
+        }
+        for device in &devices {
+            assert!(
+                events
+                    .wait_state(&sender, &device.key, nth, LONG, playing)
+                    .is_some(),
+                "{round}: {:?}",
+                events.of(&device.key)
+            );
+        }
+        if nth == 1 {
+            // AirPlay 2 refuses the large image and takes the small one;
+            // AirPlay 1 refuses the small one, which ends its artwork.
+            assert!(
+                wait_until(LONG, || images_sent(&server.fake()).len() == 2),
+                "{:?}",
+                server.fake().keys()
+            );
+            assert!(wait_until(LONG, || ap1_images().len() == 1));
+            sender
+                .set_now_playing(image_now_playing())
+                .expect("valid artwork");
+            assert!(wait_until(LONG, || images_sent(&server.fake()).len() == 3));
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(ap1_images().len(), 1, "artwork ended for that session");
+            for device in &devices {
+                sender.remove_speaker(&device.key);
+            }
+        }
+    }
+    let small = two_sizes().small;
+    let large = two_sizes().large;
+    assert!(wait_until(LONG, || images_sent(&server.fake()).len() == 4));
+    assert!(wait_until(LONG, || ap1_images().len() == 2));
+    assert_eq!(
+        image_bodies(&server.fake()),
+        [large.clone(), small.clone(), small.clone(), large]
+    );
+    assert_eq!(ap1_images(), [small.clone(), small]);
     sender.shutdown();
 }
