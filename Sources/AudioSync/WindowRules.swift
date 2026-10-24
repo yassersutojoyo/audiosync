@@ -22,6 +22,22 @@ enum WindowPlacement {
     }
 }
 
+/// How strongly a scrolling column fades at its top and bottom edges, from 0
+/// (nothing hidden past that edge) to 1 (at least the fade's height hidden).
+struct ScrollEdgeFades: Equatable {
+    var top: CGFloat
+    var bottom: CGFloat
+
+    static let none = ScrollEdgeFades(top: 0, bottom: 0)
+
+    /// `visibleTop` and `visibleHeight` give the visible part in content
+    /// coordinates; `fade` is the height over which an edge reaches full strength.
+    static func of(contentHeight: CGFloat, visibleTop: CGFloat, visibleHeight: CGFloat,
+                   fade: CGFloat) -> ScrollEdgeFades {
+        ScrollEdgeFades(top: 1, bottom: 1)
+    }
+}
+
 /// The entries of the source picker, in the order it lists them.
 enum SourceList {
     struct Entry: Equatable {

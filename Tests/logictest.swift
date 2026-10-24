@@ -3504,6 +3504,23 @@ do {
     fewBands.gains = [1, 2, 3]
     check(StoredEqualizer.decode(StoredEqualizer.encode(fewBands)) == Equalizer.Settings(),
           "equalizer storage: settings with another band count give the defaults")
+
+    func fades(content: CGFloat, top: CGFloat, height: CGFloat = 400) -> ScrollEdgeFades {
+        ScrollEdgeFades.of(contentHeight: content, visibleTop: top, visibleHeight: height, fade: 12)
+    }
+    check(fades(content: 400, top: 0) == .none, "scroll fades: a column that fits fades at neither edge")
+    check(fades(content: 300, top: 0) == .none, "scroll fades: a short column fades at neither edge")
+    check(fades(content: 1000, top: 0) == ScrollEdgeFades(top: 0, bottom: 1),
+          "scroll fades: a long column at its top fades only at the bottom")
+    check(fades(content: 1000, top: 300) == ScrollEdgeFades(top: 1, bottom: 1),
+          "scroll fades: a long column scrolled halfway fades at both edges")
+    check(fades(content: 1000, top: 600) == ScrollEdgeFades(top: 1, bottom: 0),
+          "scroll fades: a long column scrolled to its end fades only at the top")
+    check(fades(content: 1000, top: 6) == ScrollEdgeFades(top: 0.5, bottom: 1),
+          "scroll fades: the top fade grows with the first points scrolled")
+    check(fades(content: 1000, top: -20) == ScrollEdgeFades(top: 0, bottom: 1)
+            && fades(content: 1000, top: 620) == ScrollEdgeFades(top: 1, bottom: 0),
+          "scroll fades: an elastic overscroll past either end adds no fade there")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
