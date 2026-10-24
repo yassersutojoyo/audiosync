@@ -216,12 +216,45 @@ extension AppDelegate {
                                    speakerID: member.facts.listed ? member.appID : nil, note: note, target: target)
     }
 
+    /// A member's name: the user's, else the one it is listed under, else
+    /// the one its zone kept from an earlier listing (S284).
     func memberName(_ member: ZoneMemberState) -> String {
+        let listed = listedName(member.key)
+        let system = listed.isEmpty ? SpeakerZone.storedName(of: member.key, in: zones) ?? "" : listed
         switch member.kind {
-        case .airplay: return shownName(airPlay: member.appID)
-        case .cast: return CastID.device(member.appID).map { castName($0) } ?? text.unknownDevice
-        case .local: return shownName(local: member.appID, system: localDevices[member.appID]?.name ?? "")
+        case .airplay:
+            return speakerNames.shown(key: SpeakerKey.make(id: member.appID, airplay: true),
+                                      system: text.deviceName(system))
+        case .cast:
+            guard let device = CastID.device(member.appID) else { return text.deviceName(system) }
+            return speakerNames.shown(key: CastID.key(device), system: text.deviceName(system))
+        case .local: return shownName(local: member.appID, system: system)
         }
+    }
+
+    /// The name speaker `key` is listed under in this run, before the
+    /// user's own; empty when there is none.
+    private func listedName(_ key: String) -> String {
+        guard let (id, kind) = SpeakerKey.parseAny(key) else { return "" }
+        switch kind {
+        case .airplay: return airplayNames[id] ?? ""
+        case .cast:
+            let announced = castModel.devices[id]?.name ?? ""
+            return announced.isEmpty ? castModel.manualAddresses[id]?.text ?? "" : announced
+        case .local: return localDevices[id]?.name ?? ""
+        }
+    }
+
+    /// Keeps with its zone the name each member is listed under (S284), so a
+    /// relaunch without it still shows that name.
+    func rememberZoneNames() {
+        var listed: [String: String] = [:]
+        for key in zones.flatMap(\.members) {
+            let name = listedName(key)
+            if !name.isEmpty { listed[key] = name }
+        }
+        let named = SpeakerZone.remembering(listed, in: zones)
+        if named != zones { zones = named }
     }
 
     private func memberSymbol(_ member: ZoneMemberState, name: String) -> String {

@@ -50,7 +50,8 @@ extension AppDelegate {
         let leftOff = zip(preset.members, zip(states, plan.steps)).compactMap { member, pair -> PresetNotice.LeftOff? in
             let (state, step) = pair
             guard case .leftOff(let reason) = step, !keepOff.contains(member.key) else { return nil }
-            return PresetNotice.LeftOff(name: state.map(memberName) ?? text.unknownDevice, reason: reason,
+            let kept = SpeakerZone.storedName(of: member.key, in: zones).map(text.deviceName)
+            return PresetNotice.LeftOff(name: state.map(memberName) ?? kept ?? text.unknownDevice, reason: reason,
                                         target: state?.target.map { shownName(airPlay: NativeAirPlayID.app($0)) },
                                         key: member.key)
         }

@@ -370,6 +370,29 @@ do {
     stored.values[Keys.zones] = Data("not json".utf8)
     check(store.load().zones.isEmpty && stored.values[Keys.zonesMigrated] as? Bool == true,
           "zones: unreadable zones read as none and never migrate again")
+
+    let unnamed = [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:native:X", "lc:blank"], volume: 80),
+                   SpeakerZone(id: "z2", name: "Den", members: [], volume: 100)]
+    let named = SpeakerZone.remembering(["ap:native:X": "Kitchen HomePod", "lc:blank": " ", "lc:other": "Desk"],
+                                        in: unnamed)
+    store.save(zones: named)
+    let reloaded = store.load().zones
+    let moved = ZoneEdit.moving("ap:native:X", to: "z2", in: reloaded)
+    let removed = ZoneEdit.removing("ap:native:X", from: moved)
+    let older = try? JSONDecoder().decode([SpeakerZone].self,
+                                          from: Data(#"[{"id":"z","name":"Z","members":["lc:x"],"volume":50}]"#.utf8))
+    let rewritten = (try? JSONEncoder().encode(older ?? [])).map { String(decoding: $0, as: UTF8.self) } ?? ""
+    check(SpeakerZone.storedName(of: "ap:native:X", in: reloaded) == "Kitchen HomePod"
+            && SpeakerZone.storedName(of: "lc:blank", in: reloaded) == nil
+            && SpeakerZone.storedName(of: "lc:other", in: reloaded) == nil
+            && SpeakerZone.remembering(["ap:native:X": "Kitchen HomePod"], in: reloaded) == reloaded
+            && SpeakerZone.storedName(of: "ap:native:X", in: moved) == "Kitchen HomePod"
+            && SpeakerZone.storedName(of: "ap:native:X", in: removed) == nil
+            && removed.allSatisfy { $0.memberNames == nil }
+            && older == [SpeakerZone(id: "z", name: "Z", members: ["lc:x"], volume: 50)]
+            && !rewritten.contains("memberNames"),
+          "zones: an absent member shows its last listed name after a reload, and zones stored before it load unchanged",
+          "\(reloaded)")
 }
 
 // MARK: Presets — overlapping groups become presets once (Presets.swift, AppSettings.swift, S251, S254)

@@ -306,6 +306,7 @@ extension AppDelegate {
             emptySince: airplayEmptySince, now: Date()))
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
         publishEqualizerCurve()
+        rememberZoneNames()
         publish(\.zones, zoneSnapshot())
         publishPresets()
         publish(\.launchAtLogin, launchAtLogin)

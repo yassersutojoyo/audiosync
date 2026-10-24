@@ -9,8 +9,50 @@ struct SpeakerZone: Codable, Equatable {
     var members: [String]       // SpeakerKey values
     /// The zone's slider position, 0…100.
     var volume: Double
+    /// The name each member was last listed under (S284), by key; nil while
+    /// none is kept, which leaves it out of the stored JSON.
+    var memberNames: [String: String]? = nil
 
     static let defaultVolume = 100.0
+
+    /// This zone without kept names for keys that aren't members, or blank ones.
+    func pruned() -> SpeakerZone {
+        var copy = self
+        let kept = memberNames?.filter { key, name in
+            members.contains(key) && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        copy.memberNames = kept?.isEmpty == false ? kept : nil
+        return copy
+    }
+
+    /// The name member `key` was last listed under, kept by the zone that holds it (S284).
+    static func storedName(of key: String, in zones: [SpeakerZone]) -> String? {
+        zones.first { $0.members.contains(key) }?.memberNames?[key]
+    }
+
+    /// `zones` keeping `listed`, the names members are listed under now, as
+    /// each member's last name (S284); a blank name keeps the last one.
+    static func remembering(_ listed: [String: String], in zones: [SpeakerZone]) -> [SpeakerZone] {
+        zones.map { zone in
+            var copy = zone
+            for key in zone.members {
+                guard let name = listed[key],
+                      !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                if copy.memberNames == nil { copy.memberNames = [:] }
+                copy.memberNames?[key] = name
+            }
+            return copy
+        }
+    }
+
+    /// Whether `a` and `b` differ in kept names only, which changes no volume.
+    static func differInNamesOnly(_ a: [SpeakerZone], _ b: [SpeakerZone]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { first, second in
+            var copy = first
+            copy.memberNames = second.memberNames
+            return copy == second
+        }
+    }
 
     /// `zones` as S245 keeps them: a key already in an earlier zone, or
     /// earlier in the same one, is left out, a repeated ID keeps the first
@@ -23,7 +65,7 @@ struct SpeakerZone: Codable, Equatable {
             var copy = zone
             copy.members = zone.members.filter { taken.insert($0).inserted }
             copy.volume = zone.volume.isFinite ? min(max(zone.volume, 0), 100) : defaultVolume
-            out.append(copy)
+            out.append(copy.pruned())
         }
         return out
     }
@@ -82,21 +124,25 @@ enum ZoneMigration {
 /// Changes to the zones the windows make, each keeping a speaker in at most
 /// one zone (S245).
 enum ZoneEdit {
-    /// `zones` with `key` in no zone; an emptied zone stays.
+    /// `zones` with `key` and its kept name in no zone; an emptied zone stays.
     static func removing(_ key: String, from zones: [SpeakerZone]) -> [SpeakerZone] {
         zones.map { zone in
             var copy = zone
             copy.members.removeAll { $0 == key }
-            return copy
+            return copy.pruned()
         }
     }
 
-    /// `key` after the members of zone `id`, out of the zone that held it.
-    /// Nothing changes for a zone that isn't there.
+    /// `key` after the members of zone `id`, with its kept name, out of the
+    /// zone that held it. Nothing changes for a zone that isn't there.
     static func moving(_ key: String, to id: String, in zones: [SpeakerZone]) -> [SpeakerZone] {
         guard zones.contains(where: { $0.id == id }) else { return zones }
+        let name = SpeakerZone.storedName(of: key, in: zones)
         var out = removing(key, from: zones)
-        if let index = out.firstIndex(where: { $0.id == id }) { out[index].members.append(key) }
+        if let index = out.firstIndex(where: { $0.id == id }) {
+            out[index].members.append(key)
+            if let name { out = SpeakerZone.remembering([key: name], in: out) }
+        }
         return out
     }
 
@@ -124,7 +170,7 @@ enum ZoneEdit {
             offset == first || (key != target && !members.contains(key))
         }.map(\.element)
         for other in out.indices where other != index { out[other].members.removeAll { $0 == target } }
-        return out
+        return out.map { $0.pruned() }
     }
 }
 
