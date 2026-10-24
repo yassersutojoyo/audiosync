@@ -7074,6 +7074,15 @@ do {
     let line = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 123_706 * ms, wallNow: wall)
     check(line == "[AudioSync] late output callback at 2027-01-15T07:59:59.750Z on \"Speaker\": 12.3 ms late",
           "late callbacks: the line names the buffer's wall-clock start, the output and the lateness", line)
+    // The buffer's host time lies ahead of now by the output lead, so a poll can come before it.
+    let ahead = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 123_426 * ms, wallNow: wall)
+    check(ahead.contains(" at 2027-01-15T08:00:00.0"), "late callbacks: a buffer starting 30 ms after now is stamped ahead", ahead)
+    let far = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 0, wallNow: wall)
+    check(far.contains(" at 2027-01-15T08:02:03.45"), "late callbacks: a start far ahead of now does not trap", far)
+    var stopping = LogRateLimiter()
+    for event in 0..<12 { _ = stopping.admit(1, atNs: UInt64(event) * ms) }
+    check(stopping.flush() == 2 && stopping.flush() == nil,
+          "late callbacks: the last output's stop flushes the pending suppressed count once")
     check(LateCallbackLog.suppressedLine(15) == "[AudioSync] 15 more late callbacks suppressed",
           "late callbacks: suppressed-count line")
 }

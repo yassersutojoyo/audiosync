@@ -644,6 +644,10 @@ final class OutputRenderer: FadingOutput {
                 DebugTrace.log(line)
             }
         }
+        timer.setCancelHandler {
+            if let line = LateCallbackLog.reporterStopped() { DebugTrace.log(line) }
+        }
+        LateCallbackLog.queue.async { LateCallbackLog.reporterStarted() }
         timer.resume()
         lateTimer = timer
     }
@@ -663,6 +667,21 @@ enum LateCallbackLog {
     /// Every output's report runs here, so `limiter` needs no lock.
     static let queue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.late-callbacks", qos: .utility)
     private static var limiter = LogRateLimiter()
+    /// Outputs whose report runs; on `queue` only.
+    private static var reporters = 0
+
+    /// Call on `queue` only.
+    static func reporterStarted() {
+        reporters += 1
+    }
+
+    /// The suppressed count still pending once the last output stops, since
+    /// no poll is left to close its window. Call on `queue` only.
+    static func reporterStopped() -> String? {
+        reporters = max(reporters - 1, 0)
+        guard reporters == 0, let pending = limiter.flush() else { return nil }
+        return suppressedLine(pending)
+    }
 
     /// One atomic word for the render thread: the buffer's start in host ms
     /// above the lateness in µs. Plain arithmetic, safe on an audio thread.
@@ -692,7 +711,9 @@ enum LateCallbackLog {
     /// buffer started.
     static func eventLine(_ slot: UInt64, name: String, nowNs: UInt64, wallNow: Date) -> String {
         let (startMs, lateUs) = unpack(slot)
-        let ageMs = Double(nowNs / 1_000_000 &- startMs)
+        // Signed: the buffer starts after now by the output lead, often still at the poll.
+        let signedMs = Double(Int64(bitPattern: (nowNs / 1_000_000) &- startMs))
+        let ageMs = min(max(signedMs, -86_400_000), 86_400_000)
         let when = DebugLogFile.timestamp(wallNow.addingTimeInterval(-ageMs / 1000))
         return "[AudioSync] late output callback at \(when) on \"\(name)\": "
             + String(format: "%.1f", Double(lateUs) / 1000) + " ms late"
@@ -736,6 +757,16 @@ struct LogRateLimiter {
         logged += admitted
         suppressed += events - admitted
         return (closed, admitted)
+    }
+
+    /// The open window's suppressed count, nil when it has none; the window
+    /// closes either way.
+    mutating func flush() -> Int? {
+        let pending = suppressed > 0 ? suppressed : nil
+        windowStartNs = nil
+        logged = 0
+        suppressed = 0
+        return pending
     }
 
     /// Counts `events` events as suppressed in the open window, opening one
