@@ -340,7 +340,10 @@ do {
     let first = store.load()
     check(first.zones == expected && first.groups == groups,
           "zones: the first launch moves the groups to zones and leaves the saved groups as they are", "\(first.zones)")
-    check(stored.order.last == Keys.zonesMigrated && stored.values[Keys.zonesMigrated] as? Bool == true,
+    // The presets' own migration follows S248 in the same load, so "last" means last of the zone writes.
+    let zoneWrites = stored.order.prefix { ![Keys.presets, Keys.presetsMigrated].contains($0) }
+    check(zoneWrites.last == Keys.zonesMigrated && zoneWrites.contains(Keys.zones)
+            && stored.values[Keys.zonesMigrated] as? Bool == true,
           "zones: the migrated mark is written last", "\(stored.order)")
     stored.values[Keys.zonesMigrated] = nil
     stored.values[Keys.zones] = nil
@@ -3612,9 +3615,11 @@ do {
     let first = store.migrateLocalDelays(listed: [r, usb], reference: r)
     let writes = stored.writes
     let second = store.migrateLocalDelays(listed: [r, usb, tv], reference: r)
+    // Read before load(), whose zone and preset migrations (S248, S254) write marks of their own.
+    let secondWrote = stored.writes != writes
     let loaded = store.load()
     check(first?.offsets == [usb: 100, bt: -200] && first?.airPlayDelayMs == 2000
-            && second == nil && stored.writes == writes
+            && second == nil && !secondWrote
             && stored.values[Keys.localDelays] as? [String: Double] == [r: 2000, usb: 2100]
             && stored.values[Keys.legacyDelayMs] as? Double == 1800
             && stored.values[Keys.localDelaysMigrated] as? Bool == true
@@ -5326,13 +5331,15 @@ do {
                 let zoneSheet = zoneRun.finish()
                     .map { CalibrateAllSheetHandle($0, speakers: zoneSpeakers, rate: 48_000, microphone: nil) }
                 let listed = zoneSheet?.read(ended: nil).rows ?? []
+                // Asked while the row is still off: once measured, a plain Measure Again is allowed again.
+                let plainRefused = zoneSheet?.measureAgain(2) == nil
                 let onNow = CalibrateAllSpeaker(id: "attic", name: "attic", kind: .local, offsetMs: 60, latencyMs: 100)
                 let again = zoneSheet?.measureAgainOff(2, now: onNow)
                 let againSteps = again.map { play($0, arrivals: { row, _ in row == 0 ? 4_800 : 7_200 }) } ?? []
                 let replaced = again?.finish().map { zoneSheet?.replace($0) ?? false } ?? false
                 let after = zoneSheet?.read(ended: nil).rows ?? []
                 check(zoneSteps == ["0.0", "1.1", "1.2"] && listed.count == 3 && listed[2].off
-                        && listed[2].result == .notMeasured && zoneSheet?.measureAgain(2) == nil
+                        && listed[2].result == .notMeasured && plainRefused
                         && againSteps == ["0.0", "2.1", "2.2"] && replaced
                         && after.count == 3 && !after[2].off && after[2].oldMs == 60 && after[2].measured,
                       "calibrate zone: a member that is off is listed and never swept, and Measure Again measures it "
