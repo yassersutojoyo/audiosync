@@ -1244,6 +1244,9 @@ impl Ap2Session {
             return self.fail(ErrorKind::Busy, Some(method), Some(code), None);
         }
         let success = response.is_success();
+        if self.config.trace {
+            self.trace_set_parameter(&in_flight.kind, &response);
+        }
         match in_flight.kind {
             Kind::Info { first: true } => {
                 let answer = if success {
@@ -1382,6 +1385,22 @@ impl Ap2Session {
                 stream_id: answer.stream_id.unwrap_or(i64::from(self.ids.session_id)),
             });
         }
+    }
+
+    /// A refused SET_PARAMETER warns with its status only, so the debug log
+    /// carries what was sent to tell which body a receiver turns down.
+    fn trace_set_parameter(&mut self, kind: &Kind, response: &Response) {
+        let (content_type, body) = match kind {
+            Kind::Volume(volume) => ("text/parameters", volume.parameter_body().into_bytes()),
+            Kind::Metadata(metadata) => (metadata.content_type(), metadata.body()),
+            _ => return,
+        };
+        let line = format!(
+            "SET_PARAMETER {content_type}: status {}, body {}",
+            response.code,
+            bodies::trace_text(&body)
+        );
+        self.event(Ap2Event::Trace(line));
     }
 
     fn warn(&mut self, method: Method, status: u16) {

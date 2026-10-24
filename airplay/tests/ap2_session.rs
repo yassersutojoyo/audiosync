@@ -887,6 +887,29 @@ fn traced_session_reads_the_volume_once_and_survives_a_refusal() {
 }
 
 #[test]
+fn traced_session_shows_a_refused_set_parameter_with_its_body() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert("SET_PARAMETER".to_owned(), 500);
+    let rig = Ap2Rig::new(traced_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let lines = traces(&rig);
+    assert!(
+        lines.iter().any(|line| line
+            .starts_with("SET_PARAMETER text/parameters: status 500, body text \"volume: -")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn an_untraced_session_logs_no_set_parameter_lines() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert("SET_PARAMETER".to_owned(), 500);
+    let rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    assert!(traces(&rig).is_empty(), "{:?}", traces(&rig));
+}
+
+#[test]
 fn an_unanswered_volume_read_never_ends_the_session() {
     let mut fake = FakeAp2::new();
     fake.silent.push("GET_PARAMETER".to_owned());
