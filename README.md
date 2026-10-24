@@ -41,7 +41,7 @@ On `main` now or on the way, in both the Mac and the Windows app:
 - Presets: save which speakers are on with their volumes and EQ curve, and recall it all in one click or with a shortcut.
 - Several apps as one source, or every app except the ones you check.
 - Audio interfaces with more than two inputs: pick which channel pair plays, under Input Channels.
-- A mic or line in plays on local speakers with less delay, and a level meter under the source shows it's coming in. AirPlay and Cast speakers keep their usual delay, so they trail behind.
+- A mic or line in works as a source, and a level meter under the source shows it's coming in. With only local speakers on, the delay stays low. Turn on an AirPlay or Cast speaker and every speaker plays in step, about 2 seconds after the input.
 - Save your own EQ curves next to the presets.
 - The Web Remote can switch the source, zones and presets too.
 - On the Mac, a Bluetooth headset's call microphone isn't offered as a source anymore, since using it drops the headset to call quality.
