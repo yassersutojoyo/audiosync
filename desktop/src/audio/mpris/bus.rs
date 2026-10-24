@@ -163,8 +163,7 @@ impl SessionList for Players {
             .iter()
             .map(|name| player_properties(connection.inner(), name))
             .collect();
-        // Hidden from zbus's docs, not private: its own blocking proxies run on it.
-        let answers = zbus::block_on(all(asked));
+        let answers = async_io::block_on(all(asked));
         Ok(names
             .into_iter()
             .zip(answers)
