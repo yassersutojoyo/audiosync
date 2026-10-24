@@ -209,7 +209,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-calibration-title;
-                            body: Strings.help-calibration;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-calibration-linux : Strings.help-calibration;
                         }
 
                         HelpSection {
@@ -219,7 +219,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-airplay-title;
-                            body: Strings.help-airplay;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-airplay-linux : Strings.help-airplay;
                         }
 
                         HelpSection {
@@ -234,12 +234,12 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-volume-title;
-                            body: Strings.help-volume;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-volume-linux : Strings.help-volume;
                         }
 
                         HelpSection {
                             title: Strings.help-remote-title;
-                            body: Strings.help-remote;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-remote-linux : Strings.help-remote;
                         }
 
                         HelpSection {

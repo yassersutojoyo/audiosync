@@ -8181,12 +8181,12 @@ mod tests {
             "{route}"
         );
         let unmuted = guide_step_text(&strings, &GuideStep::KeepAppUnmuted { app: source });
-        assert!(
-            unmuted.starts_with(
-                "Don't mute any app other than Spotify and Chrome in the Volume mixer"
-            ),
-            "{unmuted}"
-        );
+        let expected = if cfg!(target_os = "linux") {
+            "Don't mute or turn down any app other than Spotify and Chrome in a volume control"
+        } else {
+            "Don't mute any app other than Spotify and Chrome in the Volume mixer"
+        };
+        assert!(unmuted.starts_with(expected), "{unmuted}");
         let several = SourceName::Apps(vec!["Spotify".into(), "Chrome".into()]);
         let route = guide_step_text(&strings, &GuideStep::RouteApp { app: several });
         assert!(route.contains("find Spotify and Chrome and set"), "{route}");

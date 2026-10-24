@@ -1774,7 +1774,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
 
-                                if root.mix-apps.length > 0 && root.mix-all-except: SecondaryText {
+                                if root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": SecondaryText {
                                     text: Strings.source-mix-all-except-note;
                                 }
                             }

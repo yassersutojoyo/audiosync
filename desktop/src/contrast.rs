@@ -607,7 +607,10 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"The AirPlay speakers differ by {} ms.")
                 || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
                 || line.contains("@tr(\"AirPlay speakers share one delay, so a new AirPlay delay")
-                || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
+                || line.contains(
+                    "airplay-none-found: Platform.os == OperatingSystemType.linux ? \
+                     @tr(\"No AirPlay speakers found yet.",
+                )
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
                 || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
@@ -616,7 +619,8 @@ fn no_text_promises_airplay() {
                 || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
                 || line.contains("return @tr(\"AirPlay 2 after restart\");")
                 || line.contains(
-                    "network-none-found: @tr(\"No AirPlay or Google Cast speakers found yet.",
+                    "network-none-found: Platform.os == OperatingSystemType.linux ? \
+                     @tr(\"No AirPlay or Google Cast speakers found yet.",
                 )
                 || [
                     "help-intro",
@@ -626,11 +630,14 @@ fn no_text_promises_airplay() {
                     "help-sync-cast",
                     "help-art-classes",
                     "help-volume",
+                    "help-volume-linux",
                     "help-more",
                     "help-more-linux",
                     "help-airplay-title",
                     "help-airplay",
+                    "help-airplay-linux",
                     "help-calibration",
+                    "help-calibration-linux",
                 ]
                 .iter()
                 .any(|name| line.contains(&format!("out property <string> {name}: @tr("))),
@@ -816,11 +823,24 @@ fn linux_texts_name_no_windows_places() {
         .filter(|line| line.contains("-linux: @tr(\""))
         .collect();
     for (at, _) in strings.match_indices("OperatingSystemType.linux") {
-        let rest = &strings[at..];
-        let end = ["\n        }", " : @tr("]
-            .iter()
-            .filter_map(|marker| rest.find(marker))
-            .min()
+        let rest = &strings[at + "OperatingSystemType.linux".len()..];
+        if rest.starts_with(" ?") {
+            linux.push(&rest[..rest.find(" : @tr(").expect("a Windows text follows")]);
+            continue;
+        }
+        // An `if` block: up to the brace that closes it.
+        let mut depth = 0;
+        let end = rest
+            .char_indices()
+            .find(|&(_, c)| {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => return false,
+                }
+                depth == 0
+            })
+            .map(|(i, _)| i)
             .expect("a Linux branch ends");
         linux.push(&rest[..end]);
     }
@@ -829,6 +849,22 @@ fn linux_texts_name_no_windows_places() {
         for windows_only in ["Windows", "Volume mixer", "Start menu", "notification area"] {
             assert!(!text.contains(windows_only), "{windows_only} in: {text}");
         }
+    }
+}
+
+/// Every Windows text that has a Linux twin reads as in windows_strings.txt,
+/// one per line as written in strings.slint, so Linux wording never changes
+/// what Windows shows.
+#[test]
+fn windows_texts_with_a_linux_twin_are_unchanged() {
+    let strings = include_str!("../ui/strings.slint");
+    let snapshot = include_str!("windows_strings.txt");
+    assert!(snapshot.lines().count() >= 48);
+    for text in snapshot.lines() {
+        assert!(
+            strings.contains(&format!("@tr(\"{text}\"")),
+            "a Windows text changed: {text}"
+        );
     }
 }
 
