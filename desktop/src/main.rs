@@ -32,6 +32,13 @@ mod adapter;
         reason = "without an audio backend the UI uses only its types"
     )
 )]
+#[cfg_attr(
+    all(target_os = "linux", not(test)),
+    expect(
+        dead_code,
+        reason = "the WASAPI capture formats, stream mixer and endpoint listing serve the Windows driver only"
+    )
+)]
 mod audio;
 mod backdrop;
 #[cfg(test)]
