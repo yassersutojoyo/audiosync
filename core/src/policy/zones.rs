@@ -15,7 +15,7 @@ pub const DEFAULT_ZONE_VOLUME: f64 = 100.0;
 
 /// One zone (S245): its ID, its name (S150), its members' speaker keys in
 /// order, its volume slider position, 0 to 100, and the name each member
-/// was last listed under (S284), by key.
+/// was last listed under (S286), by key.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Zone {
     pub id: String,
@@ -90,13 +90,13 @@ impl Zones {
             .find(|zone| zone.members.iter().any(|member| member == key))
     }
 
-    /// The name member `key` was last listed under (S284), kept by the zone
+    /// The name member `key` was last listed under (S286), kept by the zone
     /// that holds it.
     pub fn member_name(&self, key: &str) -> Option<&str> {
         self.zone_of(key)?.member_names.get(key).map(String::as_str)
     }
 
-    /// Keeps `name` as the one member `key` was last listed under (S284).
+    /// Keeps `name` as the one member `key` was last listed under (S286).
     /// A blank name, and a key in no zone, change nothing. True when the
     /// kept name changed, so the host saves it.
     pub fn remember_name(&mut self, key: &str, name: &str) -> bool {
@@ -153,7 +153,7 @@ impl Zones {
     }
 
     /// Moves `key` into zone `to`, after its members, taking it out of the
-    /// zone that held it (S245), with its kept name (S284). A key already in
+    /// zone that held it (S245), with its kept name (S286). A key already in
     /// `to` keeps its place. False, changing nothing, when no zone has that
     /// ID.
     pub fn move_speaker(&mut self, key: &str, to: &str) -> bool {
@@ -175,8 +175,8 @@ impl Zones {
     }
 
     /// Takes `key` out of its zone, with its kept name, leaving it in none.
-    /// The zone stays, even
-    /// when it is empty now (S245). False when no zone held it.
+    /// The zone stays, even when it is empty now (S245). False when no zone
+    /// held it.
     pub fn remove_speaker(&mut self, key: &str) -> bool {
         let mut removed = false;
         for zone in &mut self.list {

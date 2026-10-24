@@ -250,7 +250,7 @@ pub struct SavedGroup {
 
 /// A zone (spec S245): its members by speaker key, a Cast speaker's
 /// included, its volume slider position, 0 to 100, and the name each member
-/// was last listed under (S284), left out of the file while empty.
+/// was last listed under (S286), left out of the file while empty.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedZone {

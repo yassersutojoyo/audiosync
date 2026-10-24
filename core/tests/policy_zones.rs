@@ -170,7 +170,7 @@ fn deleting_a_zone_leaves_its_members_in_no_zone() {
     assert!(!zones.set_volume("b", 50.0));
 }
 
-// covers: S284
+// covers: S286
 #[test]
 fn an_absent_members_last_listed_name_survives_a_reload() {
     let mut zones = Zones::from_stored([zone("a", "Kitchen", &["ap:native:X", "lc:usb"])]);
@@ -185,7 +185,7 @@ fn an_absent_members_last_listed_name_survives_a_reload() {
     assert_eq!(reloaded.member_name("lc:usb"), None);
 }
 
-// covers: S284
+// covers: S286
 #[test]
 fn a_members_name_follows_it_and_leaves_with_it() {
     let mut zones = Zones::from_stored([zone("a", "A", &["ap:1", "ap:2"]), zone("b", "B", &[])]);

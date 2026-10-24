@@ -2529,7 +2529,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// The zone members neither `speakers` nor `hidden` holds, by the name
     /// the user gave them, else the one last listed, in this run or before
-    /// (S284).
+    /// (S286).
     fn absent_members(&self, speakers: &[Speaker], hidden: &[HiddenSpeaker]) -> Vec<AbsentMember> {
         let known = |key: &String| {
             speakers.iter().any(|speaker| speaker.id == *key)
@@ -2569,7 +2569,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Keeps with its zone the name each member was last listed under in
-    /// this run (S284), so a relaunch without it still shows that name.
+    /// this run (S286), so a relaunch without it still shows that name.
     fn remember_zone_names(&mut self) -> bool {
         let fresh: Vec<(String, String)> = self
             .zones
@@ -7732,7 +7732,7 @@ mod tests {
         assert!(saved.speaker_names.is_empty(), "cleared, nothing is kept");
     }
 
-    // covers: S284
+    // covers: S286
     #[test]
     fn an_absent_zone_member_keeps_its_last_name_after_a_relaunch() {
         let dir = test_dir("adapter-zone-member-name");

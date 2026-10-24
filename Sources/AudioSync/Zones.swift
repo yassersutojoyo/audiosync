@@ -9,7 +9,7 @@ struct SpeakerZone: Codable, Equatable {
     var members: [String]       // SpeakerKey values
     /// The zone's slider position, 0…100.
     var volume: Double
-    /// The name each member was last listed under (S284), by key; nil while
+    /// The name each member was last listed under (S286), by key; nil while
     /// none is kept, which leaves it out of the stored JSON.
     var memberNames: [String: String]? = nil
 
@@ -25,13 +25,19 @@ struct SpeakerZone: Codable, Equatable {
         return copy
     }
 
-    /// The name member `key` was last listed under, kept by the zone that holds it (S284).
+    /// The name member `key` was last listed under, kept by the zone that holds it (S286).
     static func storedName(of key: String, in zones: [SpeakerZone]) -> String? {
         zones.first { $0.members.contains(key) }?.memberNames?[key]
     }
 
+    /// The name member `key` shows before the user's own: `listed`, the one
+    /// it is listed under now, else the one its zone kept (S286), else empty.
+    static func systemName(of key: String, listed: String, in zones: [SpeakerZone]) -> String {
+        listed.isEmpty ? storedName(of: key, in: zones) ?? "" : listed
+    }
+
     /// `zones` keeping `listed`, the names members are listed under now, as
-    /// each member's last name (S284); a blank name keeps the last one.
+    /// each member's last name (S286); a blank name keeps the last one.
     static func remembering(_ listed: [String: String], in zones: [SpeakerZone]) -> [SpeakerZone] {
         zones.map { zone in
             var copy = zone

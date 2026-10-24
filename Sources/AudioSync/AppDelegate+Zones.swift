@@ -217,10 +217,9 @@ extension AppDelegate {
     }
 
     /// A member's name: the user's, else the one it is listed under, else
-    /// the one its zone kept from an earlier listing (S284).
+    /// the one its zone kept from an earlier listing (S286).
     func memberName(_ member: ZoneMemberState) -> String {
-        let listed = listedName(member.key)
-        let system = listed.isEmpty ? SpeakerZone.storedName(of: member.key, in: zones) ?? "" : listed
+        let system = SpeakerZone.systemName(of: member.key, listed: listedName(member.key), in: zones)
         switch member.kind {
         case .airplay:
             return speakerNames.shown(key: SpeakerKey.make(id: member.appID, airplay: true),
@@ -245,7 +244,7 @@ extension AppDelegate {
         }
     }
 
-    /// Keeps with its zone the name each member is listed under (S284), so a
+    /// Keeps with its zone the name each member is listed under (S286), so a
     /// relaunch without it still shows that name.
     func rememberZoneNames() {
         var listed: [String: String] = [:]

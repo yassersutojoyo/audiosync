@@ -180,10 +180,17 @@ enum SpeakerIDMigration {
         out.zones = saved.zones.map { zone in
             var copy = zone
             copy.members = []
+            copy.memberNames = nil
             for member in zone.members {
                 let key = renamedKey(member)
                 if key != member, zoneKeys.contains(key) { continue }
-                if taken.insert(key).inserted { copy.members.append(key) }
+                guard taken.insert(key).inserted else { continue }
+                copy.members.append(key)
+                // The kept name moves with its key (S286).
+                if let name = zone.memberNames?[member] {
+                    if copy.memberNames == nil { copy.memberNames = [:] }
+                    copy.memberNames?[key] = name
+                }
             }
             return copy
         }
