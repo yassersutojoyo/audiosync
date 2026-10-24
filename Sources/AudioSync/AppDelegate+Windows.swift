@@ -84,7 +84,7 @@ extension AppDelegate {
         let rows = presetSnapshot()
         followPresetNotice(current: rows.first(where: \.current)?.id)
         publish(\.presets, rows)
-        PresetsMenu.update(appModel.presets)
+        MainActor.assumeIsolated { PresetsMenu.update(rows) }
     }
 
     private func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {

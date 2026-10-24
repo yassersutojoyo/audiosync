@@ -405,14 +405,9 @@ extension AppDelegate {
     func calibrateZoneScope(_ id: String) -> CalibrateZoneScope? {
         guard let zone = zones.first(where: { $0.id == id }) else { return nil }
         let present = zone.members.filter { key in
-            guard !hiddenSpeakers.contains(key), let (sid, kind) = SpeakerKey.parseAny(key) else { return false }
-            switch kind {
-            case .local: return isAvailable(key)
-            case .cast: return castModel.devices[sid] != nil
-            case .airplay:
-                guard isAvailable(key), let receiver = NativeAirPlayID.receiver(sid) else { return false }
-                return nativeAirPlay?.model.holdingTarget(receiver, on: enabledAirPlay.contains(sid)) == nil
-            }
+            guard let member = memberState(key), member.facts.listed else { return false }
+            guard member.kind == .airplay, let receiver = NativeAirPlayID.receiver(member.appID) else { return true }
+            return nativeAirPlay?.model.holdingTarget(receiver, on: enabledAirPlay.contains(member.appID)) == nil
         }
         let playing = Set(calibratePlayingIDs().map { (id: String) -> String in
             if CastID.device(id) != nil { return CastID.key(appID: id) }
