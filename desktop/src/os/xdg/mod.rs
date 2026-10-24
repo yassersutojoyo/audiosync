@@ -269,6 +269,16 @@ mod tests {
     }
 
     #[test]
+    fn every_base_folder_from_the_environment_is_absolute() {
+        for base in [data_base(), state_base(), config_base()] {
+            assert!(
+                base.as_ref().is_none_or(|base| base.is_absolute()),
+                "{base:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_sealer_stores_the_bytes_as_they_are() {
         let sealer = sealer();
         let sealed = sealer.seal(b"AudioSync pairings 1\n").unwrap();

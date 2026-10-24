@@ -186,6 +186,14 @@ mod tests {
     }
 
     #[test]
+    fn the_users_entry_is_named_after_the_app_id() {
+        if let Some(path) = AutostartStore::system().path {
+            assert!(path.is_absolute(), "{path:?}");
+            assert!(path.ends_with(format!("autostart/{APP_ID}.desktop")));
+        }
+    }
+
+    #[test]
     fn a_path_an_exec_key_cant_hold_is_not_written() {
         let dir = test_dir("autostart-refused");
         let path = dir.join(format!("{APP_ID}.desktop"));

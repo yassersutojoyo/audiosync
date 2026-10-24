@@ -354,7 +354,7 @@ impl PairingStore {
         };
         let fresh_file = !found.starts_with("credentials");
         let found = if tightened {
-            format!("{found}; {OPEN_TO_OTHERS}")
+            format!("{OPEN_TO_OTHERS}; {found}")
         } else {
             found
         };
