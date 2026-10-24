@@ -119,7 +119,7 @@ extern "C" {
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
 #define ASC_AIRPLAY_EVENT_ERROR 2    /* an error ended a speaker's session: .error */
-#define ASC_AIRPLAY_EVENT_LATENCY 3  /* a speaker's latencies: .latency_ms, .receiver_latency_frames */
+#define ASC_AIRPLAY_EVENT_LATENCY 3  /* a speaker's latencies: .latency_ms, .receiver_latency_us and _sources, .receiver_latency_frames */
 #define ASC_AIRPLAY_EVENT_TIMELINE 4 /* the base latency L or the timeline changed: .latency_ms */
 #define ASC_AIRPLAY_EVENT_FAILED 5   /* the sender or its discovery stopped working (a bug); destroy it, create a new one; .detail where a panic was, or "" */
 #define ASC_AIRPLAY_EVENT_PIN_NEEDED 6      /* a pairing's Apple TV shows a PIN: ask the user, then asc_airplay_submit_pin */
@@ -129,6 +129,12 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
 #define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
+#define ASC_AIRPLAY_EVENT_LATENCY_HELD 13   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
+
+/* Which reports gave a speaker's latency (AscAirPlayEvent.receiver_latency_sources bits). */
+#define ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY 1     /* Audio-Latency of a RECORD answer */
+#define ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCIES 2   /* audioLatencies of /info */
+#define ASC_AIRPLAY_LATENCY_SOURCE_ARRIVAL_TO_RENDER 4 /* arrivalToRenderLatencyMs of the stream SETUP answer */
 
 /* What a warning reports (AscAirPlayEvent.warning). */
 #define ASC_AIRPLAY_WARNING_JACK_DISCONNECTED 1          /* nothing is plugged into its audio jack */
@@ -138,6 +144,7 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
 #define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
 #define ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED 7       /* three volume reads in a row failed on an AirPlay 2 session: it isn't asked again */
+#define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 8          /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -1400,13 +1407,16 @@ double asc_calibration_cast_wait_ms(bool has_offset, double offset_ms, double ho
  * which is also how long the music sent to it plays out, in ms: the
  * sender's latency for the session (sender_latency_ms, read at run start),
  * or 3000 ms while has_sender is false, plus hold_back_ms, the hold-back the
- * sender adds for the speaker, plus 500 ms. shown_ms, the AirPlay delay the
- * field shows, counts instead of the sender's latency when it is longer.
+ * sender adds for the speaker, plus reported_ms, the latency the receiver
+ * reported (0 when it reported nothing), plus 500 ms. shown_ms, the AirPlay
+ * delay the field shows, counts instead of the sender's latency when it is
+ * longer.
  * Each value is clamped to 0 to 20 000 ms; one that is not a number counts
  * as 0; a sender latency that is not a number or not above 0 counts as
  * none.
  */
-double asc_calibration_airplay_wait_ms(bool has_sender, double sender_latency_ms, double shown_ms, double hold_back_ms);
+double asc_calibration_airplay_wait_ms(bool has_sender, double sender_latency_ms, double shown_ms, double hold_back_ms,
+                                       double reported_ms);
 
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 
@@ -1482,6 +1492,8 @@ typedef struct AscAirPlayEvent {
     const char *detail;              /* an error or warning event's text, a failure event's panic location; for a debug log (no secrets) */
     double volume;                   /* a volume event's slider position, 0 to 100 */
     int32_t warning;                 /* a warning event's ASC_AIRPLAY_WARNING_* */
+    int64_t receiver_latency_us;     /* a latency event's reported latency R_s in microseconds; 0 when no source gave one */
+    uint32_t receiver_latency_sources; /* a latency event's ASC_AIRPLAY_LATENCY_SOURCE_* bits; 0 when none */
 } AscAirPlayEvent;
 
 /*
@@ -1629,6 +1641,37 @@ double asc_airplay_latency_ms(const AscAirPlay *airplay);
  * starts over; a timeline event follows.
  */
 void asc_airplay_restart_timeline(AscAirPlay *airplay);
+
+/*
+ * Sets the stream's base latency Lf in frames, clamped to 11025 to 88200.
+ * While no speaker sounds it applies at once and a timeline event reports
+ * the new L; later it is held (ASC_AIRPLAY_EVENT_LATENCY_HELD) until the
+ * stream has no speaker or the capture restarts. NULL does nothing.
+ */
+void asc_airplay_set_latency(AscAirPlay *airplay, uint32_t frames);
+
+/*
+ * True once a speaker of the stream reached its first-sound time, so an Lf
+ * set now is held; false for a NULL or dead handle.
+ */
+bool asc_airplay_sounding(const AscAirPlay *airplay);
+
+/*
+ * The stream's Lf in frames from every speaker's reported latency, count
+ * values in microseconds (a negative one counts as 0):
+ * clamp(max(77175, R_max + 22050), 11025, 88200). NULL or a count of 0
+ * gives 77175.
+ */
+uint32_t asc_airplay_session_latency_frames(const int64_t *reported_us, size_t count);
+
+/*
+ * Gives the speaker added under id a delay of its own on top of the
+ * hold-back (the host's E - e_s for a receiver that reports less latency
+ * than the largest), offset_ms clamped to 0 to ASC_AIRPLAY_MAX_DELAY_MS and
+ * the sum capped there; not finite counts as 0. Returns the offset applied
+ * in ms, -1 for a NULL handle or id or an id not added.
+ */
+double asc_airplay_set_speaker_offset(AscAirPlay *airplay, const char *id, double offset_ms);
 
 /*
  * A speaker's counters, as asc_airplay_speaker_counters copies them: one

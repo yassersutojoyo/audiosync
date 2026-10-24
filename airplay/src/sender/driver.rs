@@ -17,7 +17,7 @@ mod targets;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -276,6 +276,7 @@ pub(crate) struct Driver {
     io_sink: mpsc::Sender<Input>,
     events: mpsc::Sender<SenderEvent>,
     latency_frames: Arc<AtomicU32>,
+    sounding: Arc<AtomicBool>,
     speakers: BTreeMap<DeviceKey, Speaker>,
     sessions: HashMap<SessionKey, DeviceKey>,
     pairings: BTreeMap<DeviceKey, PairingRun>,
@@ -350,6 +351,7 @@ impl Driver {
             io_sink,
             events,
             latency_frames,
+            sounding: Arc::new(AtomicBool::new(false)),
             speakers: BTreeMap::new(),
             sessions: HashMap::new(),
             pairings: BTreeMap::new(),
@@ -391,6 +393,12 @@ impl Driver {
     ) -> Driver {
         self.ptp_ports = local;
         self.ptp_receiver_ports = receiver;
+        self
+    }
+
+    /// Where the driver publishes whether a speaker sounds (P201).
+    pub(crate) fn with_sounding(mut self, sounding: Arc<AtomicBool>) -> Driver {
+        self.sounding = sounding;
         self
     }
 
@@ -557,6 +565,8 @@ impl Driver {
         if self.stream.poll_timeout().is_some_and(|at| at <= now) {
             self.stream.handle_timeout(now);
         }
+        self.sounding
+            .store(self.stream.is_sounding(now), Ordering::Relaxed);
         if let Some(run) = &mut self.ptp
             && run.service.poll_timeout().is_some_and(|at| at <= now)
         {

@@ -62,7 +62,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -468,6 +468,7 @@ pub struct Sender {
     clock: SenderClock,
     stream_counters: Arc<StreamCounters>,
     latency_frames: Arc<AtomicU32>,
+    sounding: Arc<AtomicBool>,
     speaker_counters: RefCell<HashMap<DeviceKey, Arc<SpeakerCounters>>>,
 }
 
@@ -495,6 +496,7 @@ impl Sender {
         let (stream, writer) = Stream::new(stream_config, clock, Instant::now());
         let stream_counters = stream.counters();
         let latency_frames = Arc::new(AtomicU32::new(stream.latency_frames()));
+        let sounding = Arc::new(AtomicBool::new(false));
         let (inputs, receiver) = mpsc::channel();
         let (events_out, events) = mpsc::channel();
         let driver = Driver::new(
@@ -506,7 +508,8 @@ impl Sender {
         )
         .with_airplay2(config.airplay2, config.airplay2_device_id)
         .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
-        .with_pairing_hold(config.pairing_hold);
+        .with_pairing_hold(config.pairing_hold)
+        .with_sounding(sounding.clone());
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
             .spawn(move || driver.run())?;
@@ -517,6 +520,7 @@ impl Sender {
             clock,
             stream_counters,
             latency_frames,
+            sounding,
             speaker_counters: RefCell::new(HashMap::new()),
         };
         Ok((sender, writer))
@@ -529,6 +533,13 @@ impl Sender {
     /// The sender clock: the host schedules its local outputs on it (P89).
     pub fn clock(&self) -> SenderClock {
         self.clock
+    }
+
+    /// True once a speaker of the stream reached its first-sound time: an
+    /// Lf set now is held (P201). Read without locks; it trails the driver
+    /// by at most one of its turns.
+    pub fn sounding(&self) -> bool {
+        self.sounding.load(Ordering::Relaxed)
     }
 
     /// L, the base latency (P98, P113). Read without locks.

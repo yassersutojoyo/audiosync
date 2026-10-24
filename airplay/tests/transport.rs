@@ -933,6 +933,10 @@ fn the_host_reads_latency_and_first_sound_and_restarts_the_timeline() {
         wait_until(LONG, || receiver.log().count("FLUSH") >= 1),
         "an Lf change flushes"
     );
+    assert!(
+        wait_until(LONG, || sender.sounding()),
+        "it sounds once its first-sound time passed"
+    );
     sender.restart_timeline();
     let restarted = events.wait_for(&sender, LONG, |e| {
         matches!(

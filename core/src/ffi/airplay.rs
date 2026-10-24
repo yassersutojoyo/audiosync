@@ -77,6 +77,7 @@ use audiosync_airplay::discovery::{Browser, Device, DeviceKey, ProtocolPath, Ser
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::input::InputWriter;
+use audiosync_airplay::latency::session_latency_frames;
 use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::{Credentials, PairingEvent};
 use audiosync_airplay::rtsp::Method;
@@ -85,7 +86,10 @@ use audiosync_airplay::sender::{
     AIRPLAY2_SWITCH_ENV, NowPlaying, Progress, ReceiverEvent, ReceiverInfo, Sender, SenderConfig,
     SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState, airplay2_switch,
 };
-use audiosync_airplay::stream::{MAX_DELAY, SpeakerCounters, SpeakerLatency};
+use audiosync_airplay::stream::{
+    DEFAULT_LATENCY_FRAMES, MAX_DELAY, MAX_LATENCY_FRAMES, MIN_LATENCY_FRAMES, SpeakerCounters,
+    SpeakerLatency,
+};
 use audiosync_airplay::targets::{Target, TargetChange, TargetId};
 use audiosync_airplay::volume::{MIN_DB, Volume};
 
@@ -181,7 +185,8 @@ pub const AIRPLAY_EVENT_STATE: i32 = 1;
 /// An error ended a speaker's session ([`AscAirPlayEvent::error`]).
 pub const AIRPLAY_EVENT_ERROR: i32 = 2;
 /// A speaker's latencies, when it starts playing and whenever its first
-/// sound time moves (P110, P113, P115).
+/// sound time moves: L + d_s, and the latency R_s the receiver reported
+/// with its sources (P110, P113, P115, P199, P202).
 pub const AIRPLAY_EVENT_LATENCY: i32 = 3;
 /// The base latency L or the timeline changed; local outputs line up with
 /// the new L (P98, P114, P143).
@@ -226,6 +231,19 @@ pub const AIRPLAY_EVENT_WARNING: i32 = 11;
 /// A line for the debug log about a speaker's session
 /// ([`AscAirPlayEvent::detail`]); sent only while `AUDIOSYNC_DEBUG` is `1`.
 pub const AIRPLAY_EVENT_TRACE: i32 = 12;
+/// The host set an Lf while a speaker sounds: the sender holds it
+/// ([`AscAirPlayEvent::latency_ms`] is the held L) until the stream has no
+/// speaker or the capture restarts, when a timeline event reports it
+/// (P201).
+pub const AIRPLAY_EVENT_LATENCY_HELD: i32 = 13;
+
+/// [`AscAirPlayEvent::receiver_latency_sources`] bits: `Audio-Latency` of a
+/// RECORD answer (P196).
+pub const AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY: u32 = 1;
+/// `audioLatencies` of `/info` (P197).
+pub const AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCIES: u32 = 2;
+/// `arrivalToRenderLatencyMs` of the stream SETUP answer (P198).
+pub const AIRPLAY_LATENCY_SOURCE_ARRIVAL_TO_RENDER: u32 = 4;
 
 /// Whether the host keeps its debug log, which turns on the sender's trace
 /// lines ([`SpeakerOptions::trace`]).
@@ -252,6 +270,10 @@ pub const AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY: i32 = 6;
 /// Three volume reads in a row failed on an AirPlay 2 session: it isn't
 /// asked again (P184, S271).
 pub const AIRPLAY_WARNING_VOLUME_READS_STOPPED: i32 = 7;
+/// The receiver's reported latency needs a larger Lf than the sounding
+/// stream it joined can take: it plays in step at the stream's Lf; the
+/// detail names R_s and Lf (P201).
+pub const AIRPLAY_WARNING_LATENCY_SHORTFALL: i32 = 8;
 
 /// A speaker's state ([`AscAirPlayEvent::state`]): a session is starting.
 pub const AIRPLAY_STATE_CONNECTING: i32 = 1;
@@ -358,6 +380,11 @@ pub struct AscAirPlayEvent {
     pub volume: f64,
     /// A warning event's `AIRPLAY_WARNING_*`.
     pub warning: i32,
+    /// A latency event's R_s in microseconds, 0 when no source gave a
+    /// value (P199, P202).
+    pub receiver_latency_us: i64,
+    /// A latency event's `AIRPLAY_LATENCY_SOURCE_*` bits, 0 when none.
+    pub receiver_latency_sources: u32,
 }
 
 /// A speaker the host added.
@@ -380,6 +407,9 @@ struct Added {
     /// Each session's counters by receiver ID: the speaker's own, or each
     /// member's of a target (P144).
     counters: Vec<(String, Arc<SpeakerCounters>)>,
+    /// Its own delay on top of the hold-back
+    /// ([`asc_airplay_set_speaker_offset`]).
+    offset: Duration,
 }
 
 impl Added {
@@ -401,6 +431,7 @@ impl Added {
             volume_set_at: Some(Instant::now()),
             unreadable: false,
             dragging: false,
+            offset: Duration::ZERO,
         }
     }
 
@@ -449,6 +480,8 @@ enum Pending {
         latency: Duration,
         restarted: bool,
     },
+    /// An Lf held while a speaker sounds (P201).
+    LatencyHeld(u32),
     /// The sender is dead ([`AIRPLAY_EVENT_FAILED`]).
     Failed,
     /// A pairing event for the host: its kind (`AIRPLAY_EVENT_PIN_NEEDED`
@@ -775,6 +808,23 @@ fn warning_code(warning: &Warning) -> i32 {
         Warning::PtpUnavailable => AIRPLAY_WARNING_PTP_PORTS_TAKEN,
         Warning::PtpOutsideFamily => AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY,
         Warning::VolumeReadsStopped => AIRPLAY_WARNING_VOLUME_READS_STOPPED,
+        Warning::LatencyShortfall { .. } => AIRPLAY_WARNING_LATENCY_SHORTFALL,
+    }
+}
+
+/// A warning's detail for the debug log.
+fn warning_detail(warning: &Warning) -> String {
+    match warning {
+        Warning::LatencyShortfall {
+            reported_us,
+            latency_frames,
+        } => format!(
+            "reports {} ms, more than Lf {} frames ({} ms) leaves room for; it plays at that Lf",
+            reported_us / 1000,
+            latency_frames,
+            u64::from(*latency_frames) * 1000 / 44_100
+        ),
+        other => format!("{other:?}"),
     }
 }
 
@@ -885,6 +935,7 @@ impl AscAirPlay {
             SenderEvent::Timeline {
                 latency, restarted, ..
             } => self.queue_event(Pending::Timeline { latency, restarted }),
+            SenderEvent::LatencyHeld { frames } => self.queue_event(Pending::LatencyHeld(frames)),
             SenderEvent::Pairing { key, event } => {
                 let id = receiver_id(&key);
                 if matches!(event, PairingEvent::HomeKitPaired(_)) {
@@ -1420,6 +1471,8 @@ impl AscAirPlay {
             detail: ptr::null(),
             volume: 0.0,
             warning: 0,
+            receiver_latency_us: 0,
+            receiver_latency_sources: 0,
         };
         let (id, detail) = match pending {
             Pending::Speaker(id, SpeakerEvent::State(state)) => {
@@ -1457,17 +1510,21 @@ impl AscAirPlay {
             Pending::Warning(id, warning) => {
                 event.kind = AIRPLAY_EVENT_WARNING;
                 event.warning = warning_code(&warning);
-                (id, format!("{warning:?}"))
+                (id, warning_detail(&warning))
             }
             Pending::Speaker(id, SpeakerEvent::Latency(latency)) => {
                 let SpeakerLatency {
                     arrival_to_sound,
                     receiver_latency_frames,
+                    receiver_latency_us,
+                    receiver_latency_sources,
                     ..
                 } = latency;
                 event.kind = AIRPLAY_EVENT_LATENCY;
                 event.latency_ms = millis(arrival_to_sound);
                 event.receiver_latency_frames = receiver_latency_frames.map_or(-1, i64::from);
+                event.receiver_latency_us = i64::try_from(receiver_latency_us).unwrap_or(i64::MAX);
+                event.receiver_latency_sources = u32::from(receiver_latency_sources.bits());
                 (id, String::new())
             }
             Pending::Speaker(id, SpeakerEvent::Trace(line)) => {
@@ -1480,6 +1537,11 @@ impl AscAirPlay {
                 event.kind = AIRPLAY_EVENT_TIMELINE;
                 event.latency_ms = millis(latency);
                 event.restarted = restarted;
+                (String::new(), String::new())
+            }
+            Pending::LatencyHeld(frames) => {
+                event.kind = AIRPLAY_EVENT_LATENCY_HELD;
+                event.latency_ms = f64::from(frames) * 1000.0 / 44_100.0;
                 (String::new(), String::new())
             }
             Pending::Failed => {
@@ -2385,12 +2447,109 @@ pub unsafe extern "C" fn asc_airplay_set_hold_back(
             if hold_back != airplay.hold_back {
                 airplay.hold_back = hold_back;
                 for added in airplay.added.values() {
-                    added.set_delay(&airplay.sender, hold_back);
+                    added.set_delay(&airplay.sender, (hold_back + added.offset).min(MAX_DELAY));
                 }
             }
             millis(hold_back)
         })
     }
+}
+
+/// Gives the speaker added under `id` a delay of its own on top of the
+/// hold-back, `offset_ms` clamped to 0 to [`AIRPLAY_MAX_DELAY_MS`], the sum
+/// capped there too: the host's E − e_s, so a receiver that reports less
+/// latency than the largest waits for it ([engine-spec] S283). A value not
+/// finite counts as 0. Returns the offset applied, in ms; -1 when the
+/// handle or `id` is null or no speaker was added under `id`.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `id` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_speaker_offset(
+    airplay: *mut AscAirPlay,
+    id: *const c_char,
+    offset_ms: f64,
+) -> f64 {
+    // SAFETY: by the caller's contract null or a NUL-terminated string.
+    let Some(id) = (unsafe { host_text(id) }) else {
+        return -1.0;
+    };
+    let offset = if offset_ms.is_finite() {
+        Duration::from_secs_f64(offset_ms.clamp(0.0, millis(MAX_DELAY)) / 1000.0)
+    } else {
+        Duration::ZERO
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, -1.0, |airplay| {
+            let hold_back = airplay.hold_back;
+            let Some(added) = airplay.added.get_mut(id) else {
+                return -1.0;
+            };
+            if offset != added.offset {
+                added.offset = offset;
+                added.set_delay(&airplay.sender, (hold_back + offset).min(MAX_DELAY));
+            }
+            millis(offset)
+        })
+    }
+}
+
+/// Sets the stream's base latency Lf, clamped to 11 025 to 88 200 frames
+/// (P98, P202). While no speaker sounds it applies at once and a timeline
+/// event reports the new L; later it is held ([`AIRPLAY_EVENT_LATENCY_HELD`])
+/// until the stream has no speaker or the capture restarts (P201). A null
+/// or dead handle does nothing.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_latency(airplay: *mut AscAirPlay, frames: u32) {
+    let frames = frames.clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES);
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe { live(airplay, (), |airplay| airplay.sender.set_latency(frames)) }
+}
+
+/// True once a speaker of the stream reached its first-sound time, so an Lf
+/// set now is held (P201); false for a null or dead handle.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_sounding(airplay: *const AscAirPlay) -> bool {
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now; the call only reads it.
+    unsafe {
+        live(airplay.cast_mut(), false, |airplay| {
+            airplay.sender.sounding()
+        })
+    }
+}
+
+/// The stream's Lf in frames from every speaker's reported latency R_s
+/// (P200, P202): `reported_us` holds `count` values in microseconds, a
+/// negative one counting as 0. A null array or a count of 0 gives 77 175.
+///
+/// # Safety
+///
+/// `reported_us` is null or points to `count` readable values.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_session_latency_frames(
+    reported_us: *const i64,
+    count: usize,
+) -> u32 {
+    if reported_us.is_null() || count == 0 {
+        return DEFAULT_LATENCY_FRAMES;
+    }
+    // SAFETY: by the caller's contract `count` readable values.
+    let values = unsafe { std::slice::from_raw_parts(reported_us, count) };
+    session_latency_frames(values.iter().map(|&us| u64::try_from(us).unwrap_or(0)))
 }
 
 /// The base latency L in milliseconds (P98, P113): a local output lines up
@@ -3192,6 +3351,7 @@ mod tests {
 
     use audiosync_airplay::discovery::{BrowseEvent, Browser, DeviceId, ScopedAddr, ServiceRecord};
     use audiosync_airplay::homekit::HomeKitCredentials;
+    use audiosync_airplay::latency::LatencySources;
     use audiosync_airplay::rtsp::{Message, Method, Parser, Response};
 
     /// A browser that hands over a fixed list of events, one per poll.
@@ -3613,6 +3773,8 @@ mod tests {
         detail: String,
         volume: f64,
         warning: i32,
+        receiver_latency_us: i64,
+        receiver_latency_sources: u32,
     }
 
     fn blank_event() -> AscAirPlayEvent {
@@ -3629,6 +3791,8 @@ mod tests {
             detail: ptr::null(),
             volume: 0.0,
             warning: 0,
+            receiver_latency_us: 0,
+            receiver_latency_sources: 0,
         }
     }
 
@@ -3654,6 +3818,8 @@ mod tests {
                     detail: text(raw.detail),
                     volume: raw.volume,
                     warning: raw.warning,
+                    receiver_latency_us: raw.receiver_latency_us,
+                    receiver_latency_sources: raw.receiver_latency_sources,
                 });
             } else {
                 std::thread::sleep(Duration::from_millis(10));
@@ -3936,6 +4102,8 @@ mod tests {
                 detail: String::new(),
                 volume: 0.0,
                 warning: 0,
+                receiver_latency_us: 0,
+                receiver_latency_sources: 0,
             }
         );
         // SAFETY: a live handle, used by this thread only.
@@ -4826,6 +4994,126 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    #[test]
+    fn latency_event_carries_receiver_latency_us_and_sources() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005375";
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x75]));
+        add_for_volume(handle, id, key.clone(), 50.0);
+        let latency = |frames, us, sources| SpeakerLatency {
+            arrival_to_sound: Duration::from_millis(1750),
+            receiver_latency_frames: frames,
+            receiver_latency_us: us,
+            receiver_latency_sources: sources,
+            first_sound: Instant::now(),
+        };
+        let reported = latency(
+            Some(11_025),
+            400_000,
+            LatencySources::AUDIO_LATENCY.union(LatencySources::AUDIO_LATENCIES),
+        );
+        for event in [reported, latency(None, 0, LatencySources::NONE)] {
+            inside(handle).take_in(SenderEvent::Speaker {
+                key: key.clone(),
+                event: SpeakerEvent::Latency(event),
+            });
+        }
+        let events = events_until(handle, |events| {
+            events
+                .iter()
+                .filter(|e| e.kind == AIRPLAY_EVENT_LATENCY)
+                .count()
+                == 2
+        });
+        let latencies: Vec<(i64, i64, u32)> = events
+            .iter()
+            .filter(|e| e.kind == AIRPLAY_EVENT_LATENCY && e.id == id)
+            .map(|e| {
+                (
+                    e.receiver_latency_frames,
+                    e.receiver_latency_us,
+                    e.receiver_latency_sources,
+                )
+            })
+            .collect();
+        assert_eq!(
+            latencies,
+            [
+                (
+                    11_025,
+                    400_000,
+                    AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY | AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCIES
+                ),
+                (-1, 0, 0)
+            ]
+        );
+
+        // A shortfall is a warning that names R_s and Lf; a held Lf is its
+        // own event.
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::Warning(Warning::LatencyShortfall {
+                reported_us: 1_800_000,
+                latency_frames: 77_175,
+            }),
+        });
+        inside(handle).take_in(SenderEvent::LatencyHeld { frames: 88_200 });
+        let events = events_until(handle, |events| {
+            events.iter().any(|e| e.kind == AIRPLAY_EVENT_LATENCY_HELD)
+        });
+        let warning = events
+            .iter()
+            .find(|e| e.kind == AIRPLAY_EVENT_WARNING)
+            .expect("warning");
+        assert_eq!(warning.warning, AIRPLAY_WARNING_LATENCY_SHORTFALL);
+        assert!(warning.detail.contains("1800 ms") && warning.detail.contains("77175"));
+        let held = events
+            .iter()
+            .find(|e| e.kind == AIRPLAY_EVENT_LATENCY_HELD)
+            .expect("held");
+        assert!((held.latency_ms - 2000.0).abs() < 1e-9);
+
+        // The host's own delay per speaker sits on top of the hold-back.
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_set_speaker_offset(handle, c_id.as_ptr(), 170.0),
+                170.0
+            );
+            assert_eq!(
+                asc_airplay_set_speaker_offset(handle, c_id.as_ptr(), -5.0),
+                0.0
+            );
+            assert_eq!(
+                asc_airplay_set_speaker_offset(handle, c_id.as_ptr(), f64::NAN),
+                0.0
+            );
+            assert_eq!(
+                asc_airplay_set_speaker_offset(handle, c_id.as_ptr(), 30_000.0),
+                20_000.0
+            );
+            let other = c_string("02005E0053FF");
+            assert_eq!(
+                asc_airplay_set_speaker_offset(handle, other.as_ptr(), 10.0),
+                -1.0
+            );
+            assert_eq!(
+                asc_airplay_set_speaker_offset(handle, ptr::null(), 10.0),
+                -1.0
+            );
+            assert_eq!(
+                asc_airplay_set_speaker_offset(ptr::null_mut(), c_id.as_ptr(), 10.0),
+                -1.0
+            );
+            assert!(!asc_airplay_sounding(ptr::null()));
+            assert!(!asc_airplay_sounding(handle));
+        }
+        assert_eq!(inside(handle).added[id].offset, MAX_DELAY);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S271
     #[test]
     fn a_speaker_whose_reads_stopped_is_not_asked_again() {
@@ -4956,6 +5244,8 @@ mod tests {
             detail: String::new(),
             volume: 0.0,
             warning: 0,
+            receiver_latency_us: 0,
+            receiver_latency_sources: 0,
         }
     }
 
@@ -5452,9 +5742,17 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     fn the_event_layout_matches_the_header() {
         // The Swift smoke test checks the same size against the header.
-        assert_eq!(std::mem::size_of::<AscAirPlayEvent>(), 88);
+        assert_eq!(std::mem::size_of::<AscAirPlayEvent>(), 104);
         assert_eq!(std::mem::offset_of!(AscAirPlayEvent, volume), 72);
         assert_eq!(std::mem::offset_of!(AscAirPlayEvent, warning), 80);
+        assert_eq!(
+            std::mem::offset_of!(AscAirPlayEvent, receiver_latency_us),
+            88
+        );
+        assert_eq!(
+            std::mem::offset_of!(AscAirPlayEvent, receiver_latency_sources),
+            96
+        );
     }
 
     #[test]
@@ -6337,6 +6635,8 @@ mod tests {
                 detail: text(raw.detail),
                 volume: raw.volume,
                 warning: raw.warning,
+                receiver_latency_us: raw.receiver_latency_us,
+                receiver_latency_sources: raw.receiver_latency_sources,
             });
         }
     }

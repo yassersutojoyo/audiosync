@@ -32,7 +32,6 @@ use crate::audio::{self, FRAMES_PER_PACKET, PACKET_FRAMES, PCM_PAYLOAD_BYTES, Pa
 use crate::clock::SenderClock;
 use crate::input::{self, InputReader, InputWriter};
 use crate::latency::{self, LatencySources, ReportedLatency};
-
 use crate::rate::{MAX_MARGIN, Margin, NOMINAL_RATE, RateModel};
 
 use crate::rtp::{
@@ -855,7 +854,12 @@ impl Stream {
         self.pending_latency
     }
 
-    /// True once any speaker reached its first-sound time (P115, P201).
+    /// True once any speaker reached its first-sound time at `now` (P115,
+    /// P201): an Lf set now would be held.
+    pub fn is_sounding(&self, now: Instant) -> bool {
+        self.sounding(self.clock.seconds(now))
+    }
+
     fn sounding(&self, t: f64) -> bool {
         self.speakers
             .iter()

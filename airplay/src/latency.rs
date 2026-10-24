@@ -46,7 +46,7 @@ impl LatencySources {
         self.0 == 0
     }
 
-    fn with(self, other: LatencySources) -> LatencySources {
+    pub fn union(self, other: LatencySources) -> LatencySources {
         LatencySources(self.0 | other.0)
     }
 }
@@ -90,13 +90,13 @@ impl ReportedLatency {
     pub fn sources(&self) -> LatencySources {
         let mut sources = LatencySources::NONE;
         if self.audio_latency_frames.is_some() {
-            sources = sources.with(LatencySources::AUDIO_LATENCY);
+            sources = sources.union(LatencySources::AUDIO_LATENCY);
         }
         if self.audio_latencies_us.is_some() {
-            sources = sources.with(LatencySources::AUDIO_LATENCIES);
+            sources = sources.union(LatencySources::AUDIO_LATENCIES);
         }
         if self.arrival_to_render_us.is_some() {
-            sources = sources.with(LatencySources::ARRIVAL_TO_RENDER);
+            sources = sources.union(LatencySources::ARRIVAL_TO_RENDER);
         }
         sources
     }

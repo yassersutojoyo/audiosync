@@ -70,12 +70,18 @@ pub const AIRPLAY_UNKNOWN_LATENCY_MS: f64 = 3000.0;
 /// How long after audio enters the AirPlay sender an AirPlay speaker plays
 /// it, in ms (S235): the latency L_s the sender holds the session to, read
 /// at run start, or [`AIRPLAY_UNKNOWN_LATENCY_MS`] while it reports none,
-/// plus the hold-back the sender adds for that speaker, plus
+/// plus the hold-back the sender adds for that speaker, plus the latency
+/// R_s the receiver reported (S283, 0 when it reported nothing), plus
 /// [`AIRPLAY_LATENCY_ALLOWANCE_MS`]. The AirPlay delay the field shows
 /// counts instead of L_s when it is longer: its adjustment moves only the
 /// local outputs, so a field below L_s never shortens the window. A sender
 /// latency that is not a number or not above 0 counts as none.
-pub fn airplay_wait_ms(sender_latency_ms: Option<f64>, shown_ms: f64, hold_back_ms: f64) -> f64 {
+pub fn airplay_wait_ms(
+    sender_latency_ms: Option<f64>,
+    shown_ms: f64,
+    hold_back_ms: f64,
+    reported_ms: f64,
+) -> f64 {
     let in_range = |ms: f64| {
         if ms.is_finite() {
             ms.clamp(0.0, MAX_HOLD_BACK_MS)
@@ -86,7 +92,10 @@ pub fn airplay_wait_ms(sender_latency_ms: Option<f64>, shown_ms: f64, hold_back_
     let sender_ms = sender_latency_ms
         .filter(|ms| ms.is_finite() && *ms > 0.0)
         .map_or(AIRPLAY_UNKNOWN_LATENCY_MS, in_range);
-    sender_ms.max(in_range(shown_ms)) + in_range(hold_back_ms) + AIRPLAY_LATENCY_ALLOWANCE_MS
+    sender_ms.max(in_range(shown_ms))
+        + in_range(hold_back_ms)
+        + in_range(reported_ms)
+        + AIRPLAY_LATENCY_ALLOWANCE_MS
 }
 
 /// How a speaker's delay is kept, which decides how a measured difference

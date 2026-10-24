@@ -1117,6 +1117,26 @@ mod tests {
                 AIRPLAY_WARNING_VOLUME_READS_STOPPED.to_string(),
             ),
             (
+                "ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL",
+                AIRPLAY_WARNING_LATENCY_SHORTFALL.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_EVENT_LATENCY_HELD",
+                AIRPLAY_EVENT_LATENCY_HELD.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY",
+                AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCIES",
+                AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCIES.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_LATENCY_SOURCE_ARRIVAL_TO_RENDER",
+                AIRPLAY_LATENCY_SOURCE_ARRIVAL_TO_RENDER.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_PAIRINGS_FAILED",
                 AIRPLAY_PAIRINGS_FAILED.to_string(),
             ),
