@@ -1962,6 +1962,26 @@ do {
         check(noteRow?.note == stops && noteMenu.items[0].toolTip == stops,
               "AirPlay 2 switch: turned off from a launch that runs it, the note under it says AirPlay 2 stops")
     }
+    // The gear menu is held only by the click that opens it, and AppKit can send
+    // the chosen item's action after the pop-up call has returned.
+    MainActor.assumeIsolated {
+        var chosen = 0
+        weak var firstTarget: AnyObject?
+        var firstAction: Selector?
+        autoreleasepool {
+            let menu = NSMenu()
+            let item = MenuAction.item("Web Remote…") { chosen += 1 }
+            menu.addItem(item)
+            menu.keepUntilNextPopUp()
+            firstTarget = item.target
+            firstAction = item.action
+        }
+        if let target = firstTarget as? NSObject, let action = firstAction { _ = target.perform(action, with: nil) }
+        check(chosen == 1,
+              "Gear menu: an item chosen after the pop-up call returns still runs its action once nothing else holds the menu")
+        autoreleasepool { NSMenu().keepUntilNextPopUp() }
+        check(firstTarget == nil, "Gear menu: the next menu that opens releases the one before it")
+    }
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting for the other AirPlay 2 speaker"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,

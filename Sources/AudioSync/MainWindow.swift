@@ -1386,8 +1386,8 @@ private enum GearMenu {
     static func make(model: AppModel, text t: UIStrings) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        menu.addItem(item(t.newZone) { model.actions.newZone() })
-        menu.addItem(item(t.refreshDevices) { model.actions.refreshDevices() })
+        menu.addItem(MenuAction.item(t.newZone) { model.actions.newZone() })
+        menu.addItem(MenuAction.item(t.refreshDevices) { model.actions.refreshDevices() })
         let hidden = NSMenu(title: t.hiddenSpeakers)
         hidden.autoenablesItems = false
         if model.hidden.menu.isEmpty {
@@ -1396,29 +1396,29 @@ private enum GearMenu {
             hidden.addItem(none)
         } else {
             for entry in model.hidden.menu {
-                hidden.addItem(item(entry.title) { model.unhide(entry) })
+                hidden.addItem(MenuAction.item(entry.title) { model.unhide(entry) })
             }
         }
         menu.addItem(withTitle: t.hiddenSpeakers, action: nil, keyEquivalent: "").submenu = hidden
-        menu.addItem(item(t.showVirtualDevices, on: model.showVirtualDevices) {
+        menu.addItem(MenuAction.item(t.showVirtualDevices, on: model.showVirtualDevices) {
             model.actions.setShowVirtualDevices(!model.showVirtualDevices)
         })
         menu.addItem(.separator())
         let appearance = NSMenu(title: t.appearance)
         appearance.autoenablesItems = false
         for choice in AppAppearance.allCases {
-            appearance.addItem(item(t.appearanceName(choice), on: model.appearance == choice) {
+            appearance.addItem(MenuAction.item(t.appearanceName(choice), on: model.appearance == choice) {
                 model.actions.setAppearance(choice)
             })
         }
         menu.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
-        menu.addItem(item(t.launchAtLogin, on: model.launchAtLogin) {
+        menu.addItem(MenuAction.item(t.launchAtLogin, on: model.launchAtLogin) {
             model.actions.setLaunchAtLogin(!model.launchAtLogin)
         })
-        menu.addItem(item(t.switchToSystemWhenSourceQuits, on: model.switchWhenSourceQuits) {
+        menu.addItem(MenuAction.item(t.switchToSystemWhenSourceQuits, on: model.switchWhenSourceQuits) {
             model.actions.setSwitchWhenSourceQuits(!model.switchWhenSourceQuits)
         })
-        menu.addItem(item(t.webRemoteMenu) { model.actions.openWebRemote() })
+        menu.addItem(MenuAction.item(t.webRemoteMenu) { model.actions.openWebRemote() })
         let airPlay2 = MenuAction { model.actions.setAirPlay2(!model.airPlay2) }
         for entry in MenuNoteItem.airPlay2Items(text: t, on: model.airPlay2, onAtLaunch: model.airPlay2AtLaunch,
                                                 action: #selector(MenuAction.perform(_:)), target: airPlay2) {
@@ -1426,26 +1426,9 @@ private enum GearMenu {
             menu.addItem(entry)
         }
         menu.addItem(.separator())
-        menu.addItem(item(t.guideTitle) { model.actions.openGuide() })
+        menu.addItem(MenuAction.item(t.guideTitle) { model.actions.openGuide() })
         return menu
     }
-
-    private static func item(_ title: String, on: Bool? = nil, _ run: @escaping () -> Void) -> NSMenuItem {
-        let action = MenuAction(run)
-        let item = NSMenuItem(title: title, action: #selector(MenuAction.perform(_:)), keyEquivalent: "")
-        item.target = action
-        item.representedObject = action   // the target is weak
-        if let on { item.state = on ? .on : .off }
-        return item
-    }
-}
-
-/// Runs a closure when its menu item is chosen.
-@MainActor
-private final class MenuAction: NSObject {
-    let run: () -> Void
-    init(_ run: @escaping () -> Void) { self.run = run }
-    @objc func perform(_ sender: Any?) { run() }
 }
 
 /// An empty view behind a button that a menu opens under.
@@ -1463,13 +1446,6 @@ private struct MenuAnchor: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NSView, context: Context) { box.view = view }
-}
-
-private extension NSMenu {
-    func popUp(under view: NSView) {
-        let below = view.isFlipped ? view.bounds.maxY + 4 : view.bounds.minY - 4
-        _ = popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
-    }
 }
 
 /// A main-window column that scrolls when the window is too short for it.
