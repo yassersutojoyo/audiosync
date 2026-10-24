@@ -4,8 +4,10 @@
 //! tray icon with its flyout, and the About dialog, laid out like the macOS
 //! app. The data comes through the `Backend` trait in `ui_model`, which
 //! `os::start` opens. On Windows that is the adapter over the WASAPI audio
-//! backend, which captures and plays for real. On other hosts, where the UI
-//! is worked on, the `mock-backend` feature gives a mock with example
+//! backend, which captures and plays for real; on Linux it is the adapter
+//! over PipeWire, which captures the whole system's sound for the network
+//! speakers. On other hosts, where the UI is worked on, the `mock-backend`
+//! feature gives a mock with example
 //! speakers: nothing plays and no audio device is opened.
 //!
 //! With `AUDIOSYNC_DEBUG=1` in the environment, the app writes what it does
@@ -28,6 +30,13 @@ mod adapter;
     expect(
         dead_code,
         reason = "without an audio backend the UI uses only its types"
+    )
+)]
+#[cfg_attr(
+    all(target_os = "linux", not(test)),
+    expect(
+        dead_code,
+        reason = "the PipeWire driver has no app capture, mix or local output yet"
     )
 )]
 mod audio;

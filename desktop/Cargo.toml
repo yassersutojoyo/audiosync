@@ -123,6 +123,13 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 # Decodes the app icon for the tray (MIT OR Apache-2.0), already a
 # dependency of tray-icon on Linux.
 png = "0.18.1"
+# PipeWire's client API (MIT): the whole system's sound from the default
+# output's monitor. libpipewire comes from the host at run time; the v1_0_0
+# feature makes PipeWire 1.0 the oldest the app runs on.
+pipewire = { version = "0.10.1", features = ["v1_0_0"] }
+# clock_gettime(CLOCK_MONOTONIC), the clock PipeWire's graph times count in
+# (MIT OR Apache-2.0, already in the build).
+libc = "0.2.191"
 
 [build-dependencies]
 embed-resource = "3.0.12"

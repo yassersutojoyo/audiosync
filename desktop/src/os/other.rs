@@ -1,26 +1,25 @@
 //! Hosts without an audio backend yet, where the UI is worked on. With the
 //! `mock-backend` feature the windows show example speakers and nothing
-//! plays; without it the app says it can't start. Without a backend there
-//! is no data folder: settings and pairings last until AudioSync quits.
-//! Linux has the single-instance lock and the owner-only pairing files
-//! (`super::xdg`), and a tray icon where a StatusNotifier host shows it
-//! (`status_notifier`); other hosts have none of these.
+//! plays; without it the app says it can't start. There is no
+//! single-instance lock, tray icon or pairing sealer here, and no data
+//! folder: settings and pairings last until AudioSync quits. Linux takes
+//! only the computer's name and the notice clock from here.
 
+#[cfg(not(target_os = "linux"))]
 use std::rc::Rc;
 
+#[cfg(not(target_os = "linux"))]
 use super::Started;
+#[cfg(not(target_os = "linux"))]
 use crate::StartError;
 #[cfg(not(target_os = "linux"))]
 use crate::audio::pairings::{Seal, Sealer};
+#[cfg(not(target_os = "linux"))]
 use crate::debug_log::DebugLog;
+#[cfg(not(target_os = "linux"))]
 use crate::view::App;
 
-#[cfg(all(os_backend, target_os = "linux"))]
-pub use super::xdg::data_base;
-#[cfg(target_os = "linux")]
-pub use super::xdg::{Instance, claim_instance, sealer};
-
-#[cfg(feature = "mock-backend")]
+#[cfg(all(feature = "mock-backend", not(target_os = "linux")))]
 pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     log.log(|| "audio: example speakers from the mock backend; nothing plays".to_owned());
     Ok(Started {
@@ -29,7 +28,7 @@ pub fn start(log: &DebugLog) -> Result<Started, StartError> {
     })
 }
 
-#[cfg(not(feature = "mock-backend"))]
+#[cfg(not(any(feature = "mock-backend", target_os = "linux")))]
 pub fn start(_log: &DebugLog) -> Result<Started, StartError> {
     Err(StartError::Audio(
         "this system has no audio backend yet (the mock-backend feature shows example speakers)"
@@ -38,7 +37,7 @@ pub fn start(_log: &DebugLog) -> Result<Started, StartError> {
 }
 
 /// `backend` as it is: there is nothing else to open.
-#[cfg(feature = "mock-backend")]
+#[cfg(all(feature = "mock-backend", not(target_os = "linux")))]
 pub fn start_with(_log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -> Started {
     Started {
         backend,
@@ -47,9 +46,11 @@ pub fn start_with(_log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) -
 }
 
 /// No playing track and no now-playing card.
+#[cfg(not(target_os = "linux"))]
 #[cfg_attr(not(feature = "mock-backend"), allow(dead_code))]
 pub struct Media;
 
+#[cfg(not(target_os = "linux"))]
 impl Media {
     pub fn attach(self, _app: &Rc<App>) {}
 }
@@ -69,9 +70,6 @@ impl Instance {
 
     pub fn listen(&self, _app: &Rc<App>, _log: &DebugLog) {}
 }
-
-#[cfg(target_os = "linux")]
-pub use super::status_notifier::create_tray;
 
 /// No tray icon: closing the main window quits.
 #[cfg(not(target_os = "linux"))]
