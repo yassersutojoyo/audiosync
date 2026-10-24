@@ -112,7 +112,13 @@ pub struct SenderConfig {
     pub ptp_ports: PtpPorts,
     /// The receiver's PTP ports it sends to, 319 and 320 (P158).
     pub ptp_receiver_ports: PtpPorts,
+    /// How long the connection of a PIN pairing that paired waits for the
+    /// host to start its speaker, 30 s (P153); a test picks a shorter one.
+    pub pairing_hold: Duration,
 }
+
+/// [`SenderConfig::pairing_hold`]'s default (P153).
+const PAIRING_HOLD: Duration = Duration::from_secs(30);
 
 /// The environment variable a host reads for [`SenderConfig::airplay2`].
 pub const AIRPLAY2_SWITCH_ENV: &str = "AUDIOSYNC_AIRPLAY2";
@@ -188,6 +194,7 @@ impl Default for SenderConfig {
             airplay2_device_id: None,
             ptp_ports: PtpPorts::default(),
             ptp_receiver_ports: PtpPorts::default(),
+            pairing_hold: PAIRING_HOLD,
         }
     }
 }
@@ -491,7 +498,8 @@ impl Sender {
             latency_frames.clone(),
         )
         .with_airplay2(config.airplay2, config.airplay2_device_id)
-        .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports);
+        .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
+        .with_pairing_hold(config.pairing_hold);
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
             .spawn(move || driver.run())?;

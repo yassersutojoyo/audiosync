@@ -279,6 +279,8 @@ pub(crate) struct Driver {
     /// The connections of AirPlay 2 PIN pairings that paired, waiting for
     /// the speaker's session (P153).
     held: BTreeMap<DeviceKey, ap2::Held>,
+    /// How long a held pairing connection waits to be claimed (P153).
+    held_for: Duration,
     stream_ids: HashMap<stream::SpeakerId, DeviceKey>,
     next_session: u64,
     /// Refusals for the one AirPlay 2 place so far (P169).
@@ -349,6 +351,7 @@ impl Driver {
             pairings: BTreeMap::new(),
             pairing_sessions: HashMap::new(),
             held: BTreeMap::new(),
+            held_for: super::PAIRING_HOLD,
             stream_ids: HashMap::new(),
             next_session: 0,
             ap2_refusals: 0,
@@ -384,6 +387,11 @@ impl Driver {
     ) -> Driver {
         self.ptp_ports = local;
         self.ptp_receiver_ports = receiver;
+        self
+    }
+
+    pub(crate) fn with_pairing_hold(mut self, hold: Duration) -> Driver {
+        self.held_for = hold;
         self
     }
 

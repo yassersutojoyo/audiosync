@@ -21,10 +21,6 @@ use crate::transport::PtpIo;
 /// How often a session waiting for the old PTP service's ports looks again.
 const PTP_PORTS_POLL: Duration = Duration::from_millis(10);
 
-/// How long a PIN pairing's connection waits for the host to start the
-/// speaker it paired (P153).
-pub(super) const HELD_FOR: Duration = Duration::from_secs(30);
-
 /// The connection of an AirPlay 2 PIN pairing that paired, framed and
 /// waiting for the speaker's session (P153).
 pub(super) struct Held {
@@ -316,7 +312,7 @@ impl Driver {
             attempt,
             session,
             io,
-            until: now + HELD_FOR,
+            until: now + self.held_for,
         };
         self.held.insert(key.clone(), held);
     }
