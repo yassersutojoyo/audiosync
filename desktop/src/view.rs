@@ -3994,8 +3994,11 @@ pub fn speaker_item(
             .is_none(),
         // Needs the strings: set by the caller (`App::refresh`).
         calibration_status: SharedString::default(),
-        calibration_privacy: state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
-            && state.calibration.phase == Phase::Failed(Failure::MicrophoneDenied),
+        calibration_privacy: offers_privacy(
+            state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
+                && state.calibration.phase == Phase::Failed(Failure::MicrophoneDenied),
+            crate::platform::can_open_settings,
+        ),
         // Needs the strings: set by the caller (`App::refresh`).
         calibration_left_out: SharedString::default(),
         auto_connect: speaker.auto_connect,
@@ -4237,6 +4240,13 @@ struct CalibrateAllCard {
     said: SharedString,
 }
 
+/// Whether a calibration the microphone refused (`denied`) offers Open
+/// Privacy Settings: only where something can open that page (`can_open`,
+/// [`crate::platform::can_open_settings`]), which Linux can't.
+fn offers_privacy(denied: bool, can_open: impl Fn(&str) -> bool) -> bool {
+    denied && can_open(SettingsPage::MicrophonePrivacy.uri())
+}
+
 fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCard {
     let all = &state.calibrate_all;
     let busy = state.calibration.busy;
@@ -4281,8 +4291,11 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
     CalibrateAllCard {
         running: matches!(all.phase, AllPhase::Running(_)),
         can_start: !busy && all.blocked.is_none(),
-        privacy: all.phase == AllPhase::Failed(Failure::MicrophoneDenied)
-            || sheet.is_some_and(|sheet| sheet.failure == Some(Failure::MicrophoneDenied)),
+        privacy: offers_privacy(
+            all.phase == AllPhase::Failed(Failure::MicrophoneDenied)
+                || sheet.is_some_and(|sheet| sheet.failure == Some(Failure::MicrophoneDenied)),
+            crate::platform::can_open_settings,
+        ),
         results_shown: sheet.is_some(),
         left_out: all
             .left_out
@@ -5707,6 +5720,15 @@ mod tests {
         assert!(speaker_item(&state, &speaker, false, true, None).calibration_privacy);
         let bt = state.speaker("local:bt").unwrap().clone();
         assert!(!speaker_item(&state, &bt, false, true, None).calibration_privacy);
+    }
+
+    #[test]
+    fn open_privacy_settings_shows_only_where_something_opens_that_page() {
+        let privacy = SettingsPage::MicrophonePrivacy.uri();
+        assert!(offers_privacy(true, |uri| uri == privacy));
+        // Linux has no program for the page (guide::linux_program): no button.
+        assert!(!offers_privacy(true, |uri| uri != privacy));
+        assert!(!offers_privacy(false, |_| true));
     }
 
     /// Opens the desk's and the headset's sync controls, types 400 into the
