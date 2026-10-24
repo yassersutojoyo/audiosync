@@ -87,7 +87,8 @@ carries an icon from Microsoft's Fluent UI System Icons (MIT, © Microsoft Corpo
 
 The icons inside the Windows app's controls come from Segoe Fluent Icons, the
 icon font Windows 11 ships; the app uses the installed font and doesn't bundle
-it. The app and tray icons in `desktop/res/` are generated from AudioSync's own
+it. On Linux and macOS those icons are AudioSync's own work, drawn as
+hand-written paths in `desktop/ui/widgets.slint`. The app and tray icons in `desktop/res/` are generated from AudioSync's own
 brand mark (`scripts/brand/windows-icons.sh`).
 
 The Windows app also contains AudioSync's own AirPlay sender (`airplay/`,

@@ -234,9 +234,9 @@ The Windows-only code sits behind `#[cfg(windows)]`, mostly in `src/os/`, so
 `cargo run --features mock-backend` opens the window (without the Windows
 version check or the tray icon, and with the app's own icon drawings in place
 of Segoe Fluent Icons, as on Linux), which is handy for UI work. There the
-window shows example speakers from a mock backend: nothing plays and no audio device is opened (a plain
-`cargo run` there says it can't start). Release builds never turn that
-feature on. A Windows build can be checked there but
+window shows example speakers from a mock backend: nothing plays and no audio
+device is opened (a plain `cargo run` there says it can't start). Release
+builds never turn that feature on. A Windows build can be checked there but
 not linked:
 
 ```bash
