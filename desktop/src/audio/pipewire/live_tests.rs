@@ -520,3 +520,32 @@ fn the_default_input_is_recorded() {
     assert!(peak(&samples) > 0.1, "peak {}", peak(&samples));
     run("pw-cli", &["destroy", &node_id("mic-feed").to_string()]);
 }
+
+#[test]
+#[ignore = "needs the CI job's PipeWire daemon, its PulseAudio server and sink as-a"]
+fn a_pulseaudio_app_is_found_by_the_process_it_names() {
+    set_default("as-a");
+    let path = tone("pulse", 440.0, 0.4, 30.0);
+    let app = detached(&format!("paplay {}", path.display()));
+    wait();
+    let ring = Ring::for_rate(SESSION_RATE).unwrap();
+    let (_control, processor) = equalizer();
+    let capture = stream::start_plan(
+        stream::Plan {
+            wiring: stream::Wiring::Links,
+            filter: Some(graph::Filter::Trees(vec![app])),
+            serial: None,
+        },
+        ring.writer().unwrap(),
+        processor,
+        Feeds::default(),
+    )
+    .unwrap();
+    wait();
+    ring.take_peak();
+    std::thread::sleep(Duration::from_millis(500));
+    let playing = ring.take_peak();
+    kill(app);
+    drop(capture);
+    assert!(playing > 0.1, "peak {playing} from paplay");
+}
