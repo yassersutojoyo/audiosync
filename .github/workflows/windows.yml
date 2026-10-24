@@ -124,7 +124,7 @@ jobs:
               done
             done
             pw-link -l
-            cargo test --locked -- --ignored --test-threads 1 audio::pipewire::stream::tests::
+            cargo test --locked -- --ignored --test-threads 1 --nocapture audio::pipewire::stream::tests::
           '
 
   build:
