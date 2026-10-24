@@ -379,8 +379,12 @@ fn outputs_play_at_their_delay_and_gain() {
     assert!(running, "an output ended: {report}");
     // Null sinks report no delay, and in CI the two played a quantum apart at
     // equal delays (likely driver and follower), so the delay is measured
-    // from that baseline.
-    assert!(equal.abs() <= 1024 + 48, "{report}");
+    // from that baseline. The absolute latency goes unchecked: pw-record's
+    // file carries no clock time to set against the time a frame was due.
+    assert!(
+        equal.abs() <= 48 || (equal.abs() - 1024).abs() <= 48,
+        "{report}"
+    );
     assert!((delayed - equal - 4800).abs() <= 48, "{report}");
     assert!((ratio_db + 6.02).abs() <= 0.2, "gain {ratio_db} dB");
 
@@ -496,8 +500,15 @@ fn one_app_is_captured_alone_and_followed() {
     let second_file = ring.take_peak();
     assert!(second_file > 0.1, "peak {second_file} on the second file");
     let start = Instant::now();
-    while capture.state() == CaptureState::Running && start.elapsed() < Duration::from_secs(4) {
-        std::thread::sleep(Duration::from_millis(100));
+    let shell_proc = PathBuf::from(format!("/proc/{shell}"));
+    while shell_proc.exists() && start.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!shell_proc.exists(), "the shell still runs");
+    // The capture looks for its apps once a second.
+    let quit = Instant::now();
+    while capture.state() == CaptureState::Running && quit.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(capture.state(), CaptureState::SourceQuit);
 }
@@ -577,8 +588,11 @@ fn the_default_input_is_recorded() {
         "{recorded} frames"
     );
     let first = microphone.first_frame_ns().expect("a first frame time");
+    // No frame is older than the stream by more than one 1024-frame cycle;
+    // the stream's start-up keeps the later bound wider.
+    let quantum_ns = 1024 * 1_000_000_000 / u64::from(microphone.id().rate);
     assert!(
-        first.abs_diff(opened_ns) < 500_000_000,
+        first + quantum_ns >= opened_ns && first < opened_ns + 500_000_000,
         "first frame {first} ns, opened at {opened_ns} ns"
     );
     let samples = microphone.take(0, recorded);

@@ -58,7 +58,7 @@ pub struct Target {
 struct Status {
     ended: AtomicBool,
     latency_ns: AtomicU64,
-    /// The last stream timing's delay, rate denominator, queued bytes and
+    /// The last stream timing's delay, rate denominator, frames filled and
     /// age in ns, for the live tests' failure messages.
     #[cfg(test)]
     timing: [std::sync::atomic::AtomicI64; 4],
@@ -174,22 +174,40 @@ fn enum_format(target: &Target) -> Result<Vec<u8>, BackendError> {
         .map_err(|_| BackendError::UnsupportedFormat)
 }
 
-/// The time until a frame written now is heard, from the stream's timing:
-/// its delay to the device, what its resampler holds and the buffers queued
-/// ahead of this one, less the time since the report was made.
-fn latency_ns(time: &pw::stream::Time, rate: u32, stride: usize, monotonic_ns: u64) -> u64 {
+/// The time until the first frame of the buffer being filled is heard, from
+/// the stream's timing; `frames` is that buffer's length.
+fn latency_ns(time: &pw::stream::Time, rate: u32, frames: usize, monotonic_ns: u64) -> u64 {
     let fraction = time.rate();
-    let delay_ns = if fraction.denom == 0 {
+    let since_ns = monotonic_ns.saturating_sub(u64::try_from(time.now()).unwrap_or(0));
+    latency_sum_ns(
+        time.delay(),
+        (fraction.num, fraction.denom),
+        time.buffered() + u64::try_from(frames).unwrap_or(0),
+        rate,
+        since_ns,
+    )
+}
+
+/// The device delay (`delay_ticks` of `tick` seconds each) plus the frames
+/// ahead of the buffer's end at `rate` (the resampler's and the buffer's
+/// own, since `pw_buffer.size` is never set and `queued` stays 0), less the
+/// time since the report.
+fn latency_sum_ns(
+    delay_ticks: i64,
+    tick: (u32, u32),
+    ahead_frames: u64,
+    rate: u32,
+    since_ns: u64,
+) -> u64 {
+    let (num, denom) = tick;
+    let delay_ns = if denom == 0 {
         0
     } else {
-        time.delay().max(0) as u128 * 1_000_000_000 * u128::from(fraction.num)
-            / u128::from(fraction.denom)
+        u128::try_from(delay_ticks.max(0)).unwrap_or(0) * 1_000_000_000 * u128::from(num)
+            / u128::from(denom)
     };
-    let queued_frames = time.queued() / u64::try_from(stride.max(1)).unwrap_or(1);
-    let buffered_ns =
-        u128::from(time.buffered() + queued_frames) * 1_000_000_000 / u128::from(rate.max(1));
-    let since = u128::from(monotonic_ns.saturating_sub(u64::try_from(time.now()).unwrap_or(0)));
-    u64::try_from((delay_ns + buffered_ns).saturating_sub(since)).unwrap_or(0)
+    let ahead_ns = u128::from(ahead_frames) * 1_000_000_000 / u128::from(rate.max(1));
+    u64::try_from((delay_ns + ahead_ns).saturating_sub(u128::from(since_ns))).unwrap_or(0)
 }
 
 /// What the render callback owns.
@@ -234,12 +252,12 @@ impl Render {
             for (slot, value) in self.status.timing.iter().zip([
                 time.delay(),
                 i64::from(time.rate().denom),
-                i64::try_from(time.queued()).unwrap_or(-1),
+                i64::try_from(frames).unwrap_or(-1),
                 i64::try_from(monotonic_ns).unwrap_or(0) - time.now(),
             ]) {
                 slot.store(value, Ordering::Relaxed);
             }
-            latency_ns(&time, self.rate, stride, monotonic_ns)
+            latency_ns(&time, self.rate, frames, monotonic_ns)
         });
         if let Some(latency) = latency
             && self
@@ -455,4 +473,33 @@ pub fn target(graph: &graph::Graph, id: &str) -> Result<Target, BackendError> {
         positions,
         bluetooth: node.bluetooth(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::latency_sum_ns;
+
+    #[test]
+    fn the_latency_adds_the_delay_and_the_frames_ahead_less_the_age() {
+        // 1024 ticks of 1/48000 s and a 1024-frame buffer, reported 1 ms ago.
+        assert_eq!(
+            latency_sum_ns(1024, (1, 48_000), 1024, 48_000, 1_000_000),
+            41_666_666
+        );
+        // The resampler's frames count like the buffer's.
+        assert_eq!(
+            latency_sum_ns(0, (1, 48_000), 480 + 480, 48_000, 0),
+            20_000_000
+        );
+    }
+
+    #[test]
+    fn the_latency_never_goes_below_zero_or_trusts_a_bad_report() {
+        assert_eq!(
+            latency_sum_ns(-500, (1, 48_000), 480, 48_000, 0),
+            10_000_000
+        );
+        assert_eq!(latency_sum_ns(1024, (1, 0), 480, 48_000, 0), 10_000_000);
+        assert_eq!(latency_sum_ns(0, (1, 48_000), 480, 48_000, 50_000_000), 0);
+    }
 }

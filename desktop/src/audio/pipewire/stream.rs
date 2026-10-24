@@ -14,7 +14,7 @@
 //! [`GapFill`] are then only ever used on one thread, without a lock; the
 //! callback never allocates, locks, blocks or logs.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -732,13 +732,45 @@ struct Linker {
     filter: Filter,
     graph: Graph,
     /// The links made, each kept by its proxy.
-    links: BTreeMap<graph::Link, pw::link::Link>,
+    links: BTreeMap<graph::Link, MadeLink>,
     /// The apps' top processes and their start times.
     roots: Vec<(u32, Option<u64>)>,
     status: Arc<Status>,
     /// Whether the graph changed since the last relink.
     dirty: bool,
     turns: u32,
+}
+
+/// A link the linker made, and whether the daemon put it in its error
+/// state.
+struct MadeLink {
+    _proxy: pw::link::Link,
+    _listener: pw::link::LinkListener,
+    failed: Rc<Cell<bool>>,
+}
+
+impl MadeLink {
+    fn follow(proxy: pw::link::Link, status: &Arc<Status>) -> Self {
+        let failed = Rc::new(Cell::new(false));
+        let listener = proxy
+            .add_listener_local()
+            .info({
+                let failed = Rc::clone(&failed);
+                let status = Arc::clone(status);
+                move |info| {
+                    if matches!(info.state(), pw::link::LinkState::Error(_)) {
+                        failed.set(true);
+                        status.missing_links.store(true, Ordering::Release);
+                    }
+                }
+            })
+            .register();
+        Self {
+            _proxy: proxy,
+            _listener: listener,
+            failed,
+        }
+    }
 }
 
 /// A linker and the registry listener that feeds it.
@@ -872,7 +904,9 @@ impl Linker {
             filter.takes(graph.owner_pid(id, processes), processes)
         });
         self.links.retain(|link, _| wanted.contains(link));
-        let mut missing = false;
+        // A link in its error state stays, counted as missing, rather than
+        // being made again on every change.
+        let mut missing = self.links.values().any(|made| made.failed.get());
         for link in wanted {
             if self.links.contains_key(&link) {
                 continue;
@@ -890,7 +924,8 @@ impl Linker {
                 .create_object::<pw::link::Link>("link-factory", &properties)
             {
                 Ok(proxy) => {
-                    self.links.insert(link, proxy);
+                    self.links
+                        .insert(link, MadeLink::follow(proxy, &self.status));
                 }
                 Err(_) => missing = true,
             }
