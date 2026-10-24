@@ -239,6 +239,11 @@ pub const AIRPLAY_EVENT_TRACE: i32 = 12;
 /// ([`AscAirPlayEvent::remote`]): the host sends it through its now-playing
 /// control to the app that control follows (S274).
 pub const AIRPLAY_EVENT_REMOTE: i32 = 13;
+/// The host set an Lf while a speaker sounds: the sender holds it
+/// ([`AscAirPlayEvent::latency_ms`] is the held L) until the stream has no
+/// speaker or the capture restarts, when a timeline event reports it
+/// (P201).
+pub const AIRPLAY_EVENT_LATENCY_HELD: i32 = 14;
 
 /// A remote event's control ([`AscAirPlayEvent::remote`]): play-pause.
 pub const AIRPLAY_REMOTE_PLAY_PAUSE: i32 = 1;
@@ -254,11 +259,6 @@ pub const AIRPLAY_PLAYBACK_UNKNOWN: i32 = 0;
 pub const AIRPLAY_PLAYBACK_PLAYING: i32 = 1;
 /// It is paused.
 pub const AIRPLAY_PLAYBACK_PAUSED: i32 = 2;
-/// The host set an Lf while a speaker sounds: the sender holds it
-/// ([`AscAirPlayEvent::latency_ms`] is the held L) until the stream has no
-/// speaker or the capture restarts, when a timeline event reports it
-/// (P201).
-pub const AIRPLAY_EVENT_LATENCY_HELD: i32 = 14;
 
 /// [`AscAirPlayEvent::receiver_latency_sources`] bits: `Audio-Latency` of a
 /// RECORD answer (P196).

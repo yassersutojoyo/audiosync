@@ -616,19 +616,23 @@ mod tests {
 
     #[test]
     fn an_all_apps_except_source_is_an_app_named_around_its_list() {
+        // The id the adapter gives a chosen mix (Chosen::key).
+        const MIX: &str = "mix:except:spotify.exe,chrome.exe";
         let mut state = with_sources();
         state.sources.push(crate::ui_model::Source {
-            id: "mix:Spotify, Chrome".to_owned(),
+            id: MIX.to_owned(),
             name: "Spotify, Chrome".to_owned(),
             kind: SourceKind::AppsExcept,
             channels: 0,
         });
-        state.source_id = "mix:Spotify, Chrome".to_owned();
+        state.source_id = MIX.to_owned();
         let snapshot = snapshot(&state, not_virtual, None, "Studio PC", &Text);
         let mix = snapshot.sources.last().unwrap();
         assert_eq!(mix.kind, RemoteSourceKind::App);
         assert_eq!(mix.name, "All apps except Spotify, Chrome");
-        assert_eq!(snapshot.source_id.as_deref(), Some("mix:Spotify, Chrome"));
+        assert_eq!(snapshot.source_id.as_deref(), Some(MIX));
+        let pick = Command::Source { id: MIX.to_owned() };
+        assert_eq!(actions(&pick, &state, not_virtual), Ok(Vec::new()));
     }
 
     #[test]
