@@ -1531,9 +1531,14 @@ impl AscAirPlay {
                     paired &= !every_time;
                     let homekit = self.identity.get(&id).is_some() && !every_time;
                     let session = self.paired_for_session.contains(&id);
+                    let every_time_flag = if every_time {
+                        AIRPLAY_FLAG_CODE_EVERY_TIME
+                    } else {
+                        0
+                    };
                     (
                         airplay2_availability(info, homekit || session),
-                        flags(info) | AIRPLAY_FLAG_OVER_AIRPLAY2,
+                        flags(info) | AIRPLAY_FLAG_OVER_AIRPLAY2 | every_time_flag,
                     )
                 } else {
                     (availability(info, paired), flags(info))

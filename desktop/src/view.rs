@@ -4002,6 +4002,7 @@ pub fn speaker_item(
         availability: availability(speaker.availability),
         paired: speaker.paired,
         holds_password: speaker.holds_password,
+        code_every_time: speaker.code_every_time,
         device_volume,
         device_volume_percent,
         cast: speaker.cast.is_some(),

@@ -2489,18 +2489,44 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Takes in the AirPlay speakers as last listed: remembers their names,
-    /// and switches on the auto-connect speakers that appeared.
+    /// and switches on the auto-connect speakers that appeared. One that
+    /// asks for a code every time goes off instead, also when it was on
+    /// from the last run: only the user turns it on.
     fn airplay_listed(&mut self) {
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
+        let mut asking = Vec::new();
         for speaker in self.audio.airplay_speakers() {
             if !self.airplay_listed.contains(&speaker.id) {
-                appeared.push(speaker.id.clone());
+                if speaker.code_every_time {
+                    asking.push((speaker.id.clone(), speaker.enabled));
+                } else {
+                    appeared.push(speaker.id.clone());
+                }
             }
             self.airplay_names.insert(speaker.id.clone(), speaker.name);
             listed.insert(speaker.id);
         }
         self.airplay_listed = listed;
+        let mut switched_off = false;
+        for (id, enabled) in asking {
+            if !enabled && !self.auto_connect.contains(&airplay_key(&id)) {
+                continue;
+            }
+            self.log.log(|| {
+                format!(
+                    "auto-connect: {} stays off, it asks for a code every time",
+                    self.airplay_name(&id)
+                )
+            });
+            if enabled {
+                let _ = self.audio.set_airplay_enabled(&id, false);
+                switched_off = true;
+            }
+        }
+        if switched_off {
+            self.stop_if_idle();
+        }
         let hits: Vec<String> = appeared
             .into_iter()
             .filter(|id| {

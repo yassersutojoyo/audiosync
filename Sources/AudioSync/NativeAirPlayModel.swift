@@ -470,13 +470,27 @@ struct NativeAirPlayModel {
     /// The rows (app IDs) missing from `known` whose receiver is listed as
     /// able to play: the ones auto-connect may switch on. None for rows a
     /// stop rebuilt (`stopped`), as auto-connect would restart streaming
-    /// from inside the stop.
+    /// from inside the stop, and never one that asks for a code every time.
     func joinable(_ rows: [String], after known: Set<String>, stopped: Bool) -> [String] {
         guard !stopped else { return [] }
         return rows.filter { id in
             guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
-                  !refusedOff.contains(receiver) else { return false }
+                  !refusedOff.contains(receiver), !asksEveryTime(receiver) else { return false }
             return receivers[receiver]?.availability == .available
+        }
+    }
+
+    /// Whether the listed receiver asks for a code every time it connects.
+    func asksEveryTime(_ receiver: String) -> Bool {
+        receivers[receiver]?.codeEveryTime == true
+    }
+
+    /// The rows (app IDs) missing from `known` whose receiver asks for a
+    /// code every time: they go off as they appear, also when they were on
+    /// from the last run, so no code request comes by itself.
+    func appearedAskingEveryTime(_ rows: [String], after known: Set<String>) -> [String] {
+        rows.filter { id in
+            !known.contains(id) && NativeAirPlayID.receiver(id).map(asksEveryTime) == true
         }
     }
 

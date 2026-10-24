@@ -332,15 +332,19 @@ extension AppDelegate {
     /// speakers, local delays and auto-connect follow.
     func refreshNativeRows() {
         guard let native = nativeAirPlay else { return }
+        let wasOn = enabledAirPlay
         let joinable = adoptNativeRows(native.model, stopped: false)
         retimeLocalOutputs()   // also when only a speaker's playing state changed
         syncNativeSpeakers()
         autoConnect(joinable.map { SpeakerKey.make(id: $0, airplay: true) })
+        // One that asks for a code every time went off, maybe the last one on.
+        if !wasOn.isSubset(of: enabledAirPlay) { stopIfIdle() }
         pushModel()
     }
 
     /// Sets the AirPlay rows, names and access from `model`; returns the
     /// rows that appeared and can play, for auto-connect (none if `stopped`).
+    /// One that appears asking for a code every time goes off.
     private func adoptNativeRows(_ model: NativeAirPlayModel, stopped: Bool) -> [String] {
         let rows = model.rows(enabled: enabledAirPlay)
         for id in rows {
@@ -349,6 +353,10 @@ extension AppDelegate {
             airplayAccess[id] = model.access(receiver) ?? .open
         }
         let joinable = model.joinable(rows, after: Set(airplayOrder), stopped: stopped)
+        for id in model.appearedAskingEveryTime(rows, after: Set(airplayOrder)) where enabledAirPlay.contains(id) {
+            enabledAirPlay.remove(id)
+            DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) stays off, it asks for a code every time")
+        }
         airplayOrder = rows
         updatePtpPortNotice { $0.listed(rows) }
         airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
