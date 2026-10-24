@@ -78,7 +78,8 @@ pub struct Ap2Config {
     /// M1 to M6 and a pair-verify (P153), and ends there without a session.
     pub pin_pairing: bool,
     /// The host keeps a debug log: the session reports [`Ap2Event::Trace`]
-    /// lines and asks the receiver its volume once after RECORD.
+    /// lines and asks the receiver its volume after RECORD and with each
+    /// feedback until a read goes unanswered.
     pub trace: bool,
 }
 
@@ -323,6 +324,10 @@ pub struct Ap2Session {
     volume_read_sent: bool,
     /// The CSeq of a volume read that timed out, whose answer is ignored.
     late_volume_read: Option<u32>,
+    /// A traced read went unanswered, so no more reads this session.
+    volume_reads_stopped: bool,
+    /// The last volume trace line, so a steady level logs once.
+    last_volume_trace: Option<String>,
 }
 
 type Output = Ap2Output;
@@ -407,6 +412,8 @@ impl Ap2Session {
             volume_read_wanted: false,
             volume_read_sent: false,
             late_volume_read: None,
+            volume_reads_stopped: false,
+            last_volume_trace: None,
         };
         session.flush_point = (session.ids.first_seq, session.ids.first_rtptime);
         if drawn.is_err() {
@@ -764,6 +771,19 @@ impl Ap2Session {
             && now >= due
         {
             self.feedback_due = Some(now + FEEDBACK_INTERVAL);
+            // The debug log reads the receiver's level with each feedback, to
+            // see whether its own remote moves the stream volume.
+            if self.config.trace
+                && self.recorded
+                && self.state == Ap2State::Ready
+                && !self.volume_reads_stopped
+                && self
+                    .in_flight
+                    .as_ref()
+                    .is_none_or(|f| f.kind != Kind::VolumeRead)
+            {
+                self.volume_read_wanted = true;
+            }
             let waiting = self
                 .in_flight
                 .as_ref()
@@ -782,6 +802,8 @@ impl Ap2Session {
         {
             // The debug probe never ends a session; a late answer is dropped.
             self.late_volume_read = Some(in_flight.cseq);
+            self.volume_reads_stopped = true;
+            self.volume_read_wanted = false;
             self.in_flight = None;
             self.event(Ap2Event::Trace(
                 "GET_PARAMETER volume: no answer".to_owned(),
@@ -1356,7 +1378,10 @@ impl Ap2Session {
                     "GET_PARAMETER volume: status {code}, {level}, body {}",
                     bodies::trace_text(&response.body)
                 );
-                self.event(Ap2Event::Trace(line));
+                if self.last_volume_trace.as_ref() != Some(&line) {
+                    self.last_volume_trace = Some(line.clone());
+                    self.event(Ap2Event::Trace(line));
+                }
             }
             Kind::Feedback => {
                 if success {
