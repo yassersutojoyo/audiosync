@@ -315,6 +315,10 @@ pub struct Verdict {
     pub busy_hint: bool,
     /// An Apple TV that needs the legacy PIN pairing (P46).
     pub legacy_pairing: bool,
+    /// Flags bit 3: an AirPlay 2 receiver that asks for a code every time,
+    /// so no credentials are kept for it and it never reads as paired
+    /// (P61, P182).
+    pub code_every_time: bool,
     /// Whether AirPlay 1 can drive the device, and if not, why.
     pub airplay1: Result<(), UnsupportedReason>,
     /// Any of features bits 38, 43, 46 or 48.
@@ -392,6 +396,7 @@ impl Device {
                 needs_pairing: false,
                 busy_hint: false,
                 legacy_pairing: false,
+                code_every_time: false,
                 airplay1: Ok(()),
                 airplay2: false,
                 buffered_audio: false,
@@ -462,6 +467,7 @@ impl Device {
             needs_pairing,
             busy_hint: flags.has(StatusFlags::SESSION_ACTIVE),
             legacy_pairing,
+            code_every_time: flags.has(StatusFlags::PIN_REQUIRED),
             airplay1: self.airplay1_capability(legacy_pairing),
             airplay2: [
                 Features::COREUTILS_PAIRING,

@@ -294,6 +294,10 @@ pub struct Ap2Session {
     events: Option<Events>,
     events_attempts: u32,
     events_retry_at: Option<Instant>,
+    /// When a PIN pairing's M1 may go out after a back-off answer (P150).
+    pin_not_before: Option<Instant>,
+    /// M1 is ready and waits for `pin_not_before`.
+    pin_held: bool,
     /// The volume is answered and the stream SETUP waits for the event
     /// connection (P70).
     stream_setup_waiting: bool,
@@ -379,6 +383,8 @@ impl Ap2Session {
             events: None,
             events_attempts: 0,
             events_retry_at: None,
+            pin_not_before: None,
+            pin_held: false,
             stream_setup_waiting: false,
             stream: None,
             stream_torn_down: false,
@@ -515,6 +521,9 @@ impl Ap2Session {
         times.extend(self.teardown_deadline);
         times.extend(self.last_timing_request.map(|at| at + TIMING_SILENCE));
         times.extend(self.events_retry_at);
+        if self.pin_held {
+            times.extend(self.pin_not_before);
+        }
         if self.state != Ap2State::TearingDown {
             times.extend(self.feedback_due);
         }
@@ -531,6 +540,11 @@ impl Ap2Session {
             return;
         };
         if setup.submit_pin(pin).is_some() {
+            if self.pin_not_before.is_some_and(|at| now < at) {
+                self.pin_held = true;
+                return;
+            }
+            self.pin_not_before = None;
             self.send(Kind::PairSetup, now, false);
         }
     }
@@ -713,6 +727,11 @@ impl Ap2Session {
         }
         if self.teardown_deadline.is_some_and(|at| now >= at) {
             return self.finish();
+        }
+        if self.pin_held && self.pin_not_before.is_none_or(|at| now >= at) {
+            self.pin_held = false;
+            self.pin_not_before = None;
+            return self.send(Kind::PairSetup, now, false);
         }
         if self
             .last_timing_request
@@ -1452,6 +1471,10 @@ impl Ap2Session {
             SetupStep::Failed(failure) => self.fail_with(failure.error),
             SetupStep::PinRequested => self.event(Ap2Event::PinRequested),
             SetupStep::WrongPin => self.event(Ap2Event::WrongPin),
+            SetupStep::BackOff(wait) => {
+                self.pin_not_before = Some(now + wait);
+                self.event(Ap2Event::WrongPin);
+            }
             SetupStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,
                 Some(Method::Post),

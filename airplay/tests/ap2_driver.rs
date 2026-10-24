@@ -11,6 +11,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
+use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::pairing::PairingEvent;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
@@ -737,7 +738,7 @@ fn a_forgotten_airplay2_pairing_pairs_again_and_never_verifies_with_the_old_cred
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
     fake.info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x8))]));
+        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x244))]));
     let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
@@ -807,14 +808,15 @@ fn the_host_pairs_an_airplay2_speaker_with_a_pin() {
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
     fake.info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x8))]));
+        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x4c))]));
     let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
     let device = airplay2_only(&server, 50);
     let key = device.key.clone();
 
-    // An every-time receiver: a later connection's pair-verify fails.
+    // An every-time receiver (flags bit 3): a later connection's
+    // pair-verify fails.
     server.fake().hap.pairing_per_connection = true;
 
     // A wrong PIN: the receiver asks for it again on the same connection.
@@ -836,22 +838,26 @@ fn the_host_pairs_an_airplay2_speaker_with_a_pin() {
     );
     sender.submit_pin(&key, "4821").expect("digits");
     let paired = wait_pairing(&mut events, &sender, &key, 1, |event| {
-        matches!(event, PairingEvent::HomeKitPaired(_))
+        matches!(
+            event,
+            PairingEvent::PairedForSession | PairingEvent::HomeKitPaired(_)
+        )
     });
-    let Some(PairingEvent::HomeKitPaired(credentials)) = paired else {
-        panic!("{paired:?} {:?}", server.fake().keys());
-    };
+    assert_eq!(
+        paired,
+        Some(PairingEvent::PairedForSession),
+        "nothing to store: {:?}",
+        server.fake().keys()
+    );
     let keys = server.fake().keys();
     let starts = keys.iter().filter(|k| *k == "POST /pair-pin-start").count();
     assert_eq!(starts, 1, "{keys:?}");
     assert!(!keys.contains(&"SETUP session".to_owned()), "{keys:?}");
 
-    // The host adds the speaker with them: its session goes on over the
-    // pairing connection, with no pair-verify the receiver would refuse.
+    // The host adds the speaker: its session goes on over the pairing
+    // connection, with no pair-verify the receiver would refuse.
     server.fake().requests.clear();
-    let mut paired_options = options();
-    paired_options.homekit_credentials = Some(credentials);
-    sender.add_speaker(device.clone(), paired_options);
+    sender.add_speaker(device.clone(), options());
     assert!(
         events
             .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
@@ -892,7 +898,7 @@ fn a_pairing_connection_the_host_lets_go_closes_and_the_next_session_verifies() 
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
     fake.info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x8))]));
+        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x244))]));
     let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
@@ -927,5 +933,102 @@ fn a_pairing_connection_the_host_lets_go_closes_and_the_next_session_verifies() 
     assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
     assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
     assert_eq!(server.fake().connections, 2);
+    sender.shutdown();
+}
+
+/// Pairs with a receiver that asks for a code the first time only and
+/// returns the credentials, with the pairing connection let go.
+fn pair_first_time(
+    server: &Ap2Server,
+    sender: &Sender,
+    events: &mut Events,
+    device: &Device,
+) -> HomeKitCredentials {
+    let key = device.key.clone();
+    sender.start_pairing(device.clone());
+    let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+    assert!(wait_pairing(events, sender, &key, 1, pin_requested).is_some());
+    sender.submit_pin(&key, "4821").expect("digits");
+    let paired = wait_pairing(events, sender, &key, 1, |event| {
+        matches!(event, PairingEvent::HomeKitPaired(_))
+    });
+    let Some(PairingEvent::HomeKitPaired(credentials)) = paired else {
+        panic!("{paired:?} {:?}", server.fake().keys());
+    };
+    sender.cancel_pairing(&key);
+    credentials
+}
+
+// covers: P154
+#[test]
+fn a_refused_verify_ends_the_attempt_once() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body =
+        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x244))]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 53);
+    let key = device.key.clone();
+    let credentials = pair_first_time(&server, &sender, &mut events, &device);
+
+    // The receiver turns M2 down every time it is asked.
+    server
+        .fake()
+        .hap
+        .answers
+        .push((("/pair-verify", 1), Answer::Error(2)));
+    let connections = server.fake().connections;
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    sender.add_speaker(device, paired_options);
+    let refused = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
+    });
+    assert!(refused.is_some(), "{:?}", events.of(&key));
+    std::thread::sleep(Duration::from_secs(3));
+    events.drain(&sender);
+    assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
+    assert!(events.of(&key).contains(&SpeakerEvent::HomeKitRejected));
+    assert_eq!(
+        server.fake().connections,
+        connections + 1,
+        "no second connection"
+    );
+    sender.shutdown();
+}
+
+// covers: P61, P182
+#[test]
+fn stored_credentials_go_once_a_receiver_asks_every_time() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body =
+        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x244))]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 54);
+    let key = device.key.clone();
+    let credentials = pair_first_time(&server, &sender, &mut events, &device);
+
+    // The user sets the TV to ask for a code every time.
+    server.fake().info_body =
+        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x4c))]));
+    server.fake().requests.clear();
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    sender.add_speaker(device, paired_options);
+    let refused = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
+    });
+    assert!(refused.is_some(), "{:?}", events.of(&key));
+    assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
+    assert!(events.of(&key).contains(&SpeakerEvent::HomeKitRejected));
+    let keys = server.fake().keys();
+    assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
     sender.shutdown();
 }

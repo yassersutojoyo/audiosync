@@ -13,7 +13,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Instant;
 
 use crate::error::{ErrorKind, SessionError};
-use crate::homekit::HomeKitCredentials;
+use crate::homekit::{self, HomeKitCredentials};
 use crate::ids::{Entropy, SessionIds};
 use crate::pairing::{self, Output, PairingEvent, PairingState, PinError};
 use crate::session::Connection;
@@ -25,6 +25,9 @@ pub struct PinPairing {
     session: Ap2Session,
     state: PairingState,
     credentials: Option<HomeKitCredentials>,
+    txt_flags: Option<u64>,
+    /// Flags bit 3 in the `/info` answer: nothing to store (P182).
+    every_time: bool,
     verified: bool,
     cancelled: bool,
     outputs: VecDeque<Output>,
@@ -52,10 +55,13 @@ impl PinPairing {
         config.pin_pairing = true;
         config.credentials = None;
         config.ptp = None;
+        let txt_flags = config.txt_flags;
         let mut pairing = PinPairing {
             session: Ap2Session::new(config, ids, entropy, now),
             state: PairingState::Connecting,
             credentials: None,
+            txt_flags,
+            every_time: false,
             verified: false,
             cancelled: false,
             outputs: VecDeque::new(),
@@ -172,9 +178,17 @@ impl PinPairing {
                 self.event(PairingEvent::PinRequested);
             }
             Ap2Event::Credentials(credentials) => self.credentials = Some(credentials),
+            Ap2Event::Info(info) => {
+                let flags = homekit::status_flags(info.status_flags, self.txt_flags);
+                self.every_time = homekit::asks_code_every_time(flags);
+            }
             Ap2Event::Verified => {
                 self.state = PairingState::Closed;
                 let event = match self.credentials.clone() {
+                    Some(_) if self.every_time => {
+                        self.verified = true;
+                        PairingEvent::PairedForSession
+                    }
                     Some(credentials) => {
                         self.verified = true;
                         PairingEvent::HomeKitPaired(credentials)
@@ -210,8 +224,7 @@ impl PinPairing {
                 };
                 self.event(event);
             }
-            Ap2Event::Info(_)
-            | Ap2Event::Server(_)
+            Ap2Event::Server(_)
             | Ap2Event::TimingChosen(_)
             | Ap2Event::Ready(_)
             | Ap2Event::Warning(_) => {}
