@@ -1,8 +1,9 @@
 //! Hosts without an audio backend yet, where the UI is worked on. With the
 //! `mock-backend` feature the windows show example speakers and nothing
 //! plays; without it the app says it can't start. There is no
-//! single-instance lock, tray icon or pairing sealer here, and no data
-//! folder: settings and pairings last until AudioSync quits.
+//! single-instance lock or pairing sealer here, and no data folder:
+//! settings and pairings last until AudioSync quits. Linux has a tray icon
+//! where a StatusNotifier host shows it (`status_notifier`).
 
 use std::rc::Rc;
 
@@ -59,9 +60,14 @@ impl Instance {
     pub fn listen(&self, _app: &Rc<App>, _log: &DebugLog) {}
 }
 
+#[cfg(target_os = "linux")]
+pub use super::status_notifier::{Tray, create_tray};
+
 /// No tray icon: closing the main window quits.
+#[cfg(not(target_os = "linux"))]
 pub enum Tray {}
 
+#[cfg(not(target_os = "linux"))]
 pub fn create_tray(_app: &Rc<App>, _log: &DebugLog) -> Option<Tray> {
     None
 }

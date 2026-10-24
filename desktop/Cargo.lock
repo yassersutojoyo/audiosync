@@ -527,6 +527,7 @@ dependencies = [
  "audiosync-core",
  "audiosync-remote",
  "embed-resource",
+ "png",
  "qrcode",
  "serde",
  "serde_json",
@@ -536,6 +537,7 @@ dependencies = [
  "windows",
  "windows-core",
  "windows-future",
+ "zbus",
  "zeroize",
 ]
 
@@ -2308,7 +2310,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2ea15059d70bc31b1a8b1eb4c34f2c5df04cb7e53f36179b43c0261231d646"
 dependencies = [
  "accesskit",
- "async-channel",
  "bitflags 2.13.2",
  "cfg-if",
  "chrono",
@@ -2321,7 +2322,6 @@ dependencies = [
  "icu_normalizer",
  "image",
  "js-sys",
- "ksni",
  "lyon_algorithms",
  "lyon_extra",
  "lyon_geom",
@@ -5377,6 +5377,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f5cc5858ecf9574ddd8f0032a2ff7ffd6f7724d2b81e48b9374984b3fd6ddc9"
 dependencies = [
  "crossbeam-channel",
+ "ksni",
  "muda 0.21.2",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",

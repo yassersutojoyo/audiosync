@@ -37,7 +37,17 @@ qrcode = { version = "0.14.1", default-features = false }
 # unstable-winit-030: the winit window behind a Slint window, to focus it and
 # to close the tray flyout when it loses focus. Pinned exactly: the brand accent
 # goes through Slint's private_unstable_api (src/view.rs), which any release may change.
-slint = { version = "=1.18.1", features = ["unstable-winit-030"] }
+# Slint's defaults without system-tray: the app's tray is tray-icon, so one
+# tray stack ships.
+slint = { version = "=1.18.1", default-features = false, features = [
+    "std",
+    "backend-default",
+    "renderer-femtovg",
+    "renderer-software",
+    "accessibility",
+    "compat-1-2",
+    "unstable-winit-030",
+] }
 # The settings file in the app's data folder, as JSON (both MIT OR
 # Apache-2.0); Slint's crates already bring serde into the app.
 serde = { version = "1.0.229", features = ["derive"] }
@@ -99,6 +109,16 @@ windows-core = "0.62"
 windows-future = "0.3.2"
 # The notification-area icon and its menu (MIT OR Apache-2.0).
 tray-icon = { version = "0.26.1", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The tray icon as a StatusNotifier item over D-Bus (ksni), with no GTK.
+tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] }
+# Asks the session bus whether a StatusNotifier host runs (MIT); version 5,
+# the one ksni brings, so the build has one zbus.
+zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+# Decodes the app icon for the tray (MIT OR Apache-2.0), already a
+# dependency of tray-icon on Linux.
+png = "0.18.1"
 
 [build-dependencies]
 embed-resource = "3.0.12"

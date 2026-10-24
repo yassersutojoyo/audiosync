@@ -65,6 +65,11 @@ use debug_log::DebugLog;
 
 slint::include_modules!();
 
+/// The app's id on Linux: the Wayland app id and X11 window class, and the
+/// name of its .desktop and AppStream files.
+#[cfg(target_os = "linux")]
+const APP_ID: &str = "io.github.yassersutojoyo.audiosync";
+
 /// How long the app waits, as it stops, for the debug log to reach its file.
 const LOG_FLUSH_AT_EXIT: Duration = Duration::from_secs(1);
 
@@ -185,6 +190,11 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     };
     #[cfg(not(feature = "mock-backend"))]
     let os::Started { backend, media } = os::start(log)?;
+    // Before the first window: Wayland matches windows to the .desktop file by it.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = slint::set_xdg_app_id(APP_ID) {
+        log.log(|| format!("app id: not set ({error})"));
+    }
     let app = view::App::new(backend, log.clone())?;
     #[cfg(feature = "mock-backend")]
     if zones_preview {
