@@ -530,6 +530,23 @@ impl Ap2Rig {
         rig
     }
 
+    /// Wires `session`, already connected to `fake`, as it stands at `now`.
+    pub fn with_session(session: Ap2Session, fake: FakeAp2, now: Instant) -> Ap2Rig {
+        Ap2Rig {
+            session,
+            fake,
+            now,
+            events: Vec::new(),
+            connects: Vec::new(),
+            event_connects: Vec::new(),
+            refuse_events: 0,
+            event_answers: Vec::new(),
+            closes: 0,
+            trace: Vec::new(),
+            close_on: None,
+        }
+    }
+
     pub fn pump(&mut self) {
         while let Some(output) = self.session.poll_output() {
             match output {

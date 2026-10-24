@@ -226,6 +226,37 @@ fn udp_bind_address(local: SocketAddr) -> SocketAddr {
     }
 }
 
+/// A session's control and timing sockets, bound next to its RTSP
+/// connection.
+struct Udp {
+    control: UdpSocket,
+    timing: UdpSocket,
+    connection: Connection,
+}
+
+impl Udp {
+    fn bind(tcp: &TcpStream) -> io::Result<Udp> {
+        let local = tcp.local_addr()?;
+        let bind_at = udp_bind_address(local);
+        let control = UdpSocket::bind(bind_at)?;
+        let timing = UdpSocket::bind(bind_at)?;
+        for socket in [&control, &timing] {
+            socket.set_read_timeout(Some(UDP_BACKSTOP))?;
+            socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
+        }
+        let connection = Connection {
+            local: local.ip(),
+            control_port: control.local_addr()?.port(),
+            timing_port: timing.local_addr()?.port(),
+        };
+        Ok(Udp {
+            control,
+            timing,
+            connection,
+        })
+    }
+}
+
 /// The sockets and threads of one session.
 #[derive(Debug)]
 pub(crate) struct SessionIo {
@@ -257,62 +288,15 @@ impl SessionIo {
         let _ = tcp.set_nodelay(true);
         tcp.set_write_timeout(Some(RTSP_WRITE_TIMEOUT))?;
         tcp.set_read_timeout(Some(POLL_INTERVAL))?;
-        let local = tcp.local_addr()?;
-        let receiver = tcp.peer_addr()?.ip().to_canonical();
-        let bind_at = udp_bind_address(local);
-        let control = UdpSocket::bind(bind_at)?;
-        let timing = UdpSocket::bind(bind_at)?;
-        for socket in [&control, &timing] {
-            socket.set_read_timeout(Some(UDP_BACKSTOP))?;
-            socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
-        }
-        let connection = Connection {
-            local: local.ip(),
-            control_port: control.local_addr()?.port(),
-            timing_port: timing.local_addr()?.port(),
-        };
+        let udp = Udp::bind(&tcp)?;
         let reader = tcp.try_clone()?;
         let writer_stream = tcp.try_clone()?;
         let (writer, writes) = mpsc::channel();
-        let mut io = SessionIo {
-            tcp,
-            writer: Some(writer),
-            control: Arc::new(control),
-            timing: Arc::new(timing),
-            stop: Arc::new(AtomicBool::new(false)),
-            reset: Arc::new(AtomicBool::new(false)),
-            threads: Vec::new(),
-        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let (mut io, connection) = SessionIo::with(tcp, writer, stop, Vec::new(), udp);
         // On a failed spawn, dropping `io` stops the threads already
         // running.
-        let thread = spawn(
-            "airplay-timing",
-            timing_loop(
-                session,
-                io.timing.clone(),
-                receiver,
-                clock,
-                counters.clone(),
-                io.stop.clone(),
-                notify.clone(),
-            ),
-            report_closed(session, attempt, notify.clone()),
-        )?;
-        io.threads.push(thread);
-        let thread = spawn(
-            "airplay-control",
-            control_loop(
-                session,
-                io.control.clone(),
-                receiver,
-                counters,
-                io.stop.clone(),
-                io.reset.clone(),
-                notify.clone(),
-            ),
-            report_closed(session, attempt, notify.clone()),
-        )?;
-        io.threads.push(thread);
+        io.spawn_udp(session, attempt, clock, counters, notify.clone())?;
         let thread = spawn(
             "airplay-rtsp-read",
             read_loop(session, attempt, reader, io.stop.clone(), notify.clone()),
@@ -333,6 +317,97 @@ impl SessionIo {
         )?;
         io.threads.push(thread);
         Ok((io, connection))
+    }
+
+    /// Takes over the connection of a PIN pairing that paired (P153): its
+    /// reader and writer go on, still reporting under `session` and
+    /// `attempt`, and the session's UDP sockets open next to it. On failure
+    /// the connection is closed and its threads come back to be joined.
+    pub(crate) fn adopt(
+        mut rtsp: RtspIo,
+        session: SessionKey,
+        attempt: u32,
+        clock: SenderClock,
+        counters: Arc<SpeakerCounters>,
+        notify: impl Notify,
+    ) -> Result<(SessionIo, Connection), Vec<JoinHandle<()>>> {
+        let udp = match rtsp.tcp.as_ref().map(Udp::bind) {
+            Some(Ok(udp)) => udp,
+            _ => return Err(rtsp.close()),
+        };
+        let Some(writer) = rtsp.writer.take() else {
+            return Err(rtsp.close());
+        };
+        let Some(tcp) = rtsp.tcp.take() else {
+            return Err(Vec::new());
+        };
+        let threads = std::mem::take(&mut rtsp.threads);
+        let (mut io, connection) = SessionIo::with(tcp, writer, rtsp.stop.clone(), threads, udp);
+        match io.spawn_udp(session, attempt, clock, counters, notify) {
+            Ok(()) => Ok((io, connection)),
+            Err(_) => Err(io.close()),
+        }
+    }
+
+    fn with(
+        tcp: TcpStream,
+        writer: mpsc::Sender<Vec<u8>>,
+        stop: Arc<AtomicBool>,
+        threads: Vec<JoinHandle<()>>,
+        udp: Udp,
+    ) -> (SessionIo, Connection) {
+        let io = SessionIo {
+            tcp,
+            writer: Some(writer),
+            control: Arc::new(udp.control),
+            timing: Arc::new(udp.timing),
+            stop,
+            reset: Arc::new(AtomicBool::new(false)),
+            threads,
+        };
+        (io, udp.connection)
+    }
+
+    /// Starts the threads of the timing and control sockets, which answer
+    /// the receiver at the far end of `self.tcp` only.
+    fn spawn_udp(
+        &mut self,
+        session: SessionKey,
+        attempt: u32,
+        clock: SenderClock,
+        counters: Arc<SpeakerCounters>,
+        notify: impl Notify,
+    ) -> io::Result<()> {
+        let receiver = self.tcp.peer_addr()?.ip().to_canonical();
+        let thread = spawn(
+            "airplay-timing",
+            timing_loop(
+                session,
+                self.timing.clone(),
+                receiver,
+                clock,
+                counters.clone(),
+                self.stop.clone(),
+                notify.clone(),
+            ),
+            report_closed(session, attempt, notify.clone()),
+        )?;
+        self.threads.push(thread);
+        let thread = spawn(
+            "airplay-control",
+            control_loop(
+                session,
+                self.control.clone(),
+                receiver,
+                counters,
+                self.stop.clone(),
+                self.reset.clone(),
+                notify.clone(),
+            ),
+            report_closed(session, attempt, notify),
+        )?;
+        self.threads.push(thread);
+        Ok(())
     }
 
     /// Queues bytes for the RTSP connection; the writer thread writes them
@@ -398,7 +473,8 @@ impl Drop for SessionIo {
 /// own threads, as in a session, without UDP sockets.
 #[derive(Debug)]
 pub(crate) struct RtspIo {
-    tcp: TcpStream,
+    /// None once a session took the connection over.
+    tcp: Option<TcpStream>,
     writer: Option<mpsc::Sender<Vec<u8>>>,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
@@ -420,7 +496,7 @@ impl RtspIo {
         let writer_stream = tcp.try_clone()?;
         let (writer, writes) = mpsc::channel();
         let mut io = RtspIo {
-            tcp,
+            tcp: Some(tcp),
             writer: Some(writer),
             stop: Arc::new(AtomicBool::new(false)),
             threads: Vec::new(),
@@ -464,9 +540,12 @@ impl RtspIo {
     }
 
     fn stop_all(&mut self) {
+        let Some(tcp) = &self.tcp else {
+            return;
+        };
         self.stop.store(true, Ordering::Release);
         self.writer = None;
-        let _ = self.tcp.shutdown(Shutdown::Both);
+        let _ = tcp.shutdown(Shutdown::Both);
     }
 }
 

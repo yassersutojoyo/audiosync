@@ -2121,6 +2121,11 @@ do {
                 && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
               "native pairing: a wrong PIN starts a new pairing (a new PIN on the TV) and asks again")
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "5678") == .submitPin
+                && m.apply(.pinNeeded(id: "B2")) == .prompt
+                && m.stages["B2"] == .askingPin(wrong: true)
+                && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
+              "native pairing: an AirPlay 2 receiver that turns the PIN down asks again in the same pairing")
+        check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "4821") == .submitPin
                 && m.apply(.paired(id: "B2", storeNote: "")) == .paired("native:B2"),
               "native pairing: once paired, the speaker joins")
         check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,

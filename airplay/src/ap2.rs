@@ -3,7 +3,8 @@
 //! the HomeKit pairing (P67 to P70), [`bodies`] writes and reads the binary
 //! property lists (P41 to P44, P106, P164), [`session`] runs one session
 //! from `GET /info` to TEARDOWN, [`pin`] runs the PIN pairing the host asks
-//! for on a connection of its own (P61, P153), and [`audio`] seals its
+//! for on a connection the speaker's session then goes on with (P61, P153),
+//! and [`audio`] seals its
 //! realtime audio packets (P155, P156). Only the driver creates a session or
 //! a PIN pairing, and only while the switch is on (P170); the PTP clock a
 //! session may need is in [`crate::ptp`].

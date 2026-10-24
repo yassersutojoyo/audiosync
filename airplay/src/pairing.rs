@@ -312,7 +312,8 @@ pub fn check_pin(pin: &str) -> Result<(), PinError> {
 pub enum PairingEvent {
     /// The Apple TV shows a PIN: ask the user for it and hand it to
     /// [`Pairing::submit_pin`]. The pairing waits for it without a timeout
-    /// (P48, P51).
+    /// (P48, P51). On the AirPlay 2 path it comes again after a wrong PIN,
+    /// with the same code still shown (P150).
     PinRequested,
     /// Pairing succeeded: store these credentials for the receiver (P54).
     Paired(Credentials),
@@ -329,9 +330,9 @@ pub enum PairingEvent {
     /// turns the password down (P39, P46, P135), PairingCancelled when the
     /// Apple TV closed the connection while the PIN was awaited, or the
     /// connection errors of P134 and P140. `wrong_pin` says the Apple TV
-    /// turned the PIN down (470 to the proof, P52; error 2 on the AirPlay 2
-    /// path, P150); a new pairing starts again from `/pair-pin-start` and
-    /// shows a new PIN.
+    /// turned the PIN down (470 to the proof, P52); a new pairing starts
+    /// again from `/pair-pin-start` and shows a new PIN. On the AirPlay 2
+    /// path a wrong PIN is a second [`PairingEvent::PinRequested`] (P150).
     Failed {
         error: SessionError,
         wrong_pin: bool,

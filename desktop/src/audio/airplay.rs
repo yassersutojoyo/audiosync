@@ -936,6 +936,9 @@ pub struct AirPlaySpeakers {
     /// pairing their flags didn't announce (P61): they count as asking for
     /// one until paired or AudioSync quits.
     pin_seen: BTreeSet<String>,
+    /// The speakers in `password_attempts` that paired with a PIN during
+    /// it: one that asks for a pairing again is turned off, not paired again.
+    paired_in_attempt: BTreeSet<String>,
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
     /// to AirPlay 2, as the sender keeps it while the speaker stays added.
     airplay1_outcome: BTreeMap<String, ErrorKind>,
@@ -1003,6 +1006,7 @@ impl AirPlaySpeakers {
             password_attempts: BTreeSet::new(),
             password_seen: BTreeSet::new(),
             pin_seen: BTreeSet::new(),
+            paired_in_attempt: BTreeSet::new(),
             airplay1_outcome: BTreeMap::new(),
             streaming: false,
             master,
@@ -1726,6 +1730,7 @@ impl AirPlaySpeakers {
     pub fn begin_attempt(&mut self, id: &str) {
         if self.settings(id).enabled {
             self.password_attempts.insert(id.to_owned());
+            self.paired_in_attempt.remove(id);
         }
     }
 
@@ -2288,6 +2293,23 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// The speaker `id` the user switched on turned its stored AirPlay 2
+    /// credentials down: it pairs with a PIN in the same attempt, and its
+    /// session goes on over the pairing connection (P153). It stays off
+    /// meanwhile, as on a first pairing; with no pairing it is turned off.
+    fn pair_in_attempt(&mut self, id: &str, events: &mut Vec<BackendEvent>) -> bool {
+        self.drop_password_ask(id, "the speaker pairs with a PIN");
+        self.entry(id).enabled = false;
+        self.reconcile();
+        if let Err(problem) = self.start_pairing(id) {
+            events.push(BackendEvent::AirPlayFailed {
+                id: id.to_owned(),
+                problem,
+            });
+        }
+        true
+    }
+
     /// Turns a speaker off because it can't play, and says so.
     fn turn_off(&mut self, id: &str, problem: AirPlayProblem, events: &mut Vec<BackendEvent>) {
         self.drop_password_ask(id, "the speaker was turned off");
@@ -2426,6 +2448,11 @@ impl AirPlaySpeakers {
                 let Some(run) = self.pairings.get_mut(id) else {
                     return false;
                 };
+                // An AirPlay 2 receiver that turned the PIN down asks again
+                // on the same connection, with the same code (P150).
+                if run.phase == PairingPhase::Checking {
+                    run.wrong_pin = true;
+                }
                 run.phase = PairingPhase::WaitingForPin;
                 if !run.shown {
                     run.shown = true;
@@ -2451,6 +2478,9 @@ impl AirPlaySpeakers {
                 let wanted = self.pairings.remove(id).is_some();
                 self.keep_homekit(id, credentials);
                 if wanted {
+                    if self.password_attempts.contains(id) {
+                        self.paired_in_attempt.insert(id.to_owned());
+                    }
                     self.turn_on_paired(id, events);
                 }
                 true
@@ -2771,6 +2801,7 @@ impl AirPlaySpeakers {
         if state == SpeakerState::Playing {
             // Its password worked: one turned down later turns it off.
             self.password_attempts.remove(id);
+            self.paired_in_attempt.remove(id);
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
@@ -2995,6 +3026,14 @@ impl AirPlaySpeakers {
                         self.label(id)
                     )
                 });
+                if problem == AirPlayProblem::NeedsPin
+                    && self.over_airplay2(id)
+                    && self.password_attempts.contains(id)
+                    && !self.paired_in_attempt.contains(id)
+                    && self.added.contains_key(id)
+                {
+                    return self.pair_in_attempt(id, events);
+                }
                 if problem == AirPlayProblem::NeedsPassword
                     && self.password_attempts.contains(id)
                     && let Some(added) = self.added.remove(id)
@@ -3841,12 +3880,14 @@ pub mod tests {
         assert!(airplay.speakers()[0].airplay2);
         assert!(airplay.submit_pin(&id, "1111"));
         fake.take_calls();
-        fake.pairing(&tv, pairing_failed(ErrorKind::PairingFailed, true));
-        airplay.poll();
-        assert_eq!(fake.take_calls(), [Call::StartPairing(id.clone())]);
-        assert!(airplay.pin_prompt().unwrap().wrong_pin);
+        // A wrong PIN: the receiver asks again on the same connection, with
+        // the code it still shows (P150).
         fake.pairing(&tv, PairingEvent::PinRequested);
         airplay.poll();
+        assert!(fake.take_calls().is_empty(), "no new pairing");
+        let prompt = airplay.pin_prompt().unwrap();
+        assert!(prompt.wrong_pin);
+        assert_eq!(prompt.phase, PairingPhase::WaitingForPin);
         assert!(airplay.submit_pin(&id, "4821"));
 
         fake.pairing(&tv, PairingEvent::HomeKitPaired(homekit(0x33)));
@@ -3875,6 +3916,111 @@ pub mod tests {
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
         );
+    }
+
+    /// Loft paired with a PIN, played, and was switched off; the user
+    /// switches it on again and it turns its stored key down.
+    fn loft_turns_its_key_down_on_a_switch_on(fake: &FakeAirPlay, tv: &Device) -> AirPlaySpeakers {
+        use crate::audio::pairings::tests::homekit;
+
+        let id = id_of(tv);
+        fake.set_airplay2(true);
+        let mut airplay = speakers(fake);
+        airplay.set_streaming(true);
+        pin_shown(fake, &mut airplay, tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(tv, PairingEvent::HomeKitPaired(homekit(0x33)));
+        airplay.poll();
+        fake.state(tv, SpeakerState::Playing);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, false), Ok(()));
+
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.begin_attempt(&id);
+        fake.take_calls();
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::HomeKitRejected,
+        });
+        fake.fail(tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayFailed { .. })),
+            "{events:?}"
+        );
+        let calls = fake.take_calls();
+        assert!(
+            calls.contains(&Call::StartPairing(id.clone())),
+            "{calls:?} {events:?}"
+        );
+        assert!(!airplay.speakers()[0].enabled, "off while it pairs");
+        fake.pairing(tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert_eq!(airplay.pin_prompt().unwrap().id, id);
+        airplay
+    }
+
+    #[test]
+    fn an_airplay2_speaker_that_turns_its_key_down_pairs_again_in_the_same_attempt() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        let mut airplay = loft_turns_its_key_down_on_a_switch_on(&fake, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::HomeKitPaired(homekit(0x44)));
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayPaired { id: id.clone() }),
+            "{events:?}"
+        );
+        assert!(airplay.speakers()[0].enabled);
+
+        // Turned down again in the same attempt: no pairing loop, it stops
+        // with the notice.
+        fake.take_calls();
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::HomeKitRejected,
+        });
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::NeedsPin,
+            }),
+            "{events:?}"
+        );
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_)))
+        );
+    }
+
+    #[test]
+    fn a_pairing_in_the_attempt_that_fails_stops_with_the_notice() {
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        let mut airplay = loft_turns_its_key_down_on_a_switch_on(&fake, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, pairing_failed(ErrorKind::PairingFailed, false));
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::PairingFailed,
+            }),
+            "{events:?}"
+        );
+        assert_eq!(airplay.pin_prompt(), None);
+        assert!(!airplay.speakers()[0].enabled);
     }
 
     #[test]
