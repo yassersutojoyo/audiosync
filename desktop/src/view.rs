@@ -39,9 +39,9 @@ use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
-    self, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS, MainWindowShows,
-    NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, SourceKind,
-    SourceName, SpeakerState, ViewSettings, WindowFrame,
+    self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
+    MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
+    SourceKind, SourceName, SpeakerState, ViewSettings, WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
@@ -1792,8 +1792,16 @@ impl App {
         self.show_pin_prompt(state.pin_prompt.as_ref());
         self.show_password_prompt(state.password_prompt.as_ref());
 
+        let live_hint = match state.live_input_airplay_wait() {
+            Some(AirPlayWait::Tenths(tenths)) => {
+                strings.invoke_live_input_airplay(format!("{}.{}", tenths / 10, tenths % 10).into())
+            }
+            Some(AirPlayWait::Unknown) => strings.get_live_input_airplay_unknown(),
+            None => SharedString::new(),
+        };
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
+            window.show_live_input_hint(&live_hint);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(ui.show_virtual);
@@ -3635,6 +3643,7 @@ impl App {
 /// The properties the main window and the flyout share.
 trait WindowState {
     fn show_state(&self, state: &AppState, status: &SharedString, source_index: i32);
+    fn show_live_input_hint(&self, hint: &SharedString);
 }
 
 impl WindowState for MainWindow {
@@ -3645,6 +3654,10 @@ impl WindowState for MainWindow {
         self.set_master_volume(state.master_volume as f32);
         self.set_switch_source_on_quit(state.when_source_quits == WhenSourceQuits::SwitchToSystem);
     }
+
+    fn show_live_input_hint(&self, hint: &SharedString) {
+        self.set_live_input_hint(hint.clone());
+    }
 }
 
 impl WindowState for TrayFlyout {
@@ -3653,6 +3666,10 @@ impl WindowState for TrayFlyout {
         self.set_status(status.clone());
         self.set_source_index(source_index);
         self.set_master_volume(state.master_volume as f32);
+    }
+
+    fn show_live_input_hint(&self, hint: &SharedString) {
+        self.set_live_input_hint(hint.clone());
     }
 }
 

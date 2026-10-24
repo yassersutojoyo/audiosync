@@ -178,6 +178,9 @@ export component TrayFlyout inherits Window {
     // The chosen input device's channel pairs; none up to two channels.
     in property <[string]> input-pairs;
     in property <int> input-pair-index;
+    // The note under the source while an input device plays through an
+    // AirPlay speaker; empty hides it.
+    in property <string> live-input-hint;
     in property <float> master-volume;
     in property <[SpeakerItem]> speakers;
     in property <[ZoneItem]> zones;
@@ -367,6 +370,10 @@ export component TrayFlyout inherits Window {
                     root.source-selected(self.current-index);
                     self.current-index = root.source-index;
                 }
+            }
+
+            if root.live-input-hint != "": SecondaryText {
+                text: root.live-input-hint;
             }
 
             if root.input-pairs.length > 0: VerticalLayout {
