@@ -131,11 +131,12 @@ final class NowPlayingMonitor {
         reading = nil
     }
 
-    /// The player `send` drives now, by bundle ID; nil for none (main thread).
-    var controlledBundleID: String? { track?.bundleID ?? candidates().first }
+    /// The player `send` drives now, by bundle ID: the one read, else the
+    /// first supported player that runs; nil for none (main thread).
+    var controlledBundleID: String? { track?.bundleID ?? candidates().first(where: Self.isRunning) }
 
     func send(_ command: Command) {
-        guard let bundleID = track?.bundleID ?? candidates().first else { return }
+        guard let bundleID = controlledBundleID else { return }
         let verb: String
         switch command {
         case .playPause: verb = "playpause"

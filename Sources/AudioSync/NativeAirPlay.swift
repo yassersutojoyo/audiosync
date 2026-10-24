@@ -135,9 +135,6 @@ final class NativeAirPlay {
         }
     }
 
-    /// Holds every speaker back by `ms` on top of L, live; the sender caps
-    /// it at `NetworkHoldBack.airPlayLimitMs`. Main queue. False when it was set already.
-    @discardableResult
     /// The player the now-playing control drives, nil for none, and whether
     /// it plays, nil without a reading: a speaker remote's Play or Pause
     /// goes as play-pause only when it changes something (S274). Main queue.
@@ -151,6 +148,9 @@ final class NativeAirPlay {
         }
     }
 
+    /// Holds every speaker back by `ms` on top of L, live; the sender caps
+    /// it at `NetworkHoldBack.airPlayLimitMs`. Main queue. False when it was set already.
+    @discardableResult
     func setHoldBack(_ ms: Double) -> Bool {
         guard ms != holdBackMs else { return false }
         holdBackMs = ms

@@ -207,6 +207,7 @@ extension AppDelegate {
                 nowPlaying.startWatching()
             } else {
                 nowPlaying.stopWatching()
+                sendPlayback()
             }
         }
         let airPlayStarts = trackInfoFeed.modelUpdated(sending: sending)

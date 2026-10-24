@@ -65,8 +65,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-#[cfg(os_backend)]
 use audiosync_airplay::dacp::RemoteCommand;
+#[cfg(os_backend)]
 use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ProtocolPath, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};

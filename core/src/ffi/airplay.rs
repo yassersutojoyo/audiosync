@@ -5944,6 +5944,37 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // The Mac stops reading the player when nothing shows the track: the
+    // paused state it read last no longer holds.
+    // covers: S274
+    #[test]
+    fn a_remote_pause_after_the_reading_stopped_goes_as_play_pause() {
+        let mut handle = create_with(quiet);
+        let key = speaker_key(0x07);
+        add_for_volume(handle, "02005E005407", key.clone(), 50.0);
+        let app = c_string("Music");
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert!(asc_airplay_set_playback(
+                handle,
+                app.as_ptr(),
+                AIRPLAY_PLAYBACK_PAUSED
+            ));
+            assert!(asc_airplay_set_playback(
+                handle,
+                app.as_ptr(),
+                AIRPLAY_PLAYBACK_UNKNOWN
+            ));
+        }
+        remote(handle, &key, None, RemoteCommand::Pause);
+        let events = events_until(handle, |events| !events.is_empty());
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].kind, AIRPLAY_EVENT_REMOTE);
+        assert_eq!(events[0].remote, AIRPLAY_REMOTE_PLAY_PAUSE);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S275, S250
     #[test]
     fn a_remote_volume_up_moves_only_that_speakers_own_volume_by_5() {
