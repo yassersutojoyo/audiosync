@@ -30,6 +30,13 @@ mod adapter;
         reason = "without an audio backend the UI uses only its types"
     )
 )]
+#[cfg_attr(
+    all(target_os = "linux", not(test)),
+    expect(
+        dead_code,
+        reason = "the PipeWire driver has no app capture, mix, local output or media sessions yet"
+    )
+)]
 mod audio;
 mod backdrop;
 #[cfg(test)]

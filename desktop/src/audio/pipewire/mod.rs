@@ -20,7 +20,7 @@ mod stream;
 pub mod timing;
 
 #[cfg(target_os = "linux")]
-pub use driver::{PipeWireBackend, open};
+pub use driver::open;
 
 #[cfg(target_os = "linux")]
 mod driver {
