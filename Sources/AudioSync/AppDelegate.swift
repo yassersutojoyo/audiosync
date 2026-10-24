@@ -420,7 +420,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Arms the AirPlay reconcile for the next thing that falls due with no
     /// event to say so (`AppLifecycle.nextDueReconcile`): the sender's restart
     /// after a failed start, the Local Network recheck while access is
-    /// denied, the moment the Local Network hint may show. Runs with every
+    /// denied, the moment the Local Network hint may show, the end of the
+    /// first 20-second search for speakers. Runs with every
     /// model update, which follows every change that can move one of those
     /// times; arms nothing while the Mac sleeps or once AudioSync quits.
     func scheduleDueReconcile() {

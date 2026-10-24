@@ -37,7 +37,8 @@ enum AppLifecycle {
     /// event to report it (S101): a restart of the AirPlay sender after a
     /// failed start (`NativeSenderStarts.restartAt`), the Local Network
     /// recheck while access is denied (`LocalNetworkProbe.recheckAt`), the
-    /// moment the Local Network hint may show (`LocalNetworkHint.dueAt`).
+    /// moment the Local Network hint may show (`LocalNetworkHint.dueAt`),
+    /// the end of the first search for speakers (`AirPlaySearch.endsAt`).
     /// The earliest of `due`, but no sooner than `dueSpacing` after the last
     /// such reconcile (`last`). Nil when nothing is due, or while the Mac
     /// sleeps: its wake reconciles at once.

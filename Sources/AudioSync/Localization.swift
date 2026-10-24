@@ -586,7 +586,7 @@ struct UIStrings {
     /// AudioSync's own AirPlay sender couldn't start (or browse the network
     /// for speakers). AudioSync tries again by itself.
     let nativeAirPlayCouldNotStart = "AirPlay couldn't start, so no AirPlay speakers are listed. "
-        + "AudioSync keeps trying. If this stays, quit AudioSync and open it again."
+        + "AudioSync keeps trying. If it keeps happening, quit AudioSync and open it again."
 
     /// AudioSync's own AirPlay sender can't play to this receiver.
     func nativeAirPlayCantPlay(name: String) -> String {
@@ -1349,7 +1349,7 @@ struct UIStrings {
     let remoteTurnOnInApp = "Asks for a code: turn it on in AudioSync on the Mac"
     /// A zone or preset turned on from the phone left out a speaker that asks
     /// for a code: its prompt would wait on the Mac with nobody there.
-    func remotePairFirst(_ speaker: String) -> String { "\(speaker) stayed off. Pair it on the Mac first." }
+    func remotePairFirst(_ speaker: String) -> String { "\(speaker) stayed off. Pair it on this Mac first." }
 
     // MARK: Guide
 

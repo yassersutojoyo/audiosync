@@ -296,7 +296,7 @@ extension AppDelegate {
 
     /// The sender stopped after an internal error: it goes (torn down off
     /// the main queue), its rows with it, and the AirPlay section shows it
-    /// as failed, with Retry, and a notice says so. The switches stay as
+    /// as failed, with Retry, in place of a notice. The switches stay as
     /// they are, so the speakers rejoin once a new sender runs.
     private func nativeSenderFailed() {
         guard let native = nativeAirPlay else { return }
