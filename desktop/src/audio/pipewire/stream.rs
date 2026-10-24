@@ -455,6 +455,7 @@ fn serve(
                 .and_then(|time| u64::try_from(time.now()).ok())
                 .filter(|&now| now > 0)
                 .map_or_else(timing::monotonic_hns, |now| now / 100);
+            let mut placed = false;
             while let Some(mut buffer) = stream.dequeue_buffer() {
                 let Some(data) = buffer.datas_mut().first_mut() else {
                     continue;
@@ -470,6 +471,10 @@ fn serve(
                     .data()
                     .and_then(|mapped| mapped.get(offset..offset + length));
                 feed.buffer(cycle, bytes, frames);
+                placed = true;
+            }
+            if placed {
+                feed.clock.settle(cycle);
             }
         })
         .register()

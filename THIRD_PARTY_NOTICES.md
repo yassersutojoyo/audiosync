@@ -141,8 +141,9 @@ captures through PipeWire with `pipewire`, `pipewire-sys`, `libspa`,
 `libspa-sys`, `cookie-factory` and `nom` (MIT), `bitflags` and `libc` (MIT OR
 Apache-2.0) and `rustix` (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR
 MIT). Their bindings are generated at build time with `bindgen`
-(BSD-3-Clause), `clang-sys` (Apache-2.0), `libloading` (ISC), `system-deps`
-and `cc` (MIT OR Apache-2.0) and `target-lexicon` (Apache-2.0 WITH
+(BSD-3-Clause), `clang-sys` (Apache-2.0), `libloading` (ISC),
+`version-compare` (MIT), `system-deps`, `cfg-expr`, `annotate-snippets` and
+`cc` (MIT OR Apache-2.0) and `target-lexicon` (Apache-2.0 WITH
 LLVM-exception), none of which goes into the program. PipeWire's own library
 isn't bundled: the app uses the one the system has.
 

@@ -8,6 +8,8 @@
 //! in the same callback, and then look one cycle late. So a buffer that
 //! starts up to [`SNAP_HNS`] after the end of the one before it follows on
 //! from it; one further away starts a gap (a suspended output, an xrun).
+//! A callback's newest buffer ends at its cycle, so when even that one
+//! snapped back, a buffer was lost: [`PacketClock::settle`] makes it a gap.
 //! Closer than [`GAP_JUMP_HNS`] the cycle's time counts, so the device
 //! clock's drift never adds up.
 
@@ -67,6 +69,18 @@ impl PacketClock {
         start
     }
 
+    /// After the last buffer of a callback whose cycle ran at `cycle_hns`.
+    /// Only older buffers follow on: when even the newest was snapped back,
+    /// a buffer was lost, and the next one starts from the cycle, so the gap
+    /// is filled and the drift never adds up.
+    pub fn settle(&mut self, cycle_hns: u64) {
+        if let Some(end) = self.end
+            && cycle_hns > end.saturating_add(GAP_JUMP_HNS)
+        {
+            self.end = Some(cycle_hns);
+        }
+    }
+
     /// The `now` to hand [`GapFill::idle`](crate::audio::capture::GapFill::idle)
     /// at `now_hns`: two buffers' length earlier. GapFill counts a gap 25 ms
     /// after the last frame, but PipeWire's buffers can each last that long
@@ -123,6 +137,22 @@ mod tests {
         assert_eq!(second, first + QUANTUM);
         let third = clock.place(late, 1024);
         assert_eq!(third, second + QUANTUM);
+    }
+
+    #[test]
+    fn a_lost_cycle_is_a_gap_and_the_cycles_lead_again() {
+        let mut clock = PacketClock::new(RATE);
+        let mut cycle = 10 * HNS_PER_SECOND;
+        clock.place(cycle, 1024);
+        // One cycle's buffer never comes: the next one is the only buffer
+        // of its callback.
+        cycle += 2 * QUANTUM;
+        clock.place(cycle, 1024);
+        clock.settle(cycle);
+        for _ in 0..100 {
+            cycle += QUANTUM;
+            assert_eq!(clock.place(cycle, 1024), cycle - QUANTUM);
+        }
     }
 
     #[test]
