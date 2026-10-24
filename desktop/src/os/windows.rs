@@ -4,7 +4,7 @@
 //! the PC's DNS name and the user's time format.
 
 use std::path::PathBuf;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
 pub use super::engine::Media;
 
@@ -14,7 +14,7 @@ use crate::audio::now_playing::SharedLabels;
 use crate::audio::pairings::{Seal, Sealer};
 use crate::debug_log::DebugLog;
 use crate::view::App;
-use crate::{LOG_FLUSH_AT_EXIT, StartError, audio, launch_at_login, single_instance};
+use crate::{StartError, audio, single_instance};
 
 // Declared here, not in main.rs: it is built on the Windows-only tray-icon crate.
 #[path = "../tray.rs"]
@@ -46,107 +46,16 @@ pub fn start_with(log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) ->
 }
 
 /// This copy's hold on the session, from [`claim_instance`].
-pub struct Instance {
-    /// `Err` holds why a later hand-over can't reach this copy (it runs
-    /// anyway).
-    lock: Result<single_instance::Instance, String>,
-    /// How the hand-over to a copy that was quitting went, when this launch
-    /// waited for it to go.
-    waited_for: Option<single_instance::HandOver>,
-}
+pub type Instance = super::claim::Instance<single_instance::Instance>;
 
-/// Before the log, which a launch empties, and before any audio, tray or
-/// window: `None` when a second launch only handed over to the running copy
-/// and exits.
+/// The session's named mutex, claimed before the log and anything else.
 pub fn claim_instance() -> Option<Instance> {
-    let launched = std::time::Instant::now();
-    let (lock, waited_for) = match single_instance::acquire() {
-        single_instance::Acquired::First(instance) => (instance, None),
-        single_instance::Acquired::Second
-            if !launch_at_login::hands_over_to_running_copy(
-                launch_at_login::started_in_background(std::env::args_os()),
-            ) =>
-        {
-            let log = DebugLog::appending_from_env();
-            log.log(|| {
-                format!(
-                    "process {}: AudioSync already runs in this session; started with {}, \
-                     so it leaves that copy as it is; exiting",
-                    std::process::id(),
-                    launch_at_login::BACKGROUND_FLAG
-                )
-            });
-            log.flush(LOG_FLUSH_AT_EXIT);
-            return None;
-        }
-        single_instance::Acquired::Second => {
-            // A copy that is quitting doesn't answer; once it's gone, this
-            // launch starts instead, as on the Mac.
-            let (outcome, first) = single_instance::second_launch(
-                single_instance::hand_over,
-                || match single_instance::acquire() {
-                    single_instance::Acquired::First(instance) => Some(instance),
-                    single_instance::Acquired::Second => None,
-                },
-                || launched.elapsed(),
-                std::thread::sleep,
-            );
-            match first {
-                Some(instance) => (instance, Some(outcome)),
-                None => {
-                    let log = DebugLog::appending_from_env();
-                    log.log(|| outcome.log_line(std::process::id()));
-                    log.flush(LOG_FLUSH_AT_EXIT);
-                    return None;
-                }
-            }
-        }
-    };
-    Some(Instance { lock, waited_for })
+    super::claim::claim(single_instance::acquire, single_instance::hand_over)
 }
 
-thread_local! {
-    /// The app and its log, for a second launch's request to show the main
-    /// window.
-    static RUNNING_APP: std::cell::RefCell<Option<(Weak<App>, DebugLog)>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// A second launch asked for the main window: shown as by the tray's Open.
-fn show_main_for_second_launch() {
-    let running = RUNNING_APP.with(|cell| {
-        let cell = cell.borrow();
-        let (app, log) = cell.as_ref()?;
-        Some((app.upgrade()?, log.clone()))
-    });
-    if let Some((app, log)) = running {
-        log.log(|| "a second launch asked for the main window: shown".to_owned());
-        app.show_main();
-    }
-}
-
-impl Instance {
-    /// Logs how this copy got the session, once the log is open.
-    pub fn log_state(&self, log: &DebugLog) {
-        if let Some(outcome) = self.waited_for {
-            log.log(|| outcome.took_over_line());
-        }
-        match &self.lock {
-            Ok(_) => log.log(|| "single instance: this is the only copy in the session".to_owned()),
-            Err(error) => log.log(|| {
-                format!("single instance: a second launch can't reach this copy ({error})")
-            }),
-        }
-    }
-
-    /// From now on a second launch shows `app`'s main window.
-    pub fn listen(&self, app: &Rc<App>, log: &DebugLog) {
-        if let Ok(instance) = &self.lock {
-            RUNNING_APP.with(|cell| {
-                *cell.borrow_mut() = Some((Rc::downgrade(app), log.clone()));
-            });
-            instance.listen(show_main_for_second_launch);
-        }
+impl super::claim::Listen for single_instance::Instance {
+    fn listen(&self, show: fn()) {
+        single_instance::Instance::listen(self, show);
     }
 }
 

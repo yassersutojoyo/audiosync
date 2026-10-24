@@ -4,7 +4,8 @@
 //!
 //! It is off unless the environment sets `AUDIOSYNC_DEBUG` to exactly `1`.
 //! Then the app empties `audiosync-debug.log` in the temporary folder
-//! (`%TEMP%\audiosync-debug.log`) at launch and appends one line per event,
+//! (`%TEMP%\audiosync-debug.log`; on Linux `$XDG_STATE_HOME/audiosync/debug.log`)
+//! at launch and appends one line per event,
 //! each starting with the time in UTC, to the millisecond
 //! (`2026-10-18T17:52:13.456Z`), up to [`MAX_BYTES`].
 //!
@@ -53,17 +54,22 @@ impl DebugLog {
     /// The log the environment asks for: `audiosync-debug.log` in the
     /// temporary folder when `AUDIOSYNC_DEBUG` is `1`, nothing otherwise.
     pub fn from_env() -> DebugLog {
-        let setting = std::env::var_os(ENV_VAR);
-        DebugLog::new(log_path(setting.as_deref(), &std::env::temp_dir()))
+        let (path, warning) = env_path();
+        let log = DebugLog::new(path);
+        if let Some(warning) = warning {
+            log.log(|| warning);
+        }
+        log
     }
 
     /// [`DebugLog::from_env`] that keeps what the file holds: for a second
     /// launch, which adds its line to the running copy's log.
-    #[cfg_attr(not(windows), expect(dead_code, reason = "only Windows hands over"))]
+    #[cfg_attr(
+        not(any(windows, target_os = "linux")),
+        expect(dead_code, reason = "only Windows and Linux hand over")
+    )]
     pub fn appending_from_env() -> DebugLog {
-        let setting = std::env::var_os(ENV_VAR);
-        let path = log_path(setting.as_deref(), &std::env::temp_dir());
-        DebugLog::open(path, MAX_BYTES, false)
+        DebugLog::open(env_path().0, MAX_BYTES, false)
     }
 
     /// A log written to `path`, emptied first, or one that writes nothing
@@ -130,6 +136,34 @@ impl DebugLog {
 /// `dir` when the value is exactly `1`, nowhere for any other value or none.
 pub fn log_path(setting: Option<&OsStr>, dir: &Path) -> Option<PathBuf> {
     (setting == Some(OsStr::new("1"))).then(|| dir.join(FILE_NAME))
+}
+
+/// Where the environment asks for the log, and a line to start it with
+/// when it can't go where it should.
+#[cfg(not(target_os = "linux"))]
+fn env_path() -> (Option<PathBuf>, Option<String>) {
+    let setting = std::env::var_os(ENV_VAR);
+    (log_path(setting.as_deref(), &std::env::temp_dir()), None)
+}
+
+/// On Linux the log lives in the state folder, which outlasts a sign-out
+/// (`crate::os::xdg::debug_log_file`); the temporary folder only when that
+/// can't be made.
+#[cfg(target_os = "linux")]
+fn env_path() -> (Option<PathBuf>, Option<String>) {
+    let setting = std::env::var_os(ENV_VAR);
+    let Some(fallback) = log_path(setting.as_deref(), &std::env::temp_dir()) else {
+        return (None, None);
+    };
+    match crate::os::xdg::debug_log_file(crate::os::xdg::state_base()) {
+        Ok(path) => (Some(path), None),
+        Err(error) => (
+            Some(fallback),
+            Some(format!(
+                "debug log: the state folder can't be used ({error}); writing to the temporary folder"
+            )),
+        ),
+    }
 }
 
 /// A writer that counts the bytes it passes on.

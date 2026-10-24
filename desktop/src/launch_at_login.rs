@@ -17,6 +17,9 @@
 //! another build wrote it) still shows as on. It is rewritten or removed only
 //! when the user turns the option on or off: the documentation asks programs
 //! started from the Run key not to write to it while they run.
+//!
+//! On Linux the same option is the autostart entry
+//! (`crate::os::xdg::autostart`), through the same [`StartupStore`].
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -34,7 +37,9 @@ pub const MAX_COMMAND_LENGTH: usize = 260;
 /// count from 1 and never come near this one.
 pub const NOTICE_ID: u64 = i32::MAX as u64;
 
-/// Where the startup entry lives: the registry on Windows, memory in tests.
+/// Where the startup entry lives: the registry on Windows, the autostart
+/// file on Linux (`crate::os::xdg::autostart`), memory in tests. The
+/// command-line rules default to the Run key's.
 pub trait StartupStore {
     /// The Run value's command line, `None` when there is none (or it isn't
     /// a string).
@@ -44,6 +49,29 @@ pub trait StartupStore {
     fn remove_run_value(&mut self) -> Result<(), String>;
     /// The entry's StartupApproved data, `None` when Windows has none.
     fn approval(&self) -> Option<Vec<u8>>;
+
+    /// The command line that starts `exe` in the background, or why it
+    /// can't be stored.
+    fn command(&self, exe: &Path) -> Result<String, String> {
+        let command = run_command(exe);
+        let length = command.encode_utf16().count();
+        if length > MAX_COMMAND_LENGTH {
+            return Err(format!(
+                "the command line is {length} characters, over the Run key's {MAX_COMMAND_LENGTH}"
+            ));
+        }
+        Ok(command)
+    }
+
+    /// The exe `command` starts.
+    fn command_exe(&self, command: &str) -> Option<PathBuf> {
+        command_exe(command)
+    }
+
+    /// Whether two paths name the same exe.
+    fn same_exe(&self, a: &Path, b: &Path) -> bool {
+        same_exe(a, b)
+    }
 }
 
 /// The startup entry as Windows has it now.
@@ -105,8 +133,8 @@ pub fn status(store: &dyn StartupStore, exe: Option<&Path>) -> Status {
     {
         return Status::TurnedOffInSettings;
     }
-    match (command_exe(&command), exe) {
-        (Some(listed), Some(exe)) if same_exe(&listed, exe) => Status::On,
+    match (store.command_exe(&command), exe) {
+        (Some(listed), Some(exe)) if store.same_exe(&listed, exe) => Status::On,
         _ => Status::Elsewhere,
     }
 }
@@ -128,9 +156,22 @@ pub fn opens_main_window(background: bool, tray_available: bool) -> bool {
 /// Whether a launch while another copy runs asks that copy to show its main
 /// window. One in the background (Windows starting the Run key's entry, or
 /// reopening apps after a restart) leaves it as it is.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub fn hands_over_to_running_copy(background: bool) -> bool {
     !background
+}
+
+/// This program's path for the startup entry. Inside an AppImage the
+/// running exe sits in a mount that goes away, so the entry names the
+/// AppImage file the `APPIMAGE` variable gives.
+pub fn own_exe() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    if let Some(image) = std::env::var_os("APPIMAGE").map(PathBuf::from)
+        && image.is_absolute()
+    {
+        return Some(image);
+    }
+    std::env::current_exe().ok()
 }
 
 /// What turning the option on or off did, beyond what [`LaunchAtLogin::is_on`]
@@ -242,14 +283,8 @@ impl LaunchAtLogin {
         let exe = self
             .exe
             .as_deref()
-            .ok_or_else(|| "Windows didn't say where this exe is".to_owned())?;
-        let command = run_command(exe);
-        let length = command.encode_utf16().count();
-        if length > MAX_COMMAND_LENGTH {
-            return Err(format!(
-                "the command line is {length} characters, over the Run key's {MAX_COMMAND_LENGTH}"
-            ));
-        }
+            .ok_or_else(|| "the system didn't say where this exe is".to_owned())?;
+        let command = self.store.command(exe)?;
         self.store.set_run_value(&command)
     }
 }
@@ -265,14 +300,19 @@ fn settled(message: &NoticeMessage, status: Status) -> bool {
     }
 }
 
-/// The store the app uses: the registry on Windows, memory elsewhere and in
-/// tests, so no test reads or changes the user's startup list.
+/// The store the app uses: the registry on Windows, the autostart file on
+/// Linux, memory elsewhere and in tests, so no test reads or changes the
+/// user's startup list.
 pub fn system_store() -> Box<dyn StartupStore> {
     #[cfg(all(windows, not(test)))]
     {
         Box::new(registry::RegistryStore)
     }
-    #[cfg(any(not(windows), test))]
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        Box::new(crate::os::xdg::autostart::AutostartStore::system())
+    }
+    #[cfg(any(not(any(windows, target_os = "linux")), test))]
     {
         Box::new(MemoryStore::default())
     }
@@ -280,11 +320,11 @@ pub fn system_store() -> Box<dyn StartupStore> {
 
 /// The startup entry kept in memory. Clones share it, so a test can look
 /// at what the app wrote.
-#[cfg(any(not(windows), test))]
+#[cfg(any(not(any(windows, target_os = "linux")), test))]
 #[derive(Clone, Default)]
 pub struct MemoryStore(std::rc::Rc<std::cell::RefCell<MemoryEntry>>);
 
-#[cfg(any(not(windows), test))]
+#[cfg(any(not(any(windows, target_os = "linux")), test))]
 #[derive(Default)]
 pub struct MemoryEntry {
     pub run: Option<String>,
@@ -293,7 +333,7 @@ pub struct MemoryEntry {
     pub refuse_writes: bool,
 }
 
-#[cfg(any(not(windows), test))]
+#[cfg(any(not(any(windows, target_os = "linux")), test))]
 impl MemoryStore {
     #[cfg(test)]
     pub fn entry(&self) -> std::cell::RefMut<'_, MemoryEntry> {
@@ -301,7 +341,7 @@ impl MemoryStore {
     }
 }
 
-#[cfg(any(not(windows), test))]
+#[cfg(any(not(any(windows, target_os = "linux")), test))]
 impl StartupStore for MemoryStore {
     fn run_value(&self) -> Option<String> {
         self.0.borrow().run.clone()

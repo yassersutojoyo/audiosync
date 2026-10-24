@@ -21,6 +21,8 @@
 //! may not open, counts as another copy too.
 //!
 //! The decisions are plain Rust and unit-tested; the Win32 calls stay thin.
+//! Linux follows the same decisions with a file lock and a Unix socket
+//! (`crate::os::xdg::instance`).
 
 use std::time::Duration;
 
@@ -159,7 +161,7 @@ impl HandOver {
 
     /// The debug line of a launch that became the first copy after the
     /// running one went away.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub fn took_over_line(self) -> String {
         format!(
             "single instance: another copy was quitting when this launch asked it to show \
@@ -169,8 +171,19 @@ impl HandOver {
     }
 }
 
+/// What trying to hold the session found; `L` is the system's hold.
+#[cfg(any(windows, target_os = "linux"))]
+pub enum Acquired<L> {
+    /// This is the only copy; `Err` holds why a later hand-over can't
+    /// reach it (it runs anyway).
+    First(Result<L, String>),
+    /// Another copy runs.
+    Second,
+}
+
 /// The first copy's listener: for each request `wait_for_request` returns,
 /// calls `on_request`, until waiting fails.
+#[cfg(any(windows, test))]
 pub fn serve(mut wait_for_request: impl FnMut() -> bool, on_request: impl Fn()) {
     while wait_for_request() {
         on_request();
@@ -202,21 +215,11 @@ pub struct Instance {
     answer: Handle,
 }
 
-/// What [`acquire`] found.
-#[cfg(windows)]
-pub enum Acquired {
-    /// This is the only copy; `Err` holds why a later hand-over can't
-    /// reach it (it runs anyway).
-    First(Result<Instance, String>),
-    /// Another copy runs.
-    Second,
-}
-
 /// Creates the session's mutex and, when this is the first copy, the
 /// hand-over events. A mutex that can't be created counts as the first copy,
 /// unless access to it was denied (see [`Startup::decide`]).
 #[cfg(windows)]
-pub fn acquire() -> Acquired {
+pub fn acquire() -> Acquired<Instance> {
     use windows::Win32::Foundation::{
         CloseHandle, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, GetLastError,
     };
@@ -514,10 +517,19 @@ mod tests {
         let log = body.find("DebugLog::from_env()").expect("log");
         let run = body.find("match run(").expect("run");
         assert!(claim < log && log < run);
-        let os = include_str!("os/windows.rs");
-        let claim = &os[os.find("pub fn claim_instance()").expect("claim_instance")..];
-        let claim = &claim[..claim.find("\n}").expect("claim_instance ends")];
-        assert!(claim.contains("single_instance::acquire()"));
+        let body_of = |source: &'static str, head: &str| {
+            let start = &source[source.find(head).expect(head)..];
+            &start[..start.find("\n}").expect("the function ends")]
+        };
+        let windows = body_of(include_str!("os/windows.rs"), "pub fn claim_instance()");
+        assert!(windows.contains("single_instance::acquire"));
+        let linux = body_of(
+            include_str!("os/xdg/instance.rs"),
+            "pub fn claim_instance()",
+        );
+        assert!(linux.contains("acquire_in("));
+        let claim = body_of(include_str!("os/claim.rs"), "pub fn claim<");
+        assert!(claim.contains("acquire()"));
         assert!(!claim.contains("DebugLog::from_env()"));
     }
 }
