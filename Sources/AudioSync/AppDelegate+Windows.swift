@@ -318,6 +318,7 @@ extension AppDelegate {
         followCalibrationContext()
         followCalibrateAll()
         menuBar?.setRunning(engine.isRunning)
+        syncStreamingActivity()
         syncTrackInfo()
         scheduleDueReconcile()
     }
