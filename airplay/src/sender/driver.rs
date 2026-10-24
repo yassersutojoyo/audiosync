@@ -984,14 +984,7 @@ impl Driver {
                 self.sessions.remove(&active.key);
                 self.sessions.remove(&active.events_key);
                 self.peers_dirty = true;
-                // The service closes once no session takes PTP or may still
-                // take it (P205); NTP sessions never hold it open.
-                let shared = self.speakers.values().any(
-                    |speaker| matches!(&speaker.phase, Phase::Ap2(active) if active.may_take_ptp()),
-                );
-                if !shared {
-                    self.close_ptp();
-                }
+                self.close_unused_ptp();
             }
             Phase::Waiting(_) | Phase::Failed | Phase::Idle => {}
         }
@@ -2235,14 +2228,22 @@ mod tests {
         assert!(driver.ptp.is_some(), "the service is bound");
         driver.add_speaker(b, options(), counters(), now);
         driver.add_speaker(c, options(), counters(), now);
-        // A is served; C settled without the service; B was refused with
-        // "PTP in use on another network".
+        // A is served; C, set up with the PtpPeer, had its SETUP answered
+        // with NTP but not yet its RECORD; B was refused with "PTP in use on
+        // another network".
         if let Phase::Ap2(active) = &mut driver.speakers.get_mut(&a_key).expect("A").phase {
             active.ptp_served = true;
         }
-        if let Phase::Ap2(active) = &mut driver.speakers.get_mut(&c_key).expect("C").phase {
-            active.ptp_configured = false;
-        }
+        assert!(
+            matches!(&driver.speakers[&c_key].phase, Phase::Ap2(active) if active.ptp_configured),
+            "C was offered the PtpPeer"
+        );
+        driver.ap2_event(
+            &c_key,
+            crate::ap2::Ap2Event::TimingChosen(crate::ap2::Timing::Ntp),
+            now,
+        );
+        assert!(driver.ptp.is_some(), "A still uses the service");
         driver.end_session(&b_key, Phase::Failed);
         driver.ap2_refusals += 1;
         let refusal = driver.ap2_refusals;

@@ -88,15 +88,15 @@ pub(super) struct Ap2Active {
     pub(super) ptp_configured: bool,
     /// The service serves the session's receiver (P205).
     pub(super) ptp_served: bool,
+    /// The session SETUP answer settled the session on NTP (P205).
+    pub(super) ntp_chosen: bool,
 }
 
 impl Ap2Active {
     /// Whether the session uses the PTP service or may still take it: set
     /// up with its PtpPeer and not settled on NTP (P205).
     pub(super) fn may_take_ptp(&self) -> bool {
-        self.ptp_served
-            || (self.ptp_configured
-                && !(self.session.timing() == Timing::Ntp && self.session.recorded()))
+        self.ptp_served || (self.ptp_configured && !self.ntp_chosen)
     }
 }
 
@@ -268,6 +268,7 @@ impl Driver {
             outranked_told: false,
             ptp_configured,
             ptp_served: false,
+            ntp_chosen: false,
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
@@ -488,6 +489,18 @@ impl Driver {
             self.ptp_closing.retain(|thread| !thread.is_finished());
             self.ptp_closing.extend(run.io.close());
             self.ptp_freed = true;
+        }
+    }
+
+    /// Closes the service once no session takes PTP or may still take it;
+    /// NTP sessions never hold it open (P205).
+    pub(super) fn close_unused_ptp(&mut self) {
+        let used = self
+            .speakers
+            .values()
+            .any(|speaker| matches!(&speaker.phase, Phase::Ap2(active) if active.may_take_ptp()));
+        if !used {
+            self.close_ptp();
         }
     }
 
@@ -832,7 +845,7 @@ impl Driver {
         }
     }
 
-    fn ap2_event(&mut self, key: &DeviceKey, event: Ap2Event, now: Instant) {
+    pub(super) fn ap2_event(&mut self, key: &DeviceKey, event: Ap2Event, now: Instant) {
         match event {
             // Only a PinPairing's session reports these.
             Ap2Event::Info(_)
@@ -850,6 +863,9 @@ impl Driver {
                 self.emit_speaker(key, SpeakerEvent::HomeKitPaired(credentials));
             }
             Ap2Event::TimingChosen(timing) => {
+                if let Some(active) = self.ap2_active(key) {
+                    active.ntp_chosen = timing == Timing::Ntp;
+                }
                 if timing == Timing::Ptp {
                     self.ptp_timing.insert(key.clone());
                     let remote = self
@@ -874,17 +890,15 @@ impl Driver {
                         }
                         _ => {}
                     }
-                } else if !self.ptp_shared(key)
-                    && self
-                        .ptp
-                        .as_ref()
-                        .is_some_and(|run| run.service.peers().is_empty())
-                {
+                } else {
                     // P158: the service runs only while a session uses PTP.
-                    self.close_ptp();
+                    self.close_unused_ptp();
                 }
             }
-            Ap2Event::Recorded => self.peers_dirty = true,
+            Ap2Event::Recorded => {
+                self.peers_dirty = true;
+                self.close_unused_ptp();
+            }
             Ap2Event::PeersRefused {
                 added,
                 first_accepted,
