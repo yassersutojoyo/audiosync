@@ -201,6 +201,22 @@ pub enum ListingNote {
         /// Its name, if it could be read.
         name: Option<String>,
     },
+    /// Left out: an AirPlay speaker the sound system publishes itself
+    /// (PipeWire's RAOP sink), which AudioSync reaches through its own
+    /// sender.
+    #[cfg_attr(
+        all(not(target_os = "linux"), not(test)),
+        expect(
+            dead_code,
+            reason = "only PipeWire lists its AirPlay speakers as outputs"
+        )
+    )]
+    NetworkSpeaker {
+        /// Its node name.
+        id: String,
+        /// Its name, if it has one.
+        name: Option<String>,
+    },
     /// Left out: the endpoint or its ID couldn't be read, so nothing could
     /// play to it.
     NoId {
@@ -238,6 +254,14 @@ impl std::fmt::Display for ListingNote {
                     f,
                     "output {name:?} ({id}) left out: a Bluetooth hands-free endpoint, \
                      for calls only"
+                )
+            }
+            ListingNote::NetworkSpeaker { id, name } => {
+                let name = name.as_deref().unwrap_or("(no name)");
+                write!(
+                    f,
+                    "output {name:?} ({id}) left out: an AirPlay speaker the sound system \
+                     publishes, which AudioSync plays to through its own sender"
                 )
             }
             ListingNote::NoId { index, error } => write!(

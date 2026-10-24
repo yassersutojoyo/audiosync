@@ -1,20 +1,29 @@
-//! The PipeWire driver for Linux: the whole system's sound, captured from
-//! the default output's monitor and handed to the AirPlay and Google Cast
-//! senders.
+//! The PipeWire driver for Linux: the system's or one app's sound, or an
+//! input device, handed to the AirPlay and Google Cast senders and played
+//! on local outputs in step with them.
 //!
-//! The capture is a PipeWire stream that records what the default output
-//! plays (`stream.capture.sink`), left untargeted so the session manager
-//! links it to the default output and moves it when that output goes. It
-//! runs on its own thread with its own main loop, context and connection
-//! ([`stream`]). Local outputs, one app's sound and input devices aren't
-//! offered yet: no output plays, so the capture never hears AudioSync.
+//! A graph thread follows the registry for the outputs, inputs, the
+//! default devices, each output's own volume and the apps' streams
+//! ([`registry`]). Each capture, output and microphone is a PipeWire stream
+//! on a thread of its own, with its own main loop, context and connection.
+//! A capture of the whole system or of apps is linked by AudioSync itself,
+//! stream by stream, so AudioSync's own outputs are never captured
+//! ([`stream`]); each output is pinned to its sink ([`playback`]).
 //!
 //! - [`format`]: the format asked for and the check of the one agreed.
+//! - [`graph`]: the outputs, inputs, app streams and links PipeWire has.
 //! - [`procfs`]: the running processes, from `/proc`.
 //! - [`timing`]: where each captured buffer falls in time.
 
 pub mod format;
+pub mod graph;
+#[cfg(target_os = "linux")]
+mod microphone;
+#[cfg(target_os = "linux")]
+mod playback;
 pub mod procfs;
+#[cfg(target_os = "linux")]
+mod registry;
 #[cfg(target_os = "linux")]
 mod stream;
 pub mod timing;
@@ -32,95 +41,88 @@ mod driver {
     use audiosync_core::ring::RingWriter;
     use audiosync_core::volume::SharedGain;
 
-    use super::{procfs, stream};
+    use super::registry::Registry;
+    use super::{microphone, playback, procfs, stream};
     use crate::audio::backend::BackendError;
-    use crate::audio::capture::{Activation, CaptureTarget, Feeds, LoopbackMode};
-    use crate::audio::controller::{Controller, Driver, RendererHandle};
-    use crate::audio::outputs::{Endpoint, EndpointReading, Listing, StreamSetup};
+    use crate::audio::calibration::{Microphone, MicrophoneError};
+    use crate::audio::capture::{CaptureTarget, Feeds};
+    use crate::audio::controller::{Controller, Driver};
+    use crate::audio::outputs::{Endpoint, EndpointReading, Listing};
     use crate::audio::process::ProcessTable;
     use crate::audio::routing::{EndpointAudio, EndpointVolume};
 
     /// The platform calls of the Linux backend.
     pub struct PipeWireDriver {
         own_pid: u32,
+        registry: Registry,
     }
 
-    /// No local output plays on Linux yet, so none ever runs.
-    pub enum NoRenderer {}
-
-    impl RendererHandle for NoRenderer {
-        fn request_stop(&mut self) {
-            match *self {}
-        }
-
-        fn has_ended(&self) -> bool {
-            match *self {}
-        }
-
-        fn is_faded(&self) -> bool {
-            match *self {}
-        }
-
-        fn setup(&self) -> Option<StreamSetup> {
-            match *self {}
+    impl PipeWireDriver {
+        fn snapshot(&self) -> Result<ProcessTable, BackendError> {
+            procfs::snapshot().map_err(|error| BackendError::System {
+                call: "read_dir(/proc)",
+                code: error.raw_os_error().unwrap_or(0),
+            })
         }
     }
 
     impl Driver for PipeWireDriver {
         type Capture = stream::MonitorCapture;
-        type Renderer = NoRenderer;
+        type Renderer = playback::Playback;
 
         fn own_pid(&self) -> u32 {
             self.own_pid
         }
 
         fn processes(&mut self) -> Result<ProcessTable, BackendError> {
-            procfs::snapshot().map_err(|error| BackendError::System {
-                call: "read_dir(/proc)",
-                code: error.raw_os_error().unwrap_or(0),
-            })
+            self.snapshot()
         }
 
         fn session_pids(&mut self) -> Result<Vec<u32>, BackendError> {
-            Ok(Vec::new())
+            let graph = self.registry.graph()?;
+            Ok(graph.session_pids(&self.snapshot()?))
         }
 
         fn outputs(&mut self) -> Result<Listing, BackendError> {
-            Ok(Listing::default())
+            Ok(self.registry.graph()?.listing())
         }
 
         fn outputs_changed(&mut self) -> bool {
-            false
+            self.registry.take_outputs_changed()
         }
 
         fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
-            Ok(Vec::new())
+            let graph = self.registry.graph()?;
+            Ok(graph.endpoint_audio(&self.snapshot()?))
         }
 
-        fn watch_endpoint_volume(&mut self, _id: &str) -> Result<(), BackendError> {
+        fn watch_endpoint_volume(&mut self, id: &str) -> Result<(), BackendError> {
+            self.registry.watch(id);
             Ok(())
         }
 
-        fn unwatch_endpoint_volume(&mut self, _id: &str) {}
+        fn unwatch_endpoint_volume(&mut self, id: &str) {
+            self.registry.unwatch(id);
+        }
 
         fn endpoint_volume_changes(&mut self) -> Vec<String> {
-            Vec::new()
+            self.registry.volume_changes()
         }
 
-        fn endpoint_volume(&mut self, _id: &str) -> Result<EndpointVolume, BackendError> {
-            Err(BackendError::NotOffered)
+        fn endpoint_volume(&mut self, id: &str) -> Result<EndpointVolume, BackendError> {
+            self.registry.volume(id)
         }
 
-        fn set_endpoint_level(&mut self, _id: &str, _level: f32) -> Result<(), BackendError> {
-            Err(BackendError::NotOffered)
+        fn set_endpoint_level(&mut self, id: &str, level: f32) -> Result<(), BackendError> {
+            self.registry.set_level(id, level)
         }
 
-        fn unmute_endpoint(&mut self, _id: &str) -> Result<(), BackendError> {
-            Err(BackendError::NotOffered)
+        fn unmute_endpoint(&mut self, id: &str) -> Result<(), BackendError> {
+            self.registry.unmute(id)
         }
 
         fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError> {
-            Ok(Vec::new())
+            Ok(self.registry.graph()?.inputs())
         }
 
         fn start_capture(
@@ -130,29 +132,62 @@ mod driver {
             equalizer: EqProcessor,
             feeds: Feeds,
         ) -> Result<stream::MonitorCapture, BackendError> {
-            match target {
-                // The whole system: every app except AudioSync's own tree.
-                CaptureTarget::Loopback(Activation {
-                    mode: LoopbackMode::ExcludeTree,
-                    ..
-                }) => stream::start(
-                    stream::Wiring::DefaultOutputMonitor,
-                    writer,
-                    equalizer,
-                    feeds,
-                ),
-                _ => Err(BackendError::NotOffered),
-            }
+            let plan = match &target {
+                CaptureTarget::Input { endpoint_id, pair } => {
+                    // Only the first two channels are offered.
+                    if *pair > 0 {
+                        return Err(BackendError::NotOffered);
+                    }
+                    let graph = self.registry.graph()?;
+                    let serial = graph
+                        .named(endpoint_id)
+                        .and_then(|(_, node)| node.prop("object.serial"))
+                        .ok_or(BackendError::DeviceGone)?;
+                    stream::Plan {
+                        wiring: stream::Wiring::Input,
+                        filter: None,
+                        serial: Some(serial.to_owned()),
+                    }
+                }
+                _ => stream::Plan {
+                    wiring: stream::Wiring::Links,
+                    filter: stream::filter_of(&target, self.own_pid),
+                    serial: None,
+                },
+            };
+            stream::start_plan(plan, writer, equalizer, feeds)
         }
 
         fn start_renderer(
             &mut self,
-            _endpoint: &Endpoint,
-            _reader: Reader,
-            _control: RendererControl,
-            _gain: Arc<SharedGain>,
-        ) -> Result<NoRenderer, BackendError> {
-            Err(BackendError::NotOffered)
+            endpoint: &Endpoint,
+            reader: Reader,
+            control: RendererControl,
+            gain: Arc<SharedGain>,
+        ) -> Result<playback::Playback, BackendError> {
+            let target = playback::target(&self.registry.graph()?, &endpoint.id)?;
+            playback::start(target, reader, control, gain)
+        }
+
+        fn open_microphone(
+            &mut self,
+            seconds: f64,
+        ) -> Result<Box<dyn Microphone>, MicrophoneError> {
+            let graph = self
+                .registry
+                .graph()
+                .map_err(|_| MicrophoneError::Missing)?;
+            let (id, node) = graph.default_input().ok_or(MicrophoneError::Missing)?;
+            if graph.default_input_hands_free() {
+                return Err(MicrophoneError::HandsFree);
+            }
+            let rate = graph
+                .nodes
+                .get(&id)
+                .and_then(|node| node.format)
+                .map(|(rate, _)| rate);
+            let microphone = microphone::open(node.name().to_owned(), rate, seconds)?;
+            Ok(Box::new(microphone))
         }
     }
 
@@ -165,6 +200,7 @@ mod driver {
         stream::probe()?;
         Ok(Controller::with_driver(PipeWireDriver {
             own_pid: std::process::id(),
+            registry: Registry::start()?,
         }))
     }
 }
