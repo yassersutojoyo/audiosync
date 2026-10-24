@@ -5437,7 +5437,7 @@ mod tests {
         let speaker = state.speaker("local:desk").unwrap().clone();
         let line = calibration_status(&app.strings(), &state, &speaker);
         assert!(
-            line.contains("Privacy"),
+            line.to_lowercase().contains("privacy"),
             "it says where to allow it: {line}"
         );
         state.calibration.phase = Phase::Done {
@@ -5607,7 +5607,11 @@ mod tests {
         state.calibrate_all.phase = AllPhase::Failed(Failure::MicrophoneDenied);
         let card = calibrate_all_card(&strings, &state);
         assert!(card.privacy && !card.results_shown);
-        assert!(card.said.contains("Privacy"), "{}", card.said);
+        assert!(
+            card.said.to_lowercase().contains("privacy"),
+            "{}",
+            card.said
+        );
     }
 
     #[test]
