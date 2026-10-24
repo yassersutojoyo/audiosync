@@ -10,7 +10,10 @@ final class EqualizerWindowController {
 
     func show() {
         if window == nil {
-            let host = NSHostingController(rootView: EqualizerView(model: model))
+            let view = EqualizerView(model: model,
+                                     askSave: { [weak self] in self?.promptSaveCurve() },
+                                     askRename: { [weak self] index in self?.promptRenameCurve(index) })
+            let host = NSHostingController(rootView: view)
             let panel = NSWindow(contentViewController: host)
             panel.title = UIStrings().equalizerTitle
             panel.styleMask = [.titled, .closable]
@@ -22,12 +25,68 @@ final class EqualizerWindowController {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
+
+    /// The name field starts with the saved curve the picker shows, so saving
+    /// again updates it, or with the next "Curve N".
+    private func promptSaveCurve() {
+        let text = UIStrings()
+        let shown = model.shownSavedIndex.map { model.curves[$0].name }
+        guard shown != nil || model.curves.count < Equalizer.maxCurves else {
+            inform(text.saveCurveTitle, text.curvesFull(Equalizer.maxCurves))
+            return
+        }
+        guard let typed = promptName(title: text.saveCurveTitle, message: text.saveCurveMessage,
+                                     name: shown ?? text.numberedCurve(model.curves.count + 1),
+                                     confirm: text.save) else { return }
+        if Equalizer.curveName(typed) != nil, !model.saveCurve(named: typed) {
+            inform(text.saveCurveTitle, text.curvesFull(Equalizer.maxCurves))
+        }
+    }
+
+    private func promptRenameCurve(_ index: Int) {
+        let text = UIStrings()
+        guard model.curves.indices.contains(index) else { return }
+        let current = model.curves[index].name
+        guard let typed = promptName(title: text.renameCurveTitle, message: text.renameMessage(current),
+                                     name: current, confirm: text.rename) else { return }
+        if !model.renameCurve(index, to: typed), let name = Equalizer.curveName(typed) {
+            inform(text.renameCurveTitle, text.curveNameTaken(name))
+        }
+    }
+
+    /// The typed name, or nil when the user cancelled.
+    private func promptName(title: String, message: String, name: String, confirm: String) -> String? {
+        let text = UIStrings()
+        let prompt = NSAlert()
+        prompt.messageText = title
+        prompt.informativeText = message
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = name
+        field.placeholderString = text.curveNameField
+        field.setAccessibilityLabel(text.curveNameField)
+        prompt.accessoryView = field
+        prompt.addButton(withTitle: confirm)
+        prompt.addButton(withTitle: text.cancel)
+        prompt.window.initialFirstResponder = field
+        guard prompt.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue
+    }
+
+    private func inform(_ title: String, _ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
+    }
 }
 
 private let accent = Brand.teal
 
 struct EqualizerView: View {
     @ObservedObject var model: EqualizerModel
+    let askSave: () -> Void
+    let askRename: (Int) -> Void
     private let text = UIStrings()
 
     var body: some View {
@@ -40,17 +99,11 @@ struct EqualizerView: View {
                 .toggleStyle(.switch)
                 .font(.headline)
                 Spacer()
-                Menu(model.matchingPreset.map(text.equalizerPreset) ?? text.equalizerCustom) {
-                    ForEach(Equalizer.presets, id: \.id) { preset in
-                        Button(text.equalizerPreset(preset.id)) {
-                            var n = s
-                            n.gains = preset.gains
-                            n.enabled = true
-                            model.set(n)
-                        }
-                    }
-                }
-                .frame(width: 150)
+                Text(text.equalizerCurve)
+                    .accessibilityHidden(true)   // the picker carries the label
+                curvePicker
+                    .frame(width: 170)
+                    .accessibilityLabel(text.equalizerCurve)
             }
 
             HStack(alignment: .bottom, spacing: 6) {
@@ -72,17 +125,37 @@ struct EqualizerView: View {
                 Text(text.equalizerCaption(maxGain: Int(Equalizer.maxGain)))
                     .font(.caption).foregroundStyle(Brand.secondaryText)
                 Spacer()
-                Button(text.equalizerReset) {
-                    var n = s
-                    n.gains = Equalizer.presets[0].gains
-                    n.preamp = 0
-                    model.set(n)
-                }
+                Button(text.equalizerReset) { model.reset() }
             }
         }
         .padding(18)
         .frame(width: 520)
         .tint(accent)
+    }
+
+    /// The presets, then the saved curves; the label is the curve the gains
+    /// match, or Custom, which is not an entry.
+    private var curvePicker: some View {
+        let saved = model.shownSavedIndex
+        return Menu(text.equalizerCurveName(model.shownCurve, saved: model.curves)) {
+            ForEach(Equalizer.presets, id: \.id) { preset in
+                Button(text.equalizerPreset(preset.id)) { model.pick(gains: preset.gains) }
+            }
+            if !model.curves.isEmpty {
+                Divider()
+                ForEach(model.curves.indices, id: \.self) { index in
+                    let curve = model.curves[index]
+                    Button(curve.name) { model.pick(gains: curve.gains) }
+                }
+            }
+            Divider()
+            Button(text.equalizerSaveCurve) { askSave() }
+            if let saved, model.curves.indices.contains(saved) {
+                let name = model.curves[saved].name
+                Button(text.equalizerRenameCurve(name)) { askRename(saved) }
+                Button(text.equalizerDeleteCurve(name)) { model.deleteCurve(saved) }
+            }
+        }
     }
 
     /// `label` is the short text under the slider; `name` is what VoiceOver reads.

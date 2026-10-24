@@ -39,8 +39,8 @@ struct HiddenSpeakers: Equatable {
     func contains(_ key: String) -> Bool { entries.contains { $0.key == key } }
 
     /// The key a row is hidden under: a Cast speaker's app ID
-    /// ("cast:<device ID>", not the "lc:cast:" key its name is saved under),
-    /// the speaker key for the others.
+    /// ("cast:<device ID>", not the "cc:" key its name is saved under, so
+    /// entries saved before that key stay readable), the speaker key for the others.
     static func key(id: String, tag: SpeakerTag) -> String {
         tag == .cast ? id : SpeakerKey.make(id: id, airplay: tag == .airplay)
     }

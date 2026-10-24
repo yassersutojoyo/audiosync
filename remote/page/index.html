@@ -92,7 +92,12 @@ button {
   cursor: pointer;
 }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-button:disabled, input:disabled, select:disabled { cursor: default; opacity: 0.5; }
+button:disabled, input:disabled, select:disabled { cursor: default; }
+/* Disabled text keeps 4.5:1 in both themes; a faded control would not. */
+button:disabled, input[type=text]:disabled, input[type=number]:disabled { color: var(--muted); border-color: var(--separator); }
+select:disabled { color: var(--muted); border-color: var(--separator); }
+button.primary:disabled { background: var(--surface); border-color: var(--separator); color: var(--muted); }
+input[type=range]:disabled, input[role=switch]:disabled { opacity: 0.5; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 input[type=text], input[type=number], select {
   min-height: 44px;
@@ -161,6 +166,9 @@ input[role=switch]:checked::before { background: var(--knob); transform: transla
 .delay-line input { min-width: 0; width: 100%; text-align: center; font-variant-numeric: tabular-nums; }
 .delay-line button { padding: 0; font-size: 1.25rem; }
 .notice { background: var(--notice); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
+.calibrating { background: var(--notice); color: var(--text); font-weight: 600; border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; }
+.preset-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.zone-members { font-size: 0.875rem; overflow-wrap: anywhere; }
 .speaker.off-line { background: var(--background); border-style: dashed; border-color: var(--control-border); }
 .speaker.off-line h2 { color: var(--muted); }
 .state-text { padding: 24px 0; text-align: center; }
@@ -207,6 +215,8 @@ footer .error { flex-basis: 100%; margin-top: 0; }
 </div>
 <p id="loading" class="state-text muted" data-text="connecting"></p>
 <fieldset id="controls" hidden>
+<p id="calibrating" class="calibrating" tabindex="-1" data-text="calibrating" hidden></p>
+<fieldset id="writes">
 <section class="playing card" aria-labelledby="playing-label">
 <h2 id="playing-label" class="sr-only" data-text="nowPlaying"></h2>
 <p id="playing-title" class="title"></p>
@@ -225,8 +235,18 @@ footer .error { flex-basis: 100%; margin-top: 0; }
 <p id="source-status" class="status muted" hidden></p>
 <p id="source-error" class="error" hidden></p>
 </section>
+<section id="presets" class="card" aria-labelledby="presets-title" hidden>
+<h2 id="presets-title" data-text="presets"></h2>
+<div id="preset-list" class="preset-list"></div>
+<p id="preset-error" class="error" hidden></p>
+</section>
+<section id="zones" aria-labelledby="zones-title" hidden>
+<h2 id="zones-title" class="sr-only" data-text="zones"></h2>
+<div id="zone-list"></div>
+</section>
 <p id="empty" class="state-text muted" data-text="noSpeakers" hidden></p>
 <div id="speakers"></div>
+</fieldset>
 <footer>
 <p id="computer" class="muted"></p>
 <button id="unpair" type="button" aria-describedby="unpair-error" data-text="unpair"></button>
@@ -290,6 +310,16 @@ const TEXT = {
   stepOpen: "Open AudioSync from the new icon and enter the pairing code.",
   orderIPhone: "Do step 2 before you enter the code: a pairing made in Safari doesn't carry over to the Home Screen app, so you would pair again there.",
   orderOther: "Do step 2 before you enter the code, so you pair in the app you'll use.",
+  calibrating: "AudioSync is calibrating. The controls come back when it's done.",
+  calibrationDone: "Calibration is done. The controls are back.",
+  presets: "Presets",
+  zones: "Zones",
+  zoneVolume: "Zone volume",
+  turnOn: "Turn On",
+  turnOff: "Turn Off",
+  zoneCount: (on, total) => `${on} of ${total} on`,
+  zoneWaiting: (count) => `, ${count} waiting`,
+  zoneEmpty: "None of this zone's speakers is here right now.",
 };
 
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
@@ -319,6 +349,13 @@ const ui = {
   retry: byId("retry"),
   loading: byId("loading"),
   controls: byId("controls"),
+  calibrating: byId("calibrating"),
+  writes: byId("writes"),
+  presets: byId("presets"),
+  presetList: byId("preset-list"),
+  presetError: byId("preset-error"),
+  zones: byId("zones"),
+  zoneList: byId("zone-list"),
   playingTitle: byId("playing-title"),
   playingDetail: byId("playing-detail"),
   master: byId("master"),
@@ -344,8 +381,11 @@ let streamed = false;
 let streamReplaced = false;
 let focusAfterPair = false;
 let snapshot = null;
+let calibrating = false;
 let rowCount = 0;
 const rows = new Map();
+const zoneRows = new Map();
+const presetButtons = new Map();
 let sourceList = "";
 let switchingTo = null;
 let switchTimer = null;
@@ -438,6 +478,8 @@ function clearErrors() {
   showError(ui.unpairError, "");
   showError(ui.sourceError, "");
   for (const row of rows.values()) { showError(row.error, ""); }
+  for (const row of zoneRows.values()) { showError(row.error, ""); }
+  showError(ui.presetError, "");
 }
 
 function setLost(value, message) {
@@ -475,7 +517,7 @@ function connect() {
     render(next);
     const now = document.activeElement;
     if (stranded && (!now || now === document.body || ui.banner.contains(now) || ui.pair.contains(now))) {
-      ui.master.focus();
+      if (calibrating) { ui.calibrating.focus(); } else { ui.master.focus(); }
     }
   });
   // Sent when a newer page of this device took the stream; reconnecting would take it back.
@@ -818,6 +860,163 @@ function showComputer(name) {
   ui.computer.hidden = !shown;
 }
 
+// A disabled fieldset drops focus to the page top; the calibrating line takes it instead.
+function showCalibrating(value) {
+  const now = value === true;
+  if (now === calibrating) { return; }
+  calibrating = now;
+  ui.calibrating.hidden = !now;
+  if (now) {
+    clearErrors();
+    if (ui.writes.contains(document.activeElement)) { ui.calibrating.focus(); }
+  }
+  ui.writes.disabled = now;
+  announce(now ? TEXT.calibrating : TEXT.calibrationDone);
+}
+
+function makeZone(zone) {
+  rowCount += 1;
+  const key = `z${rowCount}`;
+  const root = document.createElement("article");
+  root.className = "zone card";
+  root.setAttribute("aria-labelledby", `${key}-name`);
+  const head = document.createElement("div");
+  head.className = "speaker-head";
+  const names = document.createElement("div");
+  names.className = "names";
+  const name = document.createElement("h2");
+  name.id = `${key}-name`;
+  name.tabIndex = -1;
+  const count = document.createElement("p");
+  count.className = "kind muted";
+  names.append(name, count);
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  head.append(names, toggle);
+  const members = document.createElement("p");
+  members.className = "zone-members muted";
+  const volumeLine = document.createElement("div");
+  volumeLine.className = "slider-line";
+  const volumeLabel = document.createElement("label");
+  volumeLabel.id = `${key}-volume-label`;
+  volumeLabel.htmlFor = `${key}-volume`;
+  volumeLabel.textContent = TEXT.zoneVolume;
+  const volume = document.createElement("input");
+  volume.type = "range";
+  volume.id = `${key}-volume`;
+  volume.min = "0";
+  volume.max = "100";
+  volume.step = "1";
+  volume.setAttribute("aria-labelledby", `${key}-volume-label ${key}-name`);
+  const volumeValue = document.createElement("output");
+  volumeValue.htmlFor = volume.id;
+  volumeLine.append(volumeLabel, volume, volumeValue);
+  const error = document.createElement("p");
+  error.className = "error";
+  error.hidden = true;
+  root.append(head, members, volumeLine, error);
+
+  const row = { id: zone.id, root, name, count, toggle, members, error, zone };
+  const fail = (message) => {
+    showError(row.error, message);
+    announce(`${row.zone.name}: ${message}`);
+  };
+  const change = (fields) => {
+    showError(row.error, "");
+    return post(`/api/zones/${encodeURIComponent(row.id)}`, fields);
+  };
+  row.volumeControl = rangeControl(volume, volumeValue, () => row.zone.volume,
+    (value) => change({ volume: value }), fail);
+  row.toggleSender = sender(() => change({ toggle: true }), (problem) => {
+    if (problem) { fail(problem.message); }
+  });
+  toggle.addEventListener("click", () => row.toggleSender.set(true));
+  return row;
+}
+
+function updateZone(row, zone, speakers) {
+  row.zone = zone;
+  row.name.textContent = zone.name;
+  const counts = zone.counts;
+  const present = counts.total > 0;
+  row.count.textContent = present
+    ? TEXT.zoneCount(counts.on, counts.total) + (counts.waiting > 0 ? TEXT.zoneWaiting(counts.waiting) : "")
+    : TEXT.zoneEmpty;
+  const label = present && counts.on === counts.total ? TEXT.turnOff : TEXT.turnOn;
+  row.toggle.textContent = label;
+  row.toggle.setAttribute("aria-label", `${label}, ${zone.name}`);
+  if (!present && document.activeElement === row.toggle) { row.name.focus(); }
+  row.toggle.disabled = !present;
+  const names = zone.members.map((id) => speakers.get(id)).filter(Boolean);
+  row.members.textContent = names.join(", ");
+  row.members.hidden = names.length === 0;
+  if (!row.volumeControl.held()) { row.volumeControl.show(zone.volume); }
+}
+
+function renderZones(next) {
+  const zones = Array.isArray(next.zones) ? next.zones : [];
+  const speakers = new Map(next.speakers.map((speaker) => [speaker.id, speaker.name]));
+  const focusedGone = [...zoneRows.values()].find((row) => row.root.contains(document.activeElement));
+  const seen = new Set();
+  let previous = null;
+  for (const zone of zones) {
+    seen.add(zone.id);
+    let row = zoneRows.get(zone.id);
+    if (!row) {
+      row = makeZone(zone);
+      zoneRows.set(zone.id, row);
+    }
+    updateZone(row, zone, speakers);
+    const place = previous ? previous.root.nextSibling : ui.zoneList.firstChild;
+    if (place !== row.root) { ui.zoneList.insertBefore(row.root, place); }
+    previous = row;
+  }
+  for (const [id, row] of zoneRows) {
+    if (!seen.has(id)) { row.root.remove(); zoneRows.delete(id); }
+  }
+  if (focusedGone && !focusedGone.root.isConnected) { ui.title.focus(); }
+  ui.zones.hidden = zones.length === 0;
+}
+
+function renderPresets(next) {
+  const presets = Array.isArray(next.presets) ? next.presets : [];
+  const focused = document.activeElement;
+  const hadFocus = ui.presetList.contains(focused);
+  const seen = new Set();
+  let previous = null;
+  for (const preset of presets) {
+    seen.add(preset.id);
+    let button = presetButtons.get(preset.id);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      const id = preset.id;
+      button.addEventListener("click", () => {
+        showError(ui.presetError, "");
+        post(`/api/presets/${encodeURIComponent(id)}`, { recall: true }).catch((problem) => {
+          if (problem) {
+            showError(ui.presetError, problem.message);
+            announce(problem.message);
+          }
+        });
+      });
+      presetButtons.set(preset.id, button);
+    }
+    button.textContent = preset.name;
+    // The current preset is filled, not only tinted, and named current to screen readers.
+    button.classList.toggle("primary", preset.current === true);
+    if (preset.current === true) { button.setAttribute("aria-current", "true"); } else { button.removeAttribute("aria-current"); }
+    const place = previous ? previous.nextSibling : ui.presetList.firstChild;
+    if (place !== button) { ui.presetList.insertBefore(button, place); }
+    previous = button;
+  }
+  for (const [id, button] of presetButtons) {
+    if (!seen.has(id)) { button.remove(); presetButtons.delete(id); }
+  }
+  if (hadFocus && !focused.isConnected) { (previous || ui.title).focus(); }
+  ui.presets.hidden = presets.length === 0;
+}
+
 function sourceName(id) {
   const list = snapshot && Array.isArray(snapshot.sources) ? snapshot.sources : [];
   const source = list.find((entry) => entry.id === id);
@@ -970,6 +1169,9 @@ function render(next) {
   }
   if (focusedRow && !focusedRow.root.isConnected) { focusNeighbor(order, focusedRow.root); }
   ui.empty.hidden = next.speakers.length > 0;
+  renderPresets(next);
+  renderZones(next);
+  showCalibrating(next.calibrating);
 }
 
 const masterControl = rangeControl(ui.master, ui.masterValue, () => (snapshot ? snapshot.master.volume : 0),

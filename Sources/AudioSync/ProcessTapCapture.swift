@@ -16,8 +16,8 @@ import Synchronization
 ///   for, and is built again whenever that set changes (S11, `AppTapFollow`).
 ///   A mix of apps does the same over all of them in one tap; an "all except"
 ///   mix taps the whole system without those processes and AudioSync's own.
-/// - An input device is read directly, its first two channels as L and R (S13,
-///   S14, `CaptureChannels`).
+/// - An input device is read directly, the chosen channel pair as L and R
+///   (S13, S14, `CaptureChannels`, `InputChannelPair`).
 ///
 /// Control calls, the property listeners and `onInterrupted` all run on the
 /// main queue. The IOProc touches nothing but a `CaptureSink`, which is set up
@@ -97,6 +97,8 @@ final class SourceCapture {
     var sessionHeard: Bool { sink?.heard.load(ordering: .relaxed) ?? false }
 
     private var source: AudioSource?
+    /// The stored channel pair (`InputChannelPair.index`) an input source reads.
+    private var inputPair = 0
     private var parts: EngineParts?
     private var sink: CaptureSink?
     /// The IOProc that feeds `sink`, on the tap's aggregate device or the input device.
@@ -123,11 +125,13 @@ final class SourceCapture {
 
     /// Starts capturing `source` into `parts`. Once the capture rate is known,
     /// `parts.prepare(captureRate:)` runs before the first IOProc callback. On
-    /// any failure everything is released again and the error is thrown.
-    func start(source: AudioSource, parts: EngineParts) throws {
+    /// any failure everything is released again and the error is thrown. An
+    /// input source reads the channel pair stored as `inputPair`.
+    func start(source: AudioSource, parts: EngineParts, inputPair: Int = 0) throws {
         halt()   // a start always follows a halt; this keeps a stray second start harmless
         sessionMark &+= 1
         self.source = source
+        self.inputPair = inputPair
         self.parts = parts
         _ = Self.runHeard   // the static's lazy init runs here, never on the IO thread
         sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(source))
@@ -225,11 +229,19 @@ final class SourceCapture {
 
     /// An input device, read directly (S13, S14).
     private func startInput(_ uid: String) throws {
-        guard let parts, let sink else { return }
+        guard let parts else { return }
         guard let device = HAL.device(uid: uid) else { throw CaptureError.inputNotFound(uid) }
         if AudioDevices.isHandsFreeInput(device) { throw CaptureError.inputHandsFree(uid) }
-        switch CaptureInputFormat.check(try HAL.inputStreamFormats(of: device)) {
-        case .usable: break
+        let streams = try HAL.inputStreamFormats(of: device)
+        let channels = CaptureInputFormat.channelCount(streams)
+        let (pair, fellBack) = InputChannelPair.resolve(saved: inputPair, channels: channels)
+        if fellBack {
+            DebugTrace.log("[AudioSync] capture: \(uid) has \(channels) channels, so its saved pair "
+                           + "\(2 * inputPair + 1)-\(2 * inputPair + 2) is gone; reading channels 1-2")
+        }
+        let layout: CaptureChannels.Layout
+        switch CaptureInputFormat.check(streams, pair: pair) {
+        case .usable(let found): layout = found
         case .noChannels: throw CaptureError.inputNotFound(uid)
         case .unsupported: throw CaptureError.formatUnusable(kAudioDeviceUnsupportedFormatError)
         }
@@ -237,12 +249,17 @@ final class SourceCapture {
         let status = HAL.read(device, kAudioDevicePropertyNominalSampleRate, into: &rate)
         guard status == noErr else { throw CaptureError.formatUnusable(status) }
         sampleRate = CaptureRate.session(reported: rate)
+        // The IOProc reads the layout without a lock, so it is fixed before the IOProc exists.
+        let sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(.input(uid: uid)),
+                               layout: layout)
+        self.sink = sink
         let link = try IOLink(device: device, sink: sink)
         parts.prepare(captureRate: sampleRate)
         do { try link.begin() } catch { link.close(); throw error }
         io = link
-        watchInput(device, uid: uid)
-        DebugTrace.log("[AudioSync] capture: input device \(uid) at \(sampleRate) Hz")
+        watchInput(device, uid: uid, formats: streams)
+        DebugTrace.log("[AudioSync] capture: input device \(uid) at \(sampleRate) Hz, "
+                       + "\(CaptureChannels.describe(layout, of: channels))")
     }
 
     // MARK: - The tap
@@ -419,7 +436,7 @@ final class SourceCapture {
         }
     }
 
-    private func watchInput(_ device: AudioObjectID, uid: String) {
+    private func watchInput(_ device: AudioObjectID, uid: String, formats: [AudioStreamBasicDescription]) {
         let mark = sessionMark
         let gone = { [weak self] in
             guard let self, self.isCurrent(mark) else { return }
@@ -440,6 +457,19 @@ final class SourceCapture {
             guard CaptureRate.needsRestart(current: self.sampleRate, reported: rate) else { return }
             DebugTrace.log("[AudioSync] capture rate changed: \(self.sampleRate) → \(rate) Hz")
             self.interrupt(.formatChanged)
+        }
+        // The IOProc's layout was read from these formats; a new bit depth or channel count would be misread.
+        let layoutChanged = { [weak self] in
+            guard let self, self.isCurrent(mark) else { return }
+            let now = try? HAL.inputStreamFormats(of: device)
+            guard CaptureInputFormat.needsRestart(started: formats, now: now) else { return }
+            DebugTrace.log("[AudioSync] capture: input device \(uid) changed its stream format")
+            self.interrupt(.formatChanged)
+        }
+        sessionListeners.add(device, kAudioDevicePropertyStreamConfiguration, scope: kAudioObjectPropertyScopeInput,
+                             layoutChanged)
+        for stream in (try? HAL.inputStreams(of: device)) ?? [] {
+            sessionListeners.add(stream, kAudioStreamPropertyVirtualFormat, layoutChanged)
         }
     }
 
@@ -493,10 +523,13 @@ private extension SourceCapture {
         static let runHeard = Atomic<Bool>(false)
         /// This session reads a tap, so its sound proves the permission (`CaptureCheck.provesPermission`).
         private let provesPermission: Bool
+        /// Which channels play as L and R, and how they are stored.
+        private let layout: CaptureChannels.Layout
 
-        init(parts: EngineParts, provesPermission: Bool) {
+        init(parts: EngineParts, provesPermission: Bool, layout: CaptureChannels.Layout = .stereoFloat) {
             self.parts = parts
             self.provesPermission = provesPermission
+            self.layout = layout
             stereoBlock = .allocate(capacity: CaptureChannels.blockFrames * 2)
             stereoBlock.initialize(repeating: 0, count: CaptureChannels.blockFrames * 2)
         }
@@ -507,7 +540,7 @@ private extension SourceCapture {
         /// and the AirPlay sender's input block by block (S7, S34–S40). Real-time safe.
         func consume(_ input: UnsafePointer<AudioBufferList>) {
             callbacks.wrappingAdd(1, ordering: .relaxed)
-            let channels = CaptureChannels(input)
+            let channels = CaptureChannels(input, layout: layout)
             guard channels.frames > 0 else {
                 silentCallbacks.wrappingAdd(1, ordering: .relaxed)
                 return
@@ -637,8 +670,9 @@ private extension SourceCapture {
         /// Adds a listener for one property of `object`. A listener Core Audio
         /// refuses is logged and left out; capture runs on without it.
         mutating func add(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                          scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
                           _ handler: @escaping () -> Void) {
-            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope,
                                                      mElement: kAudioObjectPropertyElementMain)
             // Kept as the block object itself, so the removal names the same block.
             let block: AudioObjectPropertyListenerBlock = { _, _ in handler() }
@@ -719,8 +753,8 @@ private extension SourceCapture {
             return device
         }
 
-        /// The formats the device's input streams deliver to an IOProc, in stream order.
-        static func inputStreamFormats(of device: AudioObjectID) throws -> [AudioStreamBasicDescription] {
+        /// The device's input streams, in stream order.
+        static func inputStreams(of device: AudioObjectID) throws -> [AudioStreamID] {
             var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
                                                      mScope: kAudioObjectPropertyScopeInput,
                                                      mElement: kAudioObjectPropertyElementMain)
@@ -731,7 +765,12 @@ private extension SourceCapture {
             if streams.isEmpty { return [] }
             status = AudioObjectGetPropertyData(device, &address, 0, nil, &listBytes, &streams)
             guard status == noErr else { throw CaptureError.formatUnusable(status) }
-            return try streams.prefix(Int(listBytes) / MemoryLayout<AudioStreamID>.size).map { stream in
+            return Array(streams.prefix(Int(listBytes) / MemoryLayout<AudioStreamID>.size))
+        }
+
+        /// The formats the device's input streams deliver to an IOProc, in stream order.
+        static func inputStreamFormats(of device: AudioObjectID) throws -> [AudioStreamBasicDescription] {
+            return try inputStreams(of: device).map { stream in
                 var format = AudioStreamBasicDescription()
                 let status = read(stream, kAudioStreamPropertyVirtualFormat, into: &format)
                 guard status == noErr else { throw CaptureError.formatUnusable(status) }

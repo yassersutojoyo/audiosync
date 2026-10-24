@@ -50,6 +50,46 @@ enum LocalDelay {
         return Dictionary(uniqueKeysWithValues: zip(unique, holds))
     }
 
+    // MARK: The lead per source and output (core `asc_lead_network_wait_ms`)
+
+    enum LeadOutput { case local, airPlay, cast }
+
+    /// The network wait an output plays at while `source` is captured, in
+    /// ms: `networkMs` (L, the Cast offset, or the longer of both; nil while
+    /// no network speaker plays), except for a local output with an input
+    /// device as the source, which plays at its device's start lead alone.
+    static func networkWaitMs(source: AudioSource, output: LeadOutput, networkMs: Double?) -> Double? {
+        let sourceKind: UInt32
+        switch source {
+        case .system: sourceKind = UInt32(ASC_LEAD_SOURCE_SYSTEM)
+        case .app, .mix: sourceKind = UInt32(ASC_LEAD_SOURCE_APP)
+        case .input: sourceKind = UInt32(ASC_LEAD_SOURCE_INPUT)
+        }
+        let outputKind: UInt32
+        switch output {
+        case .local: outputKind = UInt32(ASC_LEAD_OUTPUT_LOCAL)
+        case .airPlay: outputKind = UInt32(ASC_LEAD_OUTPUT_AIRPLAY)
+        case .cast: outputKind = UInt32(ASC_LEAD_OUTPUT_CAST)
+        }
+        var wait = 0.0
+        return asc_lead_network_wait_ms(sourceKind, outputKind, networkMs != nil, networkMs ?? 0, &wait) ? wait : nil
+    }
+
+    /// The lead the local speakers play at, as the debug log names it.
+    static func leadDescription(source: AudioSource, networkMs: Double?) -> String {
+        let live: String
+        if case .input = source { live = "live input: " } else { live = "" }
+        switch (networkWaitMs(source: source, output: .local, networkMs: networkMs), networkMs) {
+        case let (wait?, _):
+            return "lead: \(live)local speakers wait \(Int(wait.rounded())) ms for the network speakers"
+        case let (nil, network?):
+            return "lead: \(live)local speakers play at their device's start lead (logged in ms once measured), "
+                + "AirPlay and Google Cast at \(Int(network.rounded())) ms"
+        case (nil, nil):
+            return "lead: \(live)local speakers play at their device's start lead (logged in ms once measured)"
+        }
+    }
+
     /// The `setDelay` calls that re-time the running renderers: `applied`
     /// holds what each running renderer was last given, and every one whose
     /// hold-back in `holdBacks` differs gets the new one. A renderer whose

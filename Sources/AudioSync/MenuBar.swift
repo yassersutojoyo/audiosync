@@ -46,8 +46,8 @@ final class AppModel: ObservableObject {
         /// A speaker AudioSync streams to through AirPlay, not a local output.
         var isAirPlay: Bool { tag == .airplay }
         var isCast: Bool { tag == .cast }
-        /// Stable key across both kinds, used by groups and auto-connect.
-        var key: String { SpeakerKey.make(id: id, airplay: isAirPlay) }
+        /// Stable key across every kind, used by names, zones and auto-connect.
+        var key: String { SpeakerKey.of(id: id, tag: tag) }
         var isRenamed: Bool { !systemName.isEmpty && name != systemName }
         /// The system name when renamed, for VoiceOver labels.
         var renamedFrom: String? { isRenamed ? systemName : nil }
@@ -63,34 +63,68 @@ final class AppModel: ObservableObject {
         var inConnected = false
     }
 
-    struct Group: Identifiable, Equatable {
+    /// A zone as the windows show it (S245 to S247).
+    struct Zone: Identifiable, Equatable {
         let id, name: String
-        let memberCount: Int
-        let available: Int          // members currently present
-        let allOn: Bool
+        var volume: Double
+        /// Its members in zone order, the hidden ones left out, so the rows
+        /// and the count agree.
+        var members: [ZoneMember] = []
+        /// Present members switched on, the waiting ones included.
+        var on = 0
+        var waiting = 0
+        /// Members listed now that a click switches.
+        var present = 0
+        /// Every member a click would switch on is on.
+        var allOn = false
+        var total: Int { members.count }
+    }
+
+    struct ZoneMember: Identifiable, Equatable {
+        let key: String
+        var id: String { key }
+        let name: String
+        /// The badge icon of a dimmed row, by the key's kind.
+        let symbol: String
+        /// The row's speaker ID while it is listed; nil shows a dimmed row.
+        var speakerID: String?
+        /// Why it doesn't play with the zone: not found, part of a target,
+        /// needs AirPlay 2, or a Cast speaker left off.
+        var note: String?
+        /// The stereo pair or home theater it plays as part of, offered as
+        /// Use <target> Instead.
+        var target: ZoneTarget?
+    }
+
+    struct ZoneTarget: Equatable {
+        let key, name: String
     }
 
     struct Source: Identifiable, Equatable {
         let id, name: String        // id: "" for the whole system, else a bundle ID
         let icon: NSImage?
         let isInput: Bool
-        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name }
+        /// The channel pairs an input device with more than two channels
+        /// offers, as shown (`InputChannelPair.offered`); empty otherwise.
+        var pairs: [String] = []
+        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs }
     }
 
     struct Actions {
         var setPower: (Bool) -> Void = { _ in }
         var selectSource: (String) -> Void = { _ in }
+        var selectInputPair: (Int) -> Void = { _ in }
         var toggleMixApp: (String) -> Void = { _ in }
         var setMixMode: (AppMixMode) -> Void = { _ in }
         var setMaster: (Double) -> Void = { _ in }
-        var setAirPlayEnabled: (String, Bool) -> Void = { _, _ in }
+        var setAirPlayEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
         var forgetAirPlayPairing: (String) -> Void = { _ in }
-        var setLocalEnabled: (String, Bool) -> Void = { _, _ in }
+        var setLocalEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
         var setAirPlayDelay: (Double) -> Void = { _ in }
-        var setCastEnabled: (String, Bool) -> Void = { _, _ in }
+        var setCastEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         /// The device's own volume, slider position 0 to 100.
         var setCastVolume: (String, Double) -> Void = { _, _ in }
         /// An arrow key on the device's slider: up or down one step.
@@ -116,10 +150,27 @@ final class AppModel: ObservableObject {
         /// Dismiss the notice with this subject.
         var dismissNotice: (String) -> Void = { _ in }
         var dismissAllNotices: () -> Void = {}
-        var toggleGroup: (String) -> Void = { _ in }
-        var deleteGroup: (String) -> Void = { _ in }
-        var renameGroup: (String) -> Void = { _ in }
-        var newGroup: () -> Void = {}
+        var toggleZone: (String) -> Void = { _ in }
+        var deleteZone: (String) -> Void = { _ in }
+        var renameZone: (String) -> Void = { _ in }
+        /// Calibrate Zone… for zone `id` (S255).
+        var calibrateZone: (String) -> Void = { _ in }
+        /// The zone slider's position, 0 to 100.
+        var setZoneVolume: (String, Double) -> Void = { _, _ in }
+        var newZone: () -> Void = {}
+        /// New Zone… in a row's Move to Zone menu: speaker key and name.
+        var newZoneWithSpeaker: (String, String) -> Void = { _, _ in }
+        /// Speaker key, zone ID.
+        var moveToZone: (String, String) -> Void = { _, _ in }
+        var removeFromZone: (String) -> Void = { _ in }
+        /// Preset ID (S265).
+        var recallPreset: (String) -> Void = { _ in }
+        var savePreset: () -> Void = {}
+        var renamePreset: (String) -> Void = { _ in }
+        var updatePreset: (String) -> Void = { _ in }
+        var deletePreset: (String) -> Void = { _ in }
+        /// Zone ID, the member's key: its target takes its place (S247).
+        var useTargetInstead: (String, String) -> Void = { _, _ in }
         var setAutoConnect: (String, Bool) -> Void = { _, _ in }
         /// Speaker key, system name, the name typed (`SpeakerNames.rename`).
         var renameSpeaker: (String, String, String) -> Void = { _, _, _ in }
@@ -153,7 +204,11 @@ final class AppModel: ObservableObject {
 
     @Published var running = false
     @Published var sourceID = ""
+    /// The stored channel pair of the input source (`InputChannelPair.index`).
+    @Published var inputPair = 0
     @Published var sources: [Source] = []
+    /// The level meter under the source; it publishes on its own.
+    let inputLevel = InputLevel()
     /// The several-apps menu: the apps it offers, the mode it shows and the
     /// apps checked in that mode.
     @Published var mixApps: [Source] = []
@@ -186,6 +241,8 @@ final class AppModel: ObservableObject {
     @Published var localNetworkHint: LocalNetworkHint = .none
     @Published var nowPlaying: NowPlayingMonitor.Track?
     @Published var equalizerOn = false
+    /// The curve the equalizer picker shows, or "Custom".
+    @Published var equalizerCurve = ""
     /// Problems worth telling the user about (auto-connect, a lost source…),
     /// newest first; shown in the window and the menu bar panel instead of a
     /// modal alert, until dismissed or their cause is gone.
@@ -197,7 +254,9 @@ final class AppModel: ObservableObject {
     @Published var calibration = CalibrationStatus()
     /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
     @Published var calibrateAll = CalibrateAllStatus()
-    @Published var groups: [Group] = []
+    @Published var zones: [Zone] = []
+    /// The presets in list order, the current one marked (S259, S264).
+    @Published var presets: [PresetRow] = []
     @Published var hidden = HiddenState()
     /// The row whose switch takes the keyboard focus once it is built (H11).
     @Published var focusSwitch: String?
@@ -305,12 +364,13 @@ final class AppModel: ObservableObject {
                            in: deviceVolumes)
     }
 
-    /// A click on a speaker's switch, whatever kind it is.
-    func setEnabled(_ speaker: Speaker, _ on: Bool) {
+    /// A click on a speaker's switch, whatever kind it is; the web remote's
+    /// switches pass `.remote`.
+    func setEnabled(_ speaker: Speaker, _ on: Bool, origin: StartOrigin = .user) {
         switch speaker.tag {
-        case .airplay: actions.setAirPlayEnabled(speaker.id, on)
-        case .cast: actions.setCastEnabled(speaker.id, on)
-        default: actions.setLocalEnabled(speaker.id, on)
+        case .airplay: actions.setAirPlayEnabled(speaker.id, on, origin)
+        case .cast: actions.setCastEnabled(speaker.id, on, origin)
+        default: actions.setLocalEnabled(speaker.id, on, origin)
         }
     }
 
@@ -335,6 +395,18 @@ final class AppModel: ObservableObject {
         AccessibilityNotification.Announcement(text.speakerShown(entry.name)).post()
     }
 
+    /// Move to Zone in a row's menu.
+    func move(_ speaker: Speaker, to zone: Zone) {
+        actions.moveToZone(speaker.key, zone.id)
+        AccessibilityNotification.Announcement(text.speakerMovedToZone(speaker.name, zone: zone.name)).post()
+    }
+
+    /// Delete Zone: its members go back to the plain lists, without asking.
+    func delete(_ zone: Zone) {
+        actions.deleteZone(zone.id)
+        AccessibilityNotification.Announcement(text.zoneDeleted(zone.name)).post()
+    }
+
     func setVolume(_ speaker: Speaker, _ position: Double) {
         switch speaker.tag {
         case .airplay: actions.setAirPlayVolume(speaker.id, position)
@@ -343,9 +415,40 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// A group is on when all its present members are.
-    func state(of group: Group) -> SpeakerState {
-        SpeakerState(enabled: group.allOn, streaming: running)
+    /// A zone is on when every member a click would switch on is on.
+    func state(of zone: Zone) -> SpeakerState {
+        SpeakerState(enabled: zone.allOn, streaming: running)
+    }
+
+    func countText(of zone: Zone) -> String {
+        ZoneLayout.count(on: zone.on, waiting: zone.waiting, present: zone.present, total: zone.total, text: text)
+    }
+
+    /// The listed speaker a zone member's row shows.
+    func speaker(of member: ZoneMember) -> Speaker? {
+        guard let id = member.speakerID else { return nil }
+        return (local + shownAirPlay + cast).first { $0.id == id }
+    }
+
+    /// The zone holding `key`, if any.
+    func zone(holding key: String) -> Zone? {
+        zones.first { zone in zone.members.contains { $0.key == key } }
+    }
+
+    private var zonedKeys: Set<String> { Set(zones.flatMap { $0.members.map(\.key) }) }
+
+    /// This Mac and Connected Speakers as the windows list them: only the
+    /// speakers in no zone, which show under their zone instead.
+    var zonelessLayout: (thisMac: [Speaker], connected: [Speaker]) {
+        let all = layout
+        let zoned = zonedKeys
+        return (ZoneLayout.zoneless(all.thisMac, key: \.key, zoned: zoned),
+                ZoneLayout.zoneless(all.connected, key: \.key, zoned: zoned))
+    }
+
+    /// A section left with no row only because each of its speakers is in a zone.
+    func allInZones(_ section: [Speaker]) -> Bool {
+        !section.isEmpty && ZoneLayout.zoneless(section, key: \.key, zoned: zonedKeys).isEmpty
     }
 
     /// Speakers switched on right now, AirPlay and local.
@@ -659,6 +762,7 @@ struct MenuBarView: View {
         height += CGFloat(min(model.notices.items.count, 2)) * 90
         if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
         if offersCastAdd { height += 20 }
+        if PresetPanel.showsRow(model.presets) { height += 38 }
         return height
     }
 
@@ -678,6 +782,7 @@ struct MenuBarView: View {
             header(t)
             NoticeStack(model: model, compact: true)
             SourcePicker(model: model)
+            if PresetPanel.showsRow(model.presets) { PresetPicker(model: model) }
             // The Mac's own speakers belong with the volume, above the one
             // divider, drawn tight together as one block.
             VStack(alignment: .leading, spacing: 2) {
@@ -767,11 +872,13 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private func speakerList(_ t: UIStrings) -> some View {
-        let count = model.groups.count + model.layout.connected.count   // This Mac is above the divider
+        let layout = model.zonelessLayout
+        // This Mac is above the divider.
+        let count = model.zones.reduce(0) { $0 + 1 + $1.members.count } + layout.connected.count
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
-            Text(model.layout.thisMac.isEmpty
+            Text(layout.thisMac.isEmpty
                  ? (model.hidden.inThisMac || model.hidden.inConnected ? t.panelAllHidden : t.noSpeakers)
                  : model.hidden.inConnected ? t.panelConnectedHidden : model.networkEmptyText)
                 .font(.caption)
@@ -807,14 +914,14 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private func thisMacRows(_ t: UIStrings) -> some View {
-        let thisMac = model.layout.thisMac
+        let thisMac = model.zonelessLayout.thisMac
         if !thisMac.isEmpty {
             VStack(spacing: 0) {
                 ForEach(thisMac) { speaker in
                     CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                                text: t, height: rowHeight, renamedFrom: speaker.renamedFrom,
                                deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
-                        model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn)
+                        model.actions.setLocalEnabled(speaker.id, model.state(of: speaker).clickTurnsOn, .user)
                     }
                 }
             }
@@ -824,30 +931,50 @@ struct MenuBarView: View {
     }
 
     private var speakerRows: some View {
-        let layout = model.layout
+        let layout = model.zonelessLayout
         let t = model.text
         return VStack(spacing: 0) {
-            // Under the divider: groups, then every connected speaker by name.
-            // This Mac sits above the divider, with the volume.
-            ForEach(model.groups) { group in
-                CompactRow(name: group.name, symbol: "square.stack.3d.up.fill", state: model.state(of: group),
-                           text: t, height: rowHeight,
-                           hint: t.groupMembers(group.available, of: group.memberCount)) {
-                    model.actions.toggleGroup(group.id)
+            // Under the divider: each zone with its members, then every
+            // connected speaker in no zone by name. This Mac sits above the
+            // divider, with the volume.
+            ForEach(model.zones) { zone in
+                CompactRow(name: zone.name, symbol: Self.zoneSymbol, state: model.state(of: zone),
+                           text: t, height: rowHeight, label: t.zoneLabel(zone.name),
+                           value: zone.present == 0 ? model.countText(of: zone)
+                               : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting)) {
+                    model.actions.toggleZone(zone.id)
                 }
-                    .disabled(group.available == 0)   // none of its speakers is here
-            }
-            ForEach(layout.connected) { speaker in
-                CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
-                           text: t, height: rowHeight,
-                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
-                                           target: speaker.airPlayTarget),
-                           renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
-                           availability: speaker.availability,
-                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
-                    model.setEnabled(speaker, model.state(of: speaker).clickTurnsOn)
+                    .disabled(zone.present == 0)   // none of its speakers is here
+                ForEach(zone.members) { member in
+                    Group {
+                        if let speaker = model.speaker(of: member) {
+                            speakerRow(speaker, note: member.note)
+                        } else {
+                            CompactRow(name: member.name, symbol: member.symbol, state: .off, text: t,
+                                       height: rowHeight, hint: member.note) {}
+                                .disabled(true)
+                        }
+                    }
+                    .padding(.leading, 12)
                 }
             }
+            ForEach(layout.connected) { speaker in speakerRow(speaker, note: nil) }
+        }
+    }
+
+    static let zoneSymbol = "square.stack.3d.up.fill"
+
+    /// `note`: what the speaker's zone says about it, when its own note is empty.
+    private func speakerRow(_ speaker: AppModel.Speaker, note: String?) -> some View {
+        let t = model.text
+        return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
+                          text: t, height: rowHeight,
+                          hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                                          target: speaker.airPlayTarget) ?? note,
+                          renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
+                          availability: speaker.availability,
+                          deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
+            model.setEnabled(speaker, model.state(of: speaker).clickTurnsOn)
         }
     }
 }
@@ -858,11 +985,15 @@ private struct CompactRow: View {
     let state: SpeakerState
     let text: UIStrings
     let height: CGFloat
-    /// Read after the name by VoiceOver: a group's member count, or what a
-    /// Google Cast speaker is doing.
+    /// Read after the name by VoiceOver: what a Google Cast speaker is
+    /// doing, or why a zone member doesn't play with its zone.
     var hint: String? = nil
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
+    /// VoiceOver's label and value in place of the speaker's: a zone's, read
+    /// as the main window reads it.
+    var label: String? = nil
+    var value: String? = nil
     /// The kind of output, shown as a small icon after the name.
     var kind: SpeakerTag? = nil
     var airPlay2 = false
@@ -903,9 +1034,9 @@ private struct CompactRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover.isHovered = $0 }
-        .accessibilityLabel(text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
-                                              renamedFrom: renamedFrom))
-        .accessibilityValue(text.value(state))
+        .accessibilityLabel(label ?? text.speakerLabel(name: name, tag: kind.map { text.speakerTag($0, airPlay2: airPlay2) },
+                                                       renamedFrom: renamedFrom))
+        .accessibilityValue(value ?? text.value(state))
         .accessibilityHint(text.rowHint(state, note: hint ?? deviceVolume?.accessibilityNote
                                             ?? text.availability(availability)))
         .help(text.help(state))
@@ -1089,6 +1220,8 @@ struct AvailabilityNote: View {
 }
 
 /// The audio source menu: the whole system, running apps, then input devices.
+/// Under it, an input device with more than two channels gets its channel
+/// pair choice.
 struct SourcePicker: View {
     @ObservedObject var model: AppModel
     var large = false
@@ -1100,8 +1233,31 @@ struct SourcePicker: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sourceMenu
+            if let pairs = model.currentSource?.pairs, !pairs.isEmpty {
+                pairPicker(pairs)
+            }
+        }
+    }
+
+    private func pairPicker(_ pairs: [String]) -> some View {
         let t = model.text
-        Menu {
+        let selected = pairs.indices.contains(model.inputPair) ? model.inputPair : 0
+        return Picker(t.inputChannelsLabel, selection: Binding(get: { selected },
+                                                               set: { model.actions.selectInputPair($0) })) {
+            ForEach(Array(pairs.enumerated()), id: \.offset) { index, label in
+                Text(label).tag(index)
+            }
+        }
+        .pickerStyle(.menu)
+        .padding(.horizontal, 10)
+        .accessibilityLabel(t.inputChannelsLabel)
+    }
+
+    private var sourceMenu: some View {
+        let t = model.text
+        return Menu {
             ForEach(Array(model.sources.enumerated()), id: \.element.id) { index, source in
                 if source.isInput && (index == 0 || !model.sources[index - 1].isInput) {
                     Divider()
@@ -1173,6 +1329,69 @@ struct SourcePicker: View {
                 .frame(width: edge, height: edge)
                 .foregroundStyle(Brand.tealText)
         }
+    }
+}
+
+/// The panel's preset row (S260): recall only, the current one checked.
+/// Choosing one leaves the panel open.
+struct PresetPicker: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        let t = model.text
+        let current = PresetPanel.label(model.presets)
+        Menu {
+            ForEach(model.presets) { preset in
+                Toggle(preset.name, isOn: Binding(get: { preset.current },
+                                                  set: { _ in model.actions.recallPreset(preset.id) }))
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .frame(width: 18, height: 18)
+                    .foregroundStyle(Brand.tealText)
+                    .accessibilityHidden(true)
+                Text(current ?? t.choosePreset)
+                    .foregroundStyle(current == nil ? HierarchicalShapeStyle.secondary : .primary)
+                    .lineLimit(1)
+                Spacer()
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .tint(.primary)   // as the source picker: the teal falls under 4.5:1 on the panel
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(0.6)))
+        .help(current ?? t.choosePreset)
+        .accessibilityLabel(t.presets)
+        .accessibilityValue(current ?? t.choosePreset)
+    }
+}
+
+/// The input level meter under the source picker, while an input device is
+/// captured: a bar that only reads out, never a control or a focus stop. Its
+/// row is always laid out, so nothing below it moves when it shows.
+struct InputLevelMeter: View {
+    @ObservedObject var level: InputLevel
+    let text: UIStrings
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Brand.meterTrack)
+                Capsule().fill(Brand.tealText)
+                    .frame(width: geometry.size.width * CGFloat(min(max(level.level, 0), 1)))
+            }
+        }
+        .frame(height: 4)
+        .padding(.horizontal, 10)
+        .opacity(level.shown ? 1 : 0)
+        .accessibilityElement()
+        .accessibilityLabel(text.inputLevel)
+        .accessibilityValue(text.inputLevelValue(level.spokenPercent))
+        .accessibilityAddTraits(.updatesFrequently)
+        .accessibilityHidden(!level.shown)
     }
 }
 

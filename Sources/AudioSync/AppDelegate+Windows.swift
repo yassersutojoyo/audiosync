@@ -16,8 +16,10 @@ extension AppDelegate {
     func setUpMenuBar() {
         let settings = StoredEqualizer.decode(UserDefaults.standard.data(forKey: Keys.equalizer))
         engine.updateEqualizer(settings)
-        equalizerModel = EqualizerModel(settings: settings)
+        let curves = StoredCurves.decode(UserDefaults.standard.data(forKey: Keys.equalizerCurves))
+        equalizerModel = EqualizerModel(settings: settings, curves: curves)
         equalizerModel.onChange = { [weak self] new in self?.equalizerChanged(new) }
+        equalizerModel.onCurvesChange = { [weak self] new in self?.equalizerCurvesChanged(new) }
         equalizerWindow = EqualizerWindowController(model: equalizerModel)
 
         nowPlaying.onChange = { [weak self] track in self?.nowPlayingChanged(track) }
@@ -32,6 +34,22 @@ extension AppDelegate {
         let saved = AppSettings.load(SettingsStore.standard.read)
         let remote = WebRemote(model: appModel, store: .standard, enabled: saved.webRemote, port: saved.webRemotePort)
         remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
+        remote.host.zones = { [weak self] in self?.zones ?? [] }
+        remote.host.presets = { [weak self] in
+            guard let self else { return [] }
+            let members = Dictionary(presets.map { ($0.id, $0.members.map(\.key)) }, uniquingKeysWith: { first, _ in first })
+            return presetSnapshot().map {
+                RemotePresetRow(id: $0.id, name: $0.name, current: $0.current, members: members[$0.id] ?? [])
+            }
+        }
+        remote.host.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
+        remote.host.toggleZone = { [weak self] id, keepOff, origin in
+            self?.toggleZone(id, keepingOff: keepOff, origin: origin)
+        }
+        // A phone's recall starts as `.remote` either way (S266).
+        remote.host.recallPreset = { [weak self] id, keepOff, _ in
+            self?.recallPreset(id, from: .phone, keepingOff: keepOff)
+        }
         webRemote = remote
         webRemoteWindow = WebRemoteWindowController(remote: remote, text: text)
         menuBar = MenuBarController(model: appModel)
@@ -45,6 +63,28 @@ extension AppDelegate {
             UserDefaults.standard.set(data, forKey: Keys.equalizer)
         }
         publish(\.equalizerOn, settings.enabled)
+        publishEqualizerCurve()
+        publishPresets()   // a band change moves the current mark (S264)
+    }
+
+    private func equalizerCurvesChanged(_ curves: [Equalizer.Curve]) {
+        if let data = StoredCurves.encode(curves) {
+            UserDefaults.standard.set(data, forKey: Keys.equalizerCurves)
+        }
+        publishEqualizerCurve()
+    }
+
+    private func publishEqualizerCurve() {
+        guard let equalizerModel else { return }
+        publish(\.equalizerCurve, text.equalizerCurveName(equalizerModel.shownCurve, saved: equalizerModel.curves))
+    }
+
+    /// After the speaker rows, which the current mark is worked out from.
+    private func publishPresets() {
+        let rows = presetSnapshot()
+        followPresetNotice(current: rows.first(where: \.current)?.id)
+        publish(\.presets, rows)
+        MainActor.assumeIsolated { PresetsMenu.update(rows) }
     }
 
     private func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {
@@ -70,13 +110,14 @@ extension AppDelegate {
         var a = AppModel.Actions()
         a.setPower = { [weak self] on in self?.setStreaming(on) }
         a.selectSource = { [weak self] id in self?.setSource(AudioSource(defaultsValue: id)) }
+        a.selectInputPair = { [weak self] index in self?.setInputPair(index) }
         a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
         a.setMixMode = { [weak self] mode in self?.setMixMode(mode) }
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
-        a.setAirPlayEnabled = { [weak self] id, on in self?.setNativeAirPlayEnabled(id, on) }
+        a.setAirPlayEnabled = { [weak self] id, on, origin in self?.setNativeAirPlayEnabled(id, on, origin: origin) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
         a.forgetAirPlayPairing = { [weak self] id in self?.forgetNativePairing(id) }
-        a.setLocalEnabled = { [weak self] uid, on in self?.setLocalEnabled(uid, on) }
+        a.setLocalEnabled = { [weak self] uid, on, origin in self?.setLocalEnabled(uid, on, origin: origin) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
         a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
@@ -89,7 +130,7 @@ extension AppDelegate {
         a.undoCalibrateAll = { [weak self] in self?.undoCalibrateAll() }
         a.closeCalibrateAll = { [weak self] in self?.closeCalibrateAll() }
         a.setAirPlayDelay = { [weak self] ms in self?.setAirPlayDelay(ms) }
-        a.setCastEnabled = { [weak self] id, on in self?.setCastEnabled(id, on) }
+        a.setCastEnabled = { [weak self] id, on, origin in self?.setCastEnabled(id, on, origin: origin) }
         a.setCastVolume = { [weak self] id, position in self?.setCastVolume(id, position) }
         a.stepCastVolume = { [weak self] id, up in self?.stepCastVolume(id, up: up) }
         a.setCastMuted = { [weak self] id, muted in self?.setCastMuted(id, muted) }
@@ -116,10 +157,21 @@ extension AppDelegate {
             guard let self, !self.appModel.notices.isEmpty else { return }
             self.appModel.notices.clearAll()
         }
-        a.toggleGroup = { [weak self] id in self?.toggleGroup(id) }
-        a.deleteGroup = { [weak self] id in self?.deleteGroup(id) }
-        a.renameGroup = { [weak self] id in self?.promptRenameGroup(id) }
-        a.newGroup = { [weak self] in self?.promptNewGroup() }
+        a.toggleZone = { [weak self] id in self?.toggleZone(id) }
+        a.deleteZone = { [weak self] id in self?.deleteZone(id) }
+        a.renameZone = { [weak self] id in self?.promptRenameZone(id) }
+        a.calibrateZone = { [weak self] id in self?.calibrateZone(id) }
+        a.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
+        a.newZone = { [weak self] in self?.promptNewZone() }
+        a.newZoneWithSpeaker = { [weak self] key, name in self?.promptNewZone(with: key, name: name) }
+        a.moveToZone = { [weak self] key, id in self?.moveToZone(key, id) }
+        a.removeFromZone = { [weak self] key in self?.removeFromZone(key) }
+        a.recallPreset = { [weak self] id in self?.recallPreset(id, from: .app) }
+        a.savePreset = { [weak self] in self?.promptSavePreset() }
+        a.renamePreset = { [weak self] id in self?.promptRenamePreset(id) }
+        a.updatePreset = { [weak self] id in self?.updatePreset(id) }
+        a.deletePreset = { [weak self] id in self?.deletePreset(id) }
+        a.useTargetInstead = { [weak self] id, key in self?.useTargetInstead(in: id, for: key) }
         a.setAutoConnect = { [weak self] key, on in self?.setAutoConnect(key, on) }
         a.renameSpeaker = { [weak self] key, system, typed in self?.renameSpeaker(key, system: system, to: typed) }
         a.hideSpeaker = { [weak self] key, name, kind in self?.hideSpeaker(key, name: name, kind: kind) }
@@ -180,12 +232,6 @@ extension AppDelegate {
         pushModel()
     }
 
-    private func deleteGroup(_ id: String) {
-        guard groups.contains(where: { $0.id == id }) else { return }
-        groups.removeAll { $0.id == id }   // saved by `groups`' didSet
-        pushModel()
-    }
-
     private func setAutoConnect(_ key: String, _ on: Bool) {
         if on { autoConnect.insert(key) } else { autoConnect.remove(key) }
         pushModel()
@@ -234,6 +280,7 @@ extension AppDelegate {
     func pushModel() {
         publish(\.running, engine.isRunning)
         publish(\.sourceID, audioSource.defaultsValue)
+        publish(\.inputPair, currentInputPair)
         publish(\.master, masterVolume)
         // Hidden speakers leave the rows here, so every list built from them loses them.
         let hiddenKey = { (s: AppModel.Speaker) in HiddenSpeakers.key(id: s.id, tag: s.tag) }
@@ -257,7 +304,9 @@ extension AppDelegate {
             access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
             emptySince: airplayEmptySince, now: Date()))
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
-        publish(\.groups, groupSnapshot())
+        publishEqualizerCurve()
+        publish(\.zones, zoneSnapshot())
+        publishPresets()
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
@@ -276,7 +325,8 @@ extension AppDelegate {
     /// plugged in and out.
     func pushSources() {
         let running = SourceApps.running()
-        let inputs = devices.allInputDevices().map {
+        let inputDevices = devices.allInputDevices()
+        let inputs = inputDevices.map {
             SourceList.Input(uid: $0.uid, name: text.deviceName($0.name), transport: $0.transport,
                              inputSubTransports: $0.inputSubTransports)
         }
@@ -285,6 +335,7 @@ extension AppDelegate {
             loggedInputs = inputLog
             inputLog.forEach { DebugTrace.log($0) }
         }
+        let channels = Dictionary(inputDevices.map { ($0.uid, $0.inputChannels) }, uniquingKeysWith: { first, _ in first })
         let entries = SourceList.entries(systemName: text.sourceSystem,
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
@@ -298,7 +349,11 @@ extension AppDelegate {
             } else if !entry.id.isEmpty {
                 icon = (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized)
             }
-            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput)
+            var pairs: [String] = []
+            if case .input(let uid) = AudioSource(defaultsValue: entry.id) {
+                pairs = InputChannelPair.offered(channels: channels[uid] ?? 0).map(text.inputChannelPair)
+            }
+            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs)
         }
         publish(\.sources, sources)
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
@@ -375,15 +430,6 @@ extension AppDelegate {
                                     systemName: text.deviceName(device.name),
                                     calibrationLeftOut: calibrationLeftOut(uid),
                                     isReference: uid == localReference)
-        }
-    }
-
-    private func groupSnapshot() -> [AppModel.Group] {
-        groups.map { group in
-            let summary = GroupSummary.summarize(members: group.members, isAvailable: isAvailable,
-                                                 isEnabled: isEnabled)
-            return AppModel.Group(id: group.id, name: group.name, memberCount: group.members.count,
-                                  available: summary.available, allOn: summary.allOn)
         }
     }
 
@@ -513,7 +559,7 @@ extension AppDelegate {
 
     @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning) }
 
-    @objc func newGroup(_ sender: Any?) { promptNewGroup() }
+    @objc func newZone(_ sender: Any?) { promptNewZone() }
 
     @objc func refreshDevices(_ sender: Any?) { rescanDevices() }
 
@@ -562,6 +608,9 @@ extension AppDelegate {
             menuItem.state = whenSourceQuits == .system ? .on : .off
         case #selector(toggleAirPlay2(_:)):
             menuItem.state = airPlay2 ? .on : .off
+        case #selector(recallPresetFromMenu(_:)):
+            let id = menuItem.representedObject as? String
+            menuItem.state = appModel.presets.contains { $0.id == id && $0.current } ? .on : .off
         default:
             break
         }

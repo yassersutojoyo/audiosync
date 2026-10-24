@@ -64,9 +64,13 @@ struct CalibrateAllSheetView: View {
         let t = model.text
         let status = model.calibrateAll
         VStack(alignment: .leading, spacing: 14) {
-            Text(t.calibrateAll)
+            Text(status.zone == nil ? t.calibrateAll : t.calibrateZone)
                 .font(.title3.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
+            if let zone = status.zone {
+                Text(t.calibrateZoneBring(zone.name))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if status.sheet == nil {
                 Text(t.calibrateAllIntro)
                     .foregroundStyle(Brand.secondaryText)
@@ -176,6 +180,11 @@ struct CalibrateAllSheetView: View {
                 Text(t.calibrateAllAirPlay(airPlay))
                     .foregroundStyle(airPlay.state == .certain ? Color.primary : Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                if let moves = status.zone.flatMap({ t.calibrateZoneAirPlayMoves($0.airPlayMoves) }) {
+                    Text(moves)
+                        .foregroundStyle(Brand.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -249,7 +258,7 @@ struct CalibrateAllSheetView: View {
                 Button(applied ? t.calibrateAllDone : t.calibrateAllClose) { model.actions.closeCalibrateAll() }
                     .keyboardShortcut(.cancelAction)
                 if status.sheet == nil || status.sheet?.ended != nil {
-                    Button(t.calibrateAll) { model.actions.calibrateAll() }
+                    Button(status.zone == nil ? t.calibrateAll : t.calibrateZone) { model.actions.calibrateAll() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(status.blocker != nil || status.holdsOutputs)
                 } else if let sheet = status.sheet, !sheet.applied, sheet.ended == nil {

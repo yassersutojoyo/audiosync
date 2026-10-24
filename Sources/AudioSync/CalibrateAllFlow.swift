@@ -107,6 +107,9 @@ struct CalibrateAllContext: Equatable {
     var playing: Set<String>
     /// The delays and hold-backs of the speakers taking part.
     var delays: [String: Double]
+    /// For Calibrate Zone, the measured zone's member keys; nil once it is
+    /// deleted, and for a whole run (S240, S255).
+    var zoneMembers: [String]? = nil
 }
 
 /// The results sheet as the window shows it.
@@ -124,6 +127,8 @@ struct CalibrateAllSheet: Equatable {
         let speaker: CalibrateAllSpeaker
         let oldMs: Double?
         var result: Result
+        /// A zone member that was off: listed with "Off", never swept (S255).
+        var off = false
         var id: Int { index }
 
         var measured: Bool {
@@ -187,6 +192,8 @@ struct CalibrateAllStatus: Equatable {
     var leftOut: [CalibrateAllLeftOut] = []
     /// Outputs the user included anyway; kept until the sheet closes.
     var includedAnyway: Set<String> = []
+    /// The zone the sheet measures, for Calibrate Zone (S255).
+    var zone: CalibrateZoneSheet?
     /// Undo is offered: Apply ran and no value it wrote changed since.
     var canUndo = false
 
@@ -214,6 +221,46 @@ struct CalibrateAllUndo {
     var previousAirPlay: AirPlayDelay
     /// The stored values right after Apply, one per write; Undo lasts while they hold.
     var afterApply: [CalibrateAllRestore] = []
+}
+
+/// The zone Calibrate Zone measures, as the sheet names it (S255).
+struct CalibrateZoneSheet: Equatable {
+    var id: String
+    var name: String
+    var airPlayMoves: CalibrateZoneAirPlayMoves
+}
+
+/// Whom the shared AirPlay delay moves besides the measured zone (S255).
+struct CalibrateZoneAirPlayMoves: Equatable {
+    /// The other zones with a listed AirPlay speaker, by name, in zone order.
+    var zones: [String]
+    /// A listed AirPlay speaker is in no zone.
+    var noZone: Bool
+}
+
+/// A zone as Calibrate Zone reads it when a run starts (S255).
+struct CalibrateZoneScope: Equatable {
+    var id: String
+    var name: String
+    /// Its member keys (`SpeakerKey`), in zone order.
+    var members: [String]
+    /// Of those, the present ones (S246): listed, not hidden and not held by a target.
+    var present: Set<String>
+    /// The present members that don't play, with their stored delays now.
+    var off: [CalibrateAllSpeaker]
+}
+
+/// What a Calibrate Zone run lists, sweeps and silences (S255).
+struct CalibrateZonePlan: Equatable {
+    /// The sheet's rows: the reference, then the zone's present members in zone order.
+    var speakers: [CalibrateAllSpeaker]
+    /// One per row: a member that is off, listed and never swept.
+    var off: [Bool]
+    /// The speakers outside the zone that play silenced for the run.
+    var silenced: [CalibrateAllSpeaker]
+
+    /// The IDs of the rows swept.
+    var taking: [String] { zip(speakers, off).filter { !$0.1 }.map(\.0.id) }
 }
 
 /// One value Undo puts back; a nil delay means none was stored.
@@ -314,6 +361,112 @@ enum CalibrateAllFlow {
         playOutSeconds(speaker) + sweepSeconds
     }
 
+    /// The same, until the speakers silenced on that speaker's path have
+    /// played the sweep out too, before they are heard again (S255).
+    static func settleSeconds(_ speaker: CalibrateAllSpeaker, silenced: [CalibrateAllSpeaker]) -> Double {
+        ([speaker] + silenced.filter { $0.kind == speaker.kind }).map { settleSeconds($0) }.max() ?? 0
+    }
+
+    /// The zone the sheet's own button runs: the one the open sheet
+    /// measures, so a zone sheet never turns into a whole run (S255).
+    static func startZone(_ status: CalibrateAllStatus) -> String? {
+        status.shown ? status.zone?.id : nil
+    }
+
+    /// The status once zone `id` is deleted: a sheet that measured it reads
+    /// as Calibrate All's, since its button can't run the zone again.
+    static func deletingZone(_ id: String, from status: CalibrateAllStatus) -> CalibrateAllStatus {
+        guard status.zone?.id == id else { return status }
+        var kept = status
+        kept.zone = nil
+        return kept
+    }
+
+    /// What the sheet says when a run over the speakers, or over zone
+    /// `zone`, can't start; nil leaves the reason to the sheet's blocker.
+    static func startFailure(_ blocker: CalibrateAllBlocker, zone: String?) -> CalibrationFailure? {
+        switch blocker {
+        case .noReference: .noReference
+        case .notPlaying: .notPlaying
+        case .noOtherSpeaker: zone.map { CalibrationFailure.nothingToMeasure(zone: $0) } ?? .notPlaying
+        case .onlyLeftOut, .referenceHeadphones, .busy: nil
+        }
+    }
+
+    /// Whether a zone's Calibrate Zone… can be chosen: some member is here
+    /// and no calibration holds the outputs, since a start then does nothing.
+    static func offersZoneRun(_ status: CalibrateAllStatus, singleHoldsOutputs: Bool, present: Int) -> Bool {
+        present > 0 && !status.isRunning && !status.holdsOutputs && !singleHoldsOutputs
+    }
+
+    /// Whether the sheet lists the outputs that sit out before the run
+    /// starts, so one can be included anyway: for Calibrate Zone only when
+    /// one is a member of the zone, since no other is measured (S255).
+    static func previewsLeftOut(_ leftOut: [CalibrateAllLeftOut], zone: CalibrateZoneScope?) -> Bool {
+        guard let zone else { return !leftOut.isEmpty }
+        return leftOut.contains { zone.members.contains(SpeakerKey.make(id: $0.id, kind: .local)) }
+    }
+
+    /// A speaker's key (`SpeakerKey`), as a zone holds it.
+    static func zoneKey(_ speaker: CalibrateAllSpeaker) -> String {
+        switch speaker.kind {
+        case .local: SpeakerKey.make(id: speaker.id, kind: .local)
+        case .airPlay: SpeakerKey.make(id: speaker.id, kind: .airplay)
+        case .cast: CastID.key(appID: speaker.id)
+        }
+    }
+
+    /// Calibrate Zone's run over `zone` (S255), from the core's plan
+    /// (`asc_calibration_zone_plan`): the reference and the zone's present
+    /// members that play are swept, those that don't are listed, and every
+    /// other speaker that plays is silenced.
+    static func zonePlan(_ inputs: Inputs, zone: CalibrateZoneScope) -> Result<CalibrateZonePlan, CalibrateAllBlocker> {
+        let playing: [CalibrateAllSpeaker]
+        switch plan(inputs) {
+        case .success(let planned): playing = planned
+        case .failure(let reason): return .failure(reason)
+        }
+        let listed = playing + zone.off.filter { off in !playing.contains { $0.id == off.id } }
+        let keys = listed.map(zoneKey)
+        let copies = (zone.members + keys).map { strdup($0) }
+        defer { copies.forEach { free($0) } }
+        let pointers: [UnsafePointer<CChar>?] = copies.map { $0.map { UnsafePointer($0) } }
+        let members = Array(pointers.prefix(zone.members.count))
+        let speakers = listed.indices.map { i in
+            AscCalibrationZoneSpeaker(key: pointers[zone.members.count + i],
+                                      present: zone.present.contains(keys[i]) || !zone.members.contains(keys[i]),
+                                      on: i < playing.count)
+        }
+        var rows = [Int](repeating: 0, count: listed.count)
+        var off = [Bool](repeating: false, count: listed.count)
+        var silenced = [Bool](repeating: false, count: listed.count)
+        var count = 0
+        let reference = speakers[0].key
+        let code = members.withUnsafeBufferPointer { members in
+            speakers.withUnsafeBufferPointer { speakers in
+                asc_calibration_zone_plan(members.baseAddress, members.count, reference, speakers.baseAddress,
+                                          speakers.count, &rows, &off, &count, &silenced)
+            }
+        }
+        switch code {
+        case UInt32(ASC_CALIBRATION_ZONE_OK):
+            return .success(CalibrateZonePlan(speakers: rows.prefix(count).map { listed[$0] },
+                                              off: Array(off.prefix(count)),
+                                              silenced: listed.indices.filter { silenced[$0] }.map { listed[$0] }))
+        case UInt32(ASC_CALIBRATION_ZONE_NO_REFERENCE): return .failure(.noReference)
+        default: return .failure(.noOtherSpeaker)
+        }
+    }
+
+    /// The other zones the shared AirPlay delay moves, in zone order, and
+    /// whether it moves speakers in no zone (S255). `listed` are the keys
+    /// of the AirPlay speakers listed and not hidden.
+    static func airPlayMoves(zones: [SpeakerZone], measured: String, listed: [String]) -> CalibrateZoneAirPlayMoves {
+        let others = zones.filter { zone in zone.id != measured && zone.members.contains(where: listed.contains) }
+        let inZone = Set(zones.flatMap(\.members))
+        return CalibrateZoneAirPlayMoves(zones: others.map(\.name), noZone: listed.contains { !inZone.contains($0) })
+    }
+
     /// Why a run started in `start` stops now, or nil while it may go on.
     /// `taking` are the IDs of the speakers taking part.
     static func end(start: CalibrateAllContext, now: CalibrateAllContext, taking: [String]) -> CalibrateAllEnd? {
@@ -324,6 +477,9 @@ enum CalibrateAllFlow {
         if joined.contains(where: now.switchedOn.contains) { return .speakersChanged }
         if now.session != start.session || now.switchedOn != start.switchedOn { return .speakersChanged }
         if now.delays != start.delays { return .delaysChanged }
+        if let members = start.zoneMembers {
+            guard let kept = now.zoneMembers, members.allSatisfy(kept.contains) else { return .speakersChanged }
+        }
         return nil
     }
 
@@ -343,7 +499,8 @@ enum CalibrateAllFlow {
     }
 
     /// One row of the core's sheet for the window.
-    static func row(_ raw: AscCalibrationRow, index: Int, speaker: CalibrateAllSpeaker) -> CalibrateAllSheet.Row {
+    static func row(_ raw: AscCalibrationRow, index: Int, speaker: CalibrateAllSpeaker,
+                    off: Bool = false) -> CalibrateAllSheet.Row {
         let result: CalibrateAllSheet.Result = switch raw.state {
         case UInt32(ASC_CALIBRATION_ROW_REFERENCE): .reference
         case UInt32(ASC_CALIBRATION_ROW_CERTAIN):
@@ -353,7 +510,7 @@ enum CalibrateAllFlow {
         default: .notMeasured
         }
         return CalibrateAllSheet.Row(index: index, speaker: speaker, oldMs: raw.has_old ? raw.old_ms : nil,
-                                     result: result)
+                                     result: result, off: off)
     }
 
     /// The shared AirPlay delay of the core's sheet for the window.
@@ -374,7 +531,7 @@ enum CalibrateAllFlow {
         for (index, speaker) in speakers.enumerated() {
             var raw = AscCalibrationRow()
             guard asc_calibration_sheet_row(sheet, index, &raw) else { break }
-            rows.append(row(raw, index: index, speaker: speaker))
+            rows.append(row(raw, index: index, speaker: speaker, off: asc_calibration_sheet_row_off(sheet, index)))
         }
         var raw = AscCalibrationAirPlay()
         let airPlay = asc_calibration_sheet_airplay(sheet, &raw) ? airPlay(raw) : nil
@@ -440,11 +597,17 @@ final class CalibrateAllRunHandle: @unchecked Sendable {
 
     init(_ pointer: OpaquePointer) { self.pointer = pointer }
 
-    /// A run over `speakers`, the first the reference; nil when the core refuses it.
-    convenience init?(rate: UInt32, speakers: [CalibrateAllSpeaker]) {
+    /// A run over `speakers`, the first the reference, each row `off` marks
+    /// listed and never swept (S255); nil when the core refuses it.
+    convenience init?(rate: UInt32, speakers: [CalibrateAllSpeaker], off: [Bool] = []) {
         let list = speakers.map(\.core)
-        guard let made = list.withUnsafeBufferPointer({ asc_calibration_run_create(rate, $0.baseAddress, $0.count, 0) })
-        else { return nil }
+        let flags = off.count == speakers.count ? off : speakers.map { _ in false }
+        let made = list.withUnsafeBufferPointer { list in
+            flags.withUnsafeBufferPointer { flags in
+                asc_calibration_run_create_listing(rate, list.baseAddress, list.count, 0, flags.baseAddress)
+            }
+        }
+        guard let made else { return nil }
         self.init(made)
     }
 
@@ -480,7 +643,8 @@ final class CalibrateAllRunHandle: @unchecked Sendable {
 /// A core sheet and the speakers its rows name; freed with it.
 final class CalibrateAllSheetHandle {
     let pointer: OpaquePointer
-    let speakers: [CalibrateAllSpeaker]
+    /// An off row measured again names its speaker as it was measured (S255).
+    var speakers: [CalibrateAllSpeaker]
     let rate: UInt32
     /// The input the run recorded with; Measure Again records with it too.
     let microphone: CalibrationMicrophoneID?
@@ -519,6 +683,14 @@ final class CalibrateAllSheetHandle {
 
     func measureAgain(_ row: Int) -> CalibrateAllRunHandle? {
         asc_calibration_sheet_measure_again(pointer, row).map { CalibrateAllRunHandle($0) }
+    }
+
+    func isOff(_ row: Int) -> Bool { asc_calibration_sheet_row_off(pointer, row) }
+
+    /// Measure Again on an off row from `now`, its speaker as the host reads it now (S255).
+    func measureAgainOff(_ row: Int, now: CalibrateAllSpeaker) -> CalibrateAllRunHandle? {
+        asc_calibration_sheet_measure_again_off(pointer, row, now.offsetMs != nil, now.offsetMs ?? 0, now.latencyMs)
+            .map { CalibrateAllRunHandle($0) }
     }
 
     /// Puts a finished Measure Again sheet's row in place; `again` is freed either way.

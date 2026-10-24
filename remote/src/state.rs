@@ -18,6 +18,12 @@ pub struct State {
     pub now_playing: Option<NowPlaying>,
     /// In the app's order.
     pub speakers: Vec<Speaker>,
+    /// In the app's order; empty without zones.
+    pub zones: Vec<Zone>,
+    /// In the app's order; empty without presets.
+    pub presets: Vec<Preset>,
+    /// A microphone run is in progress: every write answers 409 `calibrating`.
+    pub calibrating: bool,
     /// What the app can capture, in its source picker's order.
     pub sources: Vec<Source>,
     /// The source in use; `None` when it isn't one of `sources`.
@@ -52,6 +58,39 @@ pub struct Speaker {
     pub available: bool,
     /// The row's notice text, if any.
     pub notice: Option<String>,
+}
+
+/// A zone as the page shows it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Zone {
+    /// Unique in a snapshot; the page puts it in `/api/zones/{id}`.
+    pub id: String,
+    pub name: String,
+    /// 0 to 100.
+    pub volume: f64,
+    /// The speaker IDs of the members present now, in zone order.
+    pub members: Vec<String>,
+    pub counts: ZoneCounts,
+}
+
+/// How many present members a zone has, and how many of them are on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZoneCounts {
+    /// Members on, a waiting one included.
+    pub on: u32,
+    pub total: u32,
+    /// Members on that wait for the other AirPlay 2 speaker.
+    pub waiting: u32,
+}
+
+/// A speaker preset as the page shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Preset {
+    /// Unique in a snapshot; the page puts it in `/api/presets/{id}`.
+    pub id: String,
+    pub name: String,
+    /// The speakers play it exactly now; at most one preset is current.
+    pub current: bool,
 }
 
 /// Something the app can capture, as its source picker lists it.
@@ -144,6 +183,75 @@ fn int_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<i64, S
     field(object, name, at)?
         .as_i64()
         .ok_or_else(|| invalid(format!("{at}{name} is not a whole number")))
+}
+
+fn count_field(object: &Map<String, Value>, name: &str, at: &str) -> Result<u32, StateError> {
+    field(object, name, at)?
+        .as_u64()
+        .and_then(|count| u32::try_from(count).ok())
+        .ok_or_else(|| invalid(format!("{at}{name} is not a whole number from 0")))
+}
+
+fn optional_list<'a>(root: &'a Map<String, Value>, name: &str) -> Result<&'a [Value], StateError> {
+    match root.get(name) {
+        None => Ok(&[]),
+        Some(Value::Array(list)) => Ok(list),
+        Some(_) => Err(invalid(format!("{name} is not a list"))),
+    }
+}
+
+fn zone_from(
+    item: &Value,
+    index: usize,
+    speakers: &[Speaker],
+    taken: &mut HashSet<String>,
+) -> Result<Zone, StateError> {
+    let at = format!("zones[{index}].");
+    let object = item
+        .as_object()
+        .ok_or_else(|| invalid(format!("zones[{index}] is not an object")))?;
+    let list = field(object, "members", &at)?
+        .as_array()
+        .ok_or_else(|| invalid(format!("{at}members is not a list")))?;
+    let mut members = Vec::with_capacity(list.len());
+    for (place, member) in list.iter().enumerate() {
+        let id = member
+            .as_str()
+            .ok_or_else(|| invalid(format!("{at}members[{place}] is not a string")))?;
+        if !speakers.iter().any(|speaker| speaker.id == id) {
+            return Err(invalid(format!(
+                "{at}members[{place}] is not a listed speaker"
+            )));
+        }
+        // One zone per speaker (S245).
+        if !taken.insert(id.to_owned()) {
+            return Err(invalid(format!(
+                "{at}members[{place}] is in a zone already"
+            )));
+        }
+        members.push(id.to_owned());
+    }
+    let counts = field(object, "counts", &at)?
+        .as_object()
+        .ok_or_else(|| invalid(format!("{at}counts is not an object")))?;
+    let at_counts = format!("{at}counts.");
+    let counts = ZoneCounts {
+        on: count_field(counts, "on", &at_counts)?,
+        total: count_field(counts, "total", &at_counts)?,
+        waiting: count_field(counts, "waiting", &at_counts)?,
+    };
+    if counts.on > counts.total || counts.waiting > counts.on {
+        return Err(invalid(format!(
+            "{at}counts are not waiting <= on <= total"
+        )));
+    }
+    Ok(Zone {
+        id: text_field(object, "id", &at)?,
+        name: text_field(object, "name", &at)?,
+        volume: volume_field(object, "volume", &at)?,
+        members,
+        counts,
+    })
 }
 
 fn notice_field(object: &Map<String, Value>, at: &str) -> Result<Option<String>, StateError> {
@@ -266,6 +374,47 @@ impl State {
             }
             speakers.push(speaker);
         }
+        let mut zones = Vec::new();
+        let mut zone_ids = HashSet::new();
+        let mut taken = HashSet::new();
+        for (index, item) in optional_list(root, "zones")?.iter().enumerate() {
+            let zone = zone_from(item, index, &speakers, &mut taken)?;
+            if zone.id.is_empty() {
+                return Err(invalid(format!("zones[{index}].id is empty")));
+            }
+            if !zone_ids.insert(zone.id.clone()) {
+                return Err(invalid(format!("zones[{index}].id is used twice")));
+            }
+            zones.push(zone);
+        }
+        let mut presets = Vec::new();
+        let mut preset_ids = HashSet::new();
+        for (index, item) in optional_list(root, "presets")?.iter().enumerate() {
+            let at = format!("presets[{index}].");
+            let object = item
+                .as_object()
+                .ok_or_else(|| invalid(format!("presets[{index}] is not an object")))?;
+            let preset = Preset {
+                id: text_field(object, "id", &at)?,
+                name: text_field(object, "name", &at)?,
+                current: bool_field(object, "current", &at)?,
+            };
+            if preset.id.is_empty() {
+                return Err(invalid(format!("{at}id is empty")));
+            }
+            if !preset_ids.insert(preset.id.clone()) {
+                return Err(invalid(format!("{at}id is used twice")));
+            }
+            presets.push(preset);
+        }
+        // Only the first exact match in list order is current (S253).
+        if presets.iter().filter(|preset| preset.current).count() > 1 {
+            return Err(invalid("more than one preset is current"));
+        }
+        let calibrating = match root.get("calibrating") {
+            None => false,
+            Some(_) => bool_field(root, "calibrating", "")?,
+        };
         let sources = sources_field(root)?;
         // The app may still name a source it no longer lists (an unplugged input).
         let source_id = match root.get("source_id") {
@@ -279,6 +428,9 @@ impl State {
             master_volume,
             now_playing,
             speakers,
+            zones,
+            presets,
+            calibrating,
             sources,
             source_id,
         })
@@ -312,6 +464,34 @@ impl State {
                 "source": playing.source,
             })
         });
+        let zones: Vec<Value> = self
+            .zones
+            .iter()
+            .map(|zone| {
+                json!({
+                    "id": zone.id,
+                    "name": zone.name,
+                    "volume": zone.volume,
+                    "members": zone.members,
+                    "counts": {
+                        "on": zone.counts.on,
+                        "total": zone.counts.total,
+                        "waiting": zone.counts.waiting,
+                    },
+                })
+            })
+            .collect();
+        let presets: Vec<Value> = self
+            .presets
+            .iter()
+            .map(|preset| {
+                json!({
+                    "id": preset.id,
+                    "name": preset.name,
+                    "current": preset.current,
+                })
+            })
+            .collect();
         let sources: Vec<Value> = self
             .sources
             .iter()
@@ -331,6 +511,9 @@ impl State {
             "master": { "volume": self.master_volume },
             "now_playing": now_playing,
             "speakers": speakers,
+            "zones": zones,
+            "presets": presets,
+            "calibrating": self.calibrating,
             "sources": sources,
             "source_id": self.source_id,
         })
@@ -339,6 +522,29 @@ impl State {
 
     pub fn speaker(&self, id: &str) -> Option<&Speaker> {
         self.speakers.iter().find(|speaker| speaker.id == id)
+    }
+
+    /// Whether `change` can be carried out on `zone`: a toggle needs a
+    /// member the page may drive, as one that would ask for a code stays off
+    /// (S257).
+    pub fn check_zone(&self, zone: &Zone, change: &ZoneChange) -> Result<(), ZoneProblem> {
+        zone.check(change)?;
+        let can_play = zone
+            .members
+            .iter()
+            .any(|id| self.speaker(id).is_some_and(|speaker| speaker.available));
+        if change.toggle && !can_play {
+            return Err(ZoneProblem::Unavailable);
+        }
+        Ok(())
+    }
+
+    pub fn zone(&self, id: &str) -> Option<&Zone> {
+        self.zones.iter().find(|zone| zone.id == id)
+    }
+
+    pub fn preset(&self, id: &str) -> Option<&Preset> {
+        self.presets.iter().find(|preset| preset.id == id)
     }
 
     pub fn source(&self, id: &str) -> Option<&Source> {
@@ -354,6 +560,14 @@ pub struct SpeakerChange {
     pub delay_ms: Option<i64>,
 }
 
+/// What one `POST /api/zones/{id}` asks to change; `toggle` or a volume is set.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ZoneChange {
+    /// A click on the zone: the host's click plan switches its members (S246).
+    pub toggle: bool,
+    pub volume: Option<f64>,
+}
+
 /// A change the page asks for, as the app's callback receives it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -364,6 +578,14 @@ pub enum Command {
     Master {
         volume: f64,
     },
+    Zone {
+        id: String,
+        change: ZoneChange,
+    },
+    /// Recalls the preset (S252).
+    Preset {
+        id: String,
+    },
     /// Capture this source, as a pick in the app's source picker would.
     Source {
         id: String,
@@ -372,8 +594,9 @@ pub enum Command {
 
 impl Command {
     /// `{"type":"speaker","id":…,"on"?,"volume"?,"delay_ms"?}`,
-    /// `{"type":"master","volume":…}` or `{"type":"source","id":…}`, with
-    /// only the fields that were posted.
+    /// `{"type":"master","volume":…}`, `{"type":"zone","id":…,"toggle"?,"volume"?}`,
+    /// `{"type":"preset","id":…,"recall":true}` or
+    /// `{"type":"source","id":…}`, with only the fields that were posted.
     pub fn to_json(&self) -> String {
         let mut object = Map::new();
         match self {
@@ -393,6 +616,21 @@ impl Command {
             Command::Master { volume } => {
                 object.insert("type".to_owned(), json!("master"));
                 object.insert("volume".to_owned(), json!(volume));
+            }
+            Command::Zone { id, change } => {
+                object.insert("type".to_owned(), json!("zone"));
+                object.insert("id".to_owned(), json!(id));
+                if change.toggle {
+                    object.insert("toggle".to_owned(), json!(true));
+                }
+                if let Some(volume) = change.volume {
+                    object.insert("volume".to_owned(), json!(volume));
+                }
+            }
+            Command::Preset { id } => {
+                object.insert("type".to_owned(), json!("preset"));
+                object.insert("id".to_owned(), json!(id));
+                object.insert("recall".to_owned(), json!(true));
             }
             Command::Source { id } => {
                 object.insert("type".to_owned(), json!("source"));
@@ -457,6 +695,29 @@ pub fn master_volume_from_body(body: &[u8]) -> Result<f64, BodyError> {
     optional(&object, "volume", Value::as_f64)?.ok_or(BodyError::Empty)
 }
 
+/// Reads `{toggle?, volume?}`; `"toggle": false` asks for nothing, and
+/// unknown fields are ignored.
+pub fn zone_change_from_body(body: &[u8]) -> Result<ZoneChange, BodyError> {
+    let object = body_object(body)?;
+    let change = ZoneChange {
+        toggle: optional(&object, "toggle", Value::as_bool)?.unwrap_or(false),
+        volume: optional(&object, "volume", Value::as_f64)?,
+    };
+    if change == ZoneChange::default() {
+        return Err(BodyError::Empty);
+    }
+    Ok(change)
+}
+
+/// Reads `{recall: true}`; `false` or no `recall` asks for nothing.
+pub fn preset_recall_from_body(body: &[u8]) -> Result<(), BodyError> {
+    let object = body_object(body)?;
+    match optional(&object, "recall", Value::as_bool)? {
+        Some(true) => Ok(()),
+        _ => Err(BodyError::Empty),
+    }
+}
+
 /// Reads `{id}`, a source's ID as a string; unknown fields are ignored.
 pub fn source_id_from_body(body: &[u8]) -> Result<String, BodyError> {
     let object = body_object(body)?;
@@ -475,6 +736,28 @@ pub fn check_master_volume(volume: f64) -> Result<(), RangeError> {
         Ok(())
     } else {
         Err(RangeError::Volume)
+    }
+}
+
+/// Why a zone change can't be carried out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZoneProblem {
+    /// A toggle on a zone with no member present (409).
+    Unavailable,
+    Range(RangeError),
+}
+
+impl Zone {
+    /// Whether `change` can be carried out: a toggle needs a present
+    /// member, and a volume is 0 to 100, both ends included.
+    pub fn check(&self, change: &ZoneChange) -> Result<(), ZoneProblem> {
+        if change.toggle && self.counts.total == 0 {
+            return Err(ZoneProblem::Unavailable);
+        }
+        if let Some(volume) = change.volume {
+            check_master_volume(volume).map_err(ZoneProblem::Range)?;
+        }
+        Ok(())
     }
 }
 
@@ -730,6 +1013,26 @@ mod tests {
         let master: Value =
             serde_json::from_str(&Command::Master { volume: 5.0 }.to_json()).unwrap();
         assert_eq!(master, json!({"type": "master", "volume": 5.0}));
+        let zone = Command::Zone {
+            id: "z1".to_owned(),
+            change: ZoneChange {
+                toggle: true,
+                volume: None,
+            },
+        };
+        let value: Value = serde_json::from_str(&zone.to_json()).unwrap();
+        assert_eq!(value, json!({"type": "zone", "id": "z1", "toggle": true}));
+        let recall: Value = serde_json::from_str(
+            &Command::Preset {
+                id: "p1".to_owned(),
+            }
+            .to_json(),
+        )
+        .unwrap();
+        assert_eq!(
+            recall,
+            json!({"type": "preset", "id": "p1", "recall": true})
+        );
         let source: Value = serde_json::from_str(
             &Command::Source {
                 id: "input:usb".to_owned(),
@@ -738,5 +1041,180 @@ mod tests {
         )
         .unwrap();
         assert_eq!(source, json!({"type": "source", "id": "input:usb"}));
+    }
+
+    fn with_zones_and_presets(zones: &str, presets: &str) -> String {
+        SAMPLE.replacen(
+            "\"speakers\": [",
+            &format!("\"zones\": {zones}, \"presets\": {presets}, \"speakers\": ["),
+            1,
+        )
+    }
+
+    // covers: S256
+    #[test]
+    fn the_snapshot_lists_zones_with_members_and_counts() {
+        let empty = State::from_json(SAMPLE).unwrap();
+        assert!(empty.zones.is_empty() && empty.presets.is_empty() && !empty.calibrating);
+        let written: Value = serde_json::from_str(&empty.to_json(1)).unwrap();
+        assert_eq!(written["zones"], json!([]));
+        assert_eq!(written["presets"], json!([]));
+        assert_eq!(written["calibrating"], false);
+
+        let json = with_zones_and_presets(
+            r#"[{"id": "z1", "name": "Downstairs", "volume": 60, "members": ["den", "kitchen"],
+                 "counts": {"on": 1, "total": 2, "waiting": 0}},
+                {"id": "z2", "name": "Empty", "volume": 100, "members": [],
+                 "counts": {"on": 0, "total": 0, "waiting": 0}}]"#,
+            "[]",
+        );
+        let state = State::from_json(&json).unwrap();
+        assert_eq!(state.zones[0].members, ["den", "kitchen"]);
+        assert_eq!(
+            state.zones[0].counts,
+            ZoneCounts {
+                on: 1,
+                total: 2,
+                waiting: 0
+            }
+        );
+        let written: Value = serde_json::from_str(&state.to_json(3)).unwrap();
+        assert_eq!(written["zones"][0]["members"], json!(["den", "kitchen"]));
+        assert_eq!(written["zones"][0]["counts"]["total"], 2);
+        assert_eq!(written["zones"][1]["volume"], 100.0);
+        assert_eq!(State::from_json(&state.to_json(3)).unwrap(), state);
+
+        let zone = |members: &str, counts: &str| {
+            with_zones_and_presets(
+                &format!(
+                    r#"[{{"id": "z1", "name": "A", "volume": 50, "members": {members}, "counts": {counts}}}]"#
+                ),
+                "[]",
+            )
+        };
+        let fine = r#"{"on": 0, "total": 1, "waiting": 0}"#;
+        for bad in [
+            zone(r#"["gone"]"#, fine),
+            zone(
+                r#"["den", "den"]"#,
+                r#"{"on": 0, "total": 2, "waiting": 0}"#,
+            ),
+            zone(r#"["den"]"#, r#"{"on": 2, "total": 1, "waiting": 0}"#),
+            zone(r#"["den"]"#, r#"{"on": 0, "total": 1, "waiting": 1}"#),
+            zone(r#"["den"]"#, r#"{"on": -1, "total": 1, "waiting": 0}"#),
+            zone(r#"["den"]"#, r#"{"on": 0, "total": 1}"#),
+            zone("\"den\"", fine),
+            with_zones_and_presets("{}", "[]"),
+            with_zones_and_presets(
+                r#"[{"id": "", "name": "A", "volume": 50, "members": [], "counts": {"on": 0, "total": 0, "waiting": 0}}]"#,
+                "[]",
+            ),
+            with_zones_and_presets(
+                r#"[{"id": "a", "name": "A", "volume": 50, "members": ["den"], "counts": {"on": 0, "total": 1, "waiting": 0}},
+                    {"id": "b", "name": "B", "volume": 50, "members": ["den"], "counts": {"on": 0, "total": 1, "waiting": 0}}]"#,
+                "[]",
+            ),
+        ] {
+            assert!(State::from_json(&bad).is_err(), "{bad}");
+        }
+    }
+
+    // covers: S256, S253
+    #[test]
+    fn the_snapshot_lists_presets_with_current() {
+        let json = with_zones_and_presets(
+            "[]",
+            r#"[{"id": "p1", "name": "Evening", "current": false},
+                {"id": "p2", "name": "Party", "current": true}]"#,
+        )
+        .replacen(
+            "\"computer_name\"",
+            "\"calibrating\": true, \"computer_name\"",
+            1,
+        );
+        let state = State::from_json(&json).unwrap();
+        assert!(state.calibrating);
+        assert_eq!(state.preset("p2").map(|preset| preset.current), Some(true));
+        let written: Value = serde_json::from_str(&state.to_json(2)).unwrap();
+        assert_eq!(
+            written["presets"],
+            json!([
+                {"id": "p1", "name": "Evening", "current": false},
+                {"id": "p2", "name": "Party", "current": true}
+            ])
+        );
+        assert_eq!(written["calibrating"], true);
+        for presets in [
+            r#"[{"id": "p1", "name": "A", "current": true}, {"id": "p2", "name": "B", "current": true}]"#,
+            r#"[{"id": "p1", "name": "A", "current": false}, {"id": "p1", "name": "B", "current": false}]"#,
+            r#"[{"id": "", "name": "A", "current": false}]"#,
+            r#"[{"id": "p1", "name": "A"}]"#,
+        ] {
+            let json = with_zones_and_presets("[]", presets);
+            assert!(State::from_json(&json).is_err(), "{presets}");
+        }
+        let flag = SAMPLE.replacen(
+            "\"computer_name\"",
+            "\"calibrating\": 1, \"computer_name\"",
+            1,
+        );
+        assert!(State::from_json(&flag).is_err());
+    }
+
+    // covers: S257
+    #[test]
+    fn zone_and_preset_bodies_read_only_the_fields_they_know() {
+        assert_eq!(
+            zone_change_from_body(br#"{"toggle": true, "extra": 1}"#),
+            Ok(ZoneChange {
+                toggle: true,
+                volume: None
+            })
+        );
+        assert_eq!(
+            zone_change_from_body(br#"{"volume": 20}"#),
+            Ok(ZoneChange {
+                toggle: false,
+                volume: Some(20.0)
+            })
+        );
+        assert_eq!(
+            zone_change_from_body(br#"{"toggle": false}"#),
+            Err(BodyError::Empty)
+        );
+        assert_eq!(
+            zone_change_from_body(br#"{"toggle": "yes"}"#),
+            Err(BodyError::Malformed)
+        );
+        assert_eq!(preset_recall_from_body(br#"{"recall": true}"#), Ok(()));
+        assert_eq!(
+            preset_recall_from_body(br#"{"recall": false}"#),
+            Err(BodyError::Empty)
+        );
+        assert_eq!(preset_recall_from_body(b"{}"), Err(BodyError::Empty));
+        assert_eq!(
+            preset_recall_from_body(br#"{"recall": 1}"#),
+            Err(BodyError::Malformed)
+        );
+        let zone = Zone {
+            id: "z".to_owned(),
+            name: "Z".to_owned(),
+            volume: 50.0,
+            members: Vec::new(),
+            counts: ZoneCounts::default(),
+        };
+        let toggle = ZoneChange {
+            toggle: true,
+            volume: None,
+        };
+        assert_eq!(zone.check(&toggle), Err(ZoneProblem::Unavailable));
+        let louder = ZoneChange {
+            toggle: false,
+            volume: Some(100.5),
+        };
+        assert_eq!(
+            zone.check(&louder),
+            Err(ZoneProblem::Range(RangeError::Volume))
+        );
     }
 }

@@ -54,7 +54,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
+use audiosync_core::lead::SourceKind;
 use audiosync_core::policy::delay::native_airplay_latency_ms;
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
@@ -69,14 +71,14 @@ use super::SESSION_RATE;
 use super::airplay::{AirPlayLink, AirPlaySpeakers, FeedSlot, SenderStarter, StartedSender};
 use super::backend::{
     AirPlayInfo, AirPlayPasswordPrompt, AirPlayPinPrompt, AirPlayProblem, AudioBackend,
-    BackendError, BackendEvent, CastDiscovery, CastInfo, CastProblem, OutputInfo, OutputKind,
-    SourceId, SourceInfo, StopReason, TIMED_OUT,
+    BackendError, BackendEvent, CastDiscovery, CastInfo, CastProblem, InTarget, OutputInfo,
+    OutputKind, SourceId, SourceInfo, StopReason, TIMED_OUT, ZoneVolumes,
 };
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
     Activation, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType,
-    decide_apps_capture, decide_capture, decide_except_capture, display_name, input_sources,
-    running_app, source_list,
+    decide_apps_capture, decide_capture, decide_except_capture, describe_pair, display_name,
+    input_sources, running_app, source_list,
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
@@ -325,6 +327,8 @@ struct Session<D: Driver> {
     /// capture, let go while Windows audio hung, still held them: the
     /// session starts again once that one gives one back.
     waits_for_feed: MissingFeeds,
+    /// The session lead last written to the debug log, in capture frames.
+    logged_lead: Option<i64>,
 }
 
 /// Which of the senders' feeds a capture started without.
@@ -374,6 +378,9 @@ struct RoutingState {
 pub struct Controller<D: Driver> {
     driver: D,
     policy: OutputPolicy,
+    /// How long AirPlay and Google Cast were last held back to meet each
+    /// other, in ms, for the debug log.
+    network_hold_backs: (f64, f64),
     /// The connected endpoints, sorted by ID, as last listed successfully.
     present: Vec<Endpoint>,
     /// Whether the last listing worked: false before the first one and after
@@ -382,6 +389,9 @@ pub struct Controller<D: Driver> {
     session: Option<Session<D>>,
     /// The equalizer settings, for the running session and the next.
     equalizer: EqSettings,
+    /// The channel pair each input device plays, by endpoint ID; one
+    /// without an entry plays channels 1-2.
+    input_pairs: BTreeMap<String, u16>,
     /// Events for the next poll.
     pending: Vec<BackendEvent>,
     /// The debug log; it writes nothing unless `AUDIOSYNC_DEBUG=1`.
@@ -467,6 +477,8 @@ pub struct Controller<D: Driver> {
     calibration_tap: Arc<CalibrationTap>,
     /// The one local output a calibration lets be heard.
     calibration_solo: Option<String>,
+    /// The zone volumes (S249), for the senders started later too.
+    zone_volumes: ZoneVolumes,
     /// Sessions started so far, captures started again included: a
     /// calibration tells by it that its session went on.
     sessions_started: u64,
@@ -479,10 +491,12 @@ impl<D: Driver> Controller<D> {
         Controller {
             driver,
             policy: OutputPolicy::new(AirPlay::Unavailable),
+            network_hold_backs: (0.0, 0.0),
             present: Vec::new(),
             listing_ok: false,
             session: None,
             equalizer: EqSettings::default(),
+            input_pairs: BTreeMap::new(),
             pending: Vec::new(),
             log: DebugLog::default(),
             names: BTreeMap::new(),
@@ -514,6 +528,7 @@ impl<D: Driver> Controller<D> {
             track_source: None,
             calibration_tap: Arc::new(CalibrationTap::new()),
             calibration_solo: None,
+            zone_volumes: ZoneVolumes::default(),
             sessions_started: 0,
         }
     }
@@ -610,7 +625,8 @@ impl<D: Driver> Controller<D> {
         feed: Option<FeedSlot>,
         store: PairingStore,
     ) {
-        let airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
+        let mut airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
+        airplay.set_zones(self.zone_volumes.airplay.clone());
         self.log.log(|| {
             format!(
                 "AirPlay: the sender runs, L = {} ms; local outputs line up with each other \
@@ -634,6 +650,7 @@ impl<D: Driver> Controller<D> {
     pub fn set_cast(&mut self, link: Box<dyn CastLink>) {
         let mut cast = CastSpeakers::new(link, self.log.clone());
         cast.set_master(self.policy.master());
+        cast.set_zones(self.zone_volumes.cast.clone());
         cast.set_streaming(self.session.is_some());
         self.cast = Some(cast);
         self.sync_cast_rule();
@@ -663,6 +680,36 @@ impl<D: Driver> Controller<D> {
         if let Some(speakers) = self.cast.as_mut() {
             speakers.set_hold_back(cast);
         }
+        // Logged apart from the local outputs' re-timing, which live input skips.
+        if (airplay, cast) != self.network_hold_backs {
+            self.network_hold_backs = (airplay, cast);
+            self.log.log(|| {
+                format!(
+                    "AirPlay held back {} ms and Google Cast {} ms to meet each other",
+                    airplay.round(),
+                    cast.round()
+                )
+            });
+        }
+    }
+
+    /// Writes the session lead to the debug log once every local output has
+    /// reported its start lead, and again whenever it moves.
+    fn log_session_lead(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(lead) = session.ring.session_leads().published_session_lead() else {
+            return;
+        };
+        if session.logged_lead == Some(lead) {
+            return;
+        }
+        session.logged_lead = Some(lead);
+        let ms = lead as f64 * 1000.0 / f64::from(SESSION_RATE);
+        let outputs = session.outputs.len();
+        self.log
+            .log(|| format!("lead: the local session lead is {ms:.1} ms over {outputs} output(s)"));
     }
 
     /// Re-times the other outputs, live, when a Google Cast speaker is
@@ -1657,11 +1704,11 @@ impl<D: Driver> Controller<D> {
         let own_pid = self.driver.own_pid();
         match source {
             SourceId::WholeSystem | SourceId::Input { .. } => {
-                decide_capture(source, own_pid, &ProcessTable::default())
+                decide_capture(source, own_pid, &ProcessTable::default(), &self.input_pairs)
             }
             SourceId::App { .. } => {
                 let processes = self.driver.processes()?;
-                decide_capture(source, own_pid, &processes)
+                decide_capture(source, own_pid, &processes, &self.input_pairs)
             }
             SourceId::Apps {
                 root_pids,
@@ -1729,6 +1776,8 @@ impl<D: Driver> Controller<D> {
             airplay.restart_timeline();
         }
         self.sessions_started += 1;
+        self.policy.set_source_kind(lead_source(source));
+        self.log.log(|| self.policy.describe_lead());
         self.session = Some(Session {
             source: source.clone(),
             target,
@@ -1738,6 +1787,7 @@ impl<D: Driver> Controller<D> {
             outputs: BTreeMap::new(),
             trial_polls: 0,
             waits_for_feed,
+            logged_lead: None,
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -2049,6 +2099,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .or_else(|| self.next_start.clone())
     }
 
+    fn input_peak(&mut self) -> Option<f32> {
+        self.session
+            .as_ref()
+            .filter(|session| matches!(session.source, SourceId::Input { .. }))
+            .map(|session| session.ring.take_peak())
+    }
+
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError> {
         self.log.log(|| {
             let state = if enabled { "on" } else { "off" };
@@ -2175,6 +2232,30 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn set_zone_volumes(&mut self, zones: ZoneVolumes) {
+        if zones == self.zone_volumes {
+            return;
+        }
+        self.log.log(|| {
+            format!(
+                "zone volumes: {} local, {} AirPlay and {} Cast speaker(s) in a zone",
+                zones.outputs.len(),
+                zones.airplay.len(),
+                zones.cast.len()
+            )
+        });
+        for id in self.policy.set_zones(zones.outputs.clone()) {
+            self.apply_gain(&id);
+        }
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_zones(zones.airplay.clone());
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_zones(zones.cast.clone());
+        }
+        self.zone_volumes = zones;
+    }
+
     fn master_volume(&self) -> f64 {
         self.policy.master()
     }
@@ -2289,8 +2370,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .and_then(AirPlaySpeakers::password_prompt)
     }
 
-    fn airplay_holding_target(&self, id: &str) -> Option<String> {
+    fn airplay_holding_target(&self, id: &str) -> Option<InTarget> {
         self.airplay.as_ref()?.holding_target(id)
+    }
+
+    fn airplay_listed_name(&self, id: &str) -> Option<String> {
+        Some(self.airplay.as_ref()?.listed_name(id)?.to_owned())
     }
 
     fn set_airplay_volume(&mut self, id: &str, position: f64) {
@@ -2448,6 +2533,14 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.quit_watch.set_setting(setting);
     }
 
+    fn set_input_pair(&mut self, endpoint_id: &str, pair: u16) {
+        if pair == 0 {
+            self.input_pairs.remove(endpoint_id);
+        } else {
+            self.input_pairs.insert(endpoint_id.to_owned(), pair);
+        }
+    }
+
     fn retry_airplay(&mut self) {
         if self
             .airplay
@@ -2503,6 +2596,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             *wait = wait.saturating_sub(1);
         }
         self.device_volumes.tick();
+        self.log_session_lead();
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
@@ -2840,6 +2934,17 @@ fn describe_source(source: &SourceId) -> String {
     }
 }
 
+/// A source as the lead choice tells sources apart.
+fn lead_source(source: &SourceId) -> SourceKind {
+    match source {
+        SourceId::WholeSystem => SourceKind::System,
+        SourceId::App { .. } | SourceId::Apps { .. } | SourceId::AppsExcept { .. } => {
+            SourceKind::App
+        }
+        SourceId::Input { .. } => SourceKind::Input,
+    }
+}
+
 /// What a capture captures, and the format Windows delivers it in.
 fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> String {
     let what = match target {
@@ -2856,7 +2961,18 @@ fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> St
             let pids: Vec<u32> = activations.iter().map(|a| a.target_pid).collect();
             format!("processes {pids:?} and their children, mixed")
         }
-        CaptureTarget::Input { endpoint_id } => format!("input device {endpoint_id}"),
+        CaptureTarget::Input { endpoint_id, pair } => {
+            let playing = setup.map_or(InputPair::FIRST, |attempt| attempt.pair);
+            let channels = describe_pair(playing);
+            if setup.is_some() && *pair != playing.index {
+                format!(
+                    "input device {endpoint_id}, {channels} (saved pair {} is not available)",
+                    pair + 1
+                )
+            } else {
+                format!("input device {endpoint_id}, {channels}")
+            }
+        }
     };
     let format = match setup {
         Some(attempt) => {
@@ -4392,7 +4508,8 @@ mod tests {
         assert_eq!(
             backend.driver().captures_started(),
             [CaptureTarget::Input {
-                endpoint_id: "mic".to_owned()
+                endpoint_id: "mic".to_owned(),
+                pair: 0,
             }]
         );
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
@@ -4410,6 +4527,28 @@ mod tests {
         assert_eq!(backend.driver().capture_attempts(), 1 + 5);
         assert_eq!(backend.running_source(), None);
         assert!(playing(&backend).is_empty());
+    }
+
+    #[test]
+    fn the_level_meter_reads_the_peak_only_while_an_input_device_is_captured() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        assert_eq!(backend.input_peak(), None, "stopped");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.feed_capture_level(480, 0.5);
+        assert_eq!(backend.input_peak(), None, "not an input device");
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        let written = backend.feed_capture_level(480, 0.5);
+        let loudest = written.iter().copied().map(f32::abs).fold(0.0, f32::max);
+        assert!(loudest > 0.0);
+        assert_eq!(backend.input_peak(), Some(loudest));
+        assert_eq!(backend.input_peak(), Some(0.0), "taken once");
+        backend.stop();
+        assert_eq!(backend.input_peak(), None);
     }
 
     #[test]
@@ -4914,6 +5053,27 @@ mod tests {
     }
 
     #[test]
+    fn a_session_start_logs_the_lead_it_chose() {
+        let (mut backend, log, dir) = logged_backend("controller-lead");
+        backend.connect_input("mic", "Microphone", "USB");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.stop();
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "lead: local outputs play at their device's start lead",
+                "starting: capturing the input device mic",
+                "lead: live input: local outputs play at their device's start lead",
+            ],
+        );
+    }
+
+    #[test]
     fn a_start_and_an_output_switch_are_logged() {
         let (mut backend, log, dir) = logged_backend("controller-start");
         backend.start(&SourceId::WholeSystem).unwrap();
@@ -5055,6 +5215,7 @@ mod tests {
                 form_factor: Some(5),
                 enumerator: Some("BTHHFENUM".to_owned()),
                 display_port: false,
+                channels: None,
             }),
         });
         backend.enumerate_endpoint(EndpointReading {

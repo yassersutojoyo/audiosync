@@ -1,5 +1,5 @@
-// The app's small dialogs: the one that names a group (New Speaker Group and
-// Rename Group), the PIN prompt of an Apple TV pairing and the password
+// The app's small dialogs: the one that names a zone (New Zone and Rename
+// Zone), the PIN prompt of an Apple TV pairing and the password
 // prompt of a speaker protected by a password. Enter confirms,
 // Escape cancels wherever the focus is: in the content's key scope or on a
 // button (DialogButton).
@@ -9,11 +9,12 @@ import { Strings } from "strings.slint";
 import { PinPhase } from "types.slint";
 import { Announcer, Card, DialogButton, Fluent, Glyph, Glyphs, TextField } from "widgets.slint";
 
-export component GroupNameDialog inherits Dialog {
+export component ZoneNameDialog inherits Dialog {
     in property <string> heading;
     in property <string> message;
     in property <string> placeholder;
     in property <string> confirm-label;
+    in property <string> field-label: Strings.new-zone-field-label;
     in-out property <string> name;
     // False for a message without a name field.
     in property <bool> show-field: true;
@@ -65,7 +66,7 @@ export component GroupNameDialog inherits Dialog {
                 property <int> focus-request: root.focus-request;
                 text <=> root.name;
                 placeholder-text: root.placeholder;
-                accessible-label: Strings.new-group-field-label;
+                accessible-label: root.field-label;
                 changed caret-in-view => {
                     root.name-caret-in-view = self.caret-in-view;
                 }

@@ -12,13 +12,14 @@ use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
     DEVICE_STATE, DEVICE_STATE_ACTIVE, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator,
     IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator,
-    PKEY_AudioEndpoint_FormFactor, PKEY_AudioEndpoint_JackSubType, eCapture, eConsole, eRender,
+    PKEY_AudioEndpoint_FormFactor, PKEY_AudioEndpoint_JackSubType, PKEY_AudioEngine_DeviceFormat,
+    eCapture, eConsole, eRender,
 };
 use windows::Win32::Media::KernelStreaming::KSNODETYPE_DISPLAYPORT_INTERFACE;
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, STGM_READ};
 use windows::Win32::System::Threading::{INFINITE, WaitForSingleObject};
-use windows::Win32::System::Variant::{VT_LPWSTR, VT_UI4};
+use windows::Win32::System::Variant::{VT_BLOB, VT_LPWSTR, VT_UI4};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::core::{GUID, PCWSTR};
 use windows_core::implement;
@@ -118,7 +119,44 @@ pub(super) fn properties(device: &IMMDevice) -> Result<EndpointProperties, Strin
         display_port: string_property(&store, &PKEY_AudioEndpoint_JackSubType)
             .and_then(|text| GUID::try_from(text.trim_matches(['{', '}'])).ok())
             == Some(KSNODETYPE_DISPLAYPORT_INTERFACE),
+        channels: format_channels(&store, &PKEY_AudioEngine_DeviceFormat),
     })
+}
+
+/// The channels of a `WAVEFORMATEX` held as raw bytes: its `nChannels`,
+/// after the two-byte format tag. None when the bytes are shorter than a
+/// `WAVEFORMATEX` (18) or name no channel.
+fn blob_channels(blob: &[u8]) -> Option<u16> {
+    if blob.len() < 18 {
+        return None;
+    }
+    let channels = u16::from_le_bytes([blob[2], blob[3]]);
+    (channels > 0).then_some(channels)
+}
+
+/// The channels of the wave format `store` holds as a blob under `key`.
+fn format_channels(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u16> {
+    // SAFETY: reads one property into a PROPVARIANT this function owns and
+    // clears; its blob is read only when the variant says it holds one, and
+    // only within the size it gives, before the clear frees it.
+    unsafe {
+        let mut value = store.GetValue(key).ok()?;
+        let channels = if value.Anonymous.Anonymous.vt == VT_BLOB {
+            let blob = value.Anonymous.Anonymous.Anonymous.blob;
+            (!blob.pBlobData.is_null())
+                .then(|| {
+                    blob_channels(std::slice::from_raw_parts(
+                        blob.pBlobData,
+                        blob.cbSize as usize,
+                    ))
+                })
+                .flatten()
+        } else {
+            None
+        };
+        let _ = PropVariantClear(&mut value);
+        channels
+    }
 }
 
 /// A failed call, for a listing note.
@@ -341,6 +379,19 @@ mod tests {
 
     /// How long a test waits for an answer.
     const TIMEOUT: Duration = Duration::from_millis(200);
+
+    #[test]
+    fn a_device_format_blob_gives_its_channel_count() {
+        // WAVE_FORMAT_EXTENSIBLE, 8 channels, then the rest of a WAVEFORMATEX.
+        let mut eight = vec![0xFE, 0xFF, 8, 0];
+        eight.resize(40, 0);
+        assert_eq!(blob_channels(&eight), Some(8));
+        assert_eq!(blob_channels(&eight[..17]), None);
+        let mut none = vec![1, 0, 0, 0];
+        none.resize(18, 0);
+        assert_eq!(blob_channels(&none), None);
+        assert_eq!(blob_channels(&[]), None);
+    }
 
     #[test]
     fn a_device_thread_that_hangs_unregistering_its_listener_doesnt_hold_quitting() {

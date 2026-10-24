@@ -1456,7 +1456,15 @@ pub unsafe extern "C" fn asc_cast_step_volume(cast: *mut AscCast, up: bool) -> b
 /// 0 to 1: their product, clamped; anything not finite counts as 0 (C104).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_cast_device_level(master: f64, own: f64) -> f64 {
-    status::device_level(master, own)
+    status::device_level(master, status::NO_ZONE_LEVEL, own)
+}
+
+/// The level to send for the host's master, the speaker's zone (1 outside a
+/// zone) and its own level, all 0 to 1: master × zone × own, clamped;
+/// anything not finite counts as 0 (C104, S249).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_zone_level(master: f64, zone: f64, own: f64) -> f64 {
+    status::device_level(master, zone, own)
 }
 
 /// The own level a reported device level means at `master` (C104):
@@ -1464,7 +1472,15 @@ pub extern "C" fn asc_cast_device_level(master: f64, own: f64) -> f64 {
 /// value isn't finite.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_cast_own_level(reported: f64, master: f64, own: f64) -> f64 {
-    status::own_level(reported, master, own)
+    status::own_level(reported, master, status::NO_ZONE_LEVEL, own)
+}
+
+/// The own level a reported device level means at `master` and `zone`
+/// (C104, S250): level ÷ (master × zone), clamped to 0 to 1; `own` as it is
+/// when master × zone is 0 or a value isn't finite.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_zone_own_level(reported: f64, master: f64, zone: f64, own: f64) -> f64 {
+    status::own_level(reported, master, zone, own)
 }
 
 /// The own level a session starts from (C105): `own` when `has_own` and it is
@@ -1477,7 +1493,27 @@ pub extern "C" fn asc_cast_start_own_level(
     own: f64,
     reported: f64,
 ) -> f64 {
-    status::start_own_level(master, has_own.then_some(own), reported)
+    status::start_own_level(
+        master,
+        status::NO_ZONE_LEVEL,
+        has_own.then_some(own),
+        reported,
+    )
+}
+
+/// The own level a session starts from (C105) for a speaker in a zone:
+/// `own` when `has_own`, whatever the first status reports; else that
+/// status's level ÷ (master × zone), clamped, or the level itself when
+/// master × zone is 0.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_zone_start_own_level(
+    master: f64,
+    zone: f64,
+    has_own: bool,
+    own: f64,
+    reported: f64,
+) -> f64 {
+    status::start_own_level(master, zone, has_own.then_some(own), reported)
 }
 
 /// Whether a reported level is the device's answer to the level `sent`
@@ -1999,6 +2035,29 @@ mod tests {
 
     fn panic_in_next_call() {
         PANIC_NEXT.with(|next| next.set(true));
+    }
+
+    // covers: S249, S250
+    #[test]
+    fn the_zoned_cast_levels_cross_the_boundary_as_the_sender_makes_them() {
+        assert!((asc_cast_zone_level(0.5, 0.5, 0.8) - 0.2).abs() < 1e-12);
+        assert!((asc_cast_zone_own_level(0.2, 0.5, 0.5, 0.9) - 0.8).abs() < 1e-12);
+        assert_eq!(asc_cast_zone_own_level(0.2, 1.0, 0.0, 0.7), 0.7);
+        assert!((asc_cast_zone_start_own_level(0.5, 0.5, false, 0.0, 0.2) - 0.8).abs() < 1e-12);
+        for (master, own, reported) in [(0.5, 0.8, 0.2), (0.37, 0.91, 0.3)] {
+            assert_eq!(
+                asc_cast_zone_level(master, 1.0, own).to_bits(),
+                asc_cast_device_level(master, own).to_bits()
+            );
+            assert_eq!(
+                asc_cast_zone_own_level(reported, master, 1.0, own).to_bits(),
+                asc_cast_own_level(reported, master, own).to_bits()
+            );
+            assert_eq!(
+                asc_cast_zone_start_own_level(master, 1.0, false, 0.0, reported).to_bits(),
+                asc_cast_start_own_level(master, false, 0.0, reported).to_bits()
+            );
+        }
     }
 
     /// A browser that hands over a fixed list of events, then nothing; one

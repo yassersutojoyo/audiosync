@@ -50,6 +50,15 @@ final class CoreDelayRing {
     }
     /// Frames written since the ring was made (any thread).
     var framesWritten: Int64 { Int64(clamping: asc_ring_frames_written(handle)) }
+    /// Any thread: the largest sample magnitude written since the last call
+    /// (1 is full scale), for the input level meter.
+    func takePeak() -> Float { asc_ring_take_peak(handle) }
+    /// Any thread: the session lead of the ring's renderers in capture
+    /// frames, once every counted renderer has published its start lead (S208).
+    var publishedSessionLeadFrames: Int64? {
+        var frames: Int64 = 0
+        return asc_ring_session_lead_frames(handle, &frames) ? frames : nil
+    }
 
     /// Capture thread: appends `frames` interleaved stereo frames. Real-time safe.
     func write(interleaved samples: UnsafePointer<Float>, frames: Int) {
@@ -380,5 +389,9 @@ struct CoreGainCurve {
     /// A local output's gain: its own position times the master's, both through the curve.
     func outputGain(localPosition: Double, masterPosition: Double) -> Double {
         asc_output_gain(localPosition, masterPosition)
+    }
+    /// A local output's gain through its zone, 100 in no zone (S71, S249).
+    func outputGain(localPosition: Double, zonePosition: Double, masterPosition: Double) -> Double {
+        asc_zone_output_gain(localPosition, zonePosition, masterPosition)
     }
 }

@@ -438,6 +438,15 @@ impl App {
                             Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
                             Action::AirPlayDelay { ms } => backend.set_airplay_delay(ms),
                             Action::Master { volume } => backend.set_master_volume(volume),
+                            Action::ToggleZone { id, keep_off } => {
+                                backend.toggle_zone_from_phone(&id, &keep_off);
+                            }
+                            Action::ZoneVolume { id, volume } => {
+                                backend.set_zone_volume(&id, volume);
+                            }
+                            Action::RecallPreset { id, keep_off } => {
+                                backend.recall_preset_from_phone(&id, &keep_off);
+                            }
                             Action::Source { id } => backend.select_source(&id),
                         }
                     }
@@ -942,6 +951,104 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.airplay_delay_ms, Some(2100.0));
         assert!(!state.speaker(&asks).expect("listed").enabled);
+    }
+
+    /// The mock with a zone of the kitchen and living room speakers and a
+    /// preset of the kitchen and desk speakers.
+    fn downstairs() -> MockBackend {
+        let mut mock = MockBackend::new();
+        mock.add_zone(
+            "zone:1",
+            "Downstairs",
+            &["airplay:kitchen", "airplay:living"],
+        );
+        mock.add_preset("preset:1", "Evening", &["airplay:kitchen", "local:desk"]);
+        mock
+    }
+
+    // covers: S257
+    #[test]
+    fn phone_zone_and_preset_commands_apply_without_showing_the_main_window() {
+        let app = over_loopback(downstairs());
+        let main_shown = app.main.window().is_visible();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.remote.borrow_mut().commands = Some(receiver);
+        for command in [
+            audiosync_remote::Command::Zone {
+                id: "zone:1".into(),
+                change: audiosync_remote::ZoneChange {
+                    toggle: true,
+                    volume: Some(30.0),
+                },
+            },
+            audiosync_remote::Command::Preset {
+                id: "preset:1".into(),
+            },
+        ] {
+            sender.send(command).expect("sent");
+        }
+        app.backend
+            .borrow_mut()
+            .set_speaker_enabled("airplay:kitchen", false);
+        app.take_remote_commands();
+        let state = app.snapshot();
+        for key in ["airplay:kitchen", "local:desk"] {
+            assert!(state.speaker(key).expect("listed").enabled, "{key}");
+        }
+        assert_eq!(state.zones[0].volume, 30.0);
+        assert!(state.presets[0].current);
+        assert_eq!(
+            app.main.window().is_visible(),
+            main_shown,
+            "a phone command leaves the main window as it was"
+        );
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_zone_toggle_or_recall_leaves_a_code_asking_member_off_and_opens_no_pin_dialog() {
+        let mut backend = downstairs();
+        backend.add_preset("preset:2", "Night", &["airplay:living", "local:desk"]);
+        let app = over_loopback(backend);
+        app.backend
+            .borrow_mut()
+            .set_speaker_enabled("airplay:kitchen", false);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.remote.borrow_mut().commands = Some(receiver);
+        let zone = audiosync_remote::Command::Zone {
+            id: "zone:1".into(),
+            change: audiosync_remote::ZoneChange {
+                toggle: true,
+                volume: None,
+            },
+        };
+        let recall = audiosync_remote::Command::Preset {
+            id: "preset:2".into(),
+        };
+        let left_off = |app: &super::App| {
+            let state = app.snapshot();
+            !state.speaker("airplay:living").expect("listed").enabled
+                && state.pin_prompt.is_none()
+                && !app.pin_dialog.window().is_visible()
+        };
+        sender.send(zone).expect("sent");
+        app.take_remote_commands();
+        assert!(app.snapshot().speaker("airplay:kitchen").unwrap().enabled);
+        assert!(
+            left_off(&app),
+            "the zone plays without the member that asks for a code"
+        );
+        sender.send(recall).expect("sent");
+        app.take_remote_commands();
+        assert!(app.snapshot().speaker("local:desk").unwrap().enabled);
+        assert!(left_off(&app), "the preset plays without it too");
+
+        app.backend.borrow_mut().recall_preset("preset:2");
+        app.refresh();
+        assert!(
+            app.snapshot().pin_prompt.is_some(),
+            "a recall at the PC still turns it on and asks for the code"
+        );
     }
 
     struct FakeProfiles(std::sync::Mutex<Vec<Category>>);
