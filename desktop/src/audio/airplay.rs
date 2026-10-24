@@ -666,6 +666,8 @@ const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 struct VolumeRead {
     /// A read was asked since the volume was last set.
     reading: bool,
+    /// The row's slider is held, so a reading must not move it (S271).
+    dragging: bool,
     /// When the volume was last set: its own, the master or a calibration.
     set_at: Instant,
     /// It turned a read down, or its AirPlay 2 reads stopped (P184): it
@@ -680,6 +682,7 @@ impl VolumeRead {
     fn new(now: Instant) -> VolumeRead {
         VolumeRead {
             reading: false,
+            dragging: false,
             set_at: now,
             unreadable: false,
             level: None,
@@ -1947,6 +1950,15 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// The speaker's slider is held (true) or let go (false); a read asked
+    /// before either is old.
+    pub fn set_volume_dragging(&mut self, id: &str, dragging: bool) {
+        if let Some(added) = self.added.get_mut(id) {
+            added.read.dragging = dragging;
+            added.read.reading = false;
+        }
+    }
+
     /// Sets the master position, which scales every speaker, live.
     pub fn set_master(&mut self, master: f64) {
         self.master = master;
@@ -2080,7 +2092,7 @@ impl AirPlaySpeakers {
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
-        if !added.read.answered() || solo || !db.is_finite() {
+        if !added.read.answered() || added.read.dragging || solo || !db.is_finite() {
             return false;
         }
         let level = if db <= MUTED_DB {
@@ -2094,24 +2106,35 @@ impl AirPlaySpeakers {
         if off < 1e-6 || (added.read.recent(now) && off < VOLUME_TOLERANCE_DB) {
             return false;
         }
+        let zone = self.zone(&row);
+        let slider = self.settings(&row).volume;
+        // With zone × master at 0 every position sounds the same. A reading
+        // on the slider's own step is its rounding, unless it is louder than
+        // the slider's end reaches: the sender keeps that level.
+        let Some(position) = slider_position(db, zone, self.master) else {
+            return false;
+        };
+        let beyond_end = (1.0 - db / MIN_DB) > stage_level(100.0, zone, self.master);
+        if position == slider.round() && !beyond_end {
+            return false;
+        }
+        let Some(added) = self.added.get_mut(&row) else {
+            return false;
+        };
         added.read.level = Some(level);
         added.set_volume(self.link.as_mut(), level);
-        let position = slider_position(db, self.zone(&row), self.master);
         self.log.log(|| {
-            let slider = position.map_or("unchanged".to_owned(), |position| position.to_string());
             format!(
-                "AirPlay speaker {} volume changed on the speaker to {}: slider at {slider}",
+                "AirPlay speaker {} volume changed on the speaker to {}: slider at {position}",
                 self.label(&row),
                 describe_volume(level)
             )
         });
-        match position {
-            Some(position) if position != self.settings(&row).volume => {
-                self.entry(&row).volume = position;
-                true
-            }
-            _ => false,
+        if position == slider {
+            return false;
         }
+        self.entry(&row).volume = position;
+        true
     }
 
     /// Sets a speaker's own delay d_s, live.
@@ -5667,6 +5690,70 @@ pub mod tests {
         report_volume(&fake, &kitchen, -26.4);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(airplay.speakers()[0].volume, 12.0);
+    }
+
+    // covers: S271
+    #[test]
+    fn a_read_back_while_the_slider_is_dragged_is_ignored() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        read_now(&mut airplay);
+        airplay.set_volume_dragging(&id, true);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
+        assert!(fake.take_calls().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 50.0);
+        // The answer to a read asked during the drag is old after it.
+        airplay.set_volume_dragging(&id, false);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 70.0);
+    }
+
+    // covers: S250, S271
+    #[test]
+    fn a_read_back_on_the_sliders_own_step_or_at_master_0_changes_nothing() {
+        let path = crate::debug_log::test_dir("airplay-volume-rounding-echo").join("log.txt");
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
+        // 10.17 sends −26.949 dB; the speaker answers −27.0, which is step 10.
+        airplay.set_volume(&id, 10.17);
+        settle(&mut airplay, &id);
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -27.0);
+        assert!(airplay.poll().is_empty());
+        assert!(fake.take_calls().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 10.17);
+        // At master 0 every slider position sounds the same.
+        airplay.set_master(0.0);
+        settle(&mut airplay, &id);
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
+        assert!(fake.take_calls().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 10.17);
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let messages = crate::debug_log::read_messages(&path);
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("volume: 10.17"))
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.contains("changed on the speaker")),
+            "{messages:?}"
+        );
     }
 
     // covers: S250, S271

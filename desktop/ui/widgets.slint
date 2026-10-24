@@ -767,11 +767,21 @@ export component VolumeSlider inherits HorizontalLayout {
     // How far an arrow key moves it; a drag is not snapped to it.
     in property <float> step: 1;
     callback changed(float);
+    // True from the first move of a drag or key press to its release.
+    callback editing(bool);
+    property <bool> is-editing;
 
     spacing: 8px;
     // A user's drag replaces the slider's binding; keep it in step with the model.
     changed volume => {
         slider.value = root.volume;
+    }
+    // A slider disabled mid-drag never sees its release.
+    changed enabled => {
+        if !root.enabled && root.is-editing {
+            root.is-editing = false;
+            root.editing(false);
+        }
     }
 
     // Gives the slider the keyboard focus.
@@ -791,7 +801,17 @@ export component VolumeSlider inherits HorizontalLayout {
         accessible-description: root.description;
         accessible-value: Strings.volume-value(self.value);
         changed(value) => {
+            if !root.is-editing {
+                root.is-editing = true;
+                root.editing(true);
+            }
             root.changed(value);
+        }
+        released => {
+            if root.is-editing {
+                root.is-editing = false;
+                root.editing(false);
+            }
         }
     }
 
@@ -1387,6 +1407,8 @@ export component SpeakerRow inherits Rectangle {
     // TouchArea takes; on a row with one, the click toggles its sync controls.
     callback blank-clicked();
     callback volume-changed(float);
+    // The volume slider is held: a drag or a key press until its release.
+    callback volume-editing(bool);
     callback sync-toggled();
     callback delay-stepped(int);
     callback delay-edited(string);
@@ -1948,6 +1970,9 @@ export component SpeakerRow inherits Rectangle {
                                     enabled: !root.item.missing && (root.item.cast ? root.cast-live && !root.item.volume-fixed : root.item.state != RowState.off);
                                     changed(value) => {
                                         root.volume-changed(value);
+                                    }
+                                    editing(on) => {
+                                        root.volume-editing(on);
                                     }
                                 }
                             }

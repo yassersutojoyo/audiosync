@@ -2386,6 +2386,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn set_airplay_volume_dragging(&mut self, id: &str, dragging: bool) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_volume_dragging(id, dragging);
+        }
+    }
+
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_delay(id, delay_ms);

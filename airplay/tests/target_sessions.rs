@@ -507,6 +507,65 @@ fn an_airplay2_target_read_back_asks_only_the_leader() {
     sender.shutdown();
 }
 
+// covers: P180, P184
+#[test]
+fn an_airplay2_target_whose_reader_stopped_reports_nothing() {
+    let _serial = serial();
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("GET_PARAMETER".to_owned(), 500);
+    let first = Ap2Server::start(refusing);
+    let second = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start(true);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10040"),
+        airplay2_only(&second, 2, "0x0,0x10040"),
+    );
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(playing(&mut events, &sender, key, 1));
+    }
+    let reads = |server: &Ap2Server| {
+        server
+            .fake()
+            .keys()
+            .iter()
+            .filter(|key| *key == "GET_PARAMETER")
+            .count()
+    };
+    let stopped = SpeakerEvent::Warning(Warning::VolumeReadsStopped);
+    assert!(
+        wait_until(Duration::from_secs(20), || {
+            sender.read_target_volume(&id);
+            thread::sleep(Duration::from_millis(100));
+            events.drain(&sender);
+            events.of(&da.key).contains(&stopped)
+        }),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(reads(&first), 3);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        sender.read_target_volume(&id);
+        thread::sleep(Duration::from_millis(250));
+    }
+    events.drain(&sender);
+    assert_eq!(reads(&first), 3, "no read after the third failure");
+    assert_eq!(reads(&second), 0);
+    let of_first = events.of(&da.key);
+    assert_eq!(of_first.iter().filter(|e| **e == stopped).count(), 1);
+    assert!(
+        !of_first
+            .iter()
+            .any(|e| matches!(e, SpeakerEvent::VolumeReported(_) | SpeakerEvent::Error(_))),
+        "{of_first:?}"
+    );
+    sender.shutdown();
+}
+
 fn states_of(events: &Events, key: &DeviceKey) -> Vec<SpeakerState> {
     events
         .of(key)

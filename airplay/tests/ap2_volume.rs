@@ -309,6 +309,21 @@ fn a_read_left_unanswered_fails_at_the_next_feedback_and_never_ends_the_session(
 
 // covers: P184
 #[test]
+fn reads_given_up_are_forgotten_once_a_later_request_is_answered() {
+    let mut fake = FakeAp2::new();
+    fake.silent.push(READ.to_owned());
+    let mut rig = Ap2Rig::new(reading_config(), fake);
+    for _ in 0..2 {
+        ask_for(&mut rig, Duration::from_secs(2));
+        // The read given up at the tick, then the feedback answered.
+        assert_eq!(rig.session.late_volume_reads(), 0, "{:?}", rig.keys());
+    }
+    assert_eq!(rig.times_of(READ).len(), 3, "{:?}", rig.keys());
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+}
+
+// covers: P184
+#[test]
 fn a_failed_read_leaves_the_feedback_loss_count_alone() {
     let mut fake = FakeAp2::new();
     fake.status.insert(READ.to_owned(), 500);

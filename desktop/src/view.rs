@@ -2110,6 +2110,13 @@ impl App {
             })
         });
         let w = weak.clone();
+        main.on_speaker_volume_editing(move |id, on| {
+            // Nothing shown changes, so no refresh.
+            with_app(&w, |app| {
+                app.backend.borrow_mut().set_speaker_volume_editing(&id, on)
+            })
+        });
+        let w = weak.clone();
         main.on_sync_toggled(move |id| with_app(&w, |app| app.toggle_sync(&id)));
         let w = weak.clone();
         main.on_delay_stepped(move |id, delta| with_app(&w, |app| app.step_delay(&id, delta)));

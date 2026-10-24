@@ -788,6 +788,8 @@ struct SpeakerRow: View {
     @FocusState private var nameFocused: Bool
     /// The switch, which takes the focus when a neighbouring row is hidden.
     @FocusState private var switchFocused: Bool
+    /// The volume slider is held; a row closed mid-drag never sees the release.
+    @State private var volumeDragging = false
 
     var body: some View {
         let t = model.text
@@ -856,7 +858,16 @@ struct SpeakerRow: View {
                     }
                     HStack(spacing: 8) {
                         Slider(value: Binding(get: { speaker.volume }, set: { model.setVolume(speaker, $0) }),
-                               in: 0...100, onEditingChanged: { model.setVolumeDragging(speaker, $0) })
+                               in: 0...100, onEditingChanged: { editing in
+                                   volumeDragging = editing
+                                   model.setVolumeDragging(speaker, editing)
+                               })
+                            .onDisappear {
+                                if volumeDragging {
+                                    volumeDragging = false
+                                    model.setVolumeDragging(speaker, false)
+                                }
+                            }
                             .controlSize(.small)
                             .disabled(!volumeAdjustable)
                             .accessibilityLabel(t.volume(of: speaker.name))

@@ -491,6 +491,12 @@ impl Ap2Session {
         &self.ids
     }
 
+    /// Volume reads given up at a feedback tick whose answers may still come.
+    #[doc(hidden)]
+    pub fn late_volume_reads(&self) -> usize {
+        self.late_volume_reads.len()
+    }
+
     /// The timing of the current or last session SETUP.
     pub fn timing(&self) -> Timing {
         self.timing
@@ -1300,12 +1306,15 @@ impl Ap2Session {
     }
 
     fn on_response(&mut self, response: Response, now: Instant) {
+        // Answers come in request order, so one for a later request means
+        // the reads given up before it will never be answered.
         if let Some(cseq) = response.cseq()
             && let Some(at) = self.late_volume_reads.iter().position(|&c| c == cseq)
         {
-            self.late_volume_reads.remove(at);
+            self.late_volume_reads.drain(..=at);
             return;
         }
+        self.late_volume_reads.clear();
         let Some(in_flight) = self.in_flight.take() else {
             return self.fail(
                 ErrorKind::ProtocolError,

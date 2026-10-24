@@ -4775,6 +4775,16 @@ mod tests {
         assert_eq!(inside(handle).added[id].position, 50.0);
         read_back(handle, &key, -6.0);
         assert_eq!(inside(handle).added[id].position, 80.0);
+        // A row closed mid-drag never lets go; turning the speaker off and
+        // on starts it undragged.
+        // SAFETY: as above.
+        unsafe {
+            assert!(asc_airplay_set_volume_dragging(handle, c_id.as_ptr(), true));
+            assert!(asc_airplay_remove_speaker(handle, c_id.as_ptr()));
+        }
+        add_for_volume(handle, id, key.clone(), 50.0);
+        read_back(handle, &key, -6.0);
+        assert_eq!(inside(handle).added[id].position, 80.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
