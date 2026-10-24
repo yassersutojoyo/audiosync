@@ -205,7 +205,7 @@ final class NowPlayingMonitor {
                 self.refreshing = false
                 if self.isRunning { self.reading = next }
                 let last = self.track
-                let lastPlayerRuns = last.map { candidates.contains($0.bundleID) && Self.isRunning($0.bundleID) }
+                let lastPlayerRuns = last.map { self.candidates().contains($0.bundleID) && Self.isRunning($0.bundleID) }
                     ?? false
                 self.publish(self.emptyReadings.next(reading: next, last: last, lastPlayerRuns: lastPlayerRuns),
                              reading: true)

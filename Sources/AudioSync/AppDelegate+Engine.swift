@@ -229,7 +229,7 @@ extension AppDelegate {
     func syncStreamingActivity() {
         // App Nap throttles a background app's timers, which read Now Playing and feed the receivers.
         if engine.isRunning, streamingActivity == nil {
-            streamingActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiated,
+            streamingActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
                                                                       reason: "Streaming audio to speakers")
         } else if !engine.isRunning, let activity = streamingActivity {
             ProcessInfo.processInfo.endActivity(activity)
