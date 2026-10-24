@@ -7112,5 +7112,61 @@ do {
     check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
 }
 
+// MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)
+do {
+    let ms: UInt64 = 1_000_000
+    var limiter = LogRateLimiter()
+    var logged = 0
+    var closedCounts: [Int] = []
+    for event in 0..<25 {
+        let decision = limiter.admit(1, atNs: 5_000 * ms + UInt64(event) * 40 * ms)
+        logged += decision.admitted
+        if let closed = decision.closed { closedCounts.append(closed) }
+    }
+    check(logged == 10 && closedCounts.isEmpty, "late callbacks: 25 in one second log 10 lines",
+          "\(logged) logged, closed \(closedCounts)")
+    let after = limiter.admit(0, atNs: 6_000 * ms)
+    check(after.closed == 15 && after.admitted == 0, "late callbacks: then one line counts the 15 suppressed",
+          "\(after)")
+    check(limiter.admit(0, atNs: 7_000 * ms).closed == nil, "late callbacks: the suppressed count comes once")
+
+    var twoSeconds = LogRateLimiter()
+    var firstLogged = 0
+    for event in 0..<12 { firstLogged += twoSeconds.admit(1, atNs: UInt64(event) * 50 * ms).admitted }
+    let next = twoSeconds.admit(1, atNs: 1_500 * ms)
+    var secondLogged = next.admitted
+    for event in 1..<12 { secondLogged += twoSeconds.admit(1, atNs: 1_500 * ms + UInt64(event) * 50 * ms).admitted }
+    check(firstLogged == 10 && next.closed == 2 && secondLogged == 10,
+          "late callbacks: a new second opens a new window of 10",
+          "first \(firstLogged), closed \(String(describing: next.closed)), second \(secondLogged)")
+
+    var dropped = LogRateLimiter()
+    _ = dropped.admit(1, atNs: 0)
+    dropped.drop(3, atNs: 10 * ms)
+    check(dropped.admit(0, atNs: 1_000 * ms).closed == 3,
+          "late callbacks: callbacks whose details were overwritten count as suppressed")
+
+    let slot = LateCallbackLog.pack(startNs: 123_456 * ms + 789, lateNs: 12_345_678)
+    let unpacked = LateCallbackLog.unpack(slot)
+    check(unpacked.startMs == 123_456 && unpacked.lateUs == 12_345, "late callbacks: a slot keeps start ms and lateness µs")
+    check(LateCallbackLog.unpack(LateCallbackLog.pack(startNs: 0, lateNs: 60 * 1_000 * ms)).lateUs
+            == LateCallbackLog.latenessMaskUs, "late callbacks: a huge lateness saturates instead of spilling")
+    let wall = Date(timeIntervalSince1970: 1_800_000_000)
+    let line = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 123_706 * ms, wallNow: wall)
+    check(line == "[AudioSync] late output callback at 2027-01-15T07:59:59.750Z on \"Speaker\": 12.3 ms late",
+          "late callbacks: the line names the buffer's wall-clock start, the output and the lateness", line)
+    // The buffer's host time lies ahead of now by the output lead, so a poll can come before it.
+    let ahead = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 123_426 * ms, wallNow: wall)
+    check(ahead.contains(" at 2027-01-15T08:00:00.0"), "late callbacks: a buffer starting 30 ms after now is stamped ahead", ahead)
+    let far = LateCallbackLog.eventLine(slot, name: "Speaker", nowNs: 0, wallNow: wall)
+    check(far.contains(" at 2027-01-15T08:02:03.45"), "late callbacks: a start far ahead of now does not trap", far)
+    var stopping = LogRateLimiter()
+    for event in 0..<12 { _ = stopping.admit(1, atNs: UInt64(event) * ms) }
+    check(stopping.flush() == 2 && stopping.flush() == nil,
+          "late callbacks: the last output's stop flushes the pending suppressed count once")
+    check(LateCallbackLog.suppressedLine(15) == "[AudioSync] 15 more late callbacks suppressed",
+          "late callbacks: suppressed-count line")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
