@@ -1,7 +1,7 @@
 //! What AirPlay receivers with a screen, such as a TV, show while AudioSync
 //! streams to them: the playing track's title, artist, album and artwork,
 //! read from the media sessions Windows lists (the system media transport
-//! controls), as the Mac app reads its players.
+//! controls) or the MPRIS players on Linux, as the Mac app reads its players.
 //!
 //! A [`TrackReader`] reads the sessions every [`POLL_INTERVAL`] on a thread
 //! of its own, only while AirPlay receivers play; [`TrackInfo`] turns its
@@ -91,10 +91,10 @@ impl SharedLabels {
     }
 }
 
-/// A media session as Windows lists it.
+/// A media session as the system lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediaSession {
-    /// The app's user model ID, as the session reports it.
+    /// The app's user model ID on Windows, the player's bus name on Linux.
     pub app_id: String,
     pub title: String,
     pub artist: String,
