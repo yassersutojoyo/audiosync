@@ -160,6 +160,36 @@ crate's license isn't allowed by `desktop/deny.toml`, or when a crate's source
 points to a license file the package doesn't ship and the script doesn't
 supply.
 
+## Linux app and AppImage (in development)
+
+The Linux build of `desktop/` shows its tray icon as a StatusNotifier item
+through tray-icon's ksni backend: [ksni](https://github.com/iovxw/ksni)
+(Unlicense) and [zbus](https://github.com/dbus2/zbus) 5 (MIT), with `png`
+(MIT OR Apache-2.0) for the icon. Its text uses the system's font through
+fontconfig, and the app includes no font for it. fontconfig, PipeWire,
+OpenSSL and the X11, Wayland and OpenGL libraries come from the system at run
+time; none of them is part of the program or the AppImage. CI writes the
+build's `THIRD-PARTY-NOTICES.txt` with `scripts/windows_notices.py
+x86_64-unknown-linux-gnu`, and the AppImage carries it in
+`usr/share/doc/audiosync/`.
+
+The AppImage file also contains the AppImage runtime, a separate program
+that mounts the app and starts it:
+[type2-runtime](https://github.com/AppImage/type2-runtime) release 20251108
+(MIT, Copyright (c) 2004-23 probonopd). It is linked statically with
+[musl](https://musl.libc.org/) (MIT), [libfuse](https://github.com/libfuse/libfuse)
+3.15.0 (its library under LGPL-2.1), [squashfuse](https://github.com/vasi/squashfuse)
+0.5.2 (BSD-2-Clause), [zstd](https://github.com/facebook/zstd)
+(BSD-3-Clause OR GPL-2.0, used under BSD-3-Clause),
+[zlib](https://zlib.net) (Zlib) and [mimalloc](https://github.com/microsoft/mimalloc)
+(MIT). musl, zstd, zlib and mimalloc come from Alpine Linux 3.21 packages.
+The AppImage carries their copyright lines and license texts in
+`usr/share/doc/audiosync/RUNTIME-NOTICES.txt` (from
+`desktop/linux/RUNTIME-NOTICES.txt`). Each release that ships an AppImage
+also carries the source of that runtime release, with its patch to libfuse's
+`mount.c`, and of libfuse 3.15.0. appimagetool, which builds the file, isn't
+part of it.
+
 ## AudioSync's own Google Cast sender
 
 `cast/` is AudioSync's own Google Cast sender (GPL-3.0-or-later). Both apps

@@ -12,3 +12,4 @@ scripts/*.sh
 scripts/brand/*.sh
 scripts/screenshots/*.sh
 core/ffi/*.sh
+desktop/linux/AppRun

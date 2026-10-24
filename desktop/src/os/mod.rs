@@ -15,6 +15,10 @@ mod desktop_entry;
 mod engine;
 #[cfg(not(windows))]
 mod other;
+#[cfg(target_os = "linux")]
+mod status_notifier;
+#[cfg(any(target_os = "linux", test))]
+mod tray_watch;
 #[cfg(windows)]
 mod windows;
 #[cfg(target_os = "linux")]

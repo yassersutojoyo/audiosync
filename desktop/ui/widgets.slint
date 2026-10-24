@@ -17,10 +17,11 @@ import "../../brand/fonts/Poppins-Medium.ttf";
 // keep the colors and the wordmark, these give the Windows look (Fluent's
 // corner radii, list row height, hover and pressed fills, and its short
 // motion). Text is set in Segoe UI Variable, which Windows 11 ships; where a
-// family is missing, Slint falls back to the system font.
+// family is missing, Slint falls back to the system font. Elsewhere the
+// family is left empty, so text takes the system font (fontconfig's on Linux).
 export global Fluent {
-    out property <string> font: "Segoe UI Variable Text";
-    out property <string> display-font: "Segoe UI Variable Display";
+    out property <string> font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Text" : "";
+    out property <string> display-font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Display" : "";
     // Cards, the flyout and the notices (overlay radius).
     out property <length> radius-card: 8px;
     // Buttons, chips and the rows inside a card (control radius).

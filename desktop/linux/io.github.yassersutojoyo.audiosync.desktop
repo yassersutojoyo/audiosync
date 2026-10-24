@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AudioSync
+Comment=Play this computer's sound on AirPlay and Google Cast speakers and local outputs
+Exec=audiosync
+Icon=io.github.yassersutojoyo.audiosync
+Categories=AudioVideo;Audio;
+StartupWMClass=io.github.yassersutojoyo.audiosync
+SingleMainWindow=true
+Terminal=false

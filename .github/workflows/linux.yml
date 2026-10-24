@@ -1,0 +1,168 @@
+name: Linux
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# A newer push to a feature branch cancels that branch's older run; every
+# commit on main keeps its own group, so main's runs are never cancelled.
+# The group starts with the file name, which stays unique when a name: is copied.
+concurrency:
+  group: linux.yml-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  SLINT_COMPILER_DENY_WARNINGS: '1'
+  # The pinned AppImage tools (MIT), checked against these SHA-256 sums.
+  APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+  RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+  RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+  # The runtime's source (with its patch to libfuse's mount.c) and that of the
+  # libfuse it links statically (LGPL-2.1), as its build fetches it; both go
+  # with each release that ships the AppImage (RELEASE.md).
+  RUNTIME_SOURCE_URL: https://github.com/AppImage/type2-runtime/archive/refs/tags/20251108.tar.gz
+  RUNTIME_SOURCE_SHA256: 4c4f6df4647c9f01f871d7edd3716d8aeeffda9d22ffbebe3fccd95a6ab52c95
+  FUSE_SOURCE_URL: https://github.com/libfuse/libfuse/releases/download/fuse-3.15.0/fuse-3.15.0.tar.xz
+  FUSE_SOURCE_SHA256: 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0
+
+jobs:
+  appimage:
+    name: AppImage (x86_64) and tray smoke test
+    # Ubuntu 24.04's glibc 2.39 is the oldest the AppImage runs on.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain (stable)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      # Build: Slint's fonts and windows, the Cast sender's OpenSSL, the PipeWire
+      # client with libclang for its bindings. Checks: Xvfb, a session bus, the
+      # .desktop and AppStream validators, readelf and the X11 libraries winit loads.
+      - name: System libraries and tools
+        run: >-
+          sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
+          libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
+          libpipewire-0.3-dev clang libclang-dev
+          xvfb dbus dbus-user-session appstream desktop-file-utils binutils file
+          libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2
+
+      - name: Download the pinned appimagetool and runtime
+        run: |
+          mkdir -p "$RUNNER_TEMP/appimage-tools"
+          cd "$RUNNER_TEMP/appimage-tools"
+          curl -fsSL -o appimagetool "$APPIMAGETOOL_URL"
+          curl -fsSL -o runtime "$RUNTIME_URL"
+          echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
+          echo "$RUNTIME_SHA256  runtime" | sha256sum -c -
+          chmod +x appimagetool
+
+      - name: Release build
+        run: cargo build --locked --release
+
+      # Fails if a crate's license isn't on desktop/deny.toml's list.
+      - name: Third-party notices
+        run: python3 -I ../scripts/windows_notices.py x86_64-unknown-linux-gnu --output target/release/THIRD-PARTY-NOTICES.txt
+
+      - name: AppImage
+        run: |
+          version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "audiosync-desktop"))')
+          mkdir -p ../dist
+          ../scripts/build_appimage.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt \
+            "$RUNNER_TEMP/appimage-tools/appimagetool" "$RUNNER_TEMP/appimage-tools/runtime" \
+            "../dist/AudioSync-$version-x86_64.AppImage"
+
+      - name: Check the AppImage (layout, linked libraries, .desktop and AppStream files)
+        working-directory: dist
+        run: |
+          appimage=$(ls AudioSync-*-x86_64.AppImage)
+          sha256sum -c "$appimage.sha256"
+          rm -rf squashfs-root
+          "./$appimage" --appimage-extract > /dev/null
+          root=squashfs-root
+          for file in AppRun .DirIcon io.github.yassersutojoyo.audiosync.desktop io.github.yassersutojoyo.audiosync.png \
+            usr/bin/audiosync usr/share/applications/io.github.yassersutojoyo.audiosync.desktop \
+            usr/share/metainfo/io.github.yassersutojoyo.audiosync.metainfo.xml \
+            usr/share/icons/hicolor/256x256/apps/io.github.yassersutojoyo.audiosync.png \
+            usr/share/doc/audiosync/THIRD-PARTY-NOTICES.txt usr/share/doc/audiosync/LICENSE \
+            usr/share/doc/audiosync/RUNTIME-NOTICES.txt; do
+            [ -e "$root/$file" ] || { echo "the AppImage lacks $file"; exit 1; }
+          done
+          # Every library comes from the system; none is bundled.
+          if [ -e "$root/usr/lib" ]; then echo "the AppImage bundles libraries (usr/lib)"; exit 1; fi
+          desktop-file-validate "$root/usr/share/applications/io.github.yassersutojoyo.audiosync.desktop"
+          appstreamcli validate --no-net "$root/usr/share/metainfo/io.github.yassersutojoyo.audiosync.metainfo.xml"
+          # Direct needs only: linking another system library has to be a deliberate change here.
+          allowed="libfontconfig.so.1 libssl.so.3 libcrypto.so.3 libgcc_s.so.1 libm.so.6 libc.so.6 ld-linux-x86-64.so.2 libdl.so.2 libpthread.so.0"
+          required="libfontconfig.so.1 libc.so.6"
+          if grep -q '^pipewire *=' ../desktop/Cargo.toml; then
+            allowed="$allowed libpipewire-0.3.so.0"
+            required="$required libpipewire-0.3.so.0"
+          fi
+          needed=$(readelf -d "$root/usr/bin/audiosync" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p')
+          echo "NEEDED: $(echo "$needed" | tr '\n' ' ')"
+          for lib in $needed; do
+            case " $allowed " in *" $lib "*) ;; *) echo "unexpected linked library: $lib"; exit 1 ;; esac
+          done
+          for lib in $required; do
+            echo "$needed" | grep -qx "$lib" || { echo "$lib isn't linked"; exit 1; }
+          done
+          echo "Highest glibc symbol version: $(objdump -T "$root/usr/bin/audiosync" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          file "$appimage"
+
+      - name: Upload the AppImage and its notices (workflow artifact, not a release)
+        uses: actions/upload-artifact@v5
+        with:
+          name: audiosync-linux-x86_64
+          path: |
+            dist/AudioSync-*-x86_64.AppImage
+            dist/AudioSync-*-x86_64.AppImage.sha256
+            desktop/target/release/THIRD-PARTY-NOTICES.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      # The runtime inside the AppImage is a separate program; its source and
+      # that of the libfuse it links statically go with each release.
+      - name: Sources of the AppImage runtime
+        run: |
+          mkdir -p ../dist/runtime-sources
+          cd ../dist/runtime-sources
+          curl -fsSL -o type2-runtime-20251108.tar.gz "$RUNTIME_SOURCE_URL"
+          curl -fsSL -o fuse-3.15.0.tar.xz "$FUSE_SOURCE_URL"
+          echo "$RUNTIME_SOURCE_SHA256  type2-runtime-20251108.tar.gz" | sha256sum -c -
+          echo "$FUSE_SOURCE_SHA256  fuse-3.15.0.tar.xz" | sha256sum -c -
+          sha256sum ./* | tee SHA256SUMS
+
+      - name: Upload the runtime sources (workflow artifact)
+        uses: actions/upload-artifact@v5
+        with:
+          name: appimage-runtime-sources
+          path: dist/runtime-sources
+          if-no-files-found: error
+          retention-days: 7
+
+      # The smoke test runs a mock-backend build, so it needs no audio server.
+      - name: Tray smoke build (mock backend) and the stand-in watcher
+        run: |
+          cargo build --locked --release --features mock-backend
+          cargo build --locked --release --example sni_watcher_stub
+          mkdir -p ../dist/smoke
+          ../scripts/build_appimage.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt \
+            "$RUNNER_TEMP/appimage-tools/appimagetool" "$RUNNER_TEMP/appimage-tools/runtime" \
+            ../dist/smoke/AudioSync-smoke-x86_64.AppImage
+
+      - name: Tray smoke test (with and without a StatusNotifier watcher)
+        working-directory: .
+        run: Tests/linux-tray-smoke.sh dist/smoke/AudioSync-smoke-x86_64.AppImage desktop/target/release/examples/sni_watcher_stub "$RUNNER_TEMP/tray-smoke"

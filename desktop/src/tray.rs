@@ -5,42 +5,68 @@
 //! every few seconds, so a theme change shows without a state change) and
 //! dims while streaming is off; its tooltip says what is streaming and
 //! names the newest notice, if any.
+//!
+//! On Linux the icon is a StatusNotifier item: the app's colored icon,
+//! dimmed while streaming is off, and a left click opens the main window,
+//! since the host gives no icon position to place a flyout at.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
 use slint::ComponentHandle;
+#[cfg(windows)]
 use slint::winit_030::winit::event::WindowEvent;
+#[cfg(windows)]
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+#[cfg(windows)]
 use crate::placement::{self, Bounds};
+#[cfg(windows)]
 use crate::platform;
 use crate::ui_model::AppState;
 use crate::view::{self, App};
 
 /// Icon resource ordinals, as build.rs embeds them.
+#[cfg(windows)]
 const ICON_LIGHT: u16 = 2;
+#[cfg(windows)]
 const ICON_DARK: u16 = 3;
+#[cfg(windows)]
 const ICON_LIGHT_OFF: u16 = 4;
+#[cfg(windows)]
 const ICON_DARK_OFF: u16 = 5;
+
+/// The app's icon, compiled in: a StatusNotifier host draws the pixmap as
+/// it is, so a colored icon reads on light and dark panels alike.
+#[cfg(target_os = "linux")]
+const APP_ICON_PNG: &[u8] = include_bytes!("../res/audiosync-256.png");
 
 /// A click on the icon right after the flyout closed (because that click
 /// took its focus) only closes it.
+#[cfg(windows)]
 const REOPEN_GUARD: Duration = Duration::from_millis(300);
 
 /// Logical pixels between the flyout and the taskbar.
+#[cfg(windows)]
 const FLYOUT_GAP: f64 = 12.0;
 
 /// How often the taskbar's theme and the icon size are checked again. A
 /// registry read and a system metric: cheap enough to poll.
+#[cfg(windows)]
 const THEME_CHECK: Duration = Duration::from_secs(2);
 
 thread_local! {
     /// The app, for tray events, which arrive through `invoke_from_event_loop`.
     static APP: RefCell<Weak<App>> = const { RefCell::new(Weak::new()) };
+}
+
+#[cfg(windows)]
+thread_local! {
     static FLYOUT_CLOSED_AT: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
@@ -51,16 +77,19 @@ pub struct Tray {
     /// The icon variant showing now, so it is replaced only when it changes.
     shown: Cell<Option<IconChoice>>,
     running: Cell<bool>,
+    #[cfg(windows)]
     theme_timer: slint::Timer,
 }
 
 /// Which icon resource the tray shows, and at what size.
+#[cfg(windows)]
 #[derive(Clone, Copy, PartialEq)]
 struct IconChoice {
     ordinal: u16,
     size: Option<(u32, u32)>,
 }
 
+#[cfg(windows)]
 impl IconChoice {
     /// The variant for the taskbar's current theme and scale.
     fn current(running: bool) -> IconChoice {
@@ -68,6 +97,20 @@ impl IconChoice {
             ordinal: icon_ordinal(platform::taskbar_is_light(), running),
             size: platform::small_icon_size(),
         }
+    }
+}
+
+/// The app's icon, full or dimmed: the panel's theme isn't known here.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, PartialEq)]
+struct IconChoice {
+    running: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl IconChoice {
+    fn current(running: bool) -> IconChoice {
+        IconChoice { running }
     }
 }
 
@@ -128,6 +171,7 @@ impl Tray {
             login_item,
             shown: Cell::new(Some(choice)),
             running: Cell::new(state.running),
+            #[cfg(windows)]
             theme_timer: slint::Timer::default(),
         });
 
@@ -140,6 +184,7 @@ impl Tray {
         }));
 
         // The flyout closes when it loses focus, like the system flyouts.
+        #[cfg(windows)]
         app.flyout.window().on_winit_window_event(|window, event| {
             match event {
                 WindowEvent::Focused(false) => {
@@ -166,13 +211,16 @@ impl Tray {
             }
         });
         // The taskbar's theme can change while nothing else does.
-        let weak = Rc::downgrade(&tray);
-        tray.theme_timer
-            .start(slint::TimerMode::Repeated, THEME_CHECK, move || {
-                if let Some(tray) = weak.upgrade() {
-                    tray.show_icon();
-                }
-            });
+        #[cfg(windows)]
+        {
+            let weak = Rc::downgrade(&tray);
+            tray.theme_timer
+                .start(slint::TimerMode::Repeated, THEME_CHECK, move || {
+                    if let Some(tray) = weak.upgrade() {
+                        tray.show_icon();
+                    }
+                });
+        }
         tray.show_state(&state);
         Ok(tray)
     }
@@ -217,6 +265,7 @@ impl MenuIds {
     const EXIT: &str = "exit";
 }
 
+#[cfg(windows)]
 fn icon_ordinal(light_taskbar: bool, running: bool) -> u16 {
     match (light_taskbar, running) {
         (true, true) => ICON_LIGHT,
@@ -226,10 +275,31 @@ fn icon_ordinal(light_taskbar: bool, running: bool) -> u16 {
     }
 }
 
+#[cfg(windows)]
 fn load_icon(choice: IconChoice) -> Result<Icon, TrayError> {
     // The small icon size, so the 16, 20 and 24 px frames are used; without
     // a size, Windows loads the 32 px (large icon) frame and shrinks it.
     Icon::from_resource(choice.ordinal, choice.size).map_err(|e| TrayError(e.to_string()))
+}
+
+#[cfg(target_os = "linux")]
+fn load_icon(choice: IconChoice) -> Result<Icon, TrayError> {
+    let error = |e: &dyn std::fmt::Display| TrayError(format!("the tray icon image: {e}"));
+    let decoder = png::Decoder::new(std::io::Cursor::new(APP_ICON_PNG));
+    let mut reader = decoder.read_info().map_err(|e| error(&e))?;
+    if reader.output_color_type() != (png::ColorType::Rgba, png::BitDepth::Eight) {
+        return Err(error(&"not 8-bit RGBA"));
+    }
+    let size = reader
+        .output_buffer_size()
+        .ok_or_else(|| error(&"too large"))?;
+    let mut rgba = vec![0; size];
+    let frame = reader.next_frame(&mut rgba).map_err(|e| error(&e))?;
+    rgba.truncate(frame.buffer_size());
+    if !choice.running {
+        crate::os::tray_watch::dim(&mut rgba);
+    }
+    Icon::from_rgba(rgba, frame.width, frame.height).map_err(|e| error(&e))
 }
 
 fn on_tray_event(event: TrayIconEvent) {
@@ -237,6 +307,7 @@ fn on_tray_event(event: TrayIconEvent) {
         return;
     };
     match event {
+        #[cfg(windows)]
         TrayIconEvent::Click {
             rect,
             button: MouseButton::Left,
@@ -259,6 +330,11 @@ fn on_tray_event(event: TrayIconEvent) {
                 show_flyout(&app, icon);
             }
         }
+        #[cfg(target_os = "linux")]
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            ..
+        } => app.show_main(),
         TrayIconEvent::DoubleClick {
             button: MouseButton::Left,
             ..
@@ -296,6 +372,7 @@ fn on_menu_event(id: MenuId) {
 
 /// Opens the flyout next to the icon, inside the work area of the icon's
 /// monitor, and gives it the keyboard focus.
+#[cfg(windows)]
 fn show_flyout(app: &App, icon: Bounds) {
     let flyout = app.flyout.window();
     if flyout.show().is_err() {

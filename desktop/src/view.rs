@@ -263,7 +263,7 @@ const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
 
 /// The most UTF-16 units a tray icon's tooltip holds (128 with the
 /// terminating null).
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 const TOOLTIP_MAX_UNITS: usize = 127;
 
 /// A listed notice, as the announcer compares them.
@@ -3712,7 +3712,7 @@ fn clear_announcement(main: &slint::Weak<MainWindow>, flyout: &slint::Weak<TrayF
 /// The tray icon's tooltip: AudioSync and its status, then the newest
 /// notice's title on a second line while there is a notice, so Narrator
 /// reads it on the tray icon even with every window closed.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState) -> String {
     let speakers = count(state.active_speakers());
     let text = match state.notices.iter().max_by_key(|n| n.id) {
@@ -3727,7 +3727,7 @@ pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState) -> String {
 }
 
 /// `text` cut to what a tray tooltip holds, ending in "…" when cut.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn fit_tooltip(text: &str) -> String {
     if text.encode_utf16().count() <= TOOLTIP_MAX_UNITS {
         return text.to_owned();

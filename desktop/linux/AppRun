@@ -1,0 +1,16 @@
+#!/bin/sh
+# The AppImage's entry point. The app links libpipewire-0.3.so.0 from the
+# system; without it the loader would stop before any window, so this says why.
+set -eu
+here=${APPDIR:-$(dirname "$(readlink -f "$0")")}
+app="$here/usr/bin/audiosync"
+if command -v ldd >/dev/null 2>&1 \
+  && ldd "$app" 2>/dev/null | grep -q 'libpipewire-0\.3\.so\.0 => not found'; then
+  message="AudioSync needs PipeWire 1.0 or later (libpipewire-0.3.so.0), which this system doesn't have."
+  echo "$message" >&2
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send --app-name=AudioSync "AudioSync can't start" "$message" || true
+  fi
+  exit 1
+fi
+exec "$app" "$@"

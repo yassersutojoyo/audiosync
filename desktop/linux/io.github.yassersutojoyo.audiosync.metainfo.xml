@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.yassersutojoyo.audiosync</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>AudioSync</name>
+  <summary>Play your computer's sound on speakers</summary>
+  <description>
+    <p>
+      AudioSync plays this computer's sound on AirPlay and Google Cast speakers
+      and on the outputs connected to it at the same time, with a delay for each
+      speaker to line them up.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.yassersutojoyo.audiosync.desktop</launchable>
+  <url type="homepage">https://github.com/yassersutojoyo/audiosync</url>
+  <url type="bugtracker">https://github.com/yassersutojoyo/audiosync/issues</url>
+  <developer id="io.github.yassersutojoyo">
+    <name>yassersutojoyo</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+</component>
