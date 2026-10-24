@@ -125,17 +125,20 @@ fn profile_source() -> Option<Arc<dyn ProfileSource>> {
     Some(Arc::new(crate::network_profile::NetworkList))
 }
 
+/// No watch and no warning: Linux has no Public network category, and
+/// firewalld's default zone is named `public`, so mapping zones would warn
+/// on most PCs.
 #[cfg(any(not(windows), test))]
 fn profile_source() -> Option<Arc<dyn ProfileSource>> {
     None
 }
 
-#[cfg(all(windows, not(test)))]
+#[cfg(all(os_backend, not(test)))]
 fn devices_path() -> Option<PathBuf> {
     crate::data_folder::folder().map(|folder| folder.join("remote-devices.json"))
 }
 
-#[cfg(any(not(windows), test))]
+#[cfg(any(not(os_backend), test))]
 fn devices_path() -> Option<PathBuf> {
     None
 }

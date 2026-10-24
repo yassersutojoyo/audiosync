@@ -146,6 +146,9 @@ pub struct PairingStore {
     keep_aside_wait: u32,
     /// `None` until [`PairingStore::open_airplay2`].
     airplay2: Option<Airplay2File>,
+    /// The file or its folder was open to other accounts at launch and was
+    /// made owner-only ([`make_private`]).
+    tightened: bool,
 }
 
 impl fmt::Debug for PairingStore {
@@ -175,6 +178,7 @@ impl PairingStore {
             kept_aside: None,
             keep_aside_wait: 0,
             airplay2: None,
+            tightened: false,
         }
     }
 
@@ -193,7 +197,11 @@ impl PairingStore {
     /// tried again every few seconds ([`PairingStore::keep_aside_if_due`])
     /// and before the first write over it.
     pub fn open(path: PathBuf, sealer: Sealer) -> (PairingStore, Loaded) {
-        let (entries, loaded) = match read(&path, sealer) {
+        let (tightened, read) = match make_private(&path) {
+            Ok(tightened) => (tightened, read(&path, sealer)),
+            Err(reason) => (false, Err(reason)),
+        };
+        let (entries, loaded) = match read {
             Ok(Some(entries)) => {
                 let count = entries.len();
                 (entries, Loaded::Speakers(count))
@@ -209,6 +217,7 @@ impl PairingStore {
             kept_aside: None,
             keep_aside_wait: 0,
             airplay2: None,
+            tightened,
         };
         // While it can't be read, the next try is due a few seconds later.
         let _ = store.keep_ignored_aside();
@@ -260,6 +269,12 @@ impl PairingStore {
         self.kept_aside.take()
     }
 
+    /// The debug line when the file or its folder was open to other
+    /// accounts at launch and was made owner-only.
+    pub fn tightened(&self) -> Option<&'static str> {
+        self.tightened.then_some(OPEN_TO_OTHERS)
+    }
+
     /// Whether the speaker `id` is paired.
     pub fn contains(&self, id: &str) -> bool {
         self.entries.contains_key(id)
@@ -300,9 +315,16 @@ impl PairingStore {
             Some(id) => (Airplay2Identity::new(id), true),
             None => (Airplay2Identity::new([0; 6]), false),
         };
+        let mut tightened = false;
         let read = match &path {
             None => Ok(None),
-            Some(path) => read_airplay2(path, self.sealer),
+            Some(path) => match make_private(path) {
+                Ok(made_private) => {
+                    tightened = made_private;
+                    read_airplay2(path, self.sealer)
+                }
+                Err(reason) => Err(Airplay2Read::Ignored(reason)),
+            },
         };
         let (identity, writable, found) = match read {
             Ok(Some(identity)) => {
@@ -331,6 +353,11 @@ impl PairingStore {
             }
         };
         let fresh_file = !found.starts_with("credentials");
+        let found = if tightened {
+            format!("{OPEN_TO_OTHERS}; {found}")
+        } else {
+            found
+        };
         let device_id = identity.device_id();
         self.airplay2 = Some(Airplay2File { identity, writable });
         if fresh_file && let Err(error) = self.save_airplay2() {
@@ -448,6 +475,35 @@ fn read_airplay2(path: &Path, sealer: Sealer) -> Result<Option<Airplay2Identity>
             "the AirPlay 2 identity file isn't in the expected format".to_owned(),
         )),
     }
+}
+
+/// What the log says when [`make_private`] tightened a file or its folder.
+const OPEN_TO_OTHERS: &str =
+    "the file or its folder was readable by other accounts; set to owner-only";
+
+/// On Linux the file isn't encrypted, so before it is read, a file other
+/// accounts may read gets 0600 and its folder 0700; returns whether either
+/// needed it. `Err`, read as an ignored file, when another account owns
+/// the file. A folder another account owns is left as it is.
+#[cfg(target_os = "linux")]
+fn make_private(path: &Path) -> Result<bool, String> {
+    use crate::os::xdg::tighten;
+    let folder = path
+        .parent()
+        .is_some_and(|folder| tighten(folder, 0o700).unwrap_or(false));
+    match tighten(path, 0o600) {
+        Ok(file) => Ok(file || folder),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Err(format!(
+            "another account owns the file and others may read it: {error}"
+        )),
+        Err(_) => Ok(folder),
+    }
+}
+
+/// Elsewhere the file is encrypted for the user.
+#[cfg(not(target_os = "linux"))]
+fn make_private(_path: &Path) -> Result<bool, String> {
+    Ok(false)
 }
 
 /// The entries in the file at `path`: `None` without a file, or why it was
@@ -848,5 +904,32 @@ pub mod tests {
             store
         });
         assert!(!store_debug.contains("a5") && !store_debug.contains("165"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_others_may_read_is_made_owner_only_and_still_loaded() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let mode = |path: &Path| fs::metadata(path).expect("there").mode() & 0o777;
+        let dir = test_dir("pairings-owner-only");
+        let path = dir.join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), crate::os::sealer());
+        store
+            .insert("02005E005301", credentials("0123456789ABCDEF", 0xA5))
+            .expect("saved");
+        assert_eq!(mode(&path), 0o600);
+        assert!(fs::read(&path).expect("there").starts_with(MAGIC));
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("chmod");
+        let (store, loaded) = PairingStore::open(path.clone(), crate::os::sealer());
+        assert_eq!(loaded, Loaded::Speakers(1));
+        assert_eq!(store.tightened(), Some(OPEN_TO_OTHERS));
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&dir), 0o700);
+
+        let (store, loaded) = PairingStore::open(path, crate::os::sealer());
+        assert_eq!(loaded, Loaded::Speakers(1));
+        assert_eq!(store.tightened(), None);
     }
 }

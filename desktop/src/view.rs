@@ -893,7 +893,7 @@ impl App {
             meter_level: Cell::new(0.0),
             login: RefCell::new(LaunchAtLogin::new(
                 launch_at_login::system_store(),
-                std::env::current_exe().ok(),
+                launch_at_login::own_exe(),
             )),
             login_timer: Timer::default(),
             now_playing: RefCell::default(),

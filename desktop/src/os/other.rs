@@ -1,16 +1,23 @@
 //! Hosts without an audio backend yet, where the UI is worked on. With the
 //! `mock-backend` feature the windows show example speakers and nothing
-//! plays; without it the app says it can't start. There is no
-//! single-instance lock, tray icon or pairing sealer here, and no data
-//! folder: settings and pairings last until AudioSync quits.
+//! plays; without it the app says it can't start. There is no tray icon
+//! here, and without a backend no data folder: settings and pairings last
+//! until AudioSync quits. Linux has the single-instance lock and the
+//! owner-only pairing files (`super::xdg`); other hosts have neither.
 
 use std::rc::Rc;
 
 use super::Started;
 use crate::StartError;
+#[cfg(not(target_os = "linux"))]
 use crate::audio::pairings::{Seal, Sealer};
 use crate::debug_log::DebugLog;
 use crate::view::App;
+
+#[cfg(all(os_backend, target_os = "linux"))]
+pub use super::xdg::data_base;
+#[cfg(target_os = "linux")]
+pub use super::xdg::{Instance, claim_instance, sealer};
 
 #[cfg(feature = "mock-backend")]
 pub fn start(log: &DebugLog) -> Result<Started, StartError> {
@@ -46,13 +53,16 @@ impl Media {
     pub fn attach(self, _app: &Rc<App>) {}
 }
 
+#[cfg(not(target_os = "linux"))]
 /// Every launch runs: there is no lock to hand over through.
 pub struct Instance;
 
+#[cfg(not(target_os = "linux"))]
 pub fn claim_instance() -> Option<Instance> {
     Some(Instance)
 }
 
+#[cfg(not(target_os = "linux"))]
 impl Instance {
     pub fn log_state(&self, _log: &DebugLog) {}
 
@@ -66,17 +76,21 @@ pub fn create_tray(_app: &Rc<App>, _log: &DebugLog) -> Option<Tray> {
     None
 }
 
+#[cfg(not(target_os = "linux"))]
 /// Nothing can be sealed, so nothing is stored.
 pub fn sealer() -> Sealer {
     Sealer::new(&Unsupported)
 }
 
+#[cfg(not(target_os = "linux"))]
 struct Unsupported;
 
+#[cfg(not(target_os = "linux"))]
 fn unsupported() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Unsupported, "no sealer on this system")
 }
 
+#[cfg(not(target_os = "linux"))]
 impl Seal for Unsupported {
     fn seal(&self, _plain: &[u8]) -> std::io::Result<Vec<u8>> {
         Err(unsupported())

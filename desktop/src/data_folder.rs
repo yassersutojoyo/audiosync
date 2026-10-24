@@ -1,5 +1,5 @@
-//! The app's data folder, `%LOCALAPPDATA%\AudioSync`, and how files in it
-//! are written.
+//! The app's data folder, `%LOCALAPPDATA%\AudioSync` on Windows and
+//! `$XDG_DATA_HOME/audiosync` on Linux, and how files in it are written.
 //!
 //! The folder holds the paired Apple TVs' credentials
 //! (`crate::audio::pairings`) and the user's settings (`crate::settings`).
@@ -21,8 +21,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// The app's data folder under `%LOCALAPPDATA%`.
-#[cfg(os_backend)]
+#[cfg(all(os_backend, not(target_os = "linux")))]
 pub const FOLDER_NAME: &str = "AudioSync";
+
+/// The app's data folder under `$XDG_DATA_HOME`.
+#[cfg(all(os_backend, target_os = "linux"))]
+pub const FOLDER_NAME: &str = crate::os::xdg::FOLDER_NAME;
 
 /// How long a read that failed waits before its second try.
 pub const READ_RETRY_PAUSE: Duration = Duration::from_millis(500);
@@ -134,10 +138,7 @@ fn file_stamp(time: SystemTime) -> String {
 /// [`io::ErrorKind::AlreadyExists`] when something is there already, which
 /// is left alone. A file this made and couldn't fill is removed.
 fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+    let mut file = create_new(path)?;
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     if written.is_err() {
         drop(file);
@@ -146,12 +147,40 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     written
 }
 
-/// The app's data folder, `%LOCALAPPDATA%\AudioSync`, or `None` when the
+/// The app's data folder, [`FOLDER_NAME`] in its base, or `None` when the
 /// system names no folder for it (`crate::os::data_base`). The folder may
 /// not exist yet.
 #[cfg(os_backend)]
 pub fn folder() -> Option<PathBuf> {
     crate::os::data_base().map(|base| base.join(FOLDER_NAME))
+}
+
+/// A new file at `path` for writing; an error when anything is there,
+/// a link included. Owner-only on unix, where the pairing files rely on
+/// their mode instead of encryption.
+fn create_new(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)
+}
+
+/// Creates `folder` and the folders above it that are missing, with mode
+/// 0700 on unix, as the XDG base directory specification asks.
+fn create_folder(folder: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(folder)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(folder)
+    }
 }
 
 /// The temporary file `path` is written through: the same name with this
@@ -171,7 +200,7 @@ pub fn temporary_path(path: &Path) -> PathBuf {
 /// the bytes never go through a file or link that was already there.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(folder) = path.parent() {
-        fs::create_dir_all(folder)?;
+        create_folder(folder)?;
     }
     let temporary = temporary_path(path);
     match fs::remove_file(&temporary) {
@@ -179,10 +208,7 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    let replaced = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
+    let replaced = create_new(&temporary)
         .and_then(|mut file| {
             file.write_all(bytes)?;
             file.sync_all()
@@ -334,5 +360,21 @@ mod tests {
         write_atomically(&path, b"whole").expect("written");
         assert_eq!(fs::read(&path).expect("the file is there"), b"whole");
         assert!(!temporary_path(&path).exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn new_folders_and_files_are_owner_only() {
+        use std::os::unix::fs::MetadataExt;
+        let mode = |path: &Path| fs::metadata(path).expect("there").mode() & 0o777;
+        let dir = test_dir("data-folder-modes");
+        let folder = dir.join("share").join("audiosync");
+        let path = folder.join("airplay-pairings.dat");
+        write_atomically(&path, b"secret").expect("written");
+        assert_eq!(mode(&dir.join("share")), 0o700);
+        assert_eq!(mode(&folder), 0o700);
+        assert_eq!(mode(&path), 0o600);
+        let copy = keep_bytes_aside(&path, "airplay-pairings.ignored.dat", b"old").expect("kept");
+        assert_eq!(mode(&copy), 0o600);
     }
 }

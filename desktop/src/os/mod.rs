@@ -3,14 +3,22 @@
 //! is the single-instance lock and [`create_tray`] the notification-area
 //! icon. The data folder's base, the pairing file's sealer, the computer's
 //! name and the notice clock come from here too. `windows` is the Windows 11
-//! app; `other` is the UI-only build on hosts without a backend yet.
+//! app; `other` is the UI-only build on hosts without a backend yet, which
+//! on Linux takes the instance lock, the sealer and the data folder's base
+//! from `xdg`.
 
+#[cfg(any(windows, target_os = "linux"))]
+mod claim;
+#[cfg(any(target_os = "linux", test))]
+mod desktop_entry;
 #[cfg(os_backend)]
 mod engine;
 #[cfg(not(windows))]
 mod other;
 #[cfg(windows)]
 mod windows;
+#[cfg(target_os = "linux")]
+pub mod xdg;
 
 #[cfg(not(windows))]
 use self::other as imp;
