@@ -109,3 +109,5 @@ S280 Hosts only: keeping each speaker's reported latency and setting the session
 S281 Hosts only: re-timing on a new L reported by the AirPlay sender, through S177 and S178, which the core covers.
 S282 Hosts only: the debug log lines for reported latencies and L.
 S283 Hosts only: each AirPlay speaker's reported latency as its starting estimate, the per-speaker delay and L the host derives from it; S235's window part is the core's `airplay_wait_ms`, covered there.
+S284 Hosts only: Lf, E and each row's delay with several AirPlay 2 receivers, a target at its largest member's R_s; the Windows tests and the Mac logic suite check it.
+S285 Hosts only: every AirPlay 2 speaker playing, the two wait reasons and one speaker's failure on its own row; the Windows tests and the Mac logic suite check it.

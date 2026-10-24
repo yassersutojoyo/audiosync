@@ -7,3 +7,14 @@
 
 # Receiver-reported latency: the hardware check only.
 P203 Hardware: a receiver's reported value against its measured offset.
+
+# Several AirPlay 2 receivers at once, specified for a later stage.
+P204 several AirPlay 2 sessions at once not built yet
+P205 one PTP service serving every AirPlay 2 receiver not built yet
+P206 warning for a receiver whose Announce outranks the sender not built yet
+P207 SETPEERS naming every PTP receiver not built yet
+P208 joining a stream of several AirPlay 2 receivers not built yet
+P209 SETPEERS updates while playing not built yet
+P210 setting up a receiver again after a refused update not built yet
+P211 one AirPlay 2 receiver failing among several not built yet
+P212 Hardware: two or more AirPlay 2 receivers on one PTP timeline (G20).
