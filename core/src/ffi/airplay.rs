@@ -1060,6 +1060,9 @@ impl AscAirPlay {
             }
             PairingEvent::PairedForSession => {
                 self.pairing.remove(&id);
+                // Keys kept from before it asked every time never verify
+                // again (P61).
+                self.forget_homekit(&id);
                 self.paired_for_session.insert(id.clone());
                 self.relist(&id);
                 (AIRPLAY_EVENT_PAIRED, 0, AIRPLAY_REASON_NONE, String::new())
@@ -5618,9 +5621,8 @@ mod tests {
         assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
         assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
 
-        // A PIN pairing stores nothing; the receiver can play until its
-        // session ends.
-        let _ = inside(handle).identity.remove(&id);
+        // A PIN pairing stores nothing and drops the refused keys; the
+        // receiver can play until its session ends.
         inside(handle).pairing.insert(id.clone(), key.clone());
         inside(handle).take_in(SenderEvent::Pairing {
             key: key.clone(),

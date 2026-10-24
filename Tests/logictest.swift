@@ -2165,6 +2165,9 @@ do {
                 && m.joinable(["native:B2"], after: [], stopped: false).isEmpty
                 && m.plan(streaming: true, enabled: ["native:B2"]).add.isEmpty,
               "native pairing: turned off for a refused pairing, neither auto-connect nor the plan adds it again")
+        let recalled = m.plan(streaming: true, enabled: ["native:B2"])
+        check(recalled.add.isEmpty && recalled.turnOff == [.init(id: "B2", reason: .needsCode)],
+              "native pairing: a refused speaker switched on without a new attempt (a recalled preset) goes off again with a notice")
 
         // A refused stored pairing is forgotten and pairs again, once per attempt.
         check(m.turnedOnByUser("B2") == nil && m.refusedOff.isEmpty, "native pairing: a paired Apple TV just joins")
