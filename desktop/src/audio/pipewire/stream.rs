@@ -205,7 +205,7 @@ pub enum Wiring {
     /// changes.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the whole system is captured through links now")
+        allow(dead_code, reason = "the whole system is captured through links now")
     )]
     DefaultOutputMonitor,
     /// The apps' streams a [`Filter`] picks, linked to the stream one by one

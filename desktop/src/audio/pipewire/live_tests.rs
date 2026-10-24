@@ -23,6 +23,7 @@ use crate::audio::SESSION_RATE;
 use crate::audio::calibration::Microphone;
 use crate::audio::capture::Feeds;
 use crate::audio::controller::{CaptureHandle, CaptureState, RendererHandle};
+use crate::audio::routing::EndpointVolume;
 
 const RATE: usize = SESSION_RATE as usize;
 
@@ -156,7 +157,7 @@ fn read_float_wav(path: &Path) -> (Vec<f32>, Vec<f32>) {
             let data = &bytes[at + 8..];
             let mut left = Vec::new();
             let mut right = Vec::new();
-            for frame in data.chunks_exact(8) {
+            for frame in data.as_chunks::<8>().0 {
                 left.push(f32::from_le_bytes(frame[0..4].try_into().unwrap()));
                 right.push(f32::from_le_bytes(frame[4..8].try_into().unwrap()));
             }
@@ -318,28 +319,29 @@ fn outputs_play_at_their_delay_and_gain() {
     let ring = Ring::for_rate(SESSION_RATE).unwrap();
     let (stop, producer) = produce(ring.writer().unwrap(), bursts);
 
+    // Both stages run before any check, so a failure shows both offsets.
+    let recorder = Recorder::start("gain");
+    let a = output(&ring, "as-a", 0, 1.0);
+    let b = output(&ring, "as-b", 0, 0.5);
+    std::thread::sleep(Duration::from_secs(4));
+    let running = !a.has_ended() && !b.has_ended();
+    drop((a, b));
+    let (left, right) = recorder.finish();
+    let equal = median_offset(&left, &right);
+    let ratio_db = 20.0 * f64::from(peak(&right) / peak(&left)).log10();
+
     let recorder = Recorder::start("delay");
     let a = output(&ring, "as-a", 0, 1.0);
     let b = output(&ring, "as-b", 4800, 1.0);
     std::thread::sleep(Duration::from_secs(4));
     drop((a, b));
     let (left, right) = recorder.finish();
-    let offset = median_offset(&left, &right);
-    assert!((offset - 4800).abs() <= 48, "offset {offset} frames");
+    let delayed = median_offset(&left, &right);
 
-    let recorder = Recorder::start("gain");
-    let a = output(&ring, "as-a", 0, 1.0);
-    let b = output(&ring, "as-b", 0, 0.5);
-    std::thread::sleep(Duration::from_secs(4));
-    assert!(!a.has_ended() && !b.has_ended());
-    drop((a, b));
-    let (left, right) = recorder.finish();
-    let offset = median_offset(&left, &right);
-    assert!(
-        offset.abs() <= 48,
-        "offset {offset} frames with equal delays"
-    );
-    let ratio_db = 20.0 * f64::from(peak(&right) / peak(&left)).log10();
+    let report = format!("offsets {equal} (equal delays) and {delayed} (4800 apart) frames");
+    assert!(running, "an output ended: {report}");
+    assert!(equal.abs() <= 48, "{report}");
+    assert!((delayed - 4800).abs() <= 48, "{report}");
     assert!((ratio_db + 6.02).abs() <= 0.2, "gain {ratio_db} dB");
 
     stop.store(true, Ordering::Relaxed);
@@ -460,6 +462,23 @@ fn one_app_is_captured_alone_and_followed() {
     assert_eq!(capture.state(), CaptureState::SourceQuit);
 }
 
+/// The volume of output `name`, or a panic naming every node it knows.
+fn volume_of(registry: &Registry, name: &str) -> EndpointVolume {
+    registry.volume(name).unwrap_or_else(|error| {
+        let nodes: Vec<String> = registry
+            .graph()
+            .map(|graph| {
+                graph
+                    .nodes
+                    .iter()
+                    .map(|(id, node)| format!("{id} {} {}", node.class(), node.name()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        panic!("{error:?} for {name}; nodes {nodes:?}")
+    })
+}
+
 #[test]
 #[ignore = "needs the CI job's PipeWire daemon and sinks as-a and as-b"]
 fn an_outputs_own_mute_is_followed_and_undone() {
@@ -469,13 +488,13 @@ fn an_outputs_own_mute_is_followed_and_undone() {
     run("wpctl", &["set-mute", &id, "1"]);
     wait();
     assert_eq!(registry.volume_changes(), ["as-a"]);
-    assert!(registry.volume("as-a").unwrap().muted);
+    assert!(volume_of(&registry, "as-a").muted);
     registry.unmute("as-a").unwrap();
     wait();
-    assert!(!registry.volume("as-a").unwrap().muted);
+    assert!(!volume_of(&registry, "as-a").muted);
     registry.set_level("as-a", 0.5).unwrap();
     wait();
-    let level = registry.volume("as-a").unwrap().level;
+    let level = volume_of(&registry, "as-a").level;
     assert!((level - 0.5).abs() < 0.01, "level {level}");
     registry.set_level("as-a", 1.0).unwrap();
     wait();

@@ -4,7 +4,7 @@
 //! reads a copy of the [`Graph`] and never waits for the daemon; volume
 //! fixes the user clicks reach the thread through a PipeWire channel.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -315,17 +315,28 @@ fn serve(
         })
         .register();
 
-    // The first `done` after the registry's globals marks the listing whole.
-    let pending = core.sync(0).map_err(|_| BackendError::ServiceNotRunning)?;
+    // The first `done` follows the registry's globals; the second follows
+    // what the proxies bound for them sent, such as the default output.
+    let pending = Rc::new(Cell::new((
+        core.sync(0).map_err(|_| BackendError::ServiceNotRunning)?,
+        false,
+    )));
     let _core_listener = core
         .add_listener_local()
         .done({
             let shared = Arc::clone(shared);
             let ready = ready.clone();
+            let core = core.clone();
             move |id, seq| {
-                if id == pw::core::PW_ID_CORE && seq == pending {
+                let (expected, bound) = pending.get();
+                if id != pw::core::PW_ID_CORE || seq != expected {
+                    return;
+                }
+                if bound {
                     shared.synced.store(true, Ordering::Release);
                     let _ = ready.send(Ok(()));
+                } else if let Ok(next) = core.sync(0) {
+                    pending.set((next, true));
                 }
             }
         })

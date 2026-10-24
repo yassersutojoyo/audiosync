@@ -212,13 +212,14 @@ pub fn open_settings(uri: &str) -> bool {
 }
 
 /// Whether a guide step's button for the page at `uri` can do anything:
-/// on Linux only when a program that shows it is installed.
-#[cfg(not(target_os = "linux"))]
+/// on Linux only when a program that shows it is installed. Tests see every
+/// page as available, whatever the machine running them has installed.
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn can_open_settings(_uri: &str) -> bool {
     true
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(test)))]
 pub fn can_open_settings(uri: &str) -> bool {
     linux_settings_program(uri).is_some()
 }
