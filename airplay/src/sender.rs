@@ -385,10 +385,11 @@ pub enum SpeakerEvent {
     Error(SpeakerError),
     /// Something to show; the session goes on.
     Warning(Warning),
-    /// Its latencies, sent when it starts playing and whenever its first
-    /// sound time moves (a delay change, an Lf change, a restart): L + d_s,
-    /// the receiver's own `Audio-Latency`, and when its first packet is due
-    /// to be heard (P110, P113, P115).
+    /// Its latencies, sent when it starts playing, before its first audio
+    /// packet, and whenever its first sound time moves (a delay change, an
+    /// Lf change, a restart): L + d_s, the receiver's reported latency R_s
+    /// with its sources and raw `Audio-Latency`, and when its first packet
+    /// is due to be heard (P110, P113, P115, P199).
     Latency(SpeakerLatency),
     /// The OPTIONS answer's methods (P27).
     Methods(Vec<String>),
@@ -437,6 +438,12 @@ pub enum SenderEvent {
         latency: Duration,
         origin: i64,
         restarted: bool,
+    },
+    /// The host set an Lf while a speaker sounds: it is held, and comes as
+    /// a [`SenderEvent::Timeline`] once the stream has no speaker or the
+    /// timeline restarts (P201).
+    LatencyHeld {
+        frames: u32,
     },
     /// Discovery stopped for good: its browser can never report anything
     /// again ([`Browser::is_dead`]), which only a bug in the browser causes.
@@ -753,8 +760,11 @@ impl Sender {
         Ok(())
     }
 
-    /// Sets Lf, 11 025 to 88 200 frames; every speaker is flushed and the
-    /// new L comes as a [`SenderEvent::Timeline`] (P98).
+    /// Sets Lf, 11 025 to 88 200 frames (P98). While no speaker has reached
+    /// its first-sound time every speaker is flushed and the new L comes as
+    /// a [`SenderEvent::Timeline`]; later the value is held
+    /// ([`SenderEvent::LatencyHeld`]) until the stream has no speaker or the
+    /// timeline restarts (P201).
     pub fn set_latency(&self, frames: u32) {
         self.command(Command::SetLatency(frames));
     }

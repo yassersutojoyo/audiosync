@@ -27,9 +27,10 @@ use crate::audio::SAMPLE_RATE;
 use crate::discovery::{
     BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath,
 };
-use crate::error::{ErrorKind, SessionError, UserReason};
+use crate::error::{ErrorKind, SessionError, UserReason, Warning};
 use crate::homekit::HomeKitCredentials;
 use crate::ids::{Entropy, OsEntropy, SessionIds};
+use crate::latency::ReportedLatency;
 use crate::metadata::Metadata;
 use crate::pairing::{self, LegacyVerifier, Pairing, PairingEvent, PairingState};
 use crate::reconnect::Backoff;
@@ -989,7 +990,7 @@ impl Driver {
             delay: speaker.options.delay,
             software_volume: active.software_volume.then_some(speaker.options.volume),
             software_mute: active.software_mute,
-            audio_latency,
+            reported_latency: ReportedLatency::from_audio_latency(audio_latency),
             airplay2: None,
         };
         let id = self
@@ -1201,6 +1202,23 @@ impl Driver {
                 if let Some(latency) = self.stream.speaker_latency(speaker) {
                     self.emit_speaker(&key, SpeakerEvent::Latency(latency));
                 }
+            }
+            StreamEvent::LatencyHeld { frames } => {
+                self.emit(SenderEvent::LatencyHeld { frames });
+            }
+            StreamEvent::LatencyShortfall {
+                speaker,
+                reported_us,
+                latency_frames,
+            } => {
+                let Some(key) = self.stream_ids.get(&speaker).cloned() else {
+                    return;
+                };
+                let warning = Warning::LatencyShortfall {
+                    reported_us,
+                    latency_frames,
+                };
+                self.emit_speaker(&key, SpeakerEvent::Warning(warning));
             }
             StreamEvent::Timeline {
                 latency,

@@ -915,6 +915,8 @@ fn the_host_reads_latency_and_first_sound_and_restarts_the_timeline() {
         Duration::from_secs_f64(1.75) + Duration::from_millis(500)
     );
     assert_eq!(latency.receiver_latency_frames, Some(2205));
+    assert_eq!(latency.receiver_latency_us, 50_000);
+    assert_eq!(latency.receiver_latency_sources.bits(), 1);
     assert!(latency.first_sound > Instant::now());
     assert!(sender.arrival_time(44_100).is_some(), "c(n) on request");
 

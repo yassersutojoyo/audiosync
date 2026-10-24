@@ -618,6 +618,7 @@ impl Driver {
             ids.first_rtptime,
         );
         config.delay = speaker.options.delay;
+        config.reported_latency = active.session.reported_latency();
         config.airplay2 = Some(Ap2Audio {
             key: active.session.stream_key(),
             clock_identity: clock_identity.filter(|_| ptp),

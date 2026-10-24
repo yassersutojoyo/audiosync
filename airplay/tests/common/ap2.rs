@@ -221,6 +221,11 @@ pub struct FakeAp2 {
     pub pause: HashMap<String, Duration>,
     /// A body in place of the usual answer, by key.
     pub bodies: HashMap<String, Vec<u8>>,
+    /// The body of the answer to the second `/info`, in place of the
+    /// initial volume alone.
+    pub second_info_body: Option<Vec<u8>>,
+    /// Headers added to the RECORD answer, such as `Audio-Latency`.
+    pub record_headers: Vec<(String, String)>,
     /// The stream SETUP answer leaves out `dataPort`.
     pub no_data_port: bool,
     /// The `dataPort` and `controlPort` of the stream SETUP answer.
@@ -259,6 +264,8 @@ impl FakeAp2 {
             held: Vec::new(),
             pause: HashMap::new(),
             bodies: HashMap::new(),
+            second_info_body: None,
+            record_headers: Vec::new(),
             no_data_port: false,
             data_port: DATA_PORT,
             control_port: RECEIVER_CONTROL_PORT,
@@ -391,7 +398,10 @@ impl FakeAp2 {
         response.body = match key {
             _ if body.is_some() => body.unwrap_or_default(),
             "GET /info" if !request.body.is_empty() => self.info_body.clone(),
-            "GET /info" => plist(dict(&[("initialVolume", Value::Real(-20.0))])),
+            "GET /info" => self
+                .second_info_body
+                .clone()
+                .unwrap_or_else(|| plist(dict(&[("initialVolume", Value::Real(-20.0))]))),
             "SETUP session" => {
                 let ptp = read_dict(&request.body).and_then(|d| d.get("timingProtocol").cloned())
                     == Some(Value::String("PTP".to_owned()));
@@ -430,6 +440,11 @@ impl FakeAp2 {
             response
                 .headers
                 .push("Content-Type", "application/x-apple-binary-plist");
+        }
+        if key == "RECORD" {
+            for (name, value) in &self.record_headers {
+                response.headers.push(name.as_str(), value.clone());
+            }
         }
         response
     }

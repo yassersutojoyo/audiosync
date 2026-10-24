@@ -5,12 +5,5 @@
 
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
 
-# Receiver-reported latency (spec 2026-10-24); the sender doesn't read or apply it yet.
-P196 Audio-Latency is read on AirPlay 1 only and reported raw; the AirPlay 2 RECORD answer isn't read.
-P197 audioLatencies in /info isn't read.
-P198 arrivalToRenderLatencyMs in the stream SETUP answer isn't read.
-P199 Partly done: the latency event carries the raw Audio-Latency; R_s in microseconds and its sources are missing.
-P200 The session latency rule isn't written.
-P201 Partly done: set_latency flushes every started speaker at once; the hold while sounding and the shortfall warning are missing.
-P202 The latency event's R_s and sources and the rule's pure function are missing.
+# Receiver-reported latency: the hardware check only.
 P203 Hardware: a receiver's reported value against its measured offset.

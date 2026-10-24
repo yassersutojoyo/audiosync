@@ -11,6 +11,7 @@ use plist::{Dictionary, Integer, Value};
 
 use crate::discovery::Features;
 use crate::discovery::txt::{AirPlayTxt, Txt};
+use crate::latency;
 
 pub const PLIST_CONTENT_TYPE: &str = "application/x-apple-binary-plist";
 pub const PEERS_CONTENT_TYPE: &str = "/peer-list-changed";
@@ -297,6 +298,8 @@ pub struct InfoAnswer {
     pub source_version: Option<String>,
     /// From the second `/info`.
     pub initial_volume: Option<f64>,
+    /// The largest usable `outputLatencyMicros` of `audioLatencies` (P197).
+    pub audio_latencies_us: Option<u64>,
 }
 
 /// A TXT record in DNS wire form: each string a length byte, then the
@@ -333,6 +336,7 @@ pub fn read_info(body: &[u8]) -> InfoAnswer {
                 .as_real()
                 .or_else(|| value.as_signed_integer().map(|v| v as f64))
         }),
+        audio_latencies_us: latency::read_audio_latencies(&dictionary),
     };
     if let Some(data) = dictionary.get("txtAirPlay").and_then(Value::as_data) {
         let txt = AirPlayTxt::read(&Txt::parse(&wire_strings(data)));
@@ -381,24 +385,31 @@ pub struct StreamSetupAnswer {
     pub data_port: Option<u16>,
     pub control_port: Option<u16>,
     pub stream_id: Option<i64>,
+    /// `arrivalToRenderLatencyMs` in microseconds (P198).
+    pub arrival_to_render_us: Option<u64>,
 }
 
 pub fn read_stream_setup(body: &[u8]) -> StreamSetupAnswer {
-    let stream = read_dictionary(body).and_then(|dictionary| {
-        dictionary
-            .get("streams")?
-            .as_array()?
-            .first()?
-            .as_dictionary()
-            .cloned()
-    });
-    let Some(stream) = stream else {
+    let Some(dictionary) = read_dictionary(body) else {
         return StreamSetupAnswer::default();
     };
+    let arrival_to_render_us = latency::read_arrival_to_render(&dictionary);
+    let stream = dictionary
+        .get("streams")
+        .and_then(Value::as_array)
+        .and_then(|streams| streams.first())
+        .and_then(Value::as_dictionary);
+    let Some(stream) = stream else {
+        return StreamSetupAnswer {
+            arrival_to_render_us,
+            ..StreamSetupAnswer::default()
+        };
+    };
     StreamSetupAnswer {
-        data_port: port(&stream, "dataPort"),
-        control_port: port(&stream, "controlPort"),
+        data_port: port(stream, "dataPort"),
+        control_port: port(stream, "controlPort"),
         stream_id: stream.get("streamID").and_then(Value::as_signed_integer),
+        arrival_to_render_us,
     }
 }
 

@@ -31,6 +31,8 @@ use crate::ap2::audio::{PacketSealer, SEALED_OVERHEAD, StreamKey};
 use crate::audio::{self, FRAMES_PER_PACKET, PACKET_FRAMES, PCM_PAYLOAD_BYTES, PacketFrames};
 use crate::clock::SenderClock;
 use crate::input::{self, InputReader, InputWriter};
+use crate::latency::{self, LatencySources, ReportedLatency};
+
 use crate::rate::{MAX_MARGIN, Margin, NOMINAL_RATE, RateModel};
 
 use crate::rtp::{
@@ -107,9 +109,9 @@ pub struct SpeakerConfig {
     /// it is muted, in an encoding of its own, and left as they are
     /// otherwise (P121). It starts unmuted.
     pub software_mute: bool,
-    /// The receiver's `Audio-Latency` in frames, reported and never used
-    /// (P110).
-    pub audio_latency: Option<u32>,
+    /// What the receiver reported of its own latency, reported back and
+    /// never folded into Lf or the timeline (P110, P199).
+    pub reported_latency: ReportedLatency,
     /// `Some` for an AirPlay 2 session: its packets are sealed (P155).
     pub airplay2: Option<Ap2Audio>,
 }
@@ -142,7 +144,7 @@ impl SpeakerConfig {
             delay: Duration::ZERO,
             software_volume: None,
             software_mute: false,
-            audio_latency: None,
+            reported_latency: ReportedLatency::default(),
             airplay2: None,
         }
     }
@@ -199,6 +201,17 @@ pub enum StreamEvent {
         rtptime: u32,
         at: Instant,
     },
+    /// The host set an Lf while a speaker sounds: it is held and applies
+    /// when the stream next has no speaker or the timeline restarts
+    /// (P201).
+    LatencyHeld { frames: u32 },
+    /// A speaker whose R_s needs more than the stream's Lf joined a
+    /// sounding stream and plays at that Lf; once per session (P201).
+    LatencyShortfall {
+        speaker: SpeakerId,
+        reported_us: u64,
+        latency_frames: u32,
+    },
     /// L or the timeline's mapping changed: local outputs re-anchor (P98,
     /// P114, P143). Frame n of the timeline is the host's frame at input
     /// ring position n + `origin` (`InputWriter::position`). Sent when Lf
@@ -211,7 +224,7 @@ pub enum StreamEvent {
     },
 }
 
-/// A speaker's latencies (P110, P113, P115).
+/// A speaker's latencies (P110, P113, P115, P199).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpeakerLatency {
     /// From a frame's arrival at c(n) to its sound: L + d_s (P113).
@@ -219,6 +232,10 @@ pub struct SpeakerLatency {
     /// The receiver's own `Audio-Latency`, in frames, as it reported it
     /// (P110).
     pub receiver_latency_frames: Option<u32>,
+    /// R_s in microseconds, 0 when nothing was reported (P199).
+    pub receiver_latency_us: u64,
+    /// The reports that gave R_s (P199).
+    pub receiver_latency_sources: LatencySources,
     /// When its first packet after RECORD or the last flush is due to be
     /// heard (P115).
     pub first_sound: Instant,
@@ -451,7 +468,9 @@ struct Speaker {
     sync_seq: u16,
     history: Box<[Sent]>,
     own: Option<OwnEncoding>,
-    receiver_latency: Option<u32>,
+    reported: ReportedLatency,
+    /// The shortfall of P201 was told for this session.
+    shortfall_told: bool,
     first_sound: f64,
     counters: Arc<SpeakerCounters>,
     /// An AirPlay 2 session's sealed packets (P155).
@@ -749,6 +768,8 @@ impl Context<'_> {
 pub struct Stream {
     clock: SenderClock,
     latency_frames: u32,
+    /// An Lf the host set while a speaker sounds (P201).
+    pending_latency: Option<u32>,
     input: InputReader,
     model: RateModel,
     margin: Margin,
@@ -788,6 +809,7 @@ impl Stream {
             latency_frames: config
                 .latency_frames
                 .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
+            pending_latency: None,
             input: reader,
             model: RateModel::new(start),
             margin: Margin::new(start),
@@ -826,6 +848,37 @@ impl Stream {
     /// Lf in frames (P98).
     pub fn latency_frames(&self) -> u32 {
         self.latency_frames
+    }
+
+    /// An Lf held until the stream next has no speaker or restarts (P201).
+    pub fn pending_latency_frames(&self) -> Option<u32> {
+        self.pending_latency
+    }
+
+    /// True once any speaker reached its first-sound time (P115, P201).
+    fn sounding(&self, t: f64) -> bool {
+        self.speakers
+            .iter()
+            .any(|speaker| speaker.started && t >= speaker.first_sound)
+    }
+
+    /// Tells the shortfall of P201 for every speaker whose R_s needs more
+    /// than the stream's Lf, once per session.
+    fn tell_shortfalls(&mut self) {
+        for speaker in &mut self.speakers {
+            let reported_us = speaker.reported.micros();
+            if !speaker.shortfall_told
+                && reported_us > 0
+                && latency::latency_needed_frames(reported_us) > self.latency_frames
+            {
+                speaker.shortfall_told = true;
+                self.events.push_back(StreamEvent::LatencyShortfall {
+                    speaker: speaker.id,
+                    reported_us,
+                    latency_frames: self.latency_frames,
+                });
+            }
+        }
     }
 
     /// c(n): when timeline frame `n` arrived from the host, as the model
@@ -906,7 +959,9 @@ impl Stream {
         let speaker = self.speakers.iter().find(|s| s.id == id)?;
         Some(SpeakerLatency {
             arrival_to_sound: self.latency() + Duration::from_secs_f64(speaker.delay),
-            receiver_latency_frames: speaker.receiver_latency,
+            receiver_latency_frames: speaker.reported.audio_latency_frames,
+            receiver_latency_us: speaker.reported.micros(),
+            receiver_latency_sources: speaker.reported.sources(),
             first_sound: self.clock.instant(speaker.first_sound),
         })
     }
@@ -1040,7 +1095,8 @@ impl Stream {
             sync_seq: 0,
             history: vec![Sent::default(); HISTORY_PACKETS].into_boxed_slice(),
             own,
-            receiver_latency: config.audio_latency,
+            reported: config.reported_latency,
+            shortfall_told: false,
             first_sound: t,
             counters,
             sealed: config
@@ -1070,14 +1126,30 @@ impl Stream {
             }
         }
         report_first_sound(&mut speaker, &context, &mut self.events);
+        let sounding = self.sounding(t);
         self.speakers.push(speaker);
+        if sounding {
+            self.tell_shortfalls();
+        }
         id
     }
 
-    /// Removes a speaker, as its session stops playing.
+    /// Removes a speaker, as its session stops playing. The last one to
+    /// leave lets a held Lf apply (P201).
     pub fn remove_speaker(&mut self, id: SpeakerId) -> bool {
         let before = self.speakers.len();
         self.speakers.retain(|speaker| speaker.id != id);
+        if self.speakers.is_empty()
+            && let Some(frames) = self.pending_latency.take()
+            && frames != self.latency_frames
+        {
+            self.latency_frames = frames;
+            self.events.push_back(StreamEvent::Timeline {
+                latency: self.latency(),
+                origin: self.origin,
+                restarted: false,
+            });
+        }
         self.speakers.len() != before
     }
 
@@ -1126,19 +1198,32 @@ impl Stream {
         }
     }
 
-    /// Sets Lf, clamped to 11 025 to 88 200 frames (P98). A change flushes
-    /// every speaker: each goes on with its next packet, flagged as the
-    /// first, and states the new latency from then on.
+    /// Sets Lf, clamped to 11 025 to 88 200 frames (P98). While no speaker
+    /// has reached its first-sound time a change flushes every speaker:
+    /// each goes on with its next packet, flagged as the first, and states
+    /// the new latency from then on. Once one sounds the value is held
+    /// until the stream has no speaker or restarts (P201).
     pub fn set_latency(&mut self, frames: u32, now: Instant) {
         let frames = frames.clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES);
+        self.handle_timeout(now);
+        let t = self.clock.seconds(now);
+        if self.sounding(t) {
+            if frames == self.latency_frames {
+                self.pending_latency = None;
+            } else if self.pending_latency != Some(frames) {
+                self.pending_latency = Some(frames);
+                self.events.push_back(StreamEvent::LatencyHeld { frames });
+                self.tell_shortfalls();
+            }
+            return;
+        }
+        self.pending_latency = None;
         if frames == self.latency_frames {
             return;
         }
-        self.handle_timeout(now);
         self.latency_frames = frames;
         let latency = self.latency();
         let context = context!(self);
-        let t = self.clock.seconds(now);
         for speaker in &mut self.speakers {
             if speaker.started {
                 let rtptime = speaker.next_rtptime();
@@ -1175,6 +1260,9 @@ impl Stream {
 
     /// Starts the timeline over at `t` seconds (P143).
     fn restart_timeline(&mut self, t: f64) {
+        if let Some(frames) = self.pending_latency.take() {
+            self.latency_frames = frames;
+        }
         self.origin = self.input.rebase() as i64;
         self.packet_base += self.next_cut + 1;
         self.next_cut = 0;

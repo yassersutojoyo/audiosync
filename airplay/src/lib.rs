@@ -28,6 +28,8 @@
 //!   sync, resend and timing packets ([`rtp`]) on the sender clock
 //!   ([`clock`]), the arrival model and send margin ([`rate`]) and the shared
 //!   payload stores ([`store`]), with per-speaker delay.
+//! - [`latency`]: the latency a receiver reports and the stream's Lf the
+//!   host derives from it.
 //! - [`sender`]: what a host app drives. It runs the state machines on the
 //!   crate's own threads with real sockets (TCP for RTSP, UDP for audio,
 //!   control and timing), browses the network with
@@ -52,6 +54,7 @@ pub mod error;
 pub mod homekit;
 pub mod ids;
 pub mod input;
+pub mod latency;
 pub mod metadata;
 pub mod pairing;
 pub mod ptp;

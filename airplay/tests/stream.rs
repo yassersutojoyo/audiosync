@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use audiosync_airplay::alac;
 use audiosync_airplay::audio::{FRAMES_PER_PACKET, Frame, PCM_PAYLOAD_BYTES};
+use audiosync_airplay::latency::ReportedLatency;
 use audiosync_airplay::rtp::{RESEND_PREFIX_BYTES, ResendRequest, SyncPacket};
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::session::{MediaDestinations, ReceiverPorts};
@@ -559,7 +560,10 @@ fn sync_latency_and_times() {
         });
         assert_eq!(rig.stream.latency_frames(), got);
     }
-    // A change flushes every speaker, and the syncs state the new value.
+    // Before any speaker sounds (P201), a change flushes every speaker,
+    // and the syncs state the new value.
+    let mut rig = Rig::with_host();
+    let id = rig.add(speaker(1, Codec::Alac));
     let other = rig.add(speaker(2, Codec::Alac));
     rig.run_for(Duration::from_millis(500));
     rig.stream.set_latency(200_000, rig.now);
@@ -754,7 +758,7 @@ fn join_mid_stream() {
 fn latency_reporting() {
     let mut rig = Rig::with_host();
     let mut config = speaker(1, Codec::Alac);
-    config.audio_latency = Some(2_205);
+    config.reported_latency = ReportedLatency::from_audio_latency(Some(2_205));
     config.delay = Duration::from_millis(250);
     let reported = rig.add(config);
     let plain = rig.add(speaker(2, Codec::Alac));

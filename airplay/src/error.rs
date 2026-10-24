@@ -222,4 +222,11 @@ pub enum Warning {
     /// Three volume reads in a row failed on an AirPlay 2 session, which
     /// reads no more; told once per session (P184).
     VolumeReadsStopped,
+    /// The receiver's reported latency R_s needs a larger Lf than the
+    /// sounding stream it joined can take: it plays in step at that Lf;
+    /// told once per session (P201).
+    LatencyShortfall {
+        reported_us: u64,
+        latency_frames: u32,
+    },
 }

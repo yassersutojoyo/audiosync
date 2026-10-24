@@ -19,6 +19,7 @@ use crate::homekit::{
     VerifyStep,
 };
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
+use crate::latency::ReportedLatency;
 use crate::metadata::{Metadata, MetadataError, MetadataSupport};
 use crate::rtsp::{Message, Method, Parser, Request, Response};
 use crate::secret::Secret;
@@ -365,6 +366,9 @@ pub struct Ap2Session {
     /// CSeqs of reads given up at a feedback tick, whose answers are dropped.
     late_volume_reads: Vec<u32>,
     volume_reads_stopped: bool,
+    /// What the receiver reported of its latency in this session (P196
+    /// to P198).
+    reported_latency: ReportedLatency,
     /// The last volume trace line, so a steady level logs once.
     last_volume_trace: Option<String>,
 }
@@ -459,6 +463,7 @@ impl Ap2Session {
             volume_read_failures: 0,
             late_volume_reads: Vec::new(),
             volume_reads_stopped: false,
+            reported_latency: ReportedLatency::default(),
             last_volume_trace: None,
         };
         session.flush_point = (session.ids.first_seq, session.ids.first_rtptime);
@@ -505,6 +510,12 @@ impl Ap2Session {
     /// The receiver's `timingPeerInfo` from a PTP session SETUP (P164).
     pub fn receiver_timing_peer(&self) -> Option<&plist::Dictionary> {
         self.receiver_timing_peer.as_ref()
+    }
+
+    /// The receiver's latency reports of this session so far (P196 to
+    /// P199); complete once the stream is ready.
+    pub fn reported_latency(&self) -> ReportedLatency {
+        self.reported_latency
     }
 
     /// The stream as set up, once the stream SETUP is answered.
@@ -1111,6 +1122,7 @@ impl Ap2Session {
         self.feedback_wanted = false;
         self.feedback_misses = 0;
         self.last_timing_request = None;
+        self.reported_latency = ReportedLatency::default();
         self.attempt_started = now;
         self.outputs.push_back(Output::Connect(address));
     }
@@ -1382,11 +1394,22 @@ impl Ap2Session {
                     };
                     self.event(Ap2Event::Trace(line));
                 }
+                self.reported_latency.audio_latencies_us = answer.audio_latencies_us;
                 self.event(Ap2Event::Info(answer.clone()));
                 self.start_pairing(&answer, now);
             }
             Kind::Info { first: false } => {
-                if !success {
+                if success {
+                    // A later answer that carries the key replaces the
+                    // earlier one (P197); the usual second answer holds
+                    // only the volume.
+                    let carries = bodies::read_dictionary(&response.body)
+                        .is_some_and(|answer| answer.contains_key("audioLatencies"));
+                    if carries {
+                        self.reported_latency.audio_latencies_us =
+                            bodies::read_info(&response.body).audio_latencies_us;
+                    }
+                } else {
                     self.warn(method, code);
                 }
                 self.send(Kind::Record, now, false);
@@ -1399,6 +1422,10 @@ impl Ap2Session {
                     return self.fail(ErrorKind::Refused, Some(method), Some(code), None);
                 }
                 self.recorded = true;
+                self.reported_latency.audio_latency_frames = response
+                    .headers
+                    .get("Audio-Latency")
+                    .and_then(crate::rtsp::audio_latency);
                 // SETPEERS only under PTP (P165).
                 if self.timing == Timing::Ptp {
                     self.send(Kind::SetPeers, now, false);
@@ -1440,6 +1467,7 @@ impl Ap2Session {
                     return self.fail(ErrorKind::Refused, Some(method), Some(code), None);
                 }
                 let answer = bodies::read_stream_setup(&response.body);
+                self.reported_latency.arrival_to_render_us = answer.arrival_to_render_us;
                 let Some(data_port) = answer.data_port else {
                     // P43: no audio without a FairPlay key on this receiver.
                     return self.fail(

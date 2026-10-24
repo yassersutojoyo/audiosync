@@ -520,9 +520,14 @@ pub fn session_id(value: &str) -> Option<&str> {
     (!id.is_empty()).then_some(id)
 }
 
-/// `Audio-Latency` of a RECORD answer, in frames (P32, P110).
+/// `Audio-Latency` of a RECORD answer, in frames: a decimal integer from 0
+/// to 2^32 − 1, without a sign (P32, P110, P196).
 pub fn audio_latency(value: &str) -> Option<u32> {
-    value.trim().parse().ok()
+    let digits = value.trim();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// What `Audio-Jack-Status` says (P24).
