@@ -203,7 +203,7 @@ pub const AIRPLAY_EVENT_PIN_NEEDED: i32 = 6;
 pub const AIRPLAY_EVENT_PASSWORD_NEEDED: i32 = 7;
 /// A pairing ended without credentials ([`AscAirPlayEvent::error`]):
 /// [`AIRPLAY_ERROR_WRONG_PIN`] when the receiver turned the PIN down (a new
-/// pairing shows a new PIN, P52), [`AIRPLAY_ERROR_NOT_RESPONDING`] when it
+/// pairing shows a PIN again, P52), [`AIRPLAY_ERROR_NOT_RESPONDING`] when it
 /// didn't answer in time, [`AIRPLAY_ERROR_PAIRING_REQUIRED`] when it turned
 /// the pairing down or cancelled it, or another reason. The detail says
 /// more, for a debug log.

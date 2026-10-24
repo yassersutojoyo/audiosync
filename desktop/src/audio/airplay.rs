@@ -16,7 +16,7 @@
 //! ([`AirPlaySpeakers::pin_prompt`]), and the credentials the pairing gives
 //! are kept in the [`PairingStore`] and handed back each time the
 //! speaker joins, so no PIN is asked again. A wrong PIN starts a new pairing
-//! (the Apple TV shows a new PIN); any other failure leaves the speaker off
+//! (the Apple TV shows a PIN again); any other failure leaves the speaker off
 //! with a notice. A pairing the user cancels and starts again at once waits
 //! for the cancelled one's end, and nothing the cancelled one reports reaches
 //! the UI, though credentials it got are kept. A speaker the user turns on
@@ -2549,7 +2549,7 @@ impl AirPlaySpeakers {
                 self.link.start_pairing(&device, password);
                 self.log.log(|| {
                     format!(
-                        "AirPlay pairing {}: wrong PIN, started again for a new PIN",
+                        "AirPlay pairing {}: wrong PIN, pairing started again",
                         self.label(id)
                     )
                 });
@@ -4456,7 +4456,7 @@ pub mod tests {
         assert_eq!(
             fake.take_calls(),
             [Call::StartPairing(id.clone())],
-            "a new PIN needs a new pairing"
+            "a wrong PIN starts the pairing again"
         );
         let prompt = airplay.pin_prompt().expect("the prompt stays");
         assert_eq!(prompt.phase, PairingPhase::Starting);
@@ -4956,7 +4956,7 @@ pub mod tests {
                 "PIN prompt shown",
                 "PIN sent",
                 "wrong PIN",
-                "started again for a new PIN",
+                "pairing started again",
                 "PIN sent",
                 "paired as client 0123456789ABCDEF",
                 "credentials forgotten",

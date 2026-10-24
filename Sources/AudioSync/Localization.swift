@@ -676,7 +676,7 @@ struct UIStrings {
     }
 
     /// The native PIN prompt again, after a PIN that didn't work (the
-    /// receiver then shows a new one).
+    /// receiver shows a code again, a new one or the same).
     func nativePairWrongPINMessage(name: String) -> String {
         "That PIN didn't work. Enter the PIN \(name) shows now. "
             + "Cancel turns the speaker off; turn it on again to retry."

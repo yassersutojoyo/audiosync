@@ -169,14 +169,15 @@ export global Strings {
     out property <string> pin-preview-speaker: @tr("Living Room");
 
     // What the dialog says while the TV is asked for a PIN, shows one, or
-    // checks the one typed; after a wrong PIN the TV shows a new one.
+    // checks the one typed; after a wrong PIN the TV shows a PIN again,
+    // which may be the same one.
     public pure function pin-message(speaker: string, phase: PinPhase, wrong-pin: bool) -> string {
         if phase == PinPhase.checking {
             return @tr("Checking the PIN with {}…", speaker);
         }
         if phase == PinPhase.starting {
             if wrong-pin {
-                return @tr("That PIN didn't work. Asking {} for a new one…", speaker);
+                return @tr("That PIN didn't work. Asking {} to show a PIN…", speaker);
             }
             return @tr("Asking {} to show a PIN…", speaker);
         }

@@ -403,7 +403,7 @@ pub struct PinPrompt {
     /// The speaker's name.
     pub name: String,
     pub phase: PinPhase,
-    /// The Apple TV turned the last PIN down and shows a new one.
+    /// The Apple TV turned the last PIN down and shows a PIN again.
     pub wrong_pin: bool,
 }
 

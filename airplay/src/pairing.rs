@@ -336,7 +336,7 @@ pub enum PairingEvent {
     /// Apple TV closed the connection while the PIN was awaited, or the
     /// connection errors of P134 and P140. `wrong_pin` says the Apple TV
     /// turned the PIN down (470 to the proof, P52); a new pairing starts
-    /// again from `/pair-pin-start` and shows a new PIN. On the AirPlay 2
+    /// again from `/pair-pin-start` and shows a PIN again. On the AirPlay 2
     /// path a wrong PIN is a second [`PairingEvent::PinRequested`] (P150).
     Failed {
         error: SessionError,
