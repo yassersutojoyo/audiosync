@@ -3521,6 +3521,10 @@ do {
     check(fades(content: 1000, top: -20) == ScrollEdgeFades(top: 0, bottom: 1)
             && fades(content: 1000, top: 620) == ScrollEdgeFades(top: 1, bottom: 0),
           "scroll fades: an elastic overscroll past either end adds no fade there")
+    check(fades(content: 401, top: 0) == ScrollEdgeFades(top: 0, bottom: 1.0 / 12),
+          "scroll fades: one point past the bottom fades a twelfth of the way")
+    check(ScrollEdgeFades.of(contentHeight: 1000, visibleTop: 300, visibleHeight: 400, fade: 0) == .none,
+          "scroll fades: no fade height gives no fade")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)

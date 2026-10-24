@@ -1474,12 +1474,21 @@ private struct FadingScroll<Content: View>: View {
                     .padding(.vertical, Self.fade)
                     // Blank space under a short column is outside every control too.
                     .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
+                    // The scroll geometry callback may not run before the first
+                    // scroll, so a column already too long at open is seeded here.
+                    .background(GeometryReader { column in
+                        Color.clear.onAppear {
+                            edges.fades = ScrollEdgeFades.of(contentHeight: column.size.height, visibleTop: 0,
+                                                             visibleHeight: viewport.size.height, fade: Self.fade)
+                        }
+                    })
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onBlankTap)
             }
             // The faded edges show there is more; a scroller would cover the
             // cards' right edge and appear on one column only.
             .scrollIndicators(.never)
+            .scrollBounceBehavior(.basedOnSize)
             .onScrollGeometryChange(for: ScrollEdgeFades.self) { geometry in
                 ScrollEdgeFades.of(contentHeight: geometry.contentSize.height,
                                    visibleTop: geometry.visibleRect.minY,
