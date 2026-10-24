@@ -1,0 +1,510 @@
+// The tray flyout: what the macOS app's menu bar panel offers, opened by
+// clicking the AudioSync icon in the notification area. Streaming on and
+// off, the newest notice, the source, the master volume, every zone with
+// its speakers under it and every other speaker, then Open AudioSync and Exit. Escape or a click elsewhere
+// closes it.
+
+import { Button, ComboBox, ScrollView } from "std-widgets.slint";
+import { Tokens } from "tokens.slint";
+import { Strings } from "strings.slint";
+import { DeviceVolumeHint, NoticeItem, PresetItem, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+
+// A compact row: the toggle and the name, with the note of a speaker or
+// zone that is on but can't play right now under it (a zone's count first) ("Waiting for device",
+// "Reconnecting…", which Narrator reads as the toggle's value), and at the
+// right a small glyph
+// when a switched-on output's own volume in Windows is low or muted (spec
+// S198). The flyout has no volume sliders, so the fix is in the main window;
+// the hint itself is in the toggle's description.
+// The preset pull-down under the source (spec S260): the current preset's
+// name, else "Choose a Preset"; its menu lists every preset, the current
+// one checked, and recalls the one chosen.
+component PresetPicker inherits Rectangle {
+    in property <[PresetItem]> presets;
+    // The current preset's name; empty while none is current.
+    in property <string> current;
+    callback recalled(string);
+
+    function open-menu() {
+        menu.show({ x: 0, y: root.height });
+    }
+
+    min-height: 32px;
+    border-radius: Fluent.radius-control;
+    border-width: 1px;
+    border-color: Fluent.stroke;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: Strings.presets;
+    accessible-value: root.current != "" ? root.current : Strings.choose-preset;
+    accessible-action-default => {
+        root.open-menu();
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.open-menu();
+        }
+
+        menu := ContextMenuArea {
+            Menu {
+                for preset in root.presets: MenuItem {
+                    title: preset.name;
+                    checkable: true;
+                    checked: preset.current;
+                    activated => {
+                        root.recalled(preset.id);
+                    }
+                }
+            }
+
+            focus := FocusScope {
+                focus-on-click: false;
+                key-pressed(event) => {
+                    if event.text == " " || event.text == Key.Return {
+                        root.open-menu();
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 8px;
+
+                    Glyph {
+                        glyph: Glyphs.presets;
+                        color: Tokens.teal-text;
+                        width: 16px;
+                    }
+
+                    Text {
+                        text: root.current != "" ? root.current : Strings.choose-preset;
+                        color: root.current != "" ? Tokens.text : Tokens.secondary-text;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        accessible-role: none;
+                    }
+
+                    Glyph {
+                        glyph: Glyphs.chevron-down;
+                        font-size: 12px;
+                        color: Tokens.secondary-text;
+                    }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        border-width: focus.has-focus ? 2px : 0px;
+        border-color: Tokens.focus;
+        border-radius: root.border-radius;
+    }
+}
+
+component FlyoutRow inherits HorizontalLayout {
+    in property <string> glyph;
+    in property <string> name;
+    in property <string> label;
+    in property <string> description;
+    in property <RowState> state;
+    in property <bool> enabled: true;
+    in property <DeviceVolumeHint> device-volume;
+    // A zone's count, before the note; and what Narrator reads as the
+    // toggle's value instead of its state.
+    in property <string> caption;
+    in property <string> value-text;
+    callback toggled();
+    // The toggle gained (true) or lost (false) keyboard focus.
+    callback focus-changed(bool);
+
+    spacing: 10px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+
+    SpeakerBadge {
+        size: 28px;
+        glyph: root.glyph;
+        state: root.state;
+        enabled: root.enabled;
+        label: root.label;
+        description: root.description;
+        value-text: root.value-text;
+        toggled => {
+            root.toggled();
+        }
+        focus-changed(focused) => {
+            root.focus-changed(focused);
+        }
+    }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 1px;
+        horizontal-stretch: 1;
+
+        Text {
+            text: root.name;
+            color: Tokens.text;
+            font-weight: root.state == RowState.playing ? 600 : 400;
+            overflow: elide;
+            accessible-role: none;
+        }
+
+        if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != "": QuietText {
+            text: Strings.speaker-caption(root.caption, Strings.row-note(root.state));
+            wrap: no-wrap;
+            overflow: elide;
+        }
+    }
+
+    if root.device-volume != DeviceVolumeHint.none: Glyph {
+        glyph: Glyphs.device-volume(root.device-volume);
+        font-size: 12px;
+        color: Tokens.secondary-text;
+    }
+}
+
+export component TrayFlyout inherits Window {
+    in property <bool> running;
+    in property <string> status;
+    in property <[string]> sources;
+    in property <int> source-index;
+    // The chosen input device's channel pairs; none up to two channels.
+    in property <[string]> input-pairs;
+    in property <int> input-pair-index;
+    in property <float> master-volume;
+    in property <[SpeakerItem]> speakers;
+    in property <[ZoneItem]> zones;
+    in property <[PresetItem]> presets;
+    in property <string> current-preset;
+    // AirPlay discovery has run for 20 seconds without finding a speaker.
+    in property <bool> airplay-none-found;
+    // Every speaker present is hidden.
+    in property <bool> all-hidden;
+    in property <bool> connected-all-hidden;
+    // AirPlay discovery runs and has found no speaker yet, short of 20 s.
+    in property <bool> airplay-searching;
+    // The newest notice only (or none); `notice-count` counts them all.
+    in property <[NoticeItem]> notices;
+    in property <int> notice-count;
+    // What Narrator says about a new notice, while the app wants it said
+    // here (empty otherwise).
+    in property <string> notice-announcement;
+    callback power-toggled(bool);
+    callback source-selected(int);
+    callback input-pair-selected(int);
+    callback master-volume-changed(float);
+    callback speaker-toggled(string);
+    callback zone-toggled(string);
+    callback preset-recall-requested(string);
+    // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
+    callback preset-shortcut(int);
+    callback notice-dismissed(int);
+    callback notices-dismissed-all();
+    // Show How on a notice: open its guide.
+    callback notice-guide-requested(int);
+    // Retry on a notice: start AirPlay again.
+    callback notice-retry-requested(int);
+    // Open Privacy Settings on a notice.
+    callback notice-privacy-requested(int);
+    callback open-app();
+    callback exit-app();
+    callback close-requested();
+
+    title: Strings.flyout-title;
+    no-frame: true;
+    always-on-top: true;
+    width: 340px;
+    // True once Windows draws the flyout's rounded frame (border and shadow).
+    in property <bool> rounded;
+    background: Tokens.surface;
+    default-font-family: Fluent.font;
+    default-font-size: Tokens.font-size-body;
+    // Key events go to the focused item, so Escape needs the scope focused.
+    forward-focus: focus;
+
+    // Whether a control that a refresh can remove has keyboard focus: the
+    // notice's buttons (dismiss, Show How), the button for more notices, or
+    // a zone or speaker row. Slint leaves nothing focused when the focused control is
+    // removed, and Escape then does nothing until Tab, so the app calls
+    // `take-focus` when a refresh removed the part that held it. A removed
+    // control never reports losing focus; `take-focus` clears these. (The
+    // flyout lists one notice, so the stack shows no Dismiss All here.)
+    out property <bool> notice-focused;
+    out property <bool> more-notices-focused;
+    out property <bool> zone-focused;
+    out property <bool> speaker-focused;
+
+    // Called each time the flyout opens (the last focused control may be
+    // gone, and Escape must work before anything inside is clicked), and
+    // when a refresh removed the control that had the focus.
+    public function take-focus() {
+        root.notice-focused = false;
+        root.more-notices-focused = false;
+        root.zone-focused = false;
+        root.speaker-focused = false;
+        focus.focus();
+    }
+
+    changed running => {
+        power.checked = root.running;
+    }
+    changed source-index => {
+        source.current-index = root.source-index;
+    }
+
+    // Without the system's rounded frame, draw the edge.
+    Rectangle {
+        border-width: root.rounded ? 0px : 1px;
+        border-color: Tokens.separator;
+    }
+
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                return accept;
+            }
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {
+                root.preset-shortcut(event.text.to-float());
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 16px;
+            padding-top: 14px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                BrandMark {
+                    running: root.running;
+                    width: 24px;
+                    height: 24px;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Wordmark {
+                        size: 15px;
+                    }
+
+                    SecondaryText {
+                        text: root.status;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                power := ToggleSwitch {
+                    checked: root.running;
+                    accessible-label: Strings.streaming-switch;
+                    toggled => {
+                        root.power-toggled(self.checked);
+                        // Show what the engine did, even if it refused.
+                        self.checked = root.running;
+                    }
+                }
+            }
+
+            if root.notices.length > 0: NoticeStack {
+                notices: root.notices;
+                dismissed(id) => {
+                    root.notice-dismissed(id);
+                }
+                dismissed-all => {
+                    root.notices-dismissed-all();
+                }
+                guide-requested(id) => {
+                    root.notice-guide-requested(id);
+                }
+                retry-requested(id) => {
+                    root.notice-retry-requested(id);
+                }
+                privacy-requested(id) => {
+                    root.notice-privacy-requested(id);
+                }
+                button-focus-changed(focused) => {
+                    root.notice-focused = focused;
+                }
+            }
+
+            if root.notice-count > root.notices.length: HorizontalLayout {
+                alignment: start;
+                Button {
+                    text: Strings.more-notices(root.notice-count - root.notices.length);
+                    accessible-label: self.text;
+                    clicked => {
+                        root.open-app();
+                    }
+                    // A standard button reports focus only through has-focus.
+                    changed has-focus => {
+                        root.more-notices-focused = self.has-focus;
+                    }
+                }
+            }
+
+            Divider { }
+
+            // No visible labels above the source and the volume, as in the
+            // Mac panel; Narrator still hears each control's name.
+            source := ComboBox {
+                model: root.sources;
+                current-index: root.source-index;
+                accessible-label: Strings.source-label;
+                selected => {
+                    root.source-selected(self.current-index);
+                    self.current-index = root.source-index;
+                }
+            }
+
+            if root.input-pairs.length > 0: VerticalLayout {
+                spacing: 4px;
+
+                SecondaryText {
+                    text: Strings.input-channels-label;
+                }
+
+                PairPicker {
+                    model: root.input-pairs;
+                    chosen: root.input-pair-index;
+                    picked(index) => {
+                        root.input-pair-selected(index);
+                    }
+                }
+            }
+
+            // Recall only: the main window saves, renames and deletes.
+            if root.presets.length > 0: PresetPicker {
+                presets: root.presets;
+                current: root.current-preset;
+                recalled(id) => {
+                    root.preset-recall-requested(id);
+                }
+            }
+
+            VolumeSlider {
+                volume: root.master-volume;
+                label: Strings.master-volume;
+                changed(value) => {
+                    root.master-volume-changed(value);
+                }
+            }
+
+            Divider { }
+
+            // "No speakers found" waits for 20 seconds of AirPlay discovery,
+            // as the main window's note does; until then it says it looks.
+            if root.zones.length == 0 && root.speakers.length == 0 && (root.all-hidden || root.airplay-none-found || root.airplay-searching): SecondaryText {
+                text: root.all-hidden ? Strings.flyout-all-hidden : root.airplay-none-found ? Strings.no-speakers : Strings.looking-for-speakers;
+            }
+
+            if root.zones.length > 0 || root.speakers.length > 0: ScrollView {
+                // Every row up to five or so, then it scrolls.
+                height: min(list.preferred-height, 260px);
+
+                list := VerticalLayout {
+                    for zone in root.zones: VerticalLayout {
+                        accessible-role: groupbox;
+                        accessible-label: zone.name;
+
+                        FlyoutRow {
+                            glyph: Glyphs.zone;
+                            name: zone.name;
+                            label: Strings.zone-label(zone.name);
+                            value-text: Strings.zone-value(zone.on, zone.total, zone.waiting);
+                            caption: zone.total == 0 ? Strings.zone-empty : Strings.zone-count(zone.on, zone.total, zone.waiting, zone.present);
+                            description: Strings.row-note(zone.state);
+                            state: zone.state;
+                            enabled: zone.present > 0;
+                            toggled => {
+                                root.zone-toggled(zone.id);
+                            }
+                            focus-changed(focused) => {
+                                root.zone-focused = focused;
+                            }
+                        }
+
+                        // Its speakers, indented by the toggle's width.
+                        for speaker in zone.members: FlyoutRow {
+                            padding-left: 38px;
+                            glyph: Glyphs.speaker(speaker.kind);
+                            name: speaker.name;
+                            label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                            description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                            caption: speaker.zone-note;
+                            state: speaker.state;
+                            enabled: !speaker.missing;
+                            device-volume: speaker.device-volume;
+                            toggled => {
+                                root.speaker-toggled(speaker.id);
+                            }
+                            focus-changed(focused) => {
+                                root.speaker-focused = focused;
+                            }
+                        }
+                    }
+
+                    for speaker in root.speakers: FlyoutRow {
+                        glyph: Glyphs.speaker(speaker.kind);
+                        name: speaker.name;
+                        label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                        description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                        state: speaker.state;
+                        device-volume: speaker.device-volume;
+
+                        toggled => {
+                            root.speaker-toggled(speaker.id);
+                        }
+                        focus-changed(focused) => {
+                            root.speaker-focused = focused;
+                        }
+                    }
+                }
+            }
+
+            if root.connected-all-hidden && root.zones.length == 0: SecondaryText {
+                text: Strings.flyout-connected-hidden;
+            }
+
+            Divider { }
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Button {
+                    text: Strings.open-app;
+                    primary: true;
+                    horizontal-stretch: 1;
+                    accessible-label: Strings.open-app;
+                    clicked => {
+                        root.open-app();
+                    }
+                }
+
+                Button {
+                    text: Strings.exit-short;
+                    accessible-label: Strings.exit-app;
+                    clicked => {
+                        root.exit-app();
+                    }
+                }
+            }
+        }
+    }
+
+    Announcer {
+        said: root.notice-announcement;
+    }
+}

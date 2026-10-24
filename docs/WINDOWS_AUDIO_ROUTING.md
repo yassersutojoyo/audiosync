@@ -1,6 +1,6 @@
 # Windows audio routing
 
-Research notes for the Windows 11 version of AudioSync (`windows/`). Process loopback capture is built, hardware test 1 has been run (results below) and double audio is detected and warned about ([Detection](#detection)), with a guide on the notice for fixing the routing by hand; the other hardware tests aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
+Research notes for the Windows 11 version of AudioSync (`desktop/`). Process loopback capture is built, hardware test 1 has been run (results below) and double audio is detected and warned about ([Detection](#detection)), with a guide on the notice for fixing the routing by hand; the other hardware tests aren't done yet. The question: how to hear a captured app only through AudioSync's delayed, synced outputs, and not also directly from the PC.
 
 ## The problem
 
@@ -89,7 +89,7 @@ Defer: the undocumented policy interface (an opt-in experiment at most, only aft
 
 ### Test 1 results: session mute
 
-Measured on Windows 11 25H2 (OS build 26200.9711) with [`windows/examples/mute_probe.rs`](../windows/examples/mute_probe.rs). To rerun it, close AudioSync and run `cargo run --release --example mute_probe` in `windows/`. The probe starts a second copy of itself that plays a 1 kHz sine (peak -26 dBFS, so RMS -29 dBFS) on the default output in shared mode, finds that process's session through `IAudioSessionManager2` and `GetProcessId`, and sets its mute and volume through `ISimpleAudioVolume`: the same session values the volume mixer shows, though the mixer's own controls weren't clicked. Each setting is captured for 3 seconds with process loopback on the player's tree, and the first two also with a whole-system capture that excludes only a separate capture process. The run is silent: the probe mutes every active output endpoint before the tone starts, checks each one reads back as muted, and puts every endpoint's mute and volume back at the end (`mute_probe restore` does that by hand if a run dies halfway).
+Measured on Windows 11 25H2 (OS build 26200.9711) with [`desktop/examples/mute_probe.rs`](../desktop/examples/mute_probe.rs). To rerun it, close AudioSync and run `cargo run --release --example mute_probe` in `desktop/`. The probe starts a second copy of itself that plays a 1 kHz sine (peak -26 dBFS, so RMS -29 dBFS) on the default output in shared mode, finds that process's session through `IAudioSessionManager2` and `GetProcessId`, and sets its mute and volume through `ISimpleAudioVolume`: the same session values the volume mixer shows, though the mixer's own controls weren't clicked. Each setting is captured for 3 seconds with process loopback on the player's tree, and the first two also with a whole-system capture that excludes only a separate capture process. The run is silent: the probe mutes every active output endpoint before the tone starts, checks each one reads back as muted, and puts every endpoint's mute and volume back at the end (`mute_probe restore` does that by hand if a run dies halfway).
 
 | Player's session | Process loopback, include tree (peak / RMS dBFS) | Whole system, exclude (peak / RMS dBFS) |
 |---|---|---|

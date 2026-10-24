@@ -27,7 +27,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: windows
+        working-directory: desktop
     steps:
       - uses: actions/checkout@v5
 
@@ -46,6 +46,45 @@ jobs:
       - name: Tests
         run: cargo test --locked
 
+  # The same crate on Linux: the UI-only build without an audio backend, the
+  # mock-backend build, and the tests.
+  linux:
+    name: Linux (format, clippy and tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain (stable, with rustfmt and clippy)
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+
+      # Slint's fonts and windows, and the Cast sender's native-tls (OpenSSL).
+      - name: System libraries
+        run: >-
+          sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
+          libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # Every check reports, even after one failed.
+      - name: Clippy (mock-backend)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked --all-targets --features mock-backend -- -D warnings
+
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked
+
   build:
     name: Release build (${{ matrix.arch }})
     strategy:
@@ -61,7 +100,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: windows
+        working-directory: desktop
     steps:
       - uses: actions/checkout@v5
 
@@ -89,7 +128,7 @@ jobs:
           "audiosync.exe $($info.ProductVersion) for ${{ matrix.arch }}: manifest and version information present"
 
       # The license notices for everything compiled into audiosync.exe, from
-      # Cargo.lock; fails if a crate's license isn't on windows/deny.toml's list.
+      # Cargo.lock; fails if a crate's license isn't on desktop/deny.toml's list.
       - name: Third-party notices (THIRD-PARTY-NOTICES.txt)
         run: python -I ../scripts/windows_notices.py ${{ matrix.target }}
 
@@ -98,8 +137,8 @@ jobs:
         with:
           name: audiosync-windows-${{ matrix.arch }}
           path: |
-            windows/target/${{ matrix.target }}/release/audiosync.exe
-            windows/target/${{ matrix.target }}/release/THIRD-PARTY-NOTICES.txt
+            desktop/target/${{ matrix.target }}/release/audiosync.exe
+            desktop/target/${{ matrix.target }}/release/THIRD-PARTY-NOTICES.txt
           if-no-files-found: error
           # Test builds only: every push makes new ones, so a week is plenty.
           retention-days: 7
@@ -109,12 +148,12 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: windows
+        working-directory: desktop
     steps:
       - uses: actions/checkout@v5
 
       - name: Install the pinned cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2
 
-      - name: Permissive licenses, plus GPL for our own crates and Slint only (windows/deny.toml)
+      - name: Permissive licenses, plus GPL for our own crates and Slint only (desktop/deny.toml)
         run: cargo deny --locked check licenses

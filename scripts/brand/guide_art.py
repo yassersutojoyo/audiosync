@@ -4,7 +4,7 @@ Writes:
   brand/guide/<name>.svg                 the light variant, drawn below in the five role colors
   brand/guide/<name>-dark.svg            the dark variant: each light color swapped for its role's dark color
   Sources/AudioSync/GuideArtwork.swift   both variants as strings, for the Mac Guide window
-The Windows Guide loads the SVGs from brand/guide/ itself (windows/ui/help.slint).
+The Windows Guide loads the SVGs from brand/guide/ itself (desktop/ui/help.slint).
 
   source   the signal path: an app's sound into AudioSync, out to several outputs
   delay    two speakers, one held back by its delay, so both reach the listener together

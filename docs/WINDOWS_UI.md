@@ -1,16 +1,16 @@
 # The Windows app's screens
 
-The Windows app (`windows/`) has the same screens as the Mac app, in the same
+The Windows app (`desktop/`) has the same screens as the Mac app, in the same
 order, with Windows manners: a menu bar with Ctrl shortcuts, a notification-area
 (tray) icon with a flyout where the Mac has its menu bar panel, the system's
 window controls, and light or dark as Windows is set unless View > Appearance
 says otherwise. The wording follows the
-Mac app's `UIStrings`; all of it lives in `windows/ui/strings.slint`.
+Mac app's `UIStrings`; all of it lives in `desktop/ui/strings.slint`.
 
 Colors, the wordmark typeface, font sizes and the window margins come from the
 shared design tokens (`brand/tokens.json`, see `brand/README.md`). The rest
 follows Windows 11 and lives only in the Windows app (the `Fluent` values in
-`windows/ui/widgets.slint`): text in Segoe UI Variable, 8 px corners on cards,
+`desktop/ui/widgets.slint`): text in Segoe UI Variable, 8 px corners on cards,
 notices and the flyout and 4 px on buttons and rows, 1 px card edges, hover and
 pressed fills, and short state changes (83 ms). Every titled window (main,
 equalizer, both guides, Web Remote, About, the zone dialog, the Apple TV code and password dialogs and the Cast address dialog) asks Windows for Mica in its
@@ -59,13 +59,13 @@ same note under the name. A zone header waits too, with the same note, when
 every present member waits (it shows the first present member's note).
 
 The windows read their data through the `Backend` trait in
-`windows/src/ui_model.rs`. On Windows that is the adapter over the WASAPI audio
-backend (`windows/src/adapter.rs`), which captures and plays for real. On other
+`desktop/src/ui_model.rs`. On Windows that is the adapter over the WASAPI audio
+backend (`desktop/src/adapter.rs`), which captures and plays for real. On other
 hosts, where the UI is worked on, a mock with example speakers stands in:
 nothing plays and no audio device is opened there.
 
 Settings are kept across launches in `%LOCALAPPDATA%\AudioSync\settings.json`
-(`windows/src/settings.rs`): the source (an input device too, and each input device's channel pair), each speaker's switch, delay and
+(`desktop/src/settings.rs`): the source (an input device too, and each input device's channel pair), each speaker's switch, delay and
 volume, the AirPlay delay, the master volume, auto-connect marks, the names given to speakers, the zones (name, members and volume), the equalizer, View >
 Show Virtual Devices, View > Appearance, File > Switch to All System Audio When the Source App Quits,
 File > AirPlay 2 (Experimental), the web remote's switch and port, the Cast
@@ -174,7 +174,7 @@ Windows that a switch can't take keyboard focus. The sections (This PC,
 Zones, Connected Speakers, Notices) and each zone card are named groups, so Narrator says where
 the focus is. Icons, the brand mark, section titles and values a control
 already reads are decorative and hidden from Narrator. Tests in
-`windows/src/contrast.rs` fail when a control in `ui/` has no accessible
+`desktop/src/contrast.rs` fail when a control in `ui/` has no accessible
 label, when one of AudioSync's own controls lacks a role, a default action
 or a focus ring, when a toggle uses the switch role, when an accessible name
 holds an icon glyph, or when a decorative piece would still reach Narrator.
@@ -205,7 +205,7 @@ toast for a notice: an automatic event never pops up over other apps.
 
 Text colors meet 4.5:1 on every background they're drawn on, in light and
 dark (the lowest is 5.07:1). The pairs are listed in `brand/tokens.json`, and
-a unit test in `windows/src/contrast.rs` computes each ratio and fails below
+a unit test in `desktop/src/contrast.rs` computes each ratio and fails below
 4.5:1; another fails when a `.slint` file draws text in a token color that no
 pair covers. The focus ring reaches 3:1 on every background. Text inside the
 standard controls (buttons, lists, fields) uses the Fluent style's own colors.

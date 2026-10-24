@@ -9,7 +9,7 @@ audiosync-cast and audiosync-remote, under the
 license their Cargo.toml declares), the Rust standard library, Slint (used
 under GPL-3.0-only), the fonts
 and icons the interface embeds, and every crate in the app's normal dependency
-graph, read from windows/Cargo.lock. For each crate it gives the name, version, license
+graph, read from desktop/Cargo.lock. For each crate it gives the name, version, license
 expression and repository, then the full text of every license or notice file
 in the crate's package (LICENSE*, LICENCE*, COPYING*, NOTICE*, COPYRIGHT*).
 A crate without such a file gets the standard text of its license with the
@@ -17,7 +17,7 @@ crate's authors as the copyright holders. Identical texts are written once and
 referenced afterwards.
 
 The graph comes from `cargo metadata --filter-platform`, walked from
-audiosync-windows over normal dependencies and narrowed to the crates
+audiosync-desktop over normal dependencies and narrowed to the crates
 `cargo tree --edges normal,no-proc-macro --target` reports: cargo metadata
 resolves features for every platform at once, so on its own it would also list
 crates that only other platforms build (Skia, for instance). Build and
@@ -34,13 +34,13 @@ or for third-party code it knows needs a notice, and fails when the package
 doesn't ship that file and no supplement covers it.
 
 The script also fails when a crate's license expression is not covered by
-windows/deny.toml (its allow list, plus the crate's own entry under
+desktop/deny.toml (its allow list, plus the crate's own entry under
 exceptions), so the notices and the CI license check can't drift apart. It
 needs only cargo, rustc (whose rustc component ships the standard library's
 copyright notices) and the Python standard library.
 
 The default output is THIRD-PARTY-NOTICES.txt next to audiosync.exe:
-windows/target/<target>/release/ (or under CARGO_TARGET_DIR when it is set).
+desktop/target/<target>/release/ (or under CARGO_TARGET_DIR when it is set).
 """
 import argparse
 import html.parser
@@ -51,8 +51,8 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WINDOWS = os.path.join(REPO, "windows")
-ROOT_PACKAGE = "audiosync-windows"
+WINDOWS = os.path.join(REPO, "desktop")
+ROOT_PACKAGE = "audiosync-desktop"
 NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
 # Slint's crates are "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
 # LicenseRef-Slint-Software-3.0"; public builds take the GPL-3.0-only option.
@@ -519,7 +519,7 @@ def strip_toml_comment(line):
 
 
 def licenses_array(key):
-    """The raw text of an array in the [licenses] section of windows/deny.toml,
+    """The raw text of an array in the [licenses] section of desktop/deny.toml,
     or None (no TOML parser in the standard library before Python 3.11)."""
     section, collected, depth = None, None, 0
     with open(os.path.join(WINDOWS, "deny.toml"), encoding="utf-8") as handle:
@@ -543,22 +543,22 @@ def licenses_array(key):
 
 
 class LicensePolicy:
-    """The [licenses] allow list of windows/deny.toml and its per-crate
+    """The [licenses] allow list of desktop/deny.toml and its per-crate
     exceptions ({ crate = "name" or "name@version", allow = [...] })."""
 
     def __init__(self):
         allow = licenses_array("allow")
         if allow is None:
-            raise NoticeError("windows/deny.toml has no [licenses] allow list")
+            raise NoticeError("desktop/deny.toml has no [licenses] allow list")
         self.allowed = set(re.findall(r'"([^"]+)"', allow))
         if not self.allowed:
-            raise NoticeError("the allow list in windows/deny.toml is empty")
+            raise NoticeError("the allow list in desktop/deny.toml is empty")
         self.exceptions = []
         for entry in re.findall(r"\{([^{}]*)\}", licenses_array("exceptions") or ""):
             spec = re.search(r'\b(?:crate|name)\s*=\s*"([^"]+)"', entry)
             licenses = re.search(r"\ballow\s*=\s*\[([^\]]*)\]", entry)
             if not spec or not licenses:
-                raise NoticeError("can't read the exception {{{}}} in windows/deny.toml".format(entry.strip()))
+                raise NoticeError("can't read the exception {{{}}} in desktop/deny.toml".format(entry.strip()))
             name, _, version = spec.group(1).partition("@")
             self.exceptions.append((name, version or None, set(re.findall(r'"([^"]+)"', licenses.group(1)))))
 
@@ -650,7 +650,7 @@ def dependency_packages(target):
     roots = [pid for pid in metadata["workspace_members"]
              if packages[pid]["name"] == ROOT_PACKAGE]
     if len(roots) != 1:
-        raise NoticeError("{} isn't the workspace member in windows/".format(ROOT_PACKAGE))
+        raise NoticeError("{} isn't the workspace member in desktop/".format(ROOT_PACKAGE))
 
     reachable, stack = [], [roots[0]]
     while stack:
@@ -1032,7 +1032,7 @@ def build(target):
         "AudioSync for Windows: third-party notices",
         "",
         "Target: {}".format(target),
-        "Generated from windows/Cargo.lock by scripts/windows_notices.py.",
+        "Generated from desktop/Cargo.lock by scripts/windows_notices.py.",
         "",
         "audiosync.exe is AudioSync's own code ({}) compiled together with the".format(own),
         "components below. Each is listed with its license; the full license and",

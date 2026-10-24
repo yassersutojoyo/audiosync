@@ -2,10 +2,10 @@
 #
 # Generates the Windows app's icons from the brand files, with no dependencies
 # beyond Xcode's command line tools:
-#   windows/res/audiosync.ico         the app icon (Explorer, the taskbar, the title bar)
-#   windows/res/audiosync-256.png     the same at 256 px, the Slint windows' icon
-#   windows/res/tray-{light,dark}.ico           the tray icon for a light or dark taskbar
-#   windows/res/tray-{light,dark}-off.ico       the same, dimmed while streaming is off
+#   desktop/res/audiosync.ico         the app icon (Explorer, the taskbar, the title bar)
+#   desktop/res/audiosync-256.png     the same at 256 px, the Slint windows' icon
+#   desktop/res/tray-{light,dark}.ico           the tray icon for a light or dark taskbar
+#   desktop/res/tray-{light,dark}-off.ico       the same, dimmed while streaming is off
 # The app icon is brand/audiosync-icon.svg cropped to its tile; the tray icons are
 # brand/audiosync-mark.svg in the token colors (scripts/brand/ico.py).
 #
@@ -16,7 +16,7 @@ cd "$(dirname "$0")/../.."
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-windows-icons-XXXXXX")
 trap 'rm -rf "$work"' EXIT
-out=windows/res
+out=desktop/res
 
 python3 -I scripts/brand/ico.py svgs "$work"
 swiftc -O scripts/brand/render-svg.swift -o "$work/render-svg"

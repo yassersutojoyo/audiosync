@@ -1,0 +1,106 @@
+[package]
+name = "audiosync-desktop"
+version = "0.7.0"
+edition = "2024"
+rust-version = "1.92"
+license = "GPL-3.0-or-later"
+description = "AudioSync for Windows 11 (in development)."
+repository = "https://github.com/yassersutojoyo/audiosync"
+publish = false
+
+[[bin]]
+name = "audiosync"
+path = "src/main.rs"
+
+[features]
+# On a host without an audio backend (src/os/other.rs), the windows show
+# example speakers and nothing plays, for work on the UI. It does nothing on
+# Windows, and release builds never turn it on.
+mock-backend = []
+
+[dependencies]
+audiosync-core = { path = "../core" }
+# AudioSync's own AirPlay sender: discovery, one session per speaker and the
+# stream they share, on the crate's own threads.
+audiosync-airplay = { path = "../airplay" }
+# AudioSync's own Google Cast sender: discovery and one session at a time, run
+# by the host's worker thread.
+audiosync-cast = { path = "../cast" }
+# AudioSync's own web remote: the page and API a paired phone uses, on the
+# crate's own threads.
+audiosync-remote = { path = "../remote" }
+# The web remote's address as a QR code (MIT OR Apache-2.0); without default
+# features it has no dependencies, and the app draws the modules itself.
+qrcode = { version = "0.14.1", default-features = false }
+# Used under GPL-3.0-only (Slint is also offered under royalty-free and
+# commercial licenses), checked for the 1.18 line; see THIRD_PARTY_NOTICES.md.
+# unstable-winit-030: the winit window behind a Slint window, to focus it and
+# to close the tray flyout when it loses focus. Pinned exactly: the brand accent
+# goes through Slint's private_unstable_api (src/view.rs), which any release may change.
+slint = { version = "=1.18.1", features = ["unstable-winit-030"] }
+# The settings file in the app's data folder, as JSON (both MIT OR
+# Apache-2.0); Slint's crates already bring serde into the app.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# Wipes the decrypted Apple TV pairing store from memory (Apache-2.0 OR MIT);
+# the AirPlay sender already depends on it.
+zeroize = "1.8.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    # The playing track for AirPlay receivers: Windows' media sessions, and
+    # their artwork decoded, scaled and encoded as a JPEG
+    # (src/audio/wasapi/media.rs, media_sessions.rs).
+    "Foundation",
+    "Foundation_Collections",
+    "Graphics_Imaging",
+    "Media_Control",
+    "Storage_Streams",
+    "Wdk_System_SystemServices",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_Globalization",
+    # DWM: Mica in the title bars and the flyout's rounded corners (src/backdrop.rs).
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    # IAudioEndpointVolume: the double-audio check reads each output's mute
+    # and volume, and examples/mute_probe.rs sets them.
+    "Win32_Media_Audio_Endpoints",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_Multimedia",
+    # Network List Manager: whether a connected network is Public, which
+    # the web remote warns about (src/network_profile.rs).
+    "Win32_Networking_NetworkListManager",
+    "Win32_Security",
+    # DPAPI (CryptProtectData): the Apple TV pairing store, encrypted for the
+    # current user (src/audio/pairings.rs).
+    "Win32_Security_Cryptography",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_ToolHelp",
+    # QueryPerformanceCounter: the capture loop's clock while loopback
+    # delivers nothing, in the time base of the packets' positions.
+    "Win32_System_Performance",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# The code `#[implement]` generates for the COM callbacks names this crate.
+windows-core = "0.62"
+# WinRT's async operation types, which `windows` uses without re-exporting
+# (MIT OR Apache-2.0, already in the build through `windows`): the media
+# sessions reader names them to wait on an app for a bounded time.
+windows-future = "0.3.2"
+# The notification-area icon and its menu (MIT OR Apache-2.0).
+tray-icon = { version = "0.26.1", default-features = false }
+
+[build-dependencies]
+embed-resource = "3.0.12"
+# The same Slint as the slint dependency, pinned for the same reason.
+slint-build = "=1.18.1"
