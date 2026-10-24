@@ -1583,8 +1583,8 @@ struct UIStrings {
               AudioSync starts. If a
               code doesn't work, AudioSync asks again; if you cancel, the speaker
               turns off. Turn it on again to retry.
-            - 'Asks for a code every time': the speaker is set to want a code at
-              each connection. Auto-connect leaves it off, also at launch; AudioSync
+            - 'Asks for a code every time': the speaker is set to ask for a code
+              every time. Auto-connect leaves it off, also at launch; AudioSync
               asks for the code each time you turn it on.
             """
     }

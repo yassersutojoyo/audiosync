@@ -191,6 +191,7 @@ extension AppDelegate {
     /// Call before the sender's speakers follow the switches, so a speaker
     /// that pairs or prompts waits instead of going off.
     func beginNativeAttempts(_ ids: [String]) {
+        everyTimeGuard.turnedOnByHand(ids)
         guard let native = nativeAirPlay else { return }
         for id in ids {
             guard let receiver = NativeAirPlayID.receiver(id) else { continue }
@@ -353,7 +354,10 @@ extension AppDelegate {
             airplayAccess[id] = model.access(receiver) ?? .open
         }
         let joinable = model.joinable(rows, after: Set(airplayOrder), stopped: stopped)
-        for id in model.appearedAskingEveryTime(rows, after: Set(airplayOrder)) where enabledAirPlay.contains(id) {
+        // Only a new row: a listed speaker whose setting changes is the
+        // user's choice, and its session under way keeps playing.
+        let asking = model.appearedAskingEveryTime(rows, after: Set(airplayOrder))
+        for id in everyTimeGuard.turnsOff(asking, enabled: enabledAirPlay) {
             enabledAirPlay.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) stays off, it asks for a code every time")
         }

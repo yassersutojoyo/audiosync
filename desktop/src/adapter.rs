@@ -432,6 +432,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     left_behind: BTreeSet<String>,
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
+    /// The AirPlay speakers the user switched on this run: one that asks for
+    /// a code every time stays on when it is listed again.
+    airplay_on_by_hand: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
     airplay_names: BTreeMap<String, String>,
     /// Polls in a row with AirPlay discovery running and no AirPlay speaker
@@ -578,6 +581,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             kinds: BTreeMap::new(),
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
+            airplay_on_by_hand: BTreeSet::new(),
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
             cast_names: BTreeMap::new(),
@@ -2491,13 +2495,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Takes in the AirPlay speakers as last listed: remembers their names,
     /// and switches on the auto-connect speakers that appeared. One that
     /// asks for a code every time goes off instead, also when it was on
-    /// from the last run: only the user turns it on.
+    /// from the last run, unless the user turned it on this run. A listed
+    /// speaker whose setting changes is left alone: that is the user's
+    /// choice, and its session under way keeps playing.
     fn airplay_listed(&mut self) {
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
         let mut asking = Vec::new();
         for speaker in self.audio.airplay_speakers() {
-            if !self.airplay_listed.contains(&speaker.id) {
+            if !self.airplay_listed.contains(&speaker.id)
+                && !(speaker.code_every_time && self.airplay_on_by_hand.contains(&speaker.id))
+            {
                 if speaker.code_every_time {
                     asking.push((speaker.id.clone(), speaker.enabled));
                 } else {
@@ -2971,6 +2979,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// starts an attempt, which may prompt for a password
     /// ([`AudioBackend::begin_airplay_attempt`]).
     fn switch_airplay_by_user(&mut self, id: &str, on: bool) -> Result<(), AirPlayProblem> {
+        if on {
+            self.airplay_on_by_hand.insert(id.to_owned());
+        } else {
+            self.airplay_on_by_hand.remove(id);
+        }
         self.audio.set_airplay_enabled(id, on)?;
         if on {
             self.audio.begin_airplay_attempt(id);
@@ -7004,7 +7017,10 @@ mod tests {
         fake.appear(&den);
         adapter.poll();
         assert_eq!(
-            adapter.snapshot().pin_prompt.map(|prompt| prompt.speaker_id),
+            adapter
+                .snapshot()
+                .pin_prompt
+                .map(|prompt| prompt.speaker_id),
             Some(id.clone())
         );
         assert!(

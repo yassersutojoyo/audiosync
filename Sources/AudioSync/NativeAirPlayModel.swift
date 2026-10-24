@@ -59,12 +59,16 @@ enum NativeTarget {
 struct EveryTimeGuard: Equatable {
     private(set) var byHand: Set<String> = []
 
-    mutating func turnedOnByHand(_ ids: [String]) {}
+    mutating func turnedOnByHand(_ ids: [String]) {
+        byHand.formUnion(ids)
+    }
 
     /// Of `appeared` (rows that appeared asking for a code every time), the
-    /// ones that go off: on from the last run, not switched on by hand.
+    /// ones that go off: on from the last run, not switched on by hand. A
+    /// speaker no longer on is forgotten first.
     mutating func turnsOff(_ appeared: [String], enabled: Set<String>) -> [String] {
-        appeared.filter { enabled.contains($0) }
+        byHand.formIntersection(enabled)
+        return appeared.filter { enabled.contains($0) && !byHand.contains($0) }
     }
 }
 
