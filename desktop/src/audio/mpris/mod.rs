@@ -23,5 +23,7 @@ mod owner;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 
+// Unused until the Linux backend hands the app its media parts.
 #[cfg(target_os = "linux")]
+#[cfg_attr(not(test), allow(unused_imports))]
 pub use bus::read_media_sessions;

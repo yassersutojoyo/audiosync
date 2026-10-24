@@ -83,7 +83,7 @@ pub fn card_artwork(image: &[u8]) -> Result<Option<CardArtwork>, String> {
     )
     .to_image();
     let mut rgba = tile.into_raw();
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let alpha = pixel[3];
         for channel in &mut pixel[..3] {
             *channel = over_black(*channel, alpha);

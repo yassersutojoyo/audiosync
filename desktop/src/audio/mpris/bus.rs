@@ -31,7 +31,6 @@ const ROOT_INTERFACE: &str = "org.mpris.MediaPlayer2";
 const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
 
 /// Starts the thread that reads the MPRIS players for both readers.
-// Unused until the Linux backend hands the app its media parts.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn read_media_sessions(log: DebugLog) -> (MediaSessionReader, MediaCardReader) {
     spawn(

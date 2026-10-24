@@ -15,6 +15,7 @@ use zbus::zvariant::{OwnedValue, Value};
 
 use super::bus::{Bus, OBJECT_PATH, Players, field};
 use super::fields::Field;
+use super::read_media_sessions;
 use crate::audio::media_sessions::{SessionList, spawn};
 use crate::audio::now_playing::{Follow, TrackReader};
 use crate::debug_log::DebugLog;
@@ -333,4 +334,34 @@ fn any_integer_type_reads_as_an_integer() {
         Field::Texts(vec!["A".to_owned(), "B".to_owned()])
     );
     assert_eq!(field(&Value::from(vec![1_u32, 2])), Field::Other);
+}
+
+/// Reads this desktop's players; play something first. Run with
+/// `cargo test -- --ignored --nocapture reads_this_desktops`.
+#[test]
+#[ignore = "reads this desktop's media players"]
+fn reads_this_desktops_players() {
+    let (mut track, mut card) = read_media_sessions(DebugLog::default());
+    track.follow(Some(Follow::AnyApp));
+    card.follow(Some(CardSource::AnyApp));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let (mut reading, mut shown) = (None, None);
+    while reading.is_none() || shown.is_none() {
+        assert!(Instant::now() < deadline, "no reading");
+        reading = reading.or_else(|| track.take_reading());
+        shown = shown.or_else(|| card.take_reading());
+        thread::sleep(Duration::from_millis(50));
+    }
+    match reading.unwrap().track {
+        Some(track) => println!(
+            "{:?}, artwork: {:?} bytes, timeline: {:?}",
+            track.session,
+            track.artwork.map(|jpeg| jpeg.len()),
+            track.timeline
+        ),
+        None => println!("no player counts"),
+    }
+    if let Some(shown) = shown.unwrap() {
+        println!("card: {} / {}", shown.title, shown.subtitle());
+    }
 }
