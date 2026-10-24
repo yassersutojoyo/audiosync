@@ -110,6 +110,7 @@ final class OutputRenderer: FadingOutput {
     private var generation: UInt64 = 0
     private var reportedLoss = false
     private var debugTimer: DispatchSourceTimer?
+    private var lateTimer: DispatchSourceTimer?
     /// How the latest stop went, for the debug log.
     private(set) var stopNote = "not started"
 
@@ -218,6 +219,7 @@ final class OutputRenderer: FadingOutput {
         installDeviceAliveListener(device)
         installOverloadListener(device)
         startDebugReport()
+        startLateCallbackReport(device: device)
         let extraLeadMs = target?.renderer.extraLeadMs ?? 0
         let lead = extraLeadMs > 0 ? ", Bluetooth, extra lead \(String(format: "%.1f", extraLeadMs)) ms" : ""
         DebugTrace.log("[AudioSync] output unit started on device \(device): \(started.channels) channels at "
@@ -234,6 +236,8 @@ final class OutputRenderer: FadingOutput {
         uninstallOverloadListener()
         debugTimer?.cancel()
         debugTimer = nil
+        lateTimer?.cancel()
+        lateTimer = nil
         guard let live = halUnit else { return }
         let now = HostClock.now()
         if reportedLoss {
@@ -339,7 +343,7 @@ final class OutputRenderer: FadingOutput {
         renderer.setDelay(ms: delayMs)
         delayFrames.store(renderer.delayFrames, ordering: .relaxed)
         let target = RenderTarget(owner: self, renderer: renderer, channels: channels,
-                                  leadNs: Self.outputLeadNs(device: device, rate: rate))
+                                  leadNs: Self.outputLeadNs(device: device, rate: rate), rate: rate)
         let callback = AURenderCallbackStruct(inputProc: outputRenderCallback,
                                               inputProcRefCon: Unmanaged.passUnretained(target).toOpaque())
         status = Self.setProperty(unit, kAudioUnitProperty_SetRenderCallback, scope: kAudioUnitScope_Input,
@@ -619,6 +623,128 @@ final class OutputRenderer: FadingOutput {
         timer.resume()
         debugTimer = timer
     }
+
+    /// While the debug log is on: a line for each late callback of this
+    /// start, within `LateCallbackLog`'s limit for the whole process. Polls
+    /// the render callback's slot on that log's queue and reads only atomics.
+    private func startLateCallbackReport(device: AudioObjectID) {
+        guard DebugTrace.enabled, let target else { return }
+        let name = Self.deviceName(device) ?? "device \(device)"
+        var seen = target.lateCount.load(ordering: .acquiring)
+        let timer = DispatchSource.makeTimerSource(queue: LateCallbackLog.queue)
+        timer.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20),
+                       leeway: .milliseconds(10))
+        timer.setEventHandler {
+            let count = target.lateCount.load(ordering: .acquiring)
+            let latest = target.lateLatest.load(ordering: .relaxed)
+            let fresh = count &- seen
+            seen = count
+            for line in LateCallbackLog.report(fresh: fresh, latest: latest, name: name,
+                                               nowNs: HostClock.now(), wallNow: Date()) {
+                DebugTrace.log(line)
+            }
+        }
+        timer.resume()
+        lateTimer = timer
+    }
+}
+
+/// The debug log's lines for late output callbacks: one per late callback,
+/// at most `LogRateLimiter`'s limit per second across all outputs.
+enum LateCallbackLog {
+    // Computed rather than stored: a static let's first read on the render thread could take a lock.
+    /// A buffer that starts this much later than the previous one ends
+    /// marks its callback as late.
+    static var thresholdNs: UInt64 { 5_000_000 }
+    /// The low bits of a packed slot hold the lateness in µs, up to ~16.7 s.
+    static var latenessBits: UInt64 { 24 }
+    static var latenessMaskUs: UInt64 { (1 << latenessBits) - 1 }
+
+    /// Every output's report runs here, so `limiter` needs no lock.
+    static let queue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.late-callbacks", qos: .utility)
+    private static var limiter = LogRateLimiter()
+
+    /// One atomic word for the render thread: the buffer's start in host ms
+    /// above the lateness in µs. Plain arithmetic, safe on an audio thread.
+    @inline(__always)
+    static func pack(startNs: UInt64, lateNs: UInt64) -> UInt64 {
+        (startNs / 1_000_000) << latenessBits | min(lateNs / 1000, latenessMaskUs)
+    }
+
+    static func unpack(_ slot: UInt64) -> (startMs: UInt64, lateUs: UInt64) {
+        (slot >> latenessBits, slot & latenessMaskUs)
+    }
+
+    /// The lines for `fresh` late callbacks since the previous poll, of which
+    /// only the latest (`latest`) kept its details; the others count as
+    /// suppressed. Call on `queue` only.
+    static func report(fresh: UInt64, latest: UInt64, name: String, nowNs: UInt64, wallNow: Date) -> [String] {
+        var lines: [String] = []
+        let decision = limiter.admit(fresh > 0 ? 1 : 0, atNs: nowNs)
+        if let closed = decision.closed { lines.append(suppressedLine(closed)) }
+        if fresh > 1 { limiter.drop(Int(clamping: fresh - 1), atNs: nowNs) }
+        guard decision.admitted > 0 else { return lines }
+        lines.append(eventLine(latest, name: name, nowNs: nowNs, wallNow: wallNow))
+        return lines
+    }
+
+    /// The line for one late callback, stamped with the wall-clock time its
+    /// buffer started.
+    static func eventLine(_ slot: UInt64, name: String, nowNs: UInt64, wallNow: Date) -> String {
+        let (startMs, lateUs) = unpack(slot)
+        let ageMs = Double(nowNs / 1_000_000 &- startMs)
+        let when = DebugLogFile.timestamp(wallNow.addingTimeInterval(-ageMs / 1000))
+        return "[AudioSync] late output callback at \(when) on \"\(name)\": "
+            + String(format: "%.1f", Double(lateUs) / 1000) + " ms late"
+    }
+
+    static func suppressedLine(_ count: Int) -> String {
+        "[AudioSync] \(count) more late callback\(count == 1 ? "" : "s") suppressed"
+    }
+}
+
+/// Lets at most `limit` events per window through to the log and counts the
+/// rest; the count comes back once the window has passed. A window opens at
+/// its first event.
+struct LogRateLimiter {
+    let limit: Int
+    let windowNs: UInt64
+    private var windowStartNs: UInt64?
+    private var logged = 0
+    private var suppressed = 0
+
+    init(limit: Int = 10, windowNs: UInt64 = 1_000_000_000) {
+        self.limit = limit
+        self.windowNs = windowNs
+    }
+
+    /// Offers `events` events at `nowNs`. `closed` is the suppressed count of
+    /// a window that passed before them (nil when it suppressed none),
+    /// `admitted` how many of them may be logged. Zero events only close a
+    /// passed window.
+    mutating func admit(_ events: Int, atNs nowNs: UInt64) -> (closed: Int?, admitted: Int) {
+        var closed: Int?
+        if let start = windowStartNs, nowNs &- start >= windowNs {
+            closed = suppressed > 0 ? suppressed : nil
+            windowStartNs = nil
+            logged = 0
+            suppressed = 0
+        }
+        guard events > 0 else { return (closed, 0) }
+        if windowStartNs == nil { windowStartNs = nowNs }
+        let admitted = min(events, max(limit - logged, 0))
+        logged += admitted
+        suppressed += events - admitted
+        return (closed, admitted)
+    }
+
+    /// Counts `events` events as suppressed in the open window, opening one
+    /// at `nowNs` when none is.
+    mutating func drop(_ events: Int, atNs nowNs: UInt64) {
+        guard events > 0 else { return }
+        if windowStartNs == nil { windowStartNs = nowNs }
+        suppressed += events
+    }
 }
 
 /// The developer-only `AUDIOSYNC_BT_IO_FRAMES` switch: another IO buffer size
@@ -714,12 +840,37 @@ private final class RenderTarget {
     /// For a time stamp without a host time: how far ahead of now the
     /// callback's buffer is output.
     let leadNs: UInt64
+    /// Only with the debug log on does the callback time its buffers.
+    let watchesLateness = DebugTrace.enabled
+    let nsPerFrame: Double
+    /// Where the previous buffer ends on the host clock, 0 before the first;
+    /// the render thread alone reads and writes it.
+    let expectedStartNs = Atomic<UInt64>(0)
+    /// Late callbacks so far (the render thread adds, the debug report
+    /// reads), and the latest one as `LateCallbackLog.pack` made it.
+    let lateCount = Atomic<UInt64>(0)
+    let lateLatest = Atomic<UInt64>(0)
 
-    init(owner: OutputRenderer, renderer: CoreRenderer, channels: Int, leadNs: UInt64) {
+    init(owner: OutputRenderer, renderer: CoreRenderer, channels: Int, leadNs: UInt64, rate: Double) {
         self.owner = owner
         self.renderer = renderer
         self.channels = channels
         self.leadNs = leadNs
+        nsPerFrame = rate > 0 && rate.isFinite ? 1_000_000_000 / rate : 0
+    }
+
+    /// Notes a callback whose buffer starts more than 5 ms after the previous
+    /// buffer ends. Lock-free stores only.
+    @inline(__always)
+    private func timeBuffer(_ stamp: AudioTimeStamp, frames: Int) {
+        // A gap in the device's own output timeline is time it played with no buffer from us.
+        guard stamp.mFlags.contains(.hostTimeValid) else { return }
+        let startNs = clock.nanoseconds(ticks: stamp.mHostTime)
+        let expectedNs = expectedStartNs.load(ordering: .relaxed)
+        expectedStartNs.store(startNs &+ UInt64(Double(max(frames, 0)) * nsPerFrame), ordering: .relaxed)
+        guard expectedNs != 0, startNs > expectedNs &+ LateCallbackLog.thresholdNs else { return }
+        lateLatest.store(LateCallbackLog.pack(startNs: startNs, lateNs: startNs - expectedNs), ordering: .relaxed)
+        _ = lateCount.wrappingAdd(1, ordering: .releasing)
     }
 
     /// Fills the unit's buffer with `frames` frames through the renderer,
@@ -727,6 +878,7 @@ private final class RenderTarget {
     /// safe.
     @inline(__always)
     func render(frames: Int, timeStamp: UnsafePointer<AudioTimeStamp>, into data: UnsafeMutablePointer<AudioBufferList>) {
+        if watchesLateness { timeBuffer(timeStamp.pointee, frames: frames) }
         let buffers = UnsafeMutableAudioBufferListPointer(data)
         guard let first = buffers.first else { return }
         // The interleaved format gives one buffer; anything beyond it stays silent.
