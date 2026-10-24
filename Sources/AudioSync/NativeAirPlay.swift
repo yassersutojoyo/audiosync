@@ -122,6 +122,14 @@ final class NativeAirPlay {
         }
     }
 
+    /// Whether the user drags the slider of the speaker `id`.
+    func setVolumeDragging(_ id: String, _ dragging: Bool) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_airplay_set_volume_dragging(handle, id, dragging)
+        }
+    }
+
     /// Holds every speaker back by `ms` on top of L, live; the sender caps
     /// it at `NetworkHoldBack.airPlayLimitMs`. Main queue. False when it was set already.
     @discardableResult

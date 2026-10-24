@@ -116,6 +116,7 @@ extension AppDelegate {
         a.setMaster = { [weak self] position in self?.setMasterVolume(position) }
         a.setAirPlayEnabled = { [weak self] id, on, origin in self?.setNativeAirPlayEnabled(id, on, origin: origin) }
         a.setAirPlayVolume = { [weak self] id, volume in self?.setNativeAirPlayVolume(id, volume) }
+        a.setAirPlayVolumeDragging = { [weak self] id, dragging in self?.setNativeAirPlayVolumeDragging(id, dragging) }
         a.forgetAirPlayPairing = { [weak self] id in self?.forgetNativePairing(id) }
         a.setLocalEnabled = { [weak self] uid, on, origin in self?.setLocalEnabled(uid, on, origin: origin) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }

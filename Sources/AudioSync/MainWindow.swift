@@ -856,7 +856,7 @@ struct SpeakerRow: View {
                     }
                     HStack(spacing: 8) {
                         Slider(value: Binding(get: { speaker.volume }, set: { model.setVolume(speaker, $0) }),
-                               in: 0...100)
+                               in: 0...100, onEditingChanged: { model.setVolumeDragging(speaker, $0) })
                             .controlSize(.small)
                             .disabled(!volumeAdjustable)
                             .accessibilityLabel(t.volume(of: speaker.name))
