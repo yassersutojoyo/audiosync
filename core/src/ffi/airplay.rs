@@ -78,7 +78,7 @@ use audiosync_airplay::discovery::{Browser, Device, DeviceKey, ProtocolPath, Ser
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::input::InputWriter;
-use audiosync_airplay::metadata::TrackInfo;
+use audiosync_airplay::metadata::{Artwork, TrackInfo};
 use audiosync_airplay::pairing::{Credentials, PairingEvent};
 use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
@@ -275,13 +275,17 @@ pub const AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY: i32 = 6;
 /// Three volume reads in a row failed on an AirPlay 2 session: it isn't
 /// asked again (P184, S271).
 pub const AIRPLAY_WARNING_VOLUME_READS_STOPPED: i32 = 7;
+/// A receiver refused an artwork image or left it unanswered: the session
+/// falls back to the small image or sends no more artwork, and plays on;
+/// once per session (P185).
+pub const AIRPLAY_WARNING_ARTWORK_REFUSED: i32 = 8;
 /// The receiver's remote control can't reach AudioSync from this speaker:
 /// no command server port could be bound on the session's local address
 /// (P190).
-pub const AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE: i32 = 8;
+pub const AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE: i32 = 9;
 /// The `_dacp._tcp` record couldn't be registered, so receivers may not
 /// find the remote control (P188).
-pub const AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED: i32 = 9;
+pub const AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED: i32 = 10;
 
 /// A speaker's state ([`AscAirPlayEvent::state`]): a session is starting.
 pub const AIRPLAY_STATE_CONNECTING: i32 = 1;
@@ -829,6 +833,7 @@ fn warning_code(warning: &Warning) -> i32 {
         Warning::PtpUnavailable => AIRPLAY_WARNING_PTP_PORTS_TAKEN,
         Warning::PtpOutsideFamily => AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY,
         Warning::VolumeReadsStopped => AIRPLAY_WARNING_VOLUME_READS_STOPPED,
+        Warning::ArtworkRefused { .. } => AIRPLAY_WARNING_ARTWORK_REFUSED,
         Warning::RemoteControlUnavailable => AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE,
         Warning::RemoteControlNotAdvertised => AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED,
     }
@@ -2768,27 +2773,32 @@ pub unsafe extern "C" fn asc_airplay_stream_counters(
 }
 
 /// Sets what is playing, for the receivers that show it (P123 to P127): the
-/// track's title, artist and album as UTF-8 text, and its artwork as a JPEG
-/// of at most 512 KiB (P125). Every speaker that lists the type gets it now,
-/// and every speaker that starts or restarts later gets it too. A null text
-/// is an empty one, and three null texts send no track information; null
-/// artwork, or a length of 0, sends none. Returns false, changing nothing,
-/// for a null or dead handle, a text that isn't UTF-8, a null `artwork`
-/// with a length, or artwork the sender refuses (not a JPEG, or too large).
+/// track's title, artist and album as UTF-8 text, and its artwork as two
+/// JPEGs of at most 512 KiB each (P125): `large` for AirPlay 2 sessions and
+/// `small` for AirPlay 1 sessions and after a refusal (P185). Every speaker
+/// that lists the type gets it now, and every speaker that starts or
+/// restarts later gets it too. A null text is an empty one, and three null
+/// texts send no track information; one image alone serves both paths, and
+/// none (null or a length of 0) sends no artwork. Returns false, changing
+/// nothing, for a null or dead handle, a text that isn't UTF-8, a null image
+/// with a length, or an image the sender refuses (not a JPEG, or too large).
 ///
 /// # Safety
 ///
 /// `airplay` is null or a live handle, called under the threading
-/// contract; each text is null or a NUL-terminated string; `artwork` is
-/// null or points to `artwork_len` bytes.
+/// contract; each text is null or a NUL-terminated string; `large` is null
+/// or points to `large_len` bytes, and `small` to `small_len`.
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn asc_airplay_set_now_playing(
     airplay: *mut AscAirPlay,
     title: *const c_char,
     artist: *const c_char,
     album: *const c_char,
-    artwork: *const u8,
-    artwork_len: usize,
+    large: *const u8,
+    large_len: usize,
+    small: *const u8,
+    small_len: usize,
 ) -> bool {
     let mut texts = [None; 3];
     for (text, pointer) in texts.iter_mut().zip([title, artist, album]) {
@@ -2801,8 +2811,11 @@ pub unsafe extern "C" fn asc_airplay_set_now_playing(
         };
         *text = Some(value);
     }
-    // SAFETY: by the caller's contract null or `artwork_len` bytes.
-    let Some(jpeg) = (unsafe { host_slice(artwork, artwork_len) }) else {
+    // SAFETY: by the caller's contract null or `large_len` and `small_len`
+    // bytes.
+    let (Some(large), Some(small)) = (unsafe { host_slice(large, large_len) }, unsafe {
+        host_slice(small, small_len)
+    }) else {
         return false;
     };
     let [title, artist, album] = texts;
@@ -2811,7 +2824,15 @@ pub unsafe extern "C" fn asc_airplay_set_now_playing(
         artist: artist.unwrap_or_default().to_owned(),
         album: album.unwrap_or_default().to_owned(),
     });
-    let artwork = (!jpeg.is_empty()).then(|| jpeg.to_vec());
+    let artwork = match (large.is_empty(), small.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(Artwork::single(large.to_vec())),
+        (true, false) => Some(Artwork::single(small.to_vec())),
+        (false, false) => Some(Artwork {
+            large: large.to_vec(),
+            small: small.to_vec(),
+        }),
+    };
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
     unsafe {
@@ -4576,6 +4597,8 @@ mod tests {
                 none,
                 none,
                 ptr::null(),
+                0,
+                ptr::null(),
                 0
             ));
         }
@@ -4604,24 +4627,62 @@ mod tests {
                     none,
                     none,
                     ptr::null(),
+                    0,
+                    ptr::null(),
                     0
                 ),
                 "a title that isn't UTF-8"
             );
             assert!(
-                !asc_airplay_set_now_playing(handle, none, none, none, ptr::null(), 4),
+                !asc_airplay_set_now_playing(
+                    handle,
+                    none,
+                    none,
+                    none,
+                    ptr::null(),
+                    4,
+                    ptr::null(),
+                    0
+                ),
                 "a length without artwork"
             );
             assert!(
-                !asc_airplay_set_now_playing(handle, none, none, none, b"GIF89a".as_ptr(), 6),
+                !asc_airplay_set_now_playing(
+                    handle,
+                    none,
+                    none,
+                    none,
+                    b"GIF89a".as_ptr(),
+                    6,
+                    ptr::null(),
+                    0
+                ),
                 "artwork that isn't a JPEG"
             );
             assert!(
-                !asc_airplay_set_now_playing(handle, none, none, none, large.as_ptr(), large.len()),
+                !asc_airplay_set_now_playing(
+                    handle,
+                    none,
+                    none,
+                    none,
+                    large.as_ptr(),
+                    large.len(),
+                    ptr::null(),
+                    0
+                ),
                 "artwork over 512 KiB"
             );
             assert!(
-                asc_airplay_set_now_playing(handle, none, none, none, ptr::null(), 0),
+                asc_airplay_set_now_playing(
+                    handle,
+                    none,
+                    none,
+                    none,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0
+                ),
                 "nothing playing"
             );
             assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0));
@@ -4637,7 +4698,9 @@ mod tests {
                 c"Some Artist".as_ptr(),
                 c"Some Album".as_ptr(),
                 jpeg.as_ptr(),
-                jpeg.len()
+                jpeg.len(),
+                ptr::null(),
+                0
             ));
         }
         assert!(
@@ -4650,6 +4713,100 @@ mod tests {
             "{:?}",
             receiver.bodies(Method::SetParameter)
         );
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S272
+    #[test]
+    fn now_playing_carries_two_images_and_an_airplay1_speaker_gets_the_small_one() {
+        let jpeg = |fill: u8, len: usize| [&[0xFF, 0xD8, 0xFF][..], &vec![fill; len]].concat();
+        let (large, small) = (jpeg(b'L', 300), jpeg(b'S', 100));
+        let none = ptr::null::<c_char>();
+        let receiver = Loopback::start();
+        let id = "02005E005333";
+        let mut txt = OPEN.to_vec();
+        txt.push("md=0,1,2");
+        let record = ServiceRecord {
+            port: receiver.port,
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+            ..raop(id, "Den", &txt)
+        };
+        let mut handle = listing(vec![record]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only, nothing else
+        // running on it; byte buffers of the lengths given.
+        unsafe {
+            assert!(asc_airplay_set_now_playing(
+                handle,
+                none,
+                none,
+                none,
+                large.as_ptr(),
+                large.len(),
+                ptr::null(),
+                0
+            ));
+            assert_eq!(
+                (*handle).now_playing.artwork,
+                Some(Artwork::single(large.clone())),
+                "one image serves both paths"
+            );
+            assert!(
+                !asc_airplay_set_now_playing(
+                    handle,
+                    none,
+                    none,
+                    none,
+                    large.as_ptr(),
+                    large.len(),
+                    b"GIF89a".as_ptr(),
+                    6
+                ),
+                "a small image that isn't a JPEG"
+            );
+            assert!(
+                !asc_airplay_set_now_playing(
+                    handle,
+                    none,
+                    none,
+                    none,
+                    large.as_ptr(),
+                    large.len(),
+                    ptr::null(),
+                    4
+                ),
+                "a length without a small image"
+            );
+            assert!(asc_airplay_set_now_playing(
+                handle,
+                none,
+                none,
+                none,
+                large.as_ptr(),
+                large.len(),
+                small.as_ptr(),
+                small.len()
+            ));
+            assert_eq!(
+                (*handle).now_playing.artwork,
+                Some(Artwork {
+                    large: large.clone(),
+                    small: small.clone()
+                })
+            );
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0));
+        }
+        let events = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        assert!(has_state(&events, id, AIRPLAY_STATE_PLAYING), "{events:?}");
+        let small_text = String::from_utf8_lossy(&small).into_owned();
+        assert!(
+            wait_for(|| receiver.bodies(Method::SetParameter).contains(&small_text)),
+            "{:?}",
+            receiver.bodies(Method::SetParameter)
+        );
+        let large_text = String::from_utf8_lossy(&large).into_owned();
+        assert!(!receiver.bodies(Method::SetParameter).contains(&large_text));
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -4724,6 +4881,8 @@ mod tests {
                 none,
                 none,
                 ptr::null(),
+                0,
+                ptr::null(),
                 0
             ));
             assert!(asc_airplay_set_progress(handle, 30_000.0, 200_000.0));
@@ -4742,6 +4901,8 @@ mod tests {
                 none,
                 none,
                 ptr::null(),
+                0,
+                ptr::null(),
                 0
             ));
             assert!((*handle).now_playing.progress.is_some(), "the same track");
@@ -4750,6 +4911,8 @@ mod tests {
                 c"Track Two".as_ptr(),
                 none,
                 none,
+                ptr::null(),
+                0,
                 ptr::null(),
                 0
             ));
@@ -4760,6 +4923,8 @@ mod tests {
                 c"Track Three".as_ptr(),
                 none,
                 none,
+                ptr::null(),
+                0,
                 ptr::null(),
                 0
             ));

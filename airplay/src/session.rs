@@ -29,7 +29,9 @@ use std::time::{Duration, Instant};
 use crate::digest::{self, Challenge};
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, Warning};
 use crate::ids::SessionIds;
-use crate::metadata::{Metadata, MetadataError, MetadataSupport};
+use crate::metadata::{
+    Artwork, ArtworkLadder, ArtworkSize, Metadata, MetadataError, MetadataSupport, Queued,
+};
 use crate::rtsp::{
     self, JackStatus, Message, Method, ParseError, Parser, Request, Response, TransportPorts,
 };
@@ -374,7 +376,11 @@ pub struct Session {
     pending_volume: Option<Volume>,
     pending_read_volume: bool,
     pending_flush: Option<(u16, u32)>,
-    metadata_queue: VecDeque<Metadata>,
+    metadata_queue: VecDeque<Queued>,
+    /// P185: an AirPlay 1 session sends the small image.
+    artwork: ArtworkLadder,
+    /// CSeqs of artwork requests given up on, whose answers are dropped.
+    late_answers: Vec<u32>,
     last_volume_sent: Option<Instant>,
     last_request_at: Option<Instant>,
     teardown_deadline: Option<Instant>,
@@ -412,6 +418,8 @@ impl Session {
             pending_read_volume: false,
             pending_flush: None,
             metadata_queue: VecDeque::new(),
+            artwork: ArtworkLadder::new(ArtworkSize::Small),
+            late_answers: Vec::new(),
             last_volume_sent: None,
             last_request_at: None,
             teardown_deadline: None,
@@ -669,9 +677,17 @@ impl Session {
         if let Some(in_flight) = &self.in_flight
             && now >= in_flight.sent_at + RESPONSE_TIMEOUT
         {
-            let method = in_flight.kind.method();
-            self.fail(ErrorKind::Timeout, Some(method), None, None);
-            return;
+            if let Kind::Metadata(Metadata::Artwork { .. }) = in_flight.kind {
+                // P185: a refusal, never the end of the session (P134).
+                let cseq = in_flight.cseq;
+                self.in_flight = None;
+                self.late_answers.push(cseq);
+                self.artwork_answered(false, None);
+            } else {
+                let method = in_flight.kind.method();
+                self.fail(ErrorKind::Timeout, Some(method), None, None);
+                return;
+            }
         }
         if self
             .last_timing_request
@@ -781,9 +797,41 @@ impl Session {
             return Err(MetadataError::NotListed);
         }
         metadata.validate()?;
-        self.metadata_queue.push_back(metadata);
+        self.metadata_queue.push_back(Queued::new(metadata));
         self.drive(now);
         Ok(())
+    }
+
+    /// Queues artwork (P125, P185): the image this session's place on the
+    /// ladder calls for goes when its turn comes.
+    pub fn send_artwork(
+        &mut self,
+        artwork: Artwork,
+        rtptime: u32,
+        now: Instant,
+    ) -> Result<(), MetadataError> {
+        if matches!(self.state, State::Closed | State::TearingDown) {
+            return Err(MetadataError::SessionEnded);
+        }
+        if !self.config.metadata.artwork {
+            return Err(MetadataError::NotListed);
+        }
+        artwork.validate()?;
+        self.metadata_queue
+            .push_back(Queued::Artwork { artwork, rtptime });
+        self.drive(now);
+        Ok(())
+    }
+
+    /// The artwork request in flight was answered or given up on (P185).
+    fn artwork_answered(&mut self, success: bool, status: Option<u16>) {
+        let (resend, warning) = self.artwork.answered(success, status);
+        if let Some(resend) = resend {
+            self.metadata_queue.push_front(resend);
+        }
+        if let Some(warning) = warning {
+            self.event(SessionEvent::Warning(warning));
+        }
     }
 
     /// Stops the session (P35, P129): no more media, TEARDOWN once the
@@ -852,6 +900,7 @@ impl Session {
     fn close(&mut self) {
         self.state = State::Closed;
         self.in_flight = None;
+        self.artwork.forget();
         self.teardown_deadline = None;
         self.last_timing_request = None;
         self.clear_queues();
@@ -890,8 +939,14 @@ impl Session {
                     // Metadata and keep-alives wait behind volume (P120, P127).
                     return;
                 }
-                if let Some(metadata) = self.metadata_queue.pop_front() {
-                    return self.send(Kind::Metadata(metadata), now, false);
+                while let Some(queued) = self.metadata_queue.pop_front() {
+                    let metadata = match queued {
+                        Queued::Item(metadata) => Some(metadata),
+                        Queued::Artwork { artwork, rtptime } => self.artwork.send(artwork, rtptime),
+                    };
+                    if let Some(metadata) = metadata {
+                        return self.send(Kind::Metadata(metadata), now, false);
+                    }
                 }
                 if self
                     .last_request_at
@@ -1031,6 +1086,15 @@ impl Session {
     }
 
     fn on_response(&mut self, response: Response, now: Instant) {
+        // Answers come in request order, so one for a later request means
+        // the requests given up before it will never be answered.
+        if let Some(cseq) = response.cseq()
+            && let Some(at) = self.late_answers.iter().position(|&c| c == cseq)
+        {
+            self.late_answers.drain(..=at);
+            return;
+        }
+        self.late_answers.clear();
         let Some(in_flight) = self.in_flight.take() else {
             self.fail(
                 ErrorKind::ProtocolError,
@@ -1182,6 +1246,9 @@ impl Session {
                 } else {
                     self.on_startup_refused(method, code);
                 }
+            }
+            Kind::Metadata(Metadata::Artwork { .. }) => {
+                self.artwork_answered(success, Some(code));
             }
             Kind::Volume(_) | Kind::Metadata(_) | Kind::ReadVolume | Kind::Flush { .. }
                 if !success =>

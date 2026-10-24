@@ -19,7 +19,9 @@ use crate::homekit::{
     VerifyStep,
 };
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
-use crate::metadata::{Metadata, MetadataError, MetadataSupport};
+use crate::metadata::{
+    Artwork, ArtworkLadder, ArtworkSize, Metadata, MetadataError, MetadataSupport, Queued,
+};
 use crate::rtsp::{Message, Method, Parser, Request, Response};
 use crate::secret::Secret;
 use crate::session::{
@@ -346,7 +348,9 @@ pub struct Ap2Session {
     feedback_wanted: bool,
     feedback_misses: u8,
     pending_volume: Option<Volume>,
-    metadata_queue: VecDeque<Metadata>,
+    metadata_queue: VecDeque<Queued>,
+    /// P185: an AirPlay 2 session sends the large image.
+    artwork: ArtworkLadder,
     teardown_deadline: Option<Instant>,
     last_timing_request: Option<Instant>,
     server: Option<String>,
@@ -362,8 +366,9 @@ pub struct Ap2Session {
     volume_generation: u32,
     /// Failed reads in a row; three stop the reads (P184).
     volume_read_failures: u8,
-    /// CSeqs of reads given up at a feedback tick, whose answers are dropped.
-    late_volume_reads: Vec<u32>,
+    /// CSeqs of reads given up at a feedback tick and of artwork given up
+    /// after the usual wait, whose answers are dropped.
+    late_answers: Vec<u32>,
     volume_reads_stopped: bool,
     /// The last volume trace line, so a steady level logs once.
     last_volume_trace: Option<String>,
@@ -447,6 +452,7 @@ impl Ap2Session {
             feedback_misses: 0,
             pending_volume: None,
             metadata_queue: VecDeque::new(),
+            artwork: ArtworkLadder::new(ArtworkSize::Large),
             teardown_deadline: None,
             last_timing_request: None,
             server: None,
@@ -457,7 +463,7 @@ impl Ap2Session {
             volume_read_wanted: false,
             volume_generation: 0,
             volume_read_failures: 0,
-            late_volume_reads: Vec::new(),
+            late_answers: Vec::new(),
             volume_reads_stopped: false,
             last_volume_trace: None,
         };
@@ -491,10 +497,11 @@ impl Ap2Session {
         &self.ids
     }
 
-    /// Volume reads given up at a feedback tick whose answers may still come.
+    /// Volume reads and artwork requests given up on whose answers may
+    /// still come.
     #[doc(hidden)]
-    pub fn late_volume_reads(&self) -> usize {
-        self.late_volume_reads.len()
+    pub fn late_answers(&self) -> usize {
+        self.late_answers.len()
     }
 
     /// The timing of the current or last session SETUP.
@@ -845,7 +852,7 @@ impl Ap2Session {
                 // session (P134), and its late answer is dropped.
                 let cseq = in_flight.cseq;
                 self.in_flight = None;
-                self.late_volume_reads.push(cseq);
+                self.late_answers.push(cseq);
                 self.volume_read_failed();
             }
             if self.state == Ap2State::Ready {
@@ -867,8 +874,16 @@ impl Ap2Session {
             && in_flight.kind != Kind::Feedback
             && now >= in_flight.sent_at + RESPONSE_TIMEOUT
         {
-            let method = in_flight.kind.method();
-            return self.fail(ErrorKind::Timeout, Some(method), None, None);
+            if let Kind::Metadata(Metadata::Artwork { .. }) = in_flight.kind {
+                // P185: a refusal, never the end of the session (P134).
+                let cseq = in_flight.cseq;
+                self.in_flight = None;
+                self.late_answers.push(cseq);
+                self.artwork_answered(false, None);
+            } else {
+                let method = in_flight.kind.method();
+                return self.fail(ErrorKind::Timeout, Some(method), None, None);
+            }
         }
         self.drive(now);
     }
@@ -1009,9 +1024,42 @@ impl Ap2Session {
             return Err(MetadataError::NotListed);
         }
         metadata.validate()?;
-        self.metadata_queue.push_back(metadata);
+        self.metadata_queue.push_back(Queued::new(metadata));
         self.drive(now);
         Ok(())
+    }
+
+    /// Queues artwork when features bit 15 is set (P123, P125, P185): the
+    /// image this session's place on the ladder calls for goes when its
+    /// turn comes.
+    pub fn send_artwork(
+        &mut self,
+        artwork: Artwork,
+        rtptime: u32,
+        now: Instant,
+    ) -> Result<(), MetadataError> {
+        if matches!(self.state, Ap2State::Closed | Ap2State::TearingDown) {
+            return Err(MetadataError::SessionEnded);
+        }
+        if !MetadataSupport::from_features(self.config.features).artwork {
+            return Err(MetadataError::NotListed);
+        }
+        artwork.validate()?;
+        self.metadata_queue
+            .push_back(Queued::Artwork { artwork, rtptime });
+        self.drive(now);
+        Ok(())
+    }
+
+    /// The artwork request in flight was answered or given up on (P185).
+    fn artwork_answered(&mut self, success: bool, status: Option<u16>) {
+        let (resend, warning) = self.artwork.answered(success, status);
+        if let Some(resend) = resend {
+            self.metadata_queue.push_front(resend);
+        }
+        if let Some(warning) = warning {
+            self.event(Ap2Event::Warning(warning));
+        }
     }
 
     /// Ends the session: TEARDOWN of the stream, then of the session, at
@@ -1073,6 +1121,7 @@ impl Ap2Session {
     fn close(&mut self) {
         self.state = Ap2State::Closed;
         self.in_flight = None;
+        self.artwork.forget();
         self.teardown_deadline = None;
         self.last_timing_request = None;
         self.feedback_due = None;
@@ -1104,6 +1153,8 @@ impl Ap2Session {
         self.shared = None;
         self.next_cseq = 0;
         self.in_flight = None;
+        self.artwork.forget();
+        self.late_answers.clear();
         self.auth = None;
         self.set_up = false;
         self.metadata_queue.clear();
@@ -1151,8 +1202,14 @@ impl Ap2Session {
                     self.volume_read_wanted = false;
                     return self.send(Kind::VolumeRead(self.volume_generation), now, false);
                 }
-                if let Some(metadata) = self.metadata_queue.pop_front() {
-                    self.send(Kind::Metadata(metadata), now, false);
+                while let Some(queued) = self.metadata_queue.pop_front() {
+                    let metadata = match queued {
+                        Queued::Item(metadata) => Some(metadata),
+                        Queued::Artwork { artwork, rtptime } => self.artwork.send(artwork, rtptime),
+                    };
+                    if let Some(metadata) = metadata {
+                        return self.send(Kind::Metadata(metadata), now, false);
+                    }
                 }
             }
             _ => {}
@@ -1309,12 +1366,12 @@ impl Ap2Session {
         // Answers come in request order, so one for a later request means
         // the reads given up before it will never be answered.
         if let Some(cseq) = response.cseq()
-            && let Some(at) = self.late_volume_reads.iter().position(|&c| c == cseq)
+            && let Some(at) = self.late_answers.iter().position(|&c| c == cseq)
         {
-            self.late_volume_reads.drain(..=at);
+            self.late_answers.drain(..=at);
             return;
         }
-        self.late_volume_reads.clear();
+        self.late_answers.clear();
         let Some(in_flight) = self.in_flight.take() else {
             return self.fail(
                 ErrorKind::ProtocolError,
@@ -1479,6 +1536,9 @@ impl Ap2Session {
                     self.send(Kind::Volume(self.config.initial_volume), now, false);
                     self.event(Ap2Event::Ready(stream));
                 }
+            }
+            Kind::Metadata(Metadata::Artwork { .. }) => {
+                self.artwork_answered(success, Some(code));
             }
             Kind::Metadata(_) => {
                 if !success {

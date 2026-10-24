@@ -12,17 +12,18 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::Warning;
-use audiosync_airplay::metadata::{Metadata, MetadataError, TrackInfo};
+use audiosync_airplay::metadata::{Artwork, Metadata, MetadataError, TrackInfo};
 use audiosync_airplay::rtsp::{Method, Request, Response};
 use audiosync_airplay::sender::{
     NowPlaying, Progress, Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions,
     SpeakerState,
 };
+use audiosync_airplay::session::RESPONSE_TIMEOUT;
 use audiosync_airplay::volume::Volume;
 use plist::Value;
 
 use common::ap2::{Ap2Rig, Ap2Server, FakeAp2, ap2_config, dict, int, plist};
-use common::net::{Events, HostAudio, serial, wait_until};
+use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 
 const LONG: Duration = Duration::from_secs(15);
 
@@ -102,8 +103,12 @@ fn answer_last_with(rig: &mut Ap2Rig, code: u16, reason: &str) {
         .and_then(|(request, _)| request.headers.get("CSeq"))
         .expect("a request with a CSeq")
         .to_owned();
+    answer_cseq(rig, &cseq, code, reason);
+}
+
+fn answer_cseq(rig: &mut Ap2Rig, cseq: &str, code: u16, reason: &str) {
     let mut response = Response::new(code, reason);
-    response.headers.push("CSeq", cseq);
+    response.headers.push("CSeq", cseq.to_owned());
     let framing = rig.fake.framing.as_mut().expect("framing has started");
     let bytes = framing.seal(&response.encode());
     let now = rig.now;
@@ -392,7 +397,9 @@ fn now_playing_reaches_an_airplay2_speaker_by_its_features() {
     sender
         .set_now_playing(NowPlaying {
             track: Some(track()),
-            artwork: Some(vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0xFF, 0xD9]),
+            artwork: Some(Artwork::single(vec![
+                0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0xFF, 0xD9,
+            ])),
             progress: Some(Progress {
                 elapsed: Duration::from_secs(10),
                 length: Duration::from_secs(200),
@@ -520,5 +527,367 @@ fn an_airplay2_read_back_asks_the_receiver_with_the_next_feedback() {
             ..
         }
     )));
+    sender.shutdown();
+}
+
+fn jpeg(fill: u8, len: usize) -> Vec<u8> {
+    let mut jpeg = vec![fill; len];
+    jpeg[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
+    jpeg
+}
+
+/// A picture too large for the small limits: two different encodings.
+fn two_sizes() -> Artwork {
+    Artwork {
+        large: jpeg(0x11, 300),
+        small: jpeg(0x22, 100),
+    }
+}
+
+/// The artwork requests the fake read, in order.
+fn images_sent(fake: &FakeAp2) -> Vec<(Request, bool)> {
+    metadata_sent(fake)
+        .into_iter()
+        .filter(|(request, _)| request.headers.get("Content-Type") == Some("image/jpeg"))
+        .collect()
+}
+
+fn image_bodies(fake: &FakeAp2) -> Vec<Vec<u8>> {
+    images_sent(fake)
+        .into_iter()
+        .map(|(request, _)| request.body)
+        .collect()
+}
+
+fn artwork_warnings(events: &[Ap2Event]) -> Vec<Warning> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Ap2Event::Warning(warning @ Warning::ArtworkRefused { .. }) => Some(warning.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn artwork_rig() -> Ap2Rig {
+    let rig = Ap2Rig::new(ap2_config(), fake_with(TEXT | ARTWORK | PROGRESS));
+    assert!(rig.ready(), "{:?}", rig.keys());
+    rig
+}
+
+// covers: P185
+#[test]
+fn an_airplay2_session_sends_the_large_image_while_it_is_taken() {
+    let mut rig = artwork_rig();
+    let now = rig.now;
+    assert_eq!(rig.session.send_artwork(two_sizes(), 1000, now), Ok(()));
+    rig.pump();
+    assert_eq!(rig.session.send_artwork(two_sizes(), 2000, now), Ok(()));
+    rig.pump();
+    assert_eq!(
+        image_bodies(&rig.fake),
+        [two_sizes().large, two_sizes().large]
+    );
+    let times: Vec<Option<String>> = images_sent(&rig.fake)
+        .iter()
+        .map(|(request, _)| request.headers.get("RTP-Info").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        times,
+        [
+            Some("rtptime=1000".to_owned()),
+            Some("rtptime=2000".to_owned())
+        ]
+    );
+    assert!(artwork_warnings(&rig.events).is_empty());
+}
+
+// covers: P185, P127, P138, P141
+#[test]
+fn a_refused_large_image_goes_again_small_and_the_session_keeps_the_small_one() {
+    let mut rig = artwork_rig();
+    rig.fake.status_once.insert("SET_PARAMETER".to_owned(), 413);
+    let now = rig.now;
+    assert_eq!(rig.session.send_artwork(two_sizes(), 1000, now), Ok(()));
+    rig.pump();
+    assert_eq!(
+        image_bodies(&rig.fake),
+        [two_sizes().large, two_sizes().small]
+    );
+    for (request, _) in images_sent(&rig.fake) {
+        assert_eq!(request.headers.get("RTP-Info"), Some("rtptime=1000"));
+    }
+    assert_eq!(
+        artwork_warnings(&rig.events),
+        [Warning::ArtworkRefused { status: Some(413) }]
+    );
+
+    // Later tracks on this session send only the small image.
+    let [track, ..] = all_three();
+    assert_eq!(rig.session.send_metadata(track, now), Ok(()));
+    assert_eq!(rig.session.send_artwork(two_sizes(), 2000, now), Ok(()));
+    rig.pump();
+    assert_eq!(
+        image_bodies(&rig.fake),
+        [two_sizes().large, two_sizes().small, two_sizes().small]
+    );
+    assert_eq!(artwork_warnings(&rig.events).len(), 1);
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+    assert!(rig.ready());
+}
+
+// covers: P185, P127
+#[test]
+fn a_refused_small_image_ends_artwork_while_text_and_progress_still_go() {
+    let mut rig = artwork_rig();
+    rig.fake.status.insert("SET_PARAMETER".to_owned(), 500);
+    let now = rig.now;
+    assert_eq!(rig.session.send_artwork(two_sizes(), 1000, now), Ok(()));
+    rig.pump();
+    assert_eq!(
+        image_bodies(&rig.fake),
+        [two_sizes().large, two_sizes().small]
+    );
+    rig.fake.status.clear();
+    assert_eq!(rig.session.send_artwork(two_sizes(), 2000, now), Ok(()));
+    for metadata in all_three() {
+        assert_eq!(rig.session.send_metadata(metadata, now), Ok(()));
+    }
+    rig.pump();
+    assert_eq!(image_bodies(&rig.fake).len(), 2, "{:?}", rig.keys());
+    let types: Vec<String> = metadata_sent(&rig.fake)
+        .iter()
+        .skip(2)
+        .filter_map(|(request, _)| request.headers.get("Content-Type").map(str::to_owned))
+        .collect();
+    assert_eq!(types, ["application/x-dmap-tagged", "text/parameters"]);
+    assert_eq!(
+        artwork_warnings(&rig.events),
+        [Warning::ArtworkRefused { status: Some(500) }]
+    );
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+    assert!(rig.ready());
+
+    // A new session starts again from its path's image; through the
+    // driver in `a_restarted_session_starts_again_from_its_paths_image`.
+    let mut rig = artwork_rig();
+    let now = rig.now;
+    assert_eq!(rig.session.send_artwork(two_sizes(), 3000, now), Ok(()));
+    rig.pump();
+    assert_eq!(image_bodies(&rig.fake), [two_sizes().large]);
+}
+
+// covers: P185
+#[test]
+fn one_picture_as_the_same_bytes_for_both_goes_once_per_session() {
+    let mut rig = artwork_rig();
+    rig.fake.status_once.insert("SET_PARAMETER".to_owned(), 413);
+    let now = rig.now;
+    let one = Artwork::single(jpeg(0x33, 80));
+    assert_eq!(rig.session.send_artwork(one.clone(), 1000, now), Ok(()));
+    rig.pump();
+    assert_eq!(rig.session.send_artwork(one.clone(), 2000, now), Ok(()));
+    rig.pump();
+    assert_eq!(image_bodies(&rig.fake), [one.large]);
+    assert_eq!(artwork_warnings(&rig.events).len(), 1);
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+}
+
+// covers: P185, P134
+#[test]
+fn an_unanswered_image_counts_as_refused_and_never_ends_the_session() {
+    let mut rig = artwork_rig();
+    rig.fake.silent.push("SET_PARAMETER".to_owned());
+    rig.fake.silent.push("POST /feedback".to_owned());
+    let now = rig.now;
+    assert_eq!(rig.session.send_artwork(two_sizes(), 1000, now), Ok(()));
+    rig.pump();
+    let large_cseq = images_sent(&rig.fake)[0]
+        .0
+        .headers
+        .get("CSeq")
+        .expect("a CSeq")
+        .to_owned();
+    // Given up on, it lets the feedback that waited behind it go first.
+    rig.advance(RESPONSE_TIMEOUT + Duration::from_millis(200));
+    assert_eq!(
+        artwork_warnings(&rig.events),
+        [Warning::ArtworkRefused { status: None }]
+    );
+    assert_eq!(rig.keys().last(), Some(&"POST /feedback"));
+    // A receiver that wakes up answers in order: the late answer is dropped.
+    answer_cseq(&mut rig, &large_cseq, 200, "OK");
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+    answer_last(&mut rig);
+    assert_eq!(
+        image_bodies(&rig.fake),
+        [two_sizes().large, two_sizes().small]
+    );
+
+    rig.advance(RESPONSE_TIMEOUT + Duration::from_millis(200));
+    rig.fake.silent.clear();
+    assert_eq!(rig.keys().last(), Some(&"POST /feedback"));
+    answer_last(&mut rig);
+    let [track, ..] = all_three();
+    let now = rig.now;
+    assert_eq!(rig.session.send_artwork(two_sizes(), 2000, now), Ok(()));
+    assert_eq!(rig.session.send_metadata(track, now), Ok(()));
+    rig.pump();
+    assert_eq!(image_bodies(&rig.fake).len(), 2, "{:?}", rig.keys());
+    assert_eq!(
+        metadata_sent(&rig.fake)
+            .last()
+            .and_then(|(request, _)| request.headers.get("Content-Type").map(str::to_owned)),
+        Some("application/x-dmap-tagged".to_owned())
+    );
+    assert_eq!(artwork_warnings(&rig.events).len(), 1);
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+    assert!(rig.ready());
+}
+
+/// An AirPlay 1 receiver that takes PCM and lists every metadata type.
+const AP1_TXT: &[&str] = &[
+    "txtvers=1",
+    "ch=2",
+    "cn=0",
+    "et=0",
+    "sr=44100",
+    "ss=16",
+    "tp=UDP",
+    "md=0,1,2",
+];
+
+// covers: P185, P125
+#[test]
+fn each_speaker_gets_its_own_paths_image() {
+    let _serial = serial();
+    let server = Ap2Server::start(fake_with(TEXT | ARTWORK | PROGRESS));
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let airplay2 = airplay2_only(&server, 63, "0x38000,0x10040");
+    let airplay1 = receiver.device(64, AP1_TXT);
+    let keys = [airplay2.key.clone(), airplay1.key.clone()];
+    sender
+        .set_now_playing(NowPlaying {
+            artwork: Some(two_sizes()),
+            ..NowPlaying::default()
+        })
+        .expect("valid artwork");
+    sender.add_speaker(airplay2, SpeakerOptions::new(Volume::Db(-20.0)));
+    sender.add_speaker(airplay1, SpeakerOptions::new(Volume::Db(-20.0)));
+    for key in &keys {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Playing)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    assert!(
+        wait_until(LONG, || images_sent(&server.fake()).len() == 1),
+        "{:?}",
+        server.fake().keys()
+    );
+    let ap1_images = || {
+        receiver
+            .log()
+            .requests
+            .iter()
+            .filter(|(_, request)| request.headers.get("Content-Type") == Some("image/jpeg"))
+            .map(|(_, request)| request.body.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        wait_until(LONG, || ap1_images().len() == 1),
+        "{:?}",
+        receiver.log().keys()
+    );
+    assert_eq!(image_bodies(&server.fake()), [two_sizes().large]);
+    assert_eq!(ap1_images(), [two_sizes().small]);
+    sender.shutdown();
+}
+
+fn image_now_playing() -> NowPlaying {
+    NowPlaying {
+        artwork: Some(two_sizes()),
+        ..NowPlaying::default()
+    }
+}
+
+// covers: P185
+#[test]
+fn a_restarted_session_starts_again_from_its_paths_image() {
+    let _serial = serial();
+    let mut fake = fake_with(TEXT | ARTWORK | PROGRESS);
+    fake.status_once
+        .insert("SET_PARAMETER image/jpeg".to_owned(), 413);
+    let server = Ap2Server::start(fake);
+    let mut behavior = Behavior::default();
+    behavior
+        .status
+        .insert("SET_PARAMETER image/jpeg".to_owned(), 500);
+    let receiver = NetReceiver::start(behavior);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let airplay2 = airplay2_only(&server, 65, "0x38000,0x10040");
+    let airplay1 = receiver.device(66, AP1_TXT);
+    let devices = [airplay2, airplay1];
+    let ap1_images = || {
+        receiver
+            .log()
+            .requests
+            .iter()
+            .filter(|(_, request)| request.headers.get("Content-Type") == Some("image/jpeg"))
+            .map(|(_, request)| request.body.clone())
+            .collect::<Vec<_>>()
+    };
+    sender
+        .set_now_playing(image_now_playing())
+        .expect("valid artwork");
+    let playing = |s: &SpeakerState| *s == SpeakerState::Playing;
+    for (nth, round) in [(1, "first"), (2, "restarted")] {
+        for device in &devices {
+            sender.add_speaker(device.clone(), SpeakerOptions::new(Volume::Db(-20.0)));
+        }
+        for device in &devices {
+            assert!(
+                events
+                    .wait_state(&sender, &device.key, nth, LONG, playing)
+                    .is_some(),
+                "{round}: {:?}",
+                events.of(&device.key)
+            );
+        }
+        if nth == 1 {
+            // AirPlay 2 refuses the large image and takes the small one;
+            // AirPlay 1 refuses the small one, which ends its artwork.
+            assert!(
+                wait_until(LONG, || images_sent(&server.fake()).len() == 2),
+                "{:?}",
+                server.fake().keys()
+            );
+            assert!(wait_until(LONG, || ap1_images().len() == 1));
+            sender
+                .set_now_playing(image_now_playing())
+                .expect("valid artwork");
+            assert!(wait_until(LONG, || images_sent(&server.fake()).len() == 3));
+            std::thread::sleep(Duration::from_millis(300));
+            assert_eq!(ap1_images().len(), 1, "artwork ended for that session");
+            for device in &devices {
+                sender.remove_speaker(&device.key);
+            }
+        }
+    }
+    let small = two_sizes().small;
+    let large = two_sizes().large;
+    assert!(wait_until(LONG, || images_sent(&server.fake()).len() == 4));
+    assert!(wait_until(LONG, || ap1_images().len() == 2));
+    assert_eq!(
+        image_bodies(&server.fake()),
+        [large.clone(), small.clone(), small.clone(), large]
+    );
+    assert_eq!(ap1_images(), [small.clone(), small]);
     sender.shutdown();
 }

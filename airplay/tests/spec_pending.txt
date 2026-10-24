@@ -4,6 +4,3 @@
 # test, so this list only shrinks. "Partly done" names what already exists.
 
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
-
-# Artwork sizes per path, built on its own branch.
-P185 artwork refusal handling not built yet

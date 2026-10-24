@@ -6072,7 +6072,13 @@ mod tests {
             track_sent.title, "Song",
             "a paused track of the source app counts"
         );
-        assert_eq!(sent[0].artwork.as_deref(), Some(&b"cover"[..]));
+        assert_eq!(
+            sent[0]
+                .artwork
+                .as_ref()
+                .map(|artwork| artwork.large.as_slice()),
+            Some(&b"cover"[..])
+        );
 
         reader.read(Some(track("player.exe", "Song", false, Some(b"cover"))));
         backend.poll();
@@ -6083,7 +6089,13 @@ mod tests {
         let sent = now_playing_sent(&fake);
         let track_sent = sent[0].track.as_ref().expect("labels");
         assert_eq!(
-            (track_sent.artist.as_str(), sent[0].artwork.as_deref()),
+            (
+                track_sent.artist.as_str(),
+                sent[0]
+                    .artwork
+                    .as_ref()
+                    .map(|artwork| artwork.large.as_slice())
+            ),
             ("Player", Some(&b"icon"[..])),
             "with no session, the source's name and AudioSync's icon"
         );

@@ -102,7 +102,9 @@ pub struct FakeReceiver {
     /// Requests that carried a valid `Authorization`.
     pub authorized: usize,
     nonce_generation: u32,
-    /// Status codes by request key ("ANNOUNCE", "POST /auth-setup", ...).
+    /// Status codes by request key ("ANNOUNCE", "POST /auth-setup", ...); a
+    /// key followed by a content type ("SET_PARAMETER image/jpeg") matches
+    /// only requests carrying that type.
     pub status: HashMap<String, u16>,
     /// A request key the receiver never answers.
     pub silent: Option<String>,
@@ -267,7 +269,14 @@ impl FakeReceiver {
     }
 
     fn success_or_override(&mut self, request: &Request, key: &str) -> Response {
-        if let Some(&code) = self.status.get(key) {
+        let typed = request
+            .headers
+            .get("Content-Type")
+            .map(|kind| format!("{key} {kind}"));
+        if let Some(&code) = typed
+            .and_then(|typed| self.status.get(&typed))
+            .or_else(|| self.status.get(key))
+        {
             return Response::new(code, "Status Set By Test");
         }
         if let Some(response) = self.apple_tv.as_ref().and_then(|atv| atv.answer(request)) {

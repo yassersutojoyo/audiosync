@@ -1,5 +1,5 @@
 //! A player's artwork, decoded and encoded with the `image` crate: receiver
-//! artwork as a JPEG ([`fit_jpeg`]) and the Now Playing card's square tile
+//! artwork as JPEGs ([`fit_artwork`]) and the Now Playing card's square tile
 //! ([`ARTWORK_SIDE`], [`cover_size`]), premultiplied as the card draws it.
 
 use std::io::Cursor;
@@ -9,7 +9,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ExtendedColorType, ImageReader, Limits, RgbaImage};
 
-use crate::audio::now_playing::fit_jpeg;
+use crate::audio::now_playing::{FittedArtwork, fit_artwork};
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{ARTWORK_SIDE, CardArtwork, cover_size};
 
@@ -24,9 +24,9 @@ const DECODE_LIMIT: u64 = 256 << 20;
 
 /// AudioSync's icon fitted as receiver artwork; `None`, logged, when it
 /// can't be.
-pub fn fitted_icon(log: &DebugLog) -> Option<Arc<[u8]>> {
+pub fn fitted_icon(log: &DebugLog) -> Option<FittedArtwork> {
     match fit_image(ICON_PNG) {
-        Ok(Some(jpeg)) => Some(Arc::from(jpeg)),
+        Ok(Some(artwork)) => Some(artwork),
         Ok(None) => {
             log.log(|| "now playing: AudioSync's icon doesn't fit as artwork".to_owned());
             None
@@ -39,15 +39,15 @@ pub fn fitted_icon(log: &DebugLog) -> Option<Arc<[u8]>> {
 }
 
 /// An encoded image as fitted receiver artwork.
-pub fn fit_image(image: &[u8]) -> Result<Option<Vec<u8>>, String> {
+pub fn fit_image(image: &[u8]) -> Result<Option<FittedArtwork>, String> {
     fit_decoded(&decode(image)?)
 }
 
 /// A decoded image as fitted receiver artwork.
-pub fn fit_decoded(decoded: &RgbaImage) -> Result<Option<Vec<u8>>, String> {
+pub fn fit_decoded(decoded: &RgbaImage) -> Result<Option<FittedArtwork>, String> {
     let (width, height) = decoded.dimensions();
     let mut failure = None;
-    let fitted = fit_jpeg(width, height, |width, height, quality| match encode_scaled(
+    let fitted = fit_artwork(width, height, |width, height, quality| match encode_scaled(
         decoded, width, height, quality,
     ) {
         Ok(jpeg) => Some(jpeg),
@@ -147,12 +147,15 @@ fn over_black(channel: u8, alpha: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::now_playing::ARTWORK_LIMIT;
+    use crate::audio::now_playing::SMALL_ARTWORK;
 
     #[test]
     fn the_icon_fits_as_a_jpeg_and_as_the_cards_tile() {
-        let jpeg = fit_image(ICON_PNG).unwrap().expect("the icon fits");
-        assert!(jpeg.len() <= ARTWORK_LIMIT && jpeg.starts_with(&[0xFF, 0xD8]));
+        let artwork = fit_image(ICON_PNG).unwrap().expect("the icon fits");
+        assert_eq!(artwork.large, artwork.small, "256 px fits the small limits");
+        assert!(
+            artwork.small.len() <= SMALL_ARTWORK.bytes && artwork.small.starts_with(&[0xFF, 0xD8])
+        );
         let tile = card_artwork(ICON_PNG).unwrap().expect("the icon fits");
         assert_eq!(tile.side, ARTWORK_SIDE);
         assert_eq!(tile.rgba.len(), (tile.side * tile.side * 4) as usize);

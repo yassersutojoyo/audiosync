@@ -1139,6 +1139,10 @@ mod tests {
                 AIRPLAY_WARNING_VOLUME_READS_STOPPED.to_string(),
             ),
             (
+                "ASC_AIRPLAY_WARNING_ARTWORK_REFUSED",
+                AIRPLAY_WARNING_ARTWORK_REFUSED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE",
                 AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE.to_string(),
             ),

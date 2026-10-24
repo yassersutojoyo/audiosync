@@ -8,6 +8,7 @@
 use std::fmt;
 
 use crate::discovery::Features;
+use crate::error::Warning;
 
 /// Largest artwork the sender sends (P125); the host scales or drops larger
 /// images.
@@ -76,15 +77,138 @@ impl Metadata {
     /// Checks what the sender can check before queueing: artwork must be a
     /// JPEG of at most 512 KiB (P125).
     pub fn validate(&self) -> Result<(), MetadataError> {
-        if let Metadata::Artwork { jpeg, .. } = self {
-            if !jpeg.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                return Err(MetadataError::NotJpeg);
-            }
-            if jpeg.len() > MAX_ARTWORK_BYTES {
-                return Err(MetadataError::ArtworkTooLarge);
-            }
+        match self {
+            Metadata::Artwork { jpeg, .. } => check_jpeg(jpeg),
+            _ => Ok(()),
         }
-        Ok(())
+    }
+}
+
+fn check_jpeg(jpeg: &[u8]) -> Result<(), MetadataError> {
+    if !jpeg.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Err(MetadataError::NotJpeg);
+    }
+    if jpeg.len() > MAX_ARTWORK_BYTES {
+        return Err(MetadataError::ArtworkTooLarge);
+    }
+    Ok(())
+}
+
+/// The two JPEG encodings of one picture that the host hands the sender
+/// (P185): `large` for an AirPlay 2 session, `small` for an AirPlay 1
+/// session and after a refusal. A picture within the small limits is the
+/// same bytes in both.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Artwork {
+    pub large: Vec<u8>,
+    pub small: Vec<u8>,
+}
+
+impl Artwork {
+    /// One encoding for both paths.
+    pub fn single(jpeg: Vec<u8>) -> Artwork {
+        Artwork {
+            small: jpeg.clone(),
+            large: jpeg,
+        }
+    }
+
+    /// Both images must pass P125's check.
+    pub fn validate(&self) -> Result<(), MetadataError> {
+        check_jpeg(&self.large)?;
+        check_jpeg(&self.small)
+    }
+}
+
+/// Which of an [`Artwork`]'s two images a request carries (P185).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtworkSize {
+    Large,
+    Small,
+}
+
+/// A metadata request waiting in a session's queue. Artwork picks its
+/// image when it goes, so a refusal also changes what is still queued.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Queued {
+    Item(Metadata),
+    Artwork { artwork: Artwork, rtptime: u32 },
+}
+
+impl Queued {
+    pub(crate) fn new(metadata: Metadata) -> Queued {
+        match metadata {
+            Metadata::Artwork { jpeg, rtptime } => Queued::Artwork {
+                artwork: Artwork::single(jpeg),
+                rtptime,
+            },
+            other => Queued::Item(other),
+        }
+    }
+}
+
+/// One session's place on P185's ladder: its path's image, then the small
+/// one after a refusal, then none after a second; a new session starts
+/// over.
+#[derive(Debug, Clone)]
+pub(crate) struct ArtworkLadder {
+    next: Option<ArtworkSize>,
+    warned: bool,
+    in_flight: Option<(ArtworkSize, Artwork, u32)>,
+}
+
+impl ArtworkLadder {
+    pub(crate) fn new(first: ArtworkSize) -> ArtworkLadder {
+        ArtworkLadder {
+            next: Some(first),
+            warned: false,
+            in_flight: None,
+        }
+    }
+
+    /// The request that sends `artwork` now, kept until its answer; none
+    /// once artwork has ended on this session.
+    pub(crate) fn send(&mut self, artwork: Artwork, rtptime: u32) -> Option<Metadata> {
+        let size = self.next?;
+        let jpeg = match size {
+            ArtworkSize::Large => artwork.large.clone(),
+            ArtworkSize::Small => artwork.small.clone(),
+        };
+        self.in_flight = Some((size, artwork, rtptime));
+        Some(Metadata::Artwork { jpeg, rtptime })
+    }
+
+    /// The artwork request in flight was answered, or given up on with
+    /// `status` none. A refusal returns the small image to send at once
+    /// with the same `RTP-Info`, if any, and the session's one warning.
+    pub(crate) fn answered(
+        &mut self,
+        success: bool,
+        status: Option<u16>,
+    ) -> (Option<Queued>, Option<Warning>) {
+        let Some((size, artwork, rtptime)) = self.in_flight.take() else {
+            return (None, None);
+        };
+        if success {
+            return (None, None);
+        }
+        let retry = size == ArtworkSize::Large && artwork.small != artwork.large;
+        self.next = if retry {
+            Some(ArtworkSize::Small)
+        } else {
+            None
+        };
+        let warning = (!self.warned).then(|| {
+            self.warned = true;
+            Warning::ArtworkRefused { status }
+        });
+        let resend = retry.then_some(Queued::Artwork { artwork, rtptime });
+        (resend, warning)
+    }
+
+    /// The request in flight is gone with its connection.
+    pub(crate) fn forget(&mut self) {
+        self.in_flight = None;
     }
 }
 

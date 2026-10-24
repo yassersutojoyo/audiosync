@@ -222,6 +222,10 @@ pub enum Warning {
     /// Three volume reads in a row failed on an AirPlay 2 session, which
     /// reads no more; told once per session (P184).
     VolumeReadsStopped,
+    /// An artwork request was refused, or left unanswered (`status` none);
+    /// the session falls back to the small image or sends no more artwork,
+    /// and plays on. Told once per session (P185).
+    ArtworkRefused { status: Option<u16> },
     /// The remote-control server couldn't listen on the session's local
     /// address, so the session plays without remote control (P190).
     RemoteControlUnavailable,

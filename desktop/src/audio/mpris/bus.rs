@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs::{self, File};
 use std::io::Read;
-use std::sync::Arc;
 use std::time::Instant;
 
 use image::RgbaImage;
@@ -24,7 +23,9 @@ use super::owner;
 use crate::audio::media_sessions::{
     APP_WAIT, MediaCardReader, MediaSessionReader, SessionList, THUMBNAIL_LIMIT, spawn,
 };
-use crate::audio::now_playing::{Follow, MediaSession, POLL_INTERVAL, RawTimeline, pick};
+use crate::audio::now_playing::{
+    FittedArtwork, Follow, MediaSession, POLL_INTERVAL, RawTimeline, pick,
+};
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{CardArtwork, MPRIS_PREFIX, Transport};
 
@@ -252,7 +253,7 @@ impl SessionList for Players {
         self.connection = None;
     }
 
-    fn fit_image(&self, image: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    fn fit_image(&self, image: &[u8]) -> Result<Option<FittedArtwork>, String> {
         self.with_decoded(image, artwork::fit_decoded)?
     }
 
@@ -260,7 +261,7 @@ impl SessionList for Players {
         self.with_decoded(image, artwork::card_decoded)
     }
 
-    fn icon(&self, log: &DebugLog) -> Option<Arc<[u8]>> {
+    fn icon(&self, log: &DebugLog) -> Option<FittedArtwork> {
         artwork::fitted_icon(log)
     }
 }

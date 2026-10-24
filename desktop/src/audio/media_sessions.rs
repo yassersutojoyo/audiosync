@@ -25,7 +25,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::audio::now_playing::{
-    Follow, MediaSession, RawTimeline, Reading, Timeline, Track, TrackReader, pick, wall_ticks,
+    FittedArtwork, Follow, MediaSession, RawTimeline, Reading, Timeline, Track, TrackReader, pick,
+    wall_ticks,
 };
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{
@@ -93,16 +94,16 @@ pub trait SessionList {
     fn reset(&mut self);
 
     /// An encoded image as fitted receiver artwork
-    /// ([`crate::audio::now_playing::fit_jpeg`]); `None` when not even the
-    /// smallest size fits.
-    fn fit_image(&self, image: &[u8]) -> Result<Option<Vec<u8>>, String>;
+    /// ([`crate::audio::now_playing::fit_artwork`]); `None` when not even
+    /// the smallest size fits.
+    fn fit_image(&self, image: &[u8]) -> Result<Option<FittedArtwork>, String>;
 
     /// An encoded image as the card's tile; `None` for an empty image.
     fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String>;
 
     /// AudioSync's icon fitted as receiver artwork; `None`, logged, when it
     /// can't be.
-    fn icon(&self, log: &DebugLog) -> Option<Arc<[u8]>>;
+    fn icon(&self, log: &DebugLog) -> Option<FittedArtwork>;
 }
 
 #[derive(Default)]
@@ -112,7 +113,7 @@ struct State {
     /// dropped.
     track_generation: u64,
     track_reading: Option<Reading>,
-    icon: Option<Arc<[u8]>>,
+    icon: Option<FittedArtwork>,
     card: Option<CardSource>,
     card_generation: u64,
     card_reading: Option<Option<CardTrack>>,
@@ -157,7 +158,7 @@ impl TrackReader for MediaSessionReader {
         self.shared.lock().track_reading.take()
     }
 
-    fn icon(&mut self) -> Option<Arc<[u8]>> {
+    fn icon(&mut self) -> Option<FittedArtwork> {
         self.shared.lock().icon.clone()
     }
 
@@ -340,7 +341,7 @@ struct Reader<L> {
     sessions: L,
     /// Receiver artwork by track; `None` for a thumbnail that couldn't be
     /// fitted.
-    jpegs: HashMap<String, Option<Arc<[u8]>>>,
+    jpegs: HashMap<String, Option<FittedArtwork>>,
     /// Card artwork by track.
     tiles: ArtworkCache,
     /// When each track's thumbnail last failed to be read in time. It is
@@ -581,9 +582,9 @@ impl<L: SessionList> Reader<L> {
         session: &MediaSession,
         image: &[u8],
         log: &DebugLog,
-    ) -> Option<Arc<[u8]>> {
+    ) -> Option<FittedArtwork> {
         let artwork = match self.sessions.fit_image(image) {
-            Ok(Some(jpeg)) => Some(Arc::from(jpeg)),
+            Ok(Some(artwork)) => Some(artwork),
             Ok(None) => {
                 log.log(|| {
                     format!(
@@ -691,9 +692,9 @@ mod tests {
 
         fn reset(&mut self) {}
 
-        fn fit_image(&self, image: &[u8]) -> Result<Option<Vec<u8>>, String> {
+        fn fit_image(&self, image: &[u8]) -> Result<Option<FittedArtwork>, String> {
             assert_eq!(image, IMAGE);
-            Ok(Some(JPEG.to_vec()))
+            Ok(Some(FittedArtwork::single(JPEG.into())))
         }
 
         fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String> {
@@ -704,8 +705,8 @@ mod tests {
             }))
         }
 
-        fn icon(&self, _: &DebugLog) -> Option<Arc<[u8]>> {
-            Some(Arc::from(JPEG))
+        fn icon(&self, _: &DebugLog) -> Option<FittedArtwork> {
+            Some(FittedArtwork::single(JPEG.into()))
         }
     }
 
@@ -755,7 +756,7 @@ mod tests {
         assert_eq!(counts.thumbnails(), 1, "one thumbnail read serves both");
         let track = track.expect("the receivers get the track");
         assert_eq!(track.session, playing());
-        assert_eq!(track.artwork.as_deref(), Some(JPEG));
+        assert_eq!(track.artwork, Some(FittedArtwork::single(JPEG.into())));
         let timeline = track.timeline.expect("the track carries its timeline");
         assert_eq!(
             (timeline.elapsed, timeline.length, timeline.raw),
@@ -839,7 +840,7 @@ mod tests {
             card_read |= card.take_reading().is_some_and(|r| r.is_some());
             thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(track.icon().as_deref(), Some(JPEG));
+        assert_eq!(track.icon(), Some(FittedArtwork::single(JPEG.into())));
         let (before, started) = (counts.lists(), Instant::now());
         thread::sleep(Duration::from_millis(600));
         let lists = counts.lists() - before;

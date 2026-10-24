@@ -9,13 +9,13 @@ use std::time::Duration;
 
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
 use audiosync_airplay::ids::{Entropy, EntropyUnavailable, OsEntropy, SessionIds};
-use audiosync_airplay::metadata::{Metadata, MetadataError, MetadataSupport, TrackInfo};
+use audiosync_airplay::metadata::{Artwork, Metadata, MetadataError, MetadataSupport, TrackInfo};
 use audiosync_airplay::rtsp::{JackKind, JackStatus, Method};
 use audiosync_airplay::sdp::{self, Codec};
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::session::{
-    MediaDestinations, Output, ReceiverPorts, SessionConfig, SessionEvent, State, UdpSendResult,
-    Verifier,
+    MediaDestinations, Output, RESPONSE_TIMEOUT, ReceiverPorts, SessionConfig, SessionEvent, State,
+    UdpSendResult, Verifier,
 };
 use audiosync_airplay::volume::Volume;
 use common::{
@@ -1794,4 +1794,121 @@ fn outputs_end_with_close_and_nothing_follows_it() {
     link.session
         .handle_timeout(link.now + Duration::from_secs(60));
     assert_eq!(link.session.poll_output(), None);
+}
+
+fn artwork_link() -> Link {
+    let mut config = config();
+    config.metadata = MetadataSupport {
+        text: true,
+        artwork: true,
+        progress: true,
+    };
+    let mut link = Link::new(config, FakeReceiver::new());
+    link.connect();
+    assert_eq!(link.session.state(), State::Playing, "{:?}", link.events);
+    link
+}
+
+fn two_sizes() -> Artwork {
+    let jpeg = |fill: u8, len: usize| [&[0xFF, 0xD8, 0xFF][..], &vec![fill; len]].concat();
+    Artwork {
+        large: jpeg(0x11, 300),
+        small: jpeg(0x22, 100),
+    }
+}
+
+fn images(link: &Link) -> Vec<Vec<u8>> {
+    link.receiver
+        .requests
+        .iter()
+        .filter(|request| request.headers.get("Content-Type") == Some("image/jpeg"))
+        .map(|request| request.body.clone())
+        .collect()
+}
+
+fn artwork_warnings(link: &Link) -> Vec<Warning> {
+    warnings(link)
+        .into_iter()
+        .filter(|warning| matches!(warning, Warning::ArtworkRefused { .. }))
+        .collect()
+}
+
+// covers: P185, P127
+#[test]
+fn an_airplay1_session_sends_the_small_image_and_a_refusal_ends_artwork() {
+    let mut link = artwork_link();
+    let now = link.now;
+    link.session
+        .send_artwork(two_sizes(), 7, now)
+        .expect("artwork listed");
+    link.pump();
+    assert_eq!(images(&link), [two_sizes().small]);
+    assert_eq!(
+        link.last("SET_PARAMETER").headers.get("RTP-Info"),
+        Some("rtptime=7")
+    );
+
+    link.receiver.status.insert("SET_PARAMETER".to_owned(), 413);
+    link.session
+        .send_artwork(two_sizes(), 8, now)
+        .expect("artwork listed");
+    link.pump();
+    link.receiver.status.clear();
+    let info = TrackInfo {
+        title: "Song".to_owned(),
+        artist: "Band".to_owned(),
+        album: "Record".to_owned(),
+    };
+    link.session
+        .send_metadata(Metadata::Track { info, rtptime: 9 }, now)
+        .expect("text listed");
+    link.session
+        .send_artwork(two_sizes(), 9, now)
+        .expect("artwork listed");
+    link.pump();
+    assert_eq!(images(&link), [two_sizes().small, two_sizes().small]);
+    assert_eq!(
+        link.last("SET_PARAMETER").headers.get("Content-Type"),
+        Some("application/x-dmap-tagged")
+    );
+    assert_eq!(
+        artwork_warnings(&link),
+        [Warning::ArtworkRefused { status: Some(413) }]
+    );
+    assert!(link.failure().is_none(), "{:?}", link.events);
+    assert_eq!(link.session.state(), State::Playing);
+}
+
+// covers: P185, P134
+#[test]
+fn an_unanswered_airplay1_image_is_a_refusal_and_its_late_answer_is_dropped() {
+    let mut link = artwork_link();
+    link.receiver.hold = Some("SET_PARAMETER".to_owned());
+    let now = link.now;
+    link.session
+        .send_artwork(two_sizes(), 7, now)
+        .expect("artwork listed");
+    link.pump();
+    link.advance(RESPONSE_TIMEOUT + Duration::from_millis(100));
+    assert_eq!(
+        artwork_warnings(&link),
+        [Warning::ArtworkRefused { status: None }]
+    );
+    assert!(link.failure().is_none(), "{:?}", link.events);
+
+    link.receiver.hold = None;
+    link.release();
+    assert!(link.failure().is_none(), "{:?}", link.events);
+    link.session.set_volume(Volume::Db(-12.0), link.now);
+    link.session
+        .send_artwork(two_sizes(), 8, link.now)
+        .expect("artwork listed");
+    link.pump();
+    assert_eq!(images(&link), [two_sizes().small]);
+    assert_eq!(
+        link.last("SET_PARAMETER").headers.get("Content-Type"),
+        Some("text/parameters")
+    );
+    assert!(link.failure().is_none(), "{:?}", link.events);
+    assert_eq!(link.session.state(), State::Playing);
 }
