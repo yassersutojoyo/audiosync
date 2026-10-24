@@ -847,7 +847,7 @@ fn traced_config() -> audiosync_airplay::ap2::Ap2Config {
 }
 
 #[test]
-fn traced_session_reads_the_volume_once_and_survives_a_refusal() {
+fn traced_session_reads_the_volume_with_each_feedback_and_logs_a_steady_answer_once() {
     let mut fake = FakeAp2::new();
     fake.status.insert("GET_PARAMETER".to_owned(), 404);
     let mut rig = Ap2Rig::new(traced_config(), fake);
@@ -861,7 +861,7 @@ fn traced_session_reads_the_volume_once_and_survives_a_refusal() {
         .map(|(request, _)| request)
         .filter(|request| request.method.as_str() == "GET_PARAMETER")
         .collect();
-    assert_eq!(reads.len(), 1, "{:?}", rig.keys());
+    assert!(reads.len() >= 5, "{:?}", rig.keys());
     assert_eq!(reads[0].body, b"volume\r\n");
     assert_eq!(
         reads[0].headers.get("Content-Type"),
@@ -878,12 +878,11 @@ fn traced_session_reads_the_volume_once_and_survives_a_refusal() {
             .any(|line| line.starts_with("/info initialVolume")),
         "{lines:?}"
     );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with("GET_PARAMETER volume: status 404")),
-        "{lines:?}"
-    );
+    let refusals = lines
+        .iter()
+        .filter(|line| line.starts_with("GET_PARAMETER volume: status 404"))
+        .count();
+    assert_eq!(refusals, 1, "{lines:?}");
 }
 
 #[test]
@@ -918,6 +917,7 @@ fn an_unanswered_volume_read_never_ends_the_session() {
     rig.advance(Duration::from_secs(25));
     assert!(rig.failure().is_none(), "{:?}", rig.events);
     assert!(traces(&rig).contains(&"GET_PARAMETER volume: no answer"));
+    assert_eq!(rig.times_of("GET_PARAMETER").len(), 1, "{:?}", rig.keys());
     let feedback = rig.times_of("POST /feedback");
     let recent = rig.now - Duration::from_secs(5);
     assert!(
