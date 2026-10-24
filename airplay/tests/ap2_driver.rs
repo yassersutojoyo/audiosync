@@ -1,6 +1,8 @@
 //! The AirPlay 2 path through the sender's driver over loopback sockets,
-//! with the switch on: one AirPlay 2 session at a time (P169), the path
-//! switch after an AirPlay 1 refusal (P2), and TEARDOWN at shutdown.
+//! with the switch on and the AirPlay 2 limit lowered to one session, so a
+//! second speaker shows how a refused one waits for a place (P169, P204);
+//! the path switch after an AirPlay 1 refusal (P2), and TEARDOWN at
+//! shutdown.
 
 mod common;
 
@@ -63,7 +65,10 @@ fn airplay2_only(server: &Ap2Server, id: u8) -> Device {
 }
 
 fn start() -> (Sender, HostAudio) {
-    start_with(SenderConfig::default())
+    start_with(SenderConfig {
+        airplay2_sessions: 1,
+        ..SenderConfig::default()
+    })
 }
 
 fn start_with(config: SenderConfig) -> (Sender, HostAudio) {
@@ -143,12 +148,12 @@ fn one_airplay2_session_at_a_time() {
     assert_eq!(
         errors(&events, &b_key),
         vec![ErrorKind::Unsupported(
-            UnsupportedReason::OneAirPlay2Session
+            UnsupportedReason::TooManyAirPlay2Sessions
         )]
     );
     assert_eq!(
-        UnsupportedReason::OneAirPlay2Session.to_string(),
-        "one AirPlay 2 speaker at a time"
+        UnsupportedReason::TooManyAirPlay2Sessions.to_string(),
+        "too many AirPlay 2 speakers"
     );
     assert_eq!(second.fake().connections, 0);
 
@@ -323,7 +328,7 @@ fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
     assert_eq!(
         errors(&events, &b_key),
         vec![ErrorKind::Unsupported(
-            UnsupportedReason::OneAirPlay2Session
+            UnsupportedReason::TooManyAirPlay2Sessions
         )]
     );
     assert_eq!(second.fake().connections, 1);
@@ -370,7 +375,7 @@ fn an_airplay2_session_waiting_for_its_retry_keeps_its_place_until_removed() {
     assert_eq!(
         errors(&events, &b_key),
         vec![ErrorKind::Unsupported(
-            UnsupportedReason::OneAirPlay2Session
+            UnsupportedReason::TooManyAirPlay2Sessions
         )]
     );
 

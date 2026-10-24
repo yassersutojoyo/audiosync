@@ -134,6 +134,7 @@ impl Driver {
                 removing: false,
                 airplay1_outcome: None,
                 ap2_waiting: false,
+                ptp_waiting: false,
                 ap2_refusal: 0,
                 ap2_retry: false,
                 reads_volume: false,
@@ -251,13 +252,6 @@ impl Driver {
             .is_some_and(|run| run.airplay2)
     }
 
-    /// Two speakers are members of one target, so they share one AirPlay 2
-    /// place (P177).
-    pub(super) fn same_target(&self, a: &DeviceKey, b: &DeviceKey) -> bool {
-        let target = |key: &DeviceKey| self.speakers.get(key).and_then(|s| s.target.clone());
-        target(a).is_some_and(|id| target(b) == Some(id))
-    }
-
     /// A member's AirPlay 1 attempt ended in Unsupported or Refused: the
     /// whole target moves to AirPlay 2 for the rest of this start, and the
     /// members already on AirPlay 1 start over (P177).
@@ -320,32 +314,6 @@ impl Driver {
             .any(|run| !run.refused && run.target.control.as_ref() == Some(key))
     }
 
-    /// The members of a target waiting for the AirPlay 2 place start with
-    /// the one that got it (P169, P177).
-    pub(super) fn wake_target_waiters(&mut self, id: &TargetId, now: Instant) {
-        let keys: Vec<DeviceKey> = self
-            .speakers
-            .iter_mut()
-            .filter(|(_, speaker)| {
-                speaker.target.as_ref() == Some(id)
-                    && speaker.ap2_waiting
-                    && !speaker.removing
-                    && matches!(speaker.phase, Phase::Failed)
-            })
-            .map(|(key, speaker)| {
-                speaker.ap2_waiting = false;
-                speaker.phase = Phase::Waiting(now);
-                key.clone()
-            })
-            .collect();
-        for key in keys {
-            self.emit_speaker(
-                &key,
-                SpeakerEvent::State(SpeakerState::Retrying { at: now }),
-            );
-        }
-    }
-
     /// The target of every device that is a member of one (P176).
     pub(super) fn target_refs(&self) -> BTreeMap<DeviceKey, TargetId> {
         self.targets
@@ -398,21 +366,6 @@ impl Driver {
             .members
             .iter()
             .filter_map(|member| member.device.as_deref())
-            .collect()
-    }
-
-    /// Addresses of the other members in view, for a member's SETPEERS
-    /// (P179).
-    pub(super) fn other_member_addresses(&self, key: &DeviceKey) -> Vec<std::net::IpAddr> {
-        self.members_in_view(key)
-            .into_iter()
-            .filter(|device| device.key != *key)
-            .filter_map(|device| {
-                device
-                    .airplay_socket_addrs()
-                    .first()
-                    .map(|address| address.ip())
-            })
             .collect()
     }
 

@@ -29,8 +29,12 @@ pub enum UnsupportedReason {
     /// The receiver refused the session SETUP's timing and PTP can't take
     /// its place (P157).
     Timing,
-    /// Another AirPlay 2 session is running (P169).
-    OneAirPlay2Session,
+    /// Sixteen AirPlay 2 sessions are running; the speaker waits for a
+    /// place (P204).
+    TooManyAirPlay2Sessions,
+    /// The receiver takes only PTP and has no address in the address family
+    /// the PTP service runs in; it waits until the service is free (P205).
+    PtpOtherNetwork,
     /// The Apple TV of a home theater group the host plays, or the group of
     /// an Apple TV the host plays by itself (P177).
     PlaysThroughSpeakers,
@@ -46,7 +50,8 @@ impl fmt::Display for UnsupportedReason {
             UnsupportedReason::Format => "format",
             UnsupportedReason::AirPlay2Only => "AirPlay 2 only",
             UnsupportedReason::Timing => "timing",
-            UnsupportedReason::OneAirPlay2Session => "one AirPlay 2 speaker at a time",
+            UnsupportedReason::TooManyAirPlay2Sessions => "too many AirPlay 2 speakers",
+            UnsupportedReason::PtpOtherNetwork => "PTP in use on another network",
             UnsupportedReason::PlaysThroughSpeakers => "plays through its speakers",
         })
     }
@@ -239,4 +244,12 @@ pub enum Warning {
         reported_us: u64,
         latency_frames: u32,
     },
+    /// A SETPEERS update was refused (`status`) or left unanswered for
+    /// 10 s (`status` none); the session plays on with the list it had.
+    /// Told once per session (P210).
+    PeersUpdateRefused { status: Option<u16> },
+    /// The receiver announced a grandmaster that ranks ahead of the
+    /// sender's, so it may follow another clock; told once per session
+    /// (P206).
+    GrandmasterOutranked,
 }

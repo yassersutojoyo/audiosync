@@ -558,11 +558,12 @@ impl Drop for RtspIo {
 /// The PTP service's sockets on ports 319 and 320 (P158), bound only while
 /// the AirPlay 2 switch is on and an AirPlay 2 session may need them. One
 /// thread reads the event socket and hands what may be a Delay_Req from a
-/// peer to the driver with its arrival time; nothing else is read.
+/// peer to the driver with its arrival time; another reads the general
+/// socket for a peer's Announce (P206); nothing else is passed on.
 #[derive(Debug)]
 pub(crate) struct PtpIo {
     event: Arc<UdpSocket>,
-    general: UdpSocket,
+    general: Arc<UdpSocket>,
     /// The receivers the service serves, as [`PtpIo::set_peers`] last named
     /// them; the thread drops datagrams from anyone else (P162).
     peers: Arc<RwLock<Vec<IpAddr>>>,
@@ -584,23 +585,34 @@ impl PtpIo {
         };
         let event = UdpSocket::bind(SocketAddr::new(any, ports.event))?;
         let general = UdpSocket::bind(SocketAddr::new(any, ports.general))?;
-        event.set_read_timeout(Some(UDP_BACKSTOP))?;
         for socket in [&event, &general] {
+            socket.set_read_timeout(Some(UDP_BACKSTOP))?;
             socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
         }
         let mut io = PtpIo {
             event: Arc::new(event),
-            general,
+            general: Arc::new(general),
             peers: Arc::new(RwLock::new(Vec::new())),
             stop: Arc::new(AtomicBool::new(false)),
             threads: Vec::new(),
         };
-        let thread = spawn(
-            "airplay-ptp",
-            ptp_loop(io.event.clone(), io.peers.clone(), io.stop.clone(), notify),
-            || {},
-        )?;
-        io.threads.push(thread);
+        let event_loop = ptp_loop(
+            io.event.clone(),
+            io.peers.clone(),
+            io.stop.clone(),
+            crate::ptp::may_be_delay_req,
+            notify.clone(),
+        );
+        io.threads.push(spawn("airplay-ptp", event_loop, || {})?);
+        let general_loop = ptp_loop(
+            io.general.clone(),
+            io.peers.clone(),
+            io.stop.clone(),
+            crate::ptp::may_be_announce,
+            notify,
+        );
+        io.threads
+            .push(spawn("airplay-ptp-general", general_loop, || {})?);
         Ok(io)
     }
 
@@ -617,7 +629,7 @@ impl PtpIo {
     pub(crate) fn send(&self, port: crate::ptp::PtpPort, to: SocketAddr, bytes: &[u8]) {
         let socket = match port {
             crate::ptp::PtpPort::Event => &*self.event,
-            crate::ptp::PtpPort::General => &self.general,
+            crate::ptp::PtpPort::General => &*self.general,
         };
         let _ = socket.send_to(bytes, to);
     }
@@ -632,6 +644,7 @@ impl PtpIo {
     fn stop_all(&mut self) {
         if !self.stop.swap(true, Ordering::AcqRel) {
             wake(&self.event);
+            wake(&self.general);
         }
     }
 }
@@ -666,6 +679,7 @@ fn ptp_loop(
     socket: Arc<UdpSocket>,
     peers: Arc<RwLock<Vec<IpAddr>>>,
     stop: Arc<AtomicBool>,
+    wanted: fn(&[u8]) -> bool,
     notify: impl Notify,
 ) -> impl FnOnce() + Send + 'static {
     move || {
@@ -682,7 +696,7 @@ fn ptp_loop(
                         .unwrap_or_else(PoisonError::into_inner)
                         .iter()
                         .any(|&peer| from_receiver(source, peer));
-                    if !from_peer || !crate::ptp::may_be_delay_req(&buf[..len]) {
+                    if !from_peer || !wanted(&buf[..len]) {
                         continue;
                     }
                     let bytes = buf[..len].to_vec();

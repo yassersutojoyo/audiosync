@@ -1,9 +1,10 @@
-//! The driver's side of the AirPlay 2 path (P2, P169, P170): one session at
-//! a time, on an RTSP connection with the session's UDP sockets and an event
-//! connection of its own, its sealed audio in the shared stream (P155), and
-//! the PTP service while it uses PTP timing (P158, P167). Nothing here runs
-//! while the switch is off: only `start_session` calls
-//! [`Driver::start_ap2`], and only with it on.
+//! The driver's side of the AirPlay 2 path (P2, P170, P204): up to 16
+//! sessions at once, each on an RTSP connection with its UDP sockets and an
+//! event connection of its own, its sealed audio in the shared stream
+//! (P155), and the one PTP service for every session that uses PTP timing
+//! (P158, P167, P205), whose receivers are named to each other in SETPEERS
+//! (P207, P209). Nothing here runs while the switch is off: only
+//! `start_session` calls [`Driver::start_ap2`], and only with it on.
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -81,6 +82,8 @@ pub(super) struct Ap2Active {
     /// The session started with stored HomeKit credentials, so a
     /// PairingRequired from it means the receiver no longer takes them (P154).
     pub(super) verifying: bool,
+    /// The warning of P206 was given for this session.
+    outranked_told: bool,
 }
 
 impl Driver {
@@ -91,16 +94,18 @@ impl Driver {
         }
     }
 
-    /// Starts an AirPlay 2 session, unless another speaker runs one or waits
-    /// to retry its own (P169): that one, and every AirPlay 1 session, go on
+    /// Starts an AirPlay 2 session, unless 16 others run or wait to retry
+    /// their own (P204): those, and every AirPlay 1 session, go on
     /// untouched.
     pub(super) fn start_ap2(&mut self, key: &DeviceKey, now: Instant) {
-        let running = self.speakers.iter().any(|(other, speaker)| {
-            other != key && speaker.holds_ap2() && !self.same_target(key, other)
-        });
-        if running {
+        let running = self
+            .speakers
+            .iter()
+            .filter(|(other, speaker)| *other != key && speaker.holds_ap2())
+            .count();
+        if running >= self.ap2_sessions {
             let error = SessionError::new(ErrorKind::Unsupported(
-                UnsupportedReason::OneAirPlay2Session,
+                UnsupportedReason::TooManyAirPlay2Sessions,
             ));
             self.refuse(key, error, now);
             self.ap2_refusals += 1;
@@ -148,6 +153,7 @@ impl Driver {
         }
         let mut ptp = None;
         let mut ptp_v6 = None;
+        let mut excluded = restart == Some(None);
         if wants && let Some(v6) = restart.flatten().or_else(|| self.ptp_v6(key)) {
             let in_family = |address: &SocketAddr| address.ip().to_canonical().is_ipv6() == v6;
             match addresses.iter().copied().find(in_family) {
@@ -164,13 +170,24 @@ impl Driver {
                     }
                 }
                 None => {
+                    // P205: a receiver that takes only PTP waits for the
+                    // service; any other plays on NTP.
+                    if self.ptp_timing.contains(key) {
+                        return self.wait_for_ptp(key, now);
+                    }
+                    excluded = true;
                     if self.ptp_family_told.insert(key.clone()) {
                         self.emit_speaker(key, SpeakerEvent::Warning(Warning::PtpOutsideFamily));
                     }
                 }
             }
         }
-        let members = self.other_member_addresses(key);
+        if excluded {
+            self.ptp_excluded.insert(key.clone());
+        } else {
+            self.ptp_excluded.remove(key);
+        }
+        let peers = self.listed_peers(Some(key));
         let claimed = self.claim_held(key, ptp_v6);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
@@ -194,7 +211,7 @@ impl Driver {
         config.password = speaker.options.password.clone();
         config.device_id = self.device_id;
         config.ptp = ptp;
-        config.members = members;
+        config.peers = peers;
         config.timing = if self.ptp_timing.contains(key) {
             Timing::Ptp
         } else {
@@ -233,6 +250,7 @@ impl Driver {
             events_io: None,
             stream_id: None,
             verifying,
+            outranked_told: false,
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
@@ -444,16 +462,148 @@ impl Driver {
         }
     }
 
-    /// The AirPlay 2 session is over: the PTP ports are let go.
+    /// No session uses the PTP service any more: its ports are let go, and
+    /// the receivers that wait for it start (P205).
     pub(super) fn close_ptp(&mut self) {
         if let Some(run) = self.ptp.take() {
             self.ptp_closing.retain(|thread| !thread.is_finished());
             self.ptp_closing.extend(run.io.close());
+            self.ptp_freed = true;
+        }
+    }
+
+    /// Refuses a receiver that takes only PTP while the service runs in an
+    /// address family it has no address in; it starts once the service is
+    /// free (P205).
+    fn wait_for_ptp(&mut self, key: &DeviceKey, now: Instant) {
+        let error = SessionError::new(ErrorKind::Unsupported(UnsupportedReason::PtpOtherNetwork));
+        self.refuse(key, error, now);
+        self.ap2_refusals += 1;
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.ptp_waiting = true;
+            speaker.ap2_refusal = self.ap2_refusals;
+        }
+    }
+
+    /// The receivers whose sessions take PTP from the service and had
+    /// their RECORD answered, by the address each session connected to,
+    /// leaving out `except` (P207).
+    pub(super) fn listed_peers(&self, except: Option<&DeviceKey>) -> Vec<IpAddr> {
+        self.speakers
+            .iter()
+            .filter(|(key, _)| Some(*key) != except)
+            .filter_map(|(_, speaker)| match &speaker.phase {
+                Phase::Ap2(active)
+                    if active.session.timing() == Timing::Ptp && active.session.recorded() =>
+                {
+                    active.session.remote().map(|remote| remote.ip())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Hands every AirPlay 2 session the list as it now stands; those
+    /// whose first SETPEERS was answered send an update (P209).
+    pub(super) fn refresh_peers(&mut self, now: Instant) {
+        let keys: Vec<DeviceKey> = self
+            .speakers
+            .iter()
+            .filter(|(_, speaker)| matches!(speaker.phase, Phase::Ap2(_)))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
+            let peers = self.listed_peers(Some(&key));
+            if let Some(active) = self.ap2_active(&key) {
+                active.session.set_peers(peers, now);
+            }
+        }
+    }
+
+    /// One warning per session for a served receiver that announced a
+    /// better grandmaster (P206).
+    pub(super) fn warn_outranked(&mut self) {
+        let Some(run) = &mut self.ptp else {
+            return;
+        };
+        let mut sources = Vec::new();
+        while let Some(source) = run.service.poll_outranked() {
+            sources.push(source);
+        }
+        for source in sources {
+            let keys: Vec<DeviceKey> = self
+                .speakers
+                .iter_mut()
+                .filter_map(|(key, speaker)| match &mut speaker.phase {
+                    Phase::Ap2(active)
+                        if !active.outranked_told
+                            && active
+                                .session
+                                .remote()
+                                .is_some_and(|remote| remote.ip().to_canonical() == source) =>
+                    {
+                        active.outranked_told = true;
+                        Some(key.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            for key in keys {
+                self.emit_speaker(&key, SpeakerEvent::Warning(Warning::GrandmasterOutranked));
+            }
+        }
+    }
+
+    /// The receivers refused for "PTP in use on another network" start
+    /// now that no session holds the service, as far as places allow
+    /// (P204, P205).
+    pub(super) fn wake_ptp_waiters(&mut self, now: Instant) {
+        if self.stopping.is_some() {
+            return;
+        }
+        let mut waiting: Vec<(u64, DeviceKey)> = self
+            .speakers
+            .iter()
+            .filter(|(_, speaker)| {
+                speaker.ptp_waiting && !speaker.removing && matches!(speaker.phase, Phase::Failed)
+            })
+            .map(|(key, speaker)| (speaker.ap2_refusal, key.clone()))
+            .collect();
+        waiting.sort();
+        for (_, key) in waiting {
+            let holding = self.speakers.values().filter(|s| s.holds_ap2()).count();
+            if holding >= self.ap2_sessions {
+                return;
+            }
+            if let Some(speaker) = self.speakers.get_mut(&key) {
+                speaker.ptp_waiting = false;
+                speaker.ap2_retry = true;
+                speaker.phase = Phase::Waiting(now);
+            }
+            self.emit_speaker(
+                &key,
+                SpeakerEvent::State(SpeakerState::Retrying { at: now }),
+            );
+        }
+    }
+
+    /// A refused SETPEERS update that added a receiver, to a receiver that
+    /// took the first list, sets that receiver up again alone, once per run
+    /// (P210).
+    fn peers_refused(&mut self, key: &DeviceKey, added: bool, first_accepted: bool, now: Instant) {
+        if !added || !first_accepted || !self.peers_set_up_again.insert(key.clone()) {
+            return;
+        }
+        if self.is_target_member(key) {
+            self.note_teardown(key.clone(), now);
+        }
+        if let Some(active) = self.ap2_active(key) {
+            active.session.teardown(now);
         }
     }
 
     /// Whether another speaker's AirPlay 2 session may use the PTP
-    /// service: only members of one target share the path (P169, P179).
+    /// service, which then stays in its family (P158, P205).
     fn ptp_shared(&self, key: &DeviceKey) -> bool {
         self.speakers
             .iter()
@@ -461,10 +611,10 @@ impl Driver {
     }
 
     /// The address family, IPv6 when true, of the PTP service for a
-    /// session to `key`: the running service's while another member uses
+    /// session to `key`: the running service's while another session uses
     /// it, the family it last moved to for this speaker, IPv4 for a target with
     /// a member reachable over IPv4, and otherwise the family of the
-    /// receiver's first address (P158, P179).
+    /// receiver's first address (P158, P179, P205).
     fn ptp_v6(&self, key: &DeviceKey) -> Option<bool> {
         if let Some(run) = &self.ptp
             && self.ptp_shared(key)
@@ -692,6 +842,7 @@ impl Driver {
                         {
                             run.service.start(remote, now);
                             run.share_peers();
+                            self.ptp_excluded.remove(key);
                         }
                         // It fell back to an address outside the service's
                         // family, which no clock serves (P158, P179).
@@ -711,6 +862,12 @@ impl Driver {
                     self.close_ptp();
                 }
             }
+            Ap2Event::Recorded => self.peers_dirty = true,
+            Ap2Event::PeersRefused {
+                added,
+                first_accepted,
+                ..
+            } => self.peers_refused(key, added, first_accepted, now),
             Ap2Event::Ready(_) => {
                 self.ap2_ready(key, now);
                 if let Some(speaker) = self.speakers.get_mut(key) {
@@ -725,7 +882,14 @@ impl Driver {
             Ap2Event::VolumeReported(db) => {
                 self.emit_speaker(key, SpeakerEvent::VolumeReported(db))
             }
-            Ap2Event::Failed(error) => {
+            Ap2Event::Failed(mut error) => {
+                // P205: timing refused by a receiver the PTP service's family
+                // kept from PTP is a wait, not the final reason of P157.
+                let ptp_wait = error.kind == ErrorKind::Unsupported(UnsupportedReason::Timing)
+                    && self.ptp_excluded.contains(key);
+                if ptp_wait {
+                    error.kind = ErrorKind::Unsupported(UnsupportedReason::PtpOtherNetwork);
+                }
                 let verifying = self.ap2_active(key).is_some_and(|active| active.verifying);
                 let member = self
                     .speakers
@@ -736,6 +900,19 @@ impl Driver {
                     self.reject_homekit(key);
                 }
                 self.on_failed(key, error, now);
+                if ptp_wait {
+                    self.ap2_refusals += 1;
+                    let refusal = self.ap2_refusals;
+                    if let Some(speaker) = self.speakers.get_mut(key)
+                        && matches!(speaker.phase, Phase::Failed)
+                    {
+                        speaker.ptp_waiting = true;
+                        speaker.ap2_refusal = refusal;
+                    }
+                    if self.ptp.is_none() {
+                        self.ptp_freed = true;
+                    }
+                }
             }
             Ap2Event::Closed => self.on_closed(key, now),
         }
