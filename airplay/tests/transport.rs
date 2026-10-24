@@ -17,7 +17,7 @@ use audiosync_airplay::discovery::{
     BrowseEvent, Browser, DeviceId, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason};
-use audiosync_airplay::metadata::TrackInfo;
+use audiosync_airplay::metadata::{Artwork, TrackInfo};
 use audiosync_airplay::rtp::{RtpHeader, SyncPacket};
 use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
@@ -805,7 +805,7 @@ fn shutdown_keeps_its_bound_when_a_receiver_stops_reading() {
     jpeg[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
     sender
         .set_now_playing(NowPlaying {
-            artwork: Some(jpeg),
+            artwork: Some(Artwork::single(jpeg)),
             ..NowPlaying::default()
         })
         .expect("valid artwork");

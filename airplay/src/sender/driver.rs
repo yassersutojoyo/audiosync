@@ -1655,31 +1655,49 @@ impl Driver {
         let frames = |duration: Duration| {
             (duration.as_secs_f64() * f64::from(SAMPLE_RATE)).round() as u64 as u32
         };
-        let mut items = Vec::new();
-        if let Some(info) = now_playing.track {
-            items.push(Metadata::Track { info, rtptime });
-        }
-        if let Some(jpeg) = now_playing.artwork {
-            items.push(Metadata::Artwork { jpeg, rtptime });
-        }
-        if let Some(progress) = now_playing
+        let track = now_playing
+            .track
+            .map(|info| Metadata::Track { info, rtptime });
+        let progress = now_playing
             .progress
             .and_then(|progress| progress_at(progress, set_at, now))
-        {
-            let start = rtptime.wrapping_sub(frames(progress.elapsed));
-            let end = start.wrapping_add(frames(progress.length));
-            items.push(Metadata::Progress {
-                start,
-                current: rtptime,
-                end,
+            .map(|progress| {
+                let start = rtptime.wrapping_sub(frames(progress.elapsed));
+                Metadata::Progress {
+                    start,
+                    current: rtptime,
+                    end: start.wrapping_add(frames(progress.length)),
+                }
             });
-        }
-        for metadata in items {
-            let _ = match &mut speaker.phase {
-                Phase::Active(active) => active.session.send_metadata(metadata, now),
-                Phase::Ap2(active) => active.session.send_metadata(metadata, now),
-                _ => return,
-            };
+        // Each session picks its own path's image (P185); refusals are the
+        // session's to report.
+        let artwork = now_playing.artwork;
+        match &mut speaker.phase {
+            Phase::Active(active) => {
+                let session = &mut active.session;
+                if let Some(track) = track {
+                    let _ = session.send_metadata(track, now);
+                }
+                if let Some(artwork) = artwork {
+                    let _ = session.send_artwork(artwork, rtptime, now);
+                }
+                if let Some(progress) = progress {
+                    let _ = session.send_metadata(progress, now);
+                }
+            }
+            Phase::Ap2(active) => {
+                let session = &mut active.session;
+                if let Some(track) = track {
+                    let _ = session.send_metadata(track, now);
+                }
+                if let Some(artwork) = artwork {
+                    let _ = session.send_artwork(artwork, rtptime, now);
+                }
+                if let Some(progress) = progress {
+                    let _ = session.send_metadata(progress, now);
+                }
+            }
+            _ => {}
         }
     }
 

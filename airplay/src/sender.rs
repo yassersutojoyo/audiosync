@@ -73,7 +73,7 @@ use crate::discovery::{Browser, Device, DeviceKey, ProtocolPath};
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::homekit::HomeKitCredentials;
 use crate::input::InputWriter;
-use crate::metadata::{Metadata, MetadataError, TrackInfo};
+use crate::metadata::{Artwork, MetadataError, TrackInfo};
 use crate::pairing::{self, Credentials, PairingEvent, PinError};
 pub use crate::ptp::PtpPorts;
 use crate::rate::NOMINAL_RATE;
@@ -269,8 +269,8 @@ pub struct Progress {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NowPlaying {
     pub track: Option<TrackInfo>,
-    /// A JPEG of at most 512 KiB (P125).
-    pub artwork: Option<Vec<u8>>,
+    /// Two JPEGs of at most 512 KiB each (P125), one per path (P185).
+    pub artwork: Option<Artwork>,
     /// Only when the host knows the track's start and length (P126), and
     /// only while the track plays: a speaker that starts later gets it
     /// carried on by the time since it was set.
@@ -739,15 +739,11 @@ impl Sender {
     }
 
     /// Sets what is playing and sends it to every speaker that lists the
-    /// type, now and when a speaker (re)starts (P123 to P127). Artwork that
-    /// isn't a JPEG of at most 512 KiB is refused here.
+    /// type, now and when a speaker (re)starts (P123 to P127). Artwork
+    /// whose images aren't both JPEGs of at most 512 KiB is refused here.
     pub fn set_now_playing(&self, now_playing: NowPlaying) -> Result<(), MetadataError> {
-        if let Some(jpeg) = &now_playing.artwork {
-            Metadata::Artwork {
-                jpeg: jpeg.clone(),
-                rtptime: 0,
-            }
-            .validate()?;
+        if let Some(artwork) = &now_playing.artwork {
+            artwork.validate()?;
         }
         self.command(Command::SetNowPlaying(now_playing));
         Ok(())
