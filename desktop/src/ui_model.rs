@@ -1500,6 +1500,27 @@ fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool 
 #[cfg(any(test, feature = "mock-backend"))]
 const PRESETS: &str = "Presets";
 
+/// What the Presets card shows for `AUDIOSYNC_PREVIEW_PRESETS`.
+#[cfg(any(test, feature = "mock-backend"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresetsPreview {
+    /// `list`: three presets, the first one current.
+    List,
+    /// `left-off`: a recall that left a hidden speaker and one not found
+    /// off, with its notice.
+    LeftOff,
+    /// `empty`: no preset yet.
+    Empty,
+}
+
+#[cfg(any(test, feature = "mock-backend"))]
+impl PresetsPreview {
+    /// The preview a value of `AUDIOSYNC_PREVIEW_PRESETS` asks for.
+    pub fn from_value(_value: &str) -> Option<Self> {
+        None
+    }
+}
+
 /// Example data for UI work and tests: no device is opened, nothing plays.
 #[cfg(any(test, feature = "mock-backend"))]
 pub struct MockBackend {
@@ -1857,6 +1878,11 @@ impl MockBackend {
             add_zone(zones, "zone:office", "Office", &[]);
         });
         mock
+    }
+
+    /// The example data with presets, for `AUDIOSYNC_PREVIEW_PRESETS`.
+    pub fn presets_preview(_which: PresetsPreview) -> Self {
+        MockBackend::new()
     }
 
     fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
@@ -2835,5 +2861,72 @@ mod tests {
         assert_eq!(picked_curve(0, 1), Some(CurveMatch::Preset(0)));
         assert_eq!(picked_curve(index + 1, 1), None);
         assert_eq!(picked_curve(-1, 1), None);
+    }
+
+    #[test]
+    fn the_presets_preview_reads_the_values_of_its_switch() {
+        assert_eq!(
+            PresetsPreview::from_value("list"),
+            Some(PresetsPreview::List)
+        );
+        assert_eq!(
+            PresetsPreview::from_value("left-off"),
+            Some(PresetsPreview::LeftOff)
+        );
+        assert_eq!(
+            PresetsPreview::from_value("empty"),
+            Some(PresetsPreview::Empty)
+        );
+        for other in ["", "1", "List", "left_off"] {
+            assert_eq!(PresetsPreview::from_value(other), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_presets_preview_lists_three_presets_with_the_first_current() {
+        let state = MockBackend::presets_preview(PresetsPreview::List).snapshot();
+        let shown: Vec<(&str, bool)> = state
+            .presets
+            .iter()
+            .map(|preset| (preset.name.as_str(), preset.current))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("Evening", true),
+                ("Movie Night", false),
+                ("Whole House", false)
+            ]
+        );
+        assert!(state.running);
+        assert!(state.notices.is_empty());
+    }
+
+    #[test]
+    fn the_left_off_preview_names_the_hidden_speaker_and_the_one_not_found() {
+        let state = MockBackend::presets_preview(PresetsPreview::LeftOff).snapshot();
+        assert_eq!(state.presets.len(), 3);
+        let notices: Vec<&NoticeMessage> = state.notices.iter().map(|n| &n.message).collect();
+        assert_eq!(
+            notices,
+            [&NoticeMessage::PresetLeftOff {
+                preset: "Whole House".into(),
+                left_off: vec![
+                    ("Den".into(), PresetLeftOff::Hidden),
+                    ("Patio".into(), PresetLeftOff::NotFound),
+                ],
+                nothing_changed: false,
+            }]
+        );
+        for id in ["airplay:kitchen", "airplay:bedroom", "local:desk"] {
+            assert!(state.speaker(id).is_some_and(|s| s.enabled), "{id} is on");
+        }
+    }
+
+    #[test]
+    fn the_empty_presets_preview_has_no_preset_and_no_notice() {
+        let state = MockBackend::presets_preview(PresetsPreview::Empty).snapshot();
+        assert!(state.presets.is_empty());
+        assert!(state.notices.is_empty());
     }
 }
