@@ -1499,6 +1499,9 @@ private struct FadingScroll<Content: View>: View {
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onBlankTap)
             }
+            // The faded edges show there is more; a scroller would cover the
+            // cards' right edge and appear on one column only.
+            .scrollIndicators(.never)
         }
         .mask(ScrollEdgeFade(height: Self.fade))
         .padding(.vertical, -Self.fade)
