@@ -56,7 +56,6 @@ use std::time::{Duration, Instant};
 
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
-use audiosync_core::lead::SourceKind;
 use audiosync_core::policy::delay::native_airplay_latency_ms;
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
@@ -680,7 +679,6 @@ impl<D: Driver> Controller<D> {
         if let Some(speakers) = self.cast.as_mut() {
             speakers.set_hold_back(cast);
         }
-        // Logged apart from the local outputs' re-timing, which live input skips.
         if (airplay, cast) != self.network_hold_backs {
             self.network_hold_backs = (airplay, cast);
             self.log.log(|| {
@@ -1776,7 +1774,6 @@ impl<D: Driver> Controller<D> {
             airplay.restart_timeline();
         }
         self.sessions_started += 1;
-        self.policy.set_source_kind(lead_source(source));
         self.log.log(|| self.policy.describe_lead());
         self.session = Some(Session {
             source: source.clone(),
@@ -2931,17 +2928,6 @@ fn describe_source(source: &SourceId) -> String {
             format!("All apps except {}", executables.join(", "))
         }
         SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
-    }
-}
-
-/// A source as the lead choice tells sources apart.
-fn lead_source(source: &SourceId) -> SourceKind {
-    match source {
-        SourceId::WholeSystem => SourceKind::System,
-        SourceId::App { .. } | SourceId::Apps { .. } | SourceId::AppsExcept { .. } => {
-            SourceKind::App
-        }
-        SourceId::Input { .. } => SourceKind::Input,
     }
 }
 
@@ -5068,7 +5054,7 @@ mod tests {
             &[
                 "lead: local outputs play at their device's start lead",
                 "starting: capturing the input device mic",
-                "lead: live input: local outputs play at their device's start lead",
+                "lead: local outputs play at their device's start lead",
             ],
         );
     }
@@ -5785,6 +5771,24 @@ mod tests {
             .set_airplay_enabled(&id_of(&kitchen), false)
             .unwrap();
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    // covers: S244
+    #[test]
+    fn live_input_waits_for_an_airplay_speaker_like_any_source() {
+        let (mut backend, _fake, kitchen) = local_delay_with_airplay();
+        backend.connect_input("mic", "Microphone", "USB");
+        let mic = SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        };
+        backend.start(&mic).unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)], "no wait");
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        backend.start(&mic).unwrap();
+        assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
     }
 
     #[test]

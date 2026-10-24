@@ -919,25 +919,6 @@ typedef struct AscLocalOutput {
  */
 bool asc_local_hold_backs_ms(const AscLocalOutput *outputs, size_t count, bool airplay_chosen, double airplay_latency_ms, double *hold_backs_ms);
 
-/* asc_lead_network_wait_ms's source and output kinds. */
-#define ASC_LEAD_SOURCE_SYSTEM 0  /* the system's mix */
-#define ASC_LEAD_SOURCE_APP 1     /* one app or several */
-#define ASC_LEAD_SOURCE_INPUT 2   /* an input device: live */
-#define ASC_LEAD_OUTPUT_LOCAL 0   /* a device the local renderer plays, Bluetooth included */
-#define ASC_LEAD_OUTPUT_AIRPLAY 1
-#define ASC_LEAD_OUTPUT_CAST 2
-
-/*
- * Whether an output of `output` kind waits for the network speakers while
- * the session captures `source`: true, writing the wait into wait_ms, when it
- * does; false, writing nothing, when it doesn't or wait_ms is NULL. A local
- * output skips the wait for an input source, so a live voice is heard at its
- * device's start lead; every other pair waits network_ms, which counts only
- * when has_network. An unknown source counts as the system, an unknown output
- * as a network speaker. Pure function for the control thread.
- */
-bool asc_lead_network_wait_ms(uint32_t source, uint32_t output, bool has_network, double network_ms, double *wait_ms);
-
 /*
  * An offset input from the user, ready to store: clamped to -2000...20 000 ms
  * into *sanitized_ms. False, writing nothing, for a non-finite value (which

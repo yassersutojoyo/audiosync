@@ -59,7 +59,7 @@ extension AppDelegate {
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
         syncCast()   // the Cast speaker that is on connects
         syncLocalOutputs(origin: origin)
-        DebugTrace.log("[AudioSync] " + LocalDelay.leadDescription(source: audioSource, networkMs: networkWaitMs))
+        DebugTrace.log("[AudioSync] " + LocalDelay.leadDescription(networkMs: networkWaitMs))
         logSessionLead(session: session)
         startInputLevel()
         verifyAudioFlowing(origin: origin)
