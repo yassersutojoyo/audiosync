@@ -492,6 +492,10 @@ pub struct AscAirPlay {
     /// run, by ID: it keeps them after the receiver is gone, so forgetting
     /// must still reach it.
     homekit_keys: HashMap<String, DeviceKey>,
+    /// Receivers that ask for a code every time (flags bit 3) and passed a
+    /// PIN pairing that stored nothing: listed as able to play until their
+    /// session ends or they leave the sender (P182).
+    paired_for_session: HashSet<String>,
     /// The paired receivers' credentials; in memory until the host opens
     /// its file ([`asc_airplay_open_pairings`]).
     store: PairingStore,
@@ -822,6 +826,9 @@ impl AscAirPlay {
                 if let SpeakerEvent::Error(error) = &event {
                     self.note_path_switch(&id, error);
                     self.speaker_failed(&id, error.reason);
+                    if self.paired_for_session.remove(&id) {
+                        self.relist(&id);
+                    }
                 }
                 if let SpeakerEvent::HomeKitPaired(credentials) = event {
                     // When the file can't be written they last for this
@@ -834,6 +841,7 @@ impl AscAirPlay {
                     // The PairingRequired error that follows reaches the host.
                     let _ = self.identity.remove(&id);
                     self.homekit_keys.remove(&id);
+                    self.relist(&id);
                     return;
                 }
                 if let SpeakerEvent::VolumeReported(db) = event {
@@ -1050,6 +1058,12 @@ impl AscAirPlay {
                 let detail = self.store_homekit_paired(&id, credentials);
                 (AIRPLAY_EVENT_PAIRED, 0, AIRPLAY_REASON_NONE, detail)
             }
+            PairingEvent::PairedForSession => {
+                self.pairing.remove(&id);
+                self.paired_for_session.insert(id.clone());
+                self.relist(&id);
+                (AIRPLAY_EVENT_PAIRED, 0, AIRPLAY_REASON_NONE, String::new())
+            }
             PairingEvent::Failed { error, wrong_pin } => {
                 self.pairing.remove(&id);
                 let reason = error.kind.user_reason();
@@ -1111,7 +1125,8 @@ impl AscAirPlay {
                 }
                 None
             }
-            PairingEvent::Stopped => None,
+            // Its connection went with the cancel, and nothing was stored.
+            PairingEvent::PairedForSession | PairingEvent::Stopped => None,
         };
         let Some(Some(device)) = self.ending.remove(id) else {
             return;
@@ -1251,10 +1266,16 @@ impl AscAirPlay {
         let (code, id, name, model, (availability, unsupported), flags) = match &event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 let id = receiver_id(&info.device.key);
-                let paired = self.paired(&id);
+                let mut paired = self.paired(&id);
                 let (availability, mut flags) = if self.over_airplay2(&id, info) {
+                    // Stored credentials never verify with a receiver that
+                    // asks for a code every time (P61).
+                    let every_time = info.device.verdict.code_every_time;
+                    paired &= !every_time;
+                    let homekit = self.identity.get(&id).is_some() && !every_time;
+                    let session = self.paired_for_session.contains(&id);
                     (
-                        airplay2_availability(info, self.identity.get(&id).is_some()),
+                        airplay2_availability(info, homekit || session),
                         flags(info) | AIRPLAY_FLAG_OVER_AIRPLAY2,
                     )
                 } else {
@@ -1789,6 +1810,7 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 targets_reported: HashSet::new(),
                 airplay1_outcome: HashMap::new(),
                 homekit_keys: HashMap::new(),
+                paired_for_session: HashSet::new(),
                 member_states: HashMap::new(),
                 target_states: HashMap::new(),
                 target_missing: HashMap::new(),
@@ -2108,6 +2130,9 @@ pub unsafe extern "C" fn asc_airplay_remove_speaker(
                 return false;
             };
             added.remove(&airplay.sender);
+            if airplay.paired_for_session.remove(id) {
+                airplay.relist(id);
+            }
             airplay.target_states.remove(id);
             airplay.target_missing.remove(id);
             for member in &added.members {
@@ -5024,7 +5049,7 @@ mod tests {
     fn a_receiver_reached_over_airplay2_is_listed_on_that_path_only_with_the_switch_on() {
         let mut handle = create_with(quiet);
         let mut record = airplay2_only();
-        record.txt.push(b"flags=0x8".to_vec());
+        record.txt.push(b"flags=0x200".to_vec());
         let device =
             Device::from_records(record.device_key(), None, Some(&record)).expect("a device");
         let id = receiver_id(&device.key);
@@ -5529,7 +5554,7 @@ mod tests {
         let mut handle = create_with(quiet);
         inside(handle).airplay2 = true;
         let mut record = airplay2_only();
-        record.txt.push(b"flags=0x8".to_vec());
+        record.txt.push(b"flags=0x200".to_vec());
         let device =
             Device::from_records(record.device_key(), None, Some(&record)).expect("a device");
         let id = receiver_id(&device.key);
@@ -5565,6 +5590,65 @@ mod tests {
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
         assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
         assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn a_receiver_that_asks_every_time_never_reads_as_paired() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let mut record = airplay2_only();
+        record.txt.push(b"flags=0x4c".to_vec());
+        let device =
+            Device::from_records(record.device_key(), None, Some(&record)).expect("a device");
+        let id = receiver_id(&device.key);
+        let key = device.key.clone();
+        let mut info = ReceiverInfo::new(device);
+        info.plan = Ok(());
+        inside(handle).listed.insert(id.clone(), info.clone());
+        // Credentials kept from before the TV was set to ask every time.
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
+        blob.extend_from_slice(&[7; 64]);
+        blob.extend_from_slice(b"receiver");
+        let credentials = HomeKitCredentials::from_bytes(&blob).expect("a credential blob");
+        let _ = inside(handle).identity.insert(&id, credentials);
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+        assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
+        assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
+
+        // A PIN pairing stores nothing; the receiver can play until its
+        // session ends.
+        let _ = inside(handle).identity.remove(&id);
+        inside(handle).pairing.insert(id.clone(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key: key.clone(),
+            event: PairingEvent::PairedForSession,
+        });
+        let relisted = next(handle, 1);
+        assert_eq!(relisted.len(), 1);
+        assert_eq!(relisted[0].availability, AIRPLAY_AVAILABLE);
+        assert_eq!(relisted[0].flags & AIRPLAY_FLAG_PAIRED, 0);
+        let events = events_until(handle, |events| {
+            events.iter().any(|e| e.kind == AIRPLAY_EVENT_PAIRED)
+        });
+        assert_eq!(
+            pairing_events(&events),
+            vec![(AIRPLAY_EVENT_PAIRED, id.clone(), 0)]
+        );
+        assert_eq!(inside(handle).identity.get(&id), None);
+        inside(handle).take_in(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::Error(SpeakerError {
+                error: audiosync_airplay::error::SessionError::new(ErrorKind::PairingRequired),
+                reason: UserReason::PairingRequired,
+                retry_at: None,
+            }),
+        });
+        let relisted = next(handle, 1);
+        assert_eq!(relisted.len(), 1, "the session ended");
+        assert_eq!(relisted[0].availability, AIRPLAY_NEEDS_PIN);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

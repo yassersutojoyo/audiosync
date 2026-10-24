@@ -737,8 +737,10 @@ fn a_forgotten_airplay2_pairing_pairs_again_and_never_verifies_with_the_old_cred
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
-    fake.info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x244))]));
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x244),
+    )]));
     let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
@@ -807,8 +809,10 @@ fn the_host_pairs_an_airplay2_speaker_with_a_pin() {
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
-    fake.info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x4c))]));
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x4c),
+    )]));
     let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
@@ -897,8 +901,10 @@ fn a_pairing_connection_the_host_lets_go_closes_and_the_next_session_verifies() 
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
-    fake.info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x244))]));
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x244),
+    )]));
     let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
@@ -965,8 +971,10 @@ fn a_refused_verify_ends_the_attempt_once() {
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
-    fake.info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x244))]));
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x244),
+    )]));
     let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
@@ -1006,8 +1014,10 @@ fn stored_credentials_go_once_a_receiver_asks_every_time() {
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
-    fake.info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x244))]));
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x244),
+    )]));
     let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
@@ -1016,8 +1026,10 @@ fn stored_credentials_go_once_a_receiver_asks_every_time() {
     let credentials = pair_first_time(&server, &sender, &mut events, &device);
 
     // The user sets the TV to ask for a code every time.
-    server.fake().info_body =
-        common::ap2::plist(common::ap2::dict(&[("statusFlags", common::ap2::int(0x4c))]));
+    server.fake().info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x4c),
+    )]));
     server.fake().requests.clear();
     let mut paired_options = options();
     paired_options.homekit_credentials = Some(credentials);
