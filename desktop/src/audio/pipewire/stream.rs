@@ -72,23 +72,6 @@ struct Status {
     failed: AtomicU8,
     /// Whether PipeWire agreed to [`CAPTURE_FORMAT`].
     agreed: AtomicBool,
-    #[cfg(test)]
-    diag: Diag,
-}
-
-/// Temporary CI diagnostics for the monitor test.
-#[cfg(test)]
-#[derive(Default, Debug)]
-struct Diag {
-    callbacks: std::sync::atomic::AtomicU64,
-    buffers: std::sync::atomic::AtomicU64,
-    unmapped: std::sync::atomic::AtomicU64,
-    frames: std::sync::atomic::AtomicU64,
-    skipped: std::sync::atomic::AtomicU64,
-    peak_bits: std::sync::atomic::AtomicU32,
-    first_cycle: std::sync::atomic::AtomicU64,
-    last_cycle: std::sync::atomic::AtomicU64,
-    states: std::sync::Mutex<Vec<String>>,
 }
 
 impl Status {
@@ -290,7 +273,7 @@ struct Feed {
 impl Feed {
     /// A buffer of `frames` frames from the cycle at `cycle_hns`: `bytes`
     /// in [`CAPTURE_FORMAT`], or `None` when it wasn't mapped (then silence).
-    fn buffer(&mut self, cycle_hns: u64, bytes: Option<&[u8]>, frames: usize) -> usize {
+    fn buffer(&mut self, cycle_hns: u64, bytes: Option<&[u8]>, frames: usize) {
         let start = self.clock.place(cycle_hns, frames);
         let (fill, skip) = self.gaps.packet(start, frames, false);
         if fill > 0 {
@@ -298,7 +281,7 @@ impl Feed {
         }
         let skip = skip.min(frames);
         if skip == frames {
-            return skip;
+            return;
         }
         match bytes {
             Some(bytes) => {
@@ -307,7 +290,6 @@ impl Feed {
             }
             None => self.converter.push(&[], frames - skip, true),
         }
-        skip
     }
 
     /// No buffer came, and it is `now_hns`: silence while the output is
@@ -426,28 +408,22 @@ fn serve(
             let main_loop = main_loop.clone();
             let status = Arc::clone(status);
             let ready = ready.clone();
-            move |_stream, _, old, new| {
-                #[cfg(test)]
-                if let Ok(mut states) = status.diag.states.lock() {
-                    states.push(format!("{old:?} -> {new:?}"));
+            move |_stream, _, old, new| match new {
+                StreamState::Paused | StreamState::Streaming => {
+                    let _ = ready.send(Ok(()));
                 }
-                match new {
-                    StreamState::Paused | StreamState::Streaming => {
-                        let _ = ready.send(Ok(()));
-                    }
-                    StreamState::Error(_) => {
-                        status.fail(&BackendError::DeviceGone);
-                        let _ = ready.send(Err(BackendError::DeviceGone));
-                        main_loop.quit();
-                    }
-                    StreamState::Unconnected
-                        if matches!(old, StreamState::Paused | StreamState::Streaming) =>
-                    {
-                        status.fail(&BackendError::DeviceGone);
-                        main_loop.quit();
-                    }
-                    _ => {}
+                StreamState::Error(_) => {
+                    status.fail(&BackendError::DeviceGone);
+                    let _ = ready.send(Err(BackendError::DeviceGone));
+                    main_loop.quit();
                 }
+                StreamState::Unconnected
+                    if matches!(old, StreamState::Paused | StreamState::Streaming) =>
+                {
+                    status.fail(&BackendError::DeviceGone);
+                    main_loop.quit();
+                }
+                _ => {}
             }
         })
         .param_changed({
@@ -469,77 +445,36 @@ fn serve(
                 }
             }
         })
-        .process({
-            #[cfg(test)]
-            let diag_status = Arc::clone(status);
-            move |stream, _| {
-                let Ok(mut feed) = process_feed.try_borrow_mut() else {
-                    return;
+        .process(move |stream, _| {
+            let Ok(mut feed) = process_feed.try_borrow_mut() else {
+                return;
+            };
+            let cycle = stream
+                .time()
+                .ok()
+                .and_then(|time| u64::try_from(time.now()).ok())
+                .filter(|&now| now > 0)
+                .map_or_else(timing::monotonic_hns, |now| now / 100);
+            let mut placed = false;
+            while let Some(mut buffer) = stream.dequeue_buffer() {
+                let Some(data) = buffer.datas_mut().first_mut() else {
+                    continue;
                 };
-                let cycle = stream
-                    .time()
-                    .ok()
-                    .and_then(|time| u64::try_from(time.now()).ok())
-                    .filter(|&now| now > 0)
-                    .map_or_else(timing::monotonic_hns, |now| now / 100);
-                let mut placed = false;
-                while let Some(mut buffer) = stream.dequeue_buffer() {
-                    let Some(data) = buffer.datas_mut().first_mut() else {
-                        continue;
-                    };
-                    let chunk = data.chunk();
-                    let offset = chunk.offset() as usize;
-                    let frames = format::frames_in(chunk.size(), chunk.stride());
-                    if frames == 0 {
-                        continue;
-                    }
-                    let length = frames * CAPTURE_FORMAT.block_align();
-                    let bytes = data
-                        .data()
-                        .and_then(|mapped| mapped.get(offset..offset + length));
-                    #[cfg(test)]
-                    {
-                        let diag = &diag_status.diag;
-                        diag.buffers.fetch_add(1, Ordering::Relaxed);
-                        diag.frames.fetch_add(frames as u64, Ordering::Relaxed);
-                        match bytes {
-                            None => {
-                                diag.unmapped.fetch_add(1, Ordering::Relaxed);
-                            }
-                            Some(bytes) => {
-                                let peak = bytes
-                                    .as_chunks::<4>()
-                                    .0
-                                    .iter()
-                                    .map(|b| f32::from_le_bytes(*b).abs())
-                                    .fold(0.0f32, f32::max);
-                                diag.peak_bits.fetch_max(peak.to_bits(), Ordering::Relaxed);
-                            }
-                        }
-                    }
-                    let _skipped = feed.buffer(cycle, bytes, frames);
-                    #[cfg(test)]
-                    diag_status
-                        .diag
-                        .skipped
-                        .fetch_add(_skipped as u64, Ordering::Relaxed);
-                    placed = true;
+                let chunk = data.chunk();
+                let offset = chunk.offset() as usize;
+                let frames = format::frames_in(chunk.size(), chunk.stride());
+                if frames == 0 {
+                    continue;
                 }
-                #[cfg(test)]
-                {
-                    let diag = &diag_status.diag;
-                    diag.callbacks.fetch_add(1, Ordering::Relaxed);
-                    let _ = diag.first_cycle.compare_exchange(
-                        0,
-                        cycle,
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    );
-                    diag.last_cycle.store(cycle, Ordering::Relaxed);
-                }
-                if placed {
-                    feed.clock.settle(cycle);
-                }
+                let length = frames * CAPTURE_FORMAT.block_align();
+                let bytes = data
+                    .data()
+                    .and_then(|mapped| mapped.get(offset..offset + length));
+                feed.buffer(cycle, bytes, frames);
+                placed = true;
+            }
+            if placed {
+                feed.clock.settle(cycle);
             }
         })
         .register()
@@ -751,7 +686,6 @@ mod tests {
         )
         .unwrap();
         std::thread::sleep(Duration::from_secs(2));
-        eprintln!("diag: {:#?}", capture.status.diag);
         assert_eq!(capture.state(), CaptureState::Running);
         assert_eq!(capture.setup(), Some(format::SETUP));
         // Two seconds at 48 kHz, give or take the start.
@@ -761,7 +695,7 @@ mod tests {
         assert!(peak > 0.01, "peak {peak}\n{}", graph());
     }
 
-    /// The links and the `default` metadata, for a failing test's message.
+    /// The links, the `default` metadata and the graph, for a failing test's message.
     fn graph() -> String {
         let mut text = String::new();
         for (tool, args) in [
@@ -822,7 +756,6 @@ mod tests {
         ring.take_peak();
         std::thread::sleep(Duration::from_secs(1));
         let quiet = ring.take_peak();
-        eprintln!("follow diag: {:#?}", capture.status.diag);
         assert_eq!(capture.state(), CaptureState::Running);
         assert!(
             (0.05..0.2).contains(&quiet),

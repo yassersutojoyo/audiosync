@@ -93,7 +93,8 @@ jobs:
       # tone of its own level, and the ignored tests that capture the default
       # output's monitor and follow a change of the default. The tones are
       # linked by hand: WirePlumber moves even a targeted pw-play to a new
-      # default output.
+      # default output. They ask for the capture's 1024-frame quantum: at
+      # pw-play's default 100 ms they failed every cycle and played silence.
       - name: PipeWire capture smoke test
         if: ${{ !cancelled() }}
         run: |
@@ -124,12 +125,7 @@ jobs:
               done
             done
             pw-link -l
-            failed=0
-            for round in 1 2 3 4; do
-              echo "round $round"
-              cargo test --locked -- --ignored --test-threads 1 --nocapture audio::pipewire::stream::tests:: || failed=1
-            done
-            exit $failed
+            cargo test --locked -- --ignored --test-threads 1 audio::pipewire::stream::tests::
           '
 
   build:
