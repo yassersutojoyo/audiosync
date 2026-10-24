@@ -473,9 +473,8 @@ fn serve(
                 feed.buffer(cycle, bytes, frames);
                 placed = true;
             }
-            if placed {
-                feed.clock.settle(cycle);
-            }
+            // Probe: settle left out to see whether it breaks the monitor test.
+            let _ = placed;
         })
         .register()
         .map_err(|_| BackendError::DeviceGone)?;
