@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 /// What AirPlay receivers with a screen, such as a TV, show while AudioSync
 /// streams to them (`ReceiverInfo` decides it): the track's title, artist and
-/// album, and its artwork as a JPEG that AudioSync's own sender hands on
-/// (`NativeAirPlay.setTrack`, `setArtwork`).
+/// album, and its artwork as a large and a small JPEG that AudioSync's own
+/// sender hands on (`NativeAirPlay.setTrackInfo`), picking one per receiver.
 enum TrackMetadata {
 
     struct Fields: Equatable {
@@ -14,27 +14,62 @@ enum TrackMetadata {
         var album: String
     }
 
-    /// At most this many bytes of JPEG per image: a cover that every receiver
-    /// takes at once, well under the 512 KiB the sender accepts (P125).
-    static let artworkLimit = 6060
-
     // MARK: - Artwork
 
-    /// At most this many pixels a side, as large as a receiver shows a cover.
-    static let artworkSide = 600
+    struct Limits: Equatable {
+        /// Pixels on the longest side.
+        let side: Int
+        let bytes: Int
+    }
+
+    /// For receivers on the AirPlay 2 path, where a TV shows the cover large
+    /// (S272).
+    static let largeArtwork = Limits(side: 1024, bytes: 128 << 10)
+    /// For receivers on the AirPlay 1 path, and the second try when one
+    /// refuses the large image (P185).
+    static let smallArtwork = Limits(side: 600, bytes: 40 << 10)
     private static let smallestSide = 64
     private static let qualities = [0.65, 0.5, 0.4]
+
+    /// A cover in both sizes; the same bytes twice when the large one is
+    /// within the small limits.
+    struct Artwork: Equatable {
+        let large: Data
+        let small: Data
+    }
+
+    /// `image` as a large and a small JPEG, each as large and sharp as its
+    /// limits allow. Nil if either can't be made to fit. Any thread.
+    static func artwork(_ image: NSImage) -> Artwork? {
+        var rect = CGRect(x: 0, y: 0, width: largeArtwork.side, height: largeArtwork.side)
+        guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+        return artwork(cgImage)
+    }
+
+    static func artwork(_ image: CGImage) -> Artwork? {
+        guard let large = fit(image, maxSide: largeArtwork.side, maxBytes: largeArtwork.bytes) else { return nil }
+        if large.side <= smallArtwork.side && large.data.count <= smallArtwork.bytes {
+            return Artwork(large: large.data, small: large.data)
+        }
+        guard let small = fit(image, maxSide: smallArtwork.side, maxBytes: smallArtwork.bytes) else { return nil }
+        return Artwork(large: large.data, small: small.data)
+    }
 
     /// `image` as a JPEG of at most `maxBytes`, as large and sharp as fits: the
     /// largest side up to `maxSide`, scaled down until it fits. Nil if not even
     /// the smallest fits. Any thread.
-    static func jpeg(_ image: NSImage, maxSide: Int = artworkSide, maxBytes: Int = artworkLimit) -> Data? {
+    static func jpeg(_ image: NSImage, maxSide: Int, maxBytes: Int) -> Data? {
         var rect = CGRect(x: 0, y: 0, width: maxSide, height: maxSide)
         guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
         return jpeg(cgImage, maxSide: maxSide, maxBytes: maxBytes)
     }
 
-    static func jpeg(_ image: CGImage, maxSide: Int = artworkSide, maxBytes: Int = artworkLimit) -> Data? {
+    static func jpeg(_ image: CGImage, maxSide: Int, maxBytes: Int) -> Data? {
+        fit(image, maxSide: maxSide, maxBytes: maxBytes)?.data
+    }
+
+    /// The JPEG and its longest side in pixels.
+    private static func fit(_ image: CGImage, maxSide: Int, maxBytes: Int) -> (data: Data, side: Int)? {
         guard maxBytes > 0, maxSide > 0,
               let first = scale(image, longestSide: min(maxSide, max(image.width, image.height)))
         else { return nil }
@@ -46,7 +81,7 @@ enum TrackMetadata {
             var smallest = Int.max
             for quality in qualities {
                 guard let data = encodeJPEG(scaled, quality: quality) else { return nil }
-                if data.count <= maxBytes { return data }
+                if data.count <= maxBytes { return (data, max(scaled.width, scaled.height)) }
                 smallest = min(smallest, data.count)
             }
             if side <= smallestSide { return nil }

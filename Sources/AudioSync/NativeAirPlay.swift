@@ -168,8 +168,8 @@ final class NativeAirPlay {
 
     /// What changed for the receivers that show it (P123 to P127), in one
     /// send: the track's title, artist and album, which drop the artwork set
-    /// last (`NativeNowPlaying`); its artwork, scaled and encoded as a small
-    /// JPEG on the queue (`TrackMetadata.jpeg`); and, when `sendsPosition`,
+    /// last (`NativeNowPlaying`); its artwork, scaled and encoded as a large
+    /// and a small JPEG on the queue (`TrackMetadata.artwork`); and, when `sendsPosition`,
     /// its position, nil for none, which a new track drops in the core.
     /// Main queue.
     func setTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?,
@@ -182,8 +182,8 @@ final class NativeAirPlay {
                 changed = true
             }
             if let artwork {
-                if let jpeg = TrackMetadata.jpeg(artwork) {
-                    self.nowPlaying.setArtwork(jpeg)
+                if let images = TrackMetadata.artwork(artwork) {
+                    self.nowPlaying.setArtwork(images)
                     changed = true
                 } else {
                     DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
@@ -361,10 +361,14 @@ final class NativeAirPlay {
     private func sendNowPlaying() {
         guard let handle else { return }
         let fields = nowPlaying.fields
-        let artwork = nowPlaying.artwork ?? Data()
-        let taken = artwork.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
-            asc_airplay_set_now_playing(handle, fields?.title, fields?.artist, fields?.album,
-                                        raw.bindMemory(to: UInt8.self).baseAddress, raw.count)
+        let large = nowPlaying.artwork?.large ?? Data()
+        let small = nowPlaying.artwork?.small ?? Data()
+        let taken = large.withUnsafeBytes { (largeRaw: UnsafeRawBufferPointer) -> Bool in
+            small.withUnsafeBytes { (smallRaw: UnsafeRawBufferPointer) -> Bool in
+                asc_airplay_set_now_playing(handle, fields?.title, fields?.artist, fields?.album,
+                                            largeRaw.bindMemory(to: UInt8.self).baseAddress, largeRaw.count,
+                                            smallRaw.bindMemory(to: UInt8.self).baseAddress, smallRaw.count)
+            }
         }
         if !taken {
             DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the sender turned the track info down") }
