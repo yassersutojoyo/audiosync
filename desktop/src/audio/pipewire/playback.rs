@@ -155,9 +155,9 @@ fn enum_format(target: &Target) -> Result<Vec<u8>, BackendError> {
 }
 
 /// The time until a frame written now is heard, from the stream's timing:
-/// its delay to the device and what its resampler holds, less the time
-/// since the report was made.
-fn latency_ns(time: &pw::stream::Time, rate: u32, monotonic_ns: u64) -> u64 {
+/// its delay to the device, what its resampler holds and the buffers queued
+/// ahead of this one, less the time since the report was made.
+fn latency_ns(time: &pw::stream::Time, rate: u32, stride: usize, monotonic_ns: u64) -> u64 {
     let fraction = time.rate();
     let delay_ns = if fraction.denom == 0 {
         0
@@ -165,7 +165,9 @@ fn latency_ns(time: &pw::stream::Time, rate: u32, monotonic_ns: u64) -> u64 {
         time.delay().max(0) as u128 * 1_000_000_000 * u128::from(fraction.num)
             / u128::from(fraction.denom)
     };
-    let buffered_ns = u128::from(time.buffered()) * 1_000_000_000 / u128::from(rate.max(1));
+    let queued_frames = time.queued() / u64::try_from(stride.max(1)).unwrap_or(1);
+    let buffered_ns =
+        u128::from(time.buffered() + queued_frames) * 1_000_000_000 / u128::from(rate.max(1));
     let since = u128::from(monotonic_ns.saturating_sub(u64::try_from(time.now()).unwrap_or(0)));
     u64::try_from((delay_ns + buffered_ns).saturating_sub(since)).unwrap_or(0)
 }
@@ -210,6 +212,7 @@ impl Render {
             latency_ns(
                 &time,
                 self.rate,
+                stride,
                 timing::monotonic_hns().saturating_mul(100),
             )
         });
