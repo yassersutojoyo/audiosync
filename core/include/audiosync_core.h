@@ -159,6 +159,7 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE 9 /* no remote control port could be bound for the session: its remote buttons do nothing */
 #define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED 10 /* the remote control's _dacp._tcp record couldn't be registered */
 #define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 11         /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
+#define ASC_AIRPLAY_WARNING_PTP_FREE 12                  /* a session bound the PTP ports after PTP_PORTS_TAKEN: they are free again, and a later clash is reported anew */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */

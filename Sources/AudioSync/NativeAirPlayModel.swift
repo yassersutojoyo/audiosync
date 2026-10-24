@@ -158,6 +158,9 @@ enum NativeSpeakerEvent: Equatable {
     /// `ptpPortsTaken`: PTP port 319 or 320 is taken, so speakers that need
     /// PTP timing can't play (P158).
     case warning(id: String, ptpPortsTaken: Bool, detail: String)
+    /// Its session bound the PTP ports after the sender reported them
+    /// taken: they are free again (P158).
+    case ptpFree(id: String)
 
     /// The event as a debug log line; `name` gives a speaker's name. Never
     /// holds a PIN, password or credential (none crosses into the app).
@@ -196,6 +199,8 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)) volume changed on the speaker: slider at \(Int(position.rounded()))"
         case .warning(let id, _, let detail):
             line = "\(label(id)) warning: \(detail)"
+        case .ptpFree(let id):
+            line = "\(label(id)) bound the PTP ports, which are free again"
         }
         return "[AudioSync] native AirPlay: " + line
     }
@@ -334,6 +339,8 @@ enum NativeAirPlayOutcome: Equatable {
     /// PTP port 319 or 320 is taken, so speakers that need PTP timing
     /// can't play (P158).
     case ptpPortsTaken
+    /// A session bound the PTP ports: they are free again.
+    case ptpPortsFree
 }
 
 /// The native sender's receivers and speakers as the app sees them (main
@@ -851,6 +858,8 @@ struct NativeAirPlayModel {
             return .volumeChanged(NativeAirPlayID.app(id), position)
         case .warning(_, let ptpPortsTaken, _):
             return ptpPortsTaken ? .ptpPortsTaken : nil
+        case .ptpFree:
+            return .ptpPortsFree
         }
     }
 }
@@ -860,13 +869,21 @@ struct NativeAirPlayModel {
 /// row is off because it needs PTP timing, and comes back when one goes off
 /// for it. A speaker that plays clears it only when no row is, since a
 /// session on NTP timing binds no PTP port and proves nothing about them.
+/// A taken episode runs from the sender's report, which it sends again only
+/// after the ports were bound in between, to a session binding them; in it,
+/// each speaker refused for PTP timing raises the notice once, so a notice
+/// cleared or dismissed meanwhile comes back.
 struct PtpPortNotice: Equatable {
-    /// The sender reported port 319 or 320 taken.
+    /// The sender reported port 319 or 320 taken, and no session bound them since.
     private(set) var portsTaken = false
     /// A speaker played since that report.
     private(set) var played = false
     /// The rows (app IDs) off because they need PTP timing.
     private(set) var timingOff: Set<String> = []
+    /// The rows whose refusal raised the notice in this episode.
+    private(set) var raisedFor: Set<String> = []
+    /// How often the notice was raised; the host posts it anew when this grows.
+    private(set) var raises = 0
 
     var shown: Bool { Self.shown(portsTaken: portsTaken, played: played, timingRows: timingOff.count) }
 
@@ -876,11 +893,26 @@ struct PtpPortNotice: Equatable {
         portsTaken && (timingRows > 0 || !played)
     }
 
-    mutating func reported() { portsTaken = true }
+    mutating func reported() {
+        portsTaken = true
+        played = false
+        raisedFor = []
+        raises += 1
+    }
+
+    mutating func portsFree() {
+        portsTaken = false
+        raisedFor = []
+    }
 
     /// The row `id` went off; `timing`: because it needs PTP timing.
     mutating func turnedOff(_ id: String, timing: Bool) {
-        if timing { timingOff.insert(id) } else { timingOff.remove(id) }
+        guard timing else {
+            timingOff.remove(id)
+            return
+        }
+        timingOff.insert(id)
+        if portsTaken && raisedFor.insert(id).inserted { raises += 1 }
     }
 
     mutating func playing(_ id: String) {

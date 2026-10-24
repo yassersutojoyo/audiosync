@@ -308,6 +308,9 @@ pub const AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED: i32 = 10;
 /// stream it joined can take: it plays in step at the stream's Lf; the
 /// detail names R_s and Lf (P201).
 pub const AIRPLAY_WARNING_LATENCY_SHORTFALL: i32 = 11;
+/// A session bound the PTP ports after [`AIRPLAY_WARNING_PTP_PORTS_TAKEN`]:
+/// they are free again, and a later clash is reported anew (P158).
+pub const AIRPLAY_WARNING_PTP_FREE: i32 = 12;
 
 /// A speaker's state ([`AscAirPlayEvent::state`]): a session is starting.
 pub const AIRPLAY_STATE_CONNECTING: i32 = 1;
@@ -981,7 +984,7 @@ impl AscAirPlay {
                     self.warned(id, warning);
                     return;
                 }
-                if let SpeakerEvent::Trace(_) = &event {
+                if matches!(event, SpeakerEvent::Trace(_) | SpeakerEvent::PtpOpened) {
                     self.queue_event(Pending::Speaker(id, event));
                     return;
                 }
@@ -1713,6 +1716,11 @@ impl AscAirPlay {
             Pending::Speaker(id, SpeakerEvent::Trace(line)) => {
                 event.kind = AIRPLAY_EVENT_TRACE;
                 (id, line)
+            }
+            Pending::Speaker(id, SpeakerEvent::PtpOpened) => {
+                event.kind = AIRPLAY_EVENT_WARNING;
+                event.warning = AIRPLAY_WARNING_PTP_FREE;
+                (id, "PtpOpened".to_owned())
             }
             // Never queued (see `pump`).
             Pending::Speaker(id, _) => (id, String::new()),
@@ -6724,6 +6732,10 @@ mod tests {
         });
         warn(Warning::PtpOutsideFamily);
         warn(Warning::JackDisconnected);
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::PtpOpened,
+        });
         let mut kinds = Vec::new();
         let mut raw = blank_event();
         // SAFETY: a live handle, used by this thread only; a local out
@@ -6769,6 +6781,12 @@ mod tests {
                     AIRPLAY_WARNING_JACK_DISCONNECTED,
                     id.clone(),
                     "JackDisconnected".to_owned()
+                ),
+                (
+                    AIRPLAY_EVENT_WARNING,
+                    AIRPLAY_WARNING_PTP_FREE,
+                    id.clone(),
+                    "PtpOpened".to_owned()
                 ),
             ]
         );

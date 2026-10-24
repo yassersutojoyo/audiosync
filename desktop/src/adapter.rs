@@ -526,6 +526,12 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// for the one AirPlay 2 slot ([`BackendEvent::AirPlayTrouble`]), by ID:
     /// their rows say so rather than show them playing.
     reconnecting: BTreeMap<String, Waiting>,
+    /// While PTP port 319 or 320 is taken (from
+    /// [`BackendEvent::AirPlayPtpPortsTaken`] to
+    /// [`BackendEvent::AirPlayPtpFree`]), the speakers refused for PTP
+    /// timing whose refusal raised the port notice: each raises it once, so a
+    /// dismissed notice comes back for the next speaker refused.
+    ptp_taken: Option<BTreeSet<String>>,
     /// The windows' own settings.
     view: ViewSettings,
     /// What a session does when the app it captures quits (spec S227).
@@ -619,6 +625,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ahead_noticed: None,
             busy: BTreeSet::new(),
             reconnecting: BTreeMap::new(),
+            ptp_taken: None,
             view: ViewSettings::default(),
             when_source_quits: WhenSourceQuits::Stop,
             calibration_run: None,
@@ -3148,7 +3155,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::AirPlayFailed { id, problem } => {
                 self.reconnecting.remove(&id);
+                let raises = problem == AirPlayProblem::TimingUnavailable
+                    && self
+                        .ptp_taken
+                        .as_mut()
+                        .is_some_and(|raised| raised.insert(id.clone()));
                 self.airplay_cant_play(&id, problem);
+                if raises {
+                    self.post(
+                        NoticeSubject::AirPlayPtp,
+                        NoticeMessage::AirPlayPtpPortsTaken,
+                    );
+                }
             }
             BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
                 self.reconnecting.remove(&id);
@@ -3171,9 +3189,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
             BackendEvent::AirPlayPtpFree => {
+                self.ptp_taken = None;
                 self.notices.clear(&[NoticeSubject::AirPlayPtp]);
             }
+            // The sender tells it again only after the ports were bound in
+            // between, so each report starts a new episode.
             BackendEvent::AirPlayPtpPortsTaken => {
+                self.ptp_taken = Some(BTreeSet::new());
                 self.post(
                     NoticeSubject::AirPlayPtp,
                     NoticeMessage::AirPlayPtpPortsTaken,
@@ -7298,6 +7320,58 @@ mod tests {
             !messages(&adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken),
             "{:?}",
             messages(&adapter)
+        );
+    }
+
+    #[test]
+    fn the_ptp_port_notice_returns_once_per_speaker_refused_while_the_ports_are_taken() {
+        use audiosync_airplay::error::{UnsupportedReason, Warning};
+        use audiosync_airplay::sender::SpeakerEvent;
+
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let den = device(3, "Den", OPEN_TXT);
+        fake.appear(&den);
+        adapter.poll();
+        let shown = |adapter: &AudioAdapter<MockBackend>| {
+            messages(adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken)
+        };
+        let speaker_event = |device: &Device, event: SpeakerEvent| {
+            fake.push(SenderEvent::Speaker {
+                key: device.key.clone(),
+                event,
+            });
+        };
+        let refuse = |adapter: &mut AudioAdapter<MockBackend>, device: &Device| {
+            adapter.set_speaker_enabled(&ap(device), true);
+            fake.fail(device, ErrorKind::Unsupported(UnsupportedReason::Timing));
+            adapter.poll();
+        };
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        speaker_event(&kitchen, SpeakerEvent::Warning(Warning::PtpUnavailable));
+        refuse(&mut adapter, &kitchen);
+        assert!(shown(&adapter));
+        adapter.dismiss_all_notices();
+        refuse(&mut adapter, &kitchen);
+        assert!(
+            !shown(&adapter),
+            "the same speaker refused again in one episode raises nothing"
+        );
+        refuse(&mut adapter, &den);
+        assert!(
+            shown(&adapter),
+            "another speaker refused while the ports are taken brings it back"
+        );
+        speaker_event(&den, SpeakerEvent::PtpOpened);
+        adapter.poll();
+        assert!(!shown(&adapter), "the ports bound: the episode ends");
+        speaker_event(&den, SpeakerEvent::Warning(Warning::PtpUnavailable));
+        adapter.poll();
+        assert!(shown(&adapter), "taken again: a new episode");
+        adapter.dismiss_all_notices();
+        refuse(&mut adapter, &kitchen);
+        assert!(
+            shown(&adapter),
+            "a speaker refused in an earlier episode raises it again in a new one"
         );
     }
 
