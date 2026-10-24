@@ -26,6 +26,8 @@ mod playback;
 pub mod procfs;
 #[cfg(target_os = "linux")]
 mod registry;
+#[cfg(all(test, target_os = "linux"))]
+mod restart_tests;
 #[cfg(target_os = "linux")]
 mod stream;
 pub mod timing;
