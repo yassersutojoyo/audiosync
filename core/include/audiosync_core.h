@@ -1394,6 +1394,18 @@ uint32_t asc_calibration_zone_plan(const char *const *members, size_t member_cou
  */
 double asc_calibration_cast_wait_ms(bool has_offset, double offset_ms, double hold_back_ms, int32_t format);
 
+/*
+ * An AirPlay speaker's expected arrival (AscCalibrationSpeaker.latency_ms),
+ * which is also how long the music sent to it plays out, in ms: the
+ * sender's latency for the session (sender_latency_ms, read at run start),
+ * or 3000 ms while has_sender is false, plus hold_back_ms, the hold-back the
+ * sender adds for the speaker, plus 500 ms. shown_ms, the AirPlay delay the
+ * field shows, counts instead of the sender's latency when it is longer.
+ * Each value is clamped to 0 to 20 000 ms; one that is not a number counts
+ * as 0, a sender latency that is not a number or 0 as none.
+ */
+double asc_calibration_airplay_wait_ms(bool has_sender, double sender_latency_ms, double shown_ms, double hold_back_ms);
+
 /* ---- AirPlay sender (AudioSync's own, airplay/) ----------------------------- */
 
 /*

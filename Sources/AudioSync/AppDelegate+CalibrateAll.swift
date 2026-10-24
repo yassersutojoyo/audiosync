@@ -359,6 +359,7 @@ extension AppDelegate {
             localOffsets: localOffsetMs, holdBacks: localHoldBacks, cast: cast,
             airPlay: appModel.airplay.filter { playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
             airPlayDelayMs: airPlayLatencyMs, airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),
+            airPlaySenderMs: (nativeAirPlay?.model.latencyMs).flatMap { $0 > 0 ? $0 : nil },
             leftOut: leftOut, includedAnyway: appModel.calibrateAll.includedAnyway)
     }
 

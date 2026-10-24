@@ -5064,7 +5064,7 @@ do {
         localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
         cast: (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 0, format: ASC_CAST_FORMAT_WAV),
         airPlay: [(id: "native:a", name: "Kitchen"), (id: "native:b", name: "Bedroom")],
-        airPlayDelayMs: 1750, airPlayHoldBackMs: 0)
+        airPlayDelayMs: 1750, airPlayHoldBackMs: 0, airPlaySenderMs: 1750)
     let planned = (try? CalibrateAllFlow.plan(inputs).get()) ?? []
     check(planned.map(\.id) == ["mac", "usb", "cast:tv", "native:a", "native:b"]
             && planned[0].offsetMs == nil && planned[1].offsetMs == 150 && planned[1].latencyMs == 2400
@@ -5076,6 +5076,22 @@ do {
     check(CalibrateAllFlow.quietSeconds(planned) == 3 && CalibrateAllFlow.settleSeconds(planned[3]) == 3,
           "calibrate all: the music on its way plays out before the first sweep, a Cast speaker's unknown latency included",
           "\(CalibrateAllFlow.quietSeconds(planned))")
+
+    // A sitting: a Samsung TV at L_s 1750 ms was missed with the AirPlay delay field at 0.
+    var fieldAtZero = inputs
+    fieldAtZero.cast = nil
+    fieldAtZero.airPlayDelayMs = 0
+    var noSender = fieldAtZero
+    noSender.airPlaySenderMs = nil
+    let atZero = (try? CalibrateAllFlow.plan(fieldAtZero).get())?.last
+    let unknown = (try? CalibrateAllFlow.plan(noSender).get())?.last
+    let windowMs = { (speaker: CalibrateAllSpeaker?) in
+        (speaker?.latencyMs ?? 0) + CalibrateAllFlow.sweepSeconds * 1000 + 1000 }
+    check(atZero?.kind == .airPlay && windowMs(atZero) >= 1750 + 750 + 1000 && atZero?.latencyMs == 2250
+            && unknown?.latencyMs == 3500,
+          "calibrate all: an AirPlay speaker at L=1750 with delay 0 gets a window of at least 1750 + 750 + 1000 ms, "
+            + "from the sender's latency, or the path's 3000 ms bound while the sender reports none (S235)",
+          "\(String(describing: atZero)) \(String(describing: unknown))")
 
     var held = inputs
     held.cast = (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 1750, format: ASC_CAST_FORMAT_FLAC)
@@ -5487,7 +5503,7 @@ do {
         localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
         cast: (id: "cast:tv", name: "TV", offsetMs: 500, waitMs: 0, format: ASC_CAST_FORMAT_WAV),
         airPlay: [(id: "native:a", name: "Kitchen"), (id: "native:b", name: "Bedroom")],
-        airPlayDelayMs: 1750, airPlayHoldBackMs: 0)
+        airPlayDelayMs: 1750, airPlayHoldBackMs: 0, airPlaySenderMs: 1750)
     let attic = CalibrateAllSpeaker(id: "attic", name: "Attic", kind: .local, offsetMs: 40, latencyMs: 0)
     let scope = CalibrateZoneScope(id: "z1", name: "Upstairs",
                                    members: ["ap:native:b", "lc:usb", "lc:attic", "lc:hidden", "lc:usb"],

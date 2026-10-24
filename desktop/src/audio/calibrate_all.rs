@@ -19,7 +19,7 @@ use std::thread;
 use audiosync_core::calibrate::{MAX_RATE, MIN_RATE, SIGNAL_SECONDS};
 use audiosync_core::calibrate_all::{
     Class, EndReason, PlanError, RowState, Run, Sheet, Speaker, Step as RunStep, Take, ZoneSpeaker,
-    cast_wait_ms, zone_plan,
+    airplay_wait_ms, cast_wait_ms, zone_plan,
 };
 use audiosync_core::policy::delay::{MAX_HOLD_BACK_MS, native_airplay_latency_ms};
 use audiosync_core::policy::speakers::SpeakerKey;
@@ -310,22 +310,22 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
         .iter()
         .filter_map(|cast| cast.offset_ms)
         .fold(0.0, f64::max);
-    let mut airplay = Vec::new();
-    if let Some(sender_ms) = audio.airplay_sender_latency_ms() {
-        let shown_ms = native_airplay_latency_ms(sender_ms, audio.airplay_adjustment());
-        let base_ms = shown_ms.max(finite_ms(Some(sender_ms))).max(cast_offset_ms);
-        airplay = audio
-            .airplay_speakers()
-            .into_iter()
-            .filter(|speaker| speaker.enabled && speaker.playing)
-            .map(|speaker| Member {
-                latency_ms: base_ms + finite_ms(Some(speaker.delay_ms)) + allowance_ms,
-                id: speaker.id,
-                class: Class::AirPlay,
-                offset_ms: Some(shown_ms),
-            })
-            .collect();
-    }
+    let sender_ms = audio.airplay_sender_latency_ms();
+    let shown_ms = native_airplay_latency_ms(
+        sender_ms.unwrap_or_else(|| audio.airplay_adjustment_base_ms()),
+        audio.airplay_adjustment(),
+    );
+    let airplay: Vec<Member> = audio
+        .airplay_speakers()
+        .into_iter()
+        .filter(|speaker| speaker.enabled && speaker.playing)
+        .map(|speaker| Member {
+            latency_ms: airplay_wait_ms(sender_ms, shown_ms.max(cast_offset_ms), speaker.delay_ms),
+            id: speaker.id,
+            class: Class::AirPlay,
+            offset_ms: Some(shown_ms),
+        })
+        .collect();
     Lineup {
         session: engine.session,
         reference: engine.reference,

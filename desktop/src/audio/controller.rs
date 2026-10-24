@@ -5914,6 +5914,30 @@ mod tests {
     }
 
     #[test]
+    fn an_airplay_speaker_at_l_1750_with_delay_0_gets_a_calibration_window_of_at_least_l() {
+        use audiosync_core::calibrate_all::Class;
+
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        backend.poll();
+        backend.set_airplay_adjustment(-1750.0);
+        let airplay = crate::audio::calibrate_all::lineup(&backend)
+            .members
+            .into_iter()
+            .find(|member| member.class == Class::AirPlay)
+            .expect("the speaker plays");
+        assert_eq!(airplay.offset_ms, Some(0.0), "the field shows 0");
+        // The window is the expected arrival plus the sweep and 1 s (S235).
+        assert!(
+            airplay.latency_ms + 750.0 + 1000.0 >= 1750.0 + 750.0 + 1000.0,
+            "{}",
+            airplay.latency_ms
+        );
+    }
+
+    #[test]
     fn an_airplay_speaker_on_moves_local_outputs_to_l_plus_their_delay_and_off_back() {
         let (mut backend, fake, kitchen) = with_airplay();
         let id = id_of(&kitchen);

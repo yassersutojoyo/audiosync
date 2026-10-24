@@ -296,6 +296,9 @@ enum CalibrateAllFlow {
         var airPlayDelayMs: Double
         /// How much longer than L the AirPlay sender holds its speakers back.
         var airPlayHoldBackMs: Double
+        /// L_s, the latency the sender holds the session to, nil while it
+        /// reports none.
+        var airPlaySenderMs: Double?
         /// Local outputs that sit out (`CalibrationFlow.leftOut`), by UID.
         var leftOut: [String: CalibrationLeftOut] = [:]
         /// Of those, the ones the user included anyway.
@@ -335,7 +338,9 @@ enum CalibrateAllFlow {
             speakers.append(CalibrateAllSpeaker(id: cast.id, name: cast.name, kind: .cast, offsetMs: cast.offsetMs,
                                                 latencyMs: latency))
         }
-        let airPlayLatency = max(0, inputs.airPlayDelayMs) + max(0, inputs.airPlayHoldBackMs) + latencyAllowanceMs
+        let sender = inputs.airPlaySenderMs
+        let airPlayLatency = asc_calibration_airplay_wait_ms(sender != nil, sender ?? 0, inputs.airPlayDelayMs,
+                                                             inputs.airPlayHoldBackMs)
         for speaker in inputs.airPlay {
             speakers.append(CalibrateAllSpeaker(id: speaker.id, name: speaker.name, kind: .airPlay,
                                                 offsetMs: inputs.airPlayDelayMs, latencyMs: airPlayLatency))
