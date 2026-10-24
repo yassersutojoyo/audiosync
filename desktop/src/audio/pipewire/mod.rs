@@ -38,12 +38,13 @@ pub use driver::open;
 const CORE_ID: u32 = 0;
 
 /// Whether an error event on a connection's core means the connection is
-/// gone, for the error `res` (a negative errno) about object `id`. Other
-/// errors come on the core too and leave it working, such as "unknown
+/// gone, for the error `res` (a negative errno) about object `id`: a broken
+/// pipe, a reset or a protocol error, after which the socket is closed.
+/// Other errors come on the core too and leave it working, such as "unknown
 /// resource" for a request about an object the daemon just removed.
 #[cfg(target_os = "linux")]
 pub fn connection_lost(id: u32, res: i32) -> bool {
-    id == CORE_ID && res == -libc::EPIPE
+    id == CORE_ID && [-libc::EPIPE, -libc::ECONNRESET, -libc::EPROTO].contains(&res)
 }
 
 #[cfg(all(test, target_os = "linux"))]
