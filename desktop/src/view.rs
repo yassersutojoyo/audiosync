@@ -4577,8 +4577,12 @@ fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
     }
 }
 
-/// The UI's name of a step's Settings page.
+/// The UI's name of a step's Settings page; none when nothing installed
+/// could show it, so the step has no button.
 fn guide_page(page: Option<SettingsPage>) -> GuidePage {
+    if page.is_some_and(|page| !crate::platform::can_open_settings(page.uri())) {
+        return GuidePage::None;
+    }
     match page {
         None | Some(SettingsPage::MicrophonePrivacy) => GuidePage::None,
         Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,

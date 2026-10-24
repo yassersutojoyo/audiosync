@@ -17,6 +17,8 @@
 
 pub mod format;
 pub mod graph;
+#[cfg(all(test, target_os = "linux"))]
+mod live_tests;
 #[cfg(target_os = "linux")]
 mod microphone;
 #[cfg(target_os = "linux")]

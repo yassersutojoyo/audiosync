@@ -205,10 +205,59 @@ pub fn open_settings(uri: &str) -> bool {
     result.0 as usize > 32
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn open_settings(uri: &str) -> bool {
     eprintln!("would open {uri}");
     false
+}
+
+/// Whether a guide step's button for the page at `uri` can do anything:
+/// on Linux only when a program that shows it is installed.
+#[cfg(not(target_os = "linux"))]
+pub fn can_open_settings(_uri: &str) -> bool {
+    true
+}
+
+#[cfg(target_os = "linux")]
+pub fn can_open_settings(uri: &str) -> bool {
+    linux_settings_program(uri).is_some()
+}
+
+/// The program on Linux that shows the page a Windows settings URI names,
+/// for this desktop ([`crate::guide::linux_program`]).
+#[cfg(target_os = "linux")]
+fn linux_settings_program(uri: &str) -> Option<(&'static str, &'static [&'static str])> {
+    use crate::guide::SettingsPage;
+
+    let page = [
+        SettingsPage::VolumeMixer,
+        SettingsPage::Sound,
+        SettingsPage::MicrophonePrivacy,
+    ]
+    .into_iter()
+    .find(|page| page.uri() == uri)?;
+    let desktops = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    crate::guide::linux_program(page, &desktops, |program| {
+        std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
+    })
+}
+
+/// Starts the program that shows the page `uri` names, without waiting for
+/// it; false when none is installed or it couldn't start.
+#[cfg(target_os = "linux")]
+pub fn open_settings(uri: &str) -> bool {
+    let Some((program, args)) = linux_settings_program(uri) else {
+        return false;
+    };
+    match std::process::Command::new(program).args(args).spawn() {
+        Ok(mut child) => {
+            // Reaped when it exits, so it leaves no zombie behind.
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 pub use crate::os::notice_time;

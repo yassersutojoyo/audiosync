@@ -127,6 +127,25 @@ jobs:
             cargo test --locked -- --ignored --test-threads 1 audio::pipewire::stream::tests::
           '
 
+      # A daemon of its own with two null sinks, as-a (the default) and as-b,
+      # for the outputs, the linked captures and their timing.
+      - name: PipeWire outputs and capture tests
+        if: ${{ !cancelled() }}
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-outputs"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          dbus-run-session -- bash -euo pipefail -c '
+            pipewire & sleep 1
+            wireplumber & sleep 2
+            for sink in a b; do
+              upper=$(echo "$sink" | tr a-z A-Z)
+              pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=as-$sink node.description=\"AudioSync $upper\" media.class=Audio/Sink object.linger=true audio.position=[FL FR] }"
+            done
+            sleep 1
+            wpctl status
+            cargo test --locked -- --ignored --test-threads 1 audio::pipewire::live_tests::
+          '
+
   build:
     name: Release build (${{ matrix.arch }})
     strategy:
