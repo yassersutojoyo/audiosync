@@ -33,6 +33,31 @@ pub mod timing;
 #[cfg(target_os = "linux")]
 pub use driver::open;
 
+/// The core's object ID, `PW_ID_CORE`.
+const CORE_ID: u32 = 0;
+
+/// Whether an error event on a connection's core means the connection is
+/// gone, for the error `res` (a negative errno) about object `id`.
+pub fn connection_lost(id: u32, _res: i32) -> bool {
+    id == CORE_ID
+}
+
+#[cfg(test)]
+mod core_error_tests {
+    use super::connection_lost;
+
+    #[test]
+    fn only_a_broken_connection_ends_it() {
+        // Linux's errno values: EPIPE 32, ENOENT 2, EPROTO 71.
+        assert!(connection_lost(0, -32));
+        // "unknown resource": a request about an object the daemon had
+        // already removed, such as a client that just quit.
+        assert!(!connection_lost(0, -2));
+        assert!(!connection_lost(0, -71));
+        assert!(!connection_lost(13, -32));
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod driver {
     use std::sync::Arc;

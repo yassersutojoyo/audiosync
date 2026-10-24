@@ -503,7 +503,7 @@ fn serve(
             let status = Arc::clone(status);
             let ready = ready.clone();
             move |id, _seq, res, message| {
-                if id == pw::core::PW_ID_CORE {
+                if super::connection_lost(id, res) {
                     status.fail_because(&BackendError::DeviceGone, || {
                         format!("core error {res}: {message}")
                     });

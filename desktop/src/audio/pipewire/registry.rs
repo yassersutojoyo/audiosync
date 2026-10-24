@@ -390,8 +390,8 @@ fn serve(
         .error({
             let shared = Arc::clone(shared);
             let main_loop = main_loop.clone();
-            move |id, _seq, _res, _message| {
-                if id == pw::core::PW_ID_CORE {
+            move |id, _seq, res, _message| {
+                if super::connection_lost(id, res) {
                     shared.failed.store(true, Ordering::Release);
                     main_loop.quit();
                 }

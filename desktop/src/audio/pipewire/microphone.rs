@@ -284,7 +284,7 @@ fn serve(
             let main_loop = main_loop.clone();
             let ready = ready.clone();
             move |id, _seq, res, _message| {
-                if id == pw::core::PW_ID_CORE || res == -libc::EPERM {
+                if super::connection_lost(id, res) || res == -libc::EPERM {
                     let error = if res == -libc::EPERM {
                         MicrophoneError::Denied
                     } else {

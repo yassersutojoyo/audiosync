@@ -387,8 +387,8 @@ fn serve(
             let main_loop = main_loop.clone();
             let status = Arc::clone(status);
             let ready = ready.clone();
-            move |id, _seq, _res, _message| {
-                if id == pw::core::PW_ID_CORE {
+            move |id, _seq, res, _message| {
+                if super::connection_lost(id, res) {
                     status.ended.store(true, Ordering::Release);
                     let _ = ready.send(Err(BackendError::DeviceGone));
                     main_loop.quit();
