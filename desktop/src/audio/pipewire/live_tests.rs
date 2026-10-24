@@ -18,8 +18,9 @@ use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
 use super::registry::Registry;
-use super::{graph, playback, stream};
+use super::{graph, microphone, playback, stream};
 use crate::audio::SESSION_RATE;
+use crate::audio::calibration::Microphone;
 use crate::audio::capture::Feeds;
 use crate::audio::controller::{CaptureHandle, CaptureState, RendererHandle};
 
@@ -457,4 +458,65 @@ fn one_app_is_captured_alone_and_followed() {
         std::thread::sleep(Duration::from_millis(100));
     }
     assert_eq!(capture.state(), CaptureState::SourceQuit);
+}
+
+#[test]
+#[ignore = "needs the CI job's PipeWire daemon and sinks as-a and as-b"]
+fn an_outputs_own_mute_is_followed_and_undone() {
+    let registry = Registry::start().unwrap();
+    registry.watch("as-a");
+    let id = node_id("as-a").to_string();
+    run("wpctl", &["set-mute", &id, "1"]);
+    wait();
+    assert_eq!(registry.volume_changes(), ["as-a"]);
+    assert!(registry.volume("as-a").unwrap().muted);
+    registry.unmute("as-a").unwrap();
+    wait();
+    assert!(!registry.volume("as-a").unwrap().muted);
+    registry.set_level("as-a", 0.5).unwrap();
+    wait();
+    let level = registry.volume("as-a").unwrap().level;
+    assert!((level - 0.5).abs() < 0.01, "level {level}");
+    registry.set_level("as-a", 1.0).unwrap();
+    wait();
+}
+
+#[test]
+#[ignore = "needs the CI job's PipeWire daemon and sinks as-a and as-b"]
+fn the_default_input_is_recorded() {
+    run(
+        "pw-cli",
+        &[
+            "create-node",
+            "adapter",
+            "{ factory.name=support.null-audio-sink node.name=mic-feed media.class=Audio/Source/Virtual object.linger=true audio.position=[MONO] }",
+        ],
+    );
+    wait();
+    set_default("mic-feed");
+    let registry = Registry::start().unwrap();
+    let graph = registry.graph().unwrap();
+    let (_, node) = graph
+        .default_input()
+        .expect("mic-feed is the default input");
+    let opened_ns = audiosync_core::clock::now_ns();
+    let mut microphone = microphone::open(node.name().to_owned(), None, 4.0).unwrap();
+    let path = tone("mic", 440.0, 0.5, 1.0);
+    detached(&format!("pw-play --target mic-feed {}", path.display()));
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(microphone.id().device, "mic-feed");
+    assert!(microphone.id().rate > 0);
+    let recorded = microphone.frames_recorded();
+    assert!(
+        recorded > microphone.id().rate as usize,
+        "{recorded} frames"
+    );
+    let first = microphone.first_frame_ns().expect("a first frame time");
+    assert!(
+        first.abs_diff(opened_ns) < 500_000_000,
+        "first frame {first} ns, opened at {opened_ns} ns"
+    );
+    let samples = microphone.take(0, recorded);
+    assert!(peak(&samples) > 0.1, "peak {}", peak(&samples));
+    run("pw-cli", &["destroy", &node_id("mic-feed").to_string()]);
 }

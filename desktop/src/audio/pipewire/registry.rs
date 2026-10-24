@@ -13,6 +13,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use pipewire as pw;
+use pw::device::{Device as DeviceProxy, DeviceListener};
 use pw::metadata::{Metadata, MetadataListener};
 use pw::node::{Node as NodeProxy, NodeListener, NodeState};
 use pw::spa;
@@ -257,6 +258,7 @@ fn serve(
         .map_err(|_| BackendError::ServiceNotRunning)?;
 
     let bound: Rc<RefCell<HashMap<u32, Bound>>> = Rc::default();
+    let devices: Rc<RefCell<HashMap<u32, Routes>>> = Rc::default();
     let defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>> = Rc::default();
 
     let _registry_listener = registry
@@ -265,9 +267,16 @@ fn serve(
             let registry = registry.clone();
             let shared = Arc::clone(shared);
             let bound = Rc::clone(&bound);
+            let devices = Rc::clone(&devices);
             let defaults = Rc::clone(&defaults);
             move |global| {
                 let Some(props) = global.props else { return };
+                if global.type_ == ObjectType::Device {
+                    if let Some(routes) = follow_routes(&registry, global) {
+                        devices.borrow_mut().insert(global.id, routes);
+                    }
+                    return;
+                }
                 if global.type_ == ObjectType::Metadata {
                     if props.get("metadata.name") == Some("default") && defaults.borrow().is_none()
                     {
@@ -295,8 +304,10 @@ fn serve(
         .global_remove({
             let shared = Arc::clone(shared);
             let bound = Rc::clone(&bound);
+            let devices = Rc::clone(&devices);
             move |id| {
                 bound.borrow_mut().remove(&id);
+                devices.borrow_mut().remove(&id);
                 if locked(&shared.graph).remove(id) {
                     shared.outputs_changed.store(true, Ordering::Release);
                 }
@@ -334,6 +345,7 @@ fn serve(
         let main_loop = main_loop.clone();
         let shared = Arc::clone(shared);
         let bound = Rc::clone(&bound);
+        let devices = Rc::clone(&devices);
         move |command| match command {
             Command::Stop => main_loop.quit(),
             Command::SetVolume {
@@ -341,27 +353,123 @@ fn serve(
                 change,
                 reply,
             } => {
-                let _ = reply.send(set_volume(&shared, &bound.borrow(), &node, &change));
+                let written =
+                    set_volume(&shared, &bound.borrow(), &devices.borrow(), &node, &change);
+                let _ = reply.send(written);
             }
         }
     });
     main_loop.run();
     bound.borrow_mut().clear();
+    devices.borrow_mut().clear();
     defaults.borrow_mut().take();
     Ok(())
 }
 
-/// Writes `change` to the output named `name` as its node's `Props`.
+/// A device the thread follows: its proxy, its listener, and the index of
+/// the active route of each of its card profile devices.
+struct Routes {
+    proxy: DeviceProxy,
+    _listener: DeviceListener,
+    active: Rc<RefCell<HashMap<i32, i32>>>,
+}
+
+/// The route index and card profile device of a `Route` param.
+fn read_route(param: &Pod) -> Option<(i32, i32)> {
+    let (_, Value::Object(object)) =
+        PodDeserializer::deserialize_any_from(param.as_bytes()).ok()?
+    else {
+        return None;
+    };
+    let mut index = None;
+    let mut device = None;
+    for property in object.properties {
+        match (property.key, property.value) {
+            (spa::sys::SPA_PARAM_ROUTE_index, Value::Int(value)) => index = Some(value),
+            (spa::sys::SPA_PARAM_ROUTE_device, Value::Int(value)) => device = Some(value),
+            _ => {}
+        }
+    }
+    Some((index?, device?))
+}
+
+/// Binds a device to learn its active routes, where the session manager
+/// keeps a device output's volume.
+fn follow_routes(
+    registry: &pw::registry::RegistryRc,
+    global: &pw::registry::GlobalObject<&DictRef>,
+) -> Option<Routes> {
+    let proxy: DeviceProxy = registry.bind(global).ok()?;
+    let active: Rc<RefCell<HashMap<i32, i32>>> = Rc::default();
+    let listener = proxy
+        .add_listener_local()
+        .param({
+            let active = Rc::clone(&active);
+            move |_seq, kind, _index, _next, param| {
+                if kind != ParamType::Route {
+                    return;
+                }
+                if let Some((index, device)) = param.and_then(read_route) {
+                    active.borrow_mut().insert(device, index);
+                }
+            }
+        })
+        .register();
+    proxy.subscribe_params(&[ParamType::Route]);
+    Some(Routes {
+        proxy,
+        _listener: listener,
+        active,
+    })
+}
+
+/// A `Route` param that sets `property` on route `index` of card profile
+/// device `device`, saved by the session manager.
+fn route_param(index: i32, device: i32, property: Property) -> Option<Vec<u8>> {
+    let props = Value::Object(Object {
+        type_: SpaTypes::ObjectParamProps.as_raw(),
+        id: ParamType::Route.as_raw(),
+        properties: vec![property],
+    });
+    let object = Value::Object(Object {
+        type_: SpaTypes::ObjectParamRoute.as_raw(),
+        id: ParamType::Route.as_raw(),
+        properties: vec![
+            Property::new(spa::sys::SPA_PARAM_ROUTE_index, Value::Int(index)),
+            Property::new(spa::sys::SPA_PARAM_ROUTE_device, Value::Int(device)),
+            Property::new(spa::sys::SPA_PARAM_ROUTE_props, props),
+            Property::new(spa::sys::SPA_PARAM_ROUTE_save, Value::Bool(true)),
+        ],
+    });
+    PodSerializer::serialize(std::io::Cursor::new(Vec::new()), &object)
+        .ok()
+        .map(|(cursor, _)| cursor.into_inner())
+}
+
+/// Writes `change` to the output named `name`: on its device's active
+/// route when it has one, where the session manager keeps device volumes,
+/// else on its node's `Props`.
 fn set_volume(
     shared: &Shared,
     bound: &HashMap<u32, Bound>,
+    devices: &HashMap<u32, Routes>,
     name: &str,
     change: &Change,
 ) -> Result<(), BackendError> {
-    let id = locked(&shared.graph)
-        .named(name)
-        .map(|(id, _)| id)
-        .ok_or(BackendError::DeviceGone)?;
+    let (id, route) = {
+        let graph = locked(&shared.graph);
+        let (id, node) = graph.named(name).ok_or(BackendError::DeviceGone)?;
+        let device = node.prop("device.id").and_then(|id| id.parse::<u32>().ok());
+        let profile = node
+            .prop("card.profile.device")
+            .and_then(|device| device.parse::<i32>().ok());
+        let route = device.zip(profile).and_then(|(device, profile)| {
+            let routes = devices.get(&device)?;
+            let index = routes.active.borrow().get(&profile).copied()?;
+            Some((device, index, profile))
+        });
+        (id, route)
+    };
     let node = bound.get(&id).ok_or(BackendError::DeviceGone)?;
     let property = match *change {
         Change::Unmute => Property::new(spa::sys::SPA_PROP_mute, Value::Bool(false)),
@@ -376,6 +484,14 @@ fn set_volume(
             )
         }
     };
+    if let Some((device, index, profile)) = route
+        && let Some(routes) = devices.get(&device)
+    {
+        let bytes = route_param(index, profile, property).ok_or(BackendError::UnsupportedFormat)?;
+        let pod = Pod::from_bytes(&bytes).ok_or(BackendError::UnsupportedFormat)?;
+        routes.proxy.set_param(ParamType::Route, 0, pod);
+        return Ok(());
+    }
     let bytes = props_param(property).ok_or(BackendError::UnsupportedFormat)?;
     let pod = Pod::from_bytes(&bytes).ok_or(BackendError::UnsupportedFormat)?;
     node.proxy.set_param(ParamType::Props, 0, pod);
