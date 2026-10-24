@@ -69,7 +69,7 @@ The wordmark SVGs in `brand/` are outlined from Poppins Medium.
 
 ## Windows app (preview)
 
-`windows/` is the Windows 11 version of AudioSync. None of it is in the macOS
+`desktop/` is the Windows 11 version of AudioSync. None of it is in the macOS
 app. Windows builds go out only as an unsigned preview attached to a macOS
 release.
 
@@ -87,7 +87,7 @@ carries an icon from Microsoft's Fluent UI System Icons (MIT, © Microsoft Corpo
 
 The icons inside the Windows app's controls come from Segoe Fluent Icons, the
 icon font Windows 11 ships; the app uses the installed font and doesn't bundle
-it. The app and tray icons in `windows/res/` are generated from AudioSync's own
+it. The app and tray icons in `desktop/res/` are generated from AudioSync's own
 brand mark (`scripts/brand/windows-icons.sh`).
 
 The Windows app also contains AudioSync's own AirPlay sender (`airplay/`,
@@ -111,7 +111,7 @@ the pairing's property lists, with `quick-xml` (MIT) and `time`,
 `time-core`, `deranged`, `powerfmt` and `num-conv` (MIT OR Apache-2.0), next
 to `base64`, `indexmap` and `memchr`, which the app already contained.
 `airplay/NOTES.md` lists each with its license; the versions a Windows build
-compiles are the ones in `windows/Cargo.lock`, which that build's
+compiles are the ones in `desktop/Cargo.lock`, which that build's
 `THIRD-PARTY-NOTICES.txt` names.
 
 The Windows app also contains AudioSync's own Google Cast sender (`cast/`,
@@ -138,9 +138,9 @@ app already contained.
 
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in
-`windows/deny.toml`. Each Windows test build CI uploads comes with a
+`desktop/deny.toml`. Each Windows test build CI uploads comes with a
 `THIRD-PARTY-NOTICES.txt` next to `audiosync.exe`. `scripts/windows_notices.py`
-generates it from `windows/Cargo.lock` for that build's target: every crate
+generates it from `desktop/Cargo.lock` for that build's target: every crate
 compiled into the executable with its version, license and repository and the
 full text of its license and notice files, plus the Rust standard library's
 copyright notices, Slint's license (GPL-3.0-only), and the font and icon
@@ -148,7 +148,7 @@ licenses above. It also adds the notices for code that crates took from other
 projects, which their own license files don't carry: AccessKit's code derived
 from Chromium (BSD-3-Clause, © The Chromium Authors) and the image crate's JPEG
 code based on the work of the Independent JPEG Group. The script fails when a
-crate's license isn't allowed by `windows/deny.toml`, or when a crate's source
+crate's license isn't allowed by `desktop/deny.toml`, or when a crate's source
 points to a license file the package doesn't ship and the script doesn't
 supply.
 

@@ -2,7 +2,7 @@
 //! session is muted or turned down in the volume mixer: hardware test 1 in
 //! `docs/WINDOWS_AUDIO_ROUTING.md`.
 //!
-//! From `windows/`: `cargo run --release --example mute_probe`. Close
+//! From `desktop/`: `cargo run --release --example mute_probe`. Close
 //! AudioSync first; anything else that plays during the run shows up in the
 //! whole-system rows.
 //!

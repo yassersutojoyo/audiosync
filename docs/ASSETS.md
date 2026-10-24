@@ -17,7 +17,7 @@ Every image, icon and font in the repository, with where it came from. Add a row
 | `site/wordmark.svg`, `site/wordmark-dark.svg` | Site wordmark | Own work: copies of the brand wordmarks (`scripts/brand/build-brand.sh`) | 2026-10-17, 2026-10-19 |
 | `site/apple-touch-icon.png`, `site/icon-512.png`, built into the web remote by `remote/src/page.rs` | Web remote icons, placeholders until the remote gets its own | Own work: the site icons above, served as the page's `/icon-180.png` and `/icon-512.png` | 2026-10-22 |
 | `site/index.html` feature-card icons | Feature card icons | Own work: hand-written SVG in the markup, no reference image | 2026-10-22 |
-| `windows/res/audiosync.ico`, `windows/res/audiosync-256.png` | Windows app icon | Own work: from `audiosync-icon.svg` by `scripts/brand/windows-icons.sh` | 2026-10-18 |
-| `windows/res/tray-light.ico`, `tray-dark.ico`, `tray-light-off.ico`, `tray-dark-off.ico` | Windows tray icons | Own work: from the mark in the token colors by `scripts/brand/windows-icons.sh` | 2026-10-18 |
+| `desktop/res/audiosync.ico`, `desktop/res/audiosync-256.png` | Windows app icon | Own work: from `audiosync-icon.svg` by `scripts/brand/windows-icons.sh` | 2026-10-18 |
+| `desktop/res/tray-light.ico`, `tray-dark.ico`, `tray-light-off.ico`, `tray-dark-off.ico` | Windows tray icons | Own work: from the mark in the token colors by `scripts/brand/windows-icons.sh` | 2026-10-18 |
 | `docs/images/main-window-light.png`, `main-window-dark.png`, `menu-bar-panel-light.png`, `menu-bar-panel-dark.png`, `equalizer-light.png`, `equalizer-dark.png` | App screenshots | Own work: the app's own views rendered from mock data by `scripts/screenshots/render.sh` | 2026-10-17 |
 | `docs/images/social-preview.png` | Link preview image | Own work: composed from the brand files and the main window screenshot by `scripts/screenshots/social-preview.swift` | 2026-10-17 |

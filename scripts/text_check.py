@@ -5,7 +5,7 @@ HTML entities for it (&mdash;, &#8212;, &#x2014;) count too, and a text file
 in scope that isn't valid UTF-8 fails rather than being skipped unread.
 
 Scope is the tracked text people outside the project read: Markdown at the
-repository root, windows/README.md, docs/*.md and everything under site/.
+repository root, desktop/README.md, docs/*.md and everything under site/.
 docs/*_SPEC.md is left out because the specs quote test output verbatim.
 App strings, code and comments are out of scope.
 
@@ -36,7 +36,7 @@ _SPEC = re.compile(r"docs/[^/]+_SPEC\.md")
 def in_scope(path):
     if path.startswith("site/"):
         return True
-    if path == "windows/README.md":
+    if path == "desktop/README.md":
         return True
     if "/" not in path:
         return path.endswith(".md")
@@ -84,7 +84,7 @@ def self_test():
     scope = {
         "README.md": True,
         "CHANGELOG.md": True,
-        "windows/README.md": True,
+        "desktop/README.md": True,
         "docs/DEVELOPMENT.md": True,
         "docs/ENGINE_SPEC.md": False,
         "docs/AIRPLAY_SPEC.md": False,

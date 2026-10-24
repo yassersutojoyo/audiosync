@@ -146,7 +146,7 @@ jobs:
           python3 -I scripts/brand/tokens.py
           python3 -I scripts/brand/guide_art.py --check
           git diff --exit-code -- brand Sources/AudioSync/BrandMark.swift site/wordmark.svg site/wordmark-dark.svg \
-            Sources/AudioSync/BrandTokens.swift windows/ui/tokens.slint windows/src/tokens.rs site/index.html
+            Sources/AudioSync/BrandTokens.swift desktop/ui/tokens.slint desktop/src/tokens.rs site/index.html
 
       - name: The icon scripts reproduce the committed app and site icons
         run: scripts/brand/check-icons.sh

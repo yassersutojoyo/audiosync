@@ -519,16 +519,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "audiosync-remote"
-version = "0.1.0"
-dependencies = [
- "getrandom 0.4.3",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "audiosync-windows"
+name = "audiosync-desktop"
 version = "0.7.0"
 dependencies = [
  "audiosync-airplay",
@@ -546,6 +537,15 @@ dependencies = [
  "windows-core",
  "windows-future",
  "zeroize",
+]
+
+[[package]]
+name = "audiosync-remote"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

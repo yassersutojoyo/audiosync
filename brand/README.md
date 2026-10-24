@@ -51,7 +51,7 @@ python3 -I scripts/brand/tokens.py
 ```
 
 which writes `Sources/AudioSync/BrandTokens.swift` (the Mac app's `Brand` constants
-read it), `windows/ui/tokens.slint` and `windows/src/tokens.rs` (the Windows app and
+read it), `desktop/ui/tokens.slint` and `desktop/src/tokens.rs` (the Windows app and
 its contrast test), and the CSS variables between the `tokens:begin` and
 `tokens:end` comments in `site/index.html`. CI runs it and fails when a generated
 file differs. The contrast pairs at the end of the file are the text colors on the
@@ -74,7 +74,7 @@ menu bar icon is the mark as a template image, dimmed while streaming is off
 ```bash
 scripts/brand/build-brand.sh   # icons, wordmarks, SwiftUI mark, AppIcon.icns, site icons and wordmark
 scripts/brand/trace-mark.sh    # re-trace the mark from source/ (needs: brew install potrace)
-scripts/brand/windows-icons.sh # the Windows app and tray icons in windows/res/
+scripts/brand/windows-icons.sh # the Windows app and tray icons in desktop/res/
 python3 -I scripts/brand/guide_art.py # the Guide's illustrations in guide/, light and dark, and GuideArtwork.swift
 ```
 

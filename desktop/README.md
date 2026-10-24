@@ -94,7 +94,7 @@ It's a single exe with no installer: put it in a folder of its own, keep the
 ## Building on Windows
 
 ```powershell
-cd windows
+cd desktop
 cargo test
 cargo build --release    # target\release\audiosync.exe
 ```
@@ -102,7 +102,7 @@ cargo build --release    # target\release\audiosync.exe
 Then, from the repository root, write the notices for that build next to it:
 
 ```powershell
-py -3 -I scripts/windows_notices.py x86_64-pc-windows-msvc --output windows/target/release/THIRD-PARTY-NOTICES.txt
+py -3 -I scripts/windows_notices.py x86_64-pc-windows-msvc --output desktop/target/release/THIRD-PARTY-NOTICES.txt
 ```
 
 For the other architecture, add its target first:
@@ -296,7 +296,7 @@ tests, builds both architectures in release mode and keeps each
 build. It doesn't publish anything. To write the notices yourself (any OS,
 for either target): `python3 -I scripts/windows_notices.py
 x86_64-pc-windows-msvc`; the file lands next to `audiosync.exe` in
-`windows/target/<target>/release/`.
+`desktop/target/<target>/release/`.
 
 ## License
 

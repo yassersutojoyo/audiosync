@@ -1,6 +1,6 @@
 # cargo-deny configuration for the Windows app.
 #
-# `cargo deny check licenses` (run from windows/, and in CI) fails when any
+# `cargo deny check licenses` (run from desktop/, and in CI) fails when any
 # crate that goes into the x64 or ARM64 Windows build or the x64 Linux build,
 # build and development dependencies included, is under a license that is not
 # on this list.
@@ -27,7 +27,7 @@ confidence-threshold = 0.93
 exceptions = [
     # AudioSync's own code is GPL-3.0-or-later; the exception names only our
     # own crates, so no third-party crate may bring a GPL license in.
-    { crate = "audiosync-windows", allow = ["GPL-3.0-or-later"] },
+    { crate = "audiosync-desktop", allow = ["GPL-3.0-or-later"] },
     { crate = "audiosync-core", allow = ["GPL-3.0-or-later"] },
     { crate = "audiosync-airplay", allow = ["GPL-3.0-or-later"] },
     { crate = "audiosync-cast", allow = ["GPL-3.0-or-later"] },
