@@ -459,7 +459,9 @@ fn one_app_is_captured_alone_and_followed() {
     )
     .unwrap();
     let recorder = Recorder::start("app");
-    let out = output(&ring, "as-b", 0, 1.0);
+    // At delay 0 this capture-fed output stayed silent once it reported its
+    // latency; 100 ms leaves the renderer room, and the check is spectral.
+    let out = output(&ring, "as-b", 4800, 1.0);
     std::thread::sleep(Duration::from_secs(3));
     let captured = ring.take_peak();
     let held = capture.holds_all();
