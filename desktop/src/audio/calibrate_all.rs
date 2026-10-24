@@ -320,7 +320,12 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
         .into_iter()
         .filter(|speaker| speaker.enabled && speaker.playing)
         .map(|speaker| Member {
-            latency_ms: airplay_wait_ms(sender_ms, shown_ms.max(cast_offset_ms), speaker.delay_ms),
+            latency_ms: airplay_wait_ms(
+                sender_ms,
+                shown_ms.max(cast_offset_ms),
+                speaker.delay_ms,
+                speaker.reported_latency_ms,
+            ),
             id: speaker.id,
             class: Class::AirPlay,
             offset_ms: Some(shown_ms),

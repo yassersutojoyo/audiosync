@@ -183,6 +183,9 @@ pub struct AirPlayInfo {
     pub volume: f64,
     /// Its own delay d_s in milliseconds, 0 to 20 000.
     pub delay_ms: f64,
+    /// The latency it reported in this run, R_s in ms (a group's largest
+    /// member's), 0 when it reported nothing (S283).
+    pub reported_latency_ms: f64,
     /// Whether it plays right now.
     pub playing: bool,
     /// Whether AudioSync keeps credentials from pairing with it, on

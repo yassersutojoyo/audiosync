@@ -6404,4 +6404,60 @@ mod tests {
         assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
         assert!(backend.airplay_speakers().is_empty());
     }
+
+    // covers: S281, S178, S177
+    #[test]
+    fn a_new_airplay_latency_retimes_the_local_outputs_and_keeps_the_adjustment() {
+        use audiosync_airplay::latency::LatencySources;
+
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_airplay_adjustment(250.0);
+        assert_eq!(held(&backend), [Some(2000), Some(2150), Some(1750)]);
+        fake.report_latency(&kitchen, 220_000, LatencySources::AUDIO_LATENCY);
+        backend.poll();
+        assert_eq!(backend.airplay_sender_latency_ms(), Some(1970.0), "L_s + E");
+        assert_eq!(held(&backend), [Some(2220), Some(2370), Some(1970)]);
+        fake.set_latency(Duration::from_secs(2));
+        backend.poll();
+        assert_eq!(backend.airplay_sender_latency_ms(), Some(2220.0));
+        assert_eq!(backend.airplay_adjustment(), 250.0, "A stays");
+        assert_eq!(held(&backend), [Some(2470), Some(2620), Some(2220)]);
+    }
+
+    // covers: S283, S237
+    #[test]
+    fn calibrate_all_measures_relative_to_the_reported_latency() {
+        use audiosync_airplay::latency::LatencySources;
+        use audiosync_core::calibrate_all::{AIRPLAY_LATENCY_ALLOWANCE_MS, Class};
+        use audiosync_core::policy::delay::native_airplay_adjustment_ms;
+
+        use crate::audio::calibrate_all::lineup;
+
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        fake.report_latency(&kitchen, 220_000, LatencySources::AUDIO_LATENCY);
+        backend.poll();
+        let member = lineup(&backend)
+            .members
+            .into_iter()
+            .find(|member| member.class == Class::AirPlay)
+            .expect("Kitchen is measured");
+        assert_eq!(member.offset_ms, Some(1970.0), "the field: L_s + E + A");
+        assert_eq!(
+            member.latency_ms,
+            1970.0 + 220.0 + AIRPLAY_LATENCY_ALLOWANCE_MS,
+            "the window adds R_s"
+        );
+        // Heard 30 ms after the reference, Kitchen moves A by those 30 ms
+        // alone: E is already in L_s + E.
+        let sender_ms = backend.airplay_sender_latency_ms().expect("a sender");
+        assert_eq!(
+            native_airplay_adjustment_ms(1970.0 + 30.0, sender_ms),
+            Some(30.0)
+        );
+    }
 }
