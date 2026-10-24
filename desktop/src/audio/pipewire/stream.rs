@@ -813,16 +813,20 @@ struct Following {
     _clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>>,
 }
 
+/// The top processes of the apps a capture follows, each with its start
+/// time.
+type Roots = Vec<(u32, Option<u64>)>;
+
 /// Checks, on a thread of its own, whether every app a capture follows
 /// quit, so the capture's thread never walks `/proc` on a timer.
 struct QuitWatch {
-    roots: Arc<Mutex<Vec<(u32, Option<u64>)>>>,
+    roots: Arc<Mutex<Roots>>,
     stop: Option<mpsc::Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl QuitWatch {
-    fn start(roots: Vec<(u32, Option<u64>)>, status: &Arc<Status>) -> QuitWatch {
+    fn start(roots: Roots, status: &Arc<Status>) -> QuitWatch {
         let roots = Arc::new(Mutex::new(roots));
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = std::thread::Builder::new()
@@ -854,7 +858,7 @@ impl QuitWatch {
         }
     }
 
-    fn follow(&self, roots: Vec<(u32, Option<u64>)>) {
+    fn follow(&self, roots: Roots) {
         if let Ok(mut held) = self.roots.lock() {
             *held = roots;
         }
@@ -872,7 +876,7 @@ impl Drop for QuitWatch {
 }
 
 /// Each root of `filter` with its start time, as `/proc` has it now.
-fn roots_of(filter: &Filter) -> Vec<(u32, Option<u64>)> {
+fn roots_of(filter: &Filter) -> Roots {
     let Filter::Trees(roots) = filter else {
         return Vec::new();
     };

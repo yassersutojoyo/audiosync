@@ -24,8 +24,22 @@ fn detached(program: &str) {
         .unwrap();
 }
 
+/// Whether a process named `program` runs; a zombie doesn't count, since the
+/// CI step's shell reaps the daemons it started only when it ends.
 fn running(program: &str) -> bool {
-    !run("pgrep", &["-x", program]).trim().is_empty()
+    std::fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read_to_string(entry.path().join("stat")).ok())
+        .any(|stat| {
+            let Some((name, rest)) = stat
+                .split_once(" (")
+                .and_then(|(_, rest)| rest.rsplit_once(") "))
+            else {
+                return false;
+            };
+            name == program && !rest.starts_with('Z')
+        })
 }
 
 /// Waits up to `seconds` for `done` to hold.
