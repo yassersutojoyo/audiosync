@@ -15,7 +15,7 @@ use std::time::Duration;
 use pipewire as pw;
 use pw::device::{Device as DeviceProxy, DeviceListener};
 use pw::metadata::{Metadata, MetadataListener};
-use pw::node::{Node as NodeProxy, NodeListener, NodeState};
+use pw::node::{Node as NodeProxy, NodeChangeMask, NodeListener, NodeState};
 use pw::spa;
 use pw::spa::param::ParamType;
 use pw::spa::param::audio::AudioInfoRaw;
@@ -529,7 +529,11 @@ fn bind_node(
                 let mut graph = locked(&shared.graph);
                 if let Some(node) = graph.nodes.get_mut(&id) {
                     node.running = running;
-                    if output && let Some(props) = info.props() {
+                    // An info event without the PROPS flag carries no properties.
+                    if output
+                        && info.change_mask().contains(NodeChangeMask::PROPS)
+                        && let Some(props) = info.props()
+                    {
                         let props = owned(props);
                         if node.props != props {
                             node.props = props;

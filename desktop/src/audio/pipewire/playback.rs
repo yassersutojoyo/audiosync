@@ -70,6 +70,14 @@ pub struct Playback {
     thread: Option<JoinHandle<()>>,
 }
 
+#[cfg(test)]
+impl Playback {
+    /// The latency last handed to the renderer.
+    pub fn reported_latency_ns(&self) -> u64 {
+        self.status.latency_ns.load(Ordering::Relaxed)
+    }
+}
+
 impl RendererHandle for Playback {
     fn request_stop(&mut self) {
         self.control.request_fade_out();

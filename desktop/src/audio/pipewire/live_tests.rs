@@ -47,6 +47,40 @@ fn node_id(name: &str) -> u64 {
         .unwrap_or_else(|| panic!("no node {name}"))
 }
 
+/// The streams and clients the daemon lists, with the process IDs they
+/// name, for a failure message.
+fn processes_listed() -> Vec<String> {
+    let objects: serde_json::Value = serde_json::from_str(&run("pw-dump", &[])).unwrap();
+    let keys = [
+        "node.name",
+        "media.class",
+        "client.id",
+        "pipewire.sec.pid",
+        "application.process.id",
+    ];
+    objects
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|object| {
+            let props = &object["info"]["props"];
+            props["pipewire.sec.pid"].is_number()
+                || props["media.class"]
+                    .as_str()
+                    .is_some_and(|class| class.starts_with("Stream/"))
+        })
+        .map(|object| {
+            let props = &object["info"]["props"];
+            let named: Vec<String> = keys
+                .iter()
+                .filter(|key| !props[**key].is_null())
+                .map(|key| format!("{key}={}", props[*key]))
+                .collect();
+            format!("{} {}", object["id"], named.join(" "))
+        })
+        .collect()
+}
+
 fn set_default(name: &str) {
     run("wpctl", &["set-default", &node_id(name).to_string()]);
     wait();
@@ -260,8 +294,8 @@ fn median_offset(left: &[f32], right: &[f32]) -> i64 {
         .filter_map(|at| {
             right
                 .iter()
-                .find(|&&other| other + 100 >= at)
                 .map(|&other| other as i64 - at as i64)
+                .min_by_key(|offset| offset.abs())
         })
         .collect();
     assert!(offsets.len() >= 3, "too few bursts: {offsets:?}");
@@ -325,6 +359,7 @@ fn outputs_play_at_their_delay_and_gain() {
     let b = output(&ring, "as-b", 0, 0.5);
     std::thread::sleep(Duration::from_secs(4));
     let running = !a.has_ended() && !b.has_ended();
+    let latencies = [a.reported_latency_ns(), b.reported_latency_ns()];
     drop((a, b));
     let (left, right) = recorder.finish();
     let equal = median_offset(&left, &right);
@@ -338,7 +373,9 @@ fn outputs_play_at_their_delay_and_gain() {
     let (left, right) = recorder.finish();
     let delayed = median_offset(&left, &right);
 
-    let report = format!("offsets {equal} (equal delays) and {delayed} (4800 apart) frames");
+    let report = format!(
+        "offsets {equal} (equal delays) and {delayed} (4800 apart) frames, latencies {latencies:?} ns"
+    );
     assert!(running, "an output ended: {report}");
     assert!(equal.abs() <= 48, "{report}");
     assert!((delayed - 4800).abs() <= 48, "{report}");
@@ -570,7 +607,11 @@ fn a_pulseaudio_app_is_found_by_the_process_it_names() {
     ring.take_peak();
     std::thread::sleep(Duration::from_millis(500));
     let playing = ring.take_peak();
+    let listed = processes_listed();
     kill(app);
     drop(capture);
-    assert!(playing > 0.1, "peak {playing} from paplay");
+    assert!(
+        playing > 0.1,
+        "peak {playing} from paplay, process {app}; listed {listed:#?}"
+    );
 }
