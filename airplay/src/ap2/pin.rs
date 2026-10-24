@@ -74,6 +74,12 @@ impl PinPairing {
         self.state
     }
 
+    /// Whether the session takes the host's PIN now: not while the next M1
+    /// is held for a back-off (P150).
+    pub fn waiting_for_pin(&self) -> bool {
+        self.session.waiting_for_pin()
+    }
+
     pub fn poll_output(&mut self) -> Option<Output> {
         self.pump();
         self.outputs.pop_front()

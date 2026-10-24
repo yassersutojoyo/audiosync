@@ -306,7 +306,10 @@ fn a_wrong_pin_is_asked_for_again_on_the_same_connection() {
     assert_eq!(rig.pairing.state(), PairingState::WaitingForPin);
     rig.fake.hap.answers.clear();
     rig.fake.requests.clear();
+    assert!(rig.pairing.waiting_for_pin());
     assert_eq!(rig.submit(PIN), Ok(()));
+    assert!(!rig.pairing.waiting_for_pin(), "held, it takes no PIN");
+    assert_eq!(rig.submit(PIN), Err(PinError::NotWaiting));
     rig.advance(Duration::from_secs(4));
     assert!(rig.fake.requests.is_empty(), "{:?}", rig.fake.keys());
     rig.advance(Duration::from_secs(2));

@@ -573,10 +573,12 @@ impl Ap2Session {
         }
     }
 
-    /// Whether a PIN pairing waits for the host's PIN.
+    /// Whether a PIN pairing waits for the host's PIN; one whose next M1 is
+    /// held for a back-off has it already.
     pub fn waiting_for_pin(&self) -> bool {
         self.state == Ap2State::Pairing
             && self.in_flight.is_none()
+            && !self.pin_held
             && matches!(self.pairing, Some(Pairing::Setup(_)))
     }
 
@@ -621,7 +623,7 @@ impl Ap2Session {
             Ap2State::TearingDown => self.finish(),
             Ap2State::Connecting => self.fail(ErrorKind::Unreachable, None, None, None),
             // The receiver stopped showing its code (P136).
-            _ if self.waiting_for_pin() => self.fail(
+            _ if self.waiting_for_pin() || self.pin_held => self.fail(
                 ErrorKind::PairingCancelled,
                 Some(Method::Post),
                 None,

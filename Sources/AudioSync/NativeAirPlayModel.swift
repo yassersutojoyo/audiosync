@@ -734,7 +734,8 @@ struct NativeAirPlayModel {
             if promptTargets.values.contains(id) { continue }
             switch receivers[id]?.availability {
             case .available? where refusedOff.contains(id):
-                break
+                // Switched on without a new attempt (a recalled preset): off again, once.
+                plan.turnOff.append(.init(id: id, reason: .needsCode))
             case .available?:
                 plan.add.append(id)
             case .needsPin? where stages[id] == nil && !pairedInAttempt.contains(id):
