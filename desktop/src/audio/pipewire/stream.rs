@@ -14,8 +14,8 @@
 //! [`GapFill`] are then only ever used on one thread, without a lock; the
 //! callback never allocates, locks, blocks or logs.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -39,10 +39,15 @@ use pw::stream::{StreamFlags, StreamRc, StreamState};
 use pw::types::ObjectType;
 
 use super::format::{self, CAPTURE_FORMAT, Negotiated};
+use super::graph::{self, Filter, Graph};
+use super::procfs;
+use super::registry;
 use super::timing::{self, PacketClock};
 use crate::audio::backend::BackendError;
 use crate::audio::capture::{CaptureAttempt, CaptureConverter, Feeds, GapFill};
+use crate::audio::capture::{CaptureTarget, LoopbackMode};
 use crate::audio::controller::{CaptureHandle, CaptureState};
+use crate::audio::process::ProcessTable;
 
 /// How long a capture may take to connect before it counts as
 /// [`BackendError::NotResponding`].
@@ -64,6 +69,13 @@ const RUNNING: u8 = 0;
 const DEVICE_GONE: u8 = 1;
 const UNSUPPORTED_FORMAT: u8 = 2;
 const SERVICE_NOT_RUNNING: u8 = 3;
+const SOURCE_QUIT: u8 = 4;
+
+/// How often a linked capture looks for streams to link.
+const RELINK_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How many relink turns pass between checks that the captured apps run.
+const QUIT_CHECK_TURNS: u32 = 10;
 
 /// How the capture thread is doing, as the controller reads it.
 #[derive(Default)]
@@ -72,6 +84,11 @@ struct Status {
     failed: AtomicU8,
     /// Whether PipeWire agreed to [`CAPTURE_FORMAT`].
     agreed: AtomicBool,
+    /// Whether a linked capture failed to make a link it wants.
+    missing_links: AtomicBool,
+    /// What PipeWire said with the first failure, for a live test's message.
+    #[cfg(test)]
+    reason: std::sync::Mutex<String>,
 }
 
 impl Status {
@@ -87,9 +104,30 @@ impl Status {
             .compare_exchange(RUNNING, code, Ordering::AcqRel, Ordering::Acquire);
     }
 
+    /// [`Status::fail`], keeping `why` for a live test's message.
+    fn fail_because(&self, error: &BackendError, why: impl FnOnce() -> String) {
+        #[cfg(test)]
+        if let Ok(mut reason) = self.reason.lock()
+            && reason.is_empty()
+        {
+            *reason = why();
+        }
+        #[cfg(not(test))]
+        let _ = why;
+        self.fail(error);
+    }
+
+    /// Records that every app the capture follows quit.
+    fn quit(&self) {
+        let _ =
+            self.failed
+                .compare_exchange(RUNNING, SOURCE_QUIT, Ordering::AcqRel, Ordering::Acquire);
+    }
+
     fn state(&self) -> CaptureState {
         match self.failed.load(Ordering::Acquire) {
             RUNNING => CaptureState::Running,
+            SOURCE_QUIT => CaptureState::SourceQuit,
             UNSUPPORTED_FORMAT => CaptureState::Failed(BackendError::UnsupportedFormat),
             SERVICE_NOT_RUNNING => CaptureState::Failed(BackendError::ServiceNotRunning),
             _ => CaptureState::Failed(BackendError::DeviceGone),
@@ -101,7 +139,9 @@ impl Status {
 /// stream and waits for its thread.
 pub struct MonitorCapture {
     status: Arc<Status>,
-    stop: pw::channel::Sender<()>,
+    stop: pw::channel::Sender<Message>,
+    /// Whether it links apps' streams, so it can move to other apps.
+    linked: bool,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -116,12 +156,68 @@ impl CaptureHandle for MonitorCapture {
             .load(Ordering::Acquire)
             .then_some(format::SETUP)
     }
+
+    fn retarget(&mut self, target: &CaptureTarget) -> bool {
+        let Some(filter) = filter_of(target, 0) else {
+            return false;
+        };
+        if !self.linked || matches!(filter, Filter::Except(_)) {
+            return false;
+        }
+        self.stop.send(Message::Retarget(filter)).is_ok()
+    }
+
+    fn holds_all(&self) -> bool {
+        !self.status.missing_links.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+impl MonitorCapture {
+    /// What PipeWire said with the first failure; empty for none.
+    pub fn failure_reason(&self) -> String {
+        self.status
+            .reason
+            .lock()
+            .map(|reason| reason.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// What the controller tells a capture's thread.
+pub enum Message {
+    Stop,
+    /// Link the streams of these apps instead.
+    Retarget(Filter),
+}
+
+/// The streams a capture of `target` links: every app but `own_pid`'s tree
+/// (or the activation's target, for 0) for the whole system, else the
+/// apps' trees. `None` for an input device.
+pub fn filter_of(target: &CaptureTarget, own_pid: u32) -> Option<Filter> {
+    match target {
+        CaptureTarget::Loopback(activation) => Some(match activation.mode {
+            LoopbackMode::ExcludeTree => Filter::Except(if own_pid == 0 {
+                activation.target_pid
+            } else {
+                own_pid
+            }),
+            LoopbackMode::IncludeTree => Filter::Trees(vec![activation.target_pid]),
+        }),
+        CaptureTarget::Mix(activations) => Some(Filter::Trees(
+            activations
+                .iter()
+                .map(|activation| activation.target_pid)
+                .collect(),
+        )),
+        CaptureTarget::Input { .. } => None,
+    }
 }
 
 impl Drop for MonitorCapture {
     fn drop(&mut self) {
         // Fails only when the thread already left its loop.
-        let _ = self.stop.send(());
+        let _ = self.stop.send(Message::Stop);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -135,36 +231,52 @@ impl Drop for MonitorCapture {
 pub enum Wiring {
     /// The default output's monitor, moving to the new default when it
     /// changes.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the whole system is captured through links now")
+    )]
     DefaultOutputMonitor,
+    /// The apps' streams a [`Filter`] picks, linked to the stream one by one
+    /// as they appear; the session manager links nothing to it.
+    Links,
+    /// An input device, by the `target.object` in the [`Plan`].
+    Input,
+}
+
+/// What a capture links to: the wiring, the apps a linked one takes, and
+/// the device an input one records.
+pub struct Plan {
+    pub wiring: Wiring,
+    pub filter: Option<Filter>,
+    pub serial: Option<String>,
 }
 
 impl Wiring {
     fn flags(self) -> StreamFlags {
         match self {
-            Wiring::DefaultOutputMonitor => StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS,
+            Wiring::DefaultOutputMonitor | Wiring::Input => {
+                StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS
+            }
+            Wiring::Links => StreamFlags::MAP_BUFFERS,
         }
     }
 
     /// The node to connect to; `None` leaves it to the session manager.
     fn target(self) -> Option<u32> {
         match self {
-            Wiring::DefaultOutputMonitor => None,
+            Wiring::DefaultOutputMonitor | Wiring::Links | Wiring::Input => None,
         }
     }
 
     /// Whether the stream records what an output plays rather than an input.
     fn captures_output(self) -> bool {
-        match self {
-            Wiring::DefaultOutputMonitor => true,
-        }
+        matches!(self, Wiring::DefaultOutputMonitor)
     }
 
     /// Whether the stream is moved when the default output changes: the
     /// session manager leaves an already linked stream where it is.
     fn follows_default(self) -> bool {
-        match self {
-            Wiring::DefaultOutputMonitor => true,
-        }
+        matches!(self, Wiring::DefaultOutputMonitor)
     }
 }
 
@@ -203,12 +315,29 @@ impl DefaultOutput {
 /// Starts capturing what `wiring` links to into `writer` through
 /// `equalizer`, handing the same audio to `feeds`. Returns once PipeWire
 /// agreed on the format and the stream is linked, or with why it couldn't.
+#[cfg_attr(not(test), expect(dead_code, reason = "the monitor wiring is tested"))]
 pub fn start(
     wiring: Wiring,
     writer: RingWriter,
     equalizer: EqProcessor,
     feeds: Feeds,
 ) -> Result<MonitorCapture, BackendError> {
+    let plan = Plan {
+        wiring,
+        filter: None,
+        serial: None,
+    };
+    start_plan(plan, writer, equalizer, feeds)
+}
+
+/// [`start`] for any [`Plan`].
+pub fn start_plan(
+    plan: Plan,
+    writer: RingWriter,
+    equalizer: EqProcessor,
+    feeds: Feeds,
+) -> Result<MonitorCapture, BackendError> {
+    let linked = plan.filter.is_some();
     let converter = CaptureConverter::new(CAPTURE_FORMAT, writer, equalizer, feeds)?;
     let status = Arc::new(Status::default());
     let (stop, stop_receiver) = pw::channel::channel();
@@ -218,7 +347,7 @@ pub fn start(
         .name("audiosync-pw".to_owned())
         .spawn(move || {
             let served = serve(
-                wiring,
+                plan,
                 converter,
                 stop_receiver,
                 ready.clone(),
@@ -236,6 +365,7 @@ pub fn start(
     let capture = MonitorCapture {
         status,
         stop,
+        linked,
         thread: Some(thread),
     };
     match ready_receiver.recv_timeout(START_TIMEOUT) {
@@ -348,12 +478,13 @@ fn enum_format() -> Result<Vec<u8>, BackendError> {
 /// stream fails. Reports through `ready` once the stream is linked, or why
 /// it couldn't be; an `Err` returned is a failure before the loop ran.
 fn serve(
-    wiring: Wiring,
+    plan: Plan,
     converter: CaptureConverter,
-    stop: pw::channel::Receiver<()>,
+    stop: pw::channel::Receiver<Message>,
     ready: mpsc::Sender<Result<(), BackendError>>,
     status: &Arc<Status>,
 ) -> Result<(), BackendError> {
+    let wiring = plan.wiring;
     pw::init();
     // Without a PipeWire daemon there is no connection to make.
     let main_loop =
@@ -371,9 +502,11 @@ fn serve(
             let main_loop = main_loop.clone();
             let status = Arc::clone(status);
             let ready = ready.clone();
-            move |id, _seq, _res, _message| {
-                if id == pw::core::PW_ID_CORE {
-                    status.fail(&BackendError::DeviceGone);
+            move |id, _seq, res, message| {
+                if super::connection_lost(id, res) {
+                    status.fail_because(&BackendError::DeviceGone, || {
+                        format!("core error {res}: {message}")
+                    });
                     let _ = ready.send(Err(BackendError::DeviceGone));
                     main_loop.quit();
                 }
@@ -392,6 +525,14 @@ fn serve(
         // The output may still suspend while nothing plays; the timer fills.
         *pw::keys::NODE_PASSIVE => "true",
     };
+    let mut properties = properties;
+    if !matches!(wiring, Wiring::DefaultOutputMonitor) {
+        properties.insert("node.dont-reconnect", "true");
+    }
+    if let Some(serial) = &plan.serial {
+        properties.insert(TARGET_KEY, serial.as_str());
+        properties.insert("node.dont-fallback", "true");
+    }
     let stream =
         StreamRc::new(core.clone(), NODE_NAME, properties).map_err(|_| BackendError::DeviceGone)?;
 
@@ -412,15 +553,19 @@ fn serve(
                 StreamState::Paused | StreamState::Streaming => {
                     let _ = ready.send(Ok(()));
                 }
-                StreamState::Error(_) => {
-                    status.fail(&BackendError::DeviceGone);
+                StreamState::Error(message) => {
+                    status.fail_because(&BackendError::DeviceGone, || {
+                        format!("stream error from {old:?}: {message}")
+                    });
                     let _ = ready.send(Err(BackendError::DeviceGone));
                     main_loop.quit();
                 }
                 StreamState::Unconnected
                     if matches!(old, StreamState::Paused | StreamState::Streaming) =>
                 {
-                    status.fail(&BackendError::DeviceGone);
+                    status.fail_because(&BackendError::DeviceGone, || {
+                        format!("stream unconnected from {old:?}")
+                    });
                     main_loop.quit();
                 }
                 _ => {}
@@ -558,6 +703,20 @@ fn serve(
             .register()
     });
 
+    let linker = plan
+        .filter
+        .map(|filter| Linker::follow(&registry, &core, &stream, filter, status));
+    let _relink_timer = linker.as_ref().map(|following| {
+        let linker = Rc::clone(&following.linker);
+        let timer = main_loop.loop_().add_timer(move |_| {
+            if let Ok(mut linker) = linker.try_borrow_mut() {
+                linker.tick();
+            }
+        });
+        let _ = timer.update_timer(Some(RELINK_INTERVAL), Some(RELINK_INTERVAL));
+        timer
+    });
+
     let idle_feed = Rc::clone(&feed);
     let timer = main_loop.loop_().add_timer(move |_| {
         if let Ok(mut feed) = idle_feed.try_borrow_mut() {
@@ -568,7 +727,17 @@ fn serve(
 
     let _stop = stop.attach(main_loop.loop_(), {
         let main_loop = main_loop.clone();
-        move |()| main_loop.quit()
+        let linker = linker
+            .as_ref()
+            .map(|following| Rc::clone(&following.linker));
+        move |message| match message {
+            Message::Stop => main_loop.quit(),
+            Message::Retarget(filter) => {
+                if let Some(linker) = &linker {
+                    linker.borrow_mut().retarget(filter);
+                }
+            }
+        }
     });
     main_loop.run();
     // PipeWire reuses node IDs: the target set for this node must not pin
@@ -583,9 +752,220 @@ fn serve(
     }
     // The metadata's listener holds the stream; it goes first.
     drop(registry_listener);
+    drop(linker);
     defaults.borrow_mut().take();
     let _ = stream.disconnect();
     Ok(())
+}
+
+/// The links of a linked capture: a graph of its own from the registry,
+/// the links it made, and, for a capture of apps, the apps it follows.
+struct Linker {
+    core: pw::core::CoreRc,
+    stream: StreamRc,
+    filter: Filter,
+    graph: Graph,
+    /// The links made, each kept by its proxy.
+    links: BTreeMap<graph::Link, MadeLink>,
+    /// The apps' top processes and their start times.
+    roots: Vec<(u32, Option<u64>)>,
+    status: Arc<Status>,
+    /// Whether the graph changed since the last relink.
+    dirty: bool,
+    turns: u32,
+}
+
+/// A link the linker made, and whether the daemon put it in its error
+/// state.
+struct MadeLink {
+    _proxy: pw::link::Link,
+    _listener: pw::link::LinkListener,
+    failed: Rc<Cell<bool>>,
+}
+
+impl MadeLink {
+    fn follow(proxy: pw::link::Link, status: &Arc<Status>) -> Self {
+        let failed = Rc::new(Cell::new(false));
+        let listener = proxy
+            .add_listener_local()
+            .info({
+                let failed = Rc::clone(&failed);
+                let status = Arc::clone(status);
+                move |info| {
+                    if matches!(info.state(), pw::link::LinkState::Error(_)) {
+                        failed.set(true);
+                        status.missing_links.store(true, Ordering::Release);
+                    }
+                }
+            })
+            .register();
+        Self {
+            _proxy: proxy,
+            _listener: listener,
+            failed,
+        }
+    }
+}
+
+/// A linker and the registry listener that feeds it.
+struct Following {
+    linker: Rc<RefCell<Linker>>,
+    _listener: pw::registry::Listener,
+    _clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>>,
+}
+
+/// Each root of `filter` with its start time, as `/proc` has it now.
+fn roots_of(filter: &Filter) -> Vec<(u32, Option<u64>)> {
+    let Filter::Trees(roots) = filter else {
+        return Vec::new();
+    };
+    let processes = procfs::snapshot().unwrap_or_default();
+    roots
+        .iter()
+        .map(|&pid| (pid, processes.get(pid).and_then(|entry| entry.created)))
+        .collect()
+}
+
+/// Whether none of `roots` still runs: each is gone, or its PID now
+/// belongs to a process started at another time.
+fn all_quit(roots: &[(u32, Option<u64>)], processes: &ProcessTable) -> bool {
+    roots.iter().all(|&(pid, created)| {
+        processes
+            .get(pid)
+            .is_none_or(|entry| created.is_some() && entry.created != created)
+    })
+}
+
+impl Linker {
+    fn follow(
+        registry: &pw::registry::RegistryRc,
+        core: &pw::core::CoreRc,
+        stream: &StreamRc,
+        filter: Filter,
+        status: &Arc<Status>,
+    ) -> Following {
+        let linker = Rc::new(RefCell::new(Linker {
+            core: core.clone(),
+            stream: stream.clone(),
+            roots: roots_of(&filter),
+            filter,
+            graph: Graph::default(),
+            links: BTreeMap::new(),
+            status: Arc::clone(status),
+            dirty: true,
+            turns: 0,
+        }));
+        let clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>> = Rc::default();
+        let listener = registry
+            .add_listener_local()
+            .global({
+                let linker = Rc::clone(&linker);
+                let clients = Rc::clone(&clients);
+                let bind = registry.clone();
+                move |global| {
+                    let (Some(kind), Some(props)) = (registry::kind(&global.type_), global.props)
+                    else {
+                        return;
+                    };
+                    if let Ok(mut linker) = linker.try_borrow_mut() {
+                        linker.graph.add(global.id, kind, registry::owned(props));
+                        linker.dirty = true;
+                    }
+                    if kind == graph::Kind::Client {
+                        let id = global.id;
+                        let linker = Rc::clone(&linker);
+                        let followed = registry::follow_client(&bind, global, move |props| {
+                            if let Ok(mut linker) = linker.try_borrow_mut() {
+                                linker.graph.add(id, graph::Kind::Client, props);
+                                linker.dirty = true;
+                            }
+                        });
+                        if let Some(followed) = followed {
+                            clients.borrow_mut().insert(id, followed);
+                        }
+                    }
+                }
+            })
+            .global_remove({
+                let linker = Rc::clone(&linker);
+                let clients = Rc::clone(&clients);
+                move |id| {
+                    clients.borrow_mut().remove(&id);
+                    if let Ok(mut linker) = linker.try_borrow_mut() {
+                        linker.graph.remove(id);
+                        linker.dirty = true;
+                    }
+                }
+            })
+            .register();
+        Following {
+            linker,
+            _listener: listener,
+            _clients: clients,
+        }
+    }
+
+    fn retarget(&mut self, filter: Filter) {
+        self.roots = roots_of(&filter);
+        self.filter = filter;
+        self.dirty = true;
+    }
+
+    /// Relinks after the graph changed, and now and then checks that the
+    /// captured apps still run.
+    fn tick(&mut self) {
+        self.turns = self.turns.wrapping_add(1);
+        let check_quit = !self.roots.is_empty() && self.turns.is_multiple_of(QUIT_CHECK_TURNS);
+        if !self.dirty && !check_quit {
+            return;
+        }
+        let Ok(processes) = procfs::snapshot() else {
+            return;
+        };
+        if check_quit && all_quit(&self.roots, &processes) {
+            self.status.quit();
+        }
+        if self.dirty {
+            self.dirty = false;
+            self.relink(&processes);
+        }
+    }
+
+    fn relink(&mut self, processes: &ProcessTable) {
+        let capture = self.stream.node_id();
+        let (graph, filter) = (&self.graph, &self.filter);
+        let wanted = graph.wanted_links(capture, |id| {
+            filter.takes(graph.owner_pid(id, processes), processes)
+        });
+        self.links.retain(|link, _| wanted.contains(link));
+        // A link in its error state stays, counted as missing, rather than
+        // being made again on every change.
+        let mut missing = self.links.values().any(|made| made.failed.get());
+        for link in wanted {
+            if self.links.contains_key(&link) {
+                continue;
+            }
+            let properties = pw::properties::properties! {
+                "link.output.node" => link.output_node.to_string(),
+                "link.output.port" => link.output_port.to_string(),
+                "link.input.node" => link.input_node.to_string(),
+                "link.input.port" => link.input_port.to_string(),
+                // The links go when AudioSync's connection does.
+                "object.linger" => "false",
+            };
+            match self
+                .core
+                .create_object::<pw::link::Link>("link-factory", &properties)
+            {
+                Ok(proxy) => {
+                    self.links
+                        .insert(link, MadeLink::follow(proxy, &self.status));
+                }
+                Err(_) => missing = true,
+            }
+        }
+        self.status.missing_links.store(missing, Ordering::Release);
+    }
 }
 
 /// Connects `stream` the way `wiring` says, asking for `format`.

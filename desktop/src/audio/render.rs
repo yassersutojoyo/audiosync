@@ -92,8 +92,8 @@ impl RenderPipeline {
     /// when it is on time, which the output's lead counts rather than a late
     /// wake's larger fill (S206). Call it before the first render.
     #[cfg_attr(
-        all(not(windows), not(test)),
-        expect(dead_code, reason = "the WASAPI render loop sets it")
+        all(not(windows), not(target_os = "linux"), not(test)),
+        expect(dead_code, reason = "the WASAPI and PipeWire render loops set it")
     )]
     pub fn set_period_frames(&mut self, frames: usize) {
         self.renderer.set_period_frames(frames);
@@ -111,6 +111,18 @@ impl RenderPipeline {
     /// (S207).
     pub fn render(&mut self, out: &mut [f32]) {
         self.renderer.render_at(out, clock::now_ns());
+    }
+
+    /// [`RenderPipeline::render`] for a callback whose first frame is heard
+    /// at `output_time_ns` on the core's clock, read at `now_ns`, so a
+    /// fade-out's end is published and the output's lateness is known
+    /// (S207, S209).
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "the PipeWire render loop knows its output time")
+    )]
+    pub fn render_timed(&mut self, out: &mut [f32], output_time_ns: u64, now_ns: u64) {
+        self.renderer.render_timed_at(out, output_time_ns, now_ns);
     }
 
     /// Whether the endpoint has played the requested fade-out (S185): the
