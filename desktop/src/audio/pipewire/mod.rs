@@ -36,10 +36,15 @@ pub use driver::open;
 /// The core's object ID, `PW_ID_CORE`.
 const CORE_ID: u32 = 0;
 
+/// Linux's `EPIPE`, which the core reports when the daemon is gone.
+const BROKEN_PIPE: i32 = 32;
+
 /// Whether an error event on a connection's core means the connection is
-/// gone, for the error `res` (a negative errno) about object `id`.
-pub fn connection_lost(id: u32, _res: i32) -> bool {
-    id == CORE_ID
+/// gone, for the error `res` (a negative errno) about object `id`. Other
+/// errors come on the core too and leave it working, such as "unknown
+/// resource" for a request about an object the daemon just removed.
+pub fn connection_lost(id: u32, res: i32) -> bool {
+    id == CORE_ID && res == -BROKEN_PIPE
 }
 
 #[cfg(test)]
