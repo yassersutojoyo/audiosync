@@ -1978,8 +1978,11 @@ do {
         }
         check(firstAction == #selector(MenuAction.choose(_:)), "Gear menu: each item sends its own action to its target",
               firstAction.map(NSStringFromSelector) ?? "none")
-        if let target = firstTarget as? NSObject, let action = firstAction, target.responds(to: action) {
-            _ = target.perform(action, with: nil)
+        // Its own pool, so the weak load and the call leave nothing autoreleased that holds the target.
+        autoreleasepool {
+            if let target = firstTarget as? NSObject, let action = firstAction, target.responds(to: action) {
+                _ = target.perform(action, with: nil)
+            }
         }
         check(chosen == 1,
               "Gear menu: an item chosen after the pop-up call returns still runs its action once nothing else holds the menu")
