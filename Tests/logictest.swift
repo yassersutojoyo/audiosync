@@ -6597,6 +6597,13 @@ do {
             && ["apps:", "except:"].allSatisfy { RemoteSource.pickerID($0) == nil },
           "web remote: a several-apps source in use is listed under apps with the picker's name and maps back",
           mixSources.map(\.id).joined(separator: " "))
+    let mixPick = RemoteCommand(json: "{\"type\":\"source\",\"id\":\"\(except.defaultsValue)\"}")
+    func planMix(from sourceID: String) -> [RemoteAction]? {
+        mixPick.map { RemoteAction.plan($0, rows: rows, sources: mixSources, sourceID: sourceID) }
+    }
+    check(planMix(from: except.defaultsValue) == [RemoteAction]()
+            && planMix(from: "system") == [RemoteAction.selectSource(pickerID: except.defaultsValue)],
+          "web remote: a pick of the several-apps source in use changes nothing; from another source it selects it")
 
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }
