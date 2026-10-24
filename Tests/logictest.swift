@@ -2160,15 +2160,25 @@ do {
         check(m.apply(.pinNeeded(id: "B2")) == .cancelPairing("B2"),
               "native pairing: a PIN request nobody waits for cancels its pairing")
 
-        // A refused stored pairing pairs again, once per attempt.
         m.removed("B2")
-        check(m.turnedOnByUser("B2") == nil, "native pairing: a paired Apple TV just joins")
+        check(m.refusedOff == ["B2"]
+                && m.joinable(["native:B2"], after: [], stopped: false).isEmpty
+                && m.plan(streaming: true, enabled: ["native:B2"]).add.isEmpty,
+              "native pairing: turned off for a refused pairing, neither auto-connect nor the plan adds it again")
+
+        // A refused stored pairing is forgotten and pairs again, once per attempt.
+        check(m.turnedOnByUser("B2") == nil && m.refusedOff.isEmpty, "native pairing: a paired Apple TV just joins")
         m.added("B2")
+        check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .repair("B2")
+                && m.stages["B2"] == .pairing(afterWrongPin: false),
+              "native pairing: within the user's attempt, a refused stored pairing is forgotten and pairs again, though still listed as paired")
         m.apply(.changed(receiver("B2", "B2", .needsPin)))   // the sender forgot the pairing it turned down
-        check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .startPairing("B2"),
-              "native pairing: within the user's attempt, a refused stored pairing pairs again")
+        m.removed("B2")   // it leaves the sender while it pairs
+        check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,
+              "native pairing: while it pairs again, the speaker waits instead of going off")
         check(m.apply(.paired(id: "B2", storeNote: "")) == .paired("native:B2"), "native pairing: paired again")
         m.apply(.changed(receiver("B2", "B2", .available)))
+        m.added("B2")
         check(m.apply(.state(id: "B2", .playing, retryMs: nil)) == .playingChanged("native:B2", playing: true)
                 && m.attempts.isEmpty,
               "native pairing: once it plays, the user's attempt is over")

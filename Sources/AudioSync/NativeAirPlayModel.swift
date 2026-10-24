@@ -302,6 +302,9 @@ enum NativeAirPlayOutcome: Equatable {
     case senderFailed
     /// Start a PIN pairing with the receiver (receiver ID).
     case startPairing(String)
+    /// Forget the receiver's stored pairing, which it refused, then start a
+    /// PIN pairing with it (receiver ID).
+    case repair(String)
     /// Stop the pairing with the receiver (receiver ID): nobody waits for it.
     case cancelPairing(String)
     /// A PIN or password prompt was queued: show the next one.
@@ -437,7 +440,8 @@ struct NativeAirPlayModel {
     func joinable(_ rows: [String], after known: Set<String>, stopped: Bool) -> [String] {
         guard !stopped else { return [] }
         return rows.filter { id in
-            guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id) else { return false }
+            guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
+                  !refusedOff.contains(receiver) else { return false }
             return receivers[receiver]?.availability == .available
         }
     }
@@ -467,6 +471,10 @@ struct NativeAirPlayModel {
     /// Attempts that paired already: refused again, they go off instead of
     /// pairing in a loop.
     private(set) var pairedInAttempt: Set<String> = []
+    /// Receivers turned off because they refused a pairing: neither
+    /// auto-connect nor the plan adds them again until the user turns them
+    /// on, so a refusal never loops.
+    private(set) var refusedOff: Set<String> = []
     /// The target each member's password prompt is for (P176): the prompt
     /// names the member, and its answer restarts the target.
     private(set) var promptTargets: [String: String] = [:]
@@ -487,6 +495,7 @@ struct NativeAirPlayModel {
     mutating func turnedOnByUser(_ id: String) -> NativeAirPlayOutcome? {
         endAttempt(id)
         attempts.insert(id)
+        refusedOff.remove(id)
         if NativeTarget.kind(id) != nil {
             var outcome: NativeAirPlayOutcome?
             for member in members(of: id)
@@ -618,21 +627,25 @@ struct NativeAirPlayModel {
     }
 
     /// A speaker's session asked for a password or a pairing (`problem`):
-    /// within the user's attempt, a password is asked for (again) and an
-    /// Apple TV whose stored pairing it turned down pairs again, once;
-    /// otherwise it goes off with why.
+    /// within the user's attempt, a password is asked for (again) and a
+    /// receiver that turned its stored pairing down forgets it and pairs
+    /// again, once, whatever its listing still says; otherwise it goes off
+    /// with why, and one refused pairing stays off (`refusedOff`).
     private mutating func accessNeeded(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome {
         let app = NativeAirPlayID.app(id)
         if problem == .wrongPassword || problem == .passwordRequired { passwords.remove(id) }
+        if problem == .pairingRequired && (!attempts.contains(id) || pairedInAttempt.contains(id)) {
+            refusedOff.insert(id)
+        }
         guard attempts.contains(id) else { return .turnOff(app, problem.turnOff) }
         switch problem {
         case .passwordRequired, .wrongPassword:
             return ask(id, .askingPassword(wrong: problem == .wrongPassword))
         case .pairingRequired where pairedInAttempt.contains(id):
             return .turnOff(app, .stillNeedsCode)
-        case .pairingRequired where receivers[id]?.availability == .needsPin:
+        case .pairingRequired:
             stages[id] = .pairing(afterWrongPin: false)
-            return .startPairing(id)
+            return .repair(id)
         default:
             return .turnOff(app, problem.turnOff)
         }
@@ -669,7 +682,8 @@ struct NativeAirPlayModel {
         case .pairingFailed(let id, let wrongPin, let problem, _):
             guard stages[id]?.pairingRuns == true else { return nil }
             if wrongPin {
-                // The receiver shows a new PIN for a new pairing (P52).
+                // An AirPlay 1 pairing ends at a wrong PIN and starts again
+                // from `/pair-pin-start` (P52).
                 stages[id] = .pairing(afterWrongPin: true)
                 return .startPairing(id)
             }
@@ -719,6 +733,8 @@ struct NativeAirPlayModel {
             // A target waits while a member's password prompt is open.
             if promptTargets.values.contains(id) { continue }
             switch receivers[id]?.availability {
+            case .available? where refusedOff.contains(id):
+                break
             case .available?:
                 plan.add.append(id)
             case .needsPin? where stages[id] == nil && !pairedInAttempt.contains(id):

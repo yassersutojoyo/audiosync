@@ -284,7 +284,10 @@ fn a_wrong_pin_is_asked_for_again_on_the_same_connection() {
     let keys = rig.fake.keys();
     let starts = keys.iter().filter(|k| *k == "POST /pair-pin-start").count();
     assert_eq!(starts, 2, "{keys:?}");
-    assert_eq!(keys.last().map(String::as_str), Some("POST /pair-pin-start"));
+    assert_eq!(
+        keys.last().map(String::as_str),
+        Some("POST /pair-pin-start")
+    );
     assert_eq!(rig.pairing.state(), PairingState::WaitingForPin);
     assert_eq!(rig.failure(), None);
     assert_eq!(rig.submit(PIN), Ok(()));
