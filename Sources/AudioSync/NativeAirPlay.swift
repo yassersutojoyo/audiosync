@@ -56,6 +56,13 @@ final class NativeAirPlay {
     /// the uptime of the last status line (queue only; `logStatusIfDue`).
     private var addedIDs: [String] = []
     private var lastStatus: TimeInterval = 0
+    /// Whether a speaker sounded at the last poll (queue only).
+    private var lastSounding = false
+    /// The offset E - e_s each row in the sender was given (main queue, S283).
+    private var sentOffsets: [String: Double] = [:]
+    /// The receivers warned this session that they report more than the
+    /// largest Lf leaves room for (main queue, P200).
+    private var latencyWarned: Set<String> = []
 
     /// `onChange` gets each discovery change, `onEvent` each speaker or
     /// timeline event with what the model made of it, on the main queue.
@@ -85,7 +92,11 @@ final class NativeAirPlay {
     /// Adds the receiver `id` as a speaker at slider position `volume` (0 to
     /// 100) times the master. Main queue.
     func add(_ id: String, volume: Double) {
+        let empty = model.states.isEmpty
         model.added(id)
+        // Lf and E are set before the speaker joins, so one the stream
+        // starts with gets them with no change at all (P201).
+        syncLatency(canChange: empty)
         if Self.pcmDebugIDs.contains(id) {
             DebugTrace.log("[AudioSync] native AirPlay: \(id) may use PCM (AUDIOSYNC_AIRPLAY_PCM)")
         }
@@ -98,20 +109,26 @@ final class NativeAirPlay {
                 // Gone from the sender's list meanwhile: the next reconcile decides again.
                 DispatchQueue.main.async {
                     self.model.removed(id)
+                    self.sentOffsets.removeValue(forKey: id)
                     DebugTrace.log("[AudioSync] native AirPlay: \(id) could not be added; it is no longer listed")
                 }
             }
         }
+        sendOffsets()
     }
 
     /// Removes the speaker `id` from the sender. Main queue.
     func remove(_ id: String) {
         model.removed(id)
+        sentOffsets.removeValue(forKey: id)
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
             _ = asc_airplay_remove_speaker(handle, id)
             self.addedIDs.removeAll { $0 == id }
         }
+        if model.states.isEmpty { latencyWarned.removeAll() }
+        syncLatency(canChange: model.states.isEmpty)
+        sendOffsets()
     }
 
     /// The slider position (0 to 100) of the speaker `id`, live.
@@ -270,6 +287,77 @@ final class NativeAirPlay {
             guard let handle = self?.handle else { return }
             asc_airplay_restart_timeline(handle)
         }
+        // The restart silences every speaker, so a held E applies now.
+        syncLatency(canChange: true)
+        sendOffsets()
+    }
+
+    /// The core's Lf rule over reported latencies in microseconds (P200).
+    static func sessionLatencyFrames(_ reportedUs: [Int64]) -> UInt32 {
+        reportedUs.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
+    }
+
+    /// Sets the stream's Lf and E from the latencies the rows in the sender
+    /// reported (S280, S283); E changes only when `canChange` or no speaker
+    /// sounds (P201). Main queue.
+    private func syncLatency(canChange: Bool) {
+        let rows = model.states.keys.sorted()
+        let members = rows.map { model.members(of: $0) }
+        for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > 1_500_000 {
+            guard latencyWarned.insert(id).inserted else { continue }
+            DebugTrace.log("[AudioSync] native AirPlay: \(model.names[id] ?? id) (\(id)) warning: reports "
+                + String(format: "%.0f", model.receiverLatency.reportedMs(id))
+                + " ms, more than the largest Lf of 2000 ms leaves room for; it plays at 2000 ms")
+        }
+        if let frames = model.receiverLatency.newFrames(over: Array(members.joined()), rule: Self.sessionLatencyFrames) {
+            queue.async { [weak self] in
+                guard let handle = self?.handle else { return }
+                asc_airplay_set_latency(handle, frames)
+            }
+            DebugTrace.log("[AudioSync] native AirPlay: " + latencyLine("Lf set to \(frames) frames", rows: rows))
+        }
+        switch model.receiverLatency.updateEstimate(rows: members, canChange: canChange || !model.sounding) {
+        case .applied:
+            // L = L_s + E + A moves: the local outputs follow (S281).
+            onEvent(.estimate(detail: latencyLine(String(format: "E set to %.0f ms", model.receiverLatency.estimateMs),
+                                                  rows: rows)),
+                    .latencyChanged)
+        case .held:
+            let latency = model.receiverLatency
+            var line = String(format: "[AudioSync] native AirPlay: E %.0f ms held while a speaker sounds; it stays "
+                              + "%.0f ms until the stream is empty or restarts", latency.heldMs ?? 0, latency.estimateMs)
+            for row in rows where latency.lateMs(of: model.members(of: row)) > 0 {
+                let late = Int(latency.lateMs(of: model.members(of: row)).rounded())
+                line += "; \(model.names[row] ?? row) plays \(late) ms late until then"
+            }
+            DebugTrace.log(line)
+        case .unchanged:
+            break
+        }
+    }
+
+    /// Lf, E and each row's offset E - e_s, for the debug log (S282).
+    private func latencyLine(_ what: String, rows: [String]) -> String {
+        let latency = model.receiverLatency
+        let each = rows.map {
+            "\(model.names[$0] ?? $0) offset \(Int(latency.offsetMs(of: model.members(of: $0)).rounded())) ms"
+        }
+        return "\(what): Lf \(latency.frames) frames, E \(Int(latency.estimateMs.rounded())) ms, over "
+            + (each.isEmpty ? "no speaker" : each.joined(separator: "; "))
+    }
+
+    /// Gives each row in the sender whose offset E - e_s moved its new one
+    /// (S283). Main queue, after the row's add on the queue.
+    private func sendOffsets() {
+        for row in model.states.keys.sorted() {
+            let offset = model.receiverLatency.offsetMs(of: model.members(of: row))
+            guard offset != (sentOffsets[row] ?? 0) else { continue }
+            sentOffsets[row] = offset
+            queue.async { [weak self] in
+                guard let handle = self?.handle else { return }
+                _ = asc_airplay_set_speaker_offset(handle, row, offset)
+            }
+        }
     }
 
     /// Tears everything down and waits for it (at most about 2 s): the input
@@ -427,14 +515,17 @@ final class NativeAirPlay {
         while asc_airplay_next_event(handle, &rawEvent) {
             if let event = Self.event(rawEvent) { events.append(event) }
         }
-        guard !changes.isEmpty || !events.isEmpty else { return }
-        DispatchQueue.main.async { [weak self] in self?.apply(changes, events) }
+        let sounding = asc_airplay_sounding(handle)
+        guard !changes.isEmpty || !events.isEmpty || sounding != lastSounding else { return }
+        lastSounding = sounding
+        DispatchQueue.main.async { [weak self] in self?.apply(changes, events, sounding: sounding) }
     }
 
     // MARK: - On the main queue
 
-    private func apply(_ changes: [NativeReceiverChange], _ events: [NativeSpeakerEvent]) {
+    private func apply(_ changes: [NativeReceiverChange], _ events: [NativeSpeakerEvent], sounding: Bool) {
         guard active else { return }
+        model.sounding = sounding
         if !changes.isEmpty { model.computerName = SCDynamicStoreCopyComputerName(nil, nil) as String? }
         for change in changes {
             if case .gone(let id, _) = change {
@@ -449,6 +540,15 @@ final class NativeAirPlay {
         for event in events where active {   // a failed sender is discarded on its way
             let outcome = model.apply(event)
             onEvent(event, outcome)
+            if case .latency = event {
+                syncLatency(canChange: false)
+                sendOffsets()
+            }
+        }
+        // A new E held while a speaker sounded applies once none does.
+        if active, !sounding, model.receiverLatency.heldMs != nil {
+            syncLatency(canChange: true)
+            sendOffsets()
         }
     }
 
@@ -485,7 +585,10 @@ final class NativeAirPlay {
                           detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_LATENCY:
             return .latency(id: id, ms: raw.latency_ms,
-                            receiverFrames: raw.receiver_latency_frames >= 0 ? raw.receiver_latency_frames : nil)
+                            receiverFrames: raw.receiver_latency_frames >= 0 ? raw.receiver_latency_frames : nil,
+                            reportedUs: raw.receiver_latency_us, sources: raw.receiver_latency_sources)
+        case ASC_AIRPLAY_EVENT_LATENCY_HELD:
+            return .latencyHeld(ms: raw.latency_ms)
         case ASC_AIRPLAY_EVENT_TIMELINE:
             return .timeline(latencyMs: raw.latency_ms, restarted: raw.restarted)
         case ASC_AIRPLAY_EVENT_FAILED:

@@ -303,6 +303,9 @@ enum CalibrateAllFlow {
         var leftOut: [String: CalibrationLeftOut] = [:]
         /// Of those, the ones the user included anyway.
         var includedAnyway: Set<String> = []
+        /// The latency each AirPlay speaker reported, R_s in ms by ID; one
+        /// not here reported nothing (S235, S283).
+        var airPlayReportedMs: [String: Double] = [:]
     }
 
     /// The local outputs other than the reference that play but sit out.
@@ -339,9 +342,10 @@ enum CalibrateAllFlow {
                                                 latencyMs: latency))
         }
         let sender = inputs.airPlaySenderMs
-        let airPlayLatency = asc_calibration_airplay_wait_ms(sender != nil, sender ?? 0, inputs.airPlayDelayMs,
-                                                             inputs.airPlayHoldBackMs)
         for speaker in inputs.airPlay {
+            let airPlayLatency = asc_calibration_airplay_wait_ms(sender != nil, sender ?? 0, inputs.airPlayDelayMs,
+                                                                 inputs.airPlayHoldBackMs,
+                                                                 inputs.airPlayReportedMs[speaker.id] ?? 0)
             speakers.append(CalibrateAllSpeaker(id: speaker.id, name: speaker.name, kind: .airPlay,
                                                 offsetMs: inputs.airPlayDelayMs, latencyMs: airPlayLatency))
         }

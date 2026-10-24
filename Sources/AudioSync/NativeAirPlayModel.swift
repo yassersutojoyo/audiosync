@@ -122,8 +122,15 @@ enum NativeSpeakerEvent: Equatable {
     /// `retryMs`: when its next session starts, nil when the user must act;
     /// `detail`: the error, for the debug log.
     case error(id: String, Problem, retryMs: Int64?, detail: String)
-    /// L + d_s, and the receiver's own latency in frames when it sent one.
-    case latency(id: String, ms: Double, receiverFrames: Int64?)
+    /// L + d_s, the receiver's own latency in frames when it sent one, and
+    /// R_s in microseconds with the `ASC_AIRPLAY_LATENCY_SOURCE_*` bits of
+    /// the reports that gave it (0 and 0 when none did).
+    case latency(id: String, ms: Double, receiverFrames: Int64?, reportedUs: Int64 = 0, sources: UInt32 = 0)
+    /// The sender holds an Lf set while a speaker sounds (`ms`: that Lf)
+    /// until the stream is empty or the capture restarts (P201).
+    case latencyHeld(ms: Double)
+    /// The app set a new Lf or E (S282), as its debug line says.
+    case estimate(detail: String)
     /// The base latency L, after a start, a change or a restart.
     case timeline(latencyMs: Double, restarted: Bool)
     /// The sender stopped working after an internal error (a panic in it):
@@ -165,9 +172,14 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)): \(state.rawValue)" + (state == .retrying ? ", " + retry(retryMs) : "")
         case .error(let id, let problem, let retryMs, let detail):
             line = "\(label(id)) error: \(problem.rawValue) (\(detail)); \(retry(retryMs))"
-        case .latency(let id, let ms, let frames):
+        case .latency(let id, let ms, let frames, let reportedUs, let sources):
             line = "\(label(id)) latency: L + d_s = \(String(format: "%.0f", ms)) ms, the receiver reports "
-                + (frames.map { "\($0) frames" } ?? "nothing")
+                + (frames.map { "\($0) frames" } ?? "nothing") + "; "
+                + NativeReceiverLatency.reportText(us: reportedUs, sources: sources)
+        case .latencyHeld(let ms):
+            line = String(format: "Lf %.0f ms held while a speaker sounds, until the stream is empty or restarts", ms)
+        case .estimate(let detail):
+            line = detail
         case .timeline(let ms, let restarted):
             line = String(format: "timeline: L = %.0f ms", ms) + (restarted ? ", restarted" : "")
         case .failed(let detail):
@@ -332,8 +344,22 @@ struct NativeAirPlayModel {
     private(set) var receivers: [String: NativeReceiver] = [:]
     /// The speakers in the sender, by receiver ID.
     private(set) var states: [String: NativeSpeakerEvent.State] = [:]
-    /// The base latency L in ms (P113); 0 until the sender reports it.
+    /// The base latency L_s in ms (P113); 0 until the sender reports it.
     var latencyMs: Double = 0
+    /// The receivers' reported latencies and the Lf and E made of them
+    /// (S280, S283).
+    var receiverLatency = NativeReceiverLatency()
+    /// A speaker of the stream reached its first-sound time, as the last
+    /// poll found.
+    var sounding = false
+
+    /// The sessions a row in the sender plays: a target's members as last
+    /// listed, or the speaker itself.
+    func members(of row: String) -> [String] {
+        guard NativeTarget.kind(row) != nil else { return [row] }
+        let members = memberOf.filter { $0.value == row }.map(\.key).sorted()
+        return members.isEmpty ? [row] : members
+    }
     /// The last name of every receiver seen, for rows and notices.
     private(set) var names: [String: String] = [:]
     /// This Mac's computer name: a receiver announced under it is this Mac's
@@ -357,6 +383,7 @@ struct NativeAirPlayModel {
             }
         case .gone(let id, _):
             receivers.removeValue(forKey: id)
+            receiverLatency.forget(id)
         }
         pruneMembers()
     }
@@ -806,7 +833,10 @@ struct NativeAirPlayModel {
             default:
                 return .turnOff(NativeAirPlayID.app(id), problem.turnOff)
             }
-        case .latency:
+        case .latency(let id, _, _, let reportedUs, _):
+            receiverLatency.report(id, us: reportedUs)
+            return nil
+        case .latencyHeld, .estimate:
             return nil
         case .timeline(let ms, _):
             guard ms != latencyMs else { return nil }
@@ -1103,5 +1133,89 @@ enum NativeAirPlayStatus {
                 + ", \(counters.foreignDatagrams) datagrams from other addresses dropped"
         }
         return text
+    }
+}
+
+/// Each AirPlay speaker's reported latency R_s and what the app makes of it
+/// (engine spec S280, S283): the stream's Lf from the core's rule, E (the
+/// largest R_s among the speakers in the stream, held while one sounds) and
+/// each row's offset E - e_s on top of the hold-back. Main queue.
+struct NativeReceiverLatency {
+    /// The sender's Lf until the app sets another: 1.75 s at 44.1 kHz.
+    static let defaultFrames: UInt32 = 77_175
+    /// The `ASC_AIRPLAY_LATENCY_SOURCE_*` bits, as the debug log names them.
+    static let sourceNames: [(bit: UInt32, name: String)] = [
+        (1, "Audio-Latency"), (2, "audioLatencies"), (4, "arrivalToRender"),
+    ]
+
+    enum EstimateChange: Equatable {
+        case unchanged
+        /// E took a new value: every row's offset and L move.
+        case applied
+        /// A new E waits until no speaker sounds; once per value.
+        case held
+    }
+
+    /// R_s in microseconds by receiver ID, from this run's latency events;
+    /// never stored, and dropped when discovery loses the receiver.
+    private(set) var reportedUs: [String: Int64] = [:]
+    /// The Lf last given to the sender.
+    private(set) var frames: UInt32 = defaultFrames
+    /// E in ms, as it applies now.
+    private(set) var estimateMs: Double = 0
+    /// The E waiting while a speaker sounds.
+    private(set) var heldMs: Double?
+
+    mutating func report(_ id: String, us: Int64) { reportedUs[id] = max(0, us) }
+
+    mutating func forget(_ id: String) { reportedUs.removeValue(forKey: id) }
+
+    /// R_s of a receiver in ms, 0 when it reported nothing.
+    func reportedMs(_ id: String) -> Double { Double(reportedUs[id] ?? 0) / 1000 }
+
+    /// e_s of a row whose sessions are `members`: the largest R_s among
+    /// them, since a target plays its members at one offset.
+    func estimateMs(of members: [String]) -> Double { members.map(reportedMs).max() ?? 0 }
+
+    /// The Lf `rule` gives over `members` (the core's
+    /// `asc_airplay_session_latency_frames`), or nil when it is the one set last.
+    mutating func newFrames(over members: [String], rule: ([Int64]) -> UInt32) -> UInt32? {
+        let next = rule(members.map { reportedUs[$0] ?? 0 })
+        guard next != frames else { return nil }
+        frames = next
+        return next
+    }
+
+    /// E over `rows` (each row's members): applied when `canChange` (no
+    /// speaker sounds, the stream is empty or the capture restarted),
+    /// otherwise held (P201).
+    mutating func updateEstimate(rows: [[String]], canChange: Bool) -> EstimateChange {
+        let wanted = rows.map { estimateMs(of: $0) }.max() ?? 0
+        guard wanted != estimateMs else {
+            heldMs = nil
+            return .unchanged
+        }
+        guard canChange else {
+            guard heldMs != wanted else { return .unchanged }
+            heldMs = wanted
+            return .held
+        }
+        estimateMs = wanted
+        heldMs = nil
+        return .applied
+    }
+
+    /// A row's offset on top of the hold-back, E - e_s; 0 for one that
+    /// reports more than E, which plays late until E may change.
+    func offsetMs(of members: [String]) -> Double { max(0, estimateMs - estimateMs(of: members)) }
+
+    /// How much later than E a row plays while E is held, in ms.
+    func lateMs(of members: [String]) -> Double { max(0, estimateMs(of: members) - estimateMs) }
+
+    /// What a receiver reported, as the debug log says it (S282).
+    static func reportText(us: Int64, sources: UInt32) -> String {
+        let names = sourceNames.filter { sources & $0.bit != 0 }.map(\.name)
+        guard !names.isEmpty else { return "reports nothing" }
+        return String(format: "reports %.0f ms (", Double(max(0, us)) / 1000) + names.joined(separator: ", ") + ")"
     }
 }

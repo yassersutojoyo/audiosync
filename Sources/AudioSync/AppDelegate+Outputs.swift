@@ -113,12 +113,14 @@ extension AppDelegate {
     }
 
     /// The native sender's latency L_s (its configured default until it
-    /// reports one).
+    /// reports one) plus E, the largest latency the AirPlay speakers in the
+    /// stream reported (S283).
     var nativeSenderLatencyMs: Double {
+        let estimate = nativeAirPlay?.model.receiverLatency.estimateMs ?? 0
         guard let reported = nativeAirPlay?.model.latencyMs, reported > 0 else {
-            return LocalDelay.senderDefaultLatencyMs
+            return LocalDelay.senderDefaultLatencyMs + estimate
         }
-        return reported
+        return reported + estimate
     }
 
     /// L, what the AirPlay delay field shows and local speakers wait for

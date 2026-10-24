@@ -2291,10 +2291,79 @@ do {
             == "[AudioSync] native AirPlay: Z9 error: not responding (Unreachable); it needs the user",
           "native airplay: an error's log line")
     check(NativeSpeakerEvent.latency(id: "A1", ms: 1750, receiverFrames: 2205).logLine(name: names)
-            == "[AudioSync] native AirPlay: Kitchen (A1) latency: L + d_s = 1750 ms, the receiver reports 2205 frames"
+            == "[AudioSync] native AirPlay: Kitchen (A1) latency: L + d_s = 1750 ms, the receiver reports 2205 frames; "
+                + "reports nothing"
             && NativeSpeakerEvent.timeline(latencyMs: 1750, restarted: true).logLine(name: names)
             == "[AudioSync] native AirPlay: timeline: L = 1750 ms, restarted",
           "native airplay: latency and timeline log lines")
+
+    // covers: S280, S282, S283 (the Mac host; the Windows tests carry the same names)
+    do {
+        let rule: ([Int64]) -> UInt32 = { reported in
+            reported.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
+        }
+        var known = NativeReceiverLatency()
+        known.report("D2", us: 1_300_000)
+        let leaving = known.newFrames(over: [], rule: rule)
+        let joining = known.newFrames(over: ["A1", "D2"], rule: rule)
+        check(leaving == nil && joining == 79_380 && known.newFrames(over: ["A1", "D2"], rule: rule) == nil,
+              "airplay latency: is set from known reports before speakers are added",
+              "\(String(describing: leaving)) \(String(describing: joining))")
+
+        var follows = NativeReceiverLatency()
+        follows.report("A1", us: 200_000)
+        let small = follows.newFrames(over: ["A1", "D2"], rule: rule)
+        follows.report("D2", us: 1_300_000)
+        let large = follows.newFrames(over: ["A1", "D2"], rule: rule)
+        let left = follows.newFrames(over: ["A1"], rule: rule)
+        check(small == nil && large == 79_380 && left == 77_175,
+              "airplay latency: follows a report and a speaker leaving",
+              "\(String(describing: small)) \(String(describing: large)) \(String(describing: left))")
+
+        var pair = NativeAirPlayModel()
+        pair.apply(.appeared(NativeReceiver(id: "L1", name: "Left", model: "", availability: .available, reason: nil,
+                                            hints: [], target: "pair:5f0c")))
+        pair.apply(.appeared(NativeReceiver(id: "R1", name: "Right", model: "", availability: .available, reason: nil,
+                                            hints: [], target: "pair:5f0c")))
+        pair.receiverLatency.report("R1", us: 1_600_000)
+        let members = pair.members(of: "pair:5f0c")
+        check(members == ["L1", "R1"] && pair.receiverLatency.newFrames(over: members, rule: rule) == 88_200
+                && pair.receiverLatency.estimateMs(of: members) == 1600,
+              "airplay latency: covers every member of a target", "\(members)")
+
+        var estimate = NativeReceiverLatency()
+        estimate.report("A1", us: 220_000)
+        let one = estimate.updateEstimate(rows: [["A1"]], canChange: true)
+        let oneOffset = estimate.offsetMs(of: ["A1"])
+        estimate.report("B2", us: 50_000)
+        let two = estimate.updateEstimate(rows: [["A1"], ["B2"]], canChange: true)
+        check(one == .applied && oneOffset == 0 && two == .unchanged && estimate.estimateMs == 220
+                && estimate.offsetMs(of: ["B2"]) == 170,
+              "airplay latency: a reported latency is the speaker's starting estimate (one at 220 ms: offset 0, "
+                + "L = L_s + 220 + A; 220 and 50 ms: the second gets 170 ms more)")
+
+        var nothing = NativeAirPlayModel()
+        let outcome = nothing.apply(.latency(id: "A1", ms: 1750, receiverFrames: nil, reportedUs: 0, sources: 0))
+        check(outcome == nil && nothing.receiverLatency.estimateMs(of: ["A1"]) == 0
+                && nothing.receiverLatency.newFrames(over: ["A1"], rule: rule) == nil
+                && NativeReceiverLatency.reportText(us: 0, sources: 0) == "reports nothing"
+                && NativeReceiverLatency.reportText(us: 220_400, sources: 5) == "reports 220 ms (Audio-Latency, arrivalToRender)",
+              "airplay latency: a receiver reporting nothing starts at zero without a warning")
+
+        var waits = NativeReceiverLatency()
+        waits.report("A1", us: 220_000)
+        _ = waits.updateEstimate(rows: [["A1"]], canChange: true)
+        waits.report("J9", us: 300_000)
+        let held = waits.updateEstimate(rows: [["A1"], ["J9"]], canChange: false)
+        let heldAgain = waits.updateEstimate(rows: [["A1"], ["J9"]], canChange: false)
+        let late = waits.lateMs(of: ["J9"])
+        let joinerOffset = waits.offsetMs(of: ["J9"])
+        let applied = waits.updateEstimate(rows: [["A1"], ["J9"]], canChange: true)
+        check(held == .held && heldAgain == .unchanged && late == 80 && joinerOffset == 0 && applied == .applied
+                && waits.estimateMs == 300 && waits.offsetMs(of: ["A1"]) == 80 && waits.heldMs == nil,
+              "airplay latency: the estimate waits while an airplay speaker sounds (a joiner at 300 ms with E = 220 "
+                + "plays 80 ms late until the stream is empty)")
+    }
 
     var volumes = NativeAirPlayModel()
     volumes.apply(.appeared(receiver("A1", "Kitchen", .available)))
@@ -5116,6 +5185,18 @@ do {
           "calibrate all: an AirPlay speaker at L=1750 with delay 0 gets a window of at least 1750 + 750 + 1000 ms, "
             + "from the sender's latency, or the path's 3000 ms bound while the sender reports none (S235)",
           "\(String(describing: atZero)) \(String(describing: unknown))")
+
+    // covers: S235, S283
+    var reportedWindow = fieldAtZero
+    reportedWindow.airPlaySenderMs = 1750 + 220
+    reportedWindow.airPlayReportedMs = [atZero?.id ?? "": 220]
+    let reportedSpeaker = (try? CalibrateAllFlow.plan(reportedWindow).get())?.last
+    var excessMs = 0.0
+    let excessMoved = asc_local_native_adjustment_ms(1970 + 30, 1970, &excessMs)
+    check(reportedSpeaker?.latencyMs == 1750 + 220 + 220 + 500 && excessMoved && excessMs == 30,
+          "airplay latency: calibrate all measures relative to the reported latency (the window adds R_s on top of "
+            + "L_s + E; the AirPlay delay moves only by the measured excess)",
+          "\(String(describing: reportedSpeaker))")
 
     var held = inputs
     held.cast = (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 1750, format: ASC_CAST_FORMAT_FLAC)
