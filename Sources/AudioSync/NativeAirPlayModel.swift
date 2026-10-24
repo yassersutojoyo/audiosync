@@ -355,7 +355,7 @@ struct NativeAirPlayModel {
 
     /// The sessions a row in the sender plays: a target's members as last
     /// listed, or the speaker itself.
-    func members(of row: String) -> [String] {
+    func sessions(of row: String) -> [String] {
         guard NativeTarget.kind(row) != nil else { return [row] }
         let members = memberOf.filter { $0.value == row }.map(\.key).sorted()
         return members.isEmpty ? [row] : members

@@ -2326,7 +2326,7 @@ do {
         pair.apply(.appeared(NativeReceiver(id: "R1", name: "Right", model: "", availability: .available, reason: nil,
                                             hints: [], target: "pair:5f0c")))
         pair.receiverLatency.report("R1", us: 1_600_000)
-        let members = pair.members(of: "pair:5f0c")
+        let members = pair.sessions(of: "pair:5f0c")
         check(members == ["L1", "R1"] && pair.receiverLatency.newFrames(over: members, rule: rule) == 88_200
                 && pair.receiverLatency.estimateMs(of: members) == 1600,
               "airplay latency: covers every member of a target", "\(members)")

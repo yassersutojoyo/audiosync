@@ -2428,9 +2428,11 @@ impl AirPlaySpeakers {
     }
 
     /// d′_s = d_s + E − e_s (S283) plus the hold-back, in ms, before the
-    /// sender's limits.
+    /// sender's limits. While E is held, a speaker reporting more than E
+    /// gets no offset and plays the difference late, as S283 says.
     fn wanted_delay_ms(&self, id: &str) -> f64 {
-        self.settings(id).delay_ms + self.estimate_ms - self.estimate_of(id) + self.hold_back_ms
+        let offset_ms = (self.estimate_ms - self.estimate_of(id)).max(0.0);
+        self.settings(id).delay_ms + offset_ms + self.hold_back_ms
     }
 
     /// d′_s plus the hold-back, as the sender plays it.
@@ -7565,5 +7567,38 @@ pub mod tests {
         assert_eq!(ms(airplay.latency()), 2050);
         let calls = fake.take_calls();
         assert_eq!(delays(&calls), [(id_of(&kitchen), 80)], "{calls:?}");
+    }
+
+    // covers: S283
+    #[test]
+    fn a_speaker_above_a_held_estimate_keeps_its_own_delay() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let den = device(2, "Den", OPEN_TXT);
+        fake.appear(&kitchen);
+        fake.appear(&den);
+        airplay.poll();
+        airplay.set_delay(&id_of(&den), 100.0);
+        airplay.set_enabled(&id_of(&kitchen), true).unwrap();
+        airplay.set_streaming(true);
+        fake.report_latency(&kitchen, 220_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        fake.set_sounding(true);
+        airplay.set_enabled(&id_of(&den), true).unwrap();
+        let calls = fake.take_calls();
+        assert!(
+            calls
+                .iter()
+                .any(|call| matches!(call, Call::Add { id, delay, .. } if *id == id_of(&den) && ms(*delay) == 320)),
+            "Den joins at d_s + E: {calls:?}"
+        );
+        fake.report_latency(&den, 300_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        assert_eq!(
+            delays(&fake.take_calls()),
+            [(id_of(&den), 100)],
+            "Den keeps d_s and plays 80 ms late, not d_s - 80"
+        );
     }
 }

@@ -302,7 +302,7 @@ final class NativeAirPlay {
     /// sounds (P201). Main queue.
     private func syncLatency(canChange: Bool) {
         let rows = model.states.keys.sorted()
-        let members = rows.map { model.members(of: $0) }
+        let members = rows.map { model.sessions(of: $0) }
         for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > 1_500_000 {
             guard latencyWarned.insert(id).inserted else { continue }
             DebugTrace.log("[AudioSync] native AirPlay: \(model.names[id] ?? id) (\(id)) warning: reports "
@@ -326,8 +326,8 @@ final class NativeAirPlay {
             let latency = model.receiverLatency
             var line = String(format: "[AudioSync] native AirPlay: E %.0f ms held while a speaker sounds; it stays "
                               + "%.0f ms until the stream is empty or restarts", latency.heldMs ?? 0, latency.estimateMs)
-            for row in rows where latency.lateMs(of: model.members(of: row)) > 0 {
-                let late = Int(latency.lateMs(of: model.members(of: row)).rounded())
+            for row in rows where latency.lateMs(of: model.sessions(of: row)) > 0 {
+                let late = Int(latency.lateMs(of: model.sessions(of: row)).rounded())
                 line += "; \(model.names[row] ?? row) plays \(late) ms late until then"
             }
             DebugTrace.log(line)
@@ -340,7 +340,7 @@ final class NativeAirPlay {
     private func latencyLine(_ what: String, rows: [String]) -> String {
         let latency = model.receiverLatency
         let each = rows.map {
-            "\(model.names[$0] ?? $0) offset \(Int(latency.offsetMs(of: model.members(of: $0)).rounded())) ms"
+            "\(model.names[$0] ?? $0) offset \(Int(latency.offsetMs(of: model.sessions(of: $0)).rounded())) ms"
         }
         return "\(what): Lf \(latency.frames) frames, E \(Int(latency.estimateMs.rounded())) ms, over "
             + (each.isEmpty ? "no speaker" : each.joined(separator: "; "))
@@ -350,7 +350,7 @@ final class NativeAirPlay {
     /// (S283). Main queue, after the row's add on the queue.
     private func sendOffsets() {
         for row in model.states.keys.sorted() {
-            let offset = model.receiverLatency.offsetMs(of: model.members(of: row))
+            let offset = model.receiverLatency.offsetMs(of: model.sessions(of: row))
             guard offset != (sentOffsets[row] ?? 0) else { continue }
             sentOffsets[row] = offset
             queue.async { [weak self] in

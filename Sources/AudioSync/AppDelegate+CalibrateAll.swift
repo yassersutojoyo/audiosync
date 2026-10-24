@@ -372,7 +372,7 @@ extension AppDelegate {
         var reported: [String: Double] = [:]
         for id in enabledAirPlay {
             guard let receiver = NativeAirPlayID.receiver(id) else { continue }
-            reported[id] = model.receiverLatency.estimateMs(of: model.members(of: receiver))
+            reported[id] = model.receiverLatency.estimateMs(of: model.sessions(of: receiver))
         }
         return reported
     }
