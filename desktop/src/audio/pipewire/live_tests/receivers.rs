@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use audiosync_airplay::audio::read_pcm_payload;
+use audiosync_airplay::audio::{FRAMES_PER_PACKET, read_pcm_payload};
 use audiosync_airplay::sender::{Sender, SenderConfig, SpeakerOptions, SpeakerState};
 use audiosync_airplay::volume::Volume;
 use audiosync_cast::audio::audio_ring;
@@ -21,7 +21,7 @@ use crate::audio::SESSION_RATE;
 use crate::audio::airplay::FeedSlot;
 use crate::audio::capture::Feeds;
 use crate::audio::cast::CastFeed;
-use crate::audio::controller::CaptureState;
+use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::pipewire::{graph, stream};
 
 #[path = "../../../../../airplay/tests/common/mod.rs"]
@@ -63,10 +63,10 @@ fn wait_until(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
 /// The loudest sample in the PCM packets the AirPlay receiver got.
 fn airplay_peak(receiver: &NetReceiver) -> i16 {
     let log = receiver.log();
-    let mut frames = [[0_i16; 2]; 352];
+    let mut frames = [[0_i16; 2]; FRAMES_PER_PACKET];
     log.audio
         .iter()
-        .filter(|packet| packet.payload.len() == frames.len() * 4)
+        .filter(|packet| packet.payload.len() == FRAMES_PER_PACKET * 4)
         .map(|packet| {
             read_pcm_payload(&packet.payload, &mut frames);
             frames
