@@ -225,6 +225,18 @@ extension AppDelegate {
     /// menu bar panel and the menu bar icon.
     func refreshStreamingViews() { pushModel() }
 
+    /// Holds a user-initiated activity exactly while streaming runs.
+    func syncStreamingActivity() {
+        // App Nap throttles a background app's timers, which read Now Playing and feed the receivers.
+        if engine.isRunning, streamingActivity == nil {
+            streamingActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                                      reason: "Streaming audio to speakers")
+        } else if !engine.isRunning, let activity = streamingActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            streamingActivity = nil
+        }
+    }
+
     /// A modal alert with one OK button. `style` says how serious it is:
     /// `.informational` (a next step), `.warning` (something failed) or
     /// `.critical` (only when going on could lose the user's data or work).

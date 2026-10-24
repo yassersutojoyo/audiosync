@@ -2816,6 +2816,36 @@ check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(
       && !NowPlayingMonitor.meansNoTrack(-2753),
       "AppleScript: Automation refused (-1743) and other errors are still logged")
 
+// MARK: Track info — a paused player keeps its track on receivers until it quits or stays empty
+do {
+    let spotify = NowPlayingMonitor.spotify
+    let source = AudioSource.app(bundleID: spotify)
+    let untitled = TrackMetadata.Fields(title: "AudioSync", artist: "Spotify", album: "From your Mac")
+    let paused = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Song", artist: "Band",
+                                         album: "Record", isPlaying: false,
+                                         artwork: NSImage(size: NSSize(width: 1, height: 1)))
+    func shows(_ t: NowPlayingMonitor.Track?) -> ReceiverInfo {
+        ReceiverInfo.decide(track: t, source: source, sourceName: "Spotify", untitled: untitled)
+    }
+    var empty = NowPlayingMonitor.EmptyReadings()
+    var shown = empty.next(reading: paused, last: nil, lastPlayerRuns: true)
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
+          "now playing: one empty reading of a paused player keeps its track and cover, not the fallback")
+    shown = empty.next(reading: paused, last: shown, lastPlayerRuns: true)
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    check(shows(shown).fields.title == "Song",
+          "now playing: a real reading in between starts the count of empty readings again")
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral,
+          "now playing: \(NowPlayingMonitor.EmptyReadings.dropAfter) empty readings in a row send the fallback")
+    var quit = NowPlayingMonitor.EmptyReadings()
+    shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
+    check(shown == nil && shows(shown).fields == untitled,
+          "now playing: a player that quit sends the fallback at the first empty reading")
+}
+
 // MARK: Track info — what AirPlay receivers with a screen show
 do {
     typealias Track = NowPlayingMonitor.Track
