@@ -1421,7 +1421,7 @@ private enum GearMenu {
         menu.addItem(MenuAction.item(t.webRemoteMenu) { model.actions.openWebRemote() })
         let airPlay2 = MenuAction { model.actions.setAirPlay2(!model.airPlay2) }
         for entry in MenuNoteItem.airPlay2Items(text: t, on: model.airPlay2, onAtLaunch: model.airPlay2AtLaunch,
-                                                action: #selector(MenuAction.perform(_:)), target: airPlay2) {
+                                                action: #selector(MenuAction.choose(_:)), target: airPlay2) {
             entry.representedObject = entry.target
             menu.addItem(entry)
         }
