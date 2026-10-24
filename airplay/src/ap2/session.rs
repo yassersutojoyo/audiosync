@@ -1227,6 +1227,9 @@ impl Ap2Session {
             }
             return;
         }
+        if self.config.trace {
+            self.trace_set_parameter(&in_flight.kind, &response);
+        }
         let code = response.code;
         if code == STATUS_CONFLICT && !self.recorded {
             // Before RECORD is answered, pairing included (P137).
@@ -1244,9 +1247,6 @@ impl Ap2Session {
             return self.fail(ErrorKind::Busy, Some(method), Some(code), None);
         }
         let success = response.is_success();
-        if self.config.trace {
-            self.trace_set_parameter(&in_flight.kind, &response);
-        }
         match in_flight.kind {
             Kind::Info { first: true } => {
                 let answer = if success {
@@ -1387,8 +1387,8 @@ impl Ap2Session {
         }
     }
 
-    /// A refused SET_PARAMETER warns with its status only, so the debug log
-    /// carries what was sent to tell which body a receiver turns down.
+    /// Every answered SET_PARAMETER, refused ones included: a refusal warns
+    /// with its status only, so the body sent is what tells them apart.
     fn trace_set_parameter(&mut self, kind: &Kind, response: &Response) {
         let (content_type, body) = match kind {
             Kind::Volume(volume) => ("text/parameters", volume.parameter_body().into_bytes()),
