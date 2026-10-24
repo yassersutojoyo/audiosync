@@ -1019,6 +1019,70 @@ fn a_refused_update_that_added_a_receiver_sets_up_only_that_session_again_once()
     sender.shutdown();
 }
 
+// covers: P204
+#[test]
+fn airplay2_sessions_default_to_16() {
+    assert_eq!(SenderConfig::default().airplay2_sessions, 16);
+}
+
+// covers: P211
+#[test]
+fn a_refused_setup_stays_with_its_own_session() {
+    let _serial = serial();
+    let first = Ap2Server::start(ptp_fake());
+    let mut refusing = ptp_fake();
+    refusing.status.insert("SETUP session".to_owned(), 403);
+    let second = Ap2Server::start(refusing);
+    let config = SenderConfig {
+        airplay2: true,
+        ptp_ports: free_ptp_ports(),
+        ptp_receiver_ports: free_ptp_ports(),
+        ..SenderConfig::default()
+    };
+    let (sender, writer) = Sender::start(config).expect("the sender starts");
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10240"),
+        airplay2_only(&second, 2, "0x0,0x10240"),
+    );
+    sender.add_speaker(da.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &da.key, 1),
+        "{:?}",
+        events.of(&da.key)
+    );
+    let connections = first.fake().connections;
+    sender.add_speaker(db.clone(), options());
+    assert!(
+        wait_until(LONG, || {
+            events.drain(&sender);
+            !errors(&events, &db.key).is_empty()
+        }),
+        "{:?}",
+        events.of(&db.key)
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    events.drain(&sender);
+    assert!(
+        errors(&events, &da.key).is_empty(),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(
+        playing_count(&events, &da.key),
+        1,
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(
+        first.fake().connections,
+        connections,
+        "the other session is left alone"
+    );
+    sender.shutdown();
+}
+
 fn ptp_warnings(events: &Events, key: &DeviceKey) -> usize {
     events
         .of(key)

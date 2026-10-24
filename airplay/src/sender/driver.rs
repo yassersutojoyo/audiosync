@@ -984,11 +984,11 @@ impl Driver {
                 self.sessions.remove(&active.key);
                 self.sessions.remove(&active.events_key);
                 self.peers_dirty = true;
-                // Every AirPlay 2 session shares the service (P205).
-                let shared = self
-                    .speakers
-                    .values()
-                    .any(|speaker| matches!(speaker.phase, Phase::Ap2(_)));
+                // The service closes once no session takes PTP or may still
+                // take it (P205); NTP sessions never hold it open.
+                let shared = self.speakers.values().any(
+                    |speaker| matches!(&speaker.phase, Phase::Ap2(active) if active.may_take_ptp()),
+                );
                 if !shared {
                     self.close_ptp();
                 }
@@ -1181,11 +1181,13 @@ impl Driver {
 
     /// An AirPlay 2 session ended for good: the first speakers refused only
     /// for the limit start now, one per free place (P169, P204), through
-    /// the usual restart. A woken speaker holds its place until it starts.
+    /// the usual restart, and so do those waiting for PTP once no service
+    /// runs (P205). A woken speaker holds its place until it starts.
     fn wake_ap2_waiter(&mut self, now: Instant) {
         if self.stopping.is_some() {
             return;
         }
+        let ptp_free = self.ptp.is_none();
         loop {
             let holding = self.speakers.values().filter(|s| s.holds_ap2()).count();
             if holding >= self.ap2_sessions {
@@ -1195,7 +1197,7 @@ impl Driver {
                 .speakers
                 .iter_mut()
                 .filter(|(_, speaker)| {
-                    speaker.ap2_waiting
+                    (speaker.ap2_waiting || (speaker.ptp_waiting && ptp_free))
                         && !speaker.removing
                         && matches!(speaker.phase, Phase::Failed)
                 })
@@ -1204,6 +1206,7 @@ impl Driver {
                 return;
             };
             speaker.ap2_waiting = false;
+            speaker.ptp_waiting = false;
             speaker.ap2_retry = true;
             speaker.phase = Phase::Waiting(now);
             let key = key.clone();
@@ -2159,6 +2162,103 @@ mod tests {
         }
         assert!(driver.ptp.is_some(), "the service is bound");
         assert!(driver.speakers[&second_key].ap2_waiting);
+        drop(listener);
+        true
+    }
+
+    // A on PTP, B waiting for PTP on another network, C on NTP: once A
+    // ends, the service closes and B starts; C never holds it open (P205).
+    #[test]
+    fn a_ptp_waiter_starts_once_the_last_ptp_session_ends_whatever_ntp_sessions_run() {
+        for _ in 0..5 {
+            if ptp_waiter_after_the_last_ptp_session() {
+                return;
+            }
+        }
+        panic!("another socket took a picked PTP port on every pick");
+    }
+
+    fn ptp_waiter_after_the_last_ptp_session() -> bool {
+        use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, Ipv4Addr, TcpListener, UdpSocket};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let free = || {
+            let [event, general] = [(); 2].map(|()| {
+                UdpSocket::bind("0.0.0.0:0")
+                    .and_then(|socket| Ok((socket.local_addr()?.port(), socket)))
+                    .expect("a free port")
+            });
+            crate::ptp::PtpPorts {
+                event: event.0,
+                general: general.0,
+            }
+        };
+        let (local, remote) = (free(), free());
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency)
+            .with_airplay2(true, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+            .with_ptp_ports(local, remote);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let port = listener.local_addr().expect("an address").port();
+        let device = |n: u8| {
+            let id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, n]);
+            let record = ServiceRecord {
+                kind: ServiceKind::AirPlay,
+                instance: format!("Speaker {n}"),
+                host: format!("speaker-{n}.local"),
+                port,
+                txt: [
+                    "features=0x0,0x10240".to_owned(),
+                    "flags=0x4".to_owned(),
+                    "model=Speaker1,1".to_owned(),
+                    format!("deviceid={id}"),
+                ]
+                .into_iter()
+                .map(String::into_bytes)
+                .collect(),
+                addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+            };
+            Device::from_records(DeviceKey::Id(id), None, Some(&record)).expect("a device")
+        };
+        let options = || SpeakerOptions::new(Volume::Db(-20.0));
+        let counters = || Arc::new(SpeakerCounters::default());
+        let (a, b, c) = (device(1), device(2), device(3));
+        let (a_key, b_key, c_key) = (a.key.clone(), b.key.clone(), c.key.clone());
+        driver.add_speaker(a, options(), counters(), now);
+        if driver.ptp_unavailable_told {
+            return false;
+        }
+        assert!(driver.ptp.is_some(), "the service is bound");
+        driver.add_speaker(b, options(), counters(), now);
+        driver.add_speaker(c, options(), counters(), now);
+        // A is served; C settled without the service; B was refused with
+        // "PTP in use on another network".
+        if let Phase::Ap2(active) = &mut driver.speakers.get_mut(&a_key).expect("A").phase {
+            active.ptp_served = true;
+        }
+        if let Phase::Ap2(active) = &mut driver.speakers.get_mut(&c_key).expect("C").phase {
+            active.ptp_configured = false;
+        }
+        driver.end_session(&b_key, Phase::Failed);
+        driver.ap2_refusals += 1;
+        let refusal = driver.ap2_refusals;
+        let waiter = driver.speakers.get_mut(&b_key).expect("B");
+        waiter.ptp_waiting = true;
+        waiter.ap2_refusal = refusal;
+
+        driver.end_session(&a_key, Phase::Failed);
+        driver.flush(now);
+        assert!(driver.ptp.is_none(), "C on NTP holds no service");
+        assert!(
+            !driver.speakers[&b_key].ptp_waiting
+                && matches!(driver.speakers[&b_key].phase, Phase::Waiting(_)),
+            "B starts"
+        );
+        assert!(matches!(driver.speakers[&c_key].phase, Phase::Ap2(_)));
         drop(listener);
         true
     }

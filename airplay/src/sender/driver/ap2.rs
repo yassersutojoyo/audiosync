@@ -84,6 +84,20 @@ pub(super) struct Ap2Active {
     pub(super) verifying: bool,
     /// The warning of P206 was given for this session.
     outranked_told: bool,
+    /// The session was set up with the service's PtpPeer (P205).
+    pub(super) ptp_configured: bool,
+    /// The service serves the session's receiver (P205).
+    pub(super) ptp_served: bool,
+}
+
+impl Ap2Active {
+    /// Whether the session uses the PTP service or may still take it: set
+    /// up with its PtpPeer and not settled on NTP (P205).
+    pub(super) fn may_take_ptp(&self) -> bool {
+        self.ptp_served
+            || (self.ptp_configured
+                && !(self.session.timing() == Timing::Ntp && self.session.recorded()))
+    }
 }
 
 impl Driver {
@@ -210,6 +224,7 @@ impl Driver {
         let verifying = config.credentials.is_some();
         config.password = speaker.options.password.clone();
         config.device_id = self.device_id;
+        let ptp_configured = ptp.is_some();
         config.ptp = ptp;
         config.peers = peers;
         config.timing = if self.ptp_timing.contains(key) {
@@ -251,6 +266,8 @@ impl Driver {
             stream_id: None,
             verifying,
             outranked_told: false,
+            ptp_configured,
+            ptp_served: false,
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
@@ -446,6 +463,8 @@ impl Driver {
         let events = active.events_io.take();
         let stream_id = active.stream_id.take();
         let remote = active.session.remote();
+        // Only a session the service serves counts at its receiver's address.
+        let served = std::mem::take(&mut active.ptp_served);
         if let Some(io) = io {
             self.retired.extend(io.close());
         }
@@ -456,7 +475,7 @@ impl Driver {
             self.stream.remove_speaker(id);
             self.stream_ids.remove(&id);
         }
-        if let (Some(run), Some(remote)) = (&mut self.ptp, remote) {
+        if let (Some(run), Some(remote), true) = (&mut self.ptp, remote, served) {
             run.service.stop_peer(remote.ip());
             run.share_peers();
         }
@@ -605,9 +624,9 @@ impl Driver {
     /// Whether another speaker's AirPlay 2 session may use the PTP
     /// service, which then stays in its family (P158, P205).
     fn ptp_shared(&self, key: &DeviceKey) -> bool {
-        self.speakers
-            .iter()
-            .any(|(other, speaker)| other != key && matches!(speaker.phase, Phase::Ap2(_)))
+        self.speakers.iter().any(|(other, speaker)| {
+            other != key && matches!(&speaker.phase, Phase::Ap2(active) if active.may_take_ptp())
+        })
     }
 
     /// The address family, IPv6 when true, of the PTP service for a
@@ -843,6 +862,9 @@ impl Driver {
                             run.service.start(remote, now);
                             run.share_peers();
                             self.ptp_excluded.remove(key);
+                            if let Some(active) = self.ap2_active(key) {
+                                active.ptp_served = true;
+                            }
                         }
                         // It fell back to an address outside the service's
                         // family, which no clock serves (P158, P179).
