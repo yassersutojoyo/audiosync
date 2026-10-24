@@ -58,6 +58,10 @@ pub struct Target {
 struct Status {
     ended: AtomicBool,
     latency_ns: AtomicU64,
+    /// The last stream timing's delay, rate denominator, queued bytes and
+    /// age in ns, for the live tests' failure messages.
+    #[cfg(test)]
+    timing: [std::sync::atomic::AtomicI64; 4],
 }
 
 /// A running output. Dropping it stops the stream at once and waits for its
@@ -74,10 +78,14 @@ pub struct Playback {
 impl Playback {
     /// The latency in use and, when the window turned it down, the one the
     /// stream reported.
-    pub fn reported_latency_ns(&self) -> (u64, Option<u64>) {
+    pub fn reported_latency_ns(&self) -> (u64, Option<u64>, [i64; 4]) {
         (
             self.status.latency_ns.load(Ordering::Relaxed),
             self.control.rejected_latency_ns(),
+            self.status
+                .timing
+                .each_ref()
+                .map(|value| value.load(Ordering::Relaxed)),
         )
     }
 }
@@ -221,12 +229,17 @@ impl Render {
         }
         let now_ns = clock::now_ns();
         let latency = stream.time().ok().map(|time| {
-            latency_ns(
-                &time,
-                self.rate,
-                stride,
-                timing::monotonic_hns().saturating_mul(100),
-            )
+            let monotonic_ns = timing::monotonic_hns().saturating_mul(100);
+            #[cfg(test)]
+            for (slot, value) in self.status.timing.iter().zip([
+                time.delay(),
+                i64::from(time.rate().denom),
+                i64::try_from(time.queued()).unwrap_or(-1),
+                i64::try_from(monotonic_ns).unwrap_or(0) - time.now(),
+            ]) {
+                slot.store(value, Ordering::Relaxed);
+            }
+            latency_ns(&time, self.rate, stride, monotonic_ns)
         });
         if let Some(latency) = latency
             && self
