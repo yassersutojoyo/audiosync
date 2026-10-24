@@ -477,8 +477,6 @@ fn read_airplay2(path: &Path, sealer: Sealer) -> Result<Option<Airplay2Identity>
     }
 }
 
-/// The entries in the file at `path`: `None` without a file, or why it was
-/// ignored.
 /// What the log says when [`make_private`] tightened a file or its folder.
 const OPEN_TO_OTHERS: &str =
     "the file or its folder was readable by other accounts; set to owner-only";
@@ -508,6 +506,8 @@ fn make_private(_path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
+/// The entries in the file at `path`: `None` without a file, or why it was
+/// ignored.
 fn read(path: &Path, sealer: Sealer) -> Result<Option<BTreeMap<String, Credentials>>, String> {
     let sealed = match data_folder::read_at_launch(path) {
         Ok(sealed) => sealed,

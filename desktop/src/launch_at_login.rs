@@ -161,17 +161,33 @@ pub fn hands_over_to_running_copy(background: bool) -> bool {
     !background
 }
 
-/// This program's path for the startup entry. Inside an AppImage the
-/// running exe sits in a mount that goes away, so the entry names the
-/// AppImage file the `APPIMAGE` variable gives.
+/// This program's path for the startup entry ([`entry_exe`] on Linux).
 pub fn own_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
     #[cfg(target_os = "linux")]
-    if let Some(image) = std::env::var_os("APPIMAGE").map(PathBuf::from)
-        && image.is_absolute()
-    {
-        return Some(image);
+    let exe = entry_exe(
+        std::env::var_os("APPIMAGE").map(PathBuf::from).as_deref(),
+        std::env::var_os("APPDIR").map(PathBuf::from).as_deref(),
+        &exe,
+    );
+    Some(exe)
+}
+
+/// The path the startup entry names for `current_exe`. Inside an AppImage
+/// the exe sits in a mount (`appdir`) that goes away, so the entry names
+/// the AppImage file (`appimage`) instead, but only when the exe really is
+/// in that mount: the variables pass down to every child process, so a
+/// launch from another AppImage's terminal would name that AppImage.
+#[cfg(any(target_os = "linux", test))]
+pub fn entry_exe(appimage: Option<&Path>, appdir: Option<&Path>, current_exe: &Path) -> PathBuf {
+    match (appimage, appdir) {
+        (Some(image), Some(dir))
+            if image.is_absolute() && dir.is_absolute() && current_exe.starts_with(dir) =>
+        {
+            image.to_path_buf()
+        }
+        _ => current_exe.to_path_buf(),
     }
-    std::env::current_exe().ok()
 }
 
 /// What turning the option on or off did, beyond what [`LaunchAtLogin::is_on`]
@@ -732,5 +748,39 @@ mod tests {
     fn a_second_launch_in_the_background_leaves_the_running_copy_alone() {
         assert!(!hands_over_to_running_copy(true));
         assert!(hands_over_to_running_copy(false));
+    }
+
+    #[test]
+    fn the_appimage_is_named_only_when_this_exe_runs_from_its_mount() {
+        // Absolute on the system the test runs on.
+        let path =
+            |text: &str| PathBuf::from(format!("{}{text}", if cfg!(windows) { "C:" } else { "" }));
+        let image = path("/home/me/Apps/AudioSync.AppImage");
+        let mount = path("/tmp/.mount_AudioSAbc123");
+        let inside = mount.join("usr/bin/audiosync");
+        let outside = path("/usr/bin/audiosync");
+
+        let named = |appimage: Option<&PathBuf>, appdir: Option<&PathBuf>, exe: &PathBuf| {
+            entry_exe(
+                appimage.map(PathBuf::as_path),
+                appdir.map(PathBuf::as_path),
+                exe,
+            )
+        };
+        assert_eq!(named(Some(&image), Some(&mount), &inside), image);
+        // Started from another AppImage's terminal: its variables came along.
+        let other = path("/tmp/.mount_TerminalXyz");
+        assert_eq!(named(Some(&image), Some(&other), &outside), outside);
+        assert_eq!(named(Some(&image), Some(&other), &inside), inside);
+        assert_eq!(named(Some(&image), None, &inside), inside);
+        assert_eq!(named(None, None, &outside), outside);
+        assert_eq!(
+            named(
+                Some(&PathBuf::from("AudioSync.AppImage")),
+                Some(&mount),
+                &inside
+            ),
+            inside
+        );
     }
 }

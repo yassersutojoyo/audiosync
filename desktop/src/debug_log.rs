@@ -51,8 +51,10 @@ pub struct DebugLog {
 }
 
 impl DebugLog {
-    /// The log the environment asks for: `audiosync-debug.log` in the
-    /// temporary folder when `AUDIOSYNC_DEBUG` is `1`, nothing otherwise.
+    /// The log the environment asks for when `AUDIOSYNC_DEBUG` is `1`,
+    /// nothing otherwise: `audiosync-debug.log` in the temporary folder, or
+    /// on Linux `debug.log` in the state folder (the temporary folder only
+    /// when that can't be made, which the log's first line then says).
     pub fn from_env() -> DebugLog {
         let (path, warning) = env_path();
         let log = DebugLog::new(path);
