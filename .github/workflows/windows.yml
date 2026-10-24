@@ -90,9 +90,10 @@ jobs:
         run: cargo test --locked
 
       # A PipeWire daemon of its own with two null sinks, each playing a 440 Hz
-      # tone of its own level through a stream pinned to it, and the ignored
-      # tests that capture the default output's monitor and follow a change
-      # of the default.
+      # tone of its own level, and the ignored tests that capture the default
+      # output's monitor and follow a change of the default. The tones are
+      # linked by hand: WirePlumber moves even a targeted pw-play to a new
+      # default output.
       - name: PipeWire capture smoke test
         if: ${{ !cancelled() }}
         run: |
@@ -113,9 +114,16 @@ jobs:
             done
             sleep 1
             wpctl status
-            pw-play --target ci-loud "$RUNNER_TEMP/loud.wav" &
-            pw-play --target ci-quiet "$RUNNER_TEMP/quiet.wav" &
+            for level in loud quiet; do
+              pw-play --target 0 -P "{ node.name = ci-$level-tone }" "$RUNNER_TEMP/$level.wav" &
+            done
             sleep 1
+            for level in loud quiet; do
+              for channel in FL FR; do
+                pw-link "ci-$level-tone:output_$channel" "ci-$level:playback_$channel"
+              done
+            done
+            pw-link -l
             cargo test --locked -- --ignored --test-threads 1 audio::pipewire::stream::tests::
           '
 

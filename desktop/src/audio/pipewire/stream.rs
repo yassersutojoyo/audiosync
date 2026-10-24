@@ -715,7 +715,7 @@ mod tests {
     }
 
     /// Needs the CI job's two null sinks, `ci-loud` and `ci-quiet`, each
-    /// playing a tone of its own level through a stream pinned to it.
+    /// playing a tone of its own level through a stream linked to it by hand.
     #[test]
     #[ignore = "needs a running PipeWire daemon with the CI job's two sinks"]
     fn the_capture_follows_a_new_default_output() {
