@@ -1904,6 +1904,31 @@ do {
           "native airplay: a receiver that asks for a code every time goes off when it appears, at launch or later",
           "\(asking.appearedAskingEveryTime(askingRows, after: ["native:H8"]))")
 
+    // Lounge was switched on by hand, Den was on from the last run; a sender
+    // Retry starts a new model that lists both as new.
+    var handOn = EveryTimeGuard()
+    handOn.turnedOnByHand(["native:G7"])
+    var retried = NativeAirPlayModel()
+    for r in [lounge, den] { retried.apply(.appeared(r)) }
+    let relisted = retried.appearedAskingEveryTime(retried.rows(enabled: []), after: [])
+    let goOff = handOn.turnsOff(relisted, enabled: ["native:G7", "native:H8"])
+    check(goOff == ["native:H8"],
+          "native airplay: a speaker that asks every time and was switched on by hand stays on when it appears again, also after a Retry",
+          "\(goOff)")
+    let afterOff = handOn.turnsOff(["native:G7"], enabled: [])
+    let onAgain = handOn.turnsOff(["native:G7"], enabled: ["native:G7"])
+    check(afterOff.isEmpty && onAgain == ["native:G7"],
+          "native airplay: switched off, it is no longer on by hand", "\(onAgain)")
+
+    // The TV setting changes while it is listed: a row already known is
+    // left as it is, so a session under way keeps playing.
+    var toggled = NativeAirPlayModel()
+    toggled.apply(.appeared(receiver("G7", "Lounge", .available)))
+    toggled.apply(.changed(lounge))
+    check(toggled.asksEveryTime("G7")
+            && toggled.appearedAskingEveryTime(toggled.rows(enabled: []), after: ["native:G7"]).isEmpty,
+          "native airplay: a listed speaker that starts asking every time isn't switched off")
+
     let all: Set<String> = ["native:A1", "native:B2", "native:C3", "native:D4", "123456789012"]
     check(model.plan(streaming: false, enabled: all).isEmpty, "native airplay: nothing joins while not streaming")
     check(model.plan(streaming: true, enabled: all)

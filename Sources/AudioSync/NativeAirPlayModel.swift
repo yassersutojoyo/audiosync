@@ -53,6 +53,21 @@ enum NativeTarget {
 
 /// What a stereo pair or home theater group row says about its members
 /// (P176, P181).
+/// The speakers (app IDs) the user switched on by hand this run, kept
+/// apart from the sender's model so they outlive a sender Retry: one that
+/// asks for a code every time stays on when it appears again.
+struct EveryTimeGuard: Equatable {
+    private(set) var byHand: Set<String> = []
+
+    mutating func turnedOnByHand(_ ids: [String]) {}
+
+    /// Of `appeared` (rows that appeared asking for a code every time), the
+    /// ones that go off: on from the last run, not switched on by hand.
+    mutating func turnsOff(_ appeared: [String], enabled: Set<String>) -> [String] {
+        appeared.filter { enabled.contains($0) }
+    }
+}
+
 struct AirPlayTargetRow: Equatable {
     enum Kind: Equatable { case stereoPair, homeTheater }
     let kind: Kind

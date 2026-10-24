@@ -6955,6 +6955,104 @@ mod tests {
         );
     }
 
+    /// [`airplay2_adapter`] with Den, which asks for a code every time,
+    /// listed and marked for auto-connect.
+    fn every_time_adapter() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let den = airplay2_every_time_tv(10, "Den");
+        fake.appear(&den);
+        adapter.poll();
+        adapter.set_auto_connect(&ap(&den), true);
+        fake.take_calls();
+        (adapter, fake, den)
+    }
+
+    #[test]
+    fn an_every_time_speaker_turned_on_by_hand_stays_on_when_it_appears_again() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(adapter.snapshot().running);
+
+        // Its announcement lapses before it plays, then comes back.
+        fake.gone(&den);
+        adapter.poll();
+        fake.appear(&den);
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.speaker(&id).unwrap().enabled, "the user turned it on");
+        assert!(state.running, "the session the user started goes on");
+    }
+
+    #[test]
+    fn an_every_time_speaker_whose_pin_prompt_is_open_keeps_it_when_it_appears_again() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.take_calls();
+
+        fake.gone(&den);
+        adapter.poll();
+        fake.appear(&den);
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().pin_prompt.map(|prompt| prompt.speaker_id),
+            Some(id.clone())
+        );
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::CancelPairing(_))),
+            "the pairing goes on"
+        );
+        assert!(messages(&adapter).is_empty());
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.speaker(&id).unwrap().enabled);
+        assert!(state.running);
+    }
+
+    #[test]
+    fn a_listed_speaker_that_starts_asking_every_time_is_left_as_it_is() {
+        use crate::audio::pairings::tests::homekit;
+
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        let id = ap(&loft);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&loft, PairingEvent::HomeKitPaired(homekit(0x33)));
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+        fake.take_calls();
+
+        // Its TV is set to ask for a code every time while it is listed.
+        fake.appear(&airplay2_every_time_tv(9, "Loft"));
+        adapter.poll();
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(row.code_every_time);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Remove(_))),
+            "a session under way isn't ended for it"
+        );
+    }
+
     #[test]
     fn a_speaker_that_asks_for_a_code_once_still_auto_connects() {
         use crate::audio::pairings::tests::homekit;
