@@ -611,15 +611,22 @@ struct UIStrings {
     let nativeAirPlayPtpPortsTaken = "Another app is using port 319 or 320, so AirPlay speakers that need "
         + "PTP timing can't play. Close that app, then turn the speaker on again."
 
-    /// Another AirPlay 2 speaker plays, and only one can at a time: this one
-    /// stays on and starts once the other stops (P169).
-    func nativeAirPlayOneAirPlay2(name: String) -> String {
-        "AudioSync plays one AirPlay 2 speaker at a time, so \(name) waits. It starts once the other one stops."
+    /// Sixteen AirPlay 2 speakers play: this one stays on and starts once
+    /// one of them stops (P169, S285).
+    func nativeAirPlayTooManyAirPlay2(name: String) -> String {
+        "AudioSync plays up to 16 AirPlay 2 speakers at once, so \(name) waits. It starts once one of them stops."
+    }
+    /// A speaker that takes only PTP while AudioSync runs PTP for speakers
+    /// on another network: it stays on and starts once those stop (S285).
+    func nativeAirPlayPtpOtherNetwork(name: String) -> String {
+        "\(name) needs PTP timing, which AudioSync already runs for AirPlay 2 speakers on another network, so it waits. It starts once those stop."
     }
     /// That notice's title.
     func nativeAirPlayWaitingTitle(name: String) -> String { "\(name) waiting" }
-    /// Under the name of a speaker waiting for the AirPlay 2 slot.
-    let waitingForAirPlay2 = "Waiting for the other AirPlay 2 speaker"
+    /// Under the name of a speaker waiting for an AirPlay 2 place.
+    let waitingForAirPlay2 = "Waiting: too many AirPlay 2 speakers"
+    /// Under the name of a speaker waiting for PTP (S285).
+    let waitingForPtp = "Waiting: PTP in use on another network"
     /// An Apple TV whose home theater group AudioSync plays to (P177).
     func nativeAirPlayPlaysThroughSpeakers(name: String) -> String {
         "\(name) plays through its home theater speakers, and AudioSync already plays to them, so it's off. "
@@ -1068,8 +1075,10 @@ struct UIStrings {
     /// The note under a speaker's name, also read in its VoiceOver hint:
     /// what a Cast speaker does, that an AirPlay 2 speaker waits, or what a
     /// stereo pair or home theater group is made of.
-    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, target: AirPlayTargetRow?) -> String? {
+    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false,
+                 target: AirPlayTargetRow?) -> String? {
         if let cast { return castNote(cast) }
+        if waitingForPtp { return self.waitingForPtp }
         if waitingForAirPlay2 { return self.waitingForAirPlay2 }
         return target.map(airPlayTargetNote)
     }

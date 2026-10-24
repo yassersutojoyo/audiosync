@@ -261,8 +261,8 @@ final class WebRemote {
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
                 needsCode: s.availability == .needsCode, paired: s.paired,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,
-                                target: s.airPlayTarget),
-                key: s.key, waiting: s.enabled && s.waitingForAirPlay2), text: t)
+                                waitingForPtp: s.waitingForPtp, target: s.airPlayTarget),
+                key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp)), text: t)
         }
     }
 

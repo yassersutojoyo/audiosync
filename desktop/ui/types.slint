@@ -3,9 +3,9 @@
 // How a speaker row or zone header shows: playing only while streaming is
 // on. A speaker that is on while streaming is on but can't play right now
 // waits for its device (another app holds it), is reconnecting (AirPlay) or
-// waits for the one AirPlay 2 slot; a zone waits when every member it
-// switches on does.
-export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2 }
+// waits for an AirPlay 2 place or for PTP; a zone waits when every member
+// it switches on does.
+export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2, waiting-for-ptp }
 
 // The part of a speaker row or zone header that has, or is to take, the keyboard
 // focus: its toggle, delay button, volume, sync controls, options or name
@@ -37,7 +37,7 @@ export enum CastList { quiet, searching, none-found, failed }
 export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, airplay2-next-launch, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, one-airplay2-speaker, plays-through-speakers, apple-tv-plays, plays-in-group, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, too-many-airplay2-speakers, ptp-other-network, plays-through-speakers, apple-tv-plays, plays-in-group, unsupported }
 
 // View > Appearance: as Windows is set, or always light or dark.
 export enum Appearance { system, light, dark }

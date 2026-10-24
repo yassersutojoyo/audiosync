@@ -3830,6 +3830,7 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Waiting(ui_model::Waiting::ForDevice) => RowState::WaitingForDevice,
         SpeakerState::Waiting(ui_model::Waiting::Reconnecting) => RowState::Reconnecting,
         SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot) => RowState::WaitingForAirplay2,
+        SpeakerState::Waiting(ui_model::Waiting::ForPtp) => RowState::WaitingForPtp,
     }
 }
 
@@ -3887,7 +3888,8 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
         P::TimingUnavailable => AirPlayProblem::TimingUnavailable,
-        P::OneAirPlay2Speaker => AirPlayProblem::OneAirplay2Speaker,
+        P::TooManyAirPlay2Speakers => AirPlayProblem::TooManyAirplay2Speakers,
+        P::PtpOtherNetwork => AirPlayProblem::PtpOtherNetwork,
         P::PlaysThroughSpeakers => AirPlayProblem::PlaysThroughSpeakers,
         P::AppleTvPlays => AirPlayProblem::AppleTvPlays,
         P::PlaysInGroup => AirPlayProblem::PlaysInGroup,
@@ -4804,7 +4806,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::PairFirst { speaker } => (NoticeKind::PairFirst, speaker.as_str()),
         NoticeMessage::AirPlayRetrying {
             speaker,
-            problem: ui_model::AirPlayProblem::OneAirPlay2Speaker,
+            problem: ui_model::AirPlayProblem::TooManyAirPlay2Speakers,
         } => (NoticeKind::AirplayWaiting, speaker.as_str()),
         NoticeMessage::AirPlayRetrying { speaker, .. } => {
             (NoticeKind::AirplayRetrying, speaker.as_str())
@@ -5255,10 +5257,15 @@ mod tests {
             read(RowState::Reconnecting),
             (reconnecting.clone(), turn_off.clone(), reconnecting)
         );
-        let slot = "Waiting for the other AirPlay 2 speaker".to_owned();
+        let slot = "Waiting: too many AirPlay 2 speakers".to_owned();
         assert_eq!(
             read(RowState::WaitingForAirplay2),
             (slot.clone(), turn_off.clone(), slot)
+        );
+        let ptp = "Waiting: PTP in use on another network".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForPtp),
+            (ptp.clone(), turn_off.clone(), ptp)
         );
         assert_eq!(
             read(RowState::Playing),
@@ -8221,7 +8228,7 @@ mod tests {
         assert_eq!(
             dismiss_label(NoticeMessage::AirPlayRetrying {
                 speaker: "Kitchen".into(),
-                problem: ui_model::AirPlayProblem::OneAirPlay2Speaker,
+                problem: ui_model::AirPlayProblem::TooManyAirPlay2Speakers,
             }),
             "Dismiss: Kitchen waiting"
         );

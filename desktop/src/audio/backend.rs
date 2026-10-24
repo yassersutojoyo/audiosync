@@ -287,9 +287,12 @@ pub enum AirPlayProblem {
     AirPlay2NotYet,
     /// It turned NTP timing down, and PTP timing isn't available.
     TimingUnavailable,
-    /// Another AirPlay 2 speaker plays: it stays on and starts once that
-    /// one stops.
-    OneAirPlay2Speaker,
+    /// Sixteen AirPlay 2 speakers play: it stays on and starts once one of
+    /// them stops.
+    TooManyAirPlay2Speakers,
+    /// It takes only PTP timing, which runs for speakers on another
+    /// network: it stays on and starts once those stop.
+    PtpOtherNetwork,
     /// An Apple TV whose home theater group plays: its sound goes to those
     /// speakers, so it is off.
     PlaysThroughSpeakers,
@@ -304,6 +307,14 @@ pub enum AirPlayProblem {
 }
 
 impl AirPlayProblem {
+    /// The sender keeps it on and starts it once it lets it (S285).
+    pub fn waits(self) -> bool {
+        matches!(
+            self,
+            AirPlayProblem::TooManyAirPlay2Speakers | AirPlayProblem::PtpOtherNetwork
+        )
+    }
+
     /// Whether AudioSync keeps trying by itself; otherwise the speaker is
     /// turned off.
     pub fn retried(self) -> bool {

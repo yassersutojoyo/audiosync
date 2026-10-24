@@ -151,9 +151,11 @@ extension AppDelegate {
             clearNotices([SpeakerKey.make(id: id, airplay: true)])
             syncNativeSpeakers()   // it joins with its new credentials
             pushModel()
-        case .waiting(let id, let waits):
-            if waits {
-                postNotice(text.nativeAirPlayOneAirPlay2(name: shownName(airPlay: id)),
+        case .waiting(let id, let reason):
+            if let reason {
+                let name = shownName(airPlay: id)
+                postNotice(reason == .ptpOtherNetwork ? text.nativeAirPlayPtpOtherNetwork(name: name)
+                                                      : text.nativeAirPlayTooManyAirPlay2(name: name),
                            subject: SpeakerKey.make(id: id, airplay: true),
                            title: text.nativeAirPlayWaitingTitle(name: shownName(airPlay: id)))
             } else {

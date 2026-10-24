@@ -262,7 +262,11 @@ fn zones(state: &AppState, listed_now: &[&Speaker]) -> Vec<RemoteZone> {
                     on: count(&|speaker| speaker.enabled),
                     total: count(&|_| true),
                     waiting: count(&|speaker| {
-                        speaker.enabled && speaker.waiting == Some(Waiting::ForAirPlay2Slot)
+                        speaker.enabled
+                            && matches!(
+                                speaker.waiting,
+                                Some(Waiting::ForAirPlay2Slot | Waiting::ForPtp)
+                            )
                     }),
                 },
             }

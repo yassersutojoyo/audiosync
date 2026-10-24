@@ -24,7 +24,8 @@ export global Strings {
     // AirPlay speaker. Its row says so instead of showing it as playing.
     out property <string> waiting-for-device: @tr("Waiting for device");
     out property <string> reconnecting: @tr("Reconnecting…");
-    out property <string> waiting-for-airplay2: @tr("Waiting for the other AirPlay 2 speaker");
+    out property <string> waiting-for-airplay2: @tr("Waiting: too many AirPlay 2 speakers");
+    out property <string> waiting-for-ptp: @tr("Waiting: PTP in use on another network");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no zone.
@@ -638,8 +639,11 @@ export global Strings {
         if problem == AirPlayProblem.timing-unavailable {
             return @tr("{} needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.", speaker);
         }
-        if problem == AirPlayProblem.one-airplay2-speaker {
-            return @tr("AudioSync plays one AirPlay 2 speaker at a time, so {} waits. It starts once the other one stops.", speaker);
+        if problem == AirPlayProblem.too-many-airplay2-speakers {
+            return @tr("AudioSync plays up to 16 AirPlay 2 speakers at once, so {} waits. It starts once one of them stops.", speaker);
+        }
+        if problem == AirPlayProblem.ptp-other-network {
+            return @tr("{} needs PTP timing, which AudioSync already runs for AirPlay 2 speakers on another network, so it waits. It starts once those stop.", speaker);
         }
         // An Apple TV and its home theater group never play at once.
         if problem == AirPlayProblem.plays-through-speakers {
@@ -955,7 +959,7 @@ export global Strings {
             return root.will-play;
         }
         if state == RowState.waiting-for-device || state == RowState.reconnecting
-                || state == RowState.waiting-for-airplay2 {
+                || state == RowState.waiting-for-airplay2 || state == RowState.waiting-for-ptp {
             return root.row-note(state);
         }
         return root.on;
@@ -972,6 +976,9 @@ export global Strings {
         }
         if state == RowState.waiting-for-airplay2 {
             return root.waiting-for-airplay2;
+        }
+        if state == RowState.waiting-for-ptp {
+            return root.waiting-for-ptp;
         }
         return "";
     }

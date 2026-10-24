@@ -967,12 +967,16 @@ mod tests {
                 AIRPLAY_REASON_TIMING.to_string(),
             ),
             (
-                "ASC_AIRPLAY_REASON_ONE_AIRPLAY2",
-                AIRPLAY_REASON_ONE_AIRPLAY2.to_string(),
+                "ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2",
+                AIRPLAY_REASON_TOO_MANY_AIRPLAY2.to_string(),
             ),
             (
                 "ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS",
                 AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_REASON_PTP_OTHER_NETWORK",
+                AIRPLAY_REASON_PTP_OTHER_NETWORK.to_string(),
             ),
             ("ASC_AIRPLAY_FLAG_TARGET", AIRPLAY_FLAG_TARGET.to_string()),
             (
@@ -1153,6 +1157,14 @@ mod tests {
             (
                 "ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL",
                 AIRPLAY_WARNING_LATENCY_SHORTFALL.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_PEERS_UPDATE_REFUSED",
+                AIRPLAY_WARNING_PEERS_UPDATE_REFUSED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_GRANDMASTER_OUTRANKED",
+                AIRPLAY_WARNING_GRANDMASTER_OUTRANKED.to_string(),
             ),
             (
                 "ASC_AIRPLAY_EVENT_LATENCY_HELD",

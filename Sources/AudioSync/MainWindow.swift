@@ -1010,6 +1010,7 @@ struct SpeakerRow: View {
     /// slot, or what a stereo pair or home theater group is made of.
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                           waitingForPtp: speaker.waitingForPtp,
                            target: speaker.airPlayTarget) ?? zoneNote
     }
 

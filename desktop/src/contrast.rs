@@ -608,8 +608,11 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
                 || line.contains("@tr(\"AirPlay speakers share one delay, so a new AirPlay delay")
                 || line.contains("airplay-none-found: @tr(\"No AirPlay speakers found yet.")
-                || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
-                || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
+                || line.contains("plays up to 16 AirPlay 2 speakers at once, so {} waits.")
+                || line.contains("@tr(\"Waiting: too many AirPlay 2 speakers\")")
+                || line.contains(
+                    "which AudioSync already runs for AirPlay 2 speakers on another network"
+                )
                 || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
                 || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
