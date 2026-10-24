@@ -121,6 +121,7 @@ final class AppModel: ObservableObject {
         var setMaster: (Double) -> Void = { _ in }
         var setAirPlayEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setAirPlayVolume: (String, Double) -> Void = { _, _ in }
+        var setAirPlayVolumeDragging: (String, Bool) -> Void = { _, _ in }
         var forgetAirPlayPairing: (String) -> Void = { _ in }
         var setLocalEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
@@ -415,6 +416,11 @@ final class AppModel: ObservableObject {
     func delete(_ zone: Zone) {
         actions.deleteZone(zone.id)
         AccessibilityNotification.Announcement(text.zoneDeleted(zone.name)).post()
+    }
+
+    /// While an AirPlay speaker's slider is dragged, levels read back from it are ignored.
+    func setVolumeDragging(_ speaker: Speaker, _ dragging: Bool) {
+        if speaker.tag == .airplay { actions.setAirPlayVolumeDragging(speaker.id, dragging) }
     }
 
     func setVolume(_ speaker: Speaker, _ position: Double) {

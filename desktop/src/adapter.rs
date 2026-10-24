@@ -3751,6 +3751,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
+    fn set_speaker_volume_editing(&mut self, id: &str, on: bool) {
+        if let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) {
+            self.audio.set_airplay_volume_dragging(&airplay_id, on);
+        }
+    }
+
     /// A local output's delay, an AirPlay speaker's own delay d_s, or a
     /// Cast speaker's measured offset (never negative).
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {

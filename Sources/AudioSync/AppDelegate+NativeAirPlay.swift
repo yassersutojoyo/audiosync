@@ -445,6 +445,13 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// A native speaker's slider drag began or ended: the core ignores read-backs during it.
+    func setNativeAirPlayVolumeDragging(_ id: String, _ dragging: Bool) {
+        if let receiver = NativeAirPlayID.receiver(id) {
+            nativeAirPlay?.setVolumeDragging(receiver, dragging)
+        }
+    }
+
     /// A new session started (P143): the speakers start over on a new timeline.
     func restartNativeTimeline() {
         nativeAirPlay?.restartTimeline()

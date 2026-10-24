@@ -458,10 +458,18 @@ fn a_target_takes_one_airplay2_place_for_all_its_members() {
 
 // covers: P180
 #[test]
-fn an_airplay2_target_read_back_reports_the_target_volume_under_the_leader() {
+fn an_airplay2_target_read_back_asks_only_the_leader() {
     let _serial = serial();
-    let first = Ap2Server::start(FakeAp2::new());
-    let second = Ap2Server::start(FakeAp2::new());
+    let answering = || {
+        let mut fake = FakeAp2::new();
+        fake.bodies.insert(
+            "GET_PARAMETER".to_owned(),
+            b"volume: -9.000000\r\n".to_vec(),
+        );
+        fake
+    };
+    let first = Ap2Server::start(answering());
+    let second = Ap2Server::start(answering());
     let (sender, _host) = start(true);
     let mut events = Events::default();
     let (da, db) = (
@@ -489,15 +497,72 @@ fn an_airplay2_target_read_back_reports_the_target_volume_under_the_leader() {
     assert!(
         wait_until(LONG, || {
             events.drain(&sender);
-            reported(&events, &da.key) == vec![-12.0]
+            reported(&events, &da.key) == vec![-9.0]
         }),
         "{:?}",
         events.of(&da.key)
     );
     assert!(reported(&events, &db.key).is_empty());
-    for server in [&first, &second] {
-        assert!(!server.fake().keys().contains(&"GET_PARAMETER".to_owned()));
+    assert!(!second.fake().keys().contains(&"GET_PARAMETER".to_owned()));
+    sender.shutdown();
+}
+
+// covers: P180, P184
+#[test]
+fn an_airplay2_target_whose_reader_stopped_reports_nothing() {
+    let _serial = serial();
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("GET_PARAMETER".to_owned(), 500);
+    let first = Ap2Server::start(refusing);
+    let second = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start(true);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10040"),
+        airplay2_only(&second, 2, "0x0,0x10040"),
+    );
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(playing(&mut events, &sender, key, 1));
     }
+    let reads = |server: &Ap2Server| {
+        server
+            .fake()
+            .keys()
+            .iter()
+            .filter(|key| *key == "GET_PARAMETER")
+            .count()
+    };
+    let stopped = SpeakerEvent::Warning(Warning::VolumeReadsStopped);
+    assert!(
+        wait_until(Duration::from_secs(20), || {
+            sender.read_target_volume(&id);
+            thread::sleep(Duration::from_millis(100));
+            events.drain(&sender);
+            events.of(&da.key).contains(&stopped)
+        }),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(reads(&first), 3);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        sender.read_target_volume(&id);
+        thread::sleep(Duration::from_millis(250));
+    }
+    events.drain(&sender);
+    assert_eq!(reads(&first), 3, "no read after the third failure");
+    assert_eq!(reads(&second), 0);
+    let of_first = events.of(&da.key);
+    assert_eq!(of_first.iter().filter(|e| **e == stopped).count(), 1);
+    assert!(
+        !of_first
+            .iter()
+            .any(|e| matches!(e, SpeakerEvent::VolumeReported(_) | SpeakerEvent::Error(_))),
+        "{of_first:?}"
+    );
     sender.shutdown();
 }
 

@@ -178,6 +178,7 @@ impl Driver {
         let device = &speaker.device;
         let mut config = Ap2Config::new(addresses, speaker.options.volume);
         config.trace = speaker.options.trace;
+        config.read_volume = speaker.reads_volume;
         config.txt_flags = device
             .airplay_txt
             .as_ref()
@@ -711,6 +712,9 @@ impl Driver {
             }
             Ap2Event::Warning(warning) => self.emit_speaker(key, SpeakerEvent::Warning(warning)),
             Ap2Event::Trace(line) => self.emit_speaker(key, SpeakerEvent::Trace(line)),
+            Ap2Event::VolumeReported(db) => {
+                self.emit_speaker(key, SpeakerEvent::VolumeReported(db))
+            }
             Ap2Event::Failed(error) => {
                 let verifying = self.ap2_active(key).is_some_and(|active| active.verifying);
                 let member = self

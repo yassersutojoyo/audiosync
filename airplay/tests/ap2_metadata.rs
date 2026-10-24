@@ -114,9 +114,9 @@ fn answer_last_with(rig: &mut Ap2Rig, code: u16, reason: &str) {
 // covers: P123
 #[test]
 fn ap2_metadata_waits_for_the_stream_setup_and_goes_framed() {
-    // The initial volume goes unanswered, so the stream SETUP isn't out yet.
+    // The FLUSH goes unanswered, so the stream isn't ready yet.
     let mut fake = fake_with(TEXT | ARTWORK | PROGRESS);
-    fake.silent.push("SET_PARAMETER".to_owned());
+    fake.silent.push("FLUSH".to_owned());
     let mut rig = Ap2Rig::new(ap2_config(), fake);
     assert!(!rig.ready());
     let now = rig.now;
@@ -147,6 +147,11 @@ fn ap2_metadata_waits_for_the_stream_setup_and_goes_framed() {
         .iter()
         .position(|(request, _)| request.method == Method::Flush);
     assert!(flush_at < first);
+    // The initial volume goes ahead of the metadata (P183).
+    assert_eq!(
+        set_parameters_after_flush(&rig.fake),
+        ["volume", "track", "artwork", "progress"]
+    );
     for ((request, framed), metadata) in sent.iter().zip(all_three()) {
         assert!(framed, "metadata goes framed (P67)");
         assert_eq!(
@@ -266,7 +271,7 @@ fn a_new_ap2_volume_goes_before_queued_metadata() {
     rig.pump();
     assert_eq!(
         set_parameters_after_flush(&rig.fake),
-        ["track", "volume", "progress"],
+        ["volume", "track", "volume", "progress"],
         "{:?}",
         rig.keys()
     );
@@ -277,7 +282,7 @@ fn a_new_ap2_volume_goes_before_queued_metadata() {
 #[test]
 fn ap2_metadata_queued_before_ready_is_dropped_by_teardown() {
     let mut fake = fake_with(TEXT | ARTWORK | PROGRESS);
-    fake.silent.push("SET_PARAMETER".to_owned());
+    fake.silent.push("FLUSH".to_owned());
     let mut rig = Ap2Rig::new(ap2_config(), fake);
     assert!(!rig.ready());
     let now = rig.now;
@@ -288,7 +293,7 @@ fn ap2_metadata_queued_before_ready_is_dropped_by_teardown() {
     rig.session.teardown(now);
     rig.pump();
 
-    // The initial volume's late answer lets the TEARDOWN go out.
+    // The FLUSH's late answer lets the TEARDOWN go out.
     rig.fake.silent.clear();
     answer_last(&mut rig);
     rig.advance(Duration::from_secs(10));
@@ -469,11 +474,16 @@ fn an_airplay2_speaker_with_bit_50_alone_gets_no_metadata() {
     sender.shutdown();
 }
 
-// covers: P122
+// covers: P122, P184
 #[test]
-fn an_airplay2_read_back_reports_the_last_volume_set_without_asking() {
+fn an_airplay2_read_back_asks_the_receiver_with_the_next_feedback() {
     let _serial = serial();
-    let server = Ap2Server::start(FakeAp2::new());
+    let mut fake = FakeAp2::new();
+    fake.bodies.insert(
+        "GET_PARAMETER".to_owned(),
+        b"volume: -27.000000\r\n".to_vec(),
+    );
+    let server = Ap2Server::start(fake);
     let (sender, _host) = start();
     let mut events = Events::default();
     let device = airplay2_only(&server, 63, "0x0,0x10040");
@@ -484,24 +494,25 @@ fn an_airplay2_read_back_reports_the_last_volume_set_without_asking() {
             .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
             .is_some()
     );
+    assert!(!server.fake().keys().contains(&"GET_PARAMETER".to_owned()));
     sender.read_volume(&key);
     assert!(wait_until(LONG, || {
         events.drain(&sender);
-        reported(&events, &key) == vec![-20.0]
+        reported(&events, &key) == vec![-27.0]
     }));
-    sender.set_volume(&key, Volume::Db(-7.5));
-    sender.read_volume(&key);
-    sender.set_volume(&key, Volume::Muted);
+    server.fake().bodies.insert(
+        "GET_PARAMETER".to_owned(),
+        b"volume: -26.700001\r\n".to_vec(),
+    );
     sender.read_volume(&key);
     assert!(
         wait_until(LONG, || {
             events.drain(&sender);
-            reported(&events, &key) == vec![-20.0, -7.5, -144.0]
+            reported(&events, &key) == vec![-27.0, -26.700001]
         }),
         "{:?}",
         reported(&events, &key)
     );
-    assert!(!server.fake().keys().contains(&"GET_PARAMETER".to_owned()));
     assert!(!events.seen.iter().any(|(_, event)| matches!(
         event,
         SenderEvent::Speaker {

@@ -33,6 +33,7 @@ component SpeakerRows inherits VerticalLayout {
     in property <[ZoneItem]> zones;
     callback toggled(string);
     callback volume-changed(string, float);
+    callback volume-editing(string, bool);
     callback sync-toggled(string);
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
@@ -91,6 +92,9 @@ component SpeakerRows inherits VerticalLayout {
             }
             volume-changed(value) => {
                 root.volume-changed(speaker.id, value);
+            }
+            volume-editing(on) => {
+                root.volume-editing(speaker.id, on);
             }
             sync-toggled => {
                 root.sync-toggled(speaker.id);
@@ -183,6 +187,7 @@ component ZoneCard inherits VerticalLayout {
     callback zone-focus-changed <=> header.focus-changed;
     callback toggled <=> rows.toggled;
     callback volume-changed <=> rows.volume-changed;
+    callback volume-editing <=> rows.volume-editing;
     callback sync-toggled <=> rows.sync-toggled;
     callback delay-stepped <=> rows.delay-stepped;
     callback delay-edited <=> rows.delay-edited;
@@ -259,6 +264,7 @@ component SpeakerSection inherits VerticalLayout {
     in property <string> note;
     callback toggled <=> rows.toggled;
     callback volume-changed <=> rows.volume-changed;
+    callback volume-editing <=> rows.volume-editing;
     callback sync-toggled <=> rows.sync-toggled;
     callback delay-stepped <=> rows.delay-stepped;
     callback delay-edited <=> rows.delay-edited;
@@ -1202,6 +1208,7 @@ export component MainWindow inherits Window {
     callback now-playing-transport(int);
     callback speaker-toggled(string);
     callback speaker-volume-changed(string, float);
+    callback speaker-volume-editing(string, bool);
     callback sync-toggled(string);
     callback delay-stepped(string, int);
     callback delay-edited(string, string);
@@ -1939,6 +1946,9 @@ export component MainWindow inherits Window {
                         volume-changed(id, value) => {
                             root.speaker-volume-changed(id, value);
                         }
+                        volume-editing(id, on) => {
+                            root.speaker-volume-editing(id, on);
+                        }
                         sync-toggled(id) => {
                             root.sync-toggled(id);
                         }
@@ -2059,6 +2069,9 @@ export component MainWindow inherits Window {
                             volume-changed(id, value) => {
                                 root.speaker-volume-changed(id, value);
                             }
+                            volume-editing(id, on) => {
+                                root.speaker-volume-editing(id, on);
+                            }
                             sync-toggled(id) => {
                                 root.sync-toggled(id);
                             }
@@ -2158,6 +2171,9 @@ export component MainWindow inherits Window {
                         }
                         volume-changed(id, value) => {
                             root.speaker-volume-changed(id, value);
+                        }
+                        volume-editing(id, on) => {
+                            root.speaker-volume-editing(id, on);
                         }
                         sync-toggled(id) => {
                             root.sync-toggled(id);

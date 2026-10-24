@@ -1113,6 +1113,10 @@ mod tests {
                 AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY.to_string(),
             ),
             (
+                "ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED",
+                AIRPLAY_WARNING_VOLUME_READS_STOPPED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_PAIRINGS_FAILED",
                 AIRPLAY_PAIRINGS_FAILED.to_string(),
             ),

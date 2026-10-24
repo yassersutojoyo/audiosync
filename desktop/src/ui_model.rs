@@ -1190,6 +1190,8 @@ pub trait Backend {
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
+    /// The speaker's volume slider is held (true) or let go (false).
+    fn set_speaker_volume_editing(&mut self, _id: &str, _on: bool) {}
     fn set_speaker_delay(&mut self, id: &str, ms: f64);
     /// Mutes or unmutes a Google Cast speaker on the speaker itself.
     fn set_speaker_muted(&mut self, _id: &str, _muted: bool) {}

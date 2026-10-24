@@ -137,6 +137,7 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID 4 /* its pair-verify signature didn't check out */
 #define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
 #define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
+#define ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED 7       /* three volume reads in a row failed on an AirPlay 2 session: it isn't asked again */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -1569,6 +1570,14 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
 
 /*
+ * Tells whether the user is dragging the volume slider of the speaker added
+ * under `id`: while it is, a level read back from the speaker is ignored.
+ * Returns false when the handle or id is NULL or no speaker was added under
+ * id.
+ */
+bool asc_airplay_set_volume_dragging(AscAirPlay *airplay, const char *id, bool dragging);
+
+/*
  * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
  * plays at its own position times the zone's times the master, live once
  * added and from its start when added later, and a level read back from it
@@ -1583,10 +1592,11 @@ bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zon
  * Only playing sessions answer. A level that moves a slider comes as
  * ASC_AIRPLAY_EVENT_VOLUME, already the speaker's level in the sender, so a
  * reconnect or a member that starts late plays at it and the host doesn't
- * set it again; a level read before the host last set the volume, or within
- * 1 s of it, is dropped.
- * Speakers that leave volume to the sender, and ones that turned a read down
- * once, aren't asked.
+ * set it again. Dropped: a level read before the host last set the volume,
+ * one that comes while the slider is dragged, and one within 0.5 dB of the
+ * level sent in the 3 s after a set. Speakers that leave volume to the
+ * sender, and ones that turned a read down or whose reads stopped, aren't
+ * asked.
  */
 void asc_airplay_read_volumes(AscAirPlay *airplay);
 

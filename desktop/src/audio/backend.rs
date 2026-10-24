@@ -857,6 +857,10 @@ pub trait AudioBackend {
     /// value that isn't finite is ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);
 
+    /// The AirPlay speaker's volume slider is held (true) or let go
+    /// (false): a level it reads back meanwhile is ignored (S271).
+    fn set_airplay_volume_dragging(&mut self, _id: &str, _dragging: bool) {}
+
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
     /// that isn't finite is ignored; others are clamped to 0 to 20 000.
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);

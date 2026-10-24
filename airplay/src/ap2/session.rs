@@ -39,6 +39,8 @@ pub const FEEDBACK_INTERVAL: Duration = Duration::from_secs(2);
 /// Missing or failed feedback answers in a row that mean the speaker is
 /// lost (P132).
 pub const FEEDBACK_MISSES: u8 = 3;
+/// Failed volume reads in a row after which a session stops reading (P184).
+pub const VOLUME_READ_FAILURES: u8 = 3;
 /// Retries of a refused event connection, and the wait between them (P70).
 pub const EVENTS_RETRIES: u32 = 5;
 pub const EVENTS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -79,9 +81,12 @@ pub struct Ap2Config {
     /// for [`Ap2Session::proceed`].
     pub pin_pairing: bool,
     /// The host keeps a debug log: the session reports [`Ap2Event::Trace`]
-    /// lines and asks the receiver its volume after RECORD and with each
-    /// feedback until a read goes unanswered.
+    /// lines.
     pub trace: bool,
+    /// The host reads this speaker's volume, so the session reads it once
+    /// after the initial volume is answered (P184); later reads wait for
+    /// [`Ap2Session::read_volume`].
+    pub read_volume: bool,
 }
 
 impl Ap2Config {
@@ -99,6 +104,7 @@ impl Ap2Config {
             members: Vec::new(),
             pin_pairing: false,
             trace: false,
+            read_volume: false,
         }
     }
 }
@@ -170,6 +176,8 @@ pub enum Ap2Event {
     TimingChosen(Timing),
     /// The stream is set up and flushed (P42).
     Ready(StreamPorts),
+    /// A volume read's level, one the user set on the speaker (P184).
+    VolumeReported(f64),
     Warning(Warning),
     /// A line for the host's debug log, only with [`Ap2Config::trace`].
     Trace(String),
@@ -196,14 +204,18 @@ pub enum Ap2Output {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Kind {
-    Info { first: bool },
+    Info {
+        first: bool,
+    },
     PairSetup,
     PairVerify,
     SessionSetup,
     Record,
     SetPeers,
     Volume(Volume),
-    VolumeRead,
+    /// Carries the volume generation it was sent in, so an answer older
+    /// than the latest host value is dropped (P184).
+    VolumeRead(u32),
     Metadata(Metadata),
     StreamSetup,
     Flush,
@@ -221,11 +233,23 @@ impl Kind {
             Kind::Record => Method::Record,
             Kind::SetPeers => Method::SetPeers,
             Kind::Volume(_) | Kind::Metadata(_) => Method::SetParameter,
-            Kind::VolumeRead => Method::GetParameter,
+            Kind::VolumeRead(_) => Method::GetParameter,
             Kind::Flush => Method::Flush,
             Kind::TeardownStream | Kind::TeardownSession => Method::Teardown,
         }
     }
+}
+
+/// The one resend of a refused volume (P183).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VolumeRetry {
+    /// The latest host value hasn't been refused.
+    Idle,
+    /// Refused once: it goes again with the next feedback.
+    Due,
+    Resent,
+    /// Refused twice: nothing more until the host sets a new value.
+    Spent,
 }
 
 struct InFlight {
@@ -297,8 +321,13 @@ pub struct Ap2Session {
     set_up: bool,
     /// RECORD was answered 200 (P137).
     recorded: bool,
-    /// The startup SET_PARAMETER with `initial_volume` went out (P42).
+    /// The initial volume went out after the FLUSH answer (P183).
     startup_volume_sent: bool,
+    /// The initial volume is out; its answer starts the first read (P184).
+    startup_read_due: bool,
+    /// One warning per session for refused volume requests (P183).
+    volume_warned: bool,
+    volume_retry: VolumeRetry,
     event_port: Option<u16>,
     events: Option<Events>,
     events_attempts: u32,
@@ -326,13 +355,15 @@ pub struct Ap2Session {
     flush_pending: bool,
     /// Unreachable UDP sends in a row (P141).
     udp_failures: u8,
-    /// The traced volume read is still to go out (only with
-    /// [`Ap2Config::trace`]).
+    /// The host asked for a read since the last one went out (P184).
+    volume_read_asked: bool,
     volume_read_wanted: bool,
-    volume_read_sent: bool,
-    /// The CSeq of a volume read that timed out, whose answer is ignored.
-    late_volume_read: Option<u32>,
-    /// A traced read went unanswered, so no more reads this session.
+    /// Bumped by every host volume, so a read older than it is stale.
+    volume_generation: u32,
+    /// Failed reads in a row; three stop the reads (P184).
+    volume_read_failures: u8,
+    /// CSeqs of reads given up at a feedback tick, whose answers are dropped.
+    late_volume_reads: Vec<u32>,
     volume_reads_stopped: bool,
     /// The last volume trace line, so a steady level logs once.
     last_volume_trace: Option<String>,
@@ -398,6 +429,9 @@ impl Ap2Session {
             set_up: false,
             recorded: false,
             startup_volume_sent: false,
+            startup_read_due: false,
+            volume_warned: false,
+            volume_retry: VolumeRetry::Idle,
             event_port: None,
             events: None,
             events_attempts: 0,
@@ -419,9 +453,11 @@ impl Ap2Session {
             flush_point: (0, 0),
             flush_pending: false,
             udp_failures: 0,
+            volume_read_asked: false,
             volume_read_wanted: false,
-            volume_read_sent: false,
-            late_volume_read: None,
+            volume_generation: 0,
+            volume_read_failures: 0,
+            late_volume_reads: Vec::new(),
             volume_reads_stopped: false,
             last_volume_trace: None,
         };
@@ -453,6 +489,12 @@ impl Ap2Session {
 
     pub fn ids(&self) -> &SessionIds {
         &self.ids
+    }
+
+    /// Volume reads given up at a feedback tick whose answers may still come.
+    #[doc(hidden)]
+    pub fn late_volume_reads(&self) -> usize {
+        self.late_volume_reads.len()
     }
 
     /// The timing of the current or last session SETUP.
@@ -796,18 +838,18 @@ impl Ap2Session {
             && now >= due
         {
             self.feedback_due = Some(now + FEEDBACK_INTERVAL);
-            // The debug log reads the receiver's level with each feedback, to
-            // see whether its own remote moves the stream volume.
-            if self.config.trace
-                && self.recorded
-                && self.state == Ap2State::Ready
-                && !self.volume_reads_stopped
-                && self
-                    .in_flight
-                    .as_ref()
-                    .is_none_or(|f| f.kind != Kind::VolumeRead)
+            if let Some(in_flight) = &self.in_flight
+                && matches!(in_flight.kind, Kind::VolumeRead(_))
             {
-                self.volume_read_wanted = true;
+                // P184: an unanswered read fails here instead of ending the
+                // session (P134), and its late answer is dropped.
+                let cseq = in_flight.cseq;
+                self.in_flight = None;
+                self.late_volume_reads.push(cseq);
+                self.volume_read_failed();
+            }
+            if self.state == Ap2State::Ready {
+                self.volume_tick();
             }
             let waiting = self
                 .in_flight
@@ -822,19 +864,6 @@ impl Ap2Session {
             }
         }
         if let Some(in_flight) = &self.in_flight
-            && in_flight.kind == Kind::VolumeRead
-            && now >= in_flight.sent_at + RESPONSE_TIMEOUT
-        {
-            // The debug probe never ends a session; a late answer is dropped.
-            self.late_volume_read = Some(in_flight.cseq);
-            self.volume_reads_stopped = true;
-            self.volume_read_wanted = false;
-            self.in_flight = None;
-            self.event(Ap2Event::Trace(
-                "GET_PARAMETER volume: no answer".to_owned(),
-            ));
-        }
-        if let Some(in_flight) = &self.in_flight
             && in_flight.kind != Kind::Feedback
             && now >= in_flight.sent_at + RESPONSE_TIMEOUT
         {
@@ -842,6 +871,39 @@ impl Ap2Session {
             return self.fail(ErrorKind::Timeout, Some(method), None, None);
         }
         self.drive(now);
+    }
+
+    /// The feedback tick's volume work in a playing stream: the one resend
+    /// of a refused volume (P183) and a read the host asked for (P184).
+    fn volume_tick(&mut self) {
+        if self.volume_retry == VolumeRetry::Due && self.pending_volume.is_none() {
+            self.volume_retry = VolumeRetry::Resent;
+            self.pending_volume = Some(self.config.initial_volume);
+        }
+        let reading = self
+            .in_flight
+            .as_ref()
+            .is_some_and(|f| matches!(f.kind, Kind::VolumeRead(_)));
+        if self.volume_read_asked
+            && !self.volume_reads_stopped
+            && !self.volume_read_wanted
+            && !reading
+        {
+            self.volume_read_asked = false;
+            self.volume_read_wanted = true;
+        }
+    }
+
+    /// A read with an error status, without a level or left unanswered
+    /// until the next feedback tick (P184).
+    fn volume_read_failed(&mut self) {
+        self.volume_read_failures = self.volume_read_failures.saturating_add(1);
+        if self.volume_read_failures >= VOLUME_READ_FAILURES && !self.volume_reads_stopped {
+            self.volume_reads_stopped = true;
+            self.volume_read_wanted = false;
+            self.volume_read_asked = false;
+            self.event(Ap2Event::Warning(Warning::VolumeReadsStopped));
+        }
     }
 
     /// One more missing or failed feedback answer; true when that made the
@@ -906,26 +968,32 @@ impl Ap2Session {
         self.drive(now);
     }
 
-    /// Sets the speaker volume: before the first volume request it replaces
-    /// the initial one, later the newest value waits for its turn. NaN is
+    /// Sets the speaker volume: before the FLUSH answer it replaces the
+    /// initial one (P183), later the newest value waits for its turn. NaN is
     /// ignored.
     pub fn set_volume(&mut self, volume: Volume, now: Instant) {
         if matches!(volume, Volume::Db(db) if db.is_nan()) {
             return;
         }
-        match self.state {
-            Ap2State::Ready => {
-                self.pending_volume = Some(volume);
-                self.drive(now);
-            }
-            Ap2State::Closed | Ap2State::TearingDown => {}
-            _ => {
-                self.config.initial_volume = volume;
-                // The startup volume is already out; Ready sends this one.
-                if self.startup_volume_sent {
-                    self.pending_volume = Some(volume);
-                }
-            }
+        if matches!(self.state, Ap2State::Closed | Ap2State::TearingDown) {
+            return;
+        }
+        self.config.initial_volume = volume;
+        self.volume_generation = self.volume_generation.wrapping_add(1);
+        self.volume_retry = VolumeRetry::Idle;
+        if self.startup_volume_sent {
+            self.pending_volume = Some(volume);
+            self.drive(now);
+        }
+    }
+
+    /// The host wants the receiver's volume: a read goes with the next
+    /// feedback while the stream plays (P184). The level comes as
+    /// [`Ap2Event::VolumeReported`]; after three failed reads none comes.
+    pub fn read_volume(&mut self, _now: Instant) {
+        self.config.read_volume = true;
+        if !self.volume_reads_stopped {
+            self.volume_read_asked = true;
         }
     }
 
@@ -958,6 +1026,7 @@ impl Ap2Session {
                 self.state = Ap2State::TearingDown;
                 self.teardown_deadline = Some(now + TEARDOWN_TIMEOUT);
                 self.pending_volume = None;
+                self.volume_read_wanted = false;
                 self.metadata_queue.clear();
                 self.feedback_wanted = false;
                 self.stream_setup_waiting = false;
@@ -1078,10 +1147,9 @@ impl Ap2Session {
                 if let Some(volume) = self.pending_volume.take() {
                     return self.send(Kind::Volume(volume), now, false);
                 }
-                if self.volume_read_wanted {
+                if self.volume_read_wanted && !self.volume_reads_stopped {
                     self.volume_read_wanted = false;
-                    self.volume_read_sent = true;
-                    return self.send(Kind::VolumeRead, now, false);
+                    return self.send(Kind::VolumeRead(self.volume_generation), now, false);
                 }
                 if let Some(metadata) = self.metadata_queue.pop_front() {
                     self.send(Kind::Metadata(metadata), now, false);
@@ -1157,7 +1225,7 @@ impl Ap2Session {
                 request.headers.push("Content-Type", "text/parameters");
                 request.body = volume.parameter_body().into_bytes();
             }
-            Kind::VolumeRead => {
+            Kind::VolumeRead(_) => {
                 request.headers.push("Content-Type", "text/parameters");
                 request.body = crate::volume::READ_BODY.as_bytes().to_vec();
             }
@@ -1238,10 +1306,15 @@ impl Ap2Session {
     }
 
     fn on_response(&mut self, response: Response, now: Instant) {
-        if self.late_volume_read.is_some() && response.cseq() == self.late_volume_read {
-            self.late_volume_read = None;
+        // Answers come in request order, so one for a later request means
+        // the reads given up before it will never be answered.
+        if let Some(cseq) = response.cseq()
+            && let Some(at) = self.late_volume_reads.iter().position(|&c| c == cseq)
+        {
+            self.late_volume_reads.drain(..=at);
             return;
         }
+        self.late_volume_reads.clear();
         let Some(in_flight) = self.in_flight.take() else {
             return self.fail(
                 ErrorKind::ProtocolError,
@@ -1326,28 +1399,40 @@ impl Ap2Session {
                     return self.fail(ErrorKind::Refused, Some(method), Some(code), None);
                 }
                 self.recorded = true;
-                if self.config.trace && !self.volume_read_sent {
-                    self.volume_read_wanted = true;
-                }
                 // SETPEERS only under PTP (P165).
                 if self.timing == Timing::Ptp {
                     self.send(Kind::SetPeers, now, false);
                 } else {
-                    self.send_startup_volume(now);
+                    self.stream_setup_waiting = true;
                 }
             }
             Kind::SetPeers => {
                 if !success {
                     self.warn(method, code);
                 }
-                self.send_startup_volume(now);
+                self.stream_setup_waiting = true;
             }
             Kind::Volume(_) => {
-                if !success {
-                    self.warn(method, code);
+                if success {
+                    if self.volume_retry == VolumeRetry::Resent {
+                        self.volume_retry = VolumeRetry::Idle;
+                    }
+                } else {
+                    if !self.volume_warned {
+                        self.volume_warned = true;
+                        self.warn(method, code);
+                    }
+                    self.volume_retry = match self.volume_retry {
+                        VolumeRetry::Idle => VolumeRetry::Due,
+                        _ => VolumeRetry::Spent,
+                    };
                 }
-                if self.state == Ap2State::Starting && self.stream.is_none() {
-                    self.stream_setup_waiting = true;
+                if self.startup_read_due {
+                    self.startup_read_due = false;
+                    if self.config.read_volume && !self.volume_reads_stopped {
+                        self.volume_read_asked = false;
+                        self.volume_read_wanted = true;
+                    }
                 }
             }
             Kind::StreamSetup => {
@@ -1387,6 +1472,11 @@ impl Ap2Session {
                     && let Some(stream) = self.stream
                 {
                     self.state = Ap2State::Ready;
+                    // Ahead of the audio and of metadata (P183): a receiver
+                    // may refuse a volume sent before the stream SETUP.
+                    self.startup_volume_sent = true;
+                    self.startup_read_due = true;
+                    self.send(Kind::Volume(self.config.initial_volume), now, false);
                     self.event(Ap2Event::Ready(stream));
                 }
             }
@@ -1395,17 +1485,28 @@ impl Ap2Session {
                     self.warn(method, code);
                 }
             }
-            // A debug probe: whatever the answer, the stream goes on.
-            Kind::VolumeRead => {
-                let level = crate::volume::parse_reported(&response.body)
-                    .map_or("no level".to_owned(), |db| format!("{db} dB"));
-                let line = format!(
-                    "GET_PARAMETER volume: status {code}, {level}, body {}",
-                    bodies::trace_text(&response.body)
-                );
-                if self.last_volume_trace.as_ref() != Some(&line) {
-                    self.last_volume_trace = Some(line.clone());
-                    self.event(Ap2Event::Trace(line));
+            // Whatever the answer, the stream goes on (P184).
+            Kind::VolumeRead(generation) => {
+                let level = crate::volume::parse_reported(&response.body).filter(|_| success);
+                if self.config.trace {
+                    let shown = level.map_or("no level".to_owned(), |db| format!("{db} dB"));
+                    let line = format!(
+                        "GET_PARAMETER volume: status {code}, {shown}, body {}",
+                        bodies::trace_text(&response.body)
+                    );
+                    if self.last_volume_trace.as_ref() != Some(&line) {
+                        self.last_volume_trace = Some(line.clone());
+                        self.event(Ap2Event::Trace(line));
+                    }
+                }
+                match level {
+                    Some(db) => {
+                        self.volume_read_failures = 0;
+                        if generation == self.volume_generation {
+                            self.event(Ap2Event::VolumeReported(db));
+                        }
+                    }
+                    None => self.volume_read_failed(),
                 }
             }
             Kind::Feedback => {
@@ -1417,11 +1518,6 @@ impl Ap2Session {
             }
             Kind::TeardownStream | Kind::TeardownSession => {}
         }
-    }
-
-    fn send_startup_volume(&mut self, now: Instant) {
-        self.startup_volume_sent = true;
-        self.send(Kind::Volume(self.config.initial_volume), now, false);
     }
 
     /// A stream SETUP answered after `teardown()`: the stream exists on the
