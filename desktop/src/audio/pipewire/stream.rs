@@ -15,6 +15,7 @@
 //! callback never allocates, locks, blocks or logs.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -171,7 +172,7 @@ impl Wiring {
 const DEFAULT_SINK_KEY: &str = "default.audio.sink";
 
 /// The metadata key, on a stream's node, that asks the session manager to
-/// link the stream to the node it names.
+/// link the stream to the node whose `object.serial` it holds.
 const TARGET_KEY: &str = "target.object";
 
 /// The node name in a [`DEFAULT_SINK_KEY`] value, `{ "name": "..." }`.
@@ -183,23 +184,19 @@ fn sink_name(value: &str) -> Option<String> {
 /// The default output as the `default` metadata last named it.
 #[derive(Default)]
 struct DefaultOutput {
-    /// Whether a value came yet: the first is the default the stream was
-    /// linked to, not a change.
-    known: bool,
     name: Option<String>,
 }
 
 impl DefaultOutput {
-    /// Records `value` and tells whether the stream should move: a new
-    /// default after the first, not one that went away.
+    /// Records `value` and tells whether the stream should move to it: each
+    /// default that differs from the last, the first one too, since the
+    /// session manager may have restored a target from an earlier run.
     fn changed(&mut self, value: Option<&str>) -> bool {
-        let differs = self.name.as_deref() != value;
-        let moves = self.known && differs && value.is_some();
-        self.known = true;
-        if differs {
-            self.name = value.map(str::to_owned);
+        if self.name.as_deref() == value {
+            return false;
         }
-        moves
+        self.name = value.map(str::to_owned);
+        value.is_some()
     }
 }
 
@@ -492,11 +489,22 @@ fn serve(
                 let registry = registry.clone();
                 let defaults = Rc::clone(&defaults);
                 let stream = stream.clone();
+                // Each output's `object.serial` by its node name.
+                let serials: Rc<RefCell<HashMap<String, String>>> = Rc::default();
                 move |global| {
+                    let Some(props) = global.props else { return };
+                    if global.type_ == ObjectType::Node {
+                        if let (Some(name), Some(serial)) =
+                            (props.get("node.name"), props.get("object.serial"))
+                        {
+                            serials
+                                .borrow_mut()
+                                .insert(name.to_owned(), serial.to_owned());
+                        }
+                        return;
+                    }
                     let is_default = global.type_ == ObjectType::Metadata
-                        && global
-                            .props
-                            .is_some_and(|props| props.get("metadata.name") == Some("default"));
+                        && props.get("metadata.name") == Some("default");
                     if !is_default || defaults.borrow().is_some() {
                         return;
                     }
@@ -505,6 +513,7 @@ fn serve(
                     };
                     let output = RefCell::new(DefaultOutput::default());
                     let stream = stream.clone();
+                    let serials = Rc::clone(&serials);
                     // Weak: the listener lives in `defaults` itself.
                     let defaults_weak = Rc::downgrade(&defaults);
                     let listener = metadata
@@ -519,6 +528,9 @@ fn serve(
                             let Some(name) = value.and_then(sink_name) else {
                                 return 0;
                             };
+                            let Some(serial) = serials.borrow().get(&name).cloned() else {
+                                return 0;
+                            };
                             let Some(defaults) = defaults_weak.upgrade() else {
                                 return 0;
                             };
@@ -529,7 +541,7 @@ fn serve(
                                     stream.node_id(),
                                     TARGET_KEY,
                                     None,
-                                    Some(name.as_str()),
+                                    Some(serial.as_str()),
                                 );
                             }
                             0
@@ -583,11 +595,11 @@ mod tests {
     use crate::audio::SESSION_RATE;
 
     #[test]
-    fn only_a_new_default_after_the_first_moves_the_stream() {
+    fn each_new_default_moves_the_stream() {
         let loud = Some(r#"{ "name": "ci-loud" }"#);
         let quiet = Some(r#"{ "name": "ci-quiet" }"#);
         let mut output = DefaultOutput::default();
-        assert!(!output.changed(loud));
+        assert!(output.changed(loud));
         assert!(!output.changed(loud));
         assert!(output.changed(quiet));
         // A default that goes away leaves the stream to the session manager;
@@ -665,7 +677,18 @@ mod tests {
         let frames = ring.frames_written();
         assert!(frames > 48_000, "{frames} frames written");
         let peak = ring.take_peak();
-        assert!(peak > 0.01, "peak {peak}");
+        assert!(peak > 0.01, "peak {peak}\n{}", graph());
+    }
+
+    /// The links and the `default` metadata, for a failing test's message.
+    fn graph() -> String {
+        let mut text = String::new();
+        for (tool, args) in [("pw-link", &["-l"][..]), ("pw-metadata", &[][..])] {
+            if let Ok(output) = std::process::Command::new(tool).args(args).output() {
+                text.push_str(&String::from_utf8_lossy(&output.stdout));
+            }
+        }
+        text
     }
 
     /// The ID of the node named `name`, from `pw-dump`.
@@ -709,7 +732,7 @@ mod tests {
         .unwrap();
         std::thread::sleep(Duration::from_secs(1));
         let loud = ring.take_peak();
-        assert!(loud > 0.3, "peak {loud} on the first default");
+        assert!(loud > 0.3, "peak {loud} on the first default\n{}", graph());
         set_default("ci-quiet");
         ring.take_peak();
         std::thread::sleep(Duration::from_secs(1));
@@ -717,7 +740,8 @@ mod tests {
         assert_eq!(capture.state(), CaptureState::Running);
         assert!(
             (0.05..0.2).contains(&quiet),
-            "peak {quiet} after the default changed"
+            "peak {quiet} after the default changed\n{}",
+            graph()
         );
     }
 }
