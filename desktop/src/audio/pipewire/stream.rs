@@ -571,6 +571,16 @@ fn serve(
         move |()| main_loop.quit()
     });
     main_loop.run();
+    // PipeWire reuses node IDs: the target set for this node must not pin
+    // the next one that gets its ID. A few turns of the loop send it.
+    if let Some((metadata, _)) = defaults.borrow().as_ref() {
+        metadata.set_property(stream.node_id(), TARGET_KEY, None, None);
+        for _ in 0..5 {
+            main_loop
+                .loop_()
+                .iterate(pw::loop_::Timeout::Finite(Duration::from_millis(10)));
+        }
+    }
     // The metadata's listener holds the stream; it goes first.
     drop(registry_listener);
     defaults.borrow_mut().take();
