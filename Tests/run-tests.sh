@@ -58,11 +58,7 @@ only=${AUDIOSYNC_TESTS_ONLY:-}
 
 if [ -z "$only" ]; then
   echo "▶ shellcheck"
-  if [ "$macos" = 0 ] && ! command -v shellcheck >/dev/null 2>&1; then
-    echo "SKIP: shellcheck is not installed here; CI runs it"
-  else
-    scripts/shellcheck.sh || status=1
-  fi
+  scripts/shellcheck.sh || status=1
 fi
 
 # Windows puts a Microsoft Store stub named python3 on PATH that only prints
