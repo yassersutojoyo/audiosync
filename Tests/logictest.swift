@@ -2991,10 +2991,10 @@ do {
     let backToMusic = toMic.oldCapture { $0 == "mic" ? 1 : 0 }
     let fromMic = CaptureSwitch.Change.source(from: mic, to: music).oldCapture { $0 == "mic" ? 1 : 0 }
     let backToPair = toPair.oldCapture { _ in 1 }
-    check(backToMusic.source == music && backToMusic.pair == 0 && fromMic.source == mic && fromMic.pair == 1
-            && backToPair.source == mic && backToPair.pair == 0,
+    check(backToMusic?.source == music && backToMusic?.pair == 0 && fromMic?.source == mic && fromMic?.pair == 1
+            && backToPair?.source == mic && backToPair?.pair == 0,
           "EC5 source: a failed switch starts the old source on its own stored pair, or the old pair",
-          "\(backToMusic) \(fromMic) \(backToPair)")
+          String(describing: (backToMusic, fromMic, backToPair)))
     check(CaptureSwitch.answer(granted: true, to: toMic, source: music, pair: 0, running: true) == .switchNow,
           "EC5 source: an allowed microphone switches to the input under the same speakers")
     check(CaptureSwitch.answer(granted: false, to: toMic, source: music, pair: 0, running: true) == .keepOld,
@@ -3010,6 +3010,27 @@ do {
           "EC5 source: a pair switch waits on the prompt only while the old pair is still stored")
     check(toMusic.stop == .sourceChanged && toPair.stop == .inputPairChanged,
           "EC5 source: the log names a source change and a pair change apart")
+
+    // S227 Switch: the source app quitting moves the session to the whole
+    // system the way a switch does, under the same speakers.
+    let musicQuits = CaptureSwitch.Change.sourceAppQuit(bundleID: "com.apple.Music")
+    let quitSwitched = CaptureSwitch.logLine(.switched, change: musicQuits, kept: 2, fromRate: 44100, toRate: 48000)
+    check(quitSwitched == "[AudioSync] source app quit (com.apple.Music), the whole system plays: "
+            + "2 AirPlay or Cast speaker(s) stayed connected, the capture went from 44100 to 48000 Hz",
+          "EC6 app quit: switching to the whole system keeps the AirPlay and Cast speakers connected (S227)",
+          quitSwitched)
+    check(musicQuits.stop == .sourceSwitchedToSystem && musicQuits.stop.restarts,
+          "EC6 app quit: the switch to the whole system rebuilds only the capture and logs why (S227)")
+    let quitStopped = CaptureSwitch.logLine(.stopped, change: musicQuits, kept: 0, fromRate: 48000, toRate: 48000)
+    let quitStopLine: String = "[AudioSync] source app quit (com.apple.Music) and the whole system didn't start: "
+        + "streaming stops"
+    let quitNoNotice = CaptureSwitch.message(.stopped, change: musicQuits, sourceName: switchName,
+                                             pairName: switchPair) == .none
+    check(musicQuits.oldCapture { _ in 0 } == nil && quitStopped == quitStopLine && quitNoNotice,
+          "EC6 app quit: a whole system that can't start stops streaming, with no app to go back to (S227)",
+          quitStopped)
+    check(CaptureSwitch.answer(granted: true, to: musicQuits, source: .system, pair: 0, running: true) == .none,
+          "EC6 app quit: the switch to the whole system never waits on the microphone prompt (S227)")
 
     // EC8: every speaker off, then one on again.
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),

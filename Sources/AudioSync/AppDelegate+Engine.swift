@@ -59,7 +59,7 @@ extension AppDelegate {
             }
             if let switching {
                 let old = switching.oldCapture { self.inputPairs[$0] ?? 0 }
-                let oldRunning = (try? engine.start(source: old.source, inputPair: old.pair)) != nil
+                let oldRunning = old.map { (try? engine.start(source: $0.source, inputPair: $0.pair)) != nil } ?? false
                 outcome = CaptureSwitch.outcome(failure: .startFailed, oldRunning: oldRunning)
                 if oldRunning { storeSwitch(switching, new: false) }   // else the new choice stays, with its error
             }
@@ -126,6 +126,9 @@ extension AppDelegate {
         case .inputPair(let uid, let from, let to):
             let index = new ? to : from
             inputPairs[uid] = index == 0 ? nil : index
+        case .sourceAppQuit:
+            audioSource = .system   // the app is gone either way
+            updateNowPlayingTarget()
         }
         pushModel()
     }

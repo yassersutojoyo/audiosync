@@ -177,20 +177,23 @@ enum CaptureSwitch {
         case source(from: AudioSource, to: AudioSource)
         /// `InputChannelPair.index` values of the input device `uid`.
         case inputPair(uid: String, from: Int, to: Int)
+        /// The source app `bundleID` quit and the whole system takes over (S227).
+        case sourceAppQuit(bundleID: String)
 
         var stop: SessionStop {
-            if case .source = self { return .sourceChanged }
-            return .inputPairChanged
+            if case .inputPair = self { return .inputPairChanged }
+            return .sourceChanged
         }
 
         /// The capture a failed switch falls back to: the old source with
         /// its stored pair (`pairOf` a device UID), or the old pair.
-        func oldCapture(pairOf: (String) -> Int) -> (source: AudioSource, pair: Int) {
+        func oldCapture(pairOf: (String) -> Int) -> (source: AudioSource, pair: Int)? {
             switch self {
             case .source(let from, _):
                 if case .input(let uid) = from { return (from, pairOf(uid)) }
                 return (from, 0)
             case .inputPair(let uid, let from, _): return (.input(uid: uid), from)
+            case .sourceAppQuit(let bundleID): return (.app(bundleID: bundleID), 0)
             }
         }
     }
@@ -244,6 +247,7 @@ enum CaptureSwitch {
         let oldStored = switch change {
         case .source(let from, _): source == from
         case .inputPair(let uid, let from, _): source == .input(uid: uid) && pair == from
+        case .sourceAppQuit: false   // the whole system never waits on the microphone
         }
         guard oldStored else { return .none }
         if !running { return granted ? .remember : .none }
@@ -289,11 +293,13 @@ enum CaptureSwitch {
         switch change {
         case .source(let from, let to): return .stillOnOld(new: sourceName(to), old: sourceName(from))
         case .inputPair(let uid, let from, let to): return .stillOnOld(new: pairName(uid, to), old: pairName(uid, from))
+        case .sourceAppQuit: return .none
         }
     }
 
     /// `kept`: the AirPlay and Cast speakers that stayed connected.
-    static func logLine(_ outcome: Outcome, kept: Int, fromRate: Double, toRate: Double) -> String {
+    static func logLine(_ outcome: Outcome, change: Change? = nil, kept: Int, fromRate: Double,
+                        toRate: Double) -> String {
         let speakers = "\(kept) AirPlay or Cast speaker(s) stayed connected"
         switch outcome {
         case .switched:
