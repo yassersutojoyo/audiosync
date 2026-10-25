@@ -1814,7 +1814,7 @@ impl Driver {
     }
 
     /// A read-back of a playing speaker's volume (P122); on the AirPlay 2
-    /// path it goes with the session's next feedback (P184).
+    /// path it goes at the session's next 1 s read tick (P184).
     fn read_volume(&mut self, key: &DeviceKey, now: Instant) {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
