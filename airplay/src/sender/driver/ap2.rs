@@ -673,7 +673,8 @@ impl Driver {
             // Only a PinPairing's session reports these.
             Ap2Event::Info(_)
             | Ap2Event::PinRequested
-            | Ap2Event::WrongPin
+            | Ap2Event::WrongPin(_)
+            | Ap2Event::PinStartAgain(_)
             | Ap2Event::Verified => {}
             Ap2Event::Server(server) => self.emit_speaker(key, SpeakerEvent::Server(server)),
             Ap2Event::Credentials(credentials) => {
