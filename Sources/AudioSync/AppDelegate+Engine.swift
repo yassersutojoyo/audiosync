@@ -177,8 +177,14 @@ extension AppDelegate {
     func rebuildMixLater() {
         let mix = audioSource
         DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
-            guard let self, audioSource == mix, !engine.isRunning, !userStopped else { return }
-            startEngine(origin: .automatic, rebuild: true)
+            guard let self else { return }
+            switch AppLifecycle.afterMixLoss(sourceChanged: audioSource != mix, userStopped: userStopped,
+                                             engineRunning: engine.isRunning) {
+            case .none: return
+            case .rebuild: startEngine(origin: .automatic, rebuild: true)
+            case .start: startEngine(origin: .automatic)
+            case .stop: stopEngine()
+            }
         }
     }
 

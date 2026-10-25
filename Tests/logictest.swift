@@ -5110,6 +5110,16 @@ do {
             && !AppLifecycle.waitsForRecheck(quitWhileStreaming,
                                              source: .mixed(.allExcept, bundleIDs: ["com.apple.TextEdit", "com.apple.Safari"])),
           "mix quit: only an app of an only-these mix quitting while it streams, or that mix's capture losing its apps, waits")
+    func afterLoss(changed: Bool, stopped: Bool, running: Bool) -> AppLifecycle.MixLossStep {
+        AppLifecycle.afterMixLoss(sourceChanged: changed, userStopped: stopped, engineRunning: running)
+    }
+    check(afterLoss(changed: false, stopped: false, running: false) == .rebuild
+            && afterLoss(changed: true, stopped: false, running: false) == .start
+            && afterLoss(changed: true, stopped: true, running: false) == .stop
+            && afterLoss(changed: false, stopped: true, running: false) == .stop
+            && afterLoss(changed: true, stopped: false, running: true) == .none
+            && afterLoss(changed: false, stopped: false, running: true) == .none,
+          "mix quit: after a mix's capture loss, a source picked in the wait starts, a stop finishes cleanly, else the mix rebuilds")
     // After a switch the source is the whole system; after a stop nothing streams.
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",

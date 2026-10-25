@@ -118,6 +118,28 @@ enum AppLifecycle {
         }
     }
 
+    /// What ends the second a mix waits after its capture lost its apps
+    /// (`waitsForRecheck`). The engine stopped the session at the loss, but
+    /// the senders and the streaming switch still count it as on.
+    enum MixLossStep: Equatable {
+        /// The user started streaming again meanwhile.
+        case none
+        /// Rebuild the mix's session (S227 e).
+        case rebuild
+        /// Start the source the user picked meanwhile: with no session
+        /// running, picking it only stored it (S163).
+        case start
+        /// The user switched streaming off: finish the stop, so the AirPlay
+        /// and Cast senders leave too.
+        case stop
+    }
+
+    static func afterMixLoss(sourceChanged: Bool, userStopped: Bool, engineRunning: Bool) -> MixLossStep {
+        if engineRunning { return .none }
+        if userStopped { return .stop }
+        return sourceChanged ? .start : .rebuild
+    }
+
     /// The app that quit and what the session does about it (S142, S164,
     /// S227, EC6), or nil when the report concerns no session: another app,
     /// nothing streaming, a source that isn't an app, a loss with another cause,
