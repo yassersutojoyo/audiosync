@@ -1074,6 +1074,10 @@ mod tests {
                 AIRPLAY_ERROR_WRONG_PIN.to_string(),
             ),
             (
+                "ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED",
+                AIRPLAY_ERROR_RECEIVER_UNVERIFIED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_EVENT_PIN_NEEDED",
                 AIRPLAY_EVENT_PIN_NEEDED.to_string(),
             ),
@@ -1125,10 +1129,6 @@ mod tests {
             (
                 "ASC_AIRPLAY_WARNING_REQUEST_FAILED",
                 AIRPLAY_WARNING_REQUEST_FAILED.to_string(),
-            ),
-            (
-                "ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID",
-                AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID.to_string(),
             ),
             (
                 "ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN",

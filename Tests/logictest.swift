@@ -2112,6 +2112,14 @@ do {
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting for the other AirPlay 2 speaker"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,
           "P169 native airplay: the notice's title and the row's note, as on Windows")
+    var impostor = NativeAirPlayModel()
+    impostor.added("A9")
+    check(impostor.apply(.error(id: "A9", .receiverUnverified, retryMs: nil, detail: ""))
+                == .turnOff("native:A9", .receiverUnverified)
+            && UIStrings().nativeAirPlayReceiverUnverified(name: "Den TV")
+                == "Den TV didn't answer as the speaker you paired, so it's off. "
+                    + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
+          "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
             == "Loft needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.",
           "native airplay: the PTP text reads as on Windows")

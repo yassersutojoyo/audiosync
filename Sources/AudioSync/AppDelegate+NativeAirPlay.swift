@@ -499,6 +499,7 @@ extension AppDelegate {
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         case .needsAirPlay2: return text.nativeAirPlayNeedsAirPlay2(name: name)
         case .timingUnavailable: return text.nativeAirPlayTimingUnavailable(name: name)
+        case .receiverUnverified: return text.nativeAirPlayReceiverUnverified(name: name)
         case .playsThroughSpeakers:
             return NativeAirPlayID.receiver(id).flatMap(NativeTarget.kind) == nil
                 ? text.nativeAirPlayPlaysThroughSpeakers(name: name)

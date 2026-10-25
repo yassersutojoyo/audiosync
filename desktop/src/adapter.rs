@@ -4739,6 +4739,7 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::TimingUnavailable => P::TimingUnavailable,
         AirPlayProblem::OneAirPlay2Speaker => P::OneAirPlay2Speaker,
         AirPlayProblem::PlaysThroughSpeakers => P::PlaysThroughSpeakers,
+        AirPlayProblem::ReceiverUnverified => P::ReceiverUnverified,
         AirPlayProblem::AppleTvPlays => P::AppleTvPlays,
         AirPlayProblem::PlaysInGroup => P::PlaysInGroup,
         AirPlayProblem::Unsupported => P::Unsupported,

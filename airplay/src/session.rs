@@ -62,14 +62,8 @@ pub trait Verifier: Send {
     /// The body of the first request.
     fn first_request(&mut self) -> Vec<u8>;
     /// The body of the second request, computed from the first response's
-    /// body (96 bytes, P55); `None` when that body is malformed.
-    fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>>;
-    /// Something the last [`Verifier::second_request`] found worth a
-    /// warning without failing the verification, such as a receiver
-    /// signature that didn't check out (P56).
-    fn take_warning(&mut self) -> Option<Warning> {
-        None
-    }
+    /// body (96 bytes, P55), or why there is none (P56).
+    fn second_request(&mut self, first_response: &[u8]) -> Result<Vec<u8>, VerifyFailure>;
     /// Gets ready for one more connection of the same session (P58's
     /// reconnect after a close right behind a verification): a fresh key
     /// pair where the verification uses one. `false` when it can't, which
@@ -77,6 +71,16 @@ pub trait Verifier: Send {
     fn renew(&mut self) -> bool {
         true
     }
+}
+
+/// Why a [`Verifier`] sends no second request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyFailure {
+    /// The first answer is malformed: a ProtocolError.
+    Malformed,
+    /// The receiver's signature didn't check out against the key it gave at
+    /// pairing: ReceiverUnverified (P56).
+    ReceiverUnverified,
 }
 
 /// Bytes of the first pair-verify answer: atv_pub (32) and atv_data (64)
@@ -1198,23 +1202,23 @@ impl Session {
                     );
                     return;
                 }
-                let (second, warning) = match self.config.verifier.as_mut() {
-                    Some(verifier) => {
-                        let second = verifier.second_request(&response.body);
-                        (second, verifier.take_warning())
-                    }
-                    None => (None, None),
+                let second = match self.config.verifier.as_mut() {
+                    Some(verifier) => verifier.second_request(&response.body),
+                    None => Err(VerifyFailure::Malformed),
                 };
-                if let Some(warning) = warning {
-                    self.event(SessionEvent::Warning(warning));
-                }
                 match second {
-                    Some(body) => self.send(Kind::VerifySecond(body), now, false),
-                    None => self.fail(
+                    Ok(body) => self.send(Kind::VerifySecond(body), now, false),
+                    Err(VerifyFailure::Malformed) => self.fail(
                         ErrorKind::ProtocolError,
                         Some(method),
                         Some(code),
                         Some("malformed pair-verify answer"),
+                    ),
+                    Err(VerifyFailure::ReceiverUnverified) => self.fail(
+                        ErrorKind::ReceiverUnverified,
+                        Some(method),
+                        Some(code),
+                        Some("receiver signature does not match the paired key"),
                     ),
                 }
             }
