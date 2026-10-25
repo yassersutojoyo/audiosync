@@ -366,19 +366,24 @@ impl DacpAdvertiser for MdnsAdvertiser {
     }
 }
 
-/// The renames among the first [`MONITOR_READS`] daemon events; an
-/// address record's rename is the host name's.
+/// The renames among the first [`MONITOR_READS`] daemon events, once per
+/// name and interface: the daemon reports each renamed record (SRV and
+/// TXT, or A and AAAA), and an address record's rename is the host name's.
 fn name_conflicts(events: impl Iterator<Item = DaemonEvent>) -> Vec<NameConflict> {
-    events
-        .take(MONITOR_READS)
-        .filter_map(|event| match event {
-            DaemonEvent::NameChange(change) => Some(NameConflict {
-                host: matches!(change.rr_type, RRType::A | RRType::AAAA),
-                interface: change.intf_name,
-            }),
-            _ => None,
-        })
-        .collect()
+    let mut conflicts: Vec<NameConflict> = Vec::new();
+    for event in events.take(MONITOR_READS) {
+        let DaemonEvent::NameChange(change) = event else {
+            continue;
+        };
+        let conflict = NameConflict {
+            host: matches!(change.rr_type, RRType::A | RRType::AAAA),
+            interface: change.intf_name,
+        };
+        if !conflicts.contains(&conflict) {
+            conflicts.push(conflict);
+        }
+    }
+    conflicts
 }
 
 impl Drop for MdnsAdvertiser {
