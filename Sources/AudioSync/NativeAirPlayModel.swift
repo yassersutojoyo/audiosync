@@ -219,8 +219,8 @@ enum NativeSpeakerEvent: Equatable {
         case .paired(let id, let note):
             line = "\(label(id)): paired, credentials stored" + (note.isEmpty ? "" : " for this run only (\(note))")
         case .volume(let id, let position, let level):
-            line = "\(label(id)) volume changed on the speaker: device level "
-                + String(format: "%.1f", level) + ", own volume \(Int(position.rounded()))"
+            let shown = String(format: "%.1f", level)
+            line = "\(label(id)) volume changed on the speaker: device level \(shown), own volume \(Int(position.rounded()))"
         case .warning(let id, _, let detail):
             line = "\(label(id)) warning: \(detail)"
         case .ptpFree(let id):
