@@ -17,6 +17,7 @@ use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
+use audiosync_airplay::targets::{Member, Target, TargetId, TargetKind};
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2};
@@ -1531,9 +1532,101 @@ fn a_forger_refusing_the_verify_never_moves_a_paired_speaker_to_airplay1() {
     );
 
     // The PIN pairing the host then offers goes over AirPlay 2 as well.
-    sender.start_pairing(forged);
-    std::thread::sleep(Duration::from_millis(500));
+    let ended =
+        |event: &PairingEvent| matches!(event, PairingEvent::Failed { .. } | PairingEvent::Stopped);
     events.drain(&sender);
+    let ended_before = events
+        .seen
+        .iter()
+        .filter(|(_, event)| {
+            matches!(event, SenderEvent::Pairing { key: k, event } if *k == key && ended(event))
+        })
+        .count();
+    forger_ap2.fake().requests.clear();
+    sender.start_pairing(forged);
+    let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+    assert!(wait_pairing(&mut events, &sender, &key, 2, pin_requested).is_some());
+    sender.cancel_pairing(&key);
+    assert!(
+        wait_pairing(&mut events, &sender, &key, ended_before + 1, ended).is_some(),
+        "{:?}",
+        events.seen
+    );
+    let keys = forger_ap2.fake().keys();
+    assert!(keys.contains(&"POST /pair-pin-start".to_owned()), "{keys:?}");
     assert_untouched(&forger);
+    sender.shutdown();
+}
+
+// After a restart the host's stored credentials reach the sender only in a
+// target member's options: the target still plays over AirPlay 2, and no
+// member goes to a RAOP address.
+// covers: P2, P177
+#[test]
+fn a_target_with_a_paired_member_plays_over_airplay2_from_its_first_start() {
+    let _serial = serial();
+    let paired_server = ask_once_receiver();
+    let forger = NetReceiver::start(Behavior::default());
+    let partner_raop = NetReceiver::start(Behavior::default());
+    let partner_server = Ap2Server::start(FakeAp2::new());
+    let (a, b) = (63, 64);
+    let credentials = {
+        let (sender, _host) = start();
+        let mut events = Events::default();
+        let device = airplay2_only(&paired_server, a);
+        let credentials = pair_first_time(&paired_server, &sender, &mut events, &device);
+        sender.shutdown();
+        credentials
+    };
+    let paired = with_forged_raop(&paired_server, &forger, a);
+    let partner = Device::from_records(
+        DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, b])),
+        Some(&partner_raop.record(b, PCM_TXT)),
+        Some(&airplay_record(partner_server.address.port(), b)),
+    )
+    .expect("device");
+    let member = |device: &Device, n: u8| Member {
+        key: device.key.clone(),
+        name: format!("Member {n}"),
+        device: Some(Box::new(device.clone())),
+    };
+    let target = Target {
+        id: TargetId {
+            kind: TargetKind::StereoPair,
+            key: "a1b2c3d4".to_owned(),
+        },
+        name: "Kitchen".to_owned(),
+        members: vec![member(&paired, a), member(&partner, b)],
+        leader: Some(paired.key.clone()),
+        control: None,
+        expected_members: Some(2),
+        partner_unreachable: false,
+    };
+
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let paired_key = paired.key.clone();
+    sender.add_target(target, options(), |key, own| {
+        if *key == paired_key {
+            own.homekit_credentials = Some(credentials.clone());
+        }
+    });
+    for key in [&paired.key, &partner.key] {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Playing)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    let keys = paired_server.fake().keys();
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(wait_until(LONG, || partner_server
+        .fake()
+        .keys()
+        .contains(&"RECORD".to_owned())));
+    assert_untouched(&forger);
+    assert_untouched(&partner_raop);
     sender.shutdown();
 }
