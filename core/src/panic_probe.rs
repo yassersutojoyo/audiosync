@@ -65,6 +65,7 @@ mod tests {
             remote: 0,
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
+            device_level: 0.0,
         };
         // SAFETY: as above; a local out struct, whose strings stay valid
         // until the next call on the handle.
