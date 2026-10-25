@@ -4322,6 +4322,31 @@ pub mod tests {
         assert_eq!(airplay.speakers().len(), 1);
     }
 
+    #[test]
+    fn a_gone_speaker_keeps_its_name_only_while_something_refers_to_it() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let forged: Vec<Device> = (1..=50)
+            .map(|n| device(100 + n, &format!("Forged {n}"), OPEN_TXT))
+            .collect();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        for speaker in forged.iter().chain([&kitchen]) {
+            fake.appear(speaker);
+        }
+        airplay.poll();
+        airplay.set_delay(&id_of(&kitchen), 40.0);
+        for speaker in forged.iter().chain([&kitchen]) {
+            fake.gone(speaker);
+        }
+        airplay.poll();
+        assert!(
+            forged
+                .iter()
+                .all(|speaker| airplay.listed_name(&id_of(speaker)).is_none())
+        );
+        assert_eq!(airplay.listed_name(&id_of(&kitchen)), Some("Kitchen"));
+    }
+
     /// A failed pairing, wrong PIN or not.
     fn pairing_failed(kind: ErrorKind, wrong_pin: bool) -> PairingEvent {
         PairingEvent::Failed {
