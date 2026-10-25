@@ -6081,6 +6081,44 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // Any host on the LAN can publish a RAOP record under the speaker's
+    // device id, so stored HomeKit credentials pin it to AirPlay 2 (P2).
+    #[test]
+    fn a_forged_raop_record_never_lists_a_homekit_paired_receiver_on_airplay1() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let airplay = airplay2_only();
+        let forged = raop("02005E005305", "Living Room", PASSWORD);
+        let both = Device::from_records(airplay.device_key(), Some(&forged), Some(&airplay))
+            .expect("a device");
+        let id = receiver_id(&both.key);
+        let forged_only =
+            Device::from_records(airplay.device_key(), Some(&forged), None).expect("a device");
+        let _ = inside(handle).identity.insert(&id, homekit_blob(3));
+
+        for (device, what) in [(both, "next to its own record"), (forged_only, "alone")] {
+            let mut info = ReceiverInfo::new(device);
+            info.plan = Ok(());
+            let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
+            assert_ne!(
+                report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2,
+                0,
+                "forged record {what}"
+            );
+            assert_eq!(
+                report.availability, AIRPLAY_AVAILABLE,
+                "forged record {what}: no password asked"
+            );
+            assert_ne!(
+                report.flags & AIRPLAY_FLAG_PAIRED,
+                0,
+                "forged record {what}"
+            );
+        }
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     /// The handle behind `handle`, for a test that looks inside.
     fn inside<'a>(handle: *mut AscAirPlay) -> &'a mut AscAirPlay {
         // SAFETY: a live handle, used by this thread only.
