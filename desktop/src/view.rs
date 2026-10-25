@@ -4662,10 +4662,8 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SourceSwitched { source } => {
             strings.invoke_notice_source_switched(source.as_str().into())
         }
-        NoticeMessage::SwitchFailed { new, old } => strings.invoke_notice_switch_failed(
-            switch_name(strings, new),
-            switch_name(strings, old),
-        ),
+        NoticeMessage::SwitchFailed { new, old } => strings
+            .invoke_notice_switch_failed(switch_name(strings, new), switch_name(strings, old)),
         NoticeMessage::SourceNotRunning { source } => {
             strings.invoke_notice_source_not_running(source.as_str().into())
         }

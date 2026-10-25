@@ -314,6 +314,13 @@ impl Chosen {
     }
 }
 
+/// A source as a failed switch's notice names it.
+fn switch_name(chosen: &Chosen) -> SwitchName {
+    chosen
+        .notice_name()
+        .map_or(SwitchName::System, SwitchName::Source)
+}
+
 /// A mix's apps by name, as the source menu lists them.
 fn mix_names(apps: &[SavedMixApp]) -> Vec<String> {
     apps.iter()
@@ -410,6 +417,14 @@ struct HeardTwiceSubject {
     endpoints: Vec<(String, String)>,
 }
 
+/// The source, and its channel pair, that played when the user picked
+/// another one while streaming: what a failed switch goes back to (S141).
+#[derive(Clone, Debug)]
+struct SwitchedFrom {
+    chosen: Chosen,
+    pair: u16,
+}
+
 /// The UI's backend over an audio backend. See the module documentation.
 pub struct AudioAdapter<A: AudioBackend> {
     audio: A,
@@ -467,6 +482,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The channel pair each input device plays, by endpoint ID; 1-2 for
     /// one without an entry.
     input_pairs: BTreeMap<String, u16>,
+    /// What the latest switch made while streaming switched away from.
+    switched_from: Option<SwitchedFrom>,
     /// The names the user gave speakers (spec S228).
     custom_names: SpeakerNames,
     /// The groups as saved; only the Mac still shows them (S248).
@@ -617,6 +634,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             auto_connect_skipped: skip_auto_connect,
             hidden: Vec::new(),
             input_pairs: BTreeMap::new(),
+            switched_from: None,
             custom_names: SpeakerNames::default(),
             groups: Vec::new(),
             zones: Zones::default(),
@@ -1556,6 +1574,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.log
             .log(|| format!("source chosen: {} ({})", picked.shown_name(), picked.key()));
+        self.note_switch_from();
         self.chosen = picked;
         self.notices
             .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
@@ -1568,6 +1587,76 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .is_some_and(|origin| self.start_session(origin));
         if switch.stop_keeping_airplay && !started && self.running() {
             self.audio.stop();
+        }
+    }
+
+    /// Keeps the source and pair that play now, for a switch made while
+    /// streaming to go back to (S141). While an earlier switch still waits
+    /// to start, the source before that one is what plays, so it stays.
+    fn note_switch_from(&mut self) {
+        if self.running() && !self.audio.switch_waits() {
+            self.switched_from = Some(SwitchedFrom {
+                chosen: self.chosen.clone(),
+                pair: self.chosen_input_pair(),
+            });
+        }
+    }
+
+    /// A switch made while streaming couldn't start with `error`, and the
+    /// audio backend started the source before it again: that one is stored
+    /// again, and a notice names both, or says where to allow a blocked
+    /// microphone (S141).
+    fn switch_failed(&mut self, error: &BackendError) {
+        let Some(from) = self.switched_from.take() else {
+            return;
+        };
+        let pair_change = from.chosen.key() == self.chosen.key();
+        let (new, old) = if pair_change {
+            (
+                self.pair_name(self.chosen_input_pair()),
+                self.pair_name(from.pair),
+            )
+        } else {
+            (switch_name(&self.chosen), switch_name(&from.chosen))
+        };
+        let message = match error {
+            BackendError::MicrophoneBlocked => NoticeMessage::MicrophoneBlocked {
+                source: self.chosen_name(),
+            },
+            _ => NoticeMessage::SwitchFailed { new, old },
+        };
+        self.log.log(|| {
+            format!(
+                "the switch to {} failed ({error}): {} plays on, {} network speaker(s) kept",
+                self.chosen_name(),
+                from.chosen.shown_name(),
+                self.enabled_network()
+            )
+        });
+        if let Chosen::Input { endpoint_id, .. } = &from.chosen {
+            if from.pair == 0 {
+                self.input_pairs.remove(endpoint_id);
+            } else {
+                self.input_pairs.insert(endpoint_id.clone(), from.pair);
+            }
+        }
+        self.chosen = from.chosen;
+        self.post(NoticeSubject::Source, message);
+    }
+
+    /// A channel pair of the chosen input device as the source picker
+    /// names it.
+    fn pair_name(&self, pair: u16) -> SwitchName {
+        let endpoint_id = match &self.chosen {
+            Chosen::Input { endpoint_id, .. } => endpoint_id.as_str(),
+            _ => "",
+        };
+        let (left, right) = InputPair::offered(self.listed_channels(endpoint_id))
+            .get(usize::from(pair))
+            .map_or((2 * pair, 2 * pair + 1), |found| (found.left, found.right));
+        SwitchName::Channels {
+            first: left + 1,
+            last: right + 1,
         }
     }
 
@@ -3115,7 +3204,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.log
                 .log(|| "streaming stops: no speaker is on anymore".to_owned());
             self.audio.stop();
+            self.clear_switch_failed();
         }
+    }
+
+    /// The notice of a switch that couldn't start goes when streaming stops.
+    fn clear_switch_failed(&mut self) {
+        self.clear_if(NoticeSubject::Source, |message| {
+            matches!(message, NoticeMessage::SwitchFailed { .. })
+        });
     }
 
     /// Starts streaming when a speaker was switched on while nothing streams
@@ -3224,6 +3321,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     NoticeSubject::Source,
                     NoticeMessage::SourceSwitched { source },
                 );
+                self.refresh_sources();
+            }
+            BackendEvent::SwitchFailed { error } => {
+                self.switch_failed(&error);
                 self.refresh_sources();
             }
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
@@ -3732,6 +3833,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.gate.user_switched_off();
                 self.audio.stop();
             }
+            self.clear_switch_failed();
             self.forget_stale_waits();
             return;
         }
@@ -3804,7 +3906,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if self.chosen_input_pair() == pair {
             return;
         }
-        let endpoint_id = endpoint_id.clone();
+        let (endpoint_id, name) = (endpoint_id.clone(), name.clone());
+        self.note_switch_from();
         self.log.log(|| {
             let channels = InputPair::offered(self.listed_channels(&endpoint_id))
                 .get(usize::from(pair))
@@ -8063,7 +8166,9 @@ mod tests {
 
         // Only when the old source can't start again either does streaming
         // stop, with the new choice stored and the start notice.
-        adapter.audio.refuse_captures(Some(BackendError::DeviceGone));
+        adapter
+            .audio
+            .refuse_captures(Some(BackendError::DeviceGone));
         adapter.select_source("system");
         let state = adapter.snapshot();
         assert!(!state.running);
@@ -8092,7 +8197,11 @@ mod tests {
         assert_eq!(state.source_id, "system", "the old source is stored again");
         assert_eq!(fake.state().stops, 0, "the Cast session goes on");
         assert_eq!(fake.state().started.len(), 1, "and isn't started again");
-        assert_eq!(playing(&adapter), [SPEAKERS], "the local output plays again");
+        assert_eq!(
+            playing(&adapter),
+            [SPEAKERS],
+            "the local output plays again"
+        );
         assert_eq!(
             messages(&adapter),
             [switch_failed(player_name(), SwitchName::System)]

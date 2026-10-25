@@ -488,6 +488,13 @@ pub enum BackendEvent {
     /// session now captures the whole system, every output still on and
     /// every AirPlay speaker still in the stream (spec S227).
     SwitchedToSystem,
+    /// A source or channel pair started while streaming couldn't start, so
+    /// the one the last session played plays again, to the same speakers
+    /// (spec S141).
+    SwitchFailed {
+        /// Why the new one couldn't start.
+        error: BackendError,
+    },
     /// Whether the source is heard twice: straight from Windows, undelayed,
     /// as well as through AudioSync's delayed copies. Checked every few
     /// seconds while streaming and reported when the answer changes.
@@ -725,8 +732,16 @@ pub trait AudioBackend {
     fn enabled_outputs(&self) -> Vec<String>;
 
     /// Starts capturing `source` and playing it on every enabled, connected
-    /// output. A running session is stopped first.
+    /// output. A running session is stopped first, its AirPlay and Google
+    /// Cast speakers staying in the stream; when `source` can't start, the
+    /// source that session played starts again and
+    /// [`BackendEvent::SwitchFailed`] tells (spec S141).
     fn start(&mut self, source: &SourceId) -> Result<(), BackendError>;
+
+    /// Whether a source switch still waits for the last session's outputs
+    /// to fade out: until it starts, the source before it is the one a
+    /// failed switch goes back to.
+    fn switch_waits(&self) -> bool;
 
     /// Stops capture and every output. Does nothing when nothing runs.
     fn stop(&mut self);
