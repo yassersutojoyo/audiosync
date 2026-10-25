@@ -102,7 +102,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet { if enabledLocal != oldValue { store.save(ids: enabledLocal, forKey: Keys.enabledLocal) } }
     }
     var masterVolume: Double {
-        didSet { if masterVolume != oldValue { store.save(master: masterVolume) } }
+        didSet {
+            guard masterVolume != oldValue else { return }
+            store.save(master: masterVolume)
+            // A master move keeps each own volume, so every AirPlay row shows own × zone × master again (S290).
+            airplayDeviceLevel = [:]
+        }
     }
     /// Slider positions (0…100) of local speakers, by device UID.
     var localVolume: [String: Double] {
@@ -134,7 +139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet {
             guard zones != oldValue else { return }
             store.save(zones: zones)
-            if !SpeakerZone.differInNamesOnly(zones, oldValue) { applyZoneVolumes() }
+            if !SpeakerZone.differInNamesOnly(zones, oldValue) {
+                forgetAirPlayDeviceLevels(zonedFrom: oldValue)
+                applyZoneVolumes()
+            }
         }
     }
     /// The groups became zones and this launch says so in a notice, once.
