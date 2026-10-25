@@ -167,16 +167,19 @@ extension AppDelegate {
             pushModel()
         case .ptpPortsTaken:
             updatePtpPortNotice { $0.reported() }
+        case .ptpPortsFree:
+            updatePtpPortNotice { $0.portsFree() }
         }
     }
 
     /// Posts or clears the PTP port notice when `change` flips whether it
-    /// shows; `again` posts it anew while it shows, in case it was dismissed.
-    private func updatePtpPortNotice(again: Bool = false, _ change: (inout PtpPortNotice) -> Void) {
-        let was = ptpPortNotice.shown
+    /// shows, and posts it anew when `change` raises it while it shows, in
+    /// case it was dismissed.
+    private func updatePtpPortNotice(_ change: (inout PtpPortNotice) -> Void) {
+        let (was, raises) = (ptpPortNotice.shown, ptpPortNotice.raises)
         change(&ptpPortNotice)
         let shown = ptpPortNotice.shown
-        if shown && (!was || again) {
+        if shown && (!was || ptpPortNotice.raises != raises) {
             postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp)
         } else if was && !shown {
             clearNotices([Notice.airplayPtp])
@@ -470,7 +473,7 @@ extension AppDelegate {
         enabledAirPlay.remove(id)
         notify(nativeTurnOffText(id, reason), origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
         let timing = reason == .timingUnavailable
-        updatePtpPortNotice(again: timing) { $0.turnedOff(id, timing: timing) }
+        updatePtpPortNotice { $0.turnedOff(id, timing: timing) }
         syncNativeSpeakers()
         stopIfIdle()
         pushModel()

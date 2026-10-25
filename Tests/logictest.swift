@@ -2495,6 +2495,31 @@ do {
     ptp.turnedOff("native:H1", timing: true)
     ptp.listed(["native:N1"])
     check(!ptp.shown && ptp.timingOff.isEmpty, "ptp notice: a row that leaves the list takes its timing reason along")
+
+    check(volumes.apply(.ptpFree(id: "A1")) == .ptpPortsFree
+            && NativeSpeakerEvent.ptpFree(id: "A1").logLine(name: names)
+            == "[AudioSync] native AirPlay: Kitchen (A1) bound the PTP ports, which are free again",
+          "native airplay: a PTP bind after the clash says the ports are free")
+    var episode = PtpPortNotice()
+    episode.reported()
+    check(episode.shown && episode.raises == 1, "ptp notice: the report raises it")
+    episode.playing("native:N1")
+    check(!episode.shown, "ptp notice: an NTP speaker that plays clears it while no row is off for PTP timing")
+    episode.turnedOff("native:H1", timing: true)
+    check(episode.shown && episode.raises == 2,
+          "ptp notice: a PTP speaker refused while the ports are taken brings it back")
+    episode.turnedOff("native:H1", timing: true)
+    check(episode.raises == 2, "ptp notice: the same speaker refused again in one episode raises nothing")
+    episode.turnedOff("native:H2", timing: true)
+    check(episode.raises == 3, "ptp notice: another speaker refused in the episode raises it again")
+    episode.portsFree()
+    check(!episode.shown, "ptp notice: a PTP bind ends the episode and clears it")
+    episode.turnedOff("native:H1", timing: true)
+    check(!episode.shown && episode.raises == 3, "ptp notice: a refusal with no clash reported raises nothing")
+    episode.reported()
+    episode.turnedOff("native:H1", timing: true)
+    check(episode.shown && episode.raises == 5,
+          "ptp notice: a new report starts a new episode, in which the same speaker raises it again")
 }
 
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")

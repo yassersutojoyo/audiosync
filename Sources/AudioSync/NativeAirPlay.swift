@@ -648,6 +648,7 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_EVENT_VOLUME:
             return .volume(id: id, position: raw.volume)
         case ASC_AIRPLAY_EVENT_WARNING:
+            if raw.warning == ASC_AIRPLAY_WARNING_PTP_FREE { return .ptpFree(id: id) }
             return .warning(id: id, ptpPortsTaken: raw.warning == ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN,
                             detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_TRACE:

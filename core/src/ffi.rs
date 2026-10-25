@@ -1155,6 +1155,10 @@ mod tests {
                 AIRPLAY_WARNING_LATENCY_SHORTFALL.to_string(),
             ),
             (
+                "ASC_AIRPLAY_WARNING_PTP_FREE",
+                AIRPLAY_WARNING_PTP_FREE.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_EVENT_LATENCY_HELD",
                 AIRPLAY_EVENT_LATENCY_HELD.to_string(),
             ),
