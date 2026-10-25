@@ -840,13 +840,18 @@ impl Session {
 
     /// Stops the session (P35, P129): no more media, TEARDOWN once the
     /// request in flight (if any) is answered, then close after the answer or
-    /// 2 s after this call, whichever comes first. Before SETUP succeeded
+    /// 2 s after this call, whichever comes first. Before SETUP goes out
     /// there is no receiver session to tear down, so the connection just
-    /// closes.
+    /// closes; a SETUP already sent is waited for, since the receiver may
+    /// have made the session it asked for.
     pub fn teardown(&mut self, now: Instant) {
+        let setup_in_flight = self
+            .in_flight
+            .as_ref()
+            .is_some_and(|in_flight| in_flight.kind == Kind::Setup);
         match self.state {
             State::Closed | State::TearingDown => {}
-            _ if self.session_header.is_none() => self.finish(),
+            _ if self.session_header.is_none() && !setup_in_flight => self.finish(),
             _ => {
                 self.state = State::TearingDown;
                 self.teardown_deadline = Some(now + TEARDOWN_TIMEOUT);
@@ -1128,6 +1133,16 @@ impl Session {
             // sent before the teardown only clears the way for TEARDOWN.
             if in_flight.kind == Kind::Teardown {
                 self.finish();
+            } else if in_flight.kind == Kind::Setup {
+                let session = response
+                    .headers
+                    .get("Session")
+                    .and_then(rtsp::session_id)
+                    .filter(|_| response.is_success());
+                match session {
+                    Some(session) => self.session_header = Some(session.to_owned()),
+                    None => self.finish(),
+                }
             }
             return;
         }
