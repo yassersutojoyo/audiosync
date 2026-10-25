@@ -220,15 +220,21 @@ final class DebugLogFile: @unchecked Sendable {
         timestamp(date) + " " + escaped(message) + "\n"
     }
 
-    /// `message` on one line, each control character escaped (`\n`, `\x1b`),
-    /// so text from a device can't start a line of its own.
+    /// What starts each line of a message after its first, in place of a stamp.
+    static let continuation = "    | "
+
+    /// `message` with each line after the first marked as a continuation and
+    /// every other control character escaped (`\r`, `\x1b`), so text from a
+    /// device can't pass for an entry of its own.
     static func escaped(_ message: String) -> String {
         let isControl = { (scalar: Unicode.Scalar) in scalar.properties.generalCategory == .control }
         guard message.unicodeScalars.contains(where: isControl) else { return message }
         var out = ""
         for scalar in message.unicodeScalars {
             switch scalar {
-            case "\n": out += "\\n"
+            case "\n":
+                out += "\n"
+                out += continuation
             case "\r": out += "\\r"
             case "\t": out += "\\t"
             case _ where isControl(scalar):

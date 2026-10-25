@@ -588,9 +588,11 @@ do {
     let t = Date(timeIntervalSince1970: 1_792_345_933.25)   // 2026-10-18 17:52:13.250 UTC
     check(DebugLogFile.line("[AudioSync] hello", at: t) == "2026-10-18T17:52:13.250Z [AudioSync] hello\n",
           "debug log: each line starts with the UTC time to the millisecond")
-    check(DebugLogFile.line("Den\r\nforged\t\u{1B}[2J", at: t) == #"2026-10-18T17:52:13.250Z Den\r\nforged\t\x1b[2J\#n"#,
-          "debug log: control characters show escaped, one physical line per message",
-          DebugLogFile.line("Den\r\nforged\t\u{1B}[2J", at: t))
+    let forged = "Den\r\n2026-01-01T00:00:00.000Z forged\t\u{1B}[2J"
+    check(DebugLogFile.line(forged, at: t)
+          == #"2026-10-18T17:52:13.250Z Den\r\#n    | 2026-01-01T00:00:00.000Z forged\t\x1b[2J\#n"#,
+          "debug log: a line after the first is marked as a continuation, other control characters show escaped",
+          DebugLogFile.line(forged, at: t))
     check(DebugLogFile.timestamp(Date(timeIntervalSince1970: 59.9999)) == "1970-01-01T00:00:59.999Z",
           "debug log: times round down, never into the next second")
 
