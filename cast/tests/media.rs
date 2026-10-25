@@ -10,7 +10,9 @@ use audiosync_cast::channel::{
 };
 use audiosync_cast::error::EndReason;
 use audiosync_cast::ids::RequestIds;
-use audiosync_cast::media::{IdleReason, LoadRequest, MediaError, Metadata, VolumeError};
+use audiosync_cast::media::{
+    IdleReason, LoadRequest, MAX_DEVICE_TEXT_CHARS, MediaError, Metadata, VolumeError,
+};
 use audiosync_cast::message::{
     CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_MEDIA, NS_RECEIVER,
     PLATFORM, SENDER,
@@ -316,6 +318,40 @@ fn idle_before_playing_fails_the_load() {
     events(&mut channel);
     channel.handle(start, media_status("t-1", 0, 4, "IDLE", Some("ERROR")));
     assert!(events(&mut channel).contains(&Event::LoadFailed(MediaError::Idle(IdleReason::Error))));
+}
+
+#[test]
+fn device_reasons_are_cut_short_and_printable() {
+    let start = Instant::now();
+    let long = format!("BAD\n\u{1b}[2J{}", "\u{e9}".repeat(70_000));
+    let expected = format!("BAD??[2J{}", "\u{e9}".repeat(MAX_DEVICE_TEXT_CHARS - 8));
+
+    let mut channel = running(start, volume());
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
+    channel.handle(start, media_status("t-1", 102, 4, "BUFFERING", None));
+    events(&mut channel);
+    channel.handle(start, media_status("t-1", 0, 4, "IDLE", Some(&long)));
+    assert!(
+        events(&mut channel).contains(&Event::LoadFailed(MediaError::Idle(IdleReason::Other(
+            expected.clone()
+        ))))
+    );
+
+    let mut channel = running(start, volume());
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
+    let reply = json!({"type": "INVALID_REQUEST", "reason": long, "requestId": 102});
+    channel.handle(start, json_message("t-1", SENDER, NS_MEDIA, reply));
+    assert_eq!(
+        events(&mut channel),
+        [Event::LoadFailed(MediaError::InvalidRequest {
+            reason: expected,
+            request: "LOAD",
+        })]
+    );
 }
 
 #[test]

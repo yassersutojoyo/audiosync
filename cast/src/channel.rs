@@ -12,6 +12,7 @@ use crate::group::MultizoneMessage;
 use crate::ids::RequestIds;
 use crate::media::{
     IdleReason, LoadRequest, MAX_CONTENT_ID, MediaError, MediaStatus, PlayerState, VolumeError,
+    device_text,
 };
 use crate::message::{
     self, BROADCAST, CastMessage, DEFAULT_MEDIA_RECEIVER, Namespace, PLATFORM, PayloadError, SENDER,
@@ -818,11 +819,12 @@ impl Channel {
             "LOAD_CANCELLED" => MediaError::LoadCancelled,
             "INVALID_PLAYER_STATE" => MediaError::InvalidPlayerState,
             _ => MediaError::InvalidRequest {
-                reason: payload
-                    .get("reason")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(kind)
-                    .to_owned(),
+                reason: device_text(
+                    payload
+                        .get("reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(kind),
+                ),
                 request: request.name(),
             },
         };

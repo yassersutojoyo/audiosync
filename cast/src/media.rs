@@ -10,6 +10,18 @@ use crate::error::EndReason;
 /// The longest `contentId` the device takes, in bytes (C47).
 pub const MAX_CONTENT_ID: usize = 1024;
 
+/// The most characters kept of a reason text the device sends.
+pub const MAX_DEVICE_TEXT_CHARS: usize = 64;
+
+/// `text` from the device as it may reach the user and the log: its first
+/// [`MAX_DEVICE_TEXT_CHARS`] characters, each control character as `?`.
+pub(crate) fn device_text(text: &str) -> String {
+    text.chars()
+        .take(MAX_DEVICE_TEXT_CHARS)
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
 /// Track metadata for the `LOAD` (C53). Unknown fields stay `None`; none
 /// is sent as a placeholder.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -118,7 +130,7 @@ impl IdleReason {
             "INTERRUPTED" => IdleReason::Interrupted,
             "FINISHED" => IdleReason::Finished,
             "ERROR" => IdleReason::Error,
-            other => IdleReason::Other(other.to_owned()),
+            other => IdleReason::Other(device_text(other)),
         }
     }
 }
