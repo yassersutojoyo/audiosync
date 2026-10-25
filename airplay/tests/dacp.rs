@@ -708,6 +708,7 @@ fn dacp_binding_and_peers() {
             .status,
         403
     );
+    let mut client = Client::connect(LOOPBACK, port);
     assert_eq!(
         client
             .request("/ctrl-int/1/playpause", Some(&a_remote))
@@ -801,7 +802,8 @@ fn dacp_answers() {
         Some("-1"),
         Some(unknown.as_str()),
     ] {
-        let reply = client.request("/ctrl-int/1/playpause", value);
+        let mut refused = Client::connect(LOOPBACK, port);
+        let reply = refused.request("/ctrl-int/1/playpause", value);
         assert_eq!(reply.status, 403, "{value:?}");
         assert_plain_answer(&reply);
     }
@@ -1077,6 +1079,37 @@ fn dacp_refusals_close() {
         client.reply().is_none(),
         "a request after a 403 on the same connection is not answered"
     );
+
+    // Eight 403s within 5 s close the peer's connections unread until
+    // the 5 s from its first 403 have passed.
+    let first = client.sent_at;
+    for _ in 1..8 {
+        let mut client = Client::connect(LOOPBACK, port);
+        assert_eq!(
+            client
+                .request("/ctrl-int/1/playpause", Some(&unknown))
+                .status,
+            403
+        );
+    }
+    let mut client = Client::connect(LOOPBACK, port);
+    let _ = client
+        .stream
+        .write_all(&get("/ctrl-int/1/beginff", Some(&remote)));
+    assert!(client.reply().is_none(), "a capped peer gets no answer");
+    thread::sleep((first + Duration::from_millis(5_200)).saturating_duration_since(Instant::now()));
+    let mut client = Client::connect(LOOPBACK, port);
+    assert_eq!(
+        client.request("/ctrl-int/1/beginff", Some(&remote)).status,
+        204,
+        "the cap lifts when the window passes"
+    );
+    events.drain(&sender);
+    assert!(
+        log_lines(&events)
+            .iter()
+            .any(|line| line.contains("8 requests refused with 403"))
+    );
     sender.shutdown();
 }
 
@@ -1259,6 +1292,7 @@ fn dacp_log_lines() {
             .status,
         403
     );
+    let mut client = Client::connect(LOOPBACK, port);
     assert_eq!(client.request("/nothing?x=1", Some(&remote)).status, 404);
     assert_eq!(
         client
