@@ -76,14 +76,27 @@ final class NowPlayingMonitor {
         static let dropAfter = 3
         private(set) var inARow = 0
 
+        /// What the last track's player answered when no track was read.
+        enum Empty {
+            /// An error, no answer within 2 s, or a paused player with no track name.
+            case unreadable
+            case stopped
+            /// Playing something without a name (a Spotify ad, an untitled file).
+            case playingNameless
+            /// macOS refuses AudioSync's Apple Events to it (Automation).
+            case denied
+        }
+
         enum Drop: Equatable {
-            case stopped, unreadable(Int), quit
+            case stopped, unreadable(Int), playingNameless(Int), quit, denied
 
             var reason: String {
                 switch self {
                 case .stopped: return "stopped"
                 case .unreadable(let n): return "unreadable x\(n)"
+                case .playingNameless(let n): return "playing without a name x\(n)"
                 case .quit: return "quit"
+                case .denied: return "Automation denied"
                 }
             }
         }
@@ -91,13 +104,15 @@ final class NowPlayingMonitor {
         private(set) var dropped: Drop?
 
         /// The track to show after a reading: `reading` when it found one.
-        /// Else `last` goes when its player quit (or is no longer a
-        /// candidate) or said it stopped. A paused `last` stays through any
-        /// number of unreadable readings, since a long-paused Spotify answers
-        /// with errors or an empty name for minutes; a playing one stays for
-        /// fewer than `dropAfter` in a row.
+        /// Else `last` goes at once when its player quit (or is no longer a
+        /// candidate), said it stopped or refuses Apple Events. A paused
+        /// `last` stays through any number of unreadable readings, since a
+        /// long-paused Spotify answers with errors or an empty name for
+        /// minutes; it goes after `dropAfter` readings in a row that play
+        /// something without a name, and a playing `last` after `dropAfter`
+        /// empty readings of any kind.
         mutating func next(reading: Track?, last: Track?, lastPlayerRuns: Bool,
-                           lastPlayerStopped: Bool = false) -> Track? {
+                           lastPlayer: Empty = .unreadable) -> Track? {
             dropped = nil
             guard reading == nil, let last else {
                 inARow = 0
@@ -105,12 +120,17 @@ final class NowPlayingMonitor {
             }
             if !lastPlayerRuns {
                 dropped = .quit
-            } else if lastPlayerStopped {
-                dropped = .stopped
             } else {
-                inARow += 1
-                if !last.isPlaying || inARow < Self.dropAfter { return last }
-                dropped = .unreadable(inARow)
+                switch lastPlayer {
+                case .stopped: dropped = .stopped
+                case .denied: dropped = .denied
+                case .unreadable, .playingNameless:
+                    // A paused track's unreadable reading neither counts nor restarts the count.
+                    guard last.isPlaying || lastPlayer == .playingNameless else { return last }
+                    inARow += 1
+                    if inARow < Self.dropAfter { return last }
+                    dropped = lastPlayer == .playingNameless ? .playingNameless(inARow) : .unreadable(inARow)
+                }
             }
             inARow = 0
             return nil
@@ -125,8 +145,7 @@ final class NowPlayingMonitor {
     /// What one player answered.
     enum Answer {
         case track(Track)
-        case stopped
-        case unreadable
+        case empty(EmptyReadings.Empty)
     }
 
     enum Command { case playPause, next, previous }
@@ -227,14 +246,13 @@ final class NowPlayingMonitor {
             guard let self else { return }
             var found: Track?
             var fallback: Track?
-            var stopped: Set<String> = []
+            var empties: [String: EmptyReadings.Empty] = [:]
             for bundleID in candidates where Self.isRunning(bundleID) {
                 switch self.query(bundleID) {
                 case .track(let t):
                     if t.isPlaying { found = t }
                     if fallback == nil { fallback = t }
-                case .stopped: stopped.insert(bundleID)
-                case .unreadable: break
+                case .empty(let e): empties[bundleID] = e
                 }
                 if found != nil { break }
             }
@@ -249,9 +267,9 @@ final class NowPlayingMonitor {
                 let last = self.track
                 let lastPlayerRuns = last.map { self.candidates().contains($0.bundleID) && Self.isRunning($0.bundleID) }
                     ?? false
-                let lastPlayerStopped = last.map { stopped.contains($0.bundleID) } ?? false
+                let lastPlayer = last.flatMap { empties[$0.bundleID] } ?? .unreadable
                 let shown = self.emptyReadings.next(reading: next, last: last, lastPlayerRuns: lastPlayerRuns,
-                                                    lastPlayerStopped: lastPlayerStopped)
+                                                    lastPlayer: lastPlayer)
                 if let drop = self.emptyReadings.dropped, let last {
                     DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason))")
                 }
@@ -312,11 +330,15 @@ final class NowPlayingMonitor {
                 return trackText & timing
             end timeout
             """
-        guard let result = run(target: bundleID, script)?.stringValue else { return .unreadable }
-        if result == "stopped" { return .stopped }
+        guard let result = run(target: bundleID, script)?.stringValue else {
+            return .empty(denied.contains(bundleID) ? .denied : .unreadable)
+        }
+        if result == "stopped" { return .empty(.stopped) }
         let readAt = ProcessInfo.processInfo.systemUptime
         let parts = result.components(separatedBy: sep)
-        guard parts.count >= 4, !parts[1].isEmpty else { return .unreadable }
+        guard parts.count >= 4, !parts[1].isEmpty else {
+            return .empty(parts[0] == "playing" ? .playingNameless : .unreadable)
+        }
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
             ?? bundleID
         let isPlaying = parts[0] == "playing"

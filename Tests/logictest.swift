@@ -3078,7 +3078,7 @@ do {
     check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
           "now playing: a paused player that still runs keeps its track and cover through 300 unreadable readings")
     check(empty.dropped == nil, "now playing: keeping a paused track through unreadable readings logs no drop")
-    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayerStopped: true)
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .stopped)
     check(shown == nil && shows(shown).fields == untitled && empty.dropped == .stopped,
           "now playing: an explicit stopped reading drops a paused track at once")
     let playing = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Tune", artist: "Band",
@@ -3100,6 +3100,22 @@ do {
     shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
     check(shown == nil && shows(shown).fields == untitled && quit.dropped == .quit,
           "now playing: a player that quit sends the fallback at the first empty reading")
+    var nameless = NowPlayingMonitor.EmptyReadings()
+    shown = nameless.next(reading: paused, last: nil, lastPlayerRuns: true)
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true)
+    for _ in 2..<dropAfter {
+        shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
+    }
+    check(shows(shown).fields.title == "Song",
+          "now playing: a paused track stays through fewer than \(dropAfter) readings that play without a name")
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
+    check(shown == nil && shows(shown).fields == untitled && nameless.dropped == .playingNameless(dropAfter),
+          "now playing: \(dropAfter) readings that play something without a name drop a paused track")
+    var denied = NowPlayingMonitor.EmptyReadings()
+    shown = denied.next(reading: nil, last: paused, lastPlayerRuns: true, lastPlayer: .denied)
+    check(shown == nil && shows(shown).fields == untitled && denied.dropped == .denied,
+          "now playing: a player that refuses Apple Events drops a paused track at once")
 }
 
 // MARK: Track info — what AirPlay receivers with a screen show
