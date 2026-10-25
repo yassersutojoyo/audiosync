@@ -261,7 +261,7 @@ enum ZoneLayout {
     }
 
     /// A zone header's count, `total` being its members that aren't hidden
-    /// (rows and count agree): "No speakers", "0 of 3 here" while none is
+    /// (rows and count agree): "No speakers", "None of 3 found" while none is
     /// present, else "2 of 3 on" with ", 1 waiting" when one waits.
     static func count(on: Int, waiting: Int, present: Int, total: Int, text: UIStrings) -> String {
         if total == 0 { return text.zoneEmpty }

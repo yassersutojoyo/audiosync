@@ -64,6 +64,30 @@ extension GuideLayout {
         return paragraphs
     }
 
+    enum Role: Equatable {
+        case title, heading, body
+    }
+
+    /// How the window sets each paragraph: the text's first one is the title,
+    /// and a heading line that opens a block is a heading. One right under
+    /// another heading-like line, such as the byline under the title, stays
+    /// body text. `opensText` false: the paragraphs go on from an earlier
+    /// piece, after an illustration, which opens a block like a blank line.
+    static func roles(of paragraphs: [Paragraph], opensText: Bool = true) -> [Role] {
+        var roles: [Role] = []
+        var previous: Paragraph?
+        for paragraph in paragraphs {
+            let headingLike = !paragraph.text.isEmpty && paragraph.hang.isEmpty && isHeading(paragraph.text)
+            if roles.isEmpty {
+                roles.append(headingLike ? (opensText ? .title : .heading) : .body)
+            } else {
+                roles.append(headingLike && previous?.text.isEmpty == true ? .heading : .body)
+            }
+            previous = paragraph
+        }
+        return roles
+    }
+
     private static func listMarker(_ line: String) -> String? {
         if line.hasPrefix("- ") { return "- " }
         let digits = line.prefix { $0.isASCII && $0.isNumber }

@@ -296,7 +296,7 @@ extension AppDelegate {
 
     /// The sender stopped after an internal error: it goes (torn down off
     /// the main queue), its rows with it, and the AirPlay section shows it
-    /// as failed, with Retry, and a notice says so. The switches stay as
+    /// as failed, with Retry, in place of a notice. The switches stay as
     /// they are, so the speakers rejoin once a new sender runs.
     private func nativeSenderFailed() {
         guard let native = nativeAirPlay else { return }
@@ -309,7 +309,8 @@ extension AppDelegate {
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
         stopNativeLocalNetworkProbe()
-        notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender)
+        // No notice: Connected Speakers says so in place of the AirPlay speakers, with Retry.
+        clearNotices([Notice.airplaySender])
         retimeLocalOutputs()   // no native speaker is chosen any more
         pushModel()
     }

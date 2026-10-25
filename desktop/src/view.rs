@@ -4542,6 +4542,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
         has_privacy: matches!(notice.message, NoticeMessage::MicrophoneBlocked { .. }),
+        info: notice.message.reports_a_change(),
     }
 }
 
@@ -7311,7 +7312,7 @@ mod tests {
             "2 of 5 on, 1 waiting"
         );
         assert_eq!(strings.invoke_zone_count(1, 3, 0, 2), "1 of 3 on");
-        assert_eq!(strings.invoke_zone_count(0, 3, 0, 0), "0 of 3 here");
+        assert_eq!(strings.invoke_zone_count(0, 3, 0, 0), "None of 3 found");
         assert_eq!(
             strings.invoke_zone_value(2, 5, 1),
             "2 of 5 speakers on, 1 waiting"

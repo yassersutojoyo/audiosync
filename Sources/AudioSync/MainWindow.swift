@@ -1575,7 +1575,8 @@ struct SyncControls: View {
             HStack(spacing: 4) {
                 step(-100)
                 step(-10)
-                DelayTextField(rowID: id, text: draft.field.text, placeholder: text.delayFieldLabel, label: label, hint: cue,
+                DelayTextField(rowID: id, text: draft.field.text, placeholder: text.delayFieldPlaceholder,
+                               label: text.delayFieldLabel(label), hint: cue,
                                typed: { typed in
                                    draft.clearBlock()
                                    draft.field.type(typed)

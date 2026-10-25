@@ -57,6 +57,25 @@ enum LocalNetworkHint: Equatable {
     }
 }
 
+/// AirPlay discovery's first look: while a running sender has listed no
+/// speaker for less than `LocalNetworkHint.emptyBeforeHint`, Connected
+/// Speakers says it is looking instead of giving network advice, as the
+/// Windows app does for its first 20 seconds.
+enum AirPlaySearch {
+    static func isSearching(access: LocalNetworkAccess, senderUp: Bool, emptySince: Date?, now: Date) -> Bool {
+        guard senderUp, access != .denied, let emptySince else { return false }
+        return now.timeIntervalSince(emptySince) < LocalNetworkHint.emptyBeforeHint
+    }
+
+    /// When the first look ends if nothing changes, while that is ahead of
+    /// `now`: no event says so, so the host reconciles then.
+    static func endsAt(access: LocalNetworkAccess, senderUp: Bool, emptySince: Date?, now: Date) -> Date? {
+        guard isSearching(access: access, senderUp: senderUp, emptySince: emptySince, now: now),
+              let emptySince else { return nil }
+        return emptySince.addingTimeInterval(LocalNetworkHint.emptyBeforeHint)
+    }
+}
+
 /// Finds out whether macOS lets AudioSync use the local network.
 ///
 /// There is no API that reports Local Network permission, but Bonjour

@@ -227,8 +227,10 @@ mod tests {
                 _ => {}
             }
         }
-        // The brand wordmark is the only text written into the markup.
-        assert_eq!(text.split_whitespace().collect::<String>(), "AudioSync");
+        // The lowercase wordmark is the only text written into the markup;
+        // screen readers name the heading AudioSync.
+        assert_eq!(text.split_whitespace().collect::<String>(), "audiosync");
+        assert!(markup.contains(r#"<h1 id="title" tabindex="-1" aria-label="AudioSync">"#));
 
         let script = only_element(PAGE, "script").unwrap();
         let table = &script[script.find("const TEXT = {").unwrap()..];

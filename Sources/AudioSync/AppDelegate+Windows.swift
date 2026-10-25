@@ -304,6 +304,9 @@ extension AppDelegate {
         publish(\.localNetworkHint, LocalNetworkHint.decide(
             access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
             emptySince: airplayEmptySince, now: Date()))
+        publish(\.airplaySearching, AirPlaySearch.isSearching(
+            access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
+            emptySince: airplayEmptySince, now: Date()))
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
         publishEqualizerCurve()
         rememberZoneNames()
@@ -528,12 +531,20 @@ extension AppDelegate {
         artAttributes[.paragraphStyle] = artParagraph
 
         let guide = NSMutableAttributedString()
+        var firstPiece = true
         for piece in GuideLayout.pieces(of: text.helpText, anchor: text.guideArtAnchor) {
             let paragraphs = GuideLayout.paragraphs(of: piece.text)
+            let roles = GuideLayout.roles(of: paragraphs, opensText: firstPiece)
+            firstPiece = false
             for (index, paragraph) in paragraphs.enumerated() {
                 let style = NSMutableParagraphStyle()
                 style.headIndent = (paragraph.hang as NSString).size(withAttributes: body).width
                 var attributes = body
+                switch roles[index] {
+                case .title: attributes[.font] = NSFont.systemFont(ofSize: NSFont.systemFontSize + 4, weight: .semibold)
+                case .heading: attributes[.font] = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+                case .body: break
+                }
                 attributes[.paragraphStyle] = style
                 let end = index < paragraphs.count - 1 ? "\n" : ""
                 guide.append(NSAttributedString(string: paragraph.text + end, attributes: attributes))

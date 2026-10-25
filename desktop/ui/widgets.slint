@@ -66,6 +66,7 @@ export global Glyphs {
     out property <string> more: "\u{E712}";
     out property <string> dismiss: "\u{E711}";
     out property <string> warning: "\u{E7BA}";
+    out property <string> info: "\u{E946}";
     out property <string> chevron-right: "\u{E76C}";
     out property <string> chevron-down: "\u{E70D}";
     out property <string> chevron-up: "\u{E70E}";
@@ -153,6 +154,9 @@ export global Glyphs {
         if glyph == root.warning {
             return "M8 2 L14.5 13.5 H1.5 Z M8 6 V9.5";
         }
+        if glyph == root.info {
+            return "M8 1.5 A6.5 6.5 0 0 1 8 14.5 A6.5 6.5 0 0 1 8 1.5 Z M8 7.25 V11.5";
+        }
         if glyph == root.chevron-right {
             return "M6 3 L11 8 L6 13";
         }
@@ -222,6 +226,9 @@ export global Glyphs {
         }
         if glyph == root.warning {
             return "M8 10.75 A0.8 0.8 0 0 1 8 12.35 A0.8 0.8 0 0 1 8 10.75 Z";
+        }
+        if glyph == root.info {
+            return "M8 4.15 A0.8 0.8 0 0 1 8 5.75 A0.8 0.8 0 0 1 8 4.15 Z";
         }
         if glyph == root.equalizer {
             return "M4 8.25 A1.75 1.75 0 0 1 4 11.75 A1.75 1.75 0 0 1 4 8.25 Z M8 3.25 A1.75 1.75 0 0 1 8 6.75 A1.75 1.75 0 0 1 8 3.25 Z M12 7.25 A1.75 1.75 0 0 1 12 10.75 A1.75 1.75 0 0 1 12 7.25 Z";
@@ -2467,7 +2474,7 @@ export component NoticeStack inherits VerticalLayout {
             spacing: 12px;
 
             Glyph {
-                glyph: Glyphs.warning;
+                glyph: notice.info ? Glyphs.info : Glyphs.warning;
                 color: Tokens.text;
                 vertical-alignment: top;
                 width: 18px;

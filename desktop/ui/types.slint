@@ -235,6 +235,9 @@ export struct NoticeItem {
     has-retry: bool,
     // The notice offers Open Privacy Settings, for microphone access.
     has-privacy: bool,
+    // The notice reports a change rather than a problem: it shows the info
+    // glyph in place of the warning one.
+    info: bool,
 }
 
 // The Settings page a guide step opens, if any.

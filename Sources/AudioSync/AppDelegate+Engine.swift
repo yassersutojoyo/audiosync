@@ -115,8 +115,9 @@ extension AppDelegate {
         if origin == .user { showAlert(message, style: style) }
     }
 
-    func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil) {
-        appModel.notices.post(message, subject: subject, title: title, settings: settings)
+    func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil,
+                    info: Bool = false) {
+        appModel.notices.post(message, subject: subject, title: title, settings: settings, info: info)
     }
 
     /// Drop the notices about `subjects`; their cause is gone (or the user
@@ -148,7 +149,8 @@ extension AppDelegate {
             // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
             startEngine(origin: .automatic)
             // A failed start has its own "start" notice; this one still says which app quit.
-            postNotice(text.sourceSwitchedToSystem(name: name, started: engine.isRunning), subject: Notice.source)
+            postNotice(text.sourceSwitchedToSystem(name: name, started: engine.isRunning), subject: Notice.source,
+                       info: engine.isRunning)
             pushModel()
         }
     }
@@ -189,7 +191,7 @@ extension AppDelegate {
                 case .waiting:
                     postNotice(text.waitingForAudio(sourceDisplayName()), subject: Notice.capture)
                 default:
-                    notify(text.captureNotWorking, origin: .automatic, subject: Notice.capture)
+                    notify(text.captureNotWorking(sourceDisplayName()), origin: .automatic, subject: Notice.capture)
                 }
             }
             // Keep watching until audio flows or the session ends, so the

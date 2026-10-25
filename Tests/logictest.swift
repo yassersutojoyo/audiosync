@@ -797,6 +797,11 @@ do {
     check(!list.clear(["ap:1"]) && list.count == 3, "notices: clearing an absent subject changes nothing")
     list.clearAll()
     check(list.isEmpty, "notices: clear all")
+    list.post("Your groups are zones now.", subject: Notice.zones, at: t0, info: true)
+    list.post("x", subject: "lc:1", at: t0 + 1)
+    check(list.items.map(\.info) == [false, true],
+          "notices: one that reports a change keeps its info flag, a problem has none")
+    list.clearAll()
     let music = Notice.automation("com.apple.Music"), spotify = Notice.automation("com.spotify.client")
     list.post("music", subject: music, at: t0, settings: .automation)
     list.post("spotify", subject: spotify, at: t0 + 1, settings: .automation)
@@ -847,6 +852,29 @@ do {
           "\(String(describing: hintDue))")
     check(due(.unknown, empty: t0, at: t0 + wait) == nil,
           "local network: once the soft hint shows, nothing more falls due for it (S101)")
+    // The first look: "Looking for speakers…" until the same 20 seconds pass, the host looking again then.
+    func searching(_ access: LocalNetworkAccess, up: Bool = true, empty since: Date?, at now: Date) -> Bool {
+        AirPlaySearch.isSearching(access: access, senderUp: up, emptySince: since, now: now)
+    }
+    check(searching(.unknown, empty: t0, at: t0) && searching(.allowed, empty: t0, at: t0 + wait - 1)
+            && !searching(.allowed, empty: t0, at: t0 + wait) && !searching(.unknown, empty: t0, at: t0 + wait)
+            && !searching(.denied, empty: t0, at: t0) && !searching(.unknown, up: false, empty: t0, at: t0)
+            && !searching(.unknown, empty: nil, at: t0),
+          "AirPlay search: looking while a running sender has listed nothing for under 20 s, unless access is denied")
+    check(AirPlaySearch.endsAt(access: .allowed, senderUp: true, emptySince: t0, now: t0 + 1) == t0 + wait
+            && AirPlaySearch.endsAt(access: .allowed, senderUp: true, emptySince: t0, now: t0 + wait) == nil
+            && AirPlaySearch.endsAt(access: .denied, senderUp: true, emptySince: t0, now: t0) == nil,
+          "AirPlay search: the host looks again when the first look ends, even with access allowed")
+    let lookingText = UIStrings()
+    check(lookingText.networkSpeakersNote(airPlayNone: true, cast: .quiet, airPlaySearching: true) == "Looking for speakers…"
+            && lookingText.networkSpeakersNote(airPlayNone: true, cast: .searching, airPlaySearching: true)
+                == "Looking for speakers…"
+            && lookingText.networkSpeakersNote(airPlayNone: true, cast: .noneFound, airPlaySearching: true)?
+                .hasPrefix("Looking for AirPlay speakers… No Google Cast speakers found yet.") == true
+            && lookingText.networkSpeakersNote(airPlayNone: false, cast: .quiet, airPlaySearching: true) == nil
+            && lookingText.networkSpeakersNote(airPlayNone: true, cast: .quiet, airPlaySearching: false)
+                == lookingText.airPlayNoneFound(),
+          "AirPlay search: Connected Speakers says it is looking, not the network advice, during the first look")
     check(due(.denied, empty: t0, at: t0) == nil && due(.allowed, empty: t0, at: t0) == nil
             && due(.unknown, up: false, empty: t0, at: t0) == nil && due(.unknown, empty: nil, at: t0) == nil,
           "local network: no hint falls due when access is known, the engine isn't up or speakers were found (S101)")
@@ -3357,8 +3385,8 @@ do {
     }
     check(zoneCount(on: 0, present: 0, total: 0) == "No speakers",
           "zones: a zone whose members are all hidden or gone says it has no speakers")
-    check(zoneCount(on: 0, present: 0, total: 3) == "0 of 3 here",
-          "zones: a zone with no member listed counts its members as not here")
+    check(zoneCount(on: 0, present: 0, total: 3) == "None of 3 found",
+          "zones: a zone with no member listed says none of its members was found")
     check(zoneCount(on: 2, present: 3, total: 3) == "2 of 3 on",
           "zones: the header counts the members that are on out of every shown member")
     check(zoneCount(on: 2, waiting: 1, present: 2, total: 3) == "2 of 3 on, 1 waiting",
@@ -4803,7 +4831,9 @@ do {
           "\(tooFast.failures)")
     check(rateText.contains("USB DAC") && rateText.contains("352.8 kHz") && rateText.contains("192 kHz")
             && rateText.contains("Audio MIDI Setup") && !rateText.contains("exclusively")
-            && rateText384.contains("384 kHz") && generic.contains("exclusively"),
+            && rateText384.contains("384 kHz") && generic.contains("exclusively")
+            && generic.hasPrefix("USB DAC couldn't start, so it's off.")
+            && strings.outputCouldNotStart(names: "USB DAC, Den", count: 2).contains("so they're off"),
           "S36 start failure: the text names the capture rate, the 192 kHz limit and Audio MIDI Setup", rateText)
     check(OutputRenderer.StartFailure.captureRateTooHigh(384_000).description.contains("384000 Hz"),
           "S36 start failure: the debug log names the refused rate")
@@ -6537,6 +6567,16 @@ do {
             && texts.filter(\.isEmpty).count == t.helpText.components(separatedBy: "\n").filter(\.isEmpty).count,
           "guide: steps and list items indent past their marker, and the blank lines between topics stay",
           "\(steps.map(\.hang))")
+
+    let roles = GuideLayout.roles(of: paragraphs)
+    let headings = zip(paragraphs, roles).filter { $0.1 == .heading }.map { $0.0.text }
+    check(roles.first == .title && roles.filter { $0 == .title }.count == 1 && headings == topics
+            && roles.count > 1 && roles[1] == .body,
+          "guide: the title and the topic headings are set apart, and the byline stays body text",
+          headings.joined(separator: " | "))
+    check(GuideLayout.roles(of: [.init(text: "Notices", hang: ""), .init(text: "Text.", hang: "")], opensText: false)
+            == [.heading, .body],
+          "guide: a piece after an illustration that opens with a topic sets it as a heading")
 
     let made = GuideLayout.paragraphs(of: "Topic\nOne two\nthree.\n\n1. Step one\n   wraps\n- Item\n  goes on\nAfter")
     check(made == [.init(text: "Topic", hang: ""), .init(text: "One two three.", hang: ""), .init(text: "", hang: ""),

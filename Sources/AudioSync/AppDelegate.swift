@@ -345,7 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         reconcileAirPlaySpeakers()
         webRemote?.startIfEnabled()   // after the window too: listening on the network can raise that prompt
         if zonesNoticeDue {
-            postNotice(text.groupsBecameZones, subject: Notice.zones)
+            postNotice(text.groupsBecameZones, subject: Notice.zones, info: true)
             store.zonesNoticeShown()
         }
         pushModel()
@@ -424,7 +424,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Arms the AirPlay reconcile for the next thing that falls due with no
     /// event to say so (`AppLifecycle.nextDueReconcile`): the sender's restart
     /// after a failed start, the Local Network recheck while access is
-    /// denied, the moment the Local Network hint may show. Runs with every
+    /// denied, the moment the Local Network hint may show, the end of the
+    /// first 20-second search for speakers. Runs with every
     /// model update, which follows every change that can move one of those
     /// times; arms nothing while the Mac sleeps or once AudioSync quits.
     func scheduleDueReconcile() {
@@ -432,7 +433,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let restart = nativeAirPlay == nil ? nativeStarts.restartAt : nil   // none while a start is under way
         let hint = LocalNetworkHint.dueAt(access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
                                           emptySince: airplayEmptySince, now: Date())
-        let next = AppLifecycle.nextDueReconcile(due: [restart, localNetworkProbe.recheckAt, hint],
+        let searchEnd = AirPlaySearch.endsAt(access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
+                                             emptySince: airplayEmptySince, now: Date())
+        let next = AppLifecycle.nextDueReconcile(due: [restart, localNetworkProbe.recheckAt, hint, searchEnd],
                                                  last: lastDueReconcile, asleep: macAsleep)
         guard next != dueReconcileAt else { return }
         dueTimer?.invalidate()

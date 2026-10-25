@@ -599,6 +599,17 @@ pub enum NoticeMessage {
     },
 }
 
+impl NoticeMessage {
+    /// Whether the notice tells of a change AudioSync made or will make,
+    /// with nothing that failed, so it shows the info glyph.
+    pub fn reports_a_change(&self) -> bool {
+        matches!(
+            self,
+            Self::SourceSwitched { .. } | Self::AirPlay2NextLaunch { .. } | Self::GroupsBecameZones
+        )
+    }
+}
+
 /// Why a preset's member stayed off at recall (spec S252, S265).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PresetLeftOff {
@@ -2717,6 +2728,25 @@ mod tests {
         );
         state.running = false;
         assert_eq!(state.zone_state(&zone), SpeakerState::WillPlay);
+    }
+
+    #[test]
+    fn only_notices_that_report_a_change_show_the_info_glyph() {
+        assert!(NoticeMessage::GroupsBecameZones.reports_a_change());
+        assert!(NoticeMessage::AirPlay2NextLaunch { on: true }.reports_a_change());
+        assert!(
+            NoticeMessage::SourceSwitched {
+                source: "Spotify".into()
+            }
+            .reports_a_change()
+        );
+        assert!(
+            !NoticeMessage::SpeakerFailed {
+                speaker: "Den".into()
+            }
+            .reports_a_change()
+        );
+        assert!(!NoticeMessage::AirPlayStopped.reports_a_change());
     }
 
     #[test]
