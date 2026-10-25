@@ -735,6 +735,7 @@ mod tests {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            own_volume: None,
             device_volume: None,
             waiting: None,
             cast: None,

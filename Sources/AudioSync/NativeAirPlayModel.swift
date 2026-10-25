@@ -173,10 +173,10 @@ enum NativeSpeakerEvent: Equatable {
     /// A pairing succeeded and its credentials are stored; `storeNote` is
     /// empty, or why they last only until AudioSync quits.
     case paired(id: String, storeNote: String)
-    /// Someone changed its volume on the speaker itself: the slider position
-    /// (0 to 100) that plays at it, which the sender already counts as the
-    /// speaker's own (P122, P180).
-    case volume(id: String, position: Double)
+    /// Someone changed its volume on the speaker itself: the own volume
+    /// (0 to 100) behind it and the device level D (0 to 100) the row shows
+    /// (S290), which the sender already counts as the speaker's (P122, P180).
+    case volume(id: String, position: Double, level: Double)
     /// Something about its session for the debug log; the session goes on.
     /// `ptpPortsTaken`: PTP port 319 or 320 is taken, so speakers that need
     /// PTP timing can't play (P158).
@@ -218,8 +218,9 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)): pairing failed: " + (wrongPin ? "wrong PIN" : problem.rawValue) + " (\(detail))"
         case .paired(let id, let note):
             line = "\(label(id)): paired, credentials stored" + (note.isEmpty ? "" : " for this run only (\(note))")
-        case .volume(let id, let position):
-            line = "\(label(id)) volume changed on the speaker: slider at \(Int(position.rounded()))"
+        case .volume(let id, let position, let level):
+            let shown = String(format: "%.1f", level)
+            line = "\(label(id)) volume changed on the speaker: device level \(shown), own volume \(Int(position.rounded()))"
         case .warning(let id, _, let detail):
             line = "\(label(id)) warning: \(detail)"
         case .ptpFree(let id):
@@ -357,8 +358,9 @@ enum NativeAirPlayOutcome: Equatable {
     /// (P169).
     case waiting(String, Bool)
     /// Someone changed the speaker's volume on the speaker itself (app ID):
-    /// its slider follows, and nothing goes back to the sender.
-    case volumeChanged(String, Double)
+    /// its own volume and device level follow (S290), and nothing goes back
+    /// to the sender.
+    case volumeChanged(String, Double, Double)
     /// PTP port 319 or 320 is taken, so speakers that need PTP timing
     /// can't play (P158).
     case ptpPortsTaken
@@ -903,9 +905,9 @@ struct NativeAirPlayModel {
             return .senderFailed
         case .pinNeeded, .passwordNeeded, .pairingFailed, .paired:
             return pairingEvent(event)
-        case .volume(let id, let position):
+        case .volume(let id, let position, let level):
             guard states[id] != nil else { return nil }
-            return .volumeChanged(NativeAirPlayID.app(id), position)
+            return .volumeChanged(NativeAirPlayID.app(id), position, level)
         case .warning(_, let ptpPortsTaken, _):
             return ptpPortsTaken ? .ptpPortsTaken : nil
         case .ptpFree:

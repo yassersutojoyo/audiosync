@@ -278,7 +278,8 @@ func airPlaySender() {
               && ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN == 5 && ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY == 6,
           "the AirPlay constants cross the header")
     // The Rust side checks the same size (`the_event_layout_matches_the_header`).
-    check(MemoryLayout<AscAirPlayEvent>.size == 104, "the event struct has the header's layout")
+    check(MemoryLayout<AscAirPlayEvent>.size == 112 && MemoryLayout<AscAirPlayEvent>.offset(of: \AscAirPlayEvent.device_level) == 104,
+          "the event struct has the header's layout")
 }
 
 func castSender() {

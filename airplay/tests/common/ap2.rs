@@ -223,6 +223,12 @@ pub struct FakeAp2 {
     pub pause: HashMap<String, Duration>,
     /// A body in place of the usual answer, by key.
     pub bodies: HashMap<String, Vec<u8>>,
+    /// Every volume SET_PARAMETER, whatever its status, sets the level a
+    /// GET_PARAMETER answers, rounded to this step in dB.
+    pub applies_volume: Option<f64>,
+    /// The session SETUP answer's `Session` (see [`FakeAp2::session_id`]),
+    /// which every later SET_PARAMETER must carry or get 500 (P25).
+    pub session: Option<String>,
     /// The body of the answer to the second `/info`, in place of the
     /// initial volume alone.
     pub second_info_body: Option<Vec<u8>>,
@@ -266,6 +272,8 @@ impl FakeAp2 {
             held: Vec::new(),
             pause: HashMap::new(),
             bodies: HashMap::new(),
+            applies_volume: None,
+            session: None,
             second_info_body: None,
             record_headers: Vec::new(),
             no_data_port: false,
@@ -279,6 +287,16 @@ impl FakeAp2 {
             transient: false,
             parser: Parser::new(),
         }
+    }
+
+    /// The `Session` ID handed out on the current connection: `session`
+    /// on the first, with `-<connection>` appended on a later one.
+    pub fn session_id(&self) -> Option<String> {
+        let session = self.session.as_ref()?;
+        Some(match self.connections {
+            0 | 1 => session.clone(),
+            n => format!("{session}-{n}"),
+        })
     }
 
     /// A new RTSP connection: plain text again.
@@ -329,6 +347,18 @@ impl FakeAp2 {
             };
             self.requests.push((request.clone(), framed));
             let key = request_key(&request);
+            if let Some(step) = self.applies_volume
+                && key == "SET_PARAMETER"
+                && let Some(level) = String::from_utf8_lossy(&request.body)
+                    .strip_prefix("volume:")
+                    .and_then(|rest| rest.trim().parse::<f64>().ok())
+            {
+                let applied = (level / step).round() * step;
+                self.bodies.insert(
+                    "GET_PARAMETER".to_owned(),
+                    format!("volume: {applied:.6}\r\n").into_bytes(),
+                );
+            }
             if self.silent.contains(&key) {
                 continue;
             }
@@ -363,9 +393,21 @@ impl FakeAp2 {
                 Response::new(code, "Refused")
             } else if pairing && !self.status.contains_key(&key) {
                 self.hap.answer(&request)
+            } else if key == "SET_PARAMETER"
+                && self.session.is_some()
+                && request.headers.get("Session") != self.session_id().as_deref()
+            {
+                Response::new(500, "Internal Server Error")
             } else {
                 self.answer(&request, &key)
             };
+            if key == "SETUP session"
+                && let Some(session) = self.session_id()
+            {
+                response
+                    .headers
+                    .push("Session", format!("{session};timeout=60"));
+            }
             let cseq = request.headers.get("CSeq").unwrap_or("0").to_owned();
             response.headers.push("CSeq", cseq);
             response.headers.push("Server", "AirTunes/fake");

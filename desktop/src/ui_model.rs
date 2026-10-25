@@ -205,8 +205,12 @@ pub struct Speaker {
     pub kind: SpeakerKind,
     /// Chosen by the user; it plays while streaming is on.
     pub enabled: bool,
-    /// 0 to 100.
+    /// 0 to 100: an AirPlay row's device level rounded down (spec S290),
+    /// any other row's own volume.
     pub volume: f64,
+    /// An AirPlay row's own volume s behind `volume`, which a preset keeps
+    /// (spec S290).
+    pub own_volume: Option<f64>,
     /// The offset of a local output relative to the reference; the
     /// reference has none, and neither do AirPlay speakers (the AirPlay
     /// sender keeps them in sync, and local outputs follow it).
@@ -662,7 +666,7 @@ pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
         .map(|speaker| SpeakerNow {
             key: speaker.id.clone(),
             volume: (!speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed))
-                .then_some(speaker.volume),
+                .then_some(speaker.own_volume.unwrap_or(speaker.volume)),
         })
         .collect()
 }
@@ -1620,6 +1624,7 @@ impl MockBackend {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            own_volume: None,
             device_volume: None,
             waiting: None,
             cast: None,
@@ -2278,6 +2283,7 @@ impl Backend for MockBackend {
                 holds_password: false,
                 holds_credentials: false,
                 code_every_time: false,
+                own_volume: None,
                 device_volume: None,
                 waiting: None,
                 cast: Some(CastRow {
@@ -2666,6 +2672,7 @@ mod tests {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            own_volume: None,
             device_volume: None,
             waiting: None,
             cast: None,

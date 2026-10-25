@@ -179,8 +179,10 @@ pub struct AirPlayInfo {
     pub availability: AirPlayAvailability,
     /// Whether the user turned it on.
     pub enabled: bool,
-    /// The volume slider position, 0 to 100.
+    /// Its own volume s, 0 to 100, which is saved (S290).
     pub volume: f64,
+    /// Its device level D, 0 to 100, which its row shows rounded down (S290).
+    pub device_level: f64,
     /// Its own delay d_s in milliseconds, 0 to 20 000.
     pub delay_ms: f64,
     /// The latency it reported in this run, R_s in ms (a group's largest
@@ -880,9 +882,13 @@ pub trait AudioBackend {
         None
     }
 
-    /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
-    /// value that isn't finite is ignored.
+    /// Sets an AirPlay speaker's own volume s (0 to 100), live: a saved
+    /// speaker and a preset's member (S290). A value that isn't finite is
+    /// ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);
+
+    /// An AirPlay speaker's row moved to `row`, its device level (S290).
+    fn move_airplay_row(&mut self, id: &str, row: f64);
 
     /// The AirPlay speaker's volume slider is held (true) or let go
     /// (false): a level it reads back meanwhile is ignored (S271).
