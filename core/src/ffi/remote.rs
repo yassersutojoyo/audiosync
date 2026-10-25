@@ -514,6 +514,7 @@ mod tests {
         }
     }
 
+    // covers: S287
     #[test]
     fn debug_mode_puts_each_pairing_code_in_the_log_lines() {
         let received = Mutex::new(Vec::<String>::new());
