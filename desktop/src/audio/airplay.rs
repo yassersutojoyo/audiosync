@@ -61,6 +61,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -699,6 +700,17 @@ const VOLUME_TOLERANCE_DB: f64 = 0.5;
 /// press later can land that close too (S271).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
+/// The address a receiver announces first, AirPlay service before RAOP.
+fn first_address(device: &Device) -> Option<IpAddr> {
+    device
+        .airplay
+        .iter()
+        .chain(&device.raop)
+        .flat_map(|endpoint| &endpoint.addresses)
+        .map(|address| address.ip)
+        .next()
+}
+
 /// The most receivers listed at one address. Unauthenticated mDNS lets a
 /// LAN host announce any number; a bridge that fronts many speakers from
 /// one host stays well under this.
@@ -974,6 +986,9 @@ pub struct AirPlaySpeakers {
     gone_targets: BTreeSet<String>,
     /// The last name of every speaker seen, for logs and notices.
     names: BTreeMap<String, String>,
+    /// The addresses that announced more receivers than
+    /// [`MAX_LISTED_PER_ADDRESS`], each logged once.
+    crowded: BTreeSet<IpAddr>,
     /// The credentials of the paired Apple TVs.
     store: PairingStore,
     /// The key of every speaker the sender paired on AirPlay 2, by speaker
@@ -1104,6 +1119,7 @@ impl AirPlaySpeakers {
             target_missing: BTreeMap::new(),
             gone_targets: BTreeSet::new(),
             names: BTreeMap::new(),
+            crowded: BTreeSet::new(),
             store,
             homekit_keys: BTreeMap::new(),
             pairings: BTreeMap::new(),
@@ -3250,6 +3266,19 @@ impl AirPlaySpeakers {
         match event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 let id = speaker_id(&info.device.key);
+                if !self.listed.contains_key(&id)
+                    && let Some(address) = first_address(&info.device)
+                    && self.listed_at(address) >= MAX_LISTED_PER_ADDRESS
+                {
+                    if self.crowded.insert(address) {
+                        self.log.log(|| {
+                            format!(
+                                "AirPlay receivers at {address} past the first {MAX_LISTED_PER_ADDRESS} not listed"
+                            )
+                        });
+                    }
+                    return;
+                }
                 let availability = self.availability_of(&id, &info);
                 let appeared = !self.listed.contains_key(&id);
                 self.names.insert(id.clone(), info.device.name.clone());
@@ -3346,6 +3375,14 @@ impl AirPlaySpeakers {
                 }
             }
         }
+    }
+
+    /// How many listed receivers announce `address` first.
+    fn listed_at(&self, address: IpAddr) -> usize {
+        self.listed
+            .values()
+            .filter(|listed| first_address(listed.device()) == Some(address))
+            .count()
     }
 
     /// Drops the name of a speaker or target that left discovery, unless
