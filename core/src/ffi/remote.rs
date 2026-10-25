@@ -253,6 +253,25 @@ pub unsafe extern "C" fn asc_remote_rotate_code(remote: *mut AscRemote) -> *cons
     }
 }
 
+/// Makes `<local_name>.local` the accepted address in place of the name
+/// the remote started with, for when the computer is renamed; null or empty
+/// leaves only the IP address. The pairing code, its age and a lockout stay.
+///
+/// # Safety
+///
+/// `remote` is null or a live handle; `local_name` is null or a
+/// NUL-terminated string, unchanged during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_remote_set_local_name(
+    remote: *mut AscRemote,
+    local_name: *const c_char,
+) {
+    // SAFETY: as the caller's.
+    let name = unsafe { host_text(local_name) };
+    // SAFETY: as the caller's.
+    unsafe { with_remote(remote, (), |remote| remote.server.set_local_name(name)) }
+}
+
 /// Whether too many wrong codes locked pairing until the next
 /// [`asc_remote_rotate_code`].
 ///
@@ -521,6 +540,46 @@ mod tests {
             assert!(!asc_remote_publish(ptr::null_mut(), STATE.as_ptr()));
             assert_eq!(asc_remote_port(ptr::null_mut()), 0);
             assert!(asc_remote_next_log(ptr::null_mut()).is_null());
+        }
+    }
+
+    #[test]
+    fn a_renamed_computer_is_reached_by_its_new_name_with_the_same_code() {
+        let mut error = -1;
+        // SAFETY: a C string literal, a context the callback never gets, a writable error.
+        let mut remote = unsafe {
+            asc_remote_start(
+                c"{\"port\": 0, \"listen\": [\"127.0.0.1\"], \"local_name\": \"kitchen\"}".as_ptr(),
+                Some(record),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert!(!remote.is_null());
+        // SAFETY: a live handle.
+        let port = u16::try_from(unsafe { asc_remote_port(remote) }).unwrap();
+        let state = |name: &str| {
+            exchange(
+                port,
+                &format!("GET /api/state HTTP/1.1\r\nHost: {name}.local:{port}\r\n\r\n"),
+            )
+        };
+        assert!(state("kitchen").starts_with("HTTP/1.1 401 "));
+        // SAFETY: a live handle; the string is copied before the next call.
+        let code = unsafe { CStr::from_ptr(asc_remote_pairing_code(remote)) }.to_owned();
+        // SAFETY: a live handle and C string literals; a null name or handle is allowed.
+        unsafe {
+            asc_remote_set_local_name(remote, c"den".as_ptr());
+            assert!(state("den").starts_with("HTTP/1.1 401 "));
+            assert!(state("kitchen").starts_with("HTTP/1.1 403 "));
+            assert_eq!(
+                CStr::from_ptr(asc_remote_pairing_code(remote)),
+                code.as_c_str()
+            );
+            asc_remote_set_local_name(remote, ptr::null());
+            assert!(state("den").starts_with("HTTP/1.1 403 "));
+            asc_remote_set_local_name(ptr::null_mut(), c"den".as_ptr());
+            asc_remote_stop(&mut remote);
         }
     }
 

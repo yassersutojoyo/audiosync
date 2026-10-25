@@ -2285,7 +2285,14 @@ const char *asc_remote_pairing_code(AscRemote *remote);
  */
 const char *asc_remote_rotate_code(AscRemote *remote);
 
-/* Whether 20 wrong codes locked pairing until the next asc_remote_rotate_code. */
+/*
+ * Makes <local_name>.local the accepted address in place of the name the
+ * remote started with, for when the computer is renamed; NULL or empty
+ * leaves only the IP address. The pairing code, its age and a lockout stay.
+ */
+void asc_remote_set_local_name(AscRemote *remote, const char *local_name);
+
+/* Whether 40 wrong codes locked pairing until the next asc_remote_rotate_code. */
 bool asc_remote_pairing_locked(AscRemote *remote);
 
 /* How many devices are paired (8 at most; pairing a ninth drops the oldest). */
