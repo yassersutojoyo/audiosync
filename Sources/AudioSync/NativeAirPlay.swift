@@ -298,6 +298,21 @@ final class NativeAirPlay {
         }
     }
 
+    /// How private the core found a pairing file, for the debug log; nil
+    /// when it wasn't read.
+    static func fileAccessLogLine(_ access: Int32) -> String? {
+        switch access {
+        case ASC_AIRPLAY_FILE_PRIVATE:
+            return "private"
+        case ASC_AIRPLAY_FILE_TIGHTENED:
+            return "tightened (was open to other accounts, owner-only now)"
+        case ASC_AIRPLAY_FILE_STILL_OPEN:
+            return "still open to other accounts (its mode couldn't be changed)"
+        default:
+            return nil
+        }
+    }
+
     /// A new capture session started (P143): the speakers are flushed and the
     /// timeline starts over.
     func restartTimeline() {
@@ -430,6 +445,8 @@ final class NativeAirPlay {
         let airPlay2 = support.map {
             asc_airplay_open_airplay2_identity(created, NativeAirPlayPairings.airPlay2File(in: $0).path)
         }
+        let pairingsAccess = support == nil ? nil : Self.fileAccessLogLine(asc_airplay_pairings_access(created))
+        let identityAccess = support == nil ? nil : Self.fileAccessLogLine(asc_airplay_airplay2_identity_access(created))
         DispatchQueue.main.async {
             if let line = NativeAirPlayPairings.moveLogLine(moved) {
                 DebugTrace.log("[AudioSync] native AirPlay: " + line)
@@ -438,6 +455,12 @@ final class NativeAirPlay {
             if let airPlay2, airPlay2 != 0 {
                 DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: "
                     + (airPlay2 > 0 ? "\(airPlay2) paired receiver(s)" : "ignored or left as it is (code \(airPlay2))"))
+            }
+            if let pairingsAccess {
+                DebugTrace.log("[AudioSync] native AirPlay: pairings file: " + pairingsAccess)
+            }
+            if let identityAccess {
+                DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: " + identityAccess)
             }
             if !excluded {
                 DebugTrace.log("[AudioSync] native AirPlay: the pairings folder couldn't be kept out of backups")

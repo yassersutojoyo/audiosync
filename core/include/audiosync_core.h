@@ -188,6 +188,12 @@ extern "C" {
 #define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* unreadable or not in the format: ignored, the next pairing replaces it */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
 
+/* How private asc_airplay_pairings_access and asc_airplay_airplay2_identity_access found a file. */
+#define ASC_AIRPLAY_FILE_UNREAD -1     /* NULL or dead handle, the identity file with AirPlay 2 off, or a file not read: another account owns it, it isn't a regular file, or opening it failed */
+#define ASC_AIRPLAY_FILE_PRIVATE 0     /* only its owner could read or write it, or there was none */
+#define ASC_AIRPLAY_FILE_TIGHTENED 1   /* other accounts could read or write it; it is owner-only now */
+#define ASC_AIRPLAY_FILE_STILL_OPEN 2  /* other accounts can read or write it; its mode couldn't be changed */
+
 /* The largest hold-back asc_airplay_set_hold_back applies, in ms: the sender's limit on a speaker's delay. */
 #define ASC_AIRPLAY_MAX_DELAY_MS 20000
 
@@ -1798,6 +1804,21 @@ int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
  * many receivers it holds credentials for, or an ASC_AIRPLAY_PAIRINGS_* code.
  */
 int32_t asc_airplay_open_airplay2_identity(AscAirPlay *airplay, const char *path);
+
+/*
+ * How private asc_airplay_open_pairings found the pairings file, for the
+ * host's log: an ASC_AIRPLAY_FILE_* code. A file other accounts could read
+ * or write is made owner-only when it is opened, also when it is then
+ * ignored.
+ */
+int32_t asc_airplay_pairings_access(const AscAirPlay *airplay);
+
+/*
+ * How private asc_airplay_open_airplay2_identity found the identity file, for
+ * the host's log: an ASC_AIRPLAY_FILE_* code, ASC_AIRPLAY_FILE_UNREAD with
+ * the hidden AirPlay 2 switch off.
+ */
+int32_t asc_airplay_airplay2_identity_access(const AscAirPlay *airplay);
 
 /*
  * Starts a PIN pairing with the listed receiver `id` (one listed as

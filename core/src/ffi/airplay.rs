@@ -95,7 +95,7 @@ use audiosync_airplay::targets::{Target, TargetChange, TargetId};
 use audiosync_airplay::volume::{MIN_DB, Volume};
 
 use super::{host_slice, stereo_samples};
-use crate::airplay_pairings::{Loaded, PairingStore};
+use crate::airplay_pairings::{Access, Loaded, PairingStore};
 use crate::airplay2_identity::IdentityStore;
 use crate::fade::InputFade;
 use crate::policy::remote::{
@@ -367,6 +367,20 @@ pub const AIRPLAY_MAX_DELAY_MS: i32 = MAX_DELAY.as_millis() as i32;
 /// A newer AudioSync wrote the pairings file: it is ignored and left as it
 /// is, and pairings made now last until the handle is destroyed.
 pub const AIRPLAY_PAIRINGS_NEWER: i32 = -3;
+
+/// What [`asc_airplay_pairings_access`] and
+/// [`asc_airplay_airplay2_identity_access`] return for a null or dead
+/// handle, an identity file left unread because AirPlay 2 is off, or a
+/// file that wasn't read: another account owns it, it isn't a regular
+/// file, or opening it failed.
+pub const AIRPLAY_FILE_UNREAD: i32 = -1;
+/// Only its owner could read or write the file, or there was none.
+pub const AIRPLAY_FILE_PRIVATE: i32 = 0;
+/// Other accounts could read or write the file; it is owner-only now.
+pub const AIRPLAY_FILE_TIGHTENED: i32 = 1;
+/// Other accounts can read or write the file, and its mode couldn't be
+/// changed.
+pub const AIRPLAY_FILE_STILL_OPEN: i32 = 2;
 
 /// Output frames the input resamples into per step; bounds its buffer.
 const INPUT_CHUNK_FRAMES: usize = 4096;
@@ -3262,6 +3276,59 @@ pub unsafe extern "C" fn asc_airplay_open_airplay2_identity(
                 Loaded::Receivers(count) => i32::try_from(count).unwrap_or(i32::MAX),
                 Loaded::Ignored(_) => AIRPLAY_PAIRINGS_IGNORED,
                 Loaded::Newer(_) => AIRPLAY_PAIRINGS_NEWER,
+            }
+        })
+    }
+}
+
+/// The `AIRPLAY_FILE_*` code for how private a file was found.
+fn access_code(access: Access) -> i32 {
+    match access {
+        Access::Private => AIRPLAY_FILE_PRIVATE,
+        Access::Tightened => AIRPLAY_FILE_TIGHTENED,
+        Access::StillOpen => AIRPLAY_FILE_STILL_OPEN,
+        Access::Unread => AIRPLAY_FILE_UNREAD,
+    }
+}
+
+/// How private [`asc_airplay_open_pairings`] found the pairings file (S224),
+/// for the host's log: [`AIRPLAY_FILE_PRIVATE`] also when there was no
+/// file, or none was opened; [`AIRPLAY_FILE_UNREAD`] for a file it didn't
+/// read, or a null or dead handle.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_pairings_access(airplay: *const AscAirPlay) -> i32 {
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now; the call only reads it.
+    unsafe {
+        live(airplay.cast_mut(), AIRPLAY_FILE_UNREAD, |airplay| {
+            access_code(airplay.store.access())
+        })
+    }
+}
+
+/// How private [`asc_airplay_open_airplay2_identity`] found the AirPlay 2
+/// identity file (S224), for the host's log: [`AIRPLAY_FILE_PRIVATE`] also
+/// when there was no file, or none was opened; [`AIRPLAY_FILE_UNREAD`] for a
+/// file it didn't read, with the hidden AirPlay 2 switch off, or for a null
+/// or dead handle.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_airplay2_identity_access(airplay: *const AscAirPlay) -> i32 {
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now; the call only reads it.
+    unsafe {
+        live(airplay.cast_mut(), AIRPLAY_FILE_UNREAD, |airplay| {
+            if airplay.airplay2 {
+                access_code(airplay.identity.access())
+            } else {
+                AIRPLAY_FILE_UNREAD
             }
         })
     }
@@ -6186,6 +6253,81 @@ mod tests {
         assert_eq!(loaded, Loaded::Receivers(1));
         assert_eq!(again.device_id(), device_id);
         assert_eq!(again.get("02005E005350"), Some(&credentials));
+    }
+
+    // covers: S224
+    #[test]
+    fn the_host_is_told_how_private_the_files_were_found() {
+        assert_eq!(access_code(Access::Private), AIRPLAY_FILE_PRIVATE);
+        assert_eq!(access_code(Access::Tightened), AIRPLAY_FILE_TIGHTENED);
+        assert_eq!(access_code(Access::StillOpen), AIRPLAY_FILE_STILL_OPEN);
+        assert_eq!(access_code(Access::Unread), AIRPLAY_FILE_UNREAD);
+        let folder = scratch("file-access");
+        let pairings = folder.join("pairings.dat");
+        let identity = folder.join("identity.dat");
+        let c_pairings = CString::new(pairings.to_str().expect("UTF-8")).expect("no NUL");
+        let c_identity = CString::new(identity.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = create_with(quiet);
+        // SAFETY: a live handle, or null, used by this thread only; the
+        // paths are NUL-terminated strings.
+        unsafe {
+            assert_eq!(
+                asc_airplay_pairings_access(ptr::null()),
+                AIRPLAY_FILE_UNREAD
+            );
+            assert_eq!(
+                asc_airplay_airplay2_identity_access(ptr::null()),
+                AIRPLAY_FILE_UNREAD
+            );
+            inside(handle).airplay2 = false;
+            assert_eq!(
+                asc_airplay_airplay2_identity_access(handle),
+                AIRPLAY_FILE_UNREAD,
+                "the identity file isn't read with the switch off"
+            );
+            inside(handle).airplay2 = true;
+            assert_eq!(asc_airplay_open_pairings(handle, c_pairings.as_ptr()), 0);
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_identity.as_ptr()),
+                0
+            );
+            assert_eq!(asc_airplay_pairings_access(handle), AIRPLAY_FILE_PRIVATE);
+            assert_eq!(
+                asc_airplay_airplay2_identity_access(handle),
+                AIRPLAY_FILE_PRIVATE
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let credentials = audiosync_airplay::pairing::Credentials::new(
+                "0123456789ABCDEF",
+                [7; audiosync_airplay::pairing::SECRET_BYTES],
+            )
+            .expect("valid credentials");
+            inside(handle)
+                .store
+                .insert("02005E005377", credentials)
+                .expect("written");
+            let open = std::fs::Permissions::from_mode(0o644);
+            std::fs::set_permissions(&pairings, open.clone()).expect("mode set");
+            std::fs::set_permissions(&identity, open).expect("mode set");
+            // SAFETY: as above.
+            unsafe {
+                assert_eq!(asc_airplay_open_pairings(handle, c_pairings.as_ptr()), 1);
+                assert_eq!(
+                    asc_airplay_open_airplay2_identity(handle, c_identity.as_ptr()),
+                    0
+                );
+                assert_eq!(asc_airplay_pairings_access(handle), AIRPLAY_FILE_TIGHTENED);
+                assert_eq!(
+                    asc_airplay_airplay2_identity_access(handle),
+                    AIRPLAY_FILE_TIGHTENED
+                );
+            }
+        }
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
     }
 
     /// HomeKit credentials made from `fill`, for telling two pairings apart.
