@@ -158,10 +158,9 @@ final class WebRemote {
     private func start() {
         guard handle == nil else { return }
         refreshAddresses()
-        var config: [String: Any] = ["port": settings.port]
         startedLocalName = settings.addresses.localHostName
-        if let name = startedLocalName { config["local_name"] = name }
-        if let file = Self.devicesFile { config["devices_path"] = file.path }
+        let config = RemoteStartConfig.make(port: settings.port, localName: startedLocalName,
+                                            devicesPath: Self.devicesFile?.path, debugLog: DebugTrace.enabled)
         guard let data = try? JSONSerialization.data(withJSONObject: config) else { return }
         let box = Unmanaged.passRetained(RemoteInbox(owner: self))
         var error: Int32 = ASC_REMOTE_ERROR_NONE

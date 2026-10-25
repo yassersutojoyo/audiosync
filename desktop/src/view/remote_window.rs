@@ -297,6 +297,7 @@ impl App {
                 listen: host.listen.clone(),
                 local_name: host.host.clone(),
                 devices_path: host.devices_path.clone(),
+                log_pairing_codes: self.log.enabled(),
                 ..Config::default()
             }
         };

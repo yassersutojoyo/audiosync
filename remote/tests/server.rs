@@ -52,6 +52,7 @@ fn config(name: &str, timing: Timing) -> Config {
         devices_path: Some(scratch(name)),
         timing,
         capacity: Capacity::default(),
+        log_pairing_codes: false,
     }
 }
 

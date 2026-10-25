@@ -378,6 +378,18 @@ enum RemotePort {
     }
 }
 
+/// What `asc_remote_start` gets. Only the debug log asks the core for the
+/// pairing codes, since whoever reads that log can pair while a code works.
+enum RemoteStartConfig {
+    static func make(port: Int, localName: String?, devicesPath: String?, debugLog: Bool) -> [String: Any] {
+        var config: [String: Any] = ["port": port]
+        if let localName { config["local_name"] = localName }
+        if let devicesPath { config["devices_path"] = devicesPath }
+        if debugLog { config["log_pairing_codes"] = true }
+        return config
+    }
+}
+
 /// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…], "seen": [Unix seconds…]}`),
 /// read and cleared here while the remote is off, so a lost phone can be
 /// unpaired before the remote is turned on again.

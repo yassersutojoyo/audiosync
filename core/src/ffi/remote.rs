@@ -120,9 +120,10 @@ fn keep(slot: &mut CString, text: String) -> *const c_char {
 }
 
 /// Starts the remote: `config_json` is `{"port"?, "local_name"?,
-/// "devices_path"?, "listen"?}` (the defaults: [`REMOTE_DEFAULT_PORT`], no
-/// `.local` name, devices kept in memory only, every IPv6 and IPv4
-/// address). A null `config_json` takes every default; one that isn't
+/// "devices_path"?, "listen"?, "log_pairing_codes"?}` (the defaults:
+/// [`REMOTE_DEFAULT_PORT`], no `.local` name, devices kept in memory only,
+/// every IPv6 and IPv4 address, no pairing codes in the log lines; only a
+/// host writing its debug log sets that one). A null `config_json` takes every default; one that isn't
 /// UTF-8 fails with [`REMOTE_ERROR_CONFIG`]. `command` gets each accepted
 /// change with `context`. Null on failure, with the reason in `*error` (one
 /// of the `REMOTE_ERROR_` codes) when `error` isn't null.
@@ -294,7 +295,8 @@ pub unsafe extern "C" fn asc_remote_forget_all(remote: *mut AscRemote) -> bool {
 }
 
 /// The oldest debug-log line not taken yet (pairing, refusals, file
-/// problems; never a code or a token), or null when there is none. The
+/// problems; never a token, and a pairing code only when the start's
+/// `log_pairing_codes` was true), or null when there is none. The
 /// string is the handle's, valid until the next call of this on it or its
 /// stop.
 ///
