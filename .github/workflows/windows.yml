@@ -18,6 +18,9 @@ permissions:
 env:
   # A warning in a .slint file fails the build, like a Rust warning in clippy.
   SLINT_COMPILER_DENY_WARNINGS: '1'
+  # Debug test builds bind every address only with this, as the app does;
+  # without it (a plain run on a desktop) they keep to loopback.
+  AUDIOSYNC_LAN_TESTS: '1'
 
 jobs:
   test:

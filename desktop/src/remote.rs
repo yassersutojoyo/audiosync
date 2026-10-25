@@ -522,7 +522,7 @@ pub fn spaced_digits(code: &str) -> String {
 pub fn lan_address() -> Option<Ipv4Addr> {
     // The wildcard bind could make Windows Firewall ask about the test program.
     #[cfg(test)]
-    if audiosync_airplay::ptp::no_lan_tests() {
+    if audiosync_airplay::ptp::loopback_only() {
         return None;
     }
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;

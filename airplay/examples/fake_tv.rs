@@ -1,11 +1,13 @@
-//! A fake AirPlay 2 television on the LAN, for dry runs of a real sender
-//! before a session with the real set: the test fake's Samsung profile
-//! ([`FakeAp2::samsung`]) served on every interface and advertised over
-//! mDNS as `_airplay._tcp` only, so a sender takes the AirPlay 2 path.
+//! A fake AirPlay 2 television, for dry runs of a real sender before a
+//! session with the real set: the test fake's Samsung profile
+//! ([`FakeAp2::samsung`]). By default it serves on 127.0.0.1 only and
+//! advertises nothing, so Windows Firewall has nothing to ask; `--lan`
+//! serves it on every interface and advertises it over mDNS as
+//! `_airplay._tcp` only, so a sender on the network takes the AirPlay 2 path.
 //! Development only; examples never enter a release build.
 //!
 //! ```text
-//! cargo run -p audiosync-airplay --example fake_tv -- [--name <text>]
+//! cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--name <text>]
 //!     [--port <n>] [--pin every|once] [--code <digits>]
 //! ```
 //!
@@ -56,6 +58,7 @@ struct Options {
     port: u16,
     pin: Pin,
     code: String,
+    on_network: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -64,10 +67,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         port: 0,
         pin: Pin::None,
         code: "4821".to_owned(),
+        on_network: false,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
+            "--lan" => options.on_network = true,
             "--name" => options.name = value()?,
             "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
             "--pin" => {
@@ -230,21 +235,39 @@ fn main() -> ExitCode {
         }
     };
     let start = Instant::now();
-    let any = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), options.port);
-    let server = Ap2Server::start_at(any, television(&options));
-    let port = server.address.port();
-    let (daemon, fullname) = match advertise(&options, port) {
-        Ok(advertised) => advertised,
-        Err(error) => {
-            eprintln!("fake_tv: {error}");
-            return ExitCode::FAILURE;
-        }
+    let ip = if options.on_network {
+        Ipv4Addr::UNSPECIFIED
+    } else {
+        Ipv4Addr::LOCALHOST
     };
-    println!(
-        "{} serving \"{}\" on port {port}, advertised as {fullname}",
-        stamp(start),
-        options.name
+    let server = Ap2Server::start_at(
+        SocketAddr::new(IpAddr::V4(ip), options.port),
+        television(&options),
     );
+    let port = server.address.port();
+    let advertised = if options.on_network {
+        match advertise(&options, port) {
+            Ok(advertised) => Some(advertised),
+            Err(error) => {
+                eprintln!("fake_tv: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+    match &advertised {
+        Some((_, fullname)) => println!(
+            "{} mode: LAN, serving \"{}\" on every interface, port {port}, advertised as {fullname}",
+            stamp(start),
+            options.name
+        ),
+        None => println!(
+            "{} mode: loopback, serving \"{}\" on 127.0.0.1:{port}, not advertised (--lan serves the network)",
+            stamp(start),
+            options.name
+        ),
+    }
     match options.pin {
         Pin::None => println!("{} pairing: transient, no PIN", stamp(start)),
         Pin::EveryTime => println!("{} pairing: PIN {} every time", stamp(start), options.code),
@@ -258,7 +281,9 @@ fn main() -> ExitCode {
         "{} stdin: vol <dB> moves the level, quit stops",
         stamp(start)
     );
-    watch_advertisement(&daemon, fullname.clone(), start);
+    if let Some((daemon, fullname)) = &advertised {
+        watch_advertisement(daemon, fullname.clone(), start);
+    }
 
     let server = Arc::new(server);
     let stop = Arc::new(AtomicBool::new(false));
@@ -297,8 +322,10 @@ fn main() -> ExitCode {
     }
     stop.store(true, Ordering::SeqCst);
     let _ = logger.join();
-    let _ = daemon.unregister(&fullname);
-    let _ = daemon.shutdown();
+    if let Some((daemon, fullname)) = advertised {
+        let _ = daemon.unregister(&fullname);
+        let _ = daemon.shutdown();
+    }
     println!("{} stopped", stamp(start));
     ExitCode::SUCCESS
 }

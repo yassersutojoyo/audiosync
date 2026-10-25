@@ -112,23 +112,23 @@ impl Default for PtpPorts {
     }
 }
 
-/// Set by `scripts/pc_test.sh`, never by the apps or CI: tests then keep
-/// every socket on loopback, since Windows Firewall asks about each new test
-/// program that binds another address.
-pub const NO_LAN_TESTS: &str = "AUDIOSYNC_NO_LAN_TESTS";
+/// Set by CI only: debug builds (the tests) then bind every address as a
+/// release does. Unset, they keep every socket on loopback, since Windows
+/// Firewall asks about each new test program that binds another address.
+pub const LAN_TESTS: &str = "AUDIOSYNC_LAN_TESTS";
 
-/// Whether [`NO_LAN_TESTS`] is set to something. Release builds ignore it,
-/// so a shipped app always binds every address.
+/// Whether this build keeps its sockets on loopback: a debug build without
+/// [`LAN_TESTS`]. Release builds ignore it and always bind every address.
 #[doc(hidden)]
-pub fn no_lan_tests() -> bool {
-    cfg!(debug_assertions) && std::env::var_os(NO_LAN_TESTS).is_some_and(|value| !value.is_empty())
+pub fn loopback_only() -> bool {
+    cfg!(debug_assertions) && std::env::var_os(LAN_TESTS).is_none_or(|value| value.is_empty())
 }
 
 /// The address the PTP service binds for receivers of `family`'s kind: every
-/// address of that kind (P158), or its loopback under [`NO_LAN_TESTS`].
+/// address of that kind (P158), or its loopback in a [`loopback_only`] build.
 #[doc(hidden)]
 pub fn service_bind_ip(family: IpAddr) -> IpAddr {
-    bind_ip(family, no_lan_tests())
+    bind_ip(family, loopback_only())
 }
 
 fn bind_ip(family: IpAddr, loopback: bool) -> IpAddr {

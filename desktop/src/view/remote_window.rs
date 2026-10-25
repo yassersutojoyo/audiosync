@@ -109,7 +109,11 @@ impl Default for RemoteHost {
             host: remote::local_host(&computer_name),
             computer_name,
             lan_address: None,
+            #[cfg(not(test))]
             listen: Config::default().listen,
+            // The wildcard default could make Windows Firewall ask about the test program.
+            #[cfg(test)]
+            listen: vec![Ipv4Addr::LOCALHOST.into()],
             devices_path: devices_path(),
             qr: None,
             devices_offline: None,

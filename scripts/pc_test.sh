@@ -1,8 +1,8 @@
 #!/bin/bash
 # Runs the Rust crates' checks the way CI does (cargo fmt --check, clippy with
-# warnings as errors, cargo test) on a Windows desktop, with
-# AUDIOSYNC_NO_LAN_TESTS=1: every test socket then stays on loopback, so
-# Windows Firewall asks nothing about the new test programs.
+# warnings as errors, cargo test) on a Windows desktop. Without
+# AUDIOSYNC_LAN_TESTS (which only CI sets) every test socket stays on
+# loopback, so Windows Firewall asks nothing about the new test programs.
 #
 #   scripts/pc_test.sh [crate ...]    crates: desktop core airplay remote cast
 #
@@ -31,7 +31,7 @@ for crate in "${crates[@]}"; do
     esac
 done
 
-export AUDIOSYNC_NO_LAN_TESTS=1
+unset AUDIOSYNC_LAN_TESTS
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$main/windows/target}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
 export CARGO_INCREMENTAL=0
