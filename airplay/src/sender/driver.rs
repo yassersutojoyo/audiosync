@@ -35,6 +35,7 @@ use crate::latency::ReportedLatency;
 use crate::metadata::Metadata;
 use crate::pairing::{self, LegacyVerifier, Pairing, PairingEvent, PairingState};
 use crate::reconnect::Backoff;
+use crate::rtsp::Method;
 use crate::sdp::Codec;
 use crate::secret::Secret;
 use crate::session::{Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT};
@@ -85,6 +86,8 @@ pub(crate) enum Command {
     SetNowPlaying(NowPlaying),
     SetLatency(u32),
     RestartTimeline,
+    Pause,
+    Resume,
     StartDiscovery(Box<dyn Browser + Send>),
     StopDiscovery,
     ArrivalTime(i64, mpsc::SyncSender<Instant>),
@@ -937,6 +940,18 @@ impl Driver {
         }
     }
 
+    /// A session's FLUSH was answered, refused or all the same: a resume
+    /// from a pause stops waiting for it (P213).
+    fn flush_answered(&mut self, key: &DeviceKey) {
+        let id = match self.active(key) {
+            Some(active) => active.stream_id,
+            None => self.ap2_active(key).and_then(|active| active.stream_id),
+        };
+        if let Some(id) = id {
+            self.stream.flush_answered(id);
+        }
+    }
+
     /// Closes a session's sockets and takes it off the stream (P141).
     fn release(&mut self, key: &DeviceKey) {
         let Some(active) = self.active(key) else {
@@ -991,9 +1006,18 @@ impl Driver {
                 self.emit_speaker(key, SpeakerEvent::VolumeReported(db))
             }
             SessionEvent::Warning(warning) => {
+                if matches!(
+                    warning,
+                    Warning::RequestFailed {
+                        method: Method::Flush,
+                        ..
+                    }
+                ) {
+                    self.flush_answered(key);
+                }
                 self.emit_speaker(key, SpeakerEvent::Warning(warning))
             }
-            SessionEvent::Flushed { .. } => {}
+            SessionEvent::Flushed { .. } => self.flush_answered(key),
             SessionEvent::Recording {
                 first_seq,
                 first_rtptime,
@@ -1238,10 +1262,13 @@ impl Driver {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
                     return;
                 };
-                if let Some(active) = self.active(&key) {
-                    active.session.flush(seq, rtptime, now);
+                let sent = match self.active(&key) {
+                    Some(active) => active.session.flush(seq, rtptime, now),
+                    None => self.ap2_flush(&key, seq, rtptime, now),
+                };
+                if !sent {
+                    self.stream.flush_answered(speaker);
                 }
-                self.ap2_flush(&key, seq, rtptime, now);
             }
             StreamEvent::FirstSound { speaker, .. } => {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
@@ -1417,6 +1444,12 @@ impl Driver {
             }
             Command::SetLatency(frames) => self.stream.set_latency(frames, now),
             Command::RestartTimeline => self.stream.restart(now),
+            Command::Pause => {
+                self.stream.pause(now);
+            }
+            Command::Resume => {
+                self.stream.resume(now);
+            }
             Command::SetAirPlay2DeviceId(id) => self.device_id = id,
             Command::StartDiscovery(browser) => {
                 self.browser = Some(browser);

@@ -84,7 +84,7 @@ pub(super) struct Ap2Active {
 }
 
 impl Driver {
-    fn ap2_active(&mut self, key: &DeviceKey) -> Option<&mut Ap2Active> {
+    pub(super) fn ap2_active(&mut self, key: &DeviceKey) -> Option<&mut Ap2Active> {
         match &mut self.speakers.get_mut(key)?.phase {
             Phase::Ap2(active) => Some(active),
             _ => None,
@@ -661,11 +661,17 @@ impl Driver {
         }
     }
 
-    /// The stream restarted a speaker: FLUSH on its session (P100, P143).
-    pub(super) fn ap2_flush(&mut self, key: &DeviceKey, seq: u16, rtptime: u32, now: Instant) {
-        if let Some(active) = self.ap2_active(key) {
-            active.session.flush(seq, rtptime, now);
-        }
+    /// The stream restarted or paused a speaker: FLUSH on its session
+    /// (P100, P143, P213). False when none goes out.
+    pub(super) fn ap2_flush(
+        &mut self,
+        key: &DeviceKey,
+        seq: u16,
+        rtptime: u32,
+        now: Instant,
+    ) -> bool {
+        self.ap2_active(key)
+            .is_some_and(|active| active.session.flush(seq, rtptime, now))
     }
 
     fn ap2_event(&mut self, key: &DeviceKey, event: Ap2Event, now: Instant) {
@@ -735,6 +741,7 @@ impl Driver {
                 self.send_now_playing(key, now);
             }
             Ap2Event::Warning(warning) => self.emit_speaker(key, SpeakerEvent::Warning(warning)),
+            Ap2Event::Flushed => self.flush_answered(key),
             Ap2Event::Trace(line) => self.emit_speaker(key, SpeakerEvent::Trace(line)),
             Ap2Event::VolumeReported(db) => {
                 self.emit_speaker(key, SpeakerEvent::VolumeReported(db))
