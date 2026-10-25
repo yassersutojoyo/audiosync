@@ -362,6 +362,7 @@ extension AppDelegate {
     /// switch them on, then start streaming once for all of them. Speakers still
     /// on from the last session only need the stream started.
     func autoConnect(_ keys: [String]) {
+        guard !LaunchAutoConnect.skipped else { return }
         let hits = hiddenSpeakers.autoConnecting(keys, marked: autoConnect)
         guard !hits.isEmpty else { return }
         DebugTrace.log("[AudioSync] auto-connect \(hits)")

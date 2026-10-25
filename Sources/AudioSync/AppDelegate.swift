@@ -81,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Settings kept between launches (AppSettings.swift)
 
     typealias Keys = AppSettings.Keys
-    private let store: SettingsStore
+    let store: SettingsStore
 
     /// The mode the several-apps menu shows while no mix is the source.
     var rememberedMixMode: AppMixMode = .only
@@ -265,8 +265,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var loggedInputs: [String] = []
 
     override init() {
-        store = .standard
-        let saved = store.load()
+        store = LaunchAutoConnect.skipped ? SettingsStore.standard.memoryOnly() : .standard
+        let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
         // A hidden speaker is never switched on, not even by the saved on-state.
         enabledAirPlay = saved.enabledAirPlay.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: true)) }
@@ -317,6 +317,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         DebugTrace.beginLaunchLog()   // each launch starts a fresh debug log (S170)
+        if LaunchAutoConnect.skipped {
+            DebugTrace.log("[AudioSync] auto-connect: skipped in this run (\(LaunchAutoConnect.environmentKey)=1 with \(DebugTrace.environmentKey)=1); speakers saved as on stay off, and nothing is saved until the next launch")
+        }
         appearance.apply()   // before any window or alert exists
         // Every window stands on its own: no tab items in the menus, and the
         // Equalizer and the Guide never open as tabs of the main window.
@@ -326,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let loginItem = Self.launchedAsLoginItem()
         DebugTrace.log("[AudioSync] launched\(loginItem ? " at login" : ""); audio engine: the Rust core")
-        SettingsStore.standard.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
+        store.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
             .forEach { DebugTrace.log($0) }
         AudioSyncCore.logVersion()   // which Rust core this build carries
 
