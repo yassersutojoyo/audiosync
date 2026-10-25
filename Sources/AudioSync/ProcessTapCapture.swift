@@ -123,6 +123,8 @@ final class SourceCapture {
     /// The source's apps that ran at the last look where any ran. Kept over a
     /// stop, so the rebuild after a mix's loss names the app that quit last.
     private var appsRunning: [String] = []
+    /// Each source app's live processes at the last look (`AppTapFollow.runningPIDs`).
+    private var seenPIDs: [String: [pid_t]] = [:]
 
     init() {}
 
@@ -191,8 +193,9 @@ final class SourceCapture {
     /// an app starts while the tap is being built is picked up too.
     private func startApps(_ bundleIDs: [String]) throws {
         let label = bundleIDs.joined(separator: ", ")
-        let pidsByApp = bundleIDs.map(Self.runningPIDs(of:))
+        let pidsByApp = bundleIDs.map { Self.runningPIDs(of: $0) }
         let pids = pidsByApp.flatMap { $0 }
+        seenPIDs = Dictionary(zip(bundleIDs, pidsByApp), uniquingKeysWith: { first, _ in first })
         guard !pids.isEmpty else {
             throw CaptureError.appNotRunning(AppTapFollow.quitApp(of: bundleIDs, ranBefore: appsRunning))
         }
@@ -216,7 +219,7 @@ final class SourceCapture {
     private func startExcluding(_ bundleIDs: [String]) throws {
         guard let own = AudioProcesses.processObject(for: getpid()) else { throw CaptureError.ownProcessUnknown }
         watchAppProcesses()
-        let excluded = Set(Self.audioProcesses(of: bundleIDs.flatMap(Self.runningPIDs(of:)))).union([own]).sorted()
+        let excluded = Set(Self.audioProcesses(of: bundleIDs.flatMap { Self.runningPIDs(of: $0) })).union([own]).sorted()
         tapped = excluded
         try openTap(Self.describe(excluded, excluding: true))
         DebugTrace.log("[AudioSync] capture: everything except \(bundleIDs.joined(separator: ", ")) "
@@ -349,8 +352,9 @@ final class SourceCapture {
         if case .mix(_, let ids) = source { apps = ids } else { apps = source.capturedApps }
         guard !apps.isEmpty else { return }
         let bundleID = apps.joined(separator: ", ")
-        let pidsByApp = apps.map(Self.runningPIDs(of:))
+        let pidsByApp = apps.map { Self.runningPIDs(of: $0, seen: seenPIDs[$0] ?? []) }
         let pids = pidsByApp.flatMap { $0 }
+        seenPIDs = Dictionary(zip(apps, pidsByApp), uniquingKeysWith: { first, _ in first })
         let found = Self.audioProcesses(of: pids)
         let ranBefore = appsRunning
         let runningNow = zip(apps, pidsByApp).filter { !$0.1.isEmpty }.map { $0.0 }
@@ -369,12 +373,10 @@ final class SourceCapture {
             closeCapture()
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process now; waiting for one")
+            // A quitting app ends its audio process before itself, and some quit with no terminate notice.
+            if !secondLook { lookAgainLater() }
         case .lookAgain:
-            let mark = sessionMark
-            DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
-                guard let self, self.isCurrent(mark) else { return }
-                self.followApp(secondLook: true)
-            }
+            lookAgainLater()
         case .lost:
             closeCapture()
             tapped = []
@@ -382,6 +384,14 @@ final class SourceCapture {
             interrupt(.sourceLost(.appNotRunning(AppTapFollow.quitApp(of: apps, ranBefore: ranBefore))))
         case .retap(let processes):
             retap(bundleID, to: processes)
+        }
+    }
+
+    private func lookAgainLater() {
+        let mark = sessionMark
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
+            guard let self, self.isCurrent(mark) else { return }
+            self.followApp(secondLook: true)
         }
     }
 
@@ -514,11 +524,15 @@ final class SourceCapture {
 
     // MARK: - Processes
 
-    /// The PIDs of every running instance of the app.
-    private static func runningPIDs(of bundleID: String) -> [pid_t] {
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .filter { !$0.isTerminated && $0.processIdentifier > 0 }
-            .map(\.processIdentifier)
+    /// The PIDs of every running instance of the app, read afresh at each look:
+    /// macOS's list of running apps plus the processes an earlier look found.
+    private static func runningPIDs(of bundleID: String, seen: [pid_t] = []) -> [pid_t] {
+        let instances = NSWorkspace.shared.runningApplications
+            + NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        let listed = instances.map {
+            AppTapFollow.ListedApp(bundleID: $0.bundleIdentifier, pid: $0.processIdentifier, terminated: $0.isTerminated)
+        }
+        return AppTapFollow.runningPIDs(of: bundleID, listed: listed, seen: seen, alive: AppTapFollow.processExists)
     }
 
     /// The audio process objects of those instances, never AudioSync's own.

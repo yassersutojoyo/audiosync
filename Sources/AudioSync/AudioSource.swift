@@ -303,9 +303,14 @@ enum SourceApps {
                            bundleID: bundleID)
     }
 
-    /// Whether some instance of the app runs and hasn't terminated.
+    /// Whether some instance of the app runs: listed under its bundle ID in
+    /// any letter case, not terminated, and its process still exists.
     static func isRunning(_ bundleID: String) -> Bool {
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).contains { !$0.isTerminated }
+        let listed = NSWorkspace.shared.runningApplications.map {
+            AppTapFollow.ListedApp(bundleID: $0.bundleIdentifier, pid: $0.processIdentifier, terminated: $0.isTerminated)
+        }
+        return !AppTapFollow.runningPIDs(of: bundleID, listed: listed, seen: [],
+                                         alive: AppTapFollow.processExists).isEmpty
     }
 
     /// The icon of a running or installed app; nil when the app isn't on the Mac.
