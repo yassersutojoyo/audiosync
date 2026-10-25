@@ -726,3 +726,97 @@ fn handle(stream: &mut TcpStream, peer: IpAddr, head: &dacp::RequestHead, shared
     }
     close
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    fn peer(n: usize) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::from(0x0a00_0000 + n as u32))
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    // covers: P194
+    #[test]
+    fn strikes_block_a_peer_at_the_limit_for_the_rest_of_its_window() {
+        let t0 = Instant::now();
+        let mut strikes = Strikes::default();
+        for n in 1..STRIKE_LIMIT {
+            assert!(!strikes.strike(peer(1), t0 + ms(u64::from(n))));
+            assert!(!strikes.blocked(peer(1), t0 + ms(u64::from(n))));
+        }
+        assert!(strikes.strike(peer(1), t0 + ms(100)));
+        assert!(strikes.blocked(peer(1), t0 + ms(100)));
+        assert!(!strikes.strike(peer(1), t0 + ms(200)), "reported once");
+        assert!(!strikes.blocked(peer(2), t0 + ms(200)));
+        let window_end = t0 + ms(1) + STRIKE_WINDOW;
+        assert!(strikes.blocked(peer(1), window_end - ms(1)));
+        assert!(!strikes.blocked(peer(1), window_end));
+    }
+
+    #[test]
+    fn strikes_start_a_fresh_window_once_the_old_one_ends() {
+        let t0 = Instant::now();
+        let mut strikes = Strikes::default();
+        for _ in 1..STRIKE_LIMIT {
+            strikes.strike(peer(1), t0);
+        }
+        let later = t0 + STRIKE_WINDOW;
+        assert!(!strikes.strike(peer(1), later));
+        assert_eq!(strikes.0[&peer(1)], (later, 1));
+    }
+
+    #[test]
+    fn strikes_prune_windows_that_ended() {
+        let t0 = Instant::now();
+        let mut strikes = Strikes::default();
+        strikes.strike(peer(1), t0);
+        strikes.strike(peer(2), t0 + ms(3000));
+        strikes.strike(peer(3), t0 + STRIKE_WINDOW);
+        assert!(!strikes.0.contains_key(&peer(1)));
+        assert!(strikes.0.contains_key(&peer(2)));
+        assert_eq!(strikes.0.len(), 2);
+    }
+
+    #[test]
+    fn strikes_track_at_most_the_peer_cap() {
+        let t0 = Instant::now();
+        let mut strikes = Strikes::default();
+        for n in 0..STRIKE_PEERS * 2 {
+            strikes.strike(peer(n), t0 + ms(n as u64));
+        }
+        assert_eq!(strikes.0.len(), STRIKE_PEERS);
+        strikes.strike(peer(STRIKE_PEERS * 2 - 1), t0 + ms(1000));
+        assert_eq!(
+            strikes.0.len(),
+            STRIKE_PEERS,
+            "a tracked peer evicts no one"
+        );
+    }
+
+    #[test]
+    fn strikes_evict_the_oldest_window_when_full() {
+        let t0 = Instant::now();
+        let mut strikes = Strikes::default();
+        // Inserted out of order, so map order can't stand in for age.
+        strikes.strike(peer(0), t0 + ms(10));
+        strikes.strike(peer(1), t0);
+        for n in 2..STRIKE_PEERS {
+            strikes.strike(peer(n), t0 + ms(10 + n as u64));
+        }
+        strikes.strike(peer(1), t0 + ms(500));
+        strikes.strike(peer(STRIKE_PEERS), t0 + ms(1000));
+        assert!(
+            !strikes.0.contains_key(&peer(1)),
+            "oldest window start goes"
+        );
+        assert!(strikes.0.contains_key(&peer(0)));
+        assert_eq!(strikes.0[&peer(STRIKE_PEERS)], (t0 + ms(1000), 1));
+        strikes.strike(peer(STRIKE_PEERS + 1), t0 + ms(1001));
+        assert!(!strikes.0.contains_key(&peer(0)));
+    }
+}
