@@ -12,7 +12,8 @@ use proptest::prelude::*;
 
 mod airplay_device_level {
     use audiosync_core::volume::{
-        RowMove, device_level, device_level_for_db, own_for_device_level, row_level, row_move,
+        ReadBack, RowMove, device_level, device_level_for_db, level_set_on_speaker,
+        own_for_device_level, row_level, row_move,
     };
 
     /// The row a speaker at own volume `own` shows through `zone` and `master`.
@@ -113,6 +114,48 @@ mod airplay_device_level {
         assert_eq!(row_level(level), 20.0);
         assert_eq!(own_for_device_level(level, 100.0, 63.0), Some(32.0));
         assert_eq!(own_for_device_level(80.0, 100.0, 63.0), Some(100.0));
+        assert_eq!(
+            level_set_on_speaker(-24.0, 50.0, 31.5, 100.0, 63.0),
+            Some(RowMove {
+                own_position: 32.0,
+                device_level: 20.0
+            })
+        );
+        // Zone × master at 0 keeps the own volume and still shows the level.
+        assert_eq!(
+            level_set_on_speaker(-24.0, 50.0, 0.0, 100.0, 0.0).map(|moved| moved.own_position),
+            Some(50.0)
+        );
+        // Own 32 at master 63 already shows row 20.
+        assert_eq!(level_set_on_speaker(-23.9, 32.0, 20.0, 100.0, 63.0), None);
+        assert_eq!(
+            level_set_on_speaker(f64::NAN, 32.0, 20.0, 100.0, 63.0),
+            None
+        );
+        // Own 21 stays, but a row showing 20.6 moves to 21.
+        assert_eq!(
+            level_set_on_speaker(-23.7, 21.0, 20.6, 100.0, 100.0).map(|moved| moved.own_position),
+            Some(21.0)
+        );
+    }
+
+    // covers: S291
+    #[test]
+    fn the_first_reading_near_a_level_sent_is_its_echo_and_the_baseline() {
+        let mut read = ReadBack::default();
+        read.sent(-24.0);
+        assert_eq!(read.echo_of(), Some(-24.0));
+        // The 0.6 dB grid echoes −24 as −24.3: the baseline, no change.
+        assert!(!read.set_on_speaker(-24.3));
+        assert_eq!(read.echo_of(), None);
+        assert!(!read.set_on_speaker(-24.27));
+        assert!(!read.set_on_speaker(f64::NAN));
+        // One remote press away from the baseline is a change and the new baseline.
+        assert!(read.set_on_speaker(-23.7));
+        assert!(!read.set_on_speaker(-23.7));
+        // More than 0.5 dB from a level just sent is a change at once.
+        read.sent(-24.0);
+        assert!(read.set_on_speaker(-23.4));
     }
 }
 

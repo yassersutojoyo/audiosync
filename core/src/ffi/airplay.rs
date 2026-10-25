@@ -104,8 +104,8 @@ use crate::policy::remote::{
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
-    NO_ZONE_POSITION, device_level, device_level_for_db, own_for_device_level,
-    own_position_for_level, row_level, stage_level,
+    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, level_set_on_speaker,
+    own_position_for_level, stage_level,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -452,10 +452,10 @@ struct Added {
     unreadable: bool,
     /// The user drags its own slider, so read-backs are ignored (S271).
     dragging: bool,
-    /// The dB last sent whose echo no reading has given yet (S291).
-    echo_of: Option<f64>,
-    /// The reading that the next ones are compared with (S291).
-    baseline: Option<f64>,
+    /// The echo of the level last sent and the baseline of its reads (S291).
+    read_back: ReadBack,
+    /// The device level last sent, which the host's row shows (S290).
+    level: f64,
     /// A single speaker's session plays: only then is it read (S291).
     playing: bool,
     /// Set when the host added a stereo pair or home theater group.
@@ -489,17 +489,23 @@ impl Added {
             volume_set_at: Some(Instant::now()),
             unreadable: false,
             dragging: false,
-            echo_of: None,
-            baseline: None,
+            read_back: ReadBack::default(),
+            level: 0.0,
             playing: false,
             offset: Duration::ZERO,
         }
     }
 
-    /// Sends `volume`; the first reading near it is its echo (S291).
+    /// The sender got `volume`: the first reading near it is its echo
+    /// (S291), and its device level is the row's (S290).
+    fn sent(&mut self, volume: Volume) {
+        self.read_back.sent(volume.wire_db());
+        self.level = device_level_for_db(volume.wire_db()).unwrap_or(0.0);
+    }
+
+    /// Sends `volume`.
     fn set_volume(&mut self, sender: &Sender, volume: Volume) {
-        self.echo_of = Some(volume.wire_db());
-        self.baseline = None;
+        self.sent(volume);
         match &self.target {
             Some(id) => sender.set_target_volume(id, volume),
             None => sender.set_volume(&self.key, volume),
@@ -896,9 +902,6 @@ fn slider_position(db: f64, zone: f64, master: f64) -> Option<f64> {
 /// within [`VOLUME_SETTLE`] of the set (S271).
 const VOLUME_TOLERANCE_DB: f64 = 0.5;
 
-/// After the echo, a reading this close to the baseline changes nothing (S291).
-const BASELINE_TOLERANCE_DB: f64 = 0.05;
-
 /// How long after the host sets a volume [`VOLUME_TOLERANCE_DB`] applies:
 /// a receiver that rounds to 0.3 dB steps can echo the set within 0.5 dB,
 /// and a remote press later can land that close too (S271).
@@ -1160,30 +1163,16 @@ impl AscAirPlay {
             return;
         };
         let asked = std::mem::take(&mut added.reading);
-        if !asked || added.dragging || !db.is_finite() {
+        if !asked || added.dragging || !added.read_back.set_on_speaker(db) {
             return;
         }
-        if let Some(sent) = added.echo_of.take() {
-            if (db - sent).abs() < VOLUME_TOLERANCE_DB {
-                added.baseline = Some(db);
-                return;
-            }
-        } else if added
-            .baseline
-            .is_some_and(|baseline| (db - baseline).abs() <= BASELINE_TOLERANCE_DB)
-        {
-            return;
-        }
-        added.baseline = Some(db);
-        let Some(level) = device_level_for_db(db) else {
+        let Some(RowMove {
+            own_position: position,
+            device_level: level,
+        }) = level_set_on_speaker(db, added.position, added.level, zone, master)
+        else {
             return;
         };
-        let position = own_for_device_level(level, zone, master).unwrap_or(added.position);
-        let unchanged = position == added.position
-            && row_level(level) == row_level(device_level(position, zone, master));
-        if unchanged {
-            return;
-        }
         added.position = position;
         // The sender keeps the level too, for a reconnect or a target
         // member that starts late (P119, P180); its next read is the echo,
@@ -2488,7 +2477,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                         .map(|(key, counters)| (receiver_id(&key), counters))
                         .collect(),
                 );
-                added.echo_of = Some(initial.wire_db());
+                added.sent(initial);
                 airplay.added.insert(id.to_owned(), added);
                 airplay.remote.forget(id);
                 return true;
@@ -2521,7 +2510,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 Vec::new(),
                 vec![(id.to_owned(), counters)],
             );
-            added.echo_of = Some(initial.wire_db());
+            added.sent(initial);
             airplay.added.insert(id.to_owned(), added);
             airplay.remote.forget(id);
             true
@@ -3771,6 +3760,7 @@ pub unsafe extern "C" fn asc_airplay_input_destroy(input: *mut *mut AscAirPlayIn
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::volume::row_level;
     use std::ffi::CStr;
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::{Duration, Instant};
@@ -5533,6 +5523,35 @@ mod tests {
 
     // covers: S290, S291
     #[test]
+    fn a_reading_that_moves_only_the_row_still_reaches_the_host() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005377";
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x77]));
+        add_for_volume(handle, id, key.clone(), 50.0);
+        let rows = |handle: *mut AscAirPlay| -> Vec<(f64, f64)> {
+            inside(handle)
+                .events
+                .drain(..)
+                .filter_map(|(_, pending)| match pending {
+                    Pending::Volume(_, position, level) => Some((position, row_level(level))),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Level 20.6: own 21, row 20.
+        read_back(handle, &key, -23.82);
+        assert_eq!(rows(handle), vec![(21.0, 20.0)]);
+        read_back(handle, &key, -23.82);
+        assert!(rows(handle).is_empty());
+        // Level 21 keeps own 21 but moves the row to 21.
+        read_back(handle, &key, -23.7);
+        assert_eq!(rows(handle), vec![(21.0, 21.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S290, S291
+    #[test]
     fn a_row_move_on_a_0_6_db_grid_keeps_the_row_until_the_speaker_moves() {
         let mut handle = create_with(quiet);
         let id = "02005E005376";
@@ -5553,7 +5572,7 @@ mod tests {
             ));
         }
         assert_eq!(inside(handle).added[id].position, 32.0);
-        assert_eq!(inside(handle).added[id].echo_of, Some(-24.0));
+        assert_eq!(inside(handle).added[id].read_back.echo_of(), Some(-24.0));
         // The television reads −24 back on its 0.6 dB grid: no event.
         read_back(handle, &key, -24.200_001);
         read_back(handle, &key, -24.200_001);
@@ -5574,7 +5593,7 @@ mod tests {
         // SAFETY: as above.
         unsafe { asc_airplay_set_master(handle, 50.0) };
         assert_eq!(inside(handle).added[id].position, 34.0);
-        let sent = inside(handle).added[id].echo_of.expect("sent");
+        let sent = inside(handle).added[id].read_back.echo_of().expect("sent");
         assert!((sent - (-30.0 + 0.3 * 17.0)).abs() < 1e-9, "{sent}");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
@@ -6592,7 +6611,7 @@ mod tests {
         added.playing = true;
         // As a real add sends it: the first read near it is its echo (S291).
         let zone = zone_in(&inside(handle).zones, id);
-        added.echo_of = Some(speaker_volume(position, zone, inside(handle).master).wire_db());
+        added.sent(speaker_volume(position, zone, inside(handle).master));
         inside(handle).added.insert(id.to_owned(), added);
     }
 

@@ -181,6 +181,75 @@ pub fn own_for_device_level(level: f64, zone_position: f64, master_position: f64
     own_position_for_level(level / MAX_POSITION, zone_position, master_position)
 }
 
+/// What a level set on the speaker itself and read back as `db` sets
+/// (S290): the device level D and the own volume D ÷ k, or `own_position`
+/// with k at 0. None when `db` isn't finite or neither the own volume nor
+/// the row, which shows `shown_level` now, changes.
+pub fn level_set_on_speaker(
+    db: f64,
+    own_position: f64,
+    shown_level: f64,
+    zone_position: f64,
+    master_position: f64,
+) -> Option<RowMove> {
+    let level = device_level_for_db(db)?;
+    let own = own_for_device_level(level, zone_position, master_position).unwrap_or(own_position);
+    let unchanged = own == own_position && row_level(level) == row_level(shown_level);
+    (!unchanged).then_some(RowMove {
+        own_position: own,
+        device_level: level,
+    })
+}
+
+/// The first reading this close to a level sent is the speaker's echo (S291).
+pub const ECHO_TOLERANCE_DB: f64 = 0.5;
+
+/// After the echo, a reading this close to the baseline changes nothing (S291).
+pub const BASELINE_TOLERANCE_DB: f64 = 0.05;
+
+/// The echo baseline of one speaker's volume reads (S291).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ReadBack {
+    echo_of: Option<f64>,
+    baseline: Option<f64>,
+}
+
+impl ReadBack {
+    /// The host sent the speaker `db`: the first reading near it is its echo.
+    pub fn sent(&mut self, db: f64) {
+        self.echo_of = Some(db);
+        self.baseline = None;
+    }
+
+    /// The dB sent whose echo no reading has given yet.
+    pub fn echo_of(&self) -> Option<f64> {
+        self.echo_of
+    }
+
+    /// Whether reading `db` is a level set on the speaker: not the echo of
+    /// a level sent and not within [`BASELINE_TOLERANCE_DB`] of the
+    /// baseline. Either way it becomes the baseline. A reading that isn't
+    /// finite is no change and leaves the state as it is.
+    pub fn set_on_speaker(&mut self, db: f64) -> bool {
+        if !db.is_finite() {
+            return false;
+        }
+        if let Some(sent) = self.echo_of.take() {
+            if (db - sent).abs() < ECHO_TOLERANCE_DB {
+                self.baseline = Some(db);
+                return false;
+            }
+        } else if self
+            .baseline
+            .is_some_and(|baseline| (db - baseline).abs() <= BASELINE_TOLERANCE_DB)
+        {
+            return false;
+        }
+        self.baseline = Some(db);
+        true
+    }
+}
+
 /// Migrates a legacy linear percentage (0…150) to a position:
 /// `p(pct / 100)`, clamped, so 3.49 % becomes 32.68 and anything from 100 %
 /// up becomes 100 (S75).
