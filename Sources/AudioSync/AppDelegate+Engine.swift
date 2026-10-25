@@ -155,6 +155,33 @@ extension AppDelegate {
         }
     }
 
+    /// An app of the "only these" mix quit: judge it `mixQuitRecheck` later,
+    /// once macOS's app list has caught up (S164), unless the user picked
+    /// another source meanwhile.
+    func recheckMixQuit(_ bundleID: String) {
+        let mix = audioSource
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
+            guard let self, audioSource == mix else { return }
+            DebugTrace.log("[AudioSync] mix app quit: \(bundleID), judged again")
+            if let quit = AppLifecycle.sourceQuit(.mixAppGone(bundleID: bundleID, streaming: engine.isRunning),
+                                                  source: mix, setting: whenSourceQuits) {
+                sourceAppQuit(quit.bundleID, quit.action)
+            }
+        }
+    }
+
+    /// The mix's capture found none of its apps and stopped: rebuild it
+    /// `mixQuitRecheck` later, which goes on with the apps still running or
+    /// fails as their quit (S227 e). A stop, start or source change by the
+    /// user meanwhile wins.
+    func rebuildMixLater() {
+        let mix = audioSource
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
+            guard let self, audioSource == mix, !engine.isRunning, !userStopped else { return }
+            startEngine(origin: .automatic, rebuild: true)
+        }
+    }
+
     /// Streaming off: the session stops, and AudioSync's own sender's
     /// speakers leave (`syncNativeSpeakers`); their switches stay as they are.
     func stopEngine() {

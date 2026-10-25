@@ -5093,6 +5093,23 @@ do {
           "mix quit: an app of a mix quitting is never judged from the app list of the turn it quit in (S164)",
           "\(mixQuit(.terminated(bundleID: "com.apple.TextEdit", streaming: true))), "
               + mixQuit(.captureLost(.appNotRunning("com.spotify.client"))))
+    let textEditGone = Report.mixAppGone(bundleID: "com.apple.TextEdit", streaming: true)
+    check(mixQuit(textEditGone, running: ["com.apple.Safari"]) == "keep"
+            && mixQuit(textEditGone) == "switchToSystem com.apple.TextEdit"
+            && mixQuit(.mixAppGone(bundleID: "com.apple.TextEdit", streaming: false)) == "keep",
+          "mix quit: judged again a moment later, the mix goes on while another of its apps runs, and acts as set once none does",
+          "\(mixQuit(textEditGone, running: ["com.apple.Safari"])), \(mixQuit(textEditGone))")
+    let quitWhileStreaming = Report.terminated(bundleID: "com.apple.TextEdit", streaming: true)
+    check(AppLifecycle.waitsForRecheck(quitWhileStreaming, source: mix3)
+            && AppLifecycle.waitsForRecheck(.captureLost(.appNotRunning("com.spotify.client")), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: "com.apple.TextEdit", streaming: false), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: "com.apple.Music", streaming: true), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: nil, streaming: true), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.captureLost(.inputDisconnected), source: mix3)
+            && !AppLifecycle.waitsForRecheck(quitWhileStreaming, source: .app(bundleID: "com.apple.TextEdit"))
+            && !AppLifecycle.waitsForRecheck(quitWhileStreaming,
+                                             source: .mixed(.allExcept, bundleIDs: ["com.apple.TextEdit", "com.apple.Safari"])),
+          "mix quit: only an app of an only-these mix quitting while it streams, or that mix's capture losing its apps, waits")
     // After a switch the source is the whole system; after a stop nothing streams.
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
