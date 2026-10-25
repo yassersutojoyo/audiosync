@@ -62,6 +62,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Web Remote: wrong pairing codes sent while no code is valid no longer lock pairing, and a paired phone that hasn't been used for 90 days is forgotten and has to pair again.
 - An AirPlay 2 speaker set to ask for a code every time no longer connects by itself, on the Mac and on Windows. Auto-connect leaves it off, and so does the next launch when it was on before; its row says Asks for a code every time. Turning it on yourself still asks for the code. Speakers that ask for a code only once, or for a password, auto-connect as before.
 - AirPlay speakers can now wait up to 20 seconds instead of 3, so a long Cast offset or a large Calibrate All result plays in full instead of being cut short.
+- An AirPlay speaker's row shows the volume the speaker itself is at, on the Mac and on Windows, so a speaker whose display follows AirPlay's usual volume scale, such as a Samsung TV, shows the same number as AudioSync, whichever side you change it on. While the speaker plays, a change on it shows in its row within about a second. AudioSync still keeps each speaker's own volume under its zone and the master, and a preset saves that own volume as before. Moving a row past what the zone and the master allow stops at the loudest they allow.
 - The arrow keys on a Google Cast speaker's volume slider now move by the step the speaker reports, if it reports one.
 - On the Mac, a Bluetooth speaker gets the speaker icon instead of headphones, unless its name says it's headphones, such as AirPods or a name with "headphones", "headset", "earbuds", "earphones" or "buds" in it. Calibration goes by the same names, so a Bluetooth speaker that macOS reports as headphones, such as a soundcore Select 4 Go, is still measured.
 - A speaker's name tooltip in the main window starts with its full name, on the Mac and on Windows, so a long name cut short in the row can still be read. On Windows the tooltip wraps instead of cutting the name off, and on the Mac the menu bar panel row has the full name as its tooltip.
@@ -71,6 +72,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, Use Port in the Web Remote window is only available for a valid port that differs from the current one, or for the same port again after it couldn't be used.
 - With AirPlay 2 on, a speaker that asks for a PIN starts playing over the same connection once you enter it. A wrong PIN is asked for again, and after repeated wrong ones the next try waits a little. A speaker that turned its pairing down and is switched on again without a new PIN goes off with a notice.
 - On the Mac, with `AUDIOSYNC_DEBUG=1`, the debug log notes each time a local output's audio arrives late, with the output's name.
+- With `AUDIOSYNC_DEBUG=1`, the debug log says why a speaker asks for its PIN again, on the Mac and on Windows.
 - On the Mac, VoiceOver reads the source menu as Audio Source and the equalizer's menu as Curve, each with what's chosen as its value.
 - For testing, with `AUDIOSYNC_DEBUG=1`: `AUDIOSYNC_NO_AUTO_CONNECT=1` keeps every speaker off for that launch and saves nothing, `AUDIOSYNC_WEB_REMOTE=1` turns the Web Remote on for one run, the debug log shows each Web Remote pairing code, and on the Mac it says why each session stopped. On the Mac and on Windows.
 
@@ -106,6 +108,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay 2 speaker or a Google Cast group can no longer make AudioSync hold an endless amount of data. Past a fixed limit, AudioSync closes that connection.
 - The connection an AirPlay speaker's remote buttons use closes after a wrong code, and a device that keeps trying is held off for a few seconds.
 - On the Mac, the Web Remote's pairing code and a wrong-code lock stay when the Mac's network name changes, instead of starting over.
+- An AirPlay 2 speaker set to ask for a code every time that was on when you quit no longer gets paired by auto-connect when it asks again, on the Mac and on Windows. It goes off each time it asks without playing, not only when it first shows up. While its code prompt is open, AudioSync starts no second pairing and plays nothing to it, and on Windows a speaker you turn on while its pairing runs goes off again if the pairing fails or you cancel it.
+- On the Mac, under All System Audio, a paused player's track and cover stay on the AirPlay speakers until another player plays, the player stops or it quits.
+- On the Mac, picking the source or input channels that are already playing clears the "Couldn't start" notice and changes nothing else.
 
 ### Windows and Linux (preview, not released yet)
 
