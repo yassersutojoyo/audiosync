@@ -4468,11 +4468,12 @@ pub mod tests {
     fn a_homekit_paired_speaker_never_shows_its_raop_record() {
         use crate::audio::pairings::tests::homekit;
 
-        let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 12]);
+        let id = 12;
+        let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
         let airplay = ServiceRecord {
             kind: ServiceKind::AirPlay,
             instance: "Den".to_owned(),
-            host: "speaker-12.local".to_owned(),
+            host: format!("speaker-{id}.local"),
             port: 7000,
             txt: vec![
                 format!("deviceid={device_id}").into_bytes(),
@@ -4484,7 +4485,7 @@ pub mod tests {
         let forged_raop = ServiceRecord {
             kind: ServiceKind::Raop,
             instance: format!("{device_id}@Den"),
-            host: "elsewhere.local".to_owned(),
+            host: format!("forger-{id}.local"),
             port: 5000,
             txt: vec![b"et=0".to_vec(), b"pw=true".to_vec()],
             addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66)))],
