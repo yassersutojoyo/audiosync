@@ -143,7 +143,8 @@ enum AppLifecycle {
     }
 
     /// `bundleID` as `source` stores it when it names one of the source's
-    /// apps, else as given: macOS compares bundle IDs regardless of letter case.
+    /// apps in any letter case, else as given; a precaution in case the running app
+    /// reports a spelling that differs from the saved one.
     static func sourceSpelling(of bundleID: String, in source: AudioSource) -> String {
         source.capturedApps.first { $0.caseInsensitiveCompare(bundleID) == .orderedSame } ?? bundleID
     }
