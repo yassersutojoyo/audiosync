@@ -5682,9 +5682,10 @@ pub mod tests {
         assert!(!airplay.credentials_turned_down.contains(&id));
     }
 
-    // An impostor plays on credentials it never had to prove: AirPlay 1
-    // checks no AirPlay 2 credentials, and legacy ones without the
-    // receiver's key skip the signature check (P56).
+    // An impostor plays on legacy credentials without the receiver's key,
+    // which skip the signature check (P56). AirPlay 2 credentials pin the
+    // speaker to AirPlay 2, whose pair-verify proves them, so playing there
+    // clears the mark.
     #[test]
     fn a_session_that_proves_nothing_leaves_turned_down_credentials_marked() {
         use crate::audio::pairings::FILE_NAME;
@@ -5723,7 +5724,7 @@ pub mod tests {
         }
         airplay.poll();
         assert!(
-            airplay
+            !airplay
                 .credentials_turned_down
                 .contains(&id_of(&homekit_only))
         );
