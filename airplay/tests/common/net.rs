@@ -24,7 +24,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::input::InputWriter;
-use audiosync_airplay::ptp::PtpPorts;
+use audiosync_airplay::ptp::{PtpPorts, service_bind_ip};
 use audiosync_airplay::rtp::{
     HEADER_BYTES, ResendRequest, RtpHeader, SyncPacket, TYPE_RESEND_REPLY, TimingPacket,
 };
@@ -77,12 +77,18 @@ pub fn free_ptp_ports() -> PtpPorts {
     PtpPorts { event, general }
 }
 
+/// The IPv4 address the sender's PTP service binds, which the port checks
+/// and holders use too.
+pub fn ptp_bind_v4() -> IpAddr {
+    service_bind_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
 /// One family after the other, since a dual-stack IPv6 bind takes the IPv4 port too.
 fn port_free(port: u16) -> bool {
-    if UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_err() {
+    if UdpSocket::bind((ptp_bind_v4(), port)).is_err() {
         return false;
     }
-    match UdpSocket::bind((Ipv6Addr::UNSPECIFIED, port)) {
+    match UdpSocket::bind((service_bind_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)), port)) {
         Ok(_) => true,
         Err(error) => !matches!(
             error.kind(),

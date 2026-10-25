@@ -676,19 +676,16 @@ pub(crate) struct PtpIo {
 }
 
 impl PtpIo {
-    /// Binds both ports on every address of `family`'s kind; either bind
+    /// Binds both ports on [`crate::ptp::service_bind_ip`]; either bind
     /// failing makes PTP unavailable (P158).
     pub(crate) fn open(
         family: IpAddr,
         ports: crate::ptp::PtpPorts,
         notify: impl Notify,
     ) -> io::Result<PtpIo> {
-        let any = match family {
-            IpAddr::V4(_) => IpAddr::from([0u8; 4]),
-            IpAddr::V6(_) => IpAddr::from([0u16; 8]),
-        };
-        let event = UdpSocket::bind(SocketAddr::new(any, ports.event))?;
-        let general = UdpSocket::bind(SocketAddr::new(any, ports.general))?;
+        let ip = crate::ptp::service_bind_ip(family);
+        let event = UdpSocket::bind(SocketAddr::new(ip, ports.event))?;
+        let general = UdpSocket::bind(SocketAddr::new(ip, ports.general))?;
         event.set_read_timeout(Some(UDP_BACKSTOP))?;
         for socket in [&event, &general] {
             socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;

@@ -20,7 +20,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 
 use common::key;
-use common::net::{Behavior, Events, HostAudio, NetReceiver, serial};
+use common::net::{Behavior, Events, HostAudio, NetReceiver, ptp_bind_v4, serial};
 
 const PCM_TXT: &[&str] = &[
     "txtvers=1",
@@ -321,7 +321,7 @@ fn ap2_switch_off_silent() {
     let free: Vec<u16> = PTP_PORTS
         .iter()
         .copied()
-        .filter(|&port| UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok())
+        .filter(|&port| UdpSocket::bind((ptp_bind_v4(), port)).is_ok())
         .collect();
     if free.len() < PTP_PORTS.len() {
         eprintln!("note: the PTP port bind check runs only for {free:?}; the host holds the rest");
@@ -339,7 +339,7 @@ fn ap2_switch_off_silent() {
     );
     for port in free {
         assert!(
-            UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok(),
+            UdpSocket::bind((ptp_bind_v4(), port)).is_ok(),
             "port {port} is bound"
         );
     }
