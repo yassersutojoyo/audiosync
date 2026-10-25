@@ -805,6 +805,63 @@ fn teardown_during_the_stream_setup_still_tears_the_stream_down() {
     assert_eq!(rig.events.last(), Some(&Ap2Event::Closed));
 }
 
+// covers: P129
+#[test]
+fn teardown_during_the_session_setup_tears_down_the_session_it_made() {
+    let mut fake = FakeAp2::new();
+    fake.hold = Some("SETUP session".to_owned());
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert_eq!(rig.keys().last(), Some(&"SETUP session"));
+    let now = rig.now;
+    rig.session.teardown(now);
+    rig.pump();
+    assert_eq!(rig.closes, 0, "closed with the session SETUP unanswered");
+    rig.release();
+    let keys = rig.keys();
+    assert_eq!(keys[keys.len() - 2..], ["SETUP session", "TEARDOWN"]);
+    let n = rig.fake.requests.len();
+    assert_eq!(
+        read_value(&rig.fake.requests[n - 1].0.body),
+        Some(dict(&[]))
+    );
+    assert_eq!(rig.events.last(), Some(&Ap2Event::Closed));
+    assert!(rig.failure().is_none());
+    assert!(rig.event_connects.is_empty());
+}
+
+// covers: P129
+#[test]
+fn teardown_during_an_unanswered_session_setup_closes_after_two_seconds() {
+    let mut fake = FakeAp2::new();
+    fake.hold = Some("SETUP session".to_owned());
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    let now = rig.now;
+    rig.session.teardown(now);
+    rig.advance(Duration::from_millis(1900));
+    assert_eq!(rig.closes, 0);
+    rig.advance(Duration::from_millis(200));
+    assert_eq!(rig.closes, 1);
+    assert_eq!(rig.keys().last(), Some(&"SETUP session"));
+    assert_eq!(rig.events.last(), Some(&Ap2Event::Closed));
+}
+
+// covers: P129
+#[test]
+fn teardown_during_a_refused_session_setup_just_closes() {
+    let mut fake = FakeAp2::new();
+    fake.hold = Some("SETUP session".to_owned());
+    fake.status.insert("SETUP session".to_owned(), 500);
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    let now = rig.now;
+    rig.session.teardown(now);
+    rig.pump();
+    rig.release();
+    assert_eq!(rig.keys().last(), Some(&"SETUP session"));
+    assert_eq!(rig.closes, 1);
+    assert_eq!(rig.events.last(), Some(&Ap2Event::Closed));
+    assert!(rig.failure().is_none());
+}
+
 // covers: P42, P106
 #[test]
 fn volume_set_before_the_startup_volume_goes_out_once() {

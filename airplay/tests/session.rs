@@ -906,6 +906,52 @@ fn rtsp_teardown_sends_the_session_and_closes_after_the_answer_or_2_s() {
     assert!(!link.keys().contains(&"TEARDOWN".to_owned()));
 }
 
+// covers: P129
+#[test]
+fn a_stop_during_setup_tears_down_the_session_setup_made() {
+    let mut receiver = FakeReceiver::new();
+    receiver.hold = Some("SETUP".to_owned());
+    let mut link = Link::new(config(), receiver);
+    link.connect();
+    link.session.teardown(link.now);
+    link.pump();
+    assert!(!link.closed, "closed with SETUP unanswered");
+    link.release();
+    assert_eq!(link.keys().last().map(String::as_str), Some("TEARDOWN"));
+    assert_eq!(link.last("TEARDOWN").headers.get("Session"), Some("1"));
+    assert!(link.closed);
+    assert_eq!(link.events.last(), Some(&SessionEvent::Closed));
+    assert!(link.failure().is_none());
+
+    // No answer: closed 2 s after the call, with nothing to tear down.
+    let mut receiver = FakeReceiver::new();
+    receiver.silent = Some("SETUP".to_owned());
+    let mut link = Link::new(config(), receiver);
+    link.connect();
+    link.session.teardown(link.now);
+    link.pump();
+    link.advance(Duration::from_millis(1999));
+    assert!(!link.closed);
+    link.advance(Duration::from_millis(1));
+    assert!(link.closed);
+    assert!(!link.keys().contains(&"TEARDOWN".to_owned()));
+    assert!(link.failure().is_none());
+
+    // A refused SETUP made no session: the connection just closes.
+    let mut receiver = FakeReceiver::new();
+    receiver.hold = Some("SETUP".to_owned());
+    receiver.status.insert("SETUP".to_owned(), 500);
+    let mut link = Link::new(config(), receiver);
+    link.connect();
+    link.session.teardown(link.now);
+    link.pump();
+    link.release();
+    assert!(link.closed);
+    assert!(!link.keys().contains(&"TEARDOWN".to_owned()));
+    assert_eq!(link.events.last(), Some(&SessionEvent::Closed));
+    assert!(link.failure().is_none());
+}
+
 fn password_config(password: &str) -> audiosync_airplay::session::SessionConfig {
     let mut config = config();
     config.password = Some(Secret::from(password));
