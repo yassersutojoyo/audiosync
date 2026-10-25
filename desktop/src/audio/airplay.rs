@@ -5524,6 +5524,59 @@ pub mod tests {
         assert!(!airplay.credentials_turned_down.contains(&id));
     }
 
+    // An impostor plays on credentials it never had to prove: AirPlay 1
+    // checks no AirPlay 2 credentials, and legacy ones without the
+    // receiver's key skip the signature check (P56).
+    #[test]
+    fn a_session_that_proves_nothing_leaves_turned_down_credentials_marked() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay-unproven-plays").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path, sealer());
+        store.open_airplay2();
+        let homekit_only = device(6, "Den TV", OPEN_TXT);
+        let without_key = device(7, "Study", OPEN_TXT);
+        let with_key = device(8, "Loft", OPEN_TXT);
+        store
+            .insert_homekit(&id_of(&homekit_only), homekit(0x33))
+            .expect("saved");
+        store
+            .insert(&id_of(&without_key), credentials("0123456789ABCDEF", 3))
+            .expect("saved");
+        let proven = credentials("FEDCBA9876543210", 4).with_receiver_key([9; 32]);
+        store.insert(&id_of(&with_key), proven).expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        let tvs = [&homekit_only, &without_key, &with_key];
+        for tv in tvs {
+            fake.appear(tv);
+        }
+        airplay.poll();
+        for tv in tvs {
+            assert_eq!(airplay.set_enabled(&id_of(tv), true), Ok(()));
+        }
+        airplay.set_streaming(true);
+        airplay.poll();
+        for tv in tvs {
+            airplay.credentials_turned_down.insert(id_of(tv));
+            fake.state(tv, SpeakerState::Playing);
+        }
+        airplay.poll();
+        assert!(
+            airplay
+                .credentials_turned_down
+                .contains(&id_of(&homekit_only))
+        );
+        assert!(
+            airplay
+                .credentials_turned_down
+                .contains(&id_of(&without_key))
+        );
+        assert!(!airplay.credentials_turned_down.contains(&id_of(&with_key)));
+    }
+
     #[test]
     fn a_tv_that_fails_its_signature_check_goes_off_and_keeps_its_credentials() {
         let fake = FakeAirPlay::new();
