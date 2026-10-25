@@ -531,7 +531,7 @@ struct ExplicitPause {
     /// A reading that started at `readAt`. A paused stream resumes once a
     /// reading started `staleReading` after the pause shows anything but the
     /// same player paused: it plays, another player counts, or none does.
-    mutating func read(app: String?, playing: Bool?, at readAt: Date) -> Step {
+    mutating func read(app: String?, playing: Bool?, at readAt: Date, sending: Bool) -> Step {
         guard let pausedAt = pausedAt, readAt.timeIntervalSince(pausedAt) >= Self.staleReading else { return .nothing }
         if let app, app == pausedApp, playing == false { return .nothing }
         return clear()

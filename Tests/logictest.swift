@@ -3352,28 +3352,62 @@ do {
             && unknown.toggled(app: spotify, playing: false, at: t0) == .nothing && !unknown.isPaused,
           "explicit pause: a play-pause to a player read as paused, or not read, sends no flush")
 
-    var readings = ExplicitPause()
-    let silentRun = [(spotify, true), (spotify, false), (music, false)] as [(String, Bool)]
-    for (i, (app, playing)) in silentRun.enumerated() {
-        _ = readings.read(app: app, playing: playing, at: t0.addingTimeInterval(Double(i) * 10))
-    }
-    check(readings.read(app: nil, playing: nil, at: later) == .nothing && !readings.isPaused,
-          "explicit pause: readings alone, a player going quiet included, never pause")
+    var own = ExplicitPause()
+    check(own.read(app: spotify, playing: true, at: t0, sending: true) == .nothing
+            && own.read(app: spotify, playing: false, at: t0, sending: true) == .pause && own.isPaused,
+          "explicit pause: the player going from playing to paused pauses the speakers")
+    check(own.read(app: spotify, playing: false, at: later.addingTimeInterval(10), sending: true) == .nothing
+            && own.isPaused,
+          "explicit pause: the player read as paused again does nothing")
+    var ownResume = ExplicitPause()
+    _ = ownResume.read(app: spotify, playing: true, at: t0, sending: true)
+    _ = ownResume.read(app: spotify, playing: false, at: t0, sending: true)
+    check(ownResume.read(app: spotify, playing: true, at: t0.addingTimeInterval(0.5), sending: true) == .resume
+            && !ownResume.isPaused,
+          "explicit pause: the player going from paused to playing resumes at once")
+
+    var first = ExplicitPause()
+    check(first.read(app: spotify, playing: false, at: t0, sending: true) == .nothing,
+          "explicit pause: the first reading is no transition")
+    _ = first.read(app: spotify, playing: true, at: t0, sending: true)
+    check(first.read(app: nil, playing: nil, at: t0, sending: true) == .nothing
+            && first.read(app: spotify, playing: nil, at: t0, sending: true) == .nothing
+            && first.read(app: spotify, playing: false, at: t0, sending: true) == .nothing && !first.isPaused,
+          "explicit pause: an unknown state or a player that quits never pauses")
+
+    var switched = ExplicitPause()
+    _ = switched.read(app: spotify, playing: true, at: t0, sending: true)
+    check(switched.read(app: music, playing: false, at: t0, sending: true) == .nothing,
+          "explicit pause: a switch to another player that was paused is no transition")
+    _ = switched.read(app: music, playing: true, at: t0, sending: true)
+    check(switched.read(app: music, playing: false, at: t0, sending: true) == .pause,
+          "explicit pause: the active player's own pause counts after a switch")
+
+    var idle = ExplicitPause()
+    _ = idle.read(app: spotify, playing: true, at: t0, sending: false)
+    check(idle.read(app: spotify, playing: false, at: t0, sending: false) == .nothing && !idle.isPaused,
+          "explicit pause: a player pausing while no speaker plays never pauses")
+
+    var ownHeard = ExplicitPause()
+    _ = ownHeard.read(app: spotify, playing: true, at: t0, sending: true)
+    _ = ownHeard.read(app: spotify, playing: false, at: t0, sending: true)
+    check(ownHeard.heard(sound: 1.0, at: later) == .nothing && ownHeard.heard(sound: 1.25, at: later) == .resume,
+          "explicit pause: sound still resumes a pause the player took")
 
     var stale = pausedAt(t0)
     let soon = t0.addingTimeInterval(ExplicitPause.staleReading - 0.01)
-    check(stale.read(app: spotify, playing: true, at: soon) == .nothing
-            && stale.read(app: nil, playing: nil, at: soon) == .nothing && stale.isPaused,
+    check(stale.read(app: spotify, playing: true, at: soon, sending: true) == .nothing
+            && stale.read(app: nil, playing: nil, at: soon, sending: true) == .nothing && stale.isPaused,
           "explicit pause: a reading that may predate the player's own pause keeps the pause")
-    check(stale.read(app: spotify, playing: false, at: later) == .nothing && stale.isPaused,
+    check(stale.read(app: spotify, playing: false, at: later, sending: true) == .nothing && stale.isPaused,
           "explicit pause: the player read as paused keeps the pause")
-    check(stale.read(app: spotify, playing: true, at: later) == .resume && !stale.isPaused,
+    check(stale.read(app: spotify, playing: true, at: later, sending: true) == .resume && !stale.isPaused,
           "explicit pause: the player read as playing again resumes")
     var other = pausedAt(t0)
-    check(other.read(app: music, playing: false, at: later) == .resume,
+    check(other.read(app: music, playing: false, at: later, sending: true) == .resume,
           "explicit pause: another player counting resumes")
     var none = pausedAt(t0)
-    check(none.read(app: spotify, playing: nil, at: later) == .resume,
+    check(none.read(app: spotify, playing: nil, at: later, sending: true) == .resume,
           "explicit pause: no reading of the player resumes")
 
     var restart = pausedAt(t0)

@@ -2558,7 +2558,9 @@ impl AirPlaySpeakers {
     /// the paused app paused (P213).
     pub fn set_playback(&mut self, playback: Option<(String, bool)>, now: Instant) {
         self.playback = playback;
-        let step = self.pause.read(playback_reading(&self.playback), now);
+        let step = self
+            .pause
+            .read(playback_reading(&self.playback), now, self.streaming);
         self.apply_pause(step);
     }
 
@@ -6960,6 +6962,7 @@ pub mod tests {
         airplay.set_playback(spotify(true), t0);
         airplay.play_pause_pressed("chrome.exe", true, t0);
         airplay.play_pause_pressed("Spotify.exe", false, t0);
+        airplay.set_playback(None, t0);
         airplay.set_playback(spotify(false), t0);
         airplay.play_pause_pressed("Spotify.exe", true, t0);
         assert_eq!(pause_calls(&fake), []);
@@ -7003,19 +7006,84 @@ pub mod tests {
         );
     }
 
+    fn chrome(playing: bool) -> Option<(String, bool)> {
+        Some(("chrome.exe".to_owned(), playing))
+    }
+
     // covers: P213
     #[test]
-    fn readings_alone_never_pause_the_speakers() {
+    fn the_app_pausing_itself_pauses_the_speakers_once_and_playing_resumes() {
         let fake = FakeAirPlay::new();
         let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        for (i, playing) in [true, false, true, false].into_iter().enumerate() {
-            airplay.set_playback(spotify(playing), t0 + STALE_READING * (i as u32));
-            airplay.poll();
-        }
-        airplay.set_playback(None, t0 + STALE_READING * 5);
+        airplay.set_playback(spotify(true), t0);
         airplay.poll();
         assert_eq!(pause_calls(&fake), []);
+        airplay.set_playback(spotify(false), t0);
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        airplay.set_playback(spotify(false), t0 + STALE_READING * 2);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), [], "the same reading again");
+        airplay.set_playback(spotify(true), t0 + STALE_READING * 3);
+        assert_eq!(pause_calls(&fake), [Call::Resume]);
+    }
+
+    // covers: P213
+    #[test]
+    fn a_first_reading_paused_or_an_app_that_quits_never_pauses_the_speakers() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(false), t0);
+        airplay.set_playback(spotify(true), t0);
+        airplay.set_playback(None, t0);
+        airplay.set_playback(spotify(false), t0);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), []);
+    }
+
+    // covers: P213
+    #[test]
+    fn a_player_switch_follows_the_active_player() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        airplay.set_playback(chrome(false), t0);
+        assert_eq!(pause_calls(&fake), [], "another app that was paused");
+        airplay.set_playback(chrome(true), t0);
+        airplay.set_playback(chrome(false), t0);
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+    }
+
+    // covers: P213
+    #[test]
+    fn the_app_pausing_while_nothing_streams_never_pauses_the_speakers() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_streaming(false);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        airplay.set_playback(spotify(false), t0);
+        airplay.set_streaming(true);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), []);
+    }
+
+    // covers: P213
+    #[test]
+    fn sound_in_the_capture_resumes_a_pause_the_app_took() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        airplay.set_playback(spotify(false), t0);
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        let later = t0 + STALE_READING;
+        airplay.heard(1.0, later);
+        assert_eq!(pause_calls(&fake), []);
+        airplay.heard(1.25, later);
+        assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
     // covers: P213

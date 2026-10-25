@@ -245,7 +245,8 @@ extension AppDelegate {
     /// A reading of the players that started at `startedAt` (P213).
     func nowPlayingRead(startedAt: Date) {
         let playback = controlledPlayback
-        nativeAirPlay?.readPause(app: playback.app, playing: playback.playing, startedAt: startedAt)
+        nativeAirPlay?.readPause(app: playback.app, playing: playback.playing, startedAt: startedAt,
+                                 sending: sendsTrackInfo)
     }
 
     /// A new sender knows nothing of what plays: send everything again.

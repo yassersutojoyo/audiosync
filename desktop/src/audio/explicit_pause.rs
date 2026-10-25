@@ -83,7 +83,7 @@ impl ExplicitPause {
     /// A now-playing reading taken at `read_at`. A paused stream resumes
     /// once a reading taken [`STALE_READING`] after the pause shows anything
     /// but the same app paused: the app plays, another one counts, or none.
-    pub fn read(&mut self, playback: Option<(&str, bool)>, read_at: Instant) -> Step {
+    pub fn read(&mut self, playback: Option<(&str, bool)>, read_at: Instant, _streaming: bool) -> Step {
         let Some(paused) = &self.paused else {
             return Step::Nothing;
         };
@@ -140,6 +140,7 @@ mod tests {
     use super::*;
 
     const SPOTIFY: &str = "Spotify.exe";
+    const CHROME: &str = "chrome.exe";
 
     fn paused_at(t0: Instant) -> ExplicitPause {
         let mut pause = ExplicitPause::default();
@@ -178,17 +179,76 @@ mod tests {
 
     // covers: P213
     #[test]
-    fn readings_alone_never_pause() {
+    fn the_app_going_from_playing_to_paused_pauses_once() {
         let t0 = Instant::now();
         let mut pause = ExplicitPause::default();
-        for (i, reading) in [Some((SPOTIFY, true)), Some((SPOTIFY, false)), None]
-            .into_iter()
-            .enumerate()
-        {
-            let at = t0 + STALE_READING * (i as u32 + 1);
-            assert_eq!(pause.read(reading, at), Step::Nothing);
-        }
+        assert_eq!(pause.read(Some((SPOTIFY, true)), t0, true), Step::Nothing);
+        assert_eq!(pause.read(Some((SPOTIFY, false)), t0, true), Step::Pause);
+        assert!(pause.is_paused());
+        let later = t0 + STALE_READING * 2;
+        assert_eq!(pause.read(Some((SPOTIFY, false)), later, true), Step::Nothing);
+        assert!(pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn the_app_going_from_paused_to_playing_resumes_at_once() {
+        let t0 = Instant::now();
+        let mut pause = ExplicitPause::default();
+        pause.read(Some((SPOTIFY, true)), t0, true);
+        assert_eq!(pause.read(Some((SPOTIFY, false)), t0, true), Step::Pause);
+        let soon = t0 + Duration::from_millis(500);
+        assert_eq!(pause.read(Some((SPOTIFY, true)), soon, true), Step::Resume);
         assert!(!pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn a_first_reading_or_one_after_an_unknown_state_is_no_transition() {
+        let t0 = Instant::now();
+        let mut pause = ExplicitPause::default();
+        assert_eq!(pause.read(Some((SPOTIFY, false)), t0, true), Step::Nothing);
+        pause.read(Some((SPOTIFY, true)), t0, true);
+        assert_eq!(pause.read(None, t0, true), Step::Nothing, "the app quit");
+        assert_eq!(pause.read(Some((SPOTIFY, false)), t0, true), Step::Nothing);
+        assert!(!pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn a_player_switch_follows_the_active_player() {
+        let t0 = Instant::now();
+        let mut pause = ExplicitPause::default();
+        pause.read(Some((SPOTIFY, true)), t0, true);
+        assert_eq!(
+            pause.read(Some((CHROME, false)), t0, true),
+            Step::Nothing,
+            "another app counts, already paused"
+        );
+        pause.read(Some((CHROME, true)), t0, true);
+        assert_eq!(pause.read(Some((CHROME, false)), t0, true), Step::Pause);
+    }
+
+    // covers: P213
+    #[test]
+    fn a_transition_while_nothing_streams_never_pauses() {
+        let t0 = Instant::now();
+        let mut pause = ExplicitPause::default();
+        pause.read(Some((SPOTIFY, true)), t0, false);
+        assert_eq!(pause.read(Some((SPOTIFY, false)), t0, false), Step::Nothing);
+        assert!(!pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn sound_still_resumes_a_pause_the_app_took() {
+        let t0 = Instant::now();
+        let mut pause = ExplicitPause::default();
+        pause.read(Some((SPOTIFY, true)), t0, true);
+        assert_eq!(pause.read(Some((SPOTIFY, false)), t0, true), Step::Pause);
+        let later = t0 + STALE_READING;
+        assert_eq!(pause.heard(1.0, later), Step::Nothing);
+        assert_eq!(pause.heard(1.25, later), Step::Resume);
     }
 
     // covers: P213
@@ -197,7 +257,7 @@ mod tests {
         let t0 = Instant::now();
         let mut pause = paused_at(t0);
         assert_eq!(
-            pause.read(Some((SPOTIFY, false)), t0 + STALE_READING * 4),
+            pause.read(Some((SPOTIFY, false)), t0 + STALE_READING * 4, true),
             Step::Nothing
         );
         assert!(pause.is_paused());
@@ -209,8 +269,8 @@ mod tests {
         let t0 = Instant::now();
         let mut pause = paused_at(t0);
         let soon = t0 + STALE_READING - Duration::from_millis(1);
-        assert_eq!(pause.read(Some((SPOTIFY, true)), soon), Step::Nothing);
-        assert_eq!(pause.read(None, soon), Step::Nothing);
+        assert_eq!(pause.read(Some((SPOTIFY, true)), soon, true), Step::Nothing);
+        assert_eq!(pause.read(None, soon, true), Step::Nothing);
         assert!(pause.is_paused());
     }
 
@@ -220,7 +280,7 @@ mod tests {
         let t0 = Instant::now();
         let mut pause = paused_at(t0);
         assert_eq!(
-            pause.read(Some((SPOTIFY, true)), t0 + STALE_READING),
+            pause.read(Some((SPOTIFY, true)), t0 + STALE_READING, true),
             Step::Resume
         );
         assert!(!pause.is_paused());
@@ -232,9 +292,9 @@ mod tests {
         let t0 = Instant::now();
         let later = t0 + STALE_READING;
         let mut pause = paused_at(t0);
-        assert_eq!(pause.read(Some(("chrome.exe", false)), later), Step::Resume);
+        assert_eq!(pause.read(Some(("chrome.exe", false)), later, true), Step::Resume);
         let mut pause = paused_at(t0);
-        assert_eq!(pause.read(None, later), Step::Resume);
+        assert_eq!(pause.read(None, later, true), Step::Resume);
     }
 
     // covers: P213

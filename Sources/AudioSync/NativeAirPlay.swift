@@ -186,8 +186,8 @@ final class NativeAirPlay {
 
     /// A reading of the players that started at `startedAt`: a paused stream
     /// resumes once it no longer shows the player paused (P213). Main queue.
-    func readPause(app: String?, playing: Bool?, startedAt: Date) {
-        applyPause(explicitPause.read(app: app, playing: playing, at: startedAt))
+    func readPause(app: String?, playing: Bool?, startedAt: Date, sending: Bool) {
+        applyPause(explicitPause.read(app: app, playing: playing, at: startedAt, sending: sending))
     }
 
     /// The readings stopped: a paused stream resumes. Main queue.
