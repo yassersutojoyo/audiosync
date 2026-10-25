@@ -711,9 +711,9 @@ fn first_address(device: &Device) -> Option<IpAddr> {
         .next()
 }
 
-/// The most receivers listed at one address. Unauthenticated mDNS lets a
-/// LAN host announce any number; a bridge that fronts many speakers from
-/// one host stays well under this.
+/// The most receivers listed under one announced address, a bridge that
+/// fronts many speakers from one host included. The announcer picks that
+/// address, so this bounds one address, not one host.
 const MAX_LISTED_PER_ADDRESS: usize = 64;
 
 /// The volume reads of one row in the sender.
@@ -4422,11 +4422,16 @@ pub mod tests {
 
     #[test]
     fn one_address_lists_at_most_its_share_of_speakers() {
+        let path = crate::debug_log::test_dir("airplay-crowded-address").join("log.txt");
         let fake = FakeAirPlay::new();
         let mut airplay = speakers(&fake);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
         let flood = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66));
-        for n in 1..=MAX_LISTED_PER_ADDRESS as u8 + 6 {
-            fake.appear(&device_at(n, &format!("Forged {n}"), OPEN_TXT, flood, 7000));
+        let announced: Vec<Device> = (1..=MAX_LISTED_PER_ADDRESS as u8 + 6)
+            .map(|n| device_at(n, &format!("Forged {n}"), OPEN_TXT, flood, 7000))
+            .collect();
+        for speaker in &announced {
+            fake.appear(speaker);
         }
         let kitchen = device(200, "Kitchen", OPEN_TXT);
         fake.appear(&kitchen);
@@ -4434,6 +4439,22 @@ pub mod tests {
         let listed = airplay.speakers();
         assert_eq!(listed.len(), MAX_LISTED_PER_ADDRESS + 1);
         assert!(listed.iter().any(|speaker| speaker.name == "Kitchen"));
+        // A listed one that changes keeps its row; the unlisted ones that
+        // announce again stay out and log nothing new.
+        fake.change(&device_at(1, "Renamed", OPEN_TXT, flood, 7000));
+        for speaker in &announced[MAX_LISTED_PER_ADDRESS..] {
+            fake.change(speaker);
+        }
+        airplay.poll();
+        let listed = airplay.speakers();
+        assert_eq!(listed.len(), MAX_LISTED_PER_ADDRESS + 1);
+        assert!(listed.iter().any(|speaker| speaker.name == "Renamed"));
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let crowded = crate::debug_log::read_messages(&path)
+            .iter()
+            .filter(|message| message.contains("192.0.2.66 past the first"))
+            .count();
+        assert_eq!(crowded, 1);
     }
 
     /// A failed pairing, wrong PIN or not.
