@@ -258,6 +258,18 @@ pub fn read_queued(stream: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<us
     }
 }
 
+/// `read_queued` for a datagram: a peek that times out leaves it queued.
+pub fn recv_queued(socket: &UdpSocket, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+    const ERROR_IO_PENDING: i32 = 997;
+    match socket.peek_from(buf) {
+        Ok(_) => socket.recv_from(buf),
+        Err(error) if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) => {
+            Err(std::io::ErrorKind::TimedOut.into())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub struct NetReceiver {
     pub address: SocketAddr,
     shared: Arc<Shared>,
@@ -572,7 +584,7 @@ fn probe_timing(ip: IpAddr, to: SocketAddr) -> Option<SocketAddr> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut buf = [0u8; 64];
     while Instant::now() < deadline {
-        if let Ok((len, from)) = socket.recv_from(&mut buf) {
+        if let Ok((len, from)) = recv_queued(&socket, &mut buf) {
             let reply = TimingPacket::parse(&buf[..len])?;
             if reply.reply && reply.seq == 7 {
                 return Some(from);
