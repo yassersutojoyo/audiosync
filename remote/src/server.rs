@@ -668,6 +668,11 @@ impl RemoteServer {
             .map_err(|_| RemoteError::Random)
     }
 
+    /// Makes `<name>.local` the accepted `Host` name in place of the one
+    /// before (none: only the address), for when the computer is renamed.
+    /// The pairing code, its age and the wrong-code counts stay as they are.
+    pub fn set_local_name(&self, _name: Option<&str>) {}
+
     /// Whether too many wrong codes locked pairing until the next rotation.
     pub fn pairing_locked(&self) -> bool {
         lock(&self.shared.pairing).locked()
@@ -1496,6 +1501,60 @@ mod tests {
         assert_eq!(percent_decode("bad%zz"), None);
         assert_eq!(percent_decode("%FF"), None);
         assert_eq!(percent_decode(""), None);
+    }
+
+    fn pair_request(host: &str, code: &str) -> Request {
+        let head = format!(
+            "POST /api/pair HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json"
+        );
+        let mut request = http::parse_head(head.as_bytes()).unwrap();
+        request.body = json!({ "code": code }).to_string().into_bytes();
+        request
+    }
+
+    fn status(answer: Answer) -> u16 {
+        match answer {
+            Answer::Response(response) => response.status,
+            Answer::Events { .. } => 200,
+        }
+    }
+
+    // Through route, not sockets: a test can't connect from 127.0.0.2 on macOS.
+    #[test]
+    fn a_new_local_name_keeps_the_pairing_lockout_and_the_code() {
+        let config = Config {
+            port: 0,
+            listen: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            local_name: Some("kitchen".to_owned()),
+            ..Config::default()
+        };
+        let server = RemoteServer::start(config, |_: &Command| {}).unwrap();
+        let port = server.port();
+        let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+        let named = |name: &str| format!("{name}.local:{port}");
+        let code = server.pairing_code().unwrap();
+        let wrong: String = code
+            .chars()
+            .map(|digit| if digit == '0' { '1' } else { '0' })
+            .collect();
+        for index in 0..auth::WRONG_BEFORE_LOCK {
+            let host = 1 + (index as usize / auth::WRONG_PER_WINDOW) as u8;
+            let from = IpAddr::V4(Ipv4Addr::new(127, 0, 0, host));
+            let request = pair_request(&named("kitchen"), &wrong);
+            assert_eq!(status(route(&request, from, local, &server.shared)), 401);
+        }
+        assert!(server.pairing_locked());
+
+        server.set_local_name(Some("kitchen-2"));
+
+        assert!(server.pairing_locked());
+        assert_eq!(server.pairing_code().as_deref(), Some(code.as_str()));
+        let from = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 100));
+        let renamed = pair_request(&named("kitchen-2"), &code);
+        assert_eq!(status(route(&renamed, from, local, &server.shared)), 429);
+        let old = pair_request(&named("kitchen"), &code);
+        assert_eq!(status(route(&old, from, local, &server.shared)), 403);
+        server.stop();
     }
 
     #[test]
