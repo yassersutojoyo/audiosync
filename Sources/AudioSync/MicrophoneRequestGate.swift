@@ -27,9 +27,10 @@ struct MicrophoneRequestGate {
         superseded = true
     }
 
-    /// The user picked a source or pair; `step` is what the pick does (S141).
+    /// The user picked a source or pair; `step` is what the pick does. Every
+    /// step drops a waiting switch, `.none` too: picking the source that plays
+    /// again means staying on it (S141).
     mutating func picked(_ step: SourceSwitch.Step) {
-        guard step != .none else { return }
         supersedeSwitch()
     }
 
