@@ -69,9 +69,10 @@ impl Driver {
             .and_then(|control| self.speakers.get(control))
             .is_some_and(|speaker| !speaker.removing);
         let airplay2 = self.airplay2
-            && in_view
-                .iter()
-                .any(|device| device.choose_path(true, None) == Ok(ProtocolPath::AirPlay2));
+            && in_view.iter().any(|device| {
+                device.choose_path_paired(true, None, self.homekit_paired(&device.key))
+                    == Ok(ProtocolPath::AirPlay2)
+            });
         self.driven.insert(
             id.clone(),
             TargetRun {

@@ -28,7 +28,7 @@ use crate::audio::SAMPLE_RATE;
 use crate::discovery::{
     BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath,
 };
-use crate::error::{ErrorKind, SessionError, UserReason, Warning};
+use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::homekit::HomeKitCredentials;
 use crate::ids::{Entropy, OsEntropy, SessionIds};
 use crate::latency::ReportedLatency;
@@ -826,6 +826,20 @@ impl Driver {
         }
         let key = device.key.clone();
         self.end_pairing(&key);
+        let homekit_paired = self.homekit_paired(&key);
+        // A paired speaker never pairs again over the legacy path, which
+        // goes to whoever published its RAOP record (P2).
+        if homekit_paired && !self.airplay2 {
+            let error = SessionError::new(ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only));
+            self.emit(SenderEvent::Pairing {
+                key,
+                event: PairingEvent::Failed {
+                    error,
+                    wrong_pin: false,
+                },
+            });
+            return;
+        }
         let mut entropy = OsEntropy;
         let mut client = [0u8; 8];
         let ids = self.session_ids();
@@ -848,7 +862,8 @@ impl Driver {
             .get(&key)
             .and_then(|speaker| speaker.airplay1_outcome);
         let ap2 = self.airplay2
-            && device.choose_path(true, airplay1_outcome) == Ok(ProtocolPath::AirPlay2);
+            && device.choose_path_paired(true, airplay1_outcome, homekit_paired)
+                == Ok(ProtocolPath::AirPlay2);
         let pairing = if ap2 {
             Job::HomeKit(Box::new(self.pin_pairing(&device, password, ids, now)))
         } else {
@@ -1565,6 +1580,9 @@ impl Driver {
     }
 
     fn open_session(&mut self, key: &DeviceKey, now: Instant) {
+        if self.homekit_paired(key) {
+            return self.open_paired(key, now);
+        }
         if self.airplay2 {
             if let Some(device) = self.directory.device(key).cloned()
                 && let Some(speaker) = self.speakers.get_mut(key)
@@ -1667,6 +1685,40 @@ impl Driver {
         self.sessions.insert(session_key, key.clone());
         self.remote_open(key, remote, now);
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
+    }
+
+    /// Whether the sender holds HomeKit credentials for a device, from the
+    /// host or from a PIN pairing in this run.
+    fn homekit_paired(&self, key: &DeviceKey) -> bool {
+        self.homekit.contains_key(key)
+            || self
+                .speakers
+                .get(key)
+                .is_some_and(|speaker| speaker.options.homekit_credentials.is_some())
+    }
+
+    /// A HomeKit-paired speaker plays over AirPlay 2 or not at all (P2).
+    /// Without its `_airplay._tcp` service in view it is unreachable and
+    /// retried on the usual schedule.
+    fn open_paired(&mut self, key: &DeviceKey, now: Instant) {
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
+        if let Some(device) = self.directory.device(key) {
+            speaker.device = device.clone();
+        }
+        let path = speaker
+            .device
+            .choose_path_paired(self.airplay2, speaker.airplay1_outcome, true);
+        if let Err(reason) = path {
+            return self.refuse(key, SessionError::new(ErrorKind::Unsupported(reason)), now);
+        }
+        if speaker.device.airplay_socket_addrs().is_empty() {
+            let mut error = SessionError::new(ErrorKind::Unreachable);
+            error.detail = Some("the speaker's AirPlay 2 service is not in view");
+            return self.refuse(key, error, now);
+        }
+        self.start_ap2(key, now)
     }
 
     /// A session that can't start (P46, P74, P139): reported like a failed
