@@ -3340,15 +3340,20 @@ impl AirPlaySpeakers {
         };
         let was_playing = added.state == SpeakerState::Playing;
         added.state = state;
+        let mut relisted = false;
         if state == SpeakerState::Playing {
             // Its password worked: one turned down later turns it off.
             self.password_attempts.remove(id);
             self.paired_in_attempt.remove(id);
+            // Playing on them shows whatever turned them down is gone,
+            // unless a password the user typed carried the session (P154).
+            relisted =
+                !self.passwords.contains_key(id) && self.credentials_turned_down.remove(id);
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
         }
-        was_playing != (state == SpeakerState::Playing)
+        relisted || was_playing != (state == SpeakerState::Playing)
     }
 
     /// Takes in a state or error of a member of the added target `target`:

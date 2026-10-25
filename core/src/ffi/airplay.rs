@@ -973,6 +973,14 @@ impl AscAirPlay {
                         self.relist(&id);
                     }
                 }
+                // Playing on them shows whatever turned them down is gone,
+                // unless a password the user typed carried the session (P154).
+                if matches!(event, SpeakerEvent::State(SpeakerState::Playing))
+                    && !self.passwords.contains_key(&id)
+                    && self.credentials_turned_down.remove(&id)
+                {
+                    self.relist(&id);
+                }
                 if let SpeakerEvent::HomeKitPaired(credentials) = event {
                     // When the file can't be written they last for this
                     // handle; the sender keeps them as well.
