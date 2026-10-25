@@ -1980,6 +1980,14 @@ impl Ap2Session {
     /// The session SETUP answer (P43, P70, P157, P164).
     fn on_session_setup(&mut self, response: &Response, now: Instant) {
         let code = response.code;
+        if self.config.trace {
+            let line = format!(
+                "SETUP session: status {code} {} [{}]",
+                response.reason,
+                trace_headers(&response.headers)
+            );
+            self.event(Ap2Event::Trace(line));
+        }
         if !response.is_success() {
             let ptp_possible = self.timing == Timing::Ntp
                 && !self.ptp_retried

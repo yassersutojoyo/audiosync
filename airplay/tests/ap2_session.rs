@@ -904,9 +904,18 @@ fn traced_session_shows_a_refused_set_parameter_with_its_body() {
 fn traced_session_shows_the_volume_request_as_sent_and_the_refusal_as_answered() {
     let mut fake = FakeAp2::new();
     fake.status.insert("SET_PARAMETER".to_owned(), 500);
+    fake.session = Some("5A1B2C3D".to_owned());
     let rig = Ap2Rig::new(traced_config(), fake);
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
     let lines = traces(&rig);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("SETUP session: status 200 OK [")
+                && line.contains("CSeq: ")
+                && line.contains("Session: 5A1B2C3D;timeout=60")),
+        "{lines:?}"
+    );
     let sent = lines
         .iter()
         .find(|line| line.starts_with("SET_PARAMETER rtsp://"))
