@@ -26,6 +26,8 @@ mod playback;
 pub mod procfs;
 #[cfg(target_os = "linux")]
 mod registry;
+#[cfg(all(test, target_os = "linux"))]
+mod restart_tests;
 #[cfg(target_os = "linux")]
 mod stream;
 pub mod timing;
@@ -34,32 +36,34 @@ pub mod timing;
 pub use driver::open;
 
 /// The core's object ID, `PW_ID_CORE`.
+#[cfg(target_os = "linux")]
 const CORE_ID: u32 = 0;
 
-/// Linux's `EPIPE`, which the core reports when the daemon is gone.
-const BROKEN_PIPE: i32 = 32;
-
 /// Whether an error event on a connection's core means the connection is
-/// gone, for the error `res` (a negative errno) about object `id`. Other
-/// errors come on the core too and leave it working, such as "unknown
+/// gone, for the error `res` (a negative errno) about object `id`: a broken
+/// pipe, a reset or a protocol error, after which the socket is closed.
+/// Other errors come on the core too and leave it working, such as "unknown
 /// resource" for a request about an object the daemon just removed.
+#[cfg(target_os = "linux")]
 pub fn connection_lost(id: u32, res: i32) -> bool {
-    id == CORE_ID && res == -BROKEN_PIPE
+    id == CORE_ID && [-libc::EPIPE, -libc::ECONNRESET, -libc::EPROTO].contains(&res)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod core_error_tests {
     use super::connection_lost;
 
     #[test]
     fn only_a_broken_connection_ends_it() {
-        // Linux's errno values: EPIPE 32, ENOENT 2, EPROTO 71.
-        assert!(connection_lost(0, -32));
+        assert!(connection_lost(0, -libc::EPIPE));
+        // The socket is closed after these too, so nothing more would come.
+        assert!(connection_lost(0, -libc::ECONNRESET));
+        assert!(connection_lost(0, -libc::EPROTO));
         // "unknown resource": a request about an object the daemon had
         // already removed, such as a client that just quit.
-        assert!(!connection_lost(0, -2));
-        assert!(!connection_lost(0, -71));
-        assert!(!connection_lost(13, -32));
+        assert!(!connection_lost(0, -libc::ENOENT));
+        assert!(!connection_lost(0, -libc::EINVAL));
+        assert!(!connection_lost(13, -libc::EPIPE));
     }
 }
 

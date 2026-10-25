@@ -34,6 +34,10 @@ use crate::audio::routing::EndpointVolume;
 /// How long the first full listing may take.
 const SYNC_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How often the graph thread looks at its connection, and tries a new one
+/// once the daemon is gone.
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
+
 /// The node name in a `default.audio.*` metadata value, `{ "name": "..." }`.
 pub fn default_name(value: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(value).ok()?;
@@ -272,6 +276,57 @@ fn props_param(property: Property) -> Option<Vec<u8>> {
         .map(|(cursor, _)| cursor.into_inner())
 }
 
+/// The one global of a kind the thread binds, such as the `default`
+/// metadata: bound while none is held, and let go when its global goes, so
+/// the one a restarted session manager makes is bound in turn.
+struct Slot<T> {
+    held: Option<(u32, T)>,
+}
+
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Slot { held: None }
+    }
+}
+
+impl<T> Slot<T> {
+    fn is_free(&self) -> bool {
+        self.held.is_none()
+    }
+
+    fn hold(&mut self, id: u32, value: T) {
+        self.held = Some((id, value));
+    }
+
+    /// Lets go of what it holds when that is global `id`; whether it did.
+    fn removed(&mut self, id: u32) -> bool {
+        let held = self.held.as_ref().is_some_and(|(held, _)| *held == id);
+        if held {
+            self.held = None;
+        }
+        held
+    }
+}
+
+/// One connection to the daemon and what the thread follows through it.
+/// The fields drop in order: the listeners, then the proxies, then the
+/// connection.
+struct Session {
+    _core_listener: pw::core::Listener,
+    _registry_listener: pw::registry::Listener,
+    bound: Rc<RefCell<HashMap<u32, Bound>>>,
+    devices: Rc<RefCell<HashMap<u32, Routes>>>,
+    _clients: Rc<RefCell<HashMap<u32, FollowedClient>>>,
+    _defaults: Rc<RefCell<Slot<(Metadata, MetadataListener)>>>,
+    _registry: pw::registry::RegistryRc,
+    _core: pw::core::CoreRc,
+    /// Whether the connection is gone.
+    lost: Rc<Cell<bool>>,
+}
+
+/// Runs the graph thread: a connection to the daemon, and a new one each
+/// [`RECONNECT_INTERVAL`] once it is gone, until the stop command comes.
+/// An `Err` is a failure before the first connection.
 fn serve(
     shared: &Arc<Shared>,
     commands: pw::channel::Receiver<Command>,
@@ -282,19 +337,80 @@ fn serve(
         pw::main_loop::MainLoopRc::new(None).map_err(|_| BackendError::ServiceNotRunning)?;
     let context = pw::context::ContextRc::new(&main_loop, None)
         .map_err(|_| BackendError::ServiceNotRunning)?;
+    let session = Rc::new(RefCell::new(Some(connect(&context, shared, &ready)?)));
+
+    let keeper = main_loop.loop_().add_timer({
+        let session = Rc::clone(&session);
+        let shared = Arc::clone(shared);
+        move |_| {
+            let Ok(mut current) = session.try_borrow_mut() else {
+                return;
+            };
+            if current.as_ref().is_some_and(|held| held.lost.get()) {
+                *current = None;
+            }
+            if current.is_none() {
+                *current = connect(&context, &shared, &ready).ok();
+            }
+        }
+    });
+    let _ = keeper.update_timer(Some(RECONNECT_INTERVAL), Some(RECONNECT_INTERVAL));
+
+    let _commands = commands.attach(main_loop.loop_(), {
+        let main_loop = main_loop.clone();
+        let shared = Arc::clone(shared);
+        let session = Rc::clone(&session);
+        move |command| match command {
+            Command::Stop => main_loop.quit(),
+            Command::SetVolume {
+                node,
+                change,
+                reply,
+            } => {
+                let written = match session.try_borrow().as_deref() {
+                    Ok(Some(held)) if !held.lost.get() => set_volume(
+                        &shared,
+                        &held.bound.borrow(),
+                        &held.devices.borrow(),
+                        &node,
+                        &change,
+                    ),
+                    _ => Err(BackendError::ServiceNotRunning),
+                };
+                let _ = reply.send(written);
+            }
+        }
+    });
+    main_loop.run();
+    drop(keeper);
+    session.borrow_mut().take();
+    Ok(())
+}
+
+/// Connects to the daemon and follows its registry into `shared`'s graph,
+/// which starts empty again: the IDs of an earlier connection mean nothing
+/// to a restarted daemon. The graph counts as listed, and `ready` hears of
+/// it, once the proxies bound for the first listing answered.
+fn connect(
+    context: &pw::context::ContextRc,
+    shared: &Arc<Shared>,
+    ready: &mpsc::Sender<Result<(), BackendError>>,
+) -> Result<Session, BackendError> {
     let core = context
         .connect_rc(None)
         .map_err(|_| BackendError::ServiceNotRunning)?;
     let registry = core
         .get_registry_rc()
         .map_err(|_| BackendError::ServiceNotRunning)?;
+    *locked(&shared.graph) = Graph::default();
 
     let bound: Rc<RefCell<HashMap<u32, Bound>>> = Rc::default();
     let devices: Rc<RefCell<HashMap<u32, Routes>>> = Rc::default();
     let clients: Rc<RefCell<HashMap<u32, FollowedClient>>> = Rc::default();
-    let defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>> = Rc::default();
+    let defaults: Rc<RefCell<Slot<(Metadata, MetadataListener)>>> = Rc::default();
+    let lost = Rc::new(Cell::new(false));
 
-    let _registry_listener = registry
+    let registry_listener = registry
         .add_listener_local()
         .global({
             let registry = registry.clone();
@@ -312,9 +428,10 @@ fn serve(
                     return;
                 }
                 if global.type_ == ObjectType::Metadata {
-                    if props.get("metadata.name") == Some("default") && defaults.borrow().is_none()
-                    {
-                        *defaults.borrow_mut() = follow_defaults(&registry, global, &shared);
+                    let wanted = props.get("metadata.name") == Some("default")
+                        && defaults.borrow().is_free();
+                    if wanted && let Some(followed) = follow_defaults(&registry, global, &shared) {
+                        defaults.borrow_mut().hold(global.id, followed);
                     }
                     return;
                 }
@@ -351,10 +468,12 @@ fn serve(
             let bound = Rc::clone(&bound);
             let devices = Rc::clone(&devices);
             let clients = Rc::clone(&clients);
+            let defaults = Rc::clone(&defaults);
             move |id| {
                 bound.borrow_mut().remove(&id);
                 devices.borrow_mut().remove(&id);
                 clients.borrow_mut().remove(&id);
+                defaults.borrow_mut().removed(id);
                 if locked(&shared.graph).remove(id) {
                     shared.outputs_changed.store(true, Ordering::Release);
                 }
@@ -368,7 +487,7 @@ fn serve(
         core.sync(0).map_err(|_| BackendError::ServiceNotRunning)?,
         false,
     )));
-    let _core_listener = core
+    let core_listener = core
         .add_listener_local()
         .done({
             let shared = Arc::clone(shared);
@@ -381,6 +500,8 @@ fn serve(
                 }
                 if bound {
                     shared.synced.store(true, Ordering::Release);
+                    shared.failed.store(false, Ordering::Release);
+                    shared.outputs_changed.store(true, Ordering::Release);
                     let _ = ready.send(Ok(()));
                 } else if let Ok(next) = core.sync(0) {
                     pending.set((next, true));
@@ -389,40 +510,29 @@ fn serve(
         })
         .error({
             let shared = Arc::clone(shared);
-            let main_loop = main_loop.clone();
+            let lost = Rc::clone(&lost);
             move |id, _seq, res, _message| {
                 if super::connection_lost(id, res) {
+                    // Before `failed`, so whoever sees the failure finds the change too.
+                    shared.outputs_changed.store(true, Ordering::Release);
                     shared.failed.store(true, Ordering::Release);
-                    main_loop.quit();
+                    lost.set(true);
                 }
             }
         })
         .register();
 
-    let _commands = commands.attach(main_loop.loop_(), {
-        let main_loop = main_loop.clone();
-        let shared = Arc::clone(shared);
-        let bound = Rc::clone(&bound);
-        let devices = Rc::clone(&devices);
-        move |command| match command {
-            Command::Stop => main_loop.quit(),
-            Command::SetVolume {
-                node,
-                change,
-                reply,
-            } => {
-                let written =
-                    set_volume(&shared, &bound.borrow(), &devices.borrow(), &node, &change);
-                let _ = reply.send(written);
-            }
-        }
-    });
-    main_loop.run();
-    bound.borrow_mut().clear();
-    devices.borrow_mut().clear();
-    clients.borrow_mut().clear();
-    defaults.borrow_mut().take();
-    Ok(())
+    Ok(Session {
+        _core_listener: core_listener,
+        _registry_listener: registry_listener,
+        bound,
+        devices,
+        _clients: clients,
+        _defaults: defaults,
+        _registry: registry,
+        _core: core,
+        lost,
+    })
 }
 
 /// A device the thread follows: its proxy, its listener, and the index of
@@ -688,4 +798,24 @@ fn follow_defaults(
         })
         .register();
     Some((metadata, listener))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Slot;
+
+    #[test]
+    fn a_slot_lets_go_only_of_its_own_global_and_then_takes_the_next() {
+        let mut defaults = Slot::default();
+        assert!(defaults.is_free());
+        defaults.hold(40, "metadata of the first session manager");
+        assert!(!defaults.is_free());
+        assert!(!defaults.removed(41));
+        assert!(!defaults.is_free());
+        assert!(defaults.removed(40));
+        assert!(defaults.is_free());
+        defaults.hold(52, "metadata of the restarted one");
+        assert!(!defaults.removed(40));
+        assert!(defaults.removed(52));
+    }
 }

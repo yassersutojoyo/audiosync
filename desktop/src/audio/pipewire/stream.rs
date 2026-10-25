@@ -17,9 +17,9 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -74,8 +74,8 @@ const SOURCE_QUIT: u8 = 4;
 /// How often a linked capture looks for streams to link.
 const RELINK_INTERVAL: Duration = Duration::from_millis(100);
 
-/// How many relink turns pass between checks that the captured apps run.
-const QUIT_CHECK_TURNS: u32 = 10;
+/// How often a capture of apps checks that they still run.
+const QUIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// How the capture thread is doing, as the controller reads it.
 #[derive(Default)]
@@ -767,12 +767,11 @@ struct Linker {
     graph: Graph,
     /// The links made, each kept by its proxy.
     links: BTreeMap<graph::Link, MadeLink>,
-    /// The apps' top processes and their start times.
-    roots: Vec<(u32, Option<u64>)>,
+    /// Watches the apps' top processes for having quit.
+    quit: QuitWatch,
     status: Arc<Status>,
     /// Whether the graph changed since the last relink.
     dirty: bool,
-    turns: u32,
 }
 
 /// A link the linker made, and whether the daemon put it in its error
@@ -814,8 +813,70 @@ struct Following {
     _clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>>,
 }
 
+/// The top processes of the apps a capture follows, each with its start
+/// time.
+type Roots = Vec<(u32, Option<u64>)>;
+
+/// Checks, on a thread of its own, whether every app a capture follows
+/// quit, so the capture's thread never walks `/proc` on a timer.
+struct QuitWatch {
+    roots: Arc<Mutex<Roots>>,
+    stop: Option<mpsc::Sender<()>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl QuitWatch {
+    fn start(roots: Roots, status: &Arc<Status>) -> QuitWatch {
+        let roots = Arc::new(Mutex::new(roots));
+        let (stop, stopped) = mpsc::channel::<()>();
+        let thread = std::thread::Builder::new()
+            .name("audiosync-pw-quit".to_owned())
+            .spawn({
+                let roots = Arc::clone(&roots);
+                let status = Arc::clone(status);
+                move || {
+                    while let Err(mpsc::RecvTimeoutError::Timeout) =
+                        stopped.recv_timeout(QUIT_CHECK_INTERVAL)
+                    {
+                        let roots = roots.lock().map(|held| held.clone()).unwrap_or_default();
+                        if roots.is_empty() {
+                            continue;
+                        }
+                        if let Ok(processes) = procfs::snapshot()
+                            && all_quit(&roots, &processes)
+                        {
+                            status.quit();
+                        }
+                    }
+                }
+            })
+            .ok();
+        QuitWatch {
+            roots,
+            stop: Some(stop),
+            thread,
+        }
+    }
+
+    fn follow(&self, roots: Roots) {
+        if let Ok(mut held) = self.roots.lock() {
+            *held = roots;
+        }
+    }
+}
+
+impl Drop for QuitWatch {
+    fn drop(&mut self) {
+        // Its thread ends once the sender is gone.
+        self.stop.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// Each root of `filter` with its start time, as `/proc` has it now.
-fn roots_of(filter: &Filter) -> Vec<(u32, Option<u64>)> {
+fn roots_of(filter: &Filter) -> Roots {
     let Filter::Trees(roots) = filter else {
         return Vec::new();
     };
@@ -847,13 +908,12 @@ impl Linker {
         let linker = Rc::new(RefCell::new(Linker {
             core: core.clone(),
             stream: stream.clone(),
-            roots: roots_of(&filter),
+            quit: QuitWatch::start(roots_of(&filter), status),
             filter,
             graph: Graph::default(),
             links: BTreeMap::new(),
             status: Arc::clone(status),
             dirty: true,
-            turns: 0,
         }));
         let clients: Rc<RefCell<HashMap<u32, registry::FollowedClient>>> = Rc::default();
         let listener = registry
@@ -906,29 +966,21 @@ impl Linker {
     }
 
     fn retarget(&mut self, filter: Filter) {
-        self.roots = roots_of(&filter);
+        self.quit.follow(roots_of(&filter));
         self.filter = filter;
         self.dirty = true;
     }
 
-    /// Relinks after the graph changed, and now and then checks that the
-    /// captured apps still run.
+    /// Relinks after the graph changed.
     fn tick(&mut self) {
-        self.turns = self.turns.wrapping_add(1);
-        let check_quit = !self.roots.is_empty() && self.turns.is_multiple_of(QUIT_CHECK_TURNS);
-        if !self.dirty && !check_quit {
+        if !self.dirty {
             return;
         }
         let Ok(processes) = procfs::snapshot() else {
             return;
         };
-        if check_quit && all_quit(&self.roots, &processes) {
-            self.status.quit();
-        }
-        if self.dirty {
-            self.dirty = false;
-            self.relink(&processes);
-        }
+        self.dirty = false;
+        self.relink(&processes);
     }
 
     fn relink(&mut self, processes: &ProcessTable) {
@@ -1021,6 +1073,22 @@ mod tests {
         assert!(!wiring.flags().contains(StreamFlags::RT_PROCESS));
         assert!(wiring.captures_output());
         assert!(wiring.follows_default());
+    }
+
+    #[test]
+    fn the_quit_watch_reports_apps_that_quit_from_its_own_thread() {
+        let status = Arc::new(Status::default());
+        let watch = QuitWatch::start(Vec::new(), &status);
+        std::thread::sleep(QUIT_CHECK_INTERVAL + Duration::from_millis(300));
+        assert_eq!(status.state(), CaptureState::Running);
+        // No process has PID u32::MAX.
+        watch.follow(vec![(u32::MAX, None)]);
+        let start = std::time::Instant::now();
+        while status.state() == CaptureState::Running && start.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(status.state(), CaptureState::SourceQuit);
+        drop(watch);
     }
 
     #[test]

@@ -36,7 +36,7 @@ mod adapter;
     all(target_os = "linux", not(test)),
     expect(
         dead_code,
-        reason = "the PipeWire driver has no app capture, mix or local output yet"
+        reason = "the WASAPI capture formats, stream mixer and endpoint listing serve the Windows driver only"
     )
 )]
 mod audio;
