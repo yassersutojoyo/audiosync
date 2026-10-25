@@ -2751,8 +2751,13 @@ impl AirPlaySpeakers {
         let joining: Vec<String> = if self.streaming {
             self.settings
                 .iter()
+                // While its PIN pairing runs, a session would pair anew and
+                // the TV would show a new code.
                 .filter(|(id, settings)| {
-                    settings.enabled && !self.added.contains_key(*id) && self.can_join(id)
+                    settings.enabled
+                        && !self.added.contains_key(*id)
+                        && !self.pairings.contains_key(*id)
+                        && self.can_join(id)
                 })
                 .map(|(id, _)| id.clone())
                 .collect()

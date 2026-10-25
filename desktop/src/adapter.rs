@@ -433,7 +433,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
     /// The AirPlay speakers the user switched on this run: one that asks for
-    /// a code every time stays on when it is listed again.
+    /// a code every time stays on while listed.
     airplay_on_by_hand: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
     airplay_names: BTreeMap<String, String>,
@@ -2538,31 +2538,29 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Takes in the AirPlay speakers as last listed: remembers their names,
     /// and switches on the auto-connect speakers that appeared. One that
-    /// asks for a code every time goes off instead, also when it was on
-    /// from the last run, unless the user turned it on this run. A listed
-    /// speaker whose setting changes is left alone: that is the user's
-    /// choice, and its session under way keeps playing.
+    /// asks for a code every time and doesn't play goes off instead, when
+    /// it appears (also on from the last run) and when a listed one starts
+    /// asking, unless the user turned it on this run.
     fn airplay_listed(&mut self) {
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
         let mut asking = Vec::new();
         for speaker in self.audio.airplay_speakers() {
-            if !self.airplay_listed.contains(&speaker.id)
-                && !(speaker.code_every_time && self.airplay_on_by_hand.contains(&speaker.id))
-            {
-                if speaker.code_every_time {
-                    asking.push((speaker.id.clone(), speaker.enabled));
-                } else {
-                    appeared.push(speaker.id.clone());
+            let new = !self.airplay_listed.contains(&speaker.id);
+            if speaker.code_every_time {
+                if !speaker.playing && !self.airplay_on_by_hand.contains(&speaker.id) {
+                    asking.push((speaker.id.clone(), speaker.enabled, new));
                 }
+            } else if new {
+                appeared.push(speaker.id.clone());
             }
             self.airplay_names.insert(speaker.id.clone(), speaker.name);
             listed.insert(speaker.id);
         }
         self.airplay_listed = listed;
         let mut switched_off = false;
-        for (id, enabled) in asking {
-            if !enabled && !self.auto_connect.contains(&airplay_key(&id)) {
+        for (id, enabled, new) in asking {
+            if !enabled && !(new && self.auto_connect.contains(&airplay_key(&id))) {
                 continue;
             }
             self.log.log(|| {
@@ -7136,7 +7134,7 @@ mod tests {
     }
 
     #[test]
-    fn a_listed_speaker_that_starts_asking_every_time_is_left_as_it_is() {
+    fn a_listed_speaker_turned_on_by_hand_keeps_its_session_when_it_starts_asking_every_time() {
         use crate::audio::pairings::tests::homekit;
 
         let (mut adapter, fake, loft) = airplay2_adapter(true);
