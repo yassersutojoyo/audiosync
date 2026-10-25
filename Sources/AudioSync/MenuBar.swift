@@ -128,6 +128,7 @@ final class AppModel: ObservableObject {
         var forgetAirPlayPairing: (String) -> Void = { _ in }
         var setLocalEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
+        var localVolumeSettled: (String) -> Void = { _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
         var setAirPlayDelay: (Double) -> Void = { _ in }
         var setCastEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
@@ -425,7 +426,11 @@ final class AppModel: ObservableObject {
 
     /// While an AirPlay speaker's slider is dragged, levels read back from it are ignored.
     func setVolumeDragging(_ speaker: Speaker, _ dragging: Bool) {
-        if speaker.tag == .airplay { actions.setAirPlayVolumeDragging(speaker.id, dragging) }
+        switch speaker.tag {
+        case .airplay: actions.setAirPlayVolumeDragging(speaker.id, dragging)
+        case .cast: break
+        default: if !dragging { actions.localVolumeSettled(speaker.id) }
+        }
     }
 
     func setVolume(_ speaker: Speaker, _ position: Double) {
