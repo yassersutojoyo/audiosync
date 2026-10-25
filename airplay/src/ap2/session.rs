@@ -1103,6 +1103,16 @@ impl Ap2Session {
         }
     }
 
+    /// The receiver reported `volume` as set on it: nothing goes out, and
+    /// a check of an earlier set no longer resends that set (P183, S291).
+    pub fn keep_volume(&mut self, volume: Volume) {
+        if matches!(volume, Volume::Db(db) if db.is_nan()) {
+            return;
+        }
+        self.config.initial_volume = volume;
+        self.volume_retry = VolumeRetry::Idle;
+    }
+
     /// The host wants the receiver's volume: a read goes at the next
     /// 1 s read tick while the stream plays (P184). The level comes as
     /// [`Ap2Event::VolumeReported`]; after three failed reads none comes.

@@ -241,6 +241,27 @@ fn a_refused_volume_the_read_back_shows_unapplied_warns_and_goes_once_more() {
     assert!(rig.failure().is_none(), "{:?}", rig.events);
 }
 
+// covers: P183
+#[test]
+fn a_level_kept_from_the_speaker_is_never_sent_and_ends_a_pending_resend() {
+    let mut fake = answering("-20.000000");
+    fake.status.insert(SET.to_owned(), 500);
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    rig.advance(Duration::from_secs(10));
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-10.0), now);
+    rig.pump();
+    // The user set −20 dB on the speaker before the check read came back.
+    rig.session.keep_volume(Volume::Db(-20.0));
+    rig.advance(Duration::from_secs(10));
+    let sets = volume_sets(&rig);
+    let count = |body: &str| sets.iter().filter(|set| *set == body).count();
+    assert_eq!(count("volume: -10.000000\r\n"), 1, "{sets:?}");
+    assert_eq!(count("volume: -20.000000\r\n"), 0, "{sets:?}");
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+}
+
 // covers: P183, P184
 #[test]
 fn reads_stopped_by_refused_volumes_warn_at_the_hosts_first_ask() {

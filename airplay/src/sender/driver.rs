@@ -81,6 +81,7 @@ pub(crate) enum Command {
     RemoveSpeaker(DeviceKey),
     SetDelay(DeviceKey, Duration),
     SetVolume(DeviceKey, Volume),
+    KeepVolume(DeviceKey, Volume),
     ReadVolume(DeviceKey),
     SetNowPlaying(NowPlaying),
     SetLatency(u32),
@@ -1427,6 +1428,7 @@ impl Driver {
                 }
             }
             Command::SetVolume(key, volume) => self.set_volume(&key, volume, now),
+            Command::KeepVolume(key, volume) => self.keep_volume(&key, volume),
             Command::ReadVolume(key) => self.read_volume(&key, now),
             Command::SetNowPlaying(now_playing) => {
                 self.now_playing = Some((now_playing, now));
@@ -1567,6 +1569,19 @@ impl Driver {
                     self.wake_ap2_waiter(now);
                 }
             }
+        }
+    }
+
+    fn keep_volume(&mut self, key: &DeviceKey, volume: Volume) {
+        if matches!(volume, Volume::Db(db) if db.is_nan()) {
+            return;
+        }
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
+        speaker.options.volume = volume;
+        if let Phase::Ap2(active) = &mut speaker.phase {
+            active.session.keep_volume(volume);
         }
     }
 

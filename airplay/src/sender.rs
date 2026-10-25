@@ -779,6 +779,14 @@ impl Sender {
         self.command(Command::SetVolume(key.clone(), volume));
     }
 
+    /// Takes a level the user set on the speaker itself as the speaker's
+    /// volume without sending it: the next session starts at it, and a
+    /// receiver that rounds sets more coarsely than its own remote steps
+    /// keeps the level the remote chose (S291). NaN levels are ignored.
+    pub fn keep_volume(&self, key: &DeviceKey, volume: Volume) {
+        self.command(Command::KeepVolume(key.clone(), volume));
+    }
+
     /// Asks a playing speaker for its volume (P122); the answer comes as
     /// [`SpeakerEvent::VolumeReported`].
     pub fn read_volume(&self, key: &DeviceKey) {

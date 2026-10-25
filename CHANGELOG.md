@@ -79,6 +79,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- A volume step made with an AirPlay TV's own remote stays where the remote put it. Before, AudioSync sent the new level back to the TV, which could round it and undo the step. On the Mac and on Windows.
 - On Windows, a phone turned away because the Web Remote is busy now gets the busy message instead of a dropped connection.
 - On the Mac, streaming All System Audio while nothing plays no longer brings up the notice that capture permission is missing. The notice now waits for sound.
 - On the Mac, calibration works while the source plays nothing. Before, the test sound never started and the run failed as if the source were silent.
