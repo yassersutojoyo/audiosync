@@ -1,0 +1,89 @@
+# Temporary: hunts a one-off STATUS_ACCESS_VIOLATION in the ap2_driver test
+# binary on windows-latest. Lives on its own branch only and is removed
+# before any merge.
+name: ap2_driver loop
+
+on:
+  push:
+    branches: ['*/ap2-driver-av']
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    name: Loop shard ${{ matrix.shard }}
+    runs-on: windows-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: airplay
+    env:
+      ITERATIONS: '100'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain (stable)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - name: Build the test binary once
+        run: |
+          $json = cargo test --test ap2_driver --no-run --message-format=json
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $exe = ($json | ForEach-Object { $_ | ConvertFrom-Json } |
+            Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -eq 'ap2_driver' -and $_.executable }).executable
+          if (-not $exe) { Write-Error 'no ap2_driver executable'; exit 1 }
+          "AP2_EXE=$exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          Write-Output "binary: $exe"
+
+      # Full memory dumps of a crashing test binary, kept for the artifact.
+      - name: Enable crash dumps
+        run: |
+          $dir = "$env:RUNNER_TEMP\dumps"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
+          New-Item -Force $key | Out-Null
+          New-ItemProperty -Force -Path $key -Name DumpFolder -PropertyType ExpandString -Value $dir | Out-Null
+          New-ItemProperty -Force -Path $key -Name DumpType -PropertyType DWord -Value 2 | Out-Null
+          New-ItemProperty -Force -Path $key -Name DumpCount -PropertyType DWord -Value 5 | Out-Null
+
+      - name: Run the binary ${{ env.ITERATIONS }} times
+        run: |
+          $n = [int]$env:ITERATIONS
+          $log = "$env:RUNNER_TEMP\iteration.txt"
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          for ($i = 1; $i -le $n; $i++) {
+            & $env:AP2_EXE *> $log
+            $code = $LASTEXITCODE
+            if ($code -ne 0) {
+              Get-Content $log
+              Write-Output ('shard ${{ matrix.shard }} iteration {0} of {1}: exit code {2} (0x{3:x8}) after {4:n0} s' -f $i, $n, $code, $code, $watch.Elapsed.TotalSeconds)
+              exit 1
+            }
+            if ($i % 10 -eq 0) { Write-Output ('{0} clean iterations, {1:n0} s' -f $i, $watch.Elapsed.TotalSeconds) }
+          }
+          Write-Output "shard ${{ matrix.shard }}: $n of $n iterations clean"
+
+      - name: Keep the dump, binary and symbols of a crash
+        if: failure()
+        run: |
+          $dir = "$env:RUNNER_TEMP\dumps"
+          Copy-Item $env:AP2_EXE $dir
+          Copy-Item ($env:AP2_EXE -replace '\.exe$', '.pdb') $dir -ErrorAction SilentlyContinue
+          Get-ChildItem $dir
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ap2-driver-crash-${{ matrix.shard }}
+          path: ${{ runner.temp }}/dumps
+          retention-days: 7
