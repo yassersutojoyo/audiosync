@@ -526,6 +526,11 @@ impl FeedSlot {
         self.closing.store(true, Ordering::Release);
     }
 
+    /// Seconds of sound the captures pushed so far, a running total (P213).
+    pub fn sound_seconds(&self) -> f64 {
+        0.0
+    }
+
     /// Whether the feed is in the slot, lent to no capture.
     pub fn is_free(&self) -> bool {
         self.feed
@@ -2460,6 +2465,14 @@ impl AirPlaySpeakers {
         let step = self.pause.read(playback_reading(&self.playback), now);
         self.apply_pause(step);
     }
+
+    /// The window's play-pause went to `app`, shown `playing`: the speakers
+    /// pause only when the reading agrees that this app plays (P213).
+    pub fn play_pause_pressed(&mut self, _app: &str, _playing: bool, _now: Instant) {}
+
+    /// The capture carried `sound` seconds of sound so far, a running total
+    /// ([`FeedSlot::sound_seconds`]): a paused stream may resume (P213).
+    pub fn heard(&mut self, _sound: f64, _now: Instant) {}
 
     /// Hands the sender an explicit pause or resume (P213).
     fn apply_pause(&mut self, step: Step) {
@@ -6804,6 +6817,68 @@ pub mod tests {
         remote(&fake, &kitchen, RemoteCommand::PlayPause);
         airplay.poll();
         assert_eq!(pause_calls(&fake), []);
+    }
+
+    // covers: P213
+    #[test]
+    fn the_window_play_pause_of_the_followed_playing_app_pauses_and_resumes() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        airplay.play_pause_pressed("Spotify.exe", false, t0);
+        assert_eq!(pause_calls(&fake), [Call::Resume]);
+    }
+
+    // covers: P213
+    #[test]
+    fn a_window_play_pause_the_reading_does_not_confirm_sends_no_flush() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        airplay.set_playback(spotify(true), t0);
+        airplay.play_pause_pressed("chrome.exe", true, t0);
+        airplay.play_pause_pressed("Spotify.exe", false, t0);
+        airplay.set_playback(spotify(false), t0);
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        assert_eq!(pause_calls(&fake), []);
+    }
+
+    // covers: P213
+    #[test]
+    fn sound_in_the_capture_resumes_a_pause_the_reading_still_holds() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        let later = Instant::now() + STALE_READING;
+        airplay.set_playback(spotify(false), later);
+        airplay.heard(0.0, later);
+        airplay.heard(0.1, later);
+        assert_eq!(pause_calls(&fake), [], "Spotify still reads paused");
+        airplay.heard(0.3, later);
+        assert_eq!(pause_calls(&fake), [Call::Resume], "another app plays");
+    }
+
+    // covers: P213
+    #[test]
+    fn the_feed_counts_the_sound_it_hands_over() {
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let slot = FeedSlot::new(input);
+        let mut lease = slot.lease().expect("the feed is free");
+        let at = Instant::now();
+        lease.push(&vec![0.0_f32; 480 * 2], 480, at);
+        lease.push(&vec![2e-5_f32; 480 * 2], 480, at);
+        assert_eq!(slot.sound_seconds(), 0.0, "silence and dither");
+        lease.push(&vec![0.25_f32; 480 * 2], 480, at);
+        assert!((slot.sound_seconds() - 0.01).abs() < 1e-9, "{}", slot.sound_seconds());
     }
 
     // covers: P213

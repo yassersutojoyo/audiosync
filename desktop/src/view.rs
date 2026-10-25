@@ -5096,6 +5096,37 @@ mod tests {
         );
     }
 
+    // covers: P213
+    #[test]
+    fn the_now_playing_play_pause_tells_the_backend_what_the_card_showed() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        let backend = MockBackend::new();
+        let pressed = backend.play_pauses.clone();
+        let app = app_over(backend);
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        app.main.invoke_now_playing_transport(1);
+        assert!(pressed.borrow().is_empty(), "no session shown");
+
+        fake.read(Some(track("Spotify.exe", "Song", "", true)));
+        app.poll();
+        app.main.invoke_now_playing_transport(0);
+        app.main.invoke_now_playing_transport(1);
+        app.main.invoke_now_playing_transport(2);
+        fake.read(Some(track("Spotify.exe", "Song", "", false)));
+        app.poll();
+        app.main.invoke_now_playing_transport(1);
+        assert_eq!(
+            *pressed.borrow(),
+            [
+                ("Spotify.exe".to_owned(), true),
+                ("Spotify.exe".to_owned(), false)
+            ]
+        );
+    }
+
     #[test]
     fn the_now_playing_card_follows_the_media_session_and_its_buttons_drive_it() {
         use crate::now_playing_card::fake::{FakeControls, track};

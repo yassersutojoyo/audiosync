@@ -12,6 +12,20 @@ use std::time::{Duration, Instant};
 /// receivers' buffer, so the flush it bought is never undone audibly.
 pub const STALE_READING: Duration = Duration::from_secs(3);
 
+/// A sample louder than this, -60 dBFS, is sound: digital silence and
+/// dither stay below it.
+pub const SOUND_LEVEL: f32 = 0.001;
+
+/// How much sound the capture carries, in total, before a paused stream
+/// resumes on its own.
+pub const SOUND_TO_RESUME: Duration = Duration::from_millis(200);
+
+/// The stereo frames of interleaved `block` with a sample louder than
+/// [`SOUND_LEVEL`]. Real-time safe.
+pub fn sound_frames(_block: &[f32]) -> u64 {
+    0
+}
+
 /// What the sender gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -85,6 +99,14 @@ impl ExplicitPause {
         } else {
             Step::Nothing
         }
+    }
+
+    /// The capture carried `sound` seconds of sound so far, a running total.
+    /// A paused stream resumes once [`SOUND_TO_RESUME`] of it came after
+    /// [`STALE_READING`] past the pause: another app plays, whatever the
+    /// reading says. Sound before that may be the paused app's last audio.
+    pub fn heard(&mut self, _sound: f64, _now: Instant) -> Step {
+        Step::Nothing
     }
 
     /// A new sender, which starts unpaused.
@@ -193,6 +215,38 @@ mod tests {
         assert_eq!(pause.read(Some(("chrome.exe", false)), later), Step::Resume);
         let mut pause = paused_at(t0);
         assert_eq!(pause.read(None, later), Step::Resume);
+    }
+
+    // covers: P213
+    #[test]
+    fn only_samples_above_minus_60_dbfs_are_sound() {
+        assert_eq!(sound_frames(&[0.0; 8]), 0, "digital silence");
+        assert_eq!(sound_frames(&[3e-5, -3e-5, 2e-5, -1e-5]), 0, "dither");
+        assert_eq!(sound_frames(&[0.002, 0.0, 0.0, -0.002, 0.0, 0.0]), 2);
+        assert_eq!(sound_frames(&[0.5, 0.5, -0.5, -0.5]), 2);
+    }
+
+    // covers: P213
+    #[test]
+    fn sound_resumes_once_200_ms_of_it_came_after_the_stale_reading_time() {
+        let t0 = Instant::now();
+        let mut pause = paused_at(t0);
+        assert_eq!(pause.heard(1.0, t0 + Duration::from_secs(1)), Step::Nothing);
+        let later = t0 + STALE_READING;
+        assert_eq!(pause.heard(1.0, later), Step::Nothing, "the app's last audio");
+        assert_eq!(pause.heard(1.15, later), Step::Nothing);
+        assert_eq!(pause.heard(1.25, later), Step::Resume);
+        assert!(!pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn sound_never_pauses() {
+        let t0 = Instant::now();
+        let mut pause = ExplicitPause::default();
+        assert_eq!(pause.heard(0.0, t0), Step::Nothing);
+        assert_eq!(pause.heard(60.0, t0 + STALE_READING * 4), Step::Nothing);
+        assert!(!pause.is_paused());
     }
 
     // covers: P213

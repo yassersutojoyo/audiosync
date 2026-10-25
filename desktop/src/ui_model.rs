@@ -1212,6 +1212,9 @@ pub trait Backend {
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     /// The speaker's volume slider is held (true) or let go (false).
     fn set_speaker_volume_editing(&mut self, _id: &str, _on: bool) {}
+    /// The now-playing card's play-pause went to `app`, which the card shows
+    /// playing or paused: the AirPlay speakers may pause with it (P213).
+    fn play_pause_pressed(&mut self, _app: &str, _playing: bool) {}
     fn set_speaker_delay(&mut self, id: &str, ms: f64);
     /// Mutes or unmutes a Google Cast speaker on the speaker itself.
     fn set_speaker_muted(&mut self, _id: &str, _muted: bool) {}
@@ -1557,6 +1560,9 @@ pub struct MockBackend {
     presets: Vec<Preset>,
     /// The preset the preset notice is about.
     preset_notice: Option<String>,
+    /// Each play-pause of the now-playing card: its app and whether it
+    /// showed playing.
+    pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
 }
 
 #[cfg(any(test, feature = "mock-backend"))]
@@ -1722,6 +1728,7 @@ impl MockBackend {
             hidden_rows: Vec::new(),
             presets: Vec::new(),
             preset_notice: None,
+            play_pauses: std::rc::Rc::default(),
         }
     }
 
@@ -1984,6 +1991,12 @@ fn add_zone(zones: &mut Zones, id: &str, name: &str, members: &[&str]) {
 
 #[cfg(any(test, feature = "mock-backend"))]
 impl Backend for MockBackend {
+    fn play_pause_pressed(&mut self, app: &str, playing: bool) {
+        self.play_pauses
+            .borrow_mut()
+            .push((app.to_owned(), playing));
+    }
+
     fn snapshot(&self) -> AppState {
         let mut state = self.state.clone();
         show_presets(&mut state, &self.presets);
