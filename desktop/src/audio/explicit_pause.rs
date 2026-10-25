@@ -22,8 +22,13 @@ pub const SOUND_TO_RESUME: Duration = Duration::from_millis(200);
 
 /// The stereo frames of interleaved `block` with a sample louder than
 /// [`SOUND_LEVEL`]. Real-time safe.
-pub fn sound_frames(_block: &[f32]) -> u64 {
-    0
+pub fn sound_frames(block: &[f32]) -> u64 {
+    block
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter(|[left, right]| left.abs() > SOUND_LEVEL || right.abs() > SOUND_LEVEL)
+        .count() as u64
 }
 
 /// What the sender gets.
@@ -35,10 +40,12 @@ pub enum Step {
 }
 
 /// The app the pause was taken for, and when.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Paused {
     app: Option<String>,
     at: Instant,
+    /// The capture's sound total once [`STALE_READING`] had passed.
+    heard_from: Option<f64>,
 }
 
 #[derive(Debug, Default)]
@@ -65,6 +72,7 @@ impl ExplicitPause {
                 self.paused = Some(Paused {
                     app: Some(app.to_owned()),
                     at: now,
+                    heard_from: None,
                 });
                 Step::Pause
             }
@@ -105,8 +113,20 @@ impl ExplicitPause {
     /// A paused stream resumes once [`SOUND_TO_RESUME`] of it came after
     /// [`STALE_READING`] past the pause: another app plays, whatever the
     /// reading says. Sound before that may be the paused app's last audio.
-    pub fn heard(&mut self, _sound: f64, _now: Instant) -> Step {
-        Step::Nothing
+    pub fn heard(&mut self, sound: f64, now: Instant) -> Step {
+        let Some(paused) = self.paused.as_mut() else {
+            return Step::Nothing;
+        };
+        if now.saturating_duration_since(paused.at) < STALE_READING {
+            return Step::Nothing;
+        }
+        let from = *paused.heard_from.get_or_insert(sound);
+        if sound - from >= SOUND_TO_RESUME.as_secs_f64() {
+            self.paused = None;
+            Step::Resume
+        } else {
+            Step::Nothing
+        }
     }
 
     /// A new sender, which starts unpaused.
@@ -233,7 +253,11 @@ mod tests {
         let mut pause = paused_at(t0);
         assert_eq!(pause.heard(1.0, t0 + Duration::from_secs(1)), Step::Nothing);
         let later = t0 + STALE_READING;
-        assert_eq!(pause.heard(1.0, later), Step::Nothing, "the app's last audio");
+        assert_eq!(
+            pause.heard(1.0, later),
+            Step::Nothing,
+            "the app's last audio"
+        );
         assert_eq!(pause.heard(1.15, later), Step::Nothing);
         assert_eq!(pause.heard(1.25, later), Step::Resume);
         assert!(!pause.is_paused());

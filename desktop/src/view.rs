@@ -1136,6 +1136,14 @@ impl App {
             _ => Transport::Next,
         };
         self.log.log(|| format!("now playing: {command:?} pressed"));
+        let shown = self
+            .now_playing
+            .borrow()
+            .track()
+            .map(|track| (track.app_id.clone(), track.playing));
+        if let (Transport::PlayPause, Some((app, playing))) = (command, shown) {
+            self.backend.borrow_mut().play_pause_pressed(&app, playing);
+        }
         self.now_playing.borrow_mut().send(command);
     }
 

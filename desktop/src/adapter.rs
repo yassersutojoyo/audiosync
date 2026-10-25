@@ -3890,6 +3890,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
+    fn play_pause_pressed(&mut self, app: &str, playing: bool) {
+        self.audio.airplay_play_pause_pressed(app, playing);
+    }
+
     /// A local output's delay, an AirPlay speaker's own delay d_s, or a
     /// Cast speaker's measured offset (never negative).
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {

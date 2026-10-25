@@ -873,6 +873,11 @@ pub trait AudioBackend {
     /// (false): a level it reads back meanwhile is ignored (S271).
     fn set_airplay_volume_dragging(&mut self, _id: &str, _dragging: bool) {}
 
+    /// The now-playing card's play-pause went to `app`, shown playing or
+    /// paused: the AirPlay speakers pause with it when the reading agrees
+    /// (P213).
+    fn airplay_play_pause_pressed(&mut self, _app: &str, _playing: bool) {}
+
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
     /// that isn't finite is ignored; others are clamped to 0 to 20 000.
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);

@@ -62,7 +62,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -105,7 +105,7 @@ use super::backend::{
     AirPlayAvailability, AirPlayGroup, AirPlayGroupKind, AirPlayInfo, AirPlayPasswordPrompt,
     AirPlayPinPrompt, AirPlayProblem, BackendEvent, InTarget, PairingPhase,
 };
-use super::explicit_pause::{ExplicitPause, Step};
+use super::explicit_pause::{ExplicitPause, Step, sound_frames};
 use super::pairings::PairingStore;
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::Transport;
@@ -490,6 +490,9 @@ pub struct FeedSlot {
     /// A stop asked the capture's feed to fade out (S186, S189); cleared by
     /// the next lease.
     closing: Arc<AtomicBool>,
+    /// Session-rate frames pushed with a sample above -60 dBFS, a running
+    /// total that a paused stream resumes on (P213).
+    sound: Arc<AtomicU64>,
 }
 
 impl FeedSlot {
@@ -498,6 +501,7 @@ impl FeedSlot {
         FeedSlot {
             feed: Arc::new(Mutex::new(Some(AirPlayFeed::new(input)))),
             closing: Arc::new(AtomicBool::new(false)),
+            sound: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -516,6 +520,7 @@ impl FeedSlot {
             feed: Some(feed),
             slot: Arc::clone(&self.feed),
             closing: Arc::clone(&self.closing),
+            sound: Arc::clone(&self.sound),
         })
     }
 
@@ -528,7 +533,7 @@ impl FeedSlot {
 
     /// Seconds of sound the captures pushed so far, a running total (P213).
     pub fn sound_seconds(&self) -> f64 {
-        0.0
+        self.sound.load(Ordering::Relaxed) as f64 / f64::from(SESSION_RATE)
     }
 
     /// Whether the feed is in the slot, lent to no capture.
@@ -546,11 +551,16 @@ pub struct FeedLease {
     feed: Option<AirPlayFeed>,
     slot: Arc<Mutex<Option<AirPlayFeed>>>,
     closing: Arc<AtomicBool>,
+    sound: Arc<AtomicU64>,
 }
 
 impl FeedLease {
     /// See [`AirPlayFeed::push`]; after a stop request the feed fades out.
     pub fn push(&mut self, block: &[f32], frames: usize, at: Instant) {
+        let loud = sound_frames(&block[..(frames * 2).min(block.len())]);
+        if loud > 0 {
+            self.sound.fetch_add(loud, Ordering::Relaxed);
+        }
         if let Some(feed) = self.feed.as_mut() {
             if self.closing.load(Ordering::Acquire) {
                 feed.fade.fade_out();
@@ -2468,11 +2478,18 @@ impl AirPlaySpeakers {
 
     /// The window's play-pause went to `app`, shown `playing`: the speakers
     /// pause only when the reading agrees that this app plays (P213).
-    pub fn play_pause_pressed(&mut self, _app: &str, _playing: bool, _now: Instant) {}
+    pub fn play_pause_pressed(&mut self, app: &str, playing: bool, now: Instant) {
+        let agreed = playback_reading(&self.playback).filter(|&reading| reading == (app, playing));
+        let step = self.pause.toggled(agreed, now);
+        self.apply_pause(step);
+    }
 
     /// The capture carried `sound` seconds of sound so far, a running total
     /// ([`FeedSlot::sound_seconds`]): a paused stream may resume (P213).
-    pub fn heard(&mut self, _sound: f64, _now: Instant) {}
+    pub fn heard(&mut self, sound: f64, now: Instant) {
+        let step = self.pause.heard(sound, now);
+        self.apply_pause(step);
+    }
 
     /// Hands the sender an explicit pause or resume (P213).
     fn apply_pause(&mut self, step: Step) {
@@ -6878,7 +6895,11 @@ pub mod tests {
         lease.push(&vec![2e-5_f32; 480 * 2], 480, at);
         assert_eq!(slot.sound_seconds(), 0.0, "silence and dither");
         lease.push(&vec![0.25_f32; 480 * 2], 480, at);
-        assert!((slot.sound_seconds() - 0.01).abs() < 1e-9, "{}", slot.sound_seconds());
+        assert!(
+            (slot.sound_seconds() - 0.01).abs() < 1e-9,
+            "{}",
+            slot.sound_seconds()
+        );
     }
 
     // covers: P213
