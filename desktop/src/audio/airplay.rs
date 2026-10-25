@@ -2008,6 +2008,16 @@ impl AirPlaySpeakers {
     /// The user cancelled the speaker's pairing; it stays off.
     pub fn cancel_pairing(&mut self, id: &str) {
         self.stop_pairing(id, "cancelled by the user");
+        self.off_after_pairing(id);
+    }
+
+    /// A speaker switched on while its pairing ran (auto-connect) never
+    /// joined, so a pairing ending unpaired leaves it off.
+    fn off_after_pairing(&mut self, id: &str) {
+        if self.settings(id).enabled {
+            self.entry(id).enabled = false;
+            self.reconcile();
+        }
     }
 
     /// Stops the speaker's pairing, if one runs, saying why in the log.
@@ -2751,8 +2761,13 @@ impl AirPlaySpeakers {
         let joining: Vec<String> = if self.streaming {
             self.settings
                 .iter()
+                // While its PIN pairing runs, a session would pair anew and
+                // the TV would show a new code.
                 .filter(|(id, settings)| {
-                    settings.enabled && !self.added.contains_key(*id) && self.can_join(id)
+                    settings.enabled
+                        && !self.added.contains_key(*id)
+                        && !self.pairings.contains_key(*id)
+                        && self.can_join(id)
                 })
                 .map(|(id, _)| id.clone())
                 .collect()
@@ -3102,6 +3117,7 @@ impl AirPlaySpeakers {
                 if self.pairings.remove(id).is_none() {
                     return false;
                 }
+                self.off_after_pairing(id);
                 events.push(BackendEvent::AirPlayFailed {
                     id: id.to_owned(),
                     problem: AirPlayProblem::PairingFailed,

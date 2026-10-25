@@ -448,7 +448,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
     /// The AirPlay speakers the user switched on this run: one that asks for
-    /// a code every time stays on when it is listed again.
+    /// a code every time stays on while listed.
     airplay_on_by_hand: BTreeSet<String>,
     /// The last name of every AirPlay speaker listed.
     airplay_names: BTreeMap<String, String>,
@@ -2628,31 +2628,29 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Takes in the AirPlay speakers as last listed: remembers their names,
     /// and switches on the auto-connect speakers that appeared. One that
-    /// asks for a code every time goes off instead, also when it was on
-    /// from the last run, unless the user turned it on this run. A listed
-    /// speaker whose setting changes is left alone: that is the user's
-    /// choice, and its session under way keeps playing.
+    /// asks for a code every time and doesn't play goes off instead, when
+    /// it appears (also on from the last run) and when a listed one starts
+    /// asking, unless the user turned it on this run.
     fn airplay_listed(&mut self) {
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
         let mut asking = Vec::new();
         for speaker in self.audio.airplay_speakers() {
-            if !self.airplay_listed.contains(&speaker.id)
-                && !(speaker.code_every_time && self.airplay_on_by_hand.contains(&speaker.id))
-            {
-                if speaker.code_every_time {
-                    asking.push((speaker.id.clone(), speaker.enabled));
-                } else {
-                    appeared.push(speaker.id.clone());
+            let new = !self.airplay_listed.contains(&speaker.id);
+            if speaker.code_every_time {
+                if !speaker.playing && !self.airplay_on_by_hand.contains(&speaker.id) {
+                    asking.push((speaker.id.clone(), speaker.enabled, new));
                 }
+            } else if new {
+                appeared.push(speaker.id.clone());
             }
             self.airplay_names.insert(speaker.id.clone(), speaker.name);
             listed.insert(speaker.id);
         }
         self.airplay_listed = listed;
         let mut switched_off = false;
-        for (id, enabled) in asking {
-            if !enabled && !self.auto_connect.contains(&airplay_key(&id)) {
+        for (id, enabled, new) in asking {
+            if !enabled && !(new && self.auto_connect.contains(&airplay_key(&id))) {
                 continue;
             }
             self.log.log(|| {
@@ -4943,8 +4941,8 @@ mod tests {
     use super::*;
     use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{
-        APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, airplay2_every_time_tv, airplay2_tv, device,
-        id_of,
+        APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, airplay2_device, airplay2_every_time_tv,
+        airplay2_tv, device, id_of,
     };
     use crate::audio::capture::{CaptureTarget, LoopbackMode};
     use crate::audio::cast::tests::{
@@ -7242,7 +7240,7 @@ mod tests {
     }
 
     #[test]
-    fn a_listed_speaker_that_starts_asking_every_time_is_left_as_it_is() {
+    fn a_listed_speaker_turned_on_by_hand_keeps_its_session_when_it_starts_asking_every_time() {
         use crate::audio::pairings::tests::homekit;
 
         let (mut adapter, fake, loft) = airplay2_adapter(true);
@@ -7269,6 +7267,134 @@ mod tests {
                 .any(|call| matches!(call, Call::Remove(_))),
             "a session under way isn't ended for it"
         );
+    }
+
+    /// [`airplay2_adapter`] with Study, which plays over AirPlay 2 with no
+    /// code, switched on by auto-connect as it appeared, not by hand.
+    fn auto_connected_study() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let study = airplay2_device(11, "Study", false);
+        fake.appear(&study);
+        adapter.poll();
+        adapter.set_auto_connect(&ap(&study), true);
+        fake.gone(&study);
+        adapter.poll();
+        fake.appear(&study);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&study)).unwrap().enabled);
+        fake.take_calls();
+        (adapter, fake, study)
+    }
+
+    #[test]
+    fn a_listed_speaker_on_by_itself_goes_off_once_it_asks_every_time() {
+        let (mut adapter, fake, study) = auto_connected_study();
+        let id = ap(&study);
+
+        fake.change(&airplay2_every_time_tv(11, "Study"));
+        adapter.poll();
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(row.code_every_time);
+        assert!(!row.enabled, "it waits for the user");
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_))),
+            "no code is asked for by itself"
+        );
+    }
+
+    #[test]
+    fn a_listed_speaker_on_by_itself_that_plays_keeps_its_session_when_it_asks_every_time() {
+        let (mut adapter, fake, study) = auto_connected_study();
+        let id = ap(&study);
+        fake.state(&study, AirPlayState::Playing);
+        adapter.poll();
+        fake.take_calls();
+
+        fake.change(&airplay2_every_time_tv(11, "Study"));
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Remove(_))),
+            "a session that plays isn't ended for it"
+        );
+    }
+
+    /// [`airplay2_adapter`] with Loft's PIN prompt open, after Loft dropped
+    /// out of view and came back listed as able to play, so auto-connect
+    /// switched it on while its pairing runs.
+    fn auto_connected_while_pairing() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        let id = ap(&loft);
+        adapter.set_auto_connect(&id, true);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.take_calls();
+        fake.gone(&loft);
+        adapter.poll();
+        fake.appear(&airplay2_device(9, "Loft", false));
+        adapter.poll();
+        (adapter, fake, loft)
+    }
+
+    #[test]
+    fn no_session_starts_for_a_speaker_whose_pin_pairing_runs() {
+        let (adapter, fake, loft) = auto_connected_while_pairing();
+        let id = ap(&loft);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Add { .. } | Call::StartPairing(_))),
+            "a session would pair anew, and the TV would show a new code"
+        );
+        assert_eq!(
+            adapter
+                .snapshot()
+                .pin_prompt
+                .map(|prompt| prompt.speaker_id),
+            Some(id)
+        );
+    }
+
+    #[test]
+    fn a_speaker_switched_on_while_its_pairing_runs_ends_off_when_the_pairing_ends_unpaired() {
+        for cancelled in [true, false] {
+            let (mut adapter, fake, loft) = auto_connected_while_pairing();
+            let id = ap(&loft);
+            if cancelled {
+                adapter.cancel_pairing(&id);
+            } else {
+                fake.pairing(
+                    &loft,
+                    PairingEvent::Failed {
+                        error: SessionError::new(ErrorKind::PairingFailed),
+                        wrong_pin: false,
+                    },
+                );
+                adapter.poll();
+            }
+            adapter.poll();
+            let state = adapter.snapshot();
+            assert!(
+                !state.speaker(&id).unwrap().enabled,
+                "cancelled: {cancelled}"
+            );
+            assert!(
+                !fake
+                    .take_calls()
+                    .iter()
+                    .any(|call| matches!(call, Call::Add { .. })),
+                "cancelled: {cancelled}"
+            );
+        }
     }
 
     #[test]
