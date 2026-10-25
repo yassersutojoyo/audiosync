@@ -1685,6 +1685,21 @@ double asc_airplay_latency_ms(const AscAirPlay *airplay);
 void asc_airplay_restart_timeline(AscAirPlay *airplay);
 
 /*
+ * The user paused playback on purpose (a remote's Pause, a media key or the
+ * app's pause button, never silence): every speaker gets a FLUSH so its
+ * buffer drops at once, and no audio goes out until asc_airplay_resume. The
+ * sessions stay up. A pause while paused does nothing. NULL does nothing.
+ */
+void asc_airplay_pause(AscAirPlay *airplay);
+
+/*
+ * Resumes after asc_airplay_pause: every speaker goes on from its flush
+ * point, in step, with the audio written from now on. A resume while
+ * playing does nothing. NULL does nothing.
+ */
+void asc_airplay_resume(AscAirPlay *airplay);
+
+/*
  * Sets the stream's base latency Lf in frames, clamped to 11025 to 88200.
  * While no speaker sounds it applies at once and a timeline event reports
  * the new L; later it is held (ASC_AIRPLAY_EVENT_LATENCY_HELD) until the

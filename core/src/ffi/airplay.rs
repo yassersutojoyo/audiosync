@@ -2956,6 +2956,34 @@ pub unsafe extern "C" fn asc_airplay_restart_timeline(airplay: *mut AscAirPlay) 
     unsafe { live(airplay, (), |airplay| airplay.sender.restart_timeline()) }
 }
 
+/// The user paused playback on purpose (P213): a remote's Pause, a media
+/// key or the app's pause button, never silence. Every speaker gets a FLUSH
+/// so its buffer drops at once and no audio goes out until
+/// [`asc_airplay_resume`]; the sessions stay up.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_pause(airplay: *mut AscAirPlay) {
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe { live(airplay, (), |airplay| airplay.sender.pause()) }
+}
+
+/// The user resumed after [`asc_airplay_pause`] (P213): every speaker goes
+/// on from its flush point, in step, with the audio written from now on.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_resume(airplay: *mut AscAirPlay) {
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe { live(airplay, (), |airplay| airplay.sender.resume()) }
+}
+
 /// A speaker's counters (P144), as [`asc_airplay_speaker_counters`] copies
 /// them: one session's, or a stereo pair's or home theater group's summed
 /// over its members. They keep counting across the speaker's reconnects.
@@ -4477,6 +4505,8 @@ mod tests {
             assert!(!asc_airplay_set_volume(ptr::null_mut(), id.as_ptr(), 50.0));
             asc_airplay_set_master(ptr::null_mut(), 50.0);
             asc_airplay_restart_timeline(ptr::null_mut());
+            asc_airplay_pause(ptr::null_mut());
+            asc_airplay_resume(ptr::null_mut());
             assert_eq!(asc_airplay_latency_ms(ptr::null()), 0.0);
             assert!(asc_airplay_take_input(ptr::null_mut()).is_null());
             assert!(!asc_airplay_input_set_rate(ptr::null_mut(), 48_000.0));
@@ -5961,6 +5991,8 @@ mod tests {
             assert!(asc_airplay_take_input(handle).is_null());
             asc_airplay_set_master(handle, 50.0);
             asc_airplay_restart_timeline(handle);
+            asc_airplay_pause(handle);
+            asc_airplay_resume(handle);
             let mut receiver = empty();
             assert!(!asc_airplay_next_receiver(handle, &mut receiver));
         }
