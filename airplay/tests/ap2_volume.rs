@@ -301,6 +301,41 @@ fn a_check_read_sent_just_before_a_feedback_tick_gets_until_the_next_one() {
     assert!(rig.failure().is_none(), "{:?}", rig.events);
 }
 
+// covers: P183, P184
+#[test]
+fn a_check_read_never_answered_fails_once_and_never_ends_the_session() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert(SET.to_owned(), 500);
+    fake.applies_volume = Some(0.6);
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    rig.advance(Duration::from_secs(1));
+
+    rig.fake.silent.push(READ.to_owned());
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-20.0), now);
+    rig.pump();
+    rig.advance(Duration::from_secs(10));
+    // Each unanswered check read failed once: one resend, then nothing.
+    assert_eq!(
+        volume_sets(&rig),
+        [
+            "volume: -15.000000\r\n",
+            "volume: -20.000000\r\n",
+            "volume: -20.000000\r\n"
+        ]
+    );
+    assert_eq!(rig.times_of(READ).len(), 3, "{:?}", rig.keys());
+    assert_eq!(
+        warnings(&rig),
+        [&Warning::RequestFailed {
+            method: Method::SetParameter,
+            status: 500
+        }]
+    );
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+}
+
 // covers: P122, P184
 #[test]
 fn reads_once_after_the_initial_volume_then_only_when_asked_at_most_every_2_s() {
@@ -334,6 +369,8 @@ fn reads_once_after_the_initial_volume_then_only_when_asked_at_most_every_2_s() 
         assert!(feedback.contains(at), "{reads:?} {feedback:?}");
     }
     assert_eq!(reported(&rig)[1], -26.700001);
+    // Host requests while reads go on warn of nothing.
+    assert!(warnings(&rig).is_empty(), "{:?}", rig.events);
     assert!(rig.failure().is_none());
 }
 
