@@ -35,6 +35,9 @@ final class AppModel: ObservableObject {
         var waitingForAirPlay2 = false
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
+        /// An AirPlay speaker with stored credentials, also ones it turned
+        /// down: Forget Pairing drops them.
+        var holdsCredentials = false
         /// An AirPlay speaker whose password AudioSync holds until it quits.
         var holdsPassword = false
         /// A stereo pair or home theater group: its kind and members (P176).
@@ -125,6 +128,7 @@ final class AppModel: ObservableObject {
         var forgetAirPlayPairing: (String) -> Void = { _ in }
         var setLocalEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
+        var localVolumeSettled: (String) -> Void = { _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
         var setAirPlayDelay: (Double) -> Void = { _ in }
         var setCastEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
@@ -422,7 +426,11 @@ final class AppModel: ObservableObject {
 
     /// While an AirPlay speaker's slider is dragged, levels read back from it are ignored.
     func setVolumeDragging(_ speaker: Speaker, _ dragging: Bool) {
-        if speaker.tag == .airplay { actions.setAirPlayVolumeDragging(speaker.id, dragging) }
+        switch speaker.tag {
+        case .airplay: actions.setAirPlayVolumeDragging(speaker.id, dragging)
+        case .cast: break
+        default: if !dragging { actions.localVolumeSettled(speaker.id) }
+        }
     }
 
     func setVolume(_ speaker: Speaker, _ position: Double) {
@@ -1320,10 +1328,16 @@ struct SourcePicker: View {
         } label: {
             HStack(spacing: 8) {
                 sourceIcon(model.currentSource)
+                    .accessibilityHidden(true)
                 Text(model.currentSource?.name ?? t.sourceSystem)
                     .lineLimit(1)
                 Spacer()
             }
+            // The menu takes its title from this content, which read the
+            // chosen app's name instead of the fixed label.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(t.sourceLabel)
+            .accessibilityValue(model.currentSource?.name ?? t.sourceSystem)
         }
         .menuStyle(.borderlessButton)
         // A borderless menu draws its label and chevron in the tint; the brand

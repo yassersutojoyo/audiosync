@@ -352,7 +352,8 @@ final class CastSender {
     }
 
     private func saveMemory() {
-        guard let handle, let url = memoryURL, let raw = asc_cast_memory_json(handle) else { return }
+        guard !LaunchAutoConnect.skipped, let handle, let url = memoryURL,
+              let raw = asc_cast_memory_json(handle) else { return }
         let json = String(cString: raw)   // valid only until the next call of its kind
         do {
             try CastMemoryFile.save(json, to: url)

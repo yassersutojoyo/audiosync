@@ -65,7 +65,7 @@ extension AppDelegate {
     func stopIfIdle() {
         if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                   enabledLocal: enabledLocal) {
-            stopEngine()
+            stopEngine(.noSpeakerOn)
         }
     }
 
@@ -74,6 +74,12 @@ extension AppDelegate {
         localVolume[uid] = v
         engine.setGain(uid: uid, g: effectiveGain(uid))
         pushModel()
+    }
+
+    /// Per drag, not per step: a slider sends many positions while it moves.
+    func logLocalVolume(_ uid: String) {
+        guard let v = localVolume[uid] else { return }
+        DebugTrace.log("[AudioSync] volume of \(uid) set to \(String(format: "%.2f", v))")
     }
 
     /// The master scales every speaker AudioSync plays: a local speaker's
@@ -231,7 +237,7 @@ extension AppDelegate {
         // AirPlay selection stays as it is (deselecting would race the reselect).
         autoStartFailed = false
         if change == .restart {
-            stopEngine()
+            stopEngine(.sourceChanged)
             startEngine(origin: .user)
         }
         pushModel()
@@ -254,7 +260,7 @@ extension AppDelegate {
         clearNotices([Notice.capture])   // about the old pair
         autoStartFailed = false
         if change == .restart {
-            stopEngine()
+            stopEngine(.inputPairChanged)
             startEngine(origin: .user)
         }
         pushModel()

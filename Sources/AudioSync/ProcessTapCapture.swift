@@ -109,6 +109,8 @@ final class SourceCapture {
     private var tapped: [AudioObjectID] = []
     /// Listeners for the whole session: the app's processes, the input device.
     private var sessionListeners = Listeners()
+    /// The session's watch on macOS's list of running apps (`AppTapFollow.followsRunningApps`).
+    private var runningAppsWatch: NSKeyValueObservation?
     /// Listeners for the current tap and aggregate device only.
     private var tapListeners = Listeners()
     /// Bumped by every start and stop, so a listener call that was already
@@ -118,6 +120,9 @@ final class SourceCapture {
     private var tapMark: UInt64 = 0
     /// Set once `onInterrupted` was called, until the next start or stop.
     private var interrupted = false
+    /// The source's apps that ran at the last look where any ran. Kept over a
+    /// stop, so the rebuild after a mix's loss names the app that quit last.
+    private var appsRunning: [String] = []
 
     init() {}
 
@@ -157,6 +162,7 @@ final class SourceCapture {
     func halt() {
         sessionMark &+= 1
         sessionListeners.removeAll()
+        runningAppsWatch = nil
         closeCapture()
         if let sink {
             DebugTrace.log("[AudioSync] capture stopped: \(sink.callbacks.load(ordering: .relaxed)) callbacks, "
@@ -185,8 +191,12 @@ final class SourceCapture {
     /// an app starts while the tap is being built is picked up too.
     private func startApps(_ bundleIDs: [String]) throws {
         let label = bundleIDs.joined(separator: ", ")
-        let pids = bundleIDs.flatMap(Self.runningPIDs(of:))
-        guard !pids.isEmpty else { throw CaptureError.appNotRunning(bundleIDs.first ?? "") }
+        let pidsByApp = bundleIDs.map(Self.runningPIDs(of:))
+        let pids = pidsByApp.flatMap { $0 }
+        guard !pids.isEmpty else {
+            throw CaptureError.appNotRunning(AppTapFollow.quitApp(of: bundleIDs, ranBefore: appsRunning))
+        }
+        appsRunning = zip(bundleIDs, pidsByApp).filter { !$0.1.isEmpty }.map { $0.0 }
         watchAppProcesses()
         let found = Self.audioProcesses(of: pids)
         guard !found.isEmpty else {
@@ -331,22 +341,26 @@ final class SourceCapture {
         DispatchQueue.main.async { body() }
     }
 
-    /// The apps' audio processes changed: follow them (S11).
-    private func followApp() {
+    /// The apps' audio processes or the running apps changed: follow them (S11).
+    private func followApp(secondLook: Bool = false) {
         guard let source else { return }
         let excluding = tapExcludes
         let apps: [String]
         if case .mix(_, let ids) = source { apps = ids } else { apps = source.capturedApps }
         guard !apps.isEmpty else { return }
         let bundleID = apps.joined(separator: ", ")
-        let pids = apps.flatMap(Self.runningPIDs(of:))
+        let pidsByApp = apps.map(Self.runningPIDs(of:))
+        let pids = pidsByApp.flatMap { $0 }
         let found = Self.audioProcesses(of: pids)
+        let ranBefore = appsRunning
+        let runningNow = zip(apps, pidsByApp).filter { !$0.1.isEmpty }.map { $0.0 }
+        if !runningNow.isEmpty { appsRunning = runningNow }
         let decision: AppTapFollow
         if excluding {
             guard let own = AudioProcesses.processObject(for: getpid()) else { return }
             decision = AppTapFollow.decideExcluding(tapped: tapped, found: found, own: own)
         } else {
-            decision = AppTapFollow.decide(tapped: tapped, found: found, appRunning: !pids.isEmpty)
+            decision = AppTapFollow.look(tapped: tapped, found: found, appRunning: !pids.isEmpty, secondLook: secondLook)
         }
         switch decision {
         case .keep:
@@ -355,11 +369,17 @@ final class SourceCapture {
             closeCapture()
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process now; waiting for one")
+        case .lookAgain:
+            let mark = sessionMark
+            DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
+                guard let self, self.isCurrent(mark) else { return }
+                self.followApp(secondLook: true)
+            }
         case .lost:
             closeCapture()
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) is gone")
-            interrupt(.sourceLost(.appNotRunning(apps[0])))
+            interrupt(.sourceLost(.appNotRunning(AppTapFollow.quitApp(of: apps, ranBefore: ranBefore))))
         case .retap(let processes):
             retap(bundleID, to: processes)
         }
@@ -417,6 +437,13 @@ final class SourceCapture {
             [weak self] in
             guard let self, self.isCurrent(mark) else { return }
             self.followApp()
+        }
+        guard let source, AppTapFollow.followsRunningApps(source) else { return }
+        runningAppsWatch = NSWorkspace.shared.observe(\.runningApplications) { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isCurrent(mark) else { return }
+                self.followApp()
+            }
         }
     }
 

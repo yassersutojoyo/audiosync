@@ -612,7 +612,8 @@ final class NativeAirPlay {
                                       target: text(raw.target),
                                       isTarget: raw.flags & UInt32(ASC_AIRPLAY_FLAG_TARGET) != 0,
                                       incomplete: raw.flags & UInt32(ASC_AIRPLAY_FLAG_INCOMPLETE) != 0,
-                                      codeEveryTime: raw.flags & UInt32(ASC_AIRPLAY_FLAG_CODE_EVERY_TIME) != 0)
+                                      codeEveryTime: raw.flags & UInt32(ASC_AIRPLAY_FLAG_CODE_EVERY_TIME) != 0,
+                                      credentialsKept: raw.flags & UInt32(ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT) != 0)
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 
@@ -693,6 +694,7 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_ERROR_PASSWORD_REQUIRED: return .passwordRequired
         case ASC_AIRPLAY_ERROR_WRONG_PASSWORD: return .wrongPassword
         case ASC_AIRPLAY_ERROR_PAIRING_REQUIRED: return .pairingRequired
+        case ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED: return .receiverUnverified
         case ASC_AIRPLAY_ERROR_UNSUPPORTED: return .unsupported
         default: return .incompatible
         }
@@ -740,6 +742,7 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_TARGET, "target"),
             (ASC_AIRPLAY_FLAG_INCOMPLETE, "incomplete"),
             (ASC_AIRPLAY_FLAG_CODE_EVERY_TIME, "code-every-time"),
+            (ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT, "credentials-kept"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
     }

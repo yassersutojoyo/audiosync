@@ -225,6 +225,9 @@ enum AppTapFollow: Equatable {
     case wait
     /// The app is gone, so the source is lost (S21).
     case lost
+    /// None of the apps seems to run: look again `AppLifecycle.mixQuitRecheck`
+    /// later before calling the source lost (`look`).
+    case lookAgain
 
     /// - Parameters:
     ///   - tapped: the processes the current tap covers (empty when there is none).
@@ -236,6 +239,15 @@ enum AppTapFollow: Equatable {
         if now.isEmpty { return tapped.isEmpty ? .keep : .wait }
         if now == Set(tapped) { return .keep }
         return .retap(now.sorted())
+    }
+
+    /// `decide` at one look; `secondLook` tells a look made after one that
+    /// asked to `lookAgain`. In the turn an app quits, macOS's list of running
+    /// apps can miss apps that still run, so only a second look loses the source.
+    static func look(tapped: [AudioObjectID], found: [AudioObjectID], appRunning: Bool,
+                     secondLook: Bool) -> AppTapFollow {
+        let decision = decide(tapped: tapped, found: found, appRunning: appRunning)
+        return decision == .lost && !secondLook ? .lookAgain : decision
     }
 
     /// The processes an app tap may cover: the app's audio processes, sorted,
@@ -252,6 +264,20 @@ enum AppTapFollow: Equatable {
     static func decideExcluding(tapped: [AudioObjectID], found: [AudioObjectID], own: AudioObjectID) -> AppTapFollow {
         let excluded = Set(found).union([own])
         return excluded == Set(tapped) ? .keep : .retap(excluded.sorted())
+    }
+
+    /// The app to name once none of `apps` runs: one that still ran at the
+    /// last look (`ranBefore`), so the notice names the app that quit last.
+    static func quitApp(of apps: [String], ranBefore: [String]) -> String {
+        apps.first(where: ranBefore.contains) ?? apps.first ?? ""
+    }
+
+    /// Whether the capture of `source` looks at its apps again whenever macOS's
+    /// list of running apps changes: an app quitting without an audio process
+    /// changes no audio process, and macOS can still list an app as running
+    /// when its last audio process ends. An "all except" tap outlives its apps.
+    static func followsRunningApps(_ source: AudioSource) -> Bool {
+        !source.capturedApps.isEmpty
     }
 }
 

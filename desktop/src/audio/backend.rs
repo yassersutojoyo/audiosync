@@ -194,6 +194,9 @@ pub struct AirPlayInfo {
     /// Whether AudioSync holds the password the user typed for it, until
     /// AudioSync quits.
     pub holds_password: bool,
+    /// Whether AudioSync stores pairing credentials for it, also ones the
+    /// speaker turned down (P154), which Forget Pairing drops.
+    pub holds_credentials: bool,
     /// Whether a pairing with it is running.
     pub pairing: bool,
     /// It asks for a code every time it connects over AirPlay 2 (status
@@ -296,6 +299,9 @@ pub enum AirPlayProblem {
     /// An Apple TV whose home theater group plays: its sound goes to those
     /// speakers, so it is off.
     PlaysThroughSpeakers,
+    /// A paired Apple TV didn't prove it is the one that was paired, so it
+    /// is off; its stored pairing stays (P56).
+    ReceiverUnverified,
     /// A home theater group whose Apple TV plays by itself, so the group is
     /// off.
     AppleTvPlays,

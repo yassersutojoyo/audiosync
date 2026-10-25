@@ -104,6 +104,11 @@ do {
             && AppTapFollow.decideExcluding(tapped: [3], found: [9, 5], own: 3) == .retap([3, 5, 9])
             && AppTapFollow.decideExcluding(tapped: [3, 5, 9], found: [9], own: 3) == .retap([3, 9]),
           "mix: an all-except tap follows the excluded apps' processes and always leaves AudioSync out")
+    check(AppTapFollow.quitApp(of: [music, safari], ranBefore: [safari]) == safari
+            && AppTapFollow.quitApp(of: [music, safari], ranBefore: [music, safari]) == music
+            && AppTapFollow.quitApp(of: [music, safari], ranBefore: ["com.other"]) == music
+            && AppTapFollow.quitApp(of: [], ranBefore: [safari]).isEmpty,
+          "mix: a mix's lost capture names an app that still ran at the last look, not simply the mix's first app")
 
     let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: music, name: "Music")], inputs: [],
                                      chosen: both, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") })
@@ -544,6 +549,37 @@ do {
           && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": ""])
           && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "true"]),
           "debug log: off unless the variable is exactly 1")
+    check(LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "1", "AUDIOSYNC_NO_AUTO_CONNECT": "1"]),
+          "auto-connect: skipped with AUDIOSYNC_NO_AUTO_CONNECT=1 in a debug launch")
+    check(!LaunchAutoConnect.skips(environment: ["AUDIOSYNC_NO_AUTO_CONNECT": "1"])
+          && !LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "0", "AUDIOSYNC_NO_AUTO_CONNECT": "1"])
+          && !LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "1"])
+          && !LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "1", "AUDIOSYNC_NO_AUTO_CONNECT": "true"]),
+          "auto-connect: ignored without the debug log, and unless it is exactly 1")
+    typealias Keys = AppSettings.Keys
+    final class Saved { var values: [String: Any] = [:] }
+    let saved = Saved()
+    let disk = SettingsStore(read: { saved.values[$0] }, write: { value, key in saved.values[key] = value })
+    disk.save(ids: ["native:AABBCCDDEE01"], forKey: Keys.enabledAirPlay)
+    disk.save(ids: ["BuiltInSpeakerDevice"], forKey: Keys.enabledLocal)
+    disk.save(ids: ["ap:native:AABBCCDDEE01"], forKey: Keys.autoConnect)
+    _ = disk.load()
+    let before = NSDictionary(dictionary: saved.values)
+    let run = disk.memoryOnly()
+    let held = run.load().atLaunch(holdingSpeakersOff: true)
+    check(held.enabledAirPlay.isEmpty && held.enabledLocal.isEmpty && held.autoConnect == ["ap:native:AABBCCDDEE01"],
+          "auto-connect skipped: the speakers saved as on start off, the marks stay", "\(held.enabledAirPlay) \(held.enabledLocal)")
+    run.save(ids: ["Headphones"], forKey: Keys.enabledLocal)
+    run.save(ids: [], forKey: Keys.autoConnect)
+    run.write(nil, Keys.enabledAirPlay)
+    check(AppSettings.ids(run.read(Keys.enabledLocal)) == ["Headphones"] && run.read(Keys.enabledAirPlay) == nil,
+          "auto-connect skipped: the run reads its own changes")
+    check(NSDictionary(dictionary: saved.values) == before,
+          "auto-connect skipped: nothing the run changes is saved")
+    let next = disk.load().atLaunch(holdingSpeakersOff: false)
+    check(next.enabledAirPlay == ["native:AABBCCDDEE01"] && next.enabledLocal == ["BuiltInSpeakerDevice"]
+          && next.autoConnect == ["ap:native:AABBCCDDEE01"],
+          "auto-connect skipped: the next launch starts from the speakers saved before")
     if !DebugTrace.enabled {
         var built = false
         DebugTrace.log({ () -> String in built = true; return "never" }())
@@ -2112,6 +2148,14 @@ do {
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting for the other AirPlay 2 speaker"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,
           "P169 native airplay: the notice's title and the row's note, as on Windows")
+    var impostor = NativeAirPlayModel()
+    impostor.added("A9")
+    check(impostor.apply(.error(id: "A9", .receiverUnverified, retryMs: nil, detail: ""))
+                == .turnOff("native:A9", .receiverUnverified)
+            && UIStrings().nativeAirPlayReceiverUnverified(name: "Den TV")
+                == "Den TV didn't answer as the speaker you paired, so it's off. "
+                    + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
+          "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
             == "Loft needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.",
           "native airplay: the PTP text reads as on Windows")
@@ -2321,13 +2365,18 @@ do {
         check(recalled.add.isEmpty && recalled.turnOff == [.init(id: "B2", reason: .needsCode)],
               "native pairing: a refused speaker switched on without a new attempt (a recalled preset) goes off again with a notice")
 
-        // A refused stored pairing is forgotten and pairs again, once per attempt.
+        // A refused stored pairing pairs again, once per attempt; it stays stored
+        // until the new pairing replaces it (P154).
         check(m.turnedOnByUser("B2") == nil && m.refusedOff.isEmpty, "native pairing: a paired Apple TV just joins")
         m.added("B2")
-        check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .repair("B2")
+        check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .startPairing("B2")
                 && m.stages["B2"] == .pairing(afterWrongPin: false),
-              "native pairing: within the user's attempt, a refused stored pairing is forgotten and pairs again, though still listed as paired")
-        m.apply(.changed(receiver("B2", "B2", .needsPin)))   // the sender forgot the pairing it turned down
+              "native pairing: within the user's attempt, a refused stored pairing pairs again without being forgotten first, though still listed as paired")
+        var turnedDown = receiver("B2", "B2", .needsPin)   // the core lists the turned-down pairing as needing its PIN
+        turnedDown.credentialsKept = true
+        m.apply(.changed(turnedDown))
+        check(!m.isPaired("B2") && m.keepsCredentials("B2"),
+              "native pairing: a stored pairing it turned down still offers Forget Pairing")
         m.removed("B2")   // it leaves the sender while it pairs
         check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,
               "native pairing: while it pairs again, the speaker waits instead of going off")
@@ -5081,6 +5130,103 @@ do {
           "\(quit(rebuild)), \(quit(rebuild, music, .system))")
     check(quit(.rebuildFailed(SourceCapture.CaptureError.formatUnusable(1)), music, .system) == "keep",
           "source quit: a rebuild that fails for another cause is no app quit")
+    // macOS's app list can miss the mix's other apps in the turn one of them quits.
+    let mix3 = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.apple.Safari", "com.apple.TextEdit"])
+    func mixQuit(_ report: Report, running: Set<String> = []) -> String {
+        guard let answer = AppLifecycle.sourceQuit(report, source: mix3, setting: .system,
+                                                   isRunning: { running.contains($0) }) else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    check(mixQuit(.terminated(bundleID: "com.apple.TextEdit", streaming: true)) == "keep"
+            && mixQuit(.captureLost(.appNotRunning("com.spotify.client"))) == "keep",
+          "mix quit: an app of a mix quitting is never judged from the app list of the turn it quit in (S164)",
+          "\(mixQuit(.terminated(bundleID: "com.apple.TextEdit", streaming: true))), "
+              + mixQuit(.captureLost(.appNotRunning("com.spotify.client"))))
+    let textEditGone = Report.mixAppGone(bundleID: "com.apple.TextEdit", streaming: true)
+    check(mixQuit(textEditGone, running: ["com.apple.Safari"]) == "keep"
+            && mixQuit(textEditGone) == "switchToSystem com.apple.TextEdit"
+            && mixQuit(.mixAppGone(bundleID: "com.apple.TextEdit", streaming: false)) == "keep",
+          "mix quit: judged again a moment later, the mix goes on while another of its apps runs, and acts as set once none does",
+          "\(mixQuit(textEditGone, running: ["com.apple.Safari"])), \(mixQuit(textEditGone))")
+    let quitWhileStreaming = Report.terminated(bundleID: "com.apple.TextEdit", streaming: true)
+    check(AppLifecycle.waitsForRecheck(quitWhileStreaming, source: mix3)
+            && AppLifecycle.waitsForRecheck(.captureLost(.appNotRunning("com.spotify.client")), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: "com.apple.TextEdit", streaming: false), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: "com.apple.Music", streaming: true), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: nil, streaming: true), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.captureLost(.inputDisconnected), source: mix3)
+            && !AppLifecycle.waitsForRecheck(quitWhileStreaming, source: .app(bundleID: "com.apple.TextEdit"))
+            && !AppLifecycle.waitsForRecheck(quitWhileStreaming,
+                                             source: .mixed(.allExcept, bundleIDs: ["com.apple.TextEdit", "com.apple.Safari"])),
+          "mix quit: only an app of an only-these mix quitting while it streams, or that mix's capture losing its apps, waits")
+    func afterLoss(changed: Bool, stopped: Bool, running: Bool, newSession: Bool = false) -> AppLifecycle.MixLossStep {
+        AppLifecycle.afterMixLoss(sourceChanged: changed, userStopped: stopped, engineRunning: running,
+                                  sessionChanged: newSession)
+    }
+    check(afterLoss(changed: false, stopped: false, running: false) == .rebuild
+            && afterLoss(changed: true, stopped: false, running: false) == .start
+            && afterLoss(changed: true, stopped: true, running: false) == .stop
+            && afterLoss(changed: false, stopped: true, running: false) == .stop
+            && afterLoss(changed: true, stopped: false, running: true) == .none
+            && afterLoss(changed: false, stopped: false, running: true) == .none,
+          "mix quit: after a mix's capture loss, a source picked in the wait starts, a stop finishes cleanly, else the mix rebuilds")
+    check(afterLoss(changed: false, stopped: false, running: false, newSession: true) == .none
+            && afterLoss(changed: true, stopped: true, running: false, newSession: true) == .none,
+          "mix quit: a loss's wait ends without acting once streaming was started again within it, so a later loss keeps its own wait")
+    // The mix's last app quits while it has no audio process, so no audio process goes away.
+    let pair = AudioSource.mixed(.only, bundleIDs: ["com.apple.Music", "com.apple.podcasts"])
+    check(AppTapFollow.followsRunningApps(pair) && AppTapFollow.followsRunningApps(.app(bundleID: "com.apple.Music"))
+            && !AppTapFollow.followsRunningApps(.system)
+            && !AppTapFollow.followsRunningApps(.mixed(.allExcept, bundleIDs: ["com.apple.Music", "com.apple.podcasts"]))
+            && !AppTapFollow.followsRunningApps(.input(uid: "BuiltInMicrophoneDevice")),
+          "mix quit: an app source's capture looks at its apps again whenever an app quits, audio process or not")
+    func lastQuit(_ setting: WhenSourceQuits) -> String {
+        guard AppTapFollow.followsRunningApps(pair) else { return "unseen" }
+        guard AppTapFollow.look(tapped: [], found: [], appRunning: false, secondLook: false) == .lookAgain,
+              AppTapFollow.look(tapped: [], found: [], appRunning: false, secondLook: true) == .lost else { return "waits" }
+        let named = AppTapFollow.quitApp(of: pair.capturedApps, ranBefore: ["com.apple.podcasts"])
+        guard AppLifecycle.waitsForRecheck(.captureLost(.appNotRunning(named)), source: pair),
+              afterLoss(changed: false, stopped: false, running: false) == .rebuild else { return "no rebuild" }
+        guard let answer = AppLifecycle.sourceQuit(.rebuildFailed(SourceCapture.CaptureError.appNotRunning(named)),
+                                                   source: pair, setting: setting, isRunning: { _ in false })
+        else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    check(lastQuit(.system) == "switchToSystem com.apple.podcasts" && lastQuit(.stop) == "stop com.apple.podcasts",
+          "mix quit: the mix's last app quitting with no audio process is judged again and acts as set",
+          "\(lastQuit(.system)), \(lastQuit(.stop))")
+    check(AppTapFollow.look(tapped: [5], found: [], appRunning: false, secondLook: false) == .lookAgain
+            && AppTapFollow.look(tapped: [5], found: [], appRunning: false, secondLook: true) == .lost
+            && AppTapFollow.look(tapped: [5], found: [5, 9], appRunning: true, secondLook: false) == .retap([5, 9])
+            && AppTapFollow.look(tapped: [5], found: [], appRunning: true, secondLook: false) == .wait,
+          "mix quit: a look that finds none of the apps running looks again a moment later before the source counts as lost")
+    // Podcasts quits while Music runs on; in that turn macOS's list can miss Music too.
+    func memberQuits() -> String {
+        let first = AppTapFollow.look(tapped: [5, 8], found: [], appRunning: false, secondLook: false)
+        guard first == .lookAgain else { return "capture lost at once (\(first))" }
+        let second = AppTapFollow.look(tapped: [5, 8], found: [5], appRunning: true, secondLook: true)
+        guard second == .retap([5]) else { return "second look: \(second)" }
+        let notice = Report.terminated(bundleID: "com.apple.podcasts", streaming: true)
+        guard AppLifecycle.waitsForRecheck(notice, source: pair) else { return "judged in the quit's turn" }
+        let judged = AppLifecycle.sourceQuit(.mixAppGone(bundleID: "com.apple.podcasts", streaming: true), source: pair,
+                                             setting: .system, isRunning: { $0 == "com.apple.Music" })
+        return judged.map { "\($0.action) \($0.bundleID)" } ?? "keep"
+    }
+    check(memberQuits() == "keep",
+          "mix quit: an app of a mix quitting while another runs loses no capture; its own quit notice is judged and the mix goes on",
+          memberQuits())
+    func noticeQuit(_ report: Report) -> String {
+        guard let answer = AppLifecycle.sourceQuit(report, source: pair, setting: .system, isRunning: { _ in false })
+        else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    check(AppLifecycle.waitsForRecheck(.terminated(bundleID: "com.apple.Podcasts", streaming: true), source: pair)
+            && noticeQuit(.mixAppGone(bundleID: "com.apple.Podcasts", streaming: true)) == "switchToSystem com.apple.podcasts"
+            && AppLifecycle.sourceQuit(.terminated(bundleID: "COM.APPLE.MUSIC", streaming: true),
+                                       source: .app(bundleID: "com.apple.Music"), setting: .stop,
+                                       isRunning: { _ in false })?.action == .stop,
+          "mix quit: macOS's quit notice matches the source's app in any letter case, as macOS compares bundle IDs (S164)",
+          noticeQuit(.mixAppGone(bundleID: "com.apple.Podcasts", streaming: true)))
     // After a switch the source is the whole system; after a stop nothing streams.
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
@@ -6946,6 +7092,21 @@ do {
     check(RemoteDevicesFile.canForget(count: 0, failed: true) && RemoteDevicesFile.canForget(count: 2, failed: false)
             && !RemoteDevicesFile.canForget(count: 0, failed: false),
           "web remote: Forget All stays available after a failed save, when no device is left in memory")
+    let debugStart = RemoteStartConfig.make(port: 7655, localName: nil, devicesPath: nil, debugLog: true)
+    let normalStart = RemoteStartConfig.make(port: 8080, localName: "den", devicesPath: "/devices.json", debugLog: false)
+    check(debugStart["log_pairing_codes"] as? Bool == true && debugStart["port"] as? Int == 7655
+            && debugStart["local_name"] == nil && normalStart["log_pairing_codes"] == nil
+            && normalStart["local_name"] as? String == "den" && normalStart["devices_path"] as? String == "/devices.json",
+          "web remote: only the debug log asks the core for the pairing codes")
+    let switchOn = ["AUDIOSYNC_WEB_REMOTE": "1"]
+    check(RemoteDebugSwitch.port(environment: switchOn, debugLog: true, savedPort: 8080) == 8080
+            && RemoteDebugSwitch.port(environment: switchOn.merging(["AUDIOSYNC_WEB_REMOTE_PORT": "9000"]) { $1 },
+                                      debugLog: true, savedPort: 8080) == 9000
+            && RemoteDebugSwitch.port(environment: switchOn.merging(["AUDIOSYNC_WEB_REMOTE_PORT": "80"]) { $1 },
+                                      debugLog: true, savedPort: 8080) == 8080
+            && RemoteDebugSwitch.port(environment: switchOn, debugLog: false, savedPort: 8080) == nil
+            && RemoteDebugSwitch.port(environment: ["AUDIOSYNC_WEB_REMOTE": "true"], debugLog: true, savedPort: 8080) == nil,
+          "web remote: the debug switch starts it for one run on the saved or given port, only with the debug log")
     let fresh = AppSettings.load { _ in nil }
     let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
     let kept = AppSettings.load { stored[$0] }
@@ -7407,6 +7568,28 @@ do {
           "late callbacks: the last output's stop flushes the pending suppressed count once")
     check(LateCallbackLog.suppressedLine(15) == "[AudioSync] 15 more late callbacks suppressed",
           "late callbacks: suppressed-count line")
+}
+
+// MARK: Every session stop names its reason in the debug log (SessionStop in AppLifecycle.swift)
+do {
+    let all = SessionStop.allCases
+    let lines = all.map { $0.logLine() }
+    check(Set(lines).count == all.count, "session stop: every reason has its own log line", lines.joined(separator: " | "))
+    check(lines.allSatisfy { $0.hasPrefix("[AudioSync] session stops: ") || $0.hasPrefix("[AudioSync] session restarts: ") },
+          "session stop: each line says whether the session stops or restarts", lines.joined(separator: " | "))
+    check(all.filter(\.restarts) == [.sourceSwitchedToSystem, .sourceChanged, .inputPairChanged, .formatChanged, .rebuild],
+          "session stop: only a source switch, a channel pair change, a format change and a rebuild restart")
+    check(SessionStop.powerSwitch.logLine(detail: "key code 49 in NSWindow")
+            == "[AudioSync] session stops: the power switch turned streaming off (key code 49 in NSWindow)",
+          "session stop: the power switch line names the input event, so a key press tells from a click")
+    check(SessionStop.sourceAppQuit.logLine(detail: "com.spotify.client")
+            == "[AudioSync] session stops: the source app quit (com.spotify.client)",
+          "session stop: a quit source app is named")
+    // Capture lost: the engine stops the session before it reports the loss, so nothing runs when the host stops.
+    check(SessionStop.logs(running: false, interrupted: true) && SessionStop.logs(running: true, interrupted: false),
+          "session stop: a stop after a capture interruption is logged although the engine already stopped")
+    check(!SessionStop.logs(running: false, interrupted: false),
+          "session stop: a stop with no session running and no interruption writes no line")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

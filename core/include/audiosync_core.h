@@ -112,10 +112,11 @@ extern "C" {
 #define ASC_AIRPLAY_FLAG_BUSY 64           /* its flags hint that another sender plays */
 #define ASC_AIRPLAY_FLAG_AIRPLAY2 128      /* it lists AirPlay 2 features */
 #define ASC_AIRPLAY_FLAG_OVER_AIRPLAY2 256 /* the AirPlay 2 switch is on and the sender reaches it over AirPlay 2 */
-#define ASC_AIRPLAY_FLAG_PAIRED 512        /* credentials are kept for it, which asc_airplay_forget_pairing drops */
+#define ASC_AIRPLAY_FLAG_PAIRED 512        /* credentials are kept for it, and no answer turned them down this run */
 #define ASC_AIRPLAY_FLAG_TARGET 1024       /* a stereo pair or home theater group, added like a speaker; only with the AirPlay 2 switch on */
 #define ASC_AIRPLAY_FLAG_INCOMPLETE 2048   /* a target with a member out of view, playing nothing, or reporting its partner unreachable */
 #define ASC_AIRPLAY_FLAG_CODE_EVERY_TIME 4096 /* reached over AirPlay 2, it asks for a code every time it connects; auto-connect leaves it off */
+#define ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT 8192 /* credentials are stored for it, turned down or not, which asc_airplay_forget_pairing drops */
 
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
@@ -152,7 +153,7 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_JACK_DISCONNECTED 1          /* nothing is plugged into its audio jack */
 #define ASC_AIRPLAY_WARNING_AUTH_SETUP_FAILED 2          /* POST /auth-setup failed */
 #define ASC_AIRPLAY_WARNING_REQUEST_FAILED 3             /* a volume, metadata, flush or keep-alive request failed */
-#define ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID 4 /* its pair-verify signature didn't check out */
+/* 4 is retired: a receiver signature that fails its check is ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED. */
 #define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
 #define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
 #define ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED 7       /* three volume reads in a row failed on an AirPlay 2 session: it isn't asked again */
@@ -180,6 +181,7 @@ extern "C" {
 #define ASC_AIRPLAY_ERROR_PAIRING_REQUIRED 8  /* it needs pairing, or rejected or cancelled it */
 #define ASC_AIRPLAY_ERROR_UNSUPPORTED 9       /* the sender can't drive it; .unsupported says why */
 #define ASC_AIRPLAY_ERROR_WRONG_PIN 10        /* a pairing's Apple TV turned the PIN down; a new pairing shows a PIN again */
+#define ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED 11 /* a paired speaker didn't prove it is the one paired; not connected, its credentials stay */
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
@@ -2284,7 +2286,14 @@ const char *asc_remote_pairing_code(AscRemote *remote);
  */
 const char *asc_remote_rotate_code(AscRemote *remote);
 
-/* Whether 20 wrong codes locked pairing until the next asc_remote_rotate_code. */
+/*
+ * Makes <local_name>.local the accepted address in place of the name the
+ * remote started with, for when the computer is renamed; NULL or empty
+ * leaves only the IP address. The pairing code, its age and a lockout stay.
+ */
+void asc_remote_set_local_name(AscRemote *remote, const char *local_name);
+
+/* Whether 40 wrong codes locked pairing until the next asc_remote_rotate_code. */
 bool asc_remote_pairing_locked(AscRemote *remote);
 
 /* How many devices are paired (8 at most; pairing a ninth drops the oldest). */

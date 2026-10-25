@@ -138,10 +138,6 @@ extension AppDelegate {
             nativeSenderFailed()
         case .startPairing(let receiver):
             startNativePairing(receiver)
-        case .repair(let receiver):
-            nativeAirPlay?.forgetPairing(receiver)   // the sender's queue runs it before the pairing starts
-            DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) refused its stored pairing; forgotten, pairing again")
-            startNativePairing(receiver)
         case .cancelPairing(let receiver):
             nativeAirPlay?.cancelPairing(receiver)
         case .prompt:
@@ -499,6 +495,7 @@ extension AppDelegate {
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         case .needsAirPlay2: return text.nativeAirPlayNeedsAirPlay2(name: name)
         case .timingUnavailable: return text.nativeAirPlayTimingUnavailable(name: name)
+        case .receiverUnverified: return text.nativeAirPlayReceiverUnverified(name: name)
         case .playsThroughSpeakers:
             return NativeAirPlayID.receiver(id).flatMap(NativeTarget.kind) == nil
                 ? text.nativeAirPlayPlaysThroughSpeakers(name: name)

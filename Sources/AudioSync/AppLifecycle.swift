@@ -89,24 +89,83 @@ enum AppLifecycle {
     enum SourceQuitReport {
         /// macOS says an app quit; `streaming` is whether a session runs.
         case terminated(bundleID: String?, streaming: Bool)
+        /// An app of an "only these" mix quit `mixQuitRecheck` ago
+        /// (`waitsForRecheck`); `streaming` is whether a session runs now.
+        case mixAppGone(bundleID: String, streaming: Bool)
         /// The running capture found its app gone and stopped the session.
         case captureLost(SourceCapture.CaptureError)
-        /// The rebuild after a capture format change couldn't start.
+        /// The rebuild after a capture format change, or after a mix's
+        /// capture lost its apps, couldn't start.
         case rebuildFailed(Error)
+    }
+
+    /// How long a mix waits after one of its apps quit before it is judged
+    /// (S164). macOS refreshes its list of running apps on later turns of the
+    /// main run loop, so in the turn an app quits in, the list can miss the
+    /// mix's other apps and make the quitting app look like the last one.
+    static let mixQuitRecheck: TimeInterval = 1
+
+    /// Whether `report` is judged only `mixQuitRecheck` later: an app of an
+    /// "only these" mix quitting while it streams comes back as `mixAppGone`,
+    /// and the capture of such a mix finding none of its apps rebuilds the
+    /// session, which goes on with the apps left or fails as a quit (S227 e).
+    static func waitsForRecheck(_ report: SourceQuitReport, source: AudioSource) -> Bool {
+        guard case .mix(.only, let ids) = source else { return false }
+        switch report {
+        case .terminated(let bundleID?, true): return ids.contains(sourceSpelling(of: bundleID, in: source))
+        case .captureLost(.appNotRunning): return true
+        default: return false
+        }
+    }
+
+    /// What ends the second a mix waits after its capture lost its apps
+    /// (`waitsForRecheck`). The engine stopped the session at the loss, but
+    /// the senders and the streaming switch still count it as on.
+    enum MixLossStep: Equatable {
+        /// The user started streaming again meanwhile, even if a later loss
+        /// stopped it again: that loss waits on its own.
+        case none
+        /// Rebuild the mix's session (S227 e).
+        case rebuild
+        /// Start the source the user picked meanwhile: with no session
+        /// running, picking it only stored it (S163).
+        case start
+        /// The user switched streaming off: finish the stop, so the AirPlay
+        /// and Cast senders leave too.
+        case stop
+    }
+
+    static func afterMixLoss(sourceChanged: Bool, userStopped: Bool, engineRunning: Bool,
+                             sessionChanged: Bool) -> MixLossStep {
+        if engineRunning || sessionChanged { return .none }
+        if userStopped { return .stop }
+        return sourceChanged ? .start : .rebuild
+    }
+
+    /// `bundleID` as `source` stores it when it names one of the source's
+    /// apps in any letter case, else as given; a precaution in case the running app
+    /// reports a spelling that differs from the saved one.
+    static func sourceSpelling(of bundleID: String, in source: AudioSource) -> String {
+        source.capturedApps.first { $0.caseInsensitiveCompare(bundleID) == .orderedSame } ?? bundleID
     }
 
     /// The app that quit and what the session does about it (S142, S164,
     /// S227, EC6), or nil when the report concerns no session: another app,
-    /// nothing streaming, a source that isn't an app, a loss with another cause.
+    /// nothing streaming, a source that isn't an app, a loss with another cause,
+    /// or a report that `waitsForRecheck`.
     /// A second report of the same quit finds the session stopped or the
     /// source switched, so it gives nil.
     static func sourceQuit(_ report: SourceQuitReport, source: AudioSource,
                            setting: WhenSourceQuits, isRunning: (String) -> Bool = SourceApps.isRunning)
         -> (bundleID: String, action: SourceQuit.Action)? {
+        if waitsForRecheck(report, source: source) { return nil }
         let quit: String?
         let streaming: SourceQuit.Streaming
         switch report {
         case .terminated(let bundleID, let running):
+            quit = bundleID
+            streaming = running ? .running : .off
+        case .mixAppGone(let bundleID, let running):
             quit = bundleID
             streaming = running ? .running : .off
         case .captureLost(let error):
@@ -118,7 +177,7 @@ enum AppLifecycle {
             quit = bundleID
             streaming = .rebuilding
         }
-        guard let quit else { return nil }
+        guard let quit = quit.map({ sourceSpelling(of: $0, in: source) }) else { return nil }
         let action = SourceQuit.decide(setting: setting, source: source, quitBundleID: quit, streaming: streaming,
                                        isRunning: isRunning)
         return action == .keep ? nil : (quit, action)
@@ -197,4 +256,63 @@ final class SignalQuit: @unchecked Sendable {
         exited = true
         exitProcess(status)
     }
+}
+
+/// Why a running session stops, written to the debug log so no stop goes
+/// unexplained there. After a restart case a new start is attempted, which
+/// can still fail or find no speaker on.
+enum SessionStop: CaseIterable {
+    /// The power switch in the window or the menu bar panel.
+    case powerSwitch
+    /// Turn Streaming Off in the Speakers menu.
+    case menuItem
+    /// The last speaker that was on went off (`StreamingPolicy.isIdle`).
+    case noSpeakerOn
+    case startFailed
+    case sourceAppQuit
+    case sourceSwitchedToSystem
+    case sourceChanged
+    case inputPairChanged
+    case captureLost
+    /// The capture format changed: the session is built again at the new rate.
+    case formatChanged
+    /// The capture format changed after streaming was switched off by hand,
+    /// so no rebuild follows (`AppLifecycle.restartsAfterFormatChange`).
+    case formatChangedSwitchedOff
+    /// A start found a session running and builds it again.
+    case rebuild
+    case quitting
+
+    var restarts: Bool {
+        switch self {
+        case .sourceSwitchedToSystem, .sourceChanged, .inputPairChanged, .formatChanged, .rebuild: return true
+        default: return false
+        }
+    }
+
+    /// `detail` names what the reason alone can't: the input event behind
+    /// the switch or the menu item, the app that quit.
+    func logLine(detail: String? = nil) -> String {
+        let why: String
+        switch self {
+        case .powerSwitch: why = "the power switch turned streaming off"
+        case .menuItem: why = "Turn Streaming Off in the Speakers menu"
+        case .noSpeakerOn: why = "no speaker is on"
+        case .startFailed: why = "the start failed"
+        case .sourceAppQuit: why = "the source app quit"
+        case .sourceSwitchedToSystem: why = "the source app quit, the whole system plays now"
+        case .sourceChanged: why = "the source changed"
+        case .inputPairChanged: why = "the input channel pair changed"
+        case .captureLost: why = "the capture was lost"
+        case .formatChanged: why = "the capture format changed"
+        case .formatChangedSwitchedOff: why = "the capture format changed after streaming was switched off by hand"
+        case .rebuild: why = "a start found it running"
+        case .quitting: why = "AudioSync quits"
+        }
+        return "[AudioSync] session \(restarts ? "restarts" : "stops"): \(why)" + (detail.map { " (\($0))" } ?? "")
+    }
+
+    /// Whether a stop is logged: a session runs, or the engine already
+    /// stopped it on a capture interruption it reports afterwards.
+    static func logs(running: Bool, interrupted: Bool) -> Bool { running || interrupted }
 }

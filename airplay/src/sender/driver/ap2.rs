@@ -16,7 +16,7 @@ use crate::error::{UnsupportedReason, Warning};
 use crate::ptp::{MessageType, PtpService, clock_identity};
 use crate::session::{Connection, MediaDestinations};
 use crate::stream::Ap2Audio;
-use crate::transport::PtpIo;
+use crate::transport::{PtpIo, Queued};
 
 /// How often a session waiting for the old PTP service's ports looks again.
 const PTP_PORTS_POLL: Duration = Duration::from_millis(10);
@@ -191,6 +191,7 @@ impl Driver {
             .clone()
             .or_else(|| self.homekit.get(key).cloned());
         let verifying = config.credentials.is_some();
+        config.credentials_turned_down = verifying && self.homekit_turned_down.contains(key);
         config.password = speaker.options.password.clone();
         config.device_id = self.device_id;
         config.ptp = ptp;
@@ -356,6 +357,7 @@ impl Driver {
             speaker.options.homekit_credentials = Some(credentials.clone());
         }
         self.homekit.insert(key.clone(), credentials);
+        self.homekit_turned_down.remove(key);
     }
 
     /// Drops the HomeKit credentials kept for a device, so its next session
@@ -365,13 +367,7 @@ impl Driver {
             speaker.options.homekit_credentials = None;
         }
         self.homekit.remove(key);
-    }
-
-    /// Drops HomeKit credentials the receiver turned down (P154), and tells
-    /// the host to delete its stored copy.
-    fn reject_homekit(&mut self, key: &DeviceKey) {
-        self.forget_homekit(key);
-        self.emit_speaker(key, SpeakerEvent::HomeKitRejected);
+        self.homekit_turned_down.remove(key);
     }
 
     pub(super) fn next_ap2_output(&mut self, key: &DeviceKey) -> Option<Ap2Output> {
@@ -406,11 +402,20 @@ impl Driver {
                 }
             }
             Ap2Output::SendEvents(bytes) => {
-                if let Some(io) = self
+                let Some(io) = self
                     .ap2_active(key)
                     .and_then(|active| active.events_io.as_ref())
-                {
-                    io.write(bytes);
+                else {
+                    return;
+                };
+                if io.write_bounded(bytes, transport::EVENT_BACKLOG) == Queued::Overflowed {
+                    let line = format!(
+                        "warning: the receiver left more than {} event answers or {} bytes unread; \
+                         closing the event connection",
+                        transport::EVENT_BACKLOG.messages,
+                        transport::EVENT_BACKLOG.bytes
+                    );
+                    self.emit_speaker(key, SpeakerEvent::Trace(line));
                 }
             }
             Ap2Output::Close => self.release_ap2(key),
@@ -678,6 +683,7 @@ impl Driver {
                     speaker.options.homekit_credentials = Some(credentials.clone());
                 }
                 self.homekit.insert(key.clone(), credentials.clone());
+                self.homekit_turned_down.remove(key);
                 self.emit_speaker(key, SpeakerEvent::HomeKitPaired(credentials));
             }
             Ap2Event::TimingChosen(timing) => {
@@ -732,8 +738,10 @@ impl Driver {
                     .get(key)
                     .is_some_and(|speaker| speaker.target.is_some());
                 let settling = member && self.settling(key, error.kind, now);
+                // No answer at this point proves the receiver, so the
+                // credentials stay for the host and for the next session (P154).
                 if verifying && error.kind == ErrorKind::PairingRequired && !settling {
-                    self.reject_homekit(key);
+                    self.homekit_turned_down.insert(key.clone());
                 }
                 self.on_failed(key, error, now);
             }

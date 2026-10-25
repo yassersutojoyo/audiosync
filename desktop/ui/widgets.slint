@@ -1591,14 +1591,14 @@ export component SpeakerRow inherits Rectangle {
                     }
                 }
 
-                if root.item.paired: MenuItem {
+                if root.item.paired || root.item.holds-credentials: MenuItem {
                     title: Strings.forget-pairing;
                     activated => {
                         root.forget-pairing();
                     }
                 }
 
-                if !root.item.paired && root.item.holds-password: MenuItem {
+                if !root.item.paired && !root.item.holds-credentials && root.item.holds-password: MenuItem {
                     title: Strings.forget-password;
                     activated => {
                         root.forget-pairing();

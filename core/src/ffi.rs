@@ -983,6 +983,10 @@ mod tests {
                 "ASC_AIRPLAY_FLAG_CODE_EVERY_TIME",
                 AIRPLAY_FLAG_CODE_EVERY_TIME.to_string(),
             ),
+            (
+                "ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT",
+                AIRPLAY_FLAG_CREDENTIALS_KEPT.to_string(),
+            ),
             ("ASC_AIRPLAY_FLAG_RAOP", AIRPLAY_FLAG_RAOP.to_string()),
             ("ASC_AIRPLAY_FLAG_AIRPLAY", AIRPLAY_FLAG_AIRPLAY.to_string()),
             (
@@ -1074,6 +1078,10 @@ mod tests {
                 AIRPLAY_ERROR_WRONG_PIN.to_string(),
             ),
             (
+                "ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED",
+                AIRPLAY_ERROR_RECEIVER_UNVERIFIED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_EVENT_PIN_NEEDED",
                 AIRPLAY_EVENT_PIN_NEEDED.to_string(),
             ),
@@ -1125,10 +1133,6 @@ mod tests {
             (
                 "ASC_AIRPLAY_WARNING_REQUEST_FAILED",
                 AIRPLAY_WARNING_REQUEST_FAILED.to_string(),
-            ),
-            (
-                "ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID",
-                AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID.to_string(),
             ),
             (
                 "ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN",

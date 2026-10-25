@@ -3889,6 +3889,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::TimingUnavailable => AirPlayProblem::TimingUnavailable,
         P::OneAirPlay2Speaker => AirPlayProblem::OneAirplay2Speaker,
         P::PlaysThroughSpeakers => AirPlayProblem::PlaysThroughSpeakers,
+        P::ReceiverUnverified => AirPlayProblem::ReceiverUnverified,
         P::AppleTvPlays => AirPlayProblem::AppleTvPlays,
         P::PlaysInGroup => AirPlayProblem::PlaysInGroup,
         P::Unsupported => AirPlayProblem::Unsupported,
@@ -4005,6 +4006,7 @@ pub fn speaker_item(
         availability: availability(speaker.availability),
         paired: speaker.paired,
         holds_password: speaker.holds_password,
+        holds_credentials: speaker.holds_credentials,
         code_every_time: speaker.code_every_time,
         device_volume,
         device_volume_percent,
@@ -4959,10 +4961,15 @@ mod tests {
 
     /// The App over `backend`, with headless windows.
     pub(super) fn app_over(backend: MockBackend) -> Rc<App> {
+        app_logging(backend, DebugLog::new(None))
+    }
+
+    /// [`app_over`] writing to `log`.
+    pub(super) fn app_logging(backend: MockBackend, log: DebugLog) -> Rc<App> {
         // The platform is set per thread: a thread that already built an
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
-        App::new(Box::new(backend), DebugLog::new(None)).expect("the windows build headless")
+        App::new(Box::new(backend), log).expect("the windows build headless")
     }
 
     #[test]
@@ -8155,6 +8162,11 @@ mod tests {
                 ui_model::AirPlayProblem::PlaysInGroup,
                 "Right",
                 "Right plays as part of its stereo pair or home theater group",
+            ),
+            (
+                ui_model::AirPlayProblem::ReceiverUnverified,
+                "Den TV",
+                "Den TV didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
             ),
         ] {
             let text = notice_text(

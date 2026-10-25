@@ -149,6 +149,17 @@ struct AppSettings: Equatable {
     /// The migration to offsets ran (S179).
     var localDelaysMigrated = false
 
+    /// The settings a launch starts from. `holdingSpeakersOff` (a debug launch
+    /// without auto-connect, `LaunchAutoConnect`) leaves every speaker off,
+    /// whatever was saved as on.
+    func atLaunch(holdingSpeakersOff: Bool) -> AppSettings {
+        guard holdingSpeakersOff else { return self }
+        var held = self
+        held.enabledAirPlay = []
+        held.enabledLocal = []
+        return held
+    }
+
     /// Reads every setting through `read`, which returns what is stored for a
     /// key (UserDefaults' `object(forKey:)`), or nil.
     static func load(_ read: (String) -> Any?) -> AppSettings {
@@ -257,6 +268,11 @@ struct AppSettings: Equatable {
     }
 }
 
+/// The writes of a `SettingsStore.memoryOnly()` store; a removed key holds nil.
+private final class WrittenInMemory {
+    var values: [String: Any?] = [:]
+}
+
 /// Where the settings are read and written: UserDefaults in the app, a plain
 /// dictionary in the logic tests. Each save writes one key, in the form
 /// `AppSettings.load` reads back.
@@ -270,6 +286,15 @@ struct SettingsStore {
     static var standard: SettingsStore {
         SettingsStore(read: { UserDefaults.standard.object(forKey: $0) },
                       write: { UserDefaults.standard.set($0, forKey: $1) })
+    }
+
+    /// This store with every write kept in memory for the run: reads see the
+    /// run's own changes, and nothing reaches `self`. A debug launch without
+    /// auto-connect (`LaunchAutoConnect`) leaves the saved settings as they were.
+    func memoryOnly() -> SettingsStore {
+        let written = WrittenInMemory()
+        return SettingsStore(read: { key in written.values[key] ?? self.read(key) },
+                             write: { value, key in _ = written.values.updateValue(value, forKey: key) })
     }
 
     /// Brings older forms up to date (`migrate`, `migrateZones`,

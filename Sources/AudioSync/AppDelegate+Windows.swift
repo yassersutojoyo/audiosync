@@ -14,9 +14,9 @@ extension AppDelegate {
     /// callbacks, the view actions, the menu bar item and the first model
     /// snapshot.
     func setUpMenuBar() {
-        let settings = StoredEqualizer.decode(UserDefaults.standard.data(forKey: Keys.equalizer))
+        let settings = StoredEqualizer.decode(store.read(Keys.equalizer) as? Data)
         engine.updateEqualizer(settings)
-        let curves = StoredCurves.decode(UserDefaults.standard.data(forKey: Keys.equalizerCurves))
+        let curves = StoredCurves.decode(store.read(Keys.equalizerCurves) as? Data)
         equalizerModel = EqualizerModel(settings: settings, curves: curves)
         equalizerModel.onChange = { [weak self] new in self?.equalizerChanged(new) }
         equalizerModel.onCurvesChange = { [weak self] new in self?.equalizerCurvesChanged(new) }
@@ -31,8 +31,8 @@ extension AppDelegate {
 
         appModel.text = text
         appModel.actions = makeActions()
-        let saved = AppSettings.load(SettingsStore.standard.read)
-        let remote = WebRemote(model: appModel, store: .standard, enabled: saved.webRemote, port: saved.webRemotePort)
+        let saved = AppSettings.load(store.read)
+        let remote = WebRemote(model: appModel, store: store, enabled: saved.webRemote, port: saved.webRemotePort)
         remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
         remote.host.zones = { [weak self] in self?.zones ?? [] }
         remote.host.presets = { [weak self] in
@@ -60,7 +60,7 @@ extension AppDelegate {
     private func equalizerChanged(_ settings: Equalizer.Settings) {
         engine.updateEqualizer(settings)
         if let data = StoredEqualizer.encode(settings) {
-            UserDefaults.standard.set(data, forKey: Keys.equalizer)
+            store.write(data, Keys.equalizer)
         }
         publish(\.equalizerOn, settings.enabled)
         publishEqualizerCurve()
@@ -69,7 +69,7 @@ extension AppDelegate {
 
     private func equalizerCurvesChanged(_ curves: [Equalizer.Curve]) {
         if let data = StoredCurves.encode(curves) {
-            UserDefaults.standard.set(data, forKey: Keys.equalizerCurves)
+            store.write(data, Keys.equalizerCurves)
         }
         publishEqualizerCurve()
     }
@@ -120,6 +120,7 @@ extension AppDelegate {
         a.forgetAirPlayPairing = { [weak self] id in self?.forgetNativePairing(id) }
         a.setLocalEnabled = { [weak self] uid, on, origin in self?.setLocalEnabled(uid, on, origin: origin) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }
+        a.localVolumeSettled = { [weak self] uid in self?.logLocalVolume(uid) }
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
         a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
         a.cancelCalibration = { [weak self] in self?.cancelCalibration() }
@@ -202,14 +203,26 @@ extension AppDelegate {
 
     /// The power switch. Switching off by hand also keeps auto-connect from
     /// starting streaming again until the user turns it back on.
-    private func setStreaming(_ on: Bool) {
+    private func setStreaming(_ on: Bool, fromMenu: Bool = false) {
         defer { pushModel() }
         guard on else {
             userStopped = true
-            stopEngine()
+            stopEngine(fromMenu ? .menuItem : .powerSwitch, detail: Self.inputEventNote())
             return
         }
         startEngine(origin: .user)
+    }
+
+    /// The event AppKit is handling, for the debug log, so a stop by a key
+    /// press or a script can be told from a click.
+    private static func inputEventNote() -> String {
+        guard let event = NSApp.currentEvent else { return "no input event" }
+        let window = event.window.map { String(describing: type(of: $0)) } ?? "no window"
+        switch event.type {
+        case .keyDown, .keyUp: return "key code \(event.keyCode) in \(window)"
+        case .leftMouseDown, .leftMouseUp: return "click in \(window)"
+        default: return "event type \(event.type.rawValue) in \(window)"
+        }
     }
 
     /// Lists the outputs afresh, asks the AirPlay sender again and reads the
@@ -420,6 +433,7 @@ extension AppDelegate {
                                     airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
                                     waitingForAirPlay2: receiver.map { native?.isWaiting($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
+                                    holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,
                                     airPlayTarget: receiver.flatMap { native?.targetRow($0) })
         }
@@ -574,7 +588,7 @@ extension AppDelegate {
 
     @objc func showWebRemote(_ sender: Any?) { openWebRemoteWindow() }
 
-    @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning) }
+    @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning, fromMenu: true) }
 
     @objc func newZone(_ sender: Any?) { promptNewZone() }
 

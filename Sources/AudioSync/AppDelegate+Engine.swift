@@ -40,7 +40,10 @@ extension AppDelegate {
         }
         // E.g. a format change: rebuild at the new rate. The start waits for
         // the old outputs' fade-outs (at most 500 ms, S186).
-        if engine.isRunning { engine.stop() }
+        if engine.isRunning {
+            DebugTrace.log(SessionStop.rebuild.logLine())
+            engine.stop()
+        }
         do {
             try engine.start(source: audioSource, inputPair: currentInputPair)
         } catch {
@@ -100,7 +103,7 @@ extension AppDelegate {
         if origin == .automatic { autoStartFailed = true }
         // Nothing is streaming now; don't leave the AirPlay speakers held
         // (an automatic restart after a format change can end up here).
-        stopEngine()
+        stopEngine(.startFailed)
         notify(message, origin: origin, subject: Notice.start)
     }
 
@@ -138,14 +141,14 @@ extension AppDelegate {
         case .keep:
             return
         case .stop:
-            stopEngine()
+            stopEngine(.sourceAppQuit, detail: bundleID)
             postNotice(text.sourceTerminated(name: name), subject: Notice.source)
         case .switchToSystem:
             audioSource = .system
             updateNowPlayingTarget()
             clearNotices([Notice.source, Notice.capture])   // about the app
             autoStartFailed = false
-            stopEngine()
+            stopEngine(.sourceSwitchedToSystem, detail: bundleID)
             // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
             startEngine(origin: .automatic)
             // A failed start has its own "start" notice; this one still says which app quit.
@@ -155,9 +158,45 @@ extension AppDelegate {
         }
     }
 
+    /// An app of the "only these" mix quit: judge it `mixQuitRecheck` later,
+    /// once macOS's app list has caught up (S164), unless the user picked
+    /// another source meanwhile.
+    func recheckMixQuit(_ bundleID: String) {
+        let mix = audioSource
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
+            guard let self, audioSource == mix else { return }
+            DebugTrace.log("[AudioSync] mix app quit: \(bundleID), judged again")
+            if let quit = AppLifecycle.sourceQuit(.mixAppGone(bundleID: bundleID, streaming: engine.isRunning),
+                                                  source: mix, setting: whenSourceQuits) {
+                sourceAppQuit(quit.bundleID, quit.action)
+            }
+        }
+    }
+
+    /// The mix's capture found none of its apps and stopped: rebuild it
+    /// `mixQuitRecheck` later, which goes on with the apps still running or
+    /// fails as their quit (S227 e). A stop, start or source change by the
+    /// user meanwhile wins.
+    func rebuildMixLater() {
+        let mix = audioSource, lostSession = session
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
+            guard let self else { return }
+            switch AppLifecycle.afterMixLoss(sourceChanged: audioSource != mix, userStopped: userStopped,
+                                             engineRunning: engine.isRunning, sessionChanged: session != lostSession) {
+            case .none: return
+            case .rebuild: startEngine(origin: .automatic, rebuild: true)
+            case .start: startEngine(origin: .automatic)
+            case .stop: stopEngine(.captureLost, detail: "streaming was switched off while the mix waited to rebuild")
+            }
+        }
+    }
+
     /// Streaming off: the session stops, and AudioSync's own sender's
     /// speakers leave (`syncNativeSpeakers`); their switches stay as they are.
-    func stopEngine() {
+    func stopEngine(_ reason: SessionStop, detail: @autoclosure () -> String? = nil) {
+        if SessionStop.logs(running: engine.isRunning, interrupted: captureInterrupted) {
+            DebugTrace.log(reason.logLine(detail: detail()))
+        }
         engine.stop()   // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
         syncNativeSpeakers()   // nothing streams: AudioSync's own sender's speakers leave
         syncCast()   // and the Cast session ends

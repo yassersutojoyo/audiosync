@@ -269,8 +269,28 @@ pub struct CastSession {
     quitting: Arc<AtomicBool>,
     group: Option<GroupRecords>,
     members: MemberList,
-    /// Multizone types already logged this session (C96).
-    group_types_logged: Vec<String>,
+    group_types_logged: LoggedTypes,
+}
+
+/// The most multizone types logged in one session, and the longest a
+/// logged type may be: a leader may send any number of made-up types.
+const MAX_LOGGED_TYPES: usize = 16;
+const MAX_TYPE_CHARS: usize = 64;
+
+/// Multizone types already logged this session (C96).
+#[derive(Debug, Default)]
+struct LoggedTypes(Vec<String>);
+
+impl LoggedTypes {
+    /// The type as it is logged, the first time it is seen.
+    fn first_sight(&mut self, kind: &str) -> Option<String> {
+        let kind: String = kind.chars().take(MAX_TYPE_CHARS).collect();
+        if self.0.len() >= MAX_LOGGED_TYPES || self.0.contains(&kind) {
+            return None;
+        }
+        self.0.push(kind.clone());
+        Some(kind)
+    }
 }
 
 fn teardown_budget(quitting: &AtomicBool) -> Duration {
@@ -404,7 +424,7 @@ impl CastSession {
             quitting,
             group,
             members: MemberList::new(),
-            group_types_logged: Vec::new(),
+            group_types_logged: LoggedTypes::default(),
         };
         if let Err(error) = session.load_with_fallback() {
             session.teardown(teardown_budget(&session.quitting));
@@ -631,9 +651,8 @@ impl CastSession {
 
     fn on_multizone(&mut self, message: MultizoneMessage) {
         if let MultizoneMessage::Other(kind) = &message {
-            if !self.group_types_logged.contains(kind) {
-                self.group_types_logged.push(kind.clone());
-                self.report(SessionEvent::GroupMessage(kind.clone()));
+            if let Some(kind) = self.group_types_logged.first_sight(kind) {
+                self.report(SessionEvent::GroupMessage(kind));
             }
             return;
         }
@@ -891,6 +910,21 @@ mod tests {
             error: ConnectError::NoStatus,
             retry_in: Duration::from_secs(30),
         }
+    }
+
+    #[test]
+    fn logged_group_types_stop_at_their_cap_and_are_cut_short() {
+        let mut logged = LoggedTypes::default();
+        let first = logged.first_sight(&"X".repeat(10_000)).expect("first type");
+        assert_eq!(first.chars().count(), MAX_TYPE_CHARS);
+        assert_eq!(logged.first_sight(&"X".repeat(10_000)), None);
+        let fresh = (0..10_000)
+            .filter_map(|n| logged.first_sight(&format!("TYPE_{n}")))
+            .count();
+        assert_eq!(fresh, MAX_LOGGED_TYPES - 1);
+        assert_eq!(logged.first_sight("TYPE_0"), None);
+        let wide = LoggedTypes::default().first_sight(&"\u{e9}".repeat(100));
+        assert_eq!(wide.map(|kind| kind.chars().count()), Some(MAX_TYPE_CHARS));
     }
 
     #[test]
