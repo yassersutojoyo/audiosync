@@ -376,4 +376,10 @@ enum DelayBadge {
         guard let ms = savedMs(of: id, airPlayID: airPlayID, airPlayMs: airPlayMs, rows: rows) else { return nil }
         return id == airPlayID ? text.delayValue(ms: ms) : text.offsetValue(ms: ms)
     }
+
+    /// The debug-log line for a change of what a row shows; an empty value is
+    /// the nil `text(of:)` gives the reference speaker or a row no longer listed.
+    static func traceLine(id: String, shows: String) -> String {
+        "[AudioSync] delay value \(id) shows \(shows.isEmpty ? "none (reference speaker or no longer listed)" : shows)"
+    }
 }
