@@ -7220,8 +7220,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn no_session_starts_for_a_speaker_whose_pin_pairing_runs() {
+    /// [`airplay2_adapter`] with Loft's PIN prompt open, after Loft dropped
+    /// out of view and came back listed as able to play, so auto-connect
+    /// switched it on while its pairing runs.
+    fn auto_connected_while_pairing() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
         let (mut adapter, fake, loft) = airplay2_adapter(true);
         let id = ap(&loft);
         adapter.set_auto_connect(&id, true);
@@ -7229,13 +7231,17 @@ mod tests {
         fake.pairing(&loft, PairingEvent::PinRequested);
         adapter.poll();
         fake.take_calls();
-
-        // It drops out of view and comes back listed as able to play, so
-        // auto-connect switches it on.
         fake.gone(&loft);
         adapter.poll();
         fake.appear(&airplay2_device(9, "Loft", false));
         adapter.poll();
+        (adapter, fake, loft)
+    }
+
+    #[test]
+    fn no_session_starts_for_a_speaker_whose_pin_pairing_runs() {
+        let (adapter, fake, loft) = auto_connected_while_pairing();
+        let id = ap(&loft);
         assert!(
             !fake
                 .take_calls()
@@ -7250,6 +7256,36 @@ mod tests {
                 .map(|prompt| prompt.speaker_id),
             Some(id)
         );
+    }
+
+    #[test]
+    fn a_speaker_switched_on_while_its_pairing_runs_ends_off_when_the_pairing_ends_unpaired() {
+        for cancelled in [true, false] {
+            let (mut adapter, fake, loft) = auto_connected_while_pairing();
+            let id = ap(&loft);
+            if cancelled {
+                adapter.cancel_pairing(&id);
+            } else {
+                fake.pairing(
+                    &loft,
+                    PairingEvent::Failed {
+                        error: SessionError::new(ErrorKind::PairingFailed),
+                        wrong_pin: false,
+                    },
+                );
+                adapter.poll();
+            }
+            adapter.poll();
+            let state = adapter.snapshot();
+            assert!(!state.speaker(&id).unwrap().enabled, "cancelled: {cancelled}");
+            assert!(
+                !fake
+                    .take_calls()
+                    .iter()
+                    .any(|call| matches!(call, Call::Add { .. })),
+                "cancelled: {cancelled}"
+            );
+        }
     }
 
     #[test]
