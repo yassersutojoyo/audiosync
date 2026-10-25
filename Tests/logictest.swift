@@ -7648,6 +7648,16 @@ do {
     _ = switches.answer()
     check(pending == toOther && switches.switching == nil,
           "microphone: the answer runs the latest switch once", "\(String(describing: pending))")
+    var picked = MicrophoneRequestGate()
+    _ = picked.begin(origin: .user, switching: toInput)
+    picked.supersedeSwitch()
+    let droppedSwitch = picked.switching
+    check(droppedSwitch == nil && picked.answer() == nil && picked.begin(origin: .user),
+          "microphone: a later pick drops the switch waiting on the prompt, and its answer runs nothing")
+    var plainStart = MicrophoneRequestGate()
+    _ = plainStart.begin(origin: .user)
+    plainStart.supersedeSwitch()
+    check(plainStart.answer() == .user, "microphone: a later pick leaves a plain start's answer alone")
 }
 
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)

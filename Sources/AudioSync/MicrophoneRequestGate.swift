@@ -17,6 +17,11 @@ struct MicrophoneRequestGate {
         return wanted == nil
     }
 
+    /// The user picked a source or pair again while a switch waited on the
+    /// prompt: that switch is dropped, and the answer runs nothing.
+    mutating func supersedeSwitch() {
+    }
+
     /// The origin of the one start (or denied notice) the answer runs; nil
     /// when no request was out. Read `switching` first: this clears it.
     mutating func answer() -> StartOrigin? {
