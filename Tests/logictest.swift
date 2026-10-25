@@ -3058,7 +3058,7 @@ check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(
       && !NowPlayingMonitor.meansNoTrack(-2753),
       "AppleScript: Automation refused (-1743) and other errors are still logged")
 
-// MARK: Track info — a paused player keeps its track on receivers until it quits or stays empty
+// MARK: Track info — a paused player keeps its track on receivers until it stops or quits
 do {
     let spotify = NowPlayingMonitor.spotify
     let source = AudioSource.app(bundleID: spotify)
@@ -3074,14 +3074,23 @@ do {
     shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
     check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
           "now playing: one empty reading of a paused player keeps its track and cover, not the fallback")
-    shown = empty.next(reading: paused, last: shown, lastPlayerRuns: true)
-    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
-    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
-    check(shows(shown).fields.title == "Song",
-          "now playing: a real reading in between starts the count of empty readings again")
-    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    for _ in 0..<300 { shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true) }
+    check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
+          "now playing: a paused player that still runs keeps its track and cover through 300 unreadable readings")
+    let playing = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Tune", artist: "Band",
+                                          album: "Record", isPlaying: true,
+                                          artwork: NSImage(size: NSSize(width: 1, height: 1)))
+    let dropAfter = NowPlayingMonitor.EmptyReadings.dropAfter
+    var stalled = NowPlayingMonitor.EmptyReadings()
+    shown = stalled.next(reading: playing, last: nil, lastPlayerRuns: true)
+    shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
+    shown = stalled.next(reading: playing, last: shown, lastPlayerRuns: true)
+    for _ in 1..<dropAfter { shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true) }
+    check(shows(shown).fields.title == "Tune",
+          "now playing: a real reading in between starts the count of empty readings after a playing track again")
+    shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
     check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral,
-          "now playing: \(NowPlayingMonitor.EmptyReadings.dropAfter) empty readings in a row send the fallback")
+          "now playing: \(dropAfter) empty readings in a row after a playing track send the fallback")
     var quit = NowPlayingMonitor.EmptyReadings()
     shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
     check(shown == nil && shows(shown).fields == untitled,
