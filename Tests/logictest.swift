@@ -3143,6 +3143,25 @@ do {
     var restart = pausedAt(t0)
     check(restart.clear() == .resume && restart.clear() == .nothing,
           "explicit pause: a new capture or stopped readings resume a paused stream once")
+
+    func loud(_ samples: [Float]) -> Int {
+        samples.withUnsafeBufferPointer { ExplicitPause.soundFrames($0.baseAddress!, frames: samples.count / 2) }
+    }
+    check(loud([0, 0, 0, 0]) == 0 && loud([3e-5, -3e-5, 2e-5, -1e-5]) == 0,
+          "explicit pause: digital silence and dither are no sound")
+    check(loud([0.002, 0, 0, -0.002, 0, 0]) == 2 && loud([0.5, 0.5, -0.5, -0.5]) == 2,
+          "explicit pause: a frame with a sample above -60 dBFS is sound")
+
+    var heard = pausedAt(t0)
+    check(heard.heard(sound: 1.0, at: t0.addingTimeInterval(1)) == .nothing
+            && heard.heard(sound: 1.0, at: later) == .nothing
+            && heard.heard(sound: 1.15, at: later) == .nothing && heard.isPaused,
+          "explicit pause: sound before the stale-reading time, or under 200 ms after it, keeps the pause")
+    check(heard.heard(sound: 1.2, at: later) == .resume && !heard.isPaused,
+          "explicit pause: 200 ms of sound after the stale-reading time resumes, whatever the reading says")
+    var playing = ExplicitPause()
+    check(playing.heard(sound: 60, at: later) == .nothing && !playing.isPaused,
+          "explicit pause: sound never pauses")
 }
 
 // MARK: Track info — what AirPlay receivers with a screen show
