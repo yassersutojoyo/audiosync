@@ -3740,18 +3740,31 @@ mod tests {
         assert_eq!(backend.running_source(), Some(app.clone()));
 
         // A source that can't be captured gives way at once to the one that
-        // played (S141); one whose capture fails when it starts at the poll,
-        // with nothing before it to go back to, stops with that reason.
+        // played, which starts once the old outputs faded (S141); another
+        // pick during that fade that fails at the poll gives way to it too.
         backend.driver().hold_fades(true);
         backend.start(&SourceId::App { root_pid: 4321 }).unwrap();
         assert_eq!(backend.running_source(), Some(app.clone()));
         backend.start(&SourceId::WholeSystem).unwrap();
-        backend.refuse_captures(Some(BackendError::DeviceGone));
+        backend.refuse_next_capture(BackendError::DeviceGone);
         backend.driver().hold_fades(false);
         let events = backend.poll();
         assert!(events.contains(&BackendEvent::SwitchFailed {
             error: BackendError::SourceGone,
         }));
+        assert!(events.contains(&BackendEvent::SwitchFailed {
+            error: BackendError::DeviceGone,
+        }));
+        assert_eq!(backend.running_source(), Some(app.clone()));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+
+        // Only when the old source can't start again either does streaming
+        // stop, with the new one's reason.
+        backend.driver().hold_fades(true);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        backend.driver().hold_fades(false);
+        let events = backend.poll();
         assert!(events.contains(&BackendEvent::Stopped {
             reason: StopReason::CaptureFailed(BackendError::DeviceGone),
         }));

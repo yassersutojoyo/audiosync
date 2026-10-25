@@ -8154,6 +8154,13 @@ mod tests {
             [switch_failed(player_name(), SwitchName::System)]
         );
 
+        // Picking the source that plays clears the notice too.
+        adapter.select_source("system");
+        assert!(messages(&adapter).is_empty());
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_source(&player());
+        assert_eq!(messages(&adapter).len(), 1);
+
         // Another pick clears the notice, and this time the player starts.
         adapter.select_source(&player());
         assert!(messages(&adapter).is_empty());
@@ -8263,6 +8270,13 @@ mod tests {
                 SwitchName::Channels { first: 1, last: 2 }
             )]
         );
+
+        // Picking the pair that plays clears the notice.
+        adapter.select_input_pair(0);
+        assert!(messages(&adapter).is_empty());
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_input_pair(1);
+        assert_eq!(messages(&adapter).len(), 1);
 
         // Picking the pair again tries it again and clears the notice.
         adapter.select_input_pair(1);
