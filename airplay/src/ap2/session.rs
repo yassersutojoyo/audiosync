@@ -175,9 +175,15 @@ pub enum Ap2Event {
     /// `/pair-pin-start` was answered: the receiver shows a code, which the
     /// host passes to [`Ap2Session::submit_pin`] (P61).
     PinRequested,
-    /// The receiver turned the PIN down (P150, error 2). The code it shows
-    /// stays, and the session waits for another [`Ap2Session::submit_pin`].
-    WrongPin,
+    /// The receiver turned the PIN down (P150, error 2), or asked for a
+    /// wait before the next one (error 3); why, for the host's debug log.
+    /// The code it shows stays, and the session waits for another
+    /// [`Ap2Session::submit_pin`].
+    WrongPin(String),
+    /// The receiver turned the PIN down a second time in a row, so
+    /// `/pair-pin-start` goes out again (P150); why, for the host's debug
+    /// log. [`Ap2Event::PinRequested`] follows its answer.
+    PinStartAgain(String),
     /// The PIN pairing's new credentials passed the pair-verify on the same
     /// connection (P153), which waits for [`Ap2Session::proceed`].
     Verified,
@@ -1780,8 +1786,16 @@ impl Ap2Session {
         };
         let mut entropy = Draw(self.entropy.as_mut());
         let step = setup.handle_response(response, &mut entropy);
+        let refusal = setup.take_refusal();
         match step {
-            SetupStep::Send(_) => self.send(Kind::PairSetup, now, false),
+            SetupStep::Send(_) => {
+                if let Some(refusal) = refusal {
+                    self.event(Ap2Event::PinStartAgain(format!(
+                        "the receiver turned the PIN down again: {refusal}; /pair-pin-start goes out again"
+                    )));
+                }
+                self.send(Kind::PairSetup, now, false);
+            }
             SetupStep::Retry => self.reconnect(Restart::PairingRetry, now),
             SetupStep::Transient(secret) => self.start_framing(secret, now),
             SetupStep::Paired(credentials) => {
@@ -1805,10 +1819,16 @@ impl Ap2Session {
             }
             SetupStep::Failed(failure) => self.fail_with(failure.error),
             SetupStep::PinRequested => self.event(Ap2Event::PinRequested),
-            SetupStep::WrongPin => self.event(Ap2Event::WrongPin),
+            SetupStep::WrongPin => self.event(Ap2Event::WrongPin(format!(
+                "the receiver turned the PIN down: {}; the PIN is asked for again",
+                refusal.unwrap_or_default()
+            ))),
             SetupStep::BackOff(wait) => {
                 self.pin_not_before = Some(now + wait);
-                self.event(Ap2Event::WrongPin);
+                self.event(Ap2Event::WrongPin(format!(
+                    "the receiver asked for a wait: {}; the PIN is asked for again",
+                    refusal.unwrap_or_default()
+                )));
             }
             SetupStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,

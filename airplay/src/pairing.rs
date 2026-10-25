@@ -344,6 +344,11 @@ pub enum PairingEvent {
     },
     /// The host cancelled the pairing; the connection is closed.
     Stopped,
+    /// An AirPlay 2 receiver turned the PIN down, or asked for a wait, and
+    /// the pairing goes on (P150): which step it answered and how, never
+    /// the PIN, for the host's debug log. A [`PairingEvent::PinRequested`]
+    /// follows, at once or after `/pair-pin-start` sent again is answered.
+    PinTurnedDown(String),
 }
 
 /// What the driver does next for a pairing.

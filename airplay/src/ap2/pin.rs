@@ -179,10 +179,12 @@ impl PinPairing {
                 self.event(PairingEvent::PinRequested);
             }
             // The receiver's code stays up, so the prompt comes back (P150).
-            Ap2Event::WrongPin => {
+            Ap2Event::WrongPin(why) => {
                 self.state = PairingState::WaitingForPin;
+                self.event(PairingEvent::PinTurnedDown(why));
                 self.event(PairingEvent::PinRequested);
             }
+            Ap2Event::PinStartAgain(why) => self.event(PairingEvent::PinTurnedDown(why)),
             Ap2Event::Credentials(credentials) => self.credentials = Some(credentials),
             Ap2Event::Info(info) => {
                 let flags = homekit::status_flags(info.status_flags, self.txt_flags);

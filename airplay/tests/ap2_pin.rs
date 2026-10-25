@@ -252,9 +252,17 @@ fn a_wrong_pin_is_asked_for_again_on_the_same_connection() {
     let mut rig = PinRig::new(pin_receiver());
     assert_eq!(rig.submit("1111"), Ok(()));
     assert_eq!(rig.failure(), None);
-    assert_eq!(
-        rig.events,
-        [PairingEvent::PinRequested, PairingEvent::PinRequested]
+    assert!(
+        matches!(
+            rig.events.as_slice(),
+            [
+                PairingEvent::PinRequested,
+                PairingEvent::PinTurnedDown(_),
+                PairingEvent::PinRequested
+            ]
+        ),
+        "{:?}",
+        rig.events
     );
     assert_eq!(rig.pairing.state(), PairingState::WaitingForPin);
     // No M5 after the refusal, and nothing more until the next PIN (P151).
@@ -339,6 +347,87 @@ fn a_wrong_pin_is_asked_for_again_on_the_same_connection() {
     let mut rig = PinRig::new(fake);
     assert_eq!(rig.submit(PIN), Ok(()));
     assert_eq!(rig.failure(), Some((ErrorKind::Busy, false)));
+}
+
+impl PinRig {
+    /// The reasons the pairing gave for asking for the PIN again.
+    fn turned_down(&self) -> Vec<String> {
+        self.events
+            .iter()
+            .filter_map(|event| match event {
+                PairingEvent::PinTurnedDown(why) => Some(why.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+// covers: P150
+#[test]
+fn every_pin_asked_for_again_says_why() {
+    let mut rig = PinRig::new(pin_receiver());
+    assert_eq!(rig.submit("1111"), Ok(()));
+    assert_eq!(
+        rig.turned_down(),
+        [
+            "the receiver turned the PIN down: error 2 (authentication) in answer to M3; the PIN is asked for again"
+        ]
+    );
+    assert_eq!(rig.submit("2222"), Ok(()));
+    assert_eq!(
+        rig.turned_down().last().map(String::as_str),
+        Some(
+            "the receiver turned the PIN down again: error 2 (authentication) in answer to M3; /pair-pin-start goes out again"
+        )
+    );
+    let reasons = rig.turned_down().join(" ");
+    assert!(!reasons.contains("1111") && !reasons.contains("2222"));
+    assert_eq!(rig.events.last(), Some(&PairingEvent::PinRequested));
+
+    let mut fake = pin_receiver();
+    fake.hap.back_off = Some(5);
+    fake.hap
+        .answers
+        .push((("/pair-setup", 1), Answer::Error(3)));
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert_eq!(
+        rig.turned_down(),
+        [
+            "the receiver asked for a wait: error 3 (back-off, 5 s) in answer to M1; the PIN is asked for again"
+        ]
+    );
+
+    // An M4 whose proof doesn't verify is a refusal too.
+    let mut fake = pin_receiver();
+    fake.hap.wrong_m4_proof = true;
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert_eq!(
+        rig.turned_down(),
+        [
+            "the receiver turned the PIN down: an M4 with a proof that didn't check; the PIN is asked for again"
+        ]
+    );
+
+    // A receiver that reads B padded turns down a B that starts with a zero byte.
+    let mut fake = pin_receiver();
+    fake.hap.hash_padded = true;
+    fake.hap.zero_led_b = 1;
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert_eq!(
+        rig.turned_down(),
+        [
+            "the receiver turned the PIN down: error 2 (authentication) in answer to M3, with B or S shorter than 384 bytes (P151); the PIN is asked for again"
+        ]
+    );
+
+    // A right PIN that pairs gives no reason.
+    let mut rig = PinRig::new(pin_receiver());
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert!(rig.credentials().is_some());
+    assert!(rig.turned_down().is_empty(), "{:?}", rig.events);
 }
 
 // covers: P149
