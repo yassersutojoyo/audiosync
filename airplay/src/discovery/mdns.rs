@@ -417,25 +417,36 @@ mod tests {
         let events = [
             DaemonEvent::Respond("eth0".to_owned()),
             rename(RRType::SRV, "eth0"),
-            rename(RRType::TXT, "eth0"),
             rename(RRType::A, "wlan0"),
-            rename(RRType::AAAA, "wlan0"),
+            rename(RRType::SRV, "wlan0"),
         ];
         assert_eq!(
             name_conflicts(events.into_iter()),
             [
                 conflict(false, "eth0"),
-                conflict(false, "eth0"),
                 conflict(true, "wlan0"),
-                conflict(true, "wlan0"),
+                conflict(false, "wlan0"),
             ]
         );
     }
 
     #[test]
+    fn a_conflict_renaming_several_records_is_one_conflict() {
+        let events = [
+            rename(RRType::SRV, "eth0"),
+            rename(RRType::TXT, "eth0"),
+            rename(RRType::A, "eth0"),
+            rename(RRType::AAAA, "eth0"),
+        ];
+        assert_eq!(
+            name_conflicts(events.into_iter()),
+            [conflict(false, "eth0"), conflict(true, "eth0")]
+        );
+    }
+
+    #[test]
     fn at_most_the_cap_is_read_per_call() {
-        let mut events =
-            std::iter::repeat_with(|| rename(RRType::SRV, "eth0")).take(MONITOR_READS + 5);
+        let mut events = (0..MONITOR_READS + 5).map(|n| rename(RRType::SRV, &format!("if{n}")));
         assert_eq!(name_conflicts(events.by_ref()).len(), MONITOR_READS);
         assert_eq!(events.count(), 5);
     }
