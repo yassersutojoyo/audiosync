@@ -716,7 +716,7 @@ struct NativeAirPlayModel {
     /// receiver that turned its stored pairing down pairs again, once,
     /// whatever its listing still says; otherwise it goes off
     /// with why, and one refused pairing stays off (`refusedOff`).
-    private mutating func accessNeeded(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome {
+    private mutating func accessNeeded(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome? {
         let app = NativeAirPlayID.app(id)
         if problem == .wrongPassword || problem == .passwordRequired { passwords.remove(id) }
         if problem == .pairingRequired && (!attempts.contains(id) || pairedInAttempt.contains(id)) {
