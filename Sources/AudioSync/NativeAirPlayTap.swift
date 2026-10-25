@@ -37,12 +37,27 @@ enum NativeAirPlayTap {
         return rate > 0 ? Double(soundFrames.load(ordering: .relaxed)) / rate : 0
     }
 
+    /// A sample louder than this, -60 dBFS, is sound: digital silence and
+    /// dither stay below it.
+    static let soundLevel: Float = 0.001
+
+    /// The stereo frames of interleaved `block` with a sample louder than
+    /// `soundLevel`. Real-time safe.
+    @inline(__always)
+    static func loudFrames(_ block: UnsafePointer<Float>, frames: Int) -> Int {
+        var count = 0
+        for frame in 0..<frames where abs(block[2 * frame]) > soundLevel || abs(block[2 * frame + 1]) > soundLevel {
+            count += 1
+        }
+        return count
+    }
+
     /// Capture thread: one block of `frames` interleaved stereo frames, after
     /// the equalizer. Real-time safe: atomics, then the input's write, which
     /// never allocates, locks, blocks or logs.
     @inline(__always)
     static func write(_ block: UnsafePointer<Float>, frames: Int) {
-        let loud = ExplicitPause.soundFrames(block, frames: frames)
+        let loud = loudFrames(block, frames: frames)
         if loud > 0 { _ = soundFrames.wrappingAdd(UInt64(loud), ordering: .relaxed) }
         _ = users.wrappingAdd(1, ordering: .sequentiallyConsistent)
         if let raw = slot.load(ordering: .sequentiallyConsistent) {

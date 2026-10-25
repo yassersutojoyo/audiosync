@@ -3381,7 +3381,7 @@ do {
           "explicit pause: a new capture or stopped readings resume a paused stream once")
 
     func loud(_ samples: [Float]) -> Int {
-        samples.withUnsafeBufferPointer { ExplicitPause.soundFrames($0.baseAddress!, frames: samples.count / 2) }
+        samples.withUnsafeBufferPointer { NativeAirPlayTap.loudFrames($0.baseAddress!, frames: samples.count / 2) }
     }
     check(loud([0, 0, 0, 0]) == 0 && loud([3e-5, -3e-5, 2e-5, -1e-5]) == 0,
           "explicit pause: digital silence and dither are no sound")

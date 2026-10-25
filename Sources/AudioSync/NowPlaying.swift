@@ -478,10 +478,6 @@ struct ExplicitPause {
     /// undoes the flush audibly.
     static let staleReading: TimeInterval = 3
 
-    /// A sample louder than this, -60 dBFS, is sound: digital silence and
-    /// dither stay below it.
-    static let soundLevel: Float = 0.001
-
     /// How much sound the capture carries, in total, before a paused stream
     /// resumes on its own.
     static let soundToResume: Double = 0.2
@@ -491,17 +487,6 @@ struct ExplicitPause {
     private var pausedAt: Date?
     /// The capture's sound total when `staleReading` had passed since the pause.
     private var heardFrom: Double?
-
-    /// The stereo frames of interleaved `block` with a sample louder than
-    /// `soundLevel`. Real-time safe.
-    @inline(__always)
-    static func soundFrames(_ block: UnsafePointer<Float>, frames: Int) -> Int {
-        var count = 0
-        for frame in 0..<frames where abs(block[2 * frame]) > soundLevel || abs(block[2 * frame + 1]) > soundLevel {
-            count += 1
-        }
-        return count
-    }
 
     var isPaused: Bool { pausedAt != nil }
 
