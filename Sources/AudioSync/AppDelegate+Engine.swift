@@ -178,11 +178,11 @@ extension AppDelegate {
     /// fails as their quit (S227 e). A stop, start or source change by the
     /// user meanwhile wins.
     func rebuildMixLater() {
-        let mix = audioSource
+        let mix = audioSource, lostSession = session
         DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
             guard let self else { return }
             switch AppLifecycle.afterMixLoss(sourceChanged: audioSource != mix, userStopped: userStopped,
-                                             engineRunning: engine.isRunning) {
+                                             engineRunning: engine.isRunning, sessionChanged: session != lostSession) {
             case .none: return
             case .rebuild: startEngine(origin: .automatic, rebuild: true)
             case .start: startEngine(origin: .automatic)
