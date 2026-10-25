@@ -7738,6 +7738,17 @@ do {
     let droppedSwitch = picked.switching
     check(droppedSwitch == nil && picked.answer() == nil && picked.begin(origin: .user),
           "microphone: a later pick drops the switch waiting on the prompt, and its answer runs nothing")
+    var repicked = MicrophoneRequestGate()
+    _ = repicked.begin(origin: .user, switching: toInput)
+    repicked.picked(SourceSwitch.decide(from: .system, to: .system, streaming: true))
+    let repickedSwitch = repicked.switching
+    check(repickedSwitch == nil && repicked.answer() == nil,
+          "microphone: picking the source that plays again drops the switch waiting on the prompt")
+    var repickedPair = MicrophoneRequestGate()
+    _ = repickedPair.begin(origin: .user, switching: .inputPair(uid: "a", from: 0, to: 1))
+    repickedPair.picked(InputChannelPair.change(from: 0, to: 0, streaming: true))
+    check(repickedPair.answer() == nil,
+          "microphone: picking the channel pair that plays again drops the switch waiting on the prompt")
     var plainStart = MicrophoneRequestGate()
     _ = plainStart.begin(origin: .user)
     plainStart.supersedeSwitch()
