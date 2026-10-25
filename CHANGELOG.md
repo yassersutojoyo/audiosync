@@ -7,7 +7,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ## [0.8.0] - unreleased
 
 <!-- Placeholder: the release date replaces "unreleased" when 0.8.0 is published. -->
-<!-- Placeholder: security fixes, to add once merged. -->
 
 ### Added
 
@@ -69,6 +68,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, Use Port in the Web Remote window is only available for a valid port that differs from the current one, or for the same port again after it couldn't be used.
 - With AirPlay 2 on, a speaker that asks for a PIN starts playing over the same connection once you enter it. A wrong PIN is asked for again, and after repeated wrong ones the next try waits a little. A speaker that turned its pairing down and is switched on again without a new PIN goes off with a notice.
 - On the Mac, with `AUDIOSYNC_DEBUG=1`, the debug log notes each time a local output's audio arrives late, with the output's name.
+- On the Mac, VoiceOver reads the source menu as Audio Source and the equalizer's menu as Curve, each with what's chosen as its value.
+- For testing, with `AUDIOSYNC_DEBUG=1`: `AUDIOSYNC_NO_AUTO_CONNECT=1` keeps every speaker off for that launch and saves nothing, `AUDIOSYNC_WEB_REMOTE=1` turns the Web Remote on for one run, the debug log shows each Web Remote pairing code, and on the Mac it says why each session stopped. On the Mac and on Windows.
 
 ### Fixed
 
@@ -93,6 +94,13 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, Apply and Undo in Calibrate All set the AirPlay delay even while no AirPlay speaker plays, as on the Mac, instead of waiting until one does. Undo puts the old AirPlay delay back even after AirPlay started again with a different latency.
 - On the Mac, a paused player keeps its track and cover on AirPlay speakers. Before, a player woken after a long pause could answer with nothing and the speakers flashed AudioSync's own title and icon.
 - A source that starts after an AirPlay stream no longer loses its first moment of sound on the AirPlay speakers.
+- On the Mac, a mix keeps playing when one of its apps quits while the others still run. Before, it could switch to All System Audio or stop. A source you pick or a stop you make right then is carried out too.
+- A paired AirPlay speaker that can't prove it's the same speaker no longer plays. AudioSync turns it off with its own notice and keeps the pairing.
+- When a speaker turns down its stored pairing, AudioSync keeps it until a new pairing replaces it, on the Mac and on Windows. Cancelling the PIN prompt no longer loses it, and Forget Pairing stays in the speaker's menu.
+- A speaker you paired with a PIN always plays over AirPlay 2 and never falls back to AirPlay 1 on its own. With AirPlay 2 off, its row reads AirPlay 2 only until you forget the pairing.
+- An AirPlay 2 speaker or a Google Cast group can no longer make AudioSync hold an endless amount of data. Past a fixed limit, AudioSync closes that connection.
+- The connection an AirPlay speaker's remote buttons use closes after a wrong code, and a device that keeps trying is held off for a few seconds.
+- On the Mac, the Web Remote's pairing code and a wrong-code lock stay when the Mac's network name changes, instead of starting over.
 
 ### Windows and Linux (preview, not released yet)
 
