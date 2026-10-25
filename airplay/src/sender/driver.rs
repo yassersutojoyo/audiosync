@@ -2071,6 +2071,44 @@ mod tests {
         );
     }
 
+    // A pause FLUSH that no session sends (no AirPlay 1 session, and
+    // `ap2_flush` gives false) doesn't hold the resume (P213).
+    #[test]
+    fn a_pause_flush_no_session_sends_does_not_hold_the_resume() {
+        use crate::discovery::DeviceId;
+        use crate::session::{MediaDestinations, ReceiverPorts};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        let destinations = MediaDestinations::new(
+            "192.0.2.21:7000".parse().expect("address"),
+            ReceiverPorts {
+                server_port: 50_000,
+                control_port: 50_001,
+                timing_port: 50_002,
+            },
+        );
+        let config = SpeakerConfig::new(Codec::Alac, destinations, 1, 7, 99);
+        let id = driver.stream.add_speaker(config, now);
+        let key = DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 1]));
+        driver.stream_ids.insert(id, key);
+        let later = now + Duration::from_secs(2);
+        driver.stream.handle_timeout(later);
+        while driver.stream.poll_transmit().is_some() {}
+        while driver.stream.poll_event().is_some() {}
+
+        driver.command(Command::Pause, later);
+        assert!(driver.stream.waits_for_flush(id));
+        while let Some(event) = driver.stream.poll_event() {
+            driver.stream_event(event, later);
+        }
+        assert!(!driver.stream.waits_for_flush(id));
+    }
+
     // A thread that outlives its session's close, such as an RTSP writer
     // blocked in a send that a socket shutdown doesn't wake (Windows) and
     // only its own timeout ends, doesn't hold up shutdown (P129).

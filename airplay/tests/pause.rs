@@ -1,15 +1,21 @@
 //! An explicit pause (P213): the stream against fake receivers on a fake
-//! clock, then one session over loopback sockets.
+//! clock, then sessions over loopback sockets.
 
 mod common;
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::FRAMES_PER_PACKET;
+use audiosync_airplay::discovery::DeviceKey;
+use audiosync_airplay::error::Warning;
 use audiosync_airplay::rtp::ResendRequest;
+use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::sdp::Codec;
-use audiosync_airplay::sender::{Sender, SenderConfig, SpeakerOptions, SpeakerState};
-use audiosync_airplay::stream::{PacketKind, SpeakerId, StreamEvent};
+use audiosync_airplay::sender::{
+    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
+};
+use audiosync_airplay::stream::{PacketKind, SpeakerCounters, SpeakerId, StreamEvent};
 use audiosync_airplay::volume::Volume;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use common::rig::{Rig, decode, host_frame, speaker};
@@ -268,5 +274,203 @@ fn a_host_pause_flushes_the_receiver_over_loopback() {
     let first = &log.audio[held];
     assert_eq!(first.header.seq, seq);
     assert!(first.header.marker);
+    sender.shutdown();
+}
+
+/// A sender playing to `receiver`, once audio flows.
+fn play(receiver: &NetReceiver, id: u8) -> (Sender, HostAudio, Events, DeviceKey) {
+    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let device = receiver.device(id, PCM_TXT);
+    let key = device.key.clone();
+    sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some()
+    );
+    assert!(wait_until(LONG, || receiver.log().audio.len() >= 50));
+    (sender, host, events, key)
+}
+
+/// The `seq` the `nth` (from 0) FLUSH request names.
+fn flush_seq(receiver: &NetReceiver, nth: usize) -> u16 {
+    let log = receiver.log();
+    let flush = log
+        .requests
+        .iter()
+        .filter(|(_, request)| request.method == Method::Flush)
+        .nth(nth)
+        .map(|(_, request)| request.clone())
+        .expect("FLUSH");
+    let info = flush.headers.get("RTP-Info").expect("RTP-Info").to_owned();
+    info.split(';')
+        .find_map(|part| part.strip_prefix("seq="))
+        .and_then(|value| value.parse().ok())
+        .expect("seq")
+}
+
+/// The first audio packet the receiver got after `at`.
+fn first_audio_after(receiver: &NetReceiver, at: Instant) -> Option<(Instant, u16, bool)> {
+    receiver
+        .log()
+        .audio
+        .iter()
+        .find(|packet| packet.at > at)
+        .map(|packet| (packet.at, packet.header.seq, packet.header.marker))
+}
+
+// Part of P213: a delay FLUSH still unanswered when the pause comes doesn't
+// end the resume's wait; only the pause FLUSH's answer does.
+#[test]
+fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
+    const ANSWER: Duration = Duration::from_millis(800);
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, _host, _events, key) = play(&receiver, 1);
+    receiver
+        .behavior()
+        .answer_delay
+        .insert("FLUSH".to_owned(), ANSWER);
+    sender.set_delay(&key, Duration::from_millis(200));
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    sender.pause();
+    let paused = Instant::now();
+    sender.resume();
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 2));
+    let quiet = paused + Duration::from_millis(50);
+    assert!(wait_until(LONG, || first_audio_after(&receiver, quiet).is_some()));
+    let (at, seq, marker) = first_audio_after(&receiver, quiet).expect("audio");
+    // The delay FLUSH is answered about ANSWER after the pause, the pause
+    // FLUSH about ANSWER after that.
+    assert!(
+        at >= paused + ANSWER + ANSWER / 2,
+        "audio {:?} after the pause",
+        at - paused
+    );
+    assert_eq!(seq, flush_seq(&receiver, 1));
+    assert!(marker);
+    sender.shutdown();
+}
+
+// Part of P213: a refused pause FLUSH still ends the wait, with a warning.
+#[test]
+fn a_refused_pause_flush_lets_the_resume_play() {
+    let _serial = serial();
+    let mut behavior = Behavior::default();
+    behavior.status.insert("FLUSH".to_owned(), 500);
+    let receiver = NetReceiver::start(behavior);
+    let (sender, _host, mut events, key) = play(&receiver, 1);
+    sender.pause();
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    let refused = events.wait_for(&sender, LONG, |event| {
+        matches!(
+            event,
+            SenderEvent::Speaker {
+                event: SpeakerEvent::Warning(Warning::RequestFailed {
+                    method: Method::Flush,
+                    ..
+                }),
+                ..
+            }
+        )
+    });
+    assert!(refused.is_some(), "{:?}", events.of(&key));
+    let resumed = Instant::now();
+    sender.resume();
+    assert!(wait_until(LONG, || first_audio_after(&receiver, resumed).is_some()));
+    let (_, seq, marker) = first_audio_after(&receiver, resumed).expect("audio");
+    assert_eq!(seq, flush_seq(&receiver, 0));
+    assert!(marker);
+    sender.shutdown();
+}
+
+// Part of P213 and P142: a speaker added, or one that reconnects, while the
+// stream is paused sends nothing until the resume.
+#[test]
+fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
+    let _serial = serial();
+    let first = NetReceiver::start(Behavior::default());
+    let second = NetReceiver::start(Behavior::default());
+    let (sender, _host, mut events, first_key) = play(&first, 1);
+    sender.pause();
+    let paused = Instant::now();
+    assert!(wait_until(LONG, || first.log().count("FLUSH") == 1));
+
+    let device = second.device(2, PCM_TXT);
+    let second_key = device.key.clone();
+    sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    first.kill();
+    for (key, nth) in [(&second_key, 1), (&first_key, 2)] {
+        assert!(
+            events
+                .wait_state(&sender, key, nth, LONG, |s| *s == SpeakerState::Playing)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    let quiet = paused + Duration::from_millis(50);
+    assert!(first_audio_after(&first, quiet).is_none());
+    assert!(second.log().audio.is_empty());
+
+    let resumed = Instant::now();
+    sender.resume();
+    for receiver in [&first, &second] {
+        assert!(wait_until(LONG, || first_audio_after(receiver, resumed).is_some()));
+        let (_, _, marker) = first_audio_after(receiver, resumed).expect("audio");
+        assert!(marker, "the first packet of a session");
+    }
+    sender.shutdown();
+}
+
+// Part of P213, P91, P118 and P131: while paused the session stays up, its
+// timing requests are answered and a volume change goes out.
+#[test]
+fn timing_and_volume_go_on_while_paused() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let device = receiver.device(1, PCM_TXT);
+    let key = device.key.clone();
+    let counters: Arc<SpeakerCounters> =
+        sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some()
+    );
+    assert!(wait_until(LONG, || receiver.log().audio.len() >= 50));
+    sender.pause();
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    let replies = counters.timing_replies();
+    sender.set_volume(&key, Volume::Db(-10.0));
+    assert!(wait_until(LONG, || receiver
+        .log()
+        .requests
+        .iter()
+        .any(|(_, request)| request.method == Method::SetParameter
+            && request.body == b"volume: -10.000000\r\n")));
+    assert!(wait_until(LONG, || counters.timing_replies() >= replies + 3));
+    events.drain(&sender);
+    assert!(
+        !events
+            .of(&key)
+            .iter()
+            .any(|event| matches!(event, SpeakerEvent::Error(_))),
+        "{:?}",
+        events.of(&key)
+    );
+    assert_eq!(
+        events.of(&key).iter().rev().find_map(|event| match event {
+            SpeakerEvent::State(state) => Some(state.clone()),
+            _ => None,
+        }),
+        Some(SpeakerState::Playing)
+    );
     sender.shutdown();
 }
