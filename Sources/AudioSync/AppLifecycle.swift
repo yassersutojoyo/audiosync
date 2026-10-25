@@ -198,3 +198,62 @@ final class SignalQuit: @unchecked Sendable {
         exitProcess(status)
     }
 }
+
+/// Why a running session stops, written to the debug log so no stop goes
+/// unexplained there. After a restart case a new start is attempted, which
+/// can still fail or find no speaker on.
+enum SessionStop: CaseIterable {
+    /// The power switch in the window or the menu bar panel.
+    case powerSwitch
+    /// Turn Streaming Off in the Speakers menu.
+    case menuItem
+    /// The last speaker that was on went off (`StreamingPolicy.isIdle`).
+    case noSpeakerOn
+    case startFailed
+    case sourceAppQuit
+    case sourceSwitchedToSystem
+    case sourceChanged
+    case inputPairChanged
+    case captureLost
+    /// The capture format changed: the session is built again at the new rate.
+    case formatChanged
+    /// The capture format changed after streaming was switched off by hand,
+    /// so no rebuild follows (`AppLifecycle.restartsAfterFormatChange`).
+    case formatChangedSwitchedOff
+    /// A start found a session running and builds it again.
+    case rebuild
+    case quitting
+
+    var restarts: Bool {
+        switch self {
+        case .sourceSwitchedToSystem, .sourceChanged, .inputPairChanged, .formatChanged, .rebuild: return true
+        default: return false
+        }
+    }
+
+    /// `detail` names what the reason alone can't: the input event behind
+    /// the switch or the menu item, the app that quit.
+    func logLine(detail: String? = nil) -> String {
+        let why: String
+        switch self {
+        case .powerSwitch: why = "the power switch turned streaming off"
+        case .menuItem: why = "Turn Streaming Off in the Speakers menu"
+        case .noSpeakerOn: why = "no speaker is on"
+        case .startFailed: why = "the start failed"
+        case .sourceAppQuit: why = "the source app quit"
+        case .sourceSwitchedToSystem: why = "the source app quit, the whole system plays now"
+        case .sourceChanged: why = "the source changed"
+        case .inputPairChanged: why = "the input channel pair changed"
+        case .captureLost: why = "the capture was lost"
+        case .formatChanged: why = "the capture format changed"
+        case .formatChangedSwitchedOff: why = "the capture format changed after streaming was switched off by hand"
+        case .rebuild: why = "a start found it running"
+        case .quitting: why = "AudioSync quits"
+        }
+        return "[AudioSync] session \(restarts ? "restarts" : "stops"): \(why)" + (detail.map { " (\($0))" } ?? "")
+    }
+
+    /// Whether a stop is logged: a session runs, or the engine already
+    /// stopped it on a capture interruption it reports afterwards.
+    static func logs(running: Bool, interrupted: Bool) -> Bool { running || interrupted }
+}

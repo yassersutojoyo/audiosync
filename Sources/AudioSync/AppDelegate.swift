@@ -234,6 +234,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The user switched streaming off: auto-connect doesn't start it again
     /// until they switch it on (S120).
     var userStopped = false
+    /// True while a capture interruption is handled: the engine stopped the
+    /// session before reporting it, and the stop still names its reason.
+    var captureInterrupted = false
     /// The microphone permission request a start has out, if any.
     var microphoneRequest = MicrophoneRequestGate()
     /// An automatic start failed: no more automatic starts until the user acts.
@@ -375,6 +378,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         engine.onInterrupted = { [weak self] interruption in
             guard let self else { return }
+            captureInterrupted = true
+            defer { captureInterrupted = false }
             switch interruption {
             case .formatChanged:
                 DebugTrace.log("[AudioSync] capture rate changed")
@@ -382,7 +387,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 // the new rate, with the speakers and the AirPlay selection
                 // as they are (S20, EC4).
                 if AppLifecycle.restartsAfterFormatChange(userStopped: userStopped) {
+                    DebugTrace.log(SessionStop.formatChanged.logLine())
                     startEngine(origin: .automatic, rebuild: true)
+                } else {
+                    DebugTrace.log(SessionStop.formatChangedSwitchedOff.logLine())
                 }
             case .sourceLost(let error):
                 DebugTrace.log("[AudioSync] capture lost: \(error)")
@@ -392,7 +400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     return
                 }
                 // A notice, never a modal alert: nobody clicked anything (S21).
-                stopEngine()
+                stopEngine(.captureLost)
                 postNotice(text.sourceStopped(error), subject: Notice.source)
             }
         }
@@ -564,7 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         dueTimer?.invalidate()
         // Nothing needs to reach the views any more.
         localNetworkProbe.onChange = { _ in }
-        stopEngine()
+        stopEngine(.quitting)
         engine.finishStopping()   // local outputs finish their fades and capture halts before the sender's teardown
         nativeAirPlay?.shutdown()   // AudioSync's own sender: every speaker gets its TEARDOWN
         nowPlaying.stopWatching()
