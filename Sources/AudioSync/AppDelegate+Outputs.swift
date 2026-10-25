@@ -256,7 +256,7 @@ extension AppDelegate {
         guard change != .none else { return }
         let old = currentInputPair
         inputPairs[uid] = index == 0 ? nil : index
-        clearNotices([Notice.capture])   // about the old pair
+        clearNotices([Notice.source, Notice.capture])   // about the old pair
         autoStartFailed = false
         if change == .restart { startEngine(origin: .user, switching: .inputPair(uid: uid, from: old, to: index)) }
         pushModel()

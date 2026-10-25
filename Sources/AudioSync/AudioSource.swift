@@ -187,8 +187,10 @@ enum CaptureSwitch {
         /// its stored pair (`pairOf` a device UID), or the old pair.
         func oldCapture(pairOf: (String) -> Int) -> (source: AudioSource, pair: Int) {
             switch self {
-            case .source(_, let to): return (to, 0)
-            case .inputPair(let uid, _, let to): return (.input(uid: uid), to)
+            case .source(let from, _):
+                if case .input(let uid) = from { return (from, pairOf(uid)) }
+                return (from, 0)
+            case .inputPair(let uid, let from, _): return (.input(uid: uid), from)
             }
         }
     }
@@ -216,7 +218,12 @@ enum CaptureSwitch {
     }
 
     static func start(hasSpeaker: Bool, microphone: Microphone) -> Start {
-        .rebuildCapture
+        guard hasSpeaker else { return .stopSession }
+        switch microphone {
+        case .notNeeded, .allowed: return .rebuildCapture
+        case .undetermined: return .askMicrophone
+        case .denied: return .keepOld
+        }
     }
 
     /// What macOS's answer to the microphone prompt of a switch does.
@@ -234,7 +241,13 @@ enum CaptureSwitch {
     /// `source` and `pair` are what is stored when the answer comes
     /// (`pair` the stored pair of `source` when it is an input device).
     static func answer(granted: Bool, to change: Change, source: AudioSource, pair: Int, running: Bool) -> Answer {
-        .none
+        let oldStored = switch change {
+        case .source(let from, _): source == from
+        case .inputPair(let uid, let from, _): source == .input(uid: uid) && pair == from
+        }
+        guard oldStored else { return .none }
+        if !running { return granted ? .remember : .none }
+        return granted ? .switchNow : .keepOld
     }
 
     enum Failure: Equatable {

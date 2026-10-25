@@ -18,9 +18,10 @@ extension AppDelegate {
             clearNotices([Notice.source, Notice.start, Notice.capture])
         }
         defer { refreshStreamingViews() }   // every path, including failures, refreshes the switch
-        guard StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
-                                         enabledLocal: enabledLocal) else {
-            if switching != nil { stopEngine(.noSpeakerOn) }   // the old capture has nothing to play to
+        let hasSpeaker = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
+                                                    enabledLocal: enabledLocal)
+        if let switching, !beginSwitch(switching, hasSpeaker: hasSpeaker, origin: origin) { return }
+        guard hasSpeaker else {
             notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
             return
         }
@@ -31,17 +32,9 @@ extension AppDelegate {
             case .authorized:
                 break
             case .notDetermined:
-                guard microphoneRequest.begin(origin: origin) else { return }
-                AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                    DispatchQueue.main.async { self?.microphoneAnswered(granted) }
-                }
+                askMicrophone(origin: origin)
                 return
             default:
-                if let switching, engine.isRunning {   // the old capture never stopped
-                    storeSwitch(switching, new: false)
-                    finishSwitch(switching, .keptOld(.microphoneDenied), fromRate: engine.captureRate, origin: origin)
-                    return
-                }
                 failStart(text.microphoneDenied, origin: origin)
                 return
             }
@@ -65,10 +58,10 @@ extension AppDelegate {
                 return
             }
             if let switching {
-                storeSwitch(switching, new: false)
-                let oldRunning = (try? engine.start(source: audioSource, inputPair: currentInputPair)) != nil
+                let old = switching.oldCapture { self.inputPairs[$0] ?? 0 }
+                let oldRunning = (try? engine.start(source: old.source, inputPair: old.pair)) != nil
                 outcome = CaptureSwitch.outcome(failure: .startFailed, oldRunning: oldRunning)
-                if !oldRunning { storeSwitch(switching, new: true) }   // the error is about the user's new choice
+                if oldRunning { storeSwitch(switching, new: false) }   // else the new choice stays, with its error
             }
             guard outcome == .keptOld(.startFailed) else {
                 if let switching { finishSwitch(switching, outcome, fromRate: fromRate, origin: origin) }
@@ -87,6 +80,41 @@ extension AppDelegate {
         startInputLevel()
         verifyAudioFlowing(origin: origin)
         if let switching { finishSwitch(switching, outcome, fromRate: fromRate, origin: origin) }
+    }
+
+    /// Acts on how a switch begins (`CaptureSwitch.start`); true when its
+    /// capture is rebuilt now.
+    private func beginSwitch(_ change: CaptureSwitch.Change, hasSpeaker: Bool, origin: StartOrigin) -> Bool {
+        switch CaptureSwitch.start(hasSpeaker: hasSpeaker, microphone: microphone(for: audioSource)) {
+        case .rebuildCapture:
+            return true
+        case .stopSession:
+            stopEngine(.noSpeakerOn)
+            notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
+        case .askMicrophone:
+            storeSwitch(change, new: false)   // the picker and the level meter show what still plays
+            askMicrophone(origin: origin, switching: change)
+        case .keepOld:
+            storeSwitch(change, new: false)
+            finishSwitch(change, .keptOld(.microphoneDenied), fromRate: engine.captureRate, origin: origin)
+        }
+        return false
+    }
+
+    private func microphone(for source: AudioSource) -> CaptureSwitch.Microphone {
+        guard case .input = source else { return .notNeeded }
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return .allowed
+        case .notDetermined: return .undetermined
+        default: return .denied
+        }
+    }
+
+    private func askMicrophone(origin: StartOrigin, switching: CaptureSwitch.Change? = nil) {
+        guard microphoneRequest.begin(origin: origin, switching: switching) else { return }
+        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+            DispatchQueue.main.async { self?.microphoneAnswered(granted) }
+        }
     }
 
     /// Stores the switch's new source or channel pair, or puts back the old one.
@@ -161,8 +189,24 @@ extension AppDelegate {
     /// macOS answered the microphone request a start made: start again, or
     /// say the source can't be captured.
     private func microphoneAnswered(_ granted: Bool) {
+        let pending = microphoneRequest.switching
         guard let origin = microphoneRequest.answer() else { return }
-        if granted { startEngine(origin: origin) } else { failStart(text.microphoneDenied, origin: origin) }
+        guard let switching = pending else {
+            if granted { startEngine(origin: origin) } else { failStart(text.microphoneDenied, origin: origin) }
+            return
+        }
+        switch CaptureSwitch.answer(granted: granted, to: switching, source: audioSource, pair: currentInputPair,
+                                    running: engine.isRunning) {
+        case .none:
+            return
+        case .remember:
+            storeSwitch(switching, new: true)
+        case .switchNow:
+            storeSwitch(switching, new: true)
+            startEngine(origin: origin, switching: switching)
+        case .keepOld:
+            finishSwitch(switching, .keptOld(.microphoneDenied), fromRate: engine.captureRate, origin: origin)
+        }
     }
 
     private func failStart(_ message: String, origin: StartOrigin) {
@@ -263,10 +307,13 @@ extension AppDelegate {
         if SessionStop.logs(running: engine.isRunning, interrupted: captureInterrupted) {
             DebugTrace.log(reason.logLine(detail: detail()))
         }
+        let wasRunning = engine.isRunning
         engine.stop()   // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
         syncNativeSpeakers()   // nothing streams: AudioSync's own sender's speakers leave
         syncCast()   // and the Cast session ends
-        clearNotices([Notice.capture])   // about this session's audio, which just ended
+        // About this session's audio, which just ended; a notice about why it
+        // ended is posted after this.
+        clearNotices(wasRunning ? [Notice.capture, Notice.source] : [Notice.capture])
         refreshStreamingViews()
     }
 

@@ -10,14 +10,20 @@ struct MicrophoneRequestGate {
     /// ask macOS; false when a request is already out, which keeps only this
     /// latest origin and switch.
     mutating func begin(origin: StartOrigin, switching change: CaptureSwitch.Change? = nil) -> Bool {
-        defer { wanted = origin }
+        defer {
+            wanted = origin
+            switching = change
+        }
         return wanted == nil
     }
 
     /// The origin of the one start (or denied notice) the answer runs; nil
     /// when no request was out. Read `switching` first: this clears it.
     mutating func answer() -> StartOrigin? {
-        defer { wanted = nil }
+        defer {
+            wanted = nil
+            switching = nil
+        }
         return wanted
     }
 }
