@@ -1320,10 +1320,16 @@ struct SourcePicker: View {
         } label: {
             HStack(spacing: 8) {
                 sourceIcon(model.currentSource)
+                    .accessibilityHidden(true)
                 Text(model.currentSource?.name ?? t.sourceSystem)
                     .lineLimit(1)
                 Spacer()
             }
+            // The menu takes its title from this content, which read the
+            // chosen app's name instead of the fixed label.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(t.sourceLabel)
+            .accessibilityValue(model.currentSource?.name ?? t.sourceSystem)
         }
         .menuStyle(.borderlessButton)
         // A borderless menu draws its label and chevron in the tint; the brand
