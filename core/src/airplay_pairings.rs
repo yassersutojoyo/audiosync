@@ -77,6 +77,8 @@ pub struct PairingStore {
     path: Option<PathBuf>,
     /// False when the file belongs to a newer AudioSync.
     writable: bool,
+    /// Whether opening made the file owner-only.
+    tightened: bool,
     entries: BTreeMap<String, Credentials>,
 }
 
@@ -86,6 +88,7 @@ impl fmt::Debug for PairingStore {
         f.debug_struct("PairingStore")
             .field("path", &self.path)
             .field("writable", &self.writable)
+            .field("tightened", &self.tightened)
             .field("receivers", &self.entries.keys().collect::<Vec<_>>())
             .finish()
     }
@@ -103,13 +106,20 @@ impl PairingStore {
         PairingStore {
             path: None,
             writable: true,
+            tightened: false,
             entries: BTreeMap::new(),
         }
     }
 
-    /// The store kept in the file at `path`, with what was found there.
+    /// The store kept in the file at `path`, with what was found there. A
+    /// file other accounts may read or write is made owner-only first; one
+    /// another account owns is ignored ([`make_private`]).
     pub fn open(path: PathBuf) -> (PairingStore, Loaded) {
-        let (entries, writable, loaded) = match read(&path) {
+        let (tightened, found) = match make_private(&path) {
+            Ok(tightened) => (tightened, read(&path)),
+            Err(reason) => (false, Err(Unreadable::Ignored(reason))),
+        };
+        let (entries, writable, loaded) = match found {
             Ok(Some(entries)) => {
                 let count = entries.len();
                 (entries, true, Loaded::Receivers(count))
@@ -121,9 +131,16 @@ impl PairingStore {
         let store = PairingStore {
             path: Some(path),
             writable,
+            tightened,
             entries,
         };
         (store, loaded)
+    }
+
+    /// Whether opening found the file open to other accounts and made it
+    /// owner-only, which the host logs as a warning.
+    pub fn tightened(&self) -> bool {
+        self.tightened
     }
 
     /// How many receivers are paired.
@@ -313,4 +330,79 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+/// What a file is to the user who opens it, by its Unix mode and owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only Unix hosts check the mode and owner")
+)]
+enum FileAccess {
+    Private,
+    OpenToOthers,
+    Foreign,
+}
+
+/// What a file with permission bits `mode`, owned by user `owner`, is to
+/// user `me`.
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only Unix hosts check the mode and owner")
+)]
+fn file_access(mode: u32, owner: u32, me: u32) -> FileAccess {
+    if owner != me {
+        FileAccess::Foreign
+    } else if mode & 0o077 != 0 {
+        FileAccess::OpenToOthers
+    } else {
+        FileAccess::Private
+    }
+}
+
+/// Checks the file at `path` before it is read: one that other accounts may
+/// read or write gets mode 0600, and `Ok(true)` says so. `Err` says why a
+/// file another account owns is not used. A file that can't be inspected is
+/// left for the read to report.
+#[cfg(unix)]
+pub(crate) fn make_private(path: &Path) -> Result<bool, String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let Ok(metadata) = fs::metadata(path) else {
+        return Ok(false);
+    };
+    // SAFETY: geteuid has no preconditions and can't fail.
+    let me = unsafe { libc::geteuid() };
+    match file_access(metadata.mode(), metadata.uid(), me) {
+        FileAccess::Private => Ok(false),
+        FileAccess::OpenToOthers => {
+            Ok(fs::set_permissions(path, fs::Permissions::from_mode(0o600)).is_ok())
+        }
+        FileAccess::Foreign => Err(format!(
+            "another account (user ID {}) owns the file",
+            metadata.uid()
+        )),
+    }
+}
+
+/// Windows keeps these files in the user's own profile.
+#[cfg(not(unix))]
+pub(crate) fn make_private(_path: &Path) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // covers: S224
+    #[test]
+    fn the_owner_and_mode_decide_how_a_file_is_used() {
+        assert_eq!(file_access(0o100600, 501, 501), FileAccess::Private);
+        assert_eq!(file_access(0o100400, 501, 501), FileAccess::Private);
+        assert_eq!(file_access(0o100644, 501, 501), FileAccess::OpenToOthers);
+        assert_eq!(file_access(0o100620, 501, 501), FileAccess::OpenToOthers);
+        assert_eq!(file_access(0o100602, 501, 501), FileAccess::OpenToOthers);
+        assert_eq!(file_access(0o100600, 502, 501), FileAccess::Foreign);
+        assert_eq!(file_access(0o100644, 0, 501), FileAccess::Foreign);
+    }
 }

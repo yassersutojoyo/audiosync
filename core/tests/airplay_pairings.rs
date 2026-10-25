@@ -177,3 +177,27 @@ fn an_in_memory_store_writes_nothing() {
     assert!(store.contains("02005E005301"));
     assert!(store.remove("02005E005301").expect("nothing to write"));
 }
+
+// covers: S224
+#[cfg(unix)]
+#[test]
+fn a_file_others_may_read_is_made_owner_only_and_still_used() {
+    use std::os::unix::fs::PermissionsExt;
+    let path = folder("open-to-others").join("airplay-pairings.dat");
+    let (mut store, _) = PairingStore::open(path.clone());
+    assert!(!store.tightened());
+    store
+        .insert("02005E005301", credentials("0123456789ABCDEF", 3))
+        .expect("written");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("mode set");
+
+    let (store, loaded) = PairingStore::open(path.clone());
+    assert_eq!(loaded, Loaded::Receivers(1));
+    assert!(store.tightened(), "the host is told, so it can log it");
+    let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+
+    let (store, loaded) = PairingStore::open(path);
+    assert_eq!(loaded, Loaded::Receivers(1));
+    assert!(!store.tightened(), "an owner-only file is left as it is");
+}

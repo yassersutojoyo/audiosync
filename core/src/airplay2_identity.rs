@@ -27,7 +27,7 @@ use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::sender::random_airplay2_device_id;
 use zeroize::Zeroizing;
 
-use crate::airplay_pairings::{Loaded, take_field, write_atomically};
+use crate::airplay_pairings::{Loaded, make_private, take_field, write_atomically};
 
 /// The byte form's first bytes.
 pub const MAGIC: &[u8] = b"AudioSync AirPlay 2 identity\n";
@@ -168,6 +168,8 @@ pub struct IdentityStore {
     /// False when the file belongs to a newer AudioSync, or no random device
     /// ID could be made: nothing is written then.
     writable: bool,
+    /// Whether opening made the file owner-only.
+    tightened: bool,
     identity: Airplay2Identity,
 }
 
@@ -176,6 +178,7 @@ impl fmt::Debug for IdentityStore {
         f.debug_struct("IdentityStore")
             .field("path", &self.path)
             .field("writable", &self.writable)
+            .field("tightened", &self.tightened)
             .field("identity", &self.identity)
             .finish()
     }
@@ -202,6 +205,7 @@ impl IdentityStore {
         IdentityStore {
             path: None,
             writable: true,
+            tightened: false,
             identity: fresh().0,
         }
     }
@@ -210,9 +214,17 @@ impl IdentityStore {
     /// new device ID is written at once when the file is missing or was
     /// ignored, so it stays the same from then on (P5). A file that can't
     /// be read now, or that a newer AudioSync wrote, is never written over.
+    /// A file other accounts may read or write is made owner-only first;
+    /// one another account owns is ignored ([`make_private`]).
     pub fn open(path: PathBuf) -> (IdentityStore, Loaded) {
-        let (identity, writable, loaded) = match fs::read(&path) {
-            Ok(bytes) => {
+        let access = make_private(&path);
+        let tightened = access == Ok(true);
+        let (identity, writable, loaded) = match access.map(|_| fs::read(&path)) {
+            Err(reason) => {
+                let (identity, random) = fresh();
+                (identity, random, Loaded::Ignored(reason))
+            }
+            Ok(Ok(bytes)) => {
                 let bytes = Zeroizing::new(bytes);
                 match Airplay2Identity::from_bytes(&bytes) {
                     Ok(identity) => {
@@ -227,13 +239,13 @@ impl IdentityStore {
                     }
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(Err(error)) if error.kind() == io::ErrorKind::NotFound => {
                 let (identity, random) = fresh();
                 (identity, random, Loaded::NoFile)
             }
             // A permission or disk error may pass, and the file may still
             // hold the device ID and credentials.
-            Err(error) => {
+            Ok(Err(error)) => {
                 let reason = format!("the file can't be read, so it is left as it is: {error}");
                 (fresh().0, false, Loaded::Ignored(reason))
             }
@@ -241,6 +253,7 @@ impl IdentityStore {
         let store = IdentityStore {
             path: Some(path),
             writable,
+            tightened,
             identity,
         };
         if store.writable && matches!(loaded, Loaded::NoFile | Loaded::Ignored(_)) {
@@ -248,6 +261,12 @@ impl IdentityStore {
             let _ = store.save();
         }
         (store, loaded)
+    }
+
+    /// Whether opening found the file open to other accounts and made it
+    /// owner-only, which the host logs as a warning.
+    pub fn tightened(&self) -> bool {
+        self.tightened
     }
 
     pub fn device_id(&self) -> [u8; 6] {
@@ -384,5 +403,23 @@ mod tests {
             );
         }
         assert!(Airplay2Identity::from_bytes(&bytes[..MAGIC.len() + 7]).is_ok());
+    }
+
+    // covers: S224
+    #[cfg(unix)]
+    #[test]
+    fn a_file_others_may_write_is_made_owner_only_and_still_used() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("open-to-others.dat");
+        let (store, _) = IdentityStore::open(path.clone());
+        let device_id = store.device_id();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).expect("mode set");
+        let (again, loaded) = IdentityStore::open(path.clone());
+        assert_eq!(loaded, Loaded::Receivers(0));
+        assert!(again.tightened());
+        assert_eq!(again.device_id(), device_id);
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = fs::remove_file(&path);
     }
 }

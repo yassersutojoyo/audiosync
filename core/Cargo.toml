@@ -33,6 +33,11 @@ audiosync-remote = { path = "../remote" }
 # already in the tree through the AirPlay sender.
 zeroize = "1.8.1"
 
+[target.'cfg(unix)'.dependencies]
+# The current user's ID, to refuse a pairing file another account owns
+# (src/airplay_pairings.rs); already in the tree through the AirPlay sender.
+libc = "0.2.191"
+
 [dev-dependencies]
 criterion = { version = "0.7.0", default-features = false, features = ["cargo_bench_support"] }
 proptest = "1.11.0"
