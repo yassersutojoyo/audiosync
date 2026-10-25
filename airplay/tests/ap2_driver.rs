@@ -1325,3 +1325,70 @@ fn a_homekit_paired_speaker_with_the_airplay2_switch_off_is_not_played_over_airp
     assert_untouched(&forger);
     sender.shutdown();
 }
+
+// A host that publishes both records of a paired speaker and turns its
+// pair-verify down with 470 never lifts the pin: a later start and a PIN
+// pairing for the speaker go nowhere near its RAOP address.
+// covers: P2, P154
+#[test]
+fn a_forger_refusing_the_verify_never_moves_a_paired_speaker_to_airplay1() {
+    let _serial = serial();
+    let server = ask_once_receiver();
+    let forger_ap2 = ask_once_receiver();
+    forger_ap2
+        .fake()
+        .hap
+        .answers
+        .push((("/pair-verify", 1), Answer::Status(470)));
+    let forger = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let id = 62;
+    let paired = airplay2_only(&server, id);
+    let key = paired.key.clone();
+    let credentials = pair_first_time(&server, &sender, &mut events, &paired);
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    let forged = with_forged_raop(&forger_ap2, &forger, id);
+
+    sender.add_speaker(forged.clone(), paired_options);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+    assert_untouched(&forger);
+
+    // Selected again, with only the sender's own copy of the credentials.
+    sender.add_speaker(forged.clone(), options());
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    assert_untouched(&forger);
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The PIN pairing the host then offers goes over AirPlay 2 as well.
+    sender.start_pairing(forged);
+    std::thread::sleep(Duration::from_millis(500));
+    events.drain(&sender);
+    assert_untouched(&forger);
+    sender.shutdown();
+}
