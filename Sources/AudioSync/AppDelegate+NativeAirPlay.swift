@@ -467,6 +467,17 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// A preset gave AirPlay speaker `id` its own volume back: it plays at
+    /// own × zone × master and its row shows that again (S290).
+    func setNativeAirPlayOwnVolume(_ id: String, _ own: Double) {
+        airplayVolume[id] = own
+        airplayDeviceLevel[id] = nil
+        if let receiver = NativeAirPlayID.receiver(id), calibrateAllRun?.silences(airPlay: id) != true {
+            nativeAirPlay?.setVolume(receiver, volume: own)
+        }
+        pushModel()
+    }
+
     /// The zone volume of AirPlay speaker `id` (app ID), 100 in no zone (S249).
     func airPlayZoneVolume(_ id: String) -> Double {
         SpeakerZone.volumes(zones, kind: .airplay)[id] ?? SpeakerZone.noZoneVolume
