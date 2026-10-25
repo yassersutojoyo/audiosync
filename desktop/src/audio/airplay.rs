@@ -1757,8 +1757,7 @@ impl AirPlaySpeakers {
                     playing: self.is_playing(id),
                     paired: self.legacy_paired(id) || self.shows_homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
-                    holds_credentials: self.store.contains(id)
-                        || self.store.homekit(id).is_some(),
+                    holds_credentials: self.store.contains(id) || self.store.homekit(id).is_some(),
                     pairing: self.pairings.contains_key(id),
                     code_every_time: self.asks_every_time(id),
                     airplay2: self.over_airplay2(id),
@@ -3347,8 +3346,7 @@ impl AirPlaySpeakers {
             self.paired_in_attempt.remove(id);
             // Playing on them shows whatever turned them down is gone,
             // unless a password the user typed carried the session (P154).
-            relisted =
-                !self.passwords.contains_key(id) && self.credentials_turned_down.remove(id);
+            relisted = !self.passwords.contains_key(id) && self.credentials_turned_down.remove(id);
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
