@@ -1,4 +1,5 @@
 import CoreAudio
+import Darwin
 
 // The parts of the capture stage that need no audio hardware, so the logic
 // suite can check them: how the IOProc turns whatever buffers Core Audio hands
@@ -248,6 +249,20 @@ enum AppTapFollow: Equatable {
                      secondLook: Bool) -> AppTapFollow {
         let decision = decide(tapped: tapped, found: found, appRunning: appRunning)
         return decision == .lost && !secondLook ? .lookAgain : decision
+    }
+
+    /// One instance of an app as macOS lists it at the moment of a look.
+    struct ListedApp: Equatable {
+        let bundleID: String?
+        let pid: pid_t
+        let terminated: Bool
+    }
+
+    /// The processes of `bundleID` that run now, sorted, once each; none means
+    /// the app is not running.
+    static func runningPIDs(of bundleID: String, listed: [ListedApp], seen: [pid_t],
+                            alive: (pid_t) -> Bool) -> [pid_t] {
+        Set(listed.filter { $0.bundleID == bundleID && !$0.terminated && $0.pid > 0 }.map(\.pid)).sorted()
     }
 
     /// The processes an app tap may cover: the app's audio processes, sorted,
