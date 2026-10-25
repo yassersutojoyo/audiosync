@@ -202,7 +202,8 @@ enum CaptureSwitch {
     /// `failure` is nil when the new capture started; `oldRunning` says
     /// whether the old capture runs after a failure.
     static func outcome(failure: Failure?, oldRunning: Bool) -> Outcome {
-        failure == nil ? .switched : .stopped
+        guard let failure else { return .switched }
+        return oldRunning ? .keptOld(failure) : .stopped
     }
 
     enum Message: Equatable {
@@ -216,12 +217,29 @@ enum CaptureSwitch {
     /// `sourceName` and `pairName` give the names the source picker shows.
     static func message(_ outcome: Outcome, change: Change, sourceName: (AudioSource) -> String,
                         pairName: (_ uid: String, _ index: Int) -> String) -> Message {
-        .none
+        // A stop has its own "start" notice already.
+        guard case .keptOld(let failure) = outcome else { return .none }
+        if failure == .microphoneDenied { return .microphoneDenied }
+        switch change {
+        case .source(let from, let to): return .stillOnOld(new: sourceName(to), old: sourceName(from))
+        case .inputPair(let uid, let from, let to): return .stillOnOld(new: pairName(uid, to), old: pairName(uid, from))
+        }
     }
 
     /// `kept`: the AirPlay and Cast speakers that stayed connected.
     static func logLine(_ outcome: Outcome, kept: Int, fromRate: Double, toRate: Double) -> String {
-        ""
+        let speakers = "\(kept) AirPlay or Cast speaker(s) stayed connected"
+        switch outcome {
+        case .switched:
+            let rate = fromRate == toRate ? "runs at \(Int(toRate)) Hz"
+                : "went from \(Int(fromRate)) to \(Int(toRate)) Hz"
+            return "[AudioSync] source switch: \(speakers), the capture \(rate)"
+        case .keptOld(let failure):
+            let why = failure == .microphoneDenied ? "the microphone isn't allowed" : "the new capture didn't start"
+            return "[AudioSync] source switch failed (\(why)): the old source plays on, \(speakers)"
+        case .stopped:
+            return "[AudioSync] source switch failed and the old source didn't start again: streaming stops"
+        }
     }
 }
 

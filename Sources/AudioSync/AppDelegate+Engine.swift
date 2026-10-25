@@ -9,7 +9,9 @@ extension AppDelegate {
 
     /// `rebuild`: the restart after a capture format change (S20), which a
     /// source app that quit meanwhile turns into a stop or a switch (S227 e).
-    func startEngine(origin: StartOrigin, rebuild: Bool = false) {
+    /// `switching`: a source or channel pair change of a running session,
+    /// already stored; a new capture that fails gives way to the old one.
+    func startEngine(origin: StartOrigin, rebuild: Bool = false, switching: CaptureSwitch.Change? = nil) {
         if origin != .automatic {
             userStopped = false
             autoStartFailed = false
@@ -18,6 +20,7 @@ extension AppDelegate {
         defer { refreshStreamingViews() }   // every path, including failures, refreshes the switch
         guard StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                          enabledLocal: enabledLocal) else {
+            if switching != nil { stopEngine(.noSpeakerOn) }   // the old capture has nothing to play to
             notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
             return
         }
@@ -34,16 +37,24 @@ extension AppDelegate {
                 }
                 return
             default:
+                if let switching, engine.isRunning {   // the old capture never stopped
+                    storeSwitch(switching, new: false)
+                    finishSwitch(switching, .keptOld(.microphoneDenied), fromRate: engine.captureRate, origin: origin)
+                    return
+                }
                 failStart(text.microphoneDenied, origin: origin)
                 return
             }
         }
-        // E.g. a format change: rebuild at the new rate. The start waits for
-        // the old outputs' fade-outs (at most 500 ms, S186).
+        // A format change or a switch rebuilds only the capture; the AirPlay
+        // and Cast speakers stay. The start waits for the old outputs' fade-outs
+        // (at most 500 ms, S186).
+        let fromRate = engine.captureRate
         if engine.isRunning {
-            DebugTrace.log(SessionStop.rebuild.logLine())
+            DebugTrace.log((switching?.stop ?? SessionStop.rebuild).logLine())
             engine.stop()
         }
+        var outcome = CaptureSwitch.Outcome.switched
         do {
             try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
         } catch {
@@ -53,8 +64,17 @@ extension AppDelegate {
                 sourceAppQuit(quit.bundleID, quit.action)
                 return
             }
-            failStart(text.streamingStartMessage(for: error), origin: origin)
-            return
+            if let switching {
+                storeSwitch(switching, new: false)
+                let oldRunning = (try? engine.start(source: audioSource, inputPair: currentInputPair)) != nil
+                outcome = CaptureSwitch.outcome(failure: .startFailed, oldRunning: oldRunning)
+                if !oldRunning { storeSwitch(switching, new: true) }   // the error is about the user's new choice
+            }
+            guard outcome == .keptOld(.startFailed) else {
+                if let switching { finishSwitch(switching, outcome, fromRate: fromRate, origin: origin) }
+                failStart(text.streamingStartMessage(for: error), origin: origin)
+                return
+            }
         }
         clearNotices([Notice.start, Notice.source])   // streaming did start, from a working source
         session += 1
@@ -66,6 +86,52 @@ extension AppDelegate {
         logSessionLead(session: session)
         startInputLevel()
         verifyAudioFlowing(origin: origin)
+        if let switching { finishSwitch(switching, outcome, fromRate: fromRate, origin: origin) }
+    }
+
+    /// Stores the switch's new source or channel pair, or puts back the old one.
+    private func storeSwitch(_ change: CaptureSwitch.Change, new: Bool) {
+        switch change {
+        case .source(let from, let to):
+            audioSource = new ? to : from
+            updateNowPlayingTarget()
+        case .inputPair(let uid, let from, let to):
+            let index = new ? to : from
+            inputPairs[uid] = index == 0 ? nil : index
+        }
+        pushModel()
+    }
+
+    /// Logs how a switch ended and tells the user when it fell back.
+    private func finishSwitch(_ change: CaptureSwitch.Change, _ outcome: CaptureSwitch.Outcome,
+                              fromRate: Double, origin: StartOrigin) {
+        let kept = engine.isRunning ? playableAirPlay.union(castSwitchedOn).count : 0
+        DebugTrace.log(CaptureSwitch.logLine(outcome, kept: kept, fromRate: fromRate, toRate: engine.captureRate))
+        switch CaptureSwitch.message(outcome, change: change, sourceName: { self.pickerName($0) },
+                                     pairName: { self.pickerName(.input(uid: $0), pair: $1) }) {
+        case .none:
+            break
+        case .microphoneDenied:
+            notify(text.microphoneDenied, origin: origin, subject: Notice.start)
+        case .stillOnOld(let new, let old):
+            postNotice(text.sourceSwitchFailed(new: new, old: old), subject: Notice.source)
+        }
+    }
+
+    /// The name the source picker shows for `source`, or with `pair` for one
+    /// of an input device's channel pairs.
+    private func pickerName(_ source: AudioSource, pair: Int? = nil) -> String {
+        let entry = appModel.sources.first { $0.id == source.defaultsValue }
+        if let entry {
+            guard let pair else { return entry.name }
+            return entry.pairs.indices.contains(pair) ? entry.pairs[pair] : entry.name
+        }
+        switch source {
+        case .system: return text.sourceSystem
+        case .app(let bundleID): return SourceApps.name(for: bundleID)
+        case .mix: return text.sourceSeveralApps
+        case .input(let uid): return uid
+        }
     }
 
     /// Writes the measured local session lead to the debug log once every

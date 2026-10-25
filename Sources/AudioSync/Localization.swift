@@ -557,6 +557,11 @@ struct UIStrings {
             : "\(name) quit, so the source is now \(sourceSystem), but streaming couldn't start with it."
     }
     var switchToSystemWhenSourceQuits: String { "Switch to \(sourceSystem) When the Source App Quits" }
+    /// A source or channel pair picked while streaming couldn't start, so
+    /// the one before it plays on (S141); names as the source picker shows them.
+    func sourceSwitchFailed(new: String, old: String) -> String {
+        "Couldn't start \(new), still on \(old)."
+    }
 
     /// An AirPlay speaker was switched off by AudioSync, not by the user.
     func airPlayTurnedOff(name: String, reason: AirPlayPairing.Reason) -> String {

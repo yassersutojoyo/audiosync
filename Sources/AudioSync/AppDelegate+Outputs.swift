@@ -230,16 +230,14 @@ extension AppDelegate {
     func setSource(_ source: AudioSource) {
         let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
         guard change != .none else { return }
+        let old = audioSource
         audioSource = source
         updateNowPlayingTarget()
         clearNotices([Notice.source, Notice.capture])   // about the old source
-        // The tap is built for one source; switching means rebuilding it. The
-        // AirPlay selection stays as it is (deselecting would race the reselect).
+        // The tap is built for one source; switching rebuilds only it, under
+        // the speakers (S141).
         autoStartFailed = false
-        if change == .restart {
-            stopEngine(.sourceChanged)
-            startEngine(origin: .user)
-        }
+        if change == .restart { startEngine(origin: .user, switching: .source(from: old, to: source)) }
         pushModel()
     }
 
@@ -251,18 +249,16 @@ extension AppDelegate {
     }
 
     /// Chooses the channel pair the input source plays (S14). A running
-    /// session restarts on it, as for a source switch.
+    /// session rebuilds its capture on it, as for a source switch.
     func setInputPair(_ index: Int) {
         guard case .input(let uid) = audioSource else { return }
         let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
         guard change != .none else { return }
+        let old = currentInputPair
         inputPairs[uid] = index == 0 ? nil : index
         clearNotices([Notice.capture])   // about the old pair
         autoStartFailed = false
-        if change == .restart {
-            stopEngine(.inputPairChanged)
-            startEngine(origin: .user)
-        }
+        if change == .restart { startEngine(origin: .user, switching: .inputPair(uid: uid, from: old, to: index)) }
         pushModel()
     }
 

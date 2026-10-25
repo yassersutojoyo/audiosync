@@ -2974,6 +2974,9 @@ do {
             + "1 AirPlay or Cast speaker(s) stayed connected",
           "EC5 source: a failed switch logs that the speakers stayed",
           CaptureSwitch.logLine(.keptOld(.startFailed), kept: 1, fromRate: 48000, toRate: 48000))
+    check(UIStrings().sourceSwitchFailed(new: "Music", old: "All System Audio")
+            == "Couldn't start Music, still on All System Audio.",
+          "EC5 source: the failed switch notice names both sources plainly")
     check(toMusic.stop == .sourceChanged && toPair.stop == .inputPairChanged,
           "EC5 source: the log names a source change and a pair change apart")
 
