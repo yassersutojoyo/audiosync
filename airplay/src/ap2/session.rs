@@ -16,7 +16,7 @@ use crate::discovery::Features;
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, Warning};
 use crate::homekit::{
     self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, SharedSecret,
-    VerifyStep,
+    Stored, VerifyStep,
 };
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::latency::ReportedLatency;
@@ -64,6 +64,10 @@ pub struct Ap2Config {
     pub features: Features,
     /// HomeKit credentials of an earlier pairing (P152).
     pub credentials: Option<HomeKitCredentials>,
+    /// An answer turned `credentials` down earlier in the sender's life
+    /// (P154): a password pairing takes their place when the flags allow
+    /// one, and otherwise they verify again.
+    pub credentials_turned_down: bool,
     /// The speaker's password, for a password pairing (P61) and a digest
     /// challenge (P36).
     pub password: Option<Secret>,
@@ -100,6 +104,7 @@ impl Ap2Config {
             txt_flags: None,
             features: Features::default(),
             credentials: None,
+            credentials_turned_down: false,
             password: None,
             device_id: [0; 6],
             timing: Timing::Ntp,
@@ -120,6 +125,7 @@ impl fmt::Debug for Ap2Config {
             .field("txt_flags", &self.txt_flags)
             .field("features", &self.features)
             .field("credentials", &self.credentials.is_some())
+            .field("credentials_turned_down", &self.credentials_turned_down)
             .field("password", &self.password.as_ref().map(|_| "<hidden>"))
             .field("timing", &self.timing)
             .field("pin_pairing", &self.pin_pairing)
@@ -1693,10 +1699,15 @@ impl Ap2Session {
         // A PIN pairing runs only when the host asks for one, and then
         // whatever the flags say: a receiver that turned a transient pairing
         // down with 470 sets no PIN flag (P61).
+        let stored = match (&self.config.credentials, self.config.credentials_turned_down) {
+            (None, _) => Stored::None,
+            (Some(_), false) => Stored::Kept,
+            (Some(_), true) => Stored::TurnedDown,
+        };
         let mode = if self.config.pin_pairing {
             Mode::Pin
         } else {
-            homekit::choose_mode(flags, self.config.credentials.is_some())
+            homekit::choose_mode(flags, stored)
         };
         let host_asked = self.config.pin_pairing;
         if let Err(kind) = homekit::check_mode(mode, host_asked, self.config.password.is_some()) {

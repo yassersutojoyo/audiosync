@@ -516,7 +516,7 @@ fn homekit_credentials_and_the_device_id_persist_through_the_host() {
 
 // covers: P154
 #[test]
-fn rejected_homekit_credentials_are_dropped_and_the_next_start_pairs_again() {
+fn rejected_homekit_credentials_stay_and_the_next_start_pairs_with_the_password() {
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.info_body = common::ap2::plist(common::ap2::dict(&[(
@@ -559,9 +559,10 @@ fn rejected_homekit_credentials_are_dropped_and_the_next_start_pairs_again() {
         events.of(&key)
     );
     assert_eq!(errors(&events, &key), vec![ErrorKind::PairingRequired]);
-    assert!(
-        events.of(&key).contains(&SpeakerEvent::HomeKitRejected),
-        "the host is told to delete its copy"
+    assert_eq!(
+        credential_events(&events, &key).len(),
+        1,
+        "only the first pairing's credentials; nothing asks the host to delete them"
     );
     sender.remove_speaker(&key);
     assert!(
@@ -587,7 +588,7 @@ fn rejected_homekit_credentials_are_dropped_and_the_next_start_pairs_again() {
 }
 
 // A back-off from pair-verify keeps the credentials and holds the retry
-// for the seconds it names; error 2 drops them.
+// for the seconds it names; error 2 turns them down, and they stay.
 // covers: P142, P154
 #[test]
 fn a_verify_back_off_keeps_the_credentials_and_delays_the_retry() {
@@ -657,8 +658,9 @@ fn a_verify_back_off_keeps_the_credentials_and_delays_the_retry() {
         })
         .collect();
     assert_eq!(reasons, vec![UserReason::Refused]);
-    assert!(
-        !events.of(&key).contains(&SpeakerEvent::HomeKitRejected),
+    assert_eq!(
+        credential_events(&events, &key).len(),
+        1,
         "the credentials stay"
     );
     sender.remove_speaker(&key);
@@ -669,7 +671,7 @@ fn a_verify_back_off_keeps_the_credentials_and_delays_the_retry() {
     );
 
     // The credentials were kept, so the next start verifies again; error 2
-    // rejects them.
+    // turns them down, and they still stay.
     {
         let mut fake = server.fake();
         fake.requests.clear();
@@ -697,7 +699,7 @@ fn a_verify_back_off_keeps_the_credentials_and_delays_the_retry() {
         errors(&events, &key),
         vec![ErrorKind::PairingFailed, ErrorKind::PairingRequired]
     );
-    assert!(events.of(&key).contains(&SpeakerEvent::HomeKitRejected));
+    assert_eq!(credential_events(&events, &key).len(), 1);
     sender.shutdown();
 }
 
@@ -1155,7 +1157,7 @@ fn a_refused_verify_ends_the_attempt_once() {
     std::thread::sleep(Duration::from_secs(3));
     events.drain(&sender);
     assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
-    assert!(events.of(&key).contains(&SpeakerEvent::HomeKitRejected));
+    assert!(credential_events(&events, &key).is_empty());
     assert_eq!(
         server.fake().connections,
         connections + 1,
@@ -1166,7 +1168,7 @@ fn a_refused_verify_ends_the_attempt_once() {
 
 // covers: P61, P182
 #[test]
-fn stored_credentials_go_once_a_receiver_asks_every_time() {
+fn stored_credentials_stay_but_never_verify_once_a_receiver_asks_every_time() {
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
@@ -1195,7 +1197,7 @@ fn stored_credentials_go_once_a_receiver_asks_every_time() {
     });
     assert!(refused.is_some(), "{:?}", events.of(&key));
     assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
-    assert!(events.of(&key).contains(&SpeakerEvent::HomeKitRejected));
+    assert!(credential_events(&events, &key).is_empty());
     let keys = server.fake().keys();
     assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
     sender.shutdown();
@@ -1216,6 +1218,15 @@ fn session_status(event: &SpeakerEvent) -> bool {
             | SpeakerEvent::PtpOpened
             | SpeakerEvent::Trace(_)
     )
+}
+
+/// The events of a speaker about its credentials, none about its session.
+fn credential_events(events: &Events, key: &DeviceKey) -> Vec<SpeakerEvent> {
+    events
+        .of(key)
+        .into_iter()
+        .filter(|event| !session_status(event))
+        .collect()
 }
 
 /// What a host at a paired speaker's address may answer without the
@@ -1290,11 +1301,7 @@ fn an_unauthenticated_rejection_keeps_the_stored_credentials() {
             [(ErrorKind::PairingRequired, UserReason::PairingRequired)],
             "{impostor:?}"
         );
-        let about_credentials: Vec<SpeakerEvent> = events
-            .of(&key)
-            .into_iter()
-            .filter(|event| !session_status(event))
-            .collect();
+        let about_credentials = credential_events(&events, &key);
         assert!(
             about_credentials.is_empty(),
             "{impostor:?}: nothing tells the host to delete its copy: {about_credentials:?}"
