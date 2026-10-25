@@ -5205,9 +5205,14 @@ mod tests {
     }
 
     /// What `log`, kept in `dir`, holds so far, without the time stamps.
+    /// A block of several lines is written as one line with `\n` escaped;
+    /// it comes back here as its lines.
     fn logged(log: &DebugLog, dir: &Path) -> Vec<String> {
         assert!(log.flush(TEST_FLUSH), "the log is written");
         read_messages(&dir.join(FILE_NAME))
+            .iter()
+            .flat_map(|message| message.split(r"\n").map(str::to_owned))
+            .collect()
     }
 
     #[test]

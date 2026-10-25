@@ -272,17 +272,29 @@ fn write_requests(requests: &Receiver<Request>, file: File, max_bytes: u64) {
     }
 }
 
-/// Writes `text` stamped with `time`. Each line of a message that has
-/// several gets the stamp, so every line of the file starts with one.
+/// Writes `text` stamped with `time` as one line, each control character
+/// escaped (`\n`, `\x1b`), so text from a device can't start a line of its
+/// own.
 fn write_line(out: &mut impl Write, time: SystemTime, text: &str) -> io::Result<()> {
     let stamp = utc_timestamp(time);
     if text.is_empty() {
         return writeln!(out, "{stamp}");
     }
-    for line in text.lines() {
-        writeln!(out, "{stamp} {line}")?;
+    write!(out, "{stamp} ")?;
+    let mut rest = text;
+    while let Some(at) = rest.find(char::is_control) {
+        out.write_all(&rest.as_bytes()[..at])?;
+        let control = rest[at..].chars().next().unwrap_or_default();
+        match control {
+            '\n' => out.write_all(b"\\n")?,
+            '\r' => out.write_all(b"\\r")?,
+            '\t' => out.write_all(b"\\t")?,
+            other => write!(out, "\\x{:02x}", u32::from(other))?,
+        }
+        rest = &rest[at + control.len_utf8()..];
     }
-    Ok(())
+    out.write_all(rest.as_bytes())?;
+    writeln!(out)
 }
 
 /// `time` in UTC, to the millisecond, as `2026-10-18T17:52:13.456Z`. A time
@@ -437,10 +449,17 @@ mod tests {
         clone.log(|| "second".to_owned());
         log.log(|| "third, with two\nlines".to_owned());
         log.log(String::new);
+        log.log(|| "Den\r\n2026-01-01T00:00:00.000Z forged\t\u{1b}[2J\u{85}".to_owned());
         assert!(log.flush(TEST_FLUSH));
         assert_eq!(
             read_messages(&dir.join(FILE_NAME)),
-            ["first", "second", "third, with two", "lines", ""]
+            [
+                "first",
+                "second",
+                r"third, with two\nlines",
+                "",
+                r"Den\r\n2026-01-01T00:00:00.000Z forged\t\x1b[2J\x85"
+            ]
         );
         let _ = fs::remove_dir_all(dir);
     }

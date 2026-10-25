@@ -217,7 +217,27 @@ final class DebugLogFile: @unchecked Sendable {
     /// `message` as a log line: the UTC time to the millisecond, a space, the
     /// message and a line break.
     static func line(_ message: String, at date: Date) -> String {
-        timestamp(date) + " " + message + "\n"
+        timestamp(date) + " " + escaped(message) + "\n"
+    }
+
+    /// `message` on one line, each control character escaped (`\n`, `\x1b`),
+    /// so text from a device can't start a line of its own.
+    static func escaped(_ message: String) -> String {
+        let isControl = { (scalar: Unicode.Scalar) in scalar.properties.generalCategory == .control }
+        guard message.unicodeScalars.contains(where: isControl) else { return message }
+        var out = ""
+        for scalar in message.unicodeScalars {
+            switch scalar {
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case _ where isControl(scalar):
+                out += scalar.value < 0x10 ? "\\x0" : "\\x"
+                out += String(scalar.value, radix: 16)
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
     }
 
     /// `date` in UTC as `yyyy-MM-ddTHH:mm:ss.SSSZ`, rounded down to the
