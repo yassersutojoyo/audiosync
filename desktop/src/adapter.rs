@@ -7277,7 +7277,10 @@ mod tests {
             }
             adapter.poll();
             let state = adapter.snapshot();
-            assert!(!state.speaker(&id).unwrap().enabled, "cancelled: {cancelled}");
+            assert!(
+                !state.speaker(&id).unwrap().enabled,
+                "cancelled: {cancelled}"
+            );
             assert!(
                 !fake
                     .take_calls()
