@@ -325,7 +325,7 @@ impl Published {
 
 struct Shared {
     stopped: AtomicBool,
-    local_name: Option<String>,
+    local_name: Mutex<Option<String>>,
     content_security_policy: String,
     heartbeat: Duration,
     request_timeout: Duration,
@@ -544,6 +544,12 @@ fn bind_all(config: &Config) -> Result<(Vec<TcpListener>, u16), RemoteError> {
     Ok((listeners, port))
 }
 
+fn own_name(name: Option<&str>) -> Option<String> {
+    name.map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
 impl RemoteServer {
     /// Opens the listeners and makes the first pairing code. `on_command`
     /// runs on a connection thread for each accepted change, one call at a
@@ -563,12 +569,7 @@ impl RemoteServer {
         let (listeners, port) = bind_all(&config)?;
         let shared = Arc::new(Shared {
             stopped: AtomicBool::new(false),
-            local_name: config
-                .local_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned),
+            local_name: Mutex::new(own_name(config.local_name.as_deref())),
             content_security_policy,
             heartbeat: config.timing.heartbeat,
             request_timeout: config.timing.request,
@@ -671,7 +672,9 @@ impl RemoteServer {
     /// Makes `<name>.local` the accepted `Host` name in place of the one
     /// before (none: only the address), for when the computer is renamed.
     /// The pairing code, its age and the wrong-code counts stay as they are.
-    pub fn set_local_name(&self, _name: Option<&str>) {}
+    pub fn set_local_name(&self, name: Option<&str>) {
+        *lock(&self.shared.local_name) = own_name(name);
+    }
 
     /// Whether too many wrong codes locked pairing until the next rotation.
     pub fn pairing_locked(&self) -> bool {
@@ -1002,7 +1005,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
     let host = match request.header("host") {
         Some(host)
             if request.header_count("host") == 1
-                && net::host_allowed(host, local, shared.local_name.as_deref()) =>
+                && net::host_allowed(host, local, lock(&shared.local_name).as_deref()) =>
         {
             host
         }

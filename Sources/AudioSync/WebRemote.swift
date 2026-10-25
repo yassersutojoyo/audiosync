@@ -74,8 +74,8 @@ final class WebRemote {
     private var publishPending = false
     private var lastPublished = ""
     private var computerName = ""
-    /// The server accepts only the `.local` name it started with as a Host.
-    private var startedLocalName: String?
+    /// The `.local` name the server accepts as a Host.
+    private var serverLocalName: String?
     private var nowPlayingNeeded = false
 
     var isRunning: Bool { handle != nil }
@@ -159,8 +159,8 @@ final class WebRemote {
         guard handle == nil else { return }
         refreshAddresses()
         var config: [String: Any] = ["port": settings.port]
-        startedLocalName = settings.addresses.localHostName
-        if let name = startedLocalName { config["local_name"] = name }
+        serverLocalName = settings.addresses.localHostName
+        if let name = serverLocalName { config["local_name"] = name }
         if let file = Self.devicesFile { config["devices_path"] = file.path }
         guard let data = try? JSONSerialization.data(withJSONObject: config) else { return }
         let box = Unmanaged.passRetained(RemoteInbox(owner: self))
@@ -331,10 +331,15 @@ final class WebRemote {
             publishNow()
         }
         refreshAddresses()
-        if settings.addresses.localHostName != startedLocalName {
-            DebugTrace.log("[AudioSync] web remote restarts: the Mac's local name changed")
-            stop()
-            start()
+        // In place: a restart makes a new code and ends a lockout, and mDNS conflicts can force renames.
+        if settings.addresses.localHostName != serverLocalName {
+            serverLocalName = settings.addresses.localHostName
+            if let name = serverLocalName {
+                name.withCString { asc_remote_set_local_name(handle, $0) }
+            } else {
+                asc_remote_set_local_name(handle, nil)
+            }
+            DebugTrace.log("[AudioSync] web remote follows the Mac's new local name")
         }
     }
 
