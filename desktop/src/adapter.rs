@@ -77,6 +77,7 @@ use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey};
 use audiosync_core::policy::zones::{self, MemberKind, Situation, Step, Zone, Zones};
 use audiosync_core::reader::DRIFT_TOLERANCE_MS;
+use audiosync_core::volume::row_level;
 
 use crate::audio::backend::{
     AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
@@ -2088,7 +2089,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.switch_zone_member(key, true);
             }
             if let (true, Some(volume)) = (*set_volume, volume) {
-                self.set_speaker_volume(&key.to_string(), *volume);
+                self.set_preset_volume(key, *volume);
             }
         }
         self.audio.set_master_volume(preset.master);
@@ -2232,6 +2233,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// What plays now as preset `id` named `name`.
+    /// A preset member's stored volume: an AirPlay speaker's own volume s,
+    /// which plays at s × zone × master (S290), any other row's volume.
+    fn set_preset_volume(&mut self, key: &SpeakerKey, volume: f64) {
+        match key {
+            SpeakerKey::AirPlay(airplay_id) => self.audio.set_airplay_volume(airplay_id, volume),
+            _ => self.set_speaker_volume(&key.to_string(), volume),
+        }
+    }
+
     fn capture_preset(&self, id: &str, name: &str) -> Result<Preset, PresetError> {
         ui_model::capture_preset(id, name, &self.snapshot()).ok_or(PresetError::NoSpeakerOn)
     }
@@ -2266,6 +2276,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            own_volume: None,
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
                 .then_some(Waiting::Reconnecting),
@@ -3497,7 +3508,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 SpeakerKind::AirPlay
             },
             enabled: speaker.enabled,
-            volume: speaker.volume,
+            // The speaker's own 0 to 100 level, as its display shows it (S290).
+            volume: row_level(speaker.device_level),
             delay_ms: None,
             availability: if speaker.pairing && waiting {
                 Availability::WaitingToPair
@@ -3510,6 +3522,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: speaker.holds_password,
             holds_credentials: speaker.holds_credentials,
             code_every_time: speaker.code_every_time,
+            own_volume: Some(speaker.volume),
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
             waiting: self
@@ -3558,6 +3571,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_credentials: false,
             code_every_time: false,
             // Read only while the output is on (S192).
+            own_volume: None,
             device_volume: output
                 .device_volume
                 .and_then(|device_volume| device_volume.hint()),
@@ -3877,7 +3891,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.audio.set_output_volume(&endpoint_id, position);
             }
             Some(SpeakerKey::AirPlay(airplay_id)) => {
-                self.audio.set_airplay_volume(&airplay_id, position);
+                self.audio.move_airplay_row(&airplay_id, position);
             }
             Some(SpeakerKey::Cast(cast_id)) => self.audio.set_cast_volume(&cast_id, position),
             None => {}
@@ -9228,6 +9242,47 @@ mod tests {
             "it isn't an auto-connect speaker"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S252, S290
+    #[test]
+    fn an_airplay_row_shows_the_device_level_and_a_preset_keeps_the_own_volume() {
+        let path = test_dir("adapter-airplay-device-level").join(settings::FILE_NAME);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let fake = FakeAirPlay::new();
+        fake.appear(&kitchen);
+        let mut audio = launch_audio();
+        audio.set_airplay(fake.link(), None);
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        let id = ap(&kitchen);
+        adapter.set_speaker_enabled(&id, true);
+        adapter.set_master_volume(63.0);
+        adapter.set_speaker_volume(&id, 20.0);
+        let row = |adapter: &AudioAdapter<MockBackend>| {
+            let speaker = speaker_of(adapter, &id);
+            (speaker.volume, speaker.own_volume)
+        };
+        assert_eq!(row(&adapter), (20.0, Some(32.0)));
+        let preset = adapter
+            .capture_preset("preset:1", "Evening")
+            .expect("a speaker is on");
+        let member = preset
+            .members
+            .iter()
+            .find(|member| member.key == id)
+            .expect("stored");
+        assert_eq!(member.volume, Some(32.0), "the own volume, not the row");
+
+        adapter.set_master_volume(100.0);
+        adapter.set_speaker_volume(&id, 80.0);
+        assert_eq!(row(&adapter), (80.0, Some(80.0)));
+        adapter.presets = vec![preset];
+        adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        assert_eq!(row(&adapter), (20.0, Some(32.0)));
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
     #[test]
