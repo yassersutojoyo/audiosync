@@ -168,6 +168,63 @@ enum SourceSwitch {
     }
 }
 
+/// A running session moving to another source or input channel pair (S141,
+/// S14). Only the capture is rebuilt: the AirPlay and Cast speakers stay
+/// connected, since a reconnect makes a speaker that asks for a code ask
+/// again and some TVs time out on it.
+enum CaptureSwitch {
+    enum Change: Equatable {
+        case source(from: AudioSource, to: AudioSource)
+        /// `InputChannelPair.index` values of the input device `uid`.
+        case inputPair(uid: String, from: Int, to: Int)
+
+        var stop: SessionStop {
+            if case .source = self { return .sourceChanged }
+            return .inputPairChanged
+        }
+    }
+
+    enum Failure: Equatable {
+        case microphoneDenied
+        case startFailed
+    }
+
+    enum Outcome: Equatable {
+        /// The new capture runs, at whatever rate it has; the AirPlay
+        /// timeline starts over with it.
+        case switched
+        /// The new capture didn't start and the old one plays (again).
+        case keptOld(Failure)
+        /// Neither capture runs: streaming stops as after any failed start.
+        case stopped
+    }
+
+    /// `failure` is nil when the new capture started; `oldRunning` says
+    /// whether the old capture runs after a failure.
+    static func outcome(failure: Failure?, oldRunning: Bool) -> Outcome {
+        failure == nil ? .switched : .stopped
+    }
+
+    enum Message: Equatable {
+        case none
+        /// The alert that says where to allow the microphone.
+        case microphoneDenied
+        /// "Couldn't start <new>, still on <old>", as a source notice.
+        case stillOnOld(new: String, old: String)
+    }
+
+    /// `sourceName` and `pairName` give the names the source picker shows.
+    static func message(_ outcome: Outcome, change: Change, sourceName: (AudioSource) -> String,
+                        pairName: (_ uid: String, _ index: Int) -> String) -> Message {
+        .none
+    }
+
+    /// `kept`: the AirPlay and Cast speakers that stayed connected.
+    static func logLine(_ outcome: Outcome, kept: Int, fromRate: Double, toRate: Double) -> String {
+        ""
+    }
+}
+
 // MARK: - When the source app quits
 
 /// What a session does when the app it captures quits (S227), kept as

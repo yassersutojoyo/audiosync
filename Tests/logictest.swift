@@ -2936,6 +2936,47 @@ do {
     check(SourceSwitch.decide(from: music, to: music, streaming: true) == .none,
           "EC5 source: choosing the same source changes nothing")
 
+    // EC5: a switch while streaming keeps the speakers connected (S141, S14).
+    let toMusic = CaptureSwitch.Change.source(from: .system, to: music)
+    let toPair = CaptureSwitch.Change.inputPair(uid: "mic", from: 0, to: 1)
+    let switchName: (AudioSource) -> String = { $0 == .system ? "All System Audio" : "Music" }
+    let switchPair: (String, Int) -> String = { _, index in index == 0 ? "Channels 1-2" : "Channels 3-4" }
+    check(CaptureSwitch.outcome(failure: nil, oldRunning: false) == .switched,
+          "EC5 source: a switch whose new capture starts plays it")
+    check(CaptureSwitch.logLine(.switched, kept: 3, fromRate: 48000, toRate: 48000)
+            == "[AudioSync] source switch: 3 AirPlay or Cast speaker(s) stayed connected, the capture runs at 48000 Hz",
+          "EC5 source: a switch keeps the speakers connected and says how many",
+          CaptureSwitch.logLine(.switched, kept: 3, fromRate: 48000, toRate: 48000))
+    check(CaptureSwitch.logLine(.switched, kept: 2, fromRate: 44100, toRate: 48000)
+            == "[AudioSync] source switch: 2 AirPlay or Cast speaker(s) stayed connected, the capture went from 44100 to 48000 Hz",
+          "EC5 source: a switch from a 44.1 kHz input to a 48 kHz app keeps the speakers at the new rate",
+          CaptureSwitch.logLine(.switched, kept: 2, fromRate: 44100, toRate: 48000))
+    check(CaptureSwitch.outcome(failure: .startFailed, oldRunning: true) == .keptOld(.startFailed),
+          "EC5 source: a new source that can't start gives way to the old one")
+    check(CaptureSwitch.outcome(failure: .microphoneDenied, oldRunning: true) == .keptOld(.microphoneDenied),
+          "EC5 source: a denied microphone keeps the old source playing")
+    check(CaptureSwitch.outcome(failure: .startFailed, oldRunning: false) == .stopped,
+          "EC5 source: streaming stops only when the old source can't start again either")
+    check(CaptureSwitch.message(.keptOld(.startFailed), change: toMusic, sourceName: switchName, pairName: switchPair)
+            == .stillOnOld(new: "Music", old: "All System Audio"),
+          "EC5 source: a failed switch names the new source and the one still playing")
+    check(CaptureSwitch.message(.keptOld(.startFailed), change: toPair, sourceName: switchName, pairName: switchPair)
+            == .stillOnOld(new: "Channels 3-4", old: "Channels 1-2"),
+          "EC5 source: a failed channel pair switch names both pairs")
+    check(CaptureSwitch.message(.keptOld(.microphoneDenied), change: toPair, sourceName: switchName,
+                                pairName: switchPair) == .microphoneDenied,
+          "EC5 source: a denied microphone says where to allow it")
+    check(CaptureSwitch.message(.switched, change: toMusic, sourceName: switchName, pairName: switchPair) == .none
+            && CaptureSwitch.message(.stopped, change: toMusic, sourceName: switchName, pairName: switchPair) == .none,
+          "EC5 source: a switch that works, or a stop with its own start notice, adds no switch notice")
+    check(CaptureSwitch.logLine(.keptOld(.startFailed), kept: 1, fromRate: 48000, toRate: 48000)
+            == "[AudioSync] source switch failed (the new capture didn't start): the old source plays on, "
+            + "1 AirPlay or Cast speaker(s) stayed connected",
+          "EC5 source: a failed switch logs that the speakers stayed",
+          CaptureSwitch.logLine(.keptOld(.startFailed), kept: 1, fromRate: 48000, toRate: 48000))
+    check(toMusic.stop == .sourceChanged && toPair.stop == .inputPairChanged,
+          "EC5 source: the log names a source change and a pair change apart")
+
     // EC8: every speaker off, then one on again.
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: streaming stops when the last speaker is switched off")
