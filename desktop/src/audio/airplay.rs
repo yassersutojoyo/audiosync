@@ -699,6 +699,11 @@ const VOLUME_TOLERANCE_DB: f64 = 0.5;
 /// press later can land that close too (S271).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
+/// The most receivers listed at one address. Unauthenticated mDNS lets a
+/// LAN host announce any number; a bridge that fronts many speakers from
+/// one host stays well under this.
+const MAX_LISTED_PER_ADDRESS: usize = 64;
+
 /// The volume reads of one row in the sender.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct VolumeRead {
@@ -4376,6 +4381,22 @@ pub mod tests {
                 .all(|speaker| airplay.listed_name(&id_of(speaker)).is_none())
         );
         assert_eq!(airplay.listed_name(&id_of(&kitchen)), Some("Kitchen"));
+    }
+
+    #[test]
+    fn one_address_lists_at_most_its_share_of_speakers() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let flood = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66));
+        for n in 1..=MAX_LISTED_PER_ADDRESS as u8 + 6 {
+            fake.appear(&device_at(n, &format!("Forged {n}"), OPEN_TXT, flood, 7000));
+        }
+        let kitchen = device(200, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        airplay.poll();
+        let listed = airplay.speakers();
+        assert_eq!(listed.len(), MAX_LISTED_PER_ADDRESS + 1);
+        assert!(listed.iter().any(|speaker| speaker.name == "Kitchen"));
     }
 
     /// A failed pairing, wrong PIN or not.
