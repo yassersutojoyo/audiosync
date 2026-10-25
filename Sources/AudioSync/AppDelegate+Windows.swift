@@ -14,9 +14,9 @@ extension AppDelegate {
     /// callbacks, the view actions, the menu bar item and the first model
     /// snapshot.
     func setUpMenuBar() {
-        let settings = StoredEqualizer.decode(UserDefaults.standard.data(forKey: Keys.equalizer))
+        let settings = StoredEqualizer.decode(store.read(Keys.equalizer) as? Data)
         engine.updateEqualizer(settings)
-        let curves = StoredCurves.decode(UserDefaults.standard.data(forKey: Keys.equalizerCurves))
+        let curves = StoredCurves.decode(store.read(Keys.equalizerCurves) as? Data)
         equalizerModel = EqualizerModel(settings: settings, curves: curves)
         equalizerModel.onChange = { [weak self] new in self?.equalizerChanged(new) }
         equalizerModel.onCurvesChange = { [weak self] new in self?.equalizerCurvesChanged(new) }
@@ -31,8 +31,8 @@ extension AppDelegate {
 
         appModel.text = text
         appModel.actions = makeActions()
-        let saved = AppSettings.load(SettingsStore.standard.read)
-        let remote = WebRemote(model: appModel, store: .standard, enabled: saved.webRemote, port: saved.webRemotePort)
+        let saved = AppSettings.load(store.read)
+        let remote = WebRemote(model: appModel, store: store, enabled: saved.webRemote, port: saved.webRemotePort)
         remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
         remote.host.zones = { [weak self] in self?.zones ?? [] }
         remote.host.presets = { [weak self] in
@@ -59,8 +59,8 @@ extension AppDelegate {
 
     private func equalizerChanged(_ settings: Equalizer.Settings) {
         engine.updateEqualizer(settings)
-        if !LaunchAutoConnect.skipped, let data = StoredEqualizer.encode(settings) {
-            UserDefaults.standard.set(data, forKey: Keys.equalizer)
+        if let data = StoredEqualizer.encode(settings) {
+            store.write(data, Keys.equalizer)
         }
         publish(\.equalizerOn, settings.enabled)
         publishEqualizerCurve()
@@ -68,8 +68,8 @@ extension AppDelegate {
     }
 
     private func equalizerCurvesChanged(_ curves: [Equalizer.Curve]) {
-        if !LaunchAutoConnect.skipped, let data = StoredCurves.encode(curves) {
-            UserDefaults.standard.set(data, forKey: Keys.equalizerCurves)
+        if let data = StoredCurves.encode(curves) {
+            store.write(data, Keys.equalizerCurves)
         }
         publishEqualizerCurve()
     }

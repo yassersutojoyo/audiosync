@@ -81,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Settings kept between launches (AppSettings.swift)
 
     typealias Keys = AppSettings.Keys
-    private let store: SettingsStore
+    let store: SettingsStore
 
     /// The mode the several-apps menu shows while no mix is the source.
     var rememberedMixMode: AppMixMode = .only
@@ -326,7 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let loginItem = Self.launchedAsLoginItem()
         DebugTrace.log("[AudioSync] launched\(loginItem ? " at login" : ""); audio engine: the Rust core")
-        SettingsStore.standard.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
+        store.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
             .forEach { DebugTrace.log($0) }
         AudioSyncCore.logVersion()   // which Rust core this build carries
 

@@ -149,8 +149,6 @@ struct AppSettings: Equatable {
     /// The migration to offsets ran (S179).
     var localDelaysMigrated = false
 
-    /// Reads every setting through `read`, which returns what is stored for a
-    /// key (UserDefaults' `object(forKey:)`), or nil.
     /// The settings a launch starts from. `holdingSpeakersOff` (a debug launch
     /// without auto-connect, `LaunchAutoConnect`) leaves every speaker off,
     /// whatever was saved as on.
@@ -162,6 +160,8 @@ struct AppSettings: Equatable {
         return held
     }
 
+    /// Reads every setting through `read`, which returns what is stored for a
+    /// key (UserDefaults' `object(forKey:)`), or nil.
     static func load(_ read: (String) -> Any?) -> AppSettings {
         var s = AppSettings()
         s.source = AudioSource(defaultsValue: read(Keys.source) as? String)
