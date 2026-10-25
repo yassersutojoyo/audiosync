@@ -111,3 +111,4 @@ S283 Hosts only: each AirPlay speaker's reported latency as its starting estimat
 S284 Hosts only: Lf, E and each row's delay with several AirPlay 2 receivers, a target at its largest member's R_s; the Windows tests and the Mac logic suite check it.
 S285 Hosts only: every AirPlay 2 speaker playing, the two wait reasons and one speaker's failure on its own row; the Windows tests and the Mac logic suite check it.
 S288 Hosts only: the web remote's debug switch at launch; the Windows host's tests and the Mac logic suite check it.
+S292 Hosts only: an explicit pause resumes on sound the host counts in its own capture; the Windows tests and the Mac logic suite check it.
