@@ -181,19 +181,28 @@ enum CaptureSwitch {
         case sourceAppQuit(bundleID: String)
 
         var stop: SessionStop {
-            if case .inputPair = self { return .inputPairChanged }
-            return .sourceChanged
+            switch self {
+            case .source: return .sourceChanged
+            case .inputPair: return .inputPairChanged
+            case .sourceAppQuit: return .sourceSwitchedToSystem
+            }
+        }
+
+        var quitApp: String? {
+            if case .sourceAppQuit(let bundleID) = self { return bundleID }
+            return nil
         }
 
         /// The capture a failed switch falls back to: the old source with
-        /// its stored pair (`pairOf` a device UID), or the old pair.
+        /// its stored pair (`pairOf` a device UID), or the old pair. None
+        /// after the source app quit, since that capture is gone.
         func oldCapture(pairOf: (String) -> Int) -> (source: AudioSource, pair: Int)? {
             switch self {
             case .source(let from, _):
                 if case .input(let uid) = from { return (from, pairOf(uid)) }
                 return (from, 0)
             case .inputPair(let uid, let from, _): return (.input(uid: uid), from)
-            case .sourceAppQuit(let bundleID): return (.app(bundleID: bundleID), 0)
+            case .sourceAppQuit: return nil
             }
         }
     }
@@ -301,15 +310,20 @@ enum CaptureSwitch {
     static func logLine(_ outcome: Outcome, change: Change? = nil, kept: Int, fromRate: Double,
                         toRate: Double) -> String {
         let speakers = "\(kept) AirPlay or Cast speaker(s) stayed connected"
+        let quit = change?.quitApp
         switch outcome {
         case .switched:
             let rate = fromRate == toRate ? "runs at \(Int(toRate)) Hz"
                 : "went from \(Int(fromRate)) to \(Int(toRate)) Hz"
-            return "[AudioSync] source switch: \(speakers), the capture \(rate)"
+            let what = quit.map { "source app quit (\($0)), the whole system plays" } ?? "source switch"
+            return "[AudioSync] \(what): \(speakers), the capture \(rate)"
         case .keptOld(let failure):
             let why = failure == .microphoneDenied ? "the microphone isn't allowed" : "the new capture didn't start"
             return "[AudioSync] source switch failed (\(why)): the old source plays on, \(speakers)"
         case .stopped:
+            if let quit {
+                return "[AudioSync] source app quit (\(quit)) and the whole system didn't start: streaming stops"
+            }
             return "[AudioSync] source switch failed and the old source didn't start again: streaming stops"
         }
     }

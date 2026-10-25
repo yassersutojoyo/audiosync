@@ -44,7 +44,7 @@ extension AppDelegate {
         // (at most 500 ms, S186).
         let fromRate = engine.captureRate
         if engine.isRunning {
-            DebugTrace.log((switching?.stop ?? SessionStop.rebuild).logLine())
+            DebugTrace.log((switching?.stop ?? SessionStop.rebuild).logLine(detail: switching?.quitApp))
             engine.stop()
         }
         var outcome = CaptureSwitch.Outcome.switched
@@ -137,7 +137,8 @@ extension AppDelegate {
     private func finishSwitch(_ change: CaptureSwitch.Change, _ outcome: CaptureSwitch.Outcome,
                               fromRate: Double, origin: StartOrigin) {
         let kept = engine.isRunning ? playableAirPlay.union(castSwitchedOn).count : 0
-        DebugTrace.log(CaptureSwitch.logLine(outcome, kept: kept, fromRate: fromRate, toRate: engine.captureRate))
+        DebugTrace.log(CaptureSwitch.logLine(outcome, change: change, kept: kept, fromRate: fromRate,
+                                             toRate: engine.captureRate))
         switch CaptureSwitch.message(outcome, change: change, sourceName: { self.pickerName($0) },
                                      pairName: { self.pickerName(.input(uid: $0), pair: $1) }) {
         case .none:
@@ -246,7 +247,8 @@ extension AppDelegate {
     /// The source app quit during a session (S142, S227). Stop: the AirPlay
     /// speakers stay chosen and the source stays that app. Switch: the session
     /// goes on with the whole system as a source change does (S141, S163),
-    /// with the AirPlay speakers kept selected and the new source stored (S12).
+    /// with the AirPlay and Cast speakers kept connected and the new source
+    /// stored (S12); a whole system that can't start stops streaming.
     func sourceAppQuit(_ bundleID: String, _ action: SourceQuit.Action) {
         DebugTrace.log("[AudioSync] source app quit: \(bundleID), \(action)")
         let name = SourceApps.name(for: bundleID)
@@ -261,9 +263,8 @@ extension AppDelegate {
             updateNowPlayingTarget()
             clearNotices([Notice.source, Notice.capture])   // about the app
             autoStartFailed = false
-            stopEngine(.sourceSwitchedToSystem, detail: bundleID)
             // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
-            startEngine(origin: .automatic)
+            startEngine(origin: .automatic, switching: .sourceAppQuit(bundleID: bundleID))
             // A failed start has its own "start" notice; this one still says which app quit.
             postNotice(text.sourceSwitchedToSystem(name: name, started: engine.isRunning), subject: Notice.source,
                        info: engine.isRunning)
