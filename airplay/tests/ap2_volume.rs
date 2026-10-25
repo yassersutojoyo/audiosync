@@ -185,18 +185,24 @@ fn an_accepted_resend_leaves_the_volume_alone_after_it() {
 fn a_refused_volume_the_read_back_shows_applied_neither_warns_nor_goes_again() {
     let mut fake = FakeAp2::new();
     fake.status.insert(SET.to_owned(), 500);
-    fake.applies_volume = Some(0.3);
+    fake.applies_volume = Some(0.6);
     let mut rig = Ap2Rig::new(ap2_config(), fake);
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
-    let now = rig.now;
-    rig.session.set_volume(Volume::Db(-28.110378), now);
-    rig.pump();
-    rig.advance(Duration::from_secs(10));
+    for level in [-28.110378, -25.748351] {
+        let now = rig.now;
+        rig.session.set_volume(Volume::Db(level), now);
+        rig.pump();
+        rig.advance(Duration::from_secs(10));
+    }
     assert_eq!(
         volume_sets(&rig),
-        ["volume: -15.000000\r\n", "volume: -28.110378\r\n"]
+        [
+            "volume: -15.000000\r\n",
+            "volume: -28.110378\r\n",
+            "volume: -25.748351\r\n"
+        ]
     );
-    assert_eq!(rig.times_of(READ).len(), 2, "{:?}", rig.keys());
+    assert_eq!(rig.times_of(READ).len(), 3, "{:?}", rig.keys());
     assert!(warnings(&rig).is_empty(), "{:?}", rig.events);
     // The host never asked for the level.
     assert!(reported(&rig).is_empty());

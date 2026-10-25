@@ -44,6 +44,9 @@ pub const FEEDBACK_INTERVAL: Duration = Duration::from_secs(2);
 pub const FEEDBACK_MISSES: u8 = 3;
 /// Failed volume reads in a row after which a session stops reading (P184).
 pub const VOLUME_READ_FAILURES: u8 = 3;
+/// A read-back this close to a refused volume means the receiver applied
+/// it; a Samsung TV rounds to a 0.6 dB grid (P183).
+const APPLIED_TOLERANCE_DB: f64 = 0.5;
 /// Retries of a refused event connection, and the wait between them (P70).
 pub const EVENTS_RETRIES: u32 = 5;
 pub const EVENTS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -251,10 +254,16 @@ impl Kind {
 }
 
 /// The one resend of a refused volume (P183).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum VolumeRetry {
     /// The latest host value hasn't been refused.
     Idle,
+    /// Refused, and a read decides whether the receiver applied it anyway.
+    Checking {
+        db: f64,
+        resent: bool,
+        status: u16,
+    },
     /// Refused once: it goes again with the next feedback.
     Due,
     Resent,
@@ -939,13 +948,32 @@ impl Ap2Session {
     /// A read with an error status, without a level or left unanswered
     /// until the next feedback tick (P184).
     fn volume_read_failed(&mut self) {
+        if let VolumeRetry::Checking { resent, status, .. } = self.volume_retry {
+            self.volume_refused(resent, status);
+        }
         self.volume_read_failures = self.volume_read_failures.saturating_add(1);
         if self.volume_read_failures >= VOLUME_READ_FAILURES && !self.volume_reads_stopped {
             self.volume_reads_stopped = true;
             self.volume_read_wanted = false;
             self.volume_read_asked = false;
-            self.event(Ap2Event::Warning(Warning::VolumeReadsStopped));
+            if self.config.read_volume {
+                self.event(Ap2Event::Warning(Warning::VolumeReadsStopped));
+            }
         }
+    }
+
+    /// A refused volume the receiver didn't apply: the session's one
+    /// warning, then one resend unless this was the resend (P183).
+    fn volume_refused(&mut self, resent: bool, status: u16) {
+        if !self.volume_warned {
+            self.volume_warned = true;
+            self.warn(Method::SetParameter, status);
+        }
+        self.volume_retry = if resent {
+            VolumeRetry::Spent
+        } else {
+            VolumeRetry::Due
+        };
     }
 
     /// One more missing or failed feedback answer; true when that made the
@@ -1515,20 +1543,23 @@ impl Ap2Session {
                 }
                 self.stream_setup_waiting = true;
             }
-            Kind::Volume(_) => {
+            Kind::Volume(volume) => {
                 if success {
                     if self.volume_retry == VolumeRetry::Resent {
                         self.volume_retry = VolumeRetry::Idle;
                     }
-                } else {
-                    if !self.volume_warned {
-                        self.volume_warned = true;
-                        self.warn(method, code);
+                } else if self.pending_volume.is_none() {
+                    let resent = self.volume_retry == VolumeRetry::Resent;
+                    if self.volume_reads_stopped {
+                        self.volume_refused(resent, code);
+                    } else {
+                        self.volume_retry = VolumeRetry::Checking {
+                            db: volume.wire_db(),
+                            resent,
+                            status: code,
+                        };
+                        self.volume_read_wanted = true;
                     }
-                    self.volume_retry = match self.volume_retry {
-                        VolumeRetry::Idle => VolumeRetry::Due,
-                        _ => VolumeRetry::Spent,
-                    };
                 }
                 if self.startup_read_due {
                     self.startup_read_due = false;
@@ -1610,7 +1641,21 @@ impl Ap2Session {
                     Some(db) => {
                         self.volume_read_failures = 0;
                         if generation == self.volume_generation {
-                            self.event(Ap2Event::VolumeReported(db));
+                            if let VolumeRetry::Checking {
+                                db: sent,
+                                resent,
+                                status,
+                            } = self.volume_retry
+                            {
+                                if (db - sent).abs() <= APPLIED_TOLERANCE_DB {
+                                    self.volume_retry = VolumeRetry::Idle;
+                                } else {
+                                    self.volume_refused(resent, status);
+                                }
+                            }
+                            if self.config.read_volume {
+                                self.event(Ap2Event::VolumeReported(db));
+                            }
                         }
                     }
                     None => self.volume_read_failed(),

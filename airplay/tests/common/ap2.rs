@@ -224,7 +224,7 @@ pub struct FakeAp2 {
     /// A body in place of the usual answer, by key.
     pub bodies: HashMap<String, Vec<u8>>,
     /// Every volume SET_PARAMETER, whatever its status, sets the level a
-    /// GET_PARAMETER answers, down to this step in dB.
+    /// GET_PARAMETER answers, rounded to this step in dB.
     pub applies_volume: Option<f64>,
     /// The body of the answer to the second `/info`, in place of the
     /// initial volume alone.
@@ -339,7 +339,7 @@ impl FakeAp2 {
                     .strip_prefix("volume:")
                     .and_then(|rest| rest.trim().parse::<f64>().ok())
             {
-                let applied = (level / step).floor() * step;
+                let applied = (level / step).round() * step;
                 self.bodies.insert(
                     "GET_PARAMETER".to_owned(),
                     format!("volume: {applied:.6}\r\n").into_bytes(),
