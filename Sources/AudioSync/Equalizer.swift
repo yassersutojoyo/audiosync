@@ -67,11 +67,22 @@ enum Equalizer {
         case saved(Int)
     }
 
-    /// The first curve whose ten gains all equal `gains`: the presets in menu
-    /// order, then the saved curves in their order. The preamp never counts.
-    static func matching(_ gains: [Double], saved: [Curve]) -> CurveMatch? {
-        if let preset = presets.first(where: { $0.gains == gains }) { return .preset(preset.id) }
-        return saved.firstIndex { $0.gains == gains }.map(CurveMatch.saved)
+    /// The ten gains of a preset or saved curve; nil for a bad index.
+    static func gains(of curve: CurveMatch, saved: [Curve]) -> [Double]? {
+        switch curve {
+        case .preset(let id): return presets.first { $0.id == id }?.gains
+        case .saved(let index): return saved.indices.contains(index) ? saved[index].gains : nil
+        }
+    }
+
+    /// The curve whose ten gains all equal `gains`: `chosen` while it still
+    /// does, then the saved curves in their order, then the presets in menu
+    /// order. Saved curves come first so one with a preset's gains keeps
+    /// Rename and Delete. The preamp never counts.
+    static func matching(_ gains: [Double], saved: [Curve], chosen: CurveMatch? = nil) -> CurveMatch? {
+        if let chosen, self.gains(of: chosen, saved: saved) == gains { return chosen }
+        if let index = saved.firstIndex(where: { $0.gains == gains }) { return .saved(index) }
+        return presets.first { $0.gains == gains }.map { CurveMatch.preset($0.id) }
     }
 
     /// A typed name as a curve keeps it: trimmed and cut to 40 Unicode scalars;
@@ -165,7 +176,11 @@ final class EqualizerModel: ObservableObject {
         onChange(new)
     }
 
-    var shownCurve: Equalizer.CurveMatch? { Equalizer.matching(settings.gains, saved: curves) }
+    /// The curve last picked, saved or reset to, so the picker tells a preset
+    /// from a saved curve with the same gains.
+    @Published private(set) var chosen: Equalizer.CurveMatch?
+
+    var shownCurve: Equalizer.CurveMatch? { Equalizer.matching(settings.gains, saved: curves, chosen: chosen) }
 
     /// The saved curve the picker shows, which Rename and Delete act on.
     var shownSavedIndex: Int? {
@@ -174,7 +189,9 @@ final class EqualizerModel: ObservableObject {
     }
 
     /// Picking a curve sets the gains only and turns the equalizer on.
-    func pick(gains: [Double]) {
+    func pick(_ curve: Equalizer.CurveMatch) {
+        guard let gains = Equalizer.gains(of: curve, saved: curves) else { return }
+        chosen = curve
         var new = settings
         new.gains = gains
         new.enabled = true
@@ -182,6 +199,7 @@ final class EqualizerModel: ObservableObject {
     }
 
     func reset() {
+        chosen = .preset(.flat)
         var new = settings
         new.reset()
         set(new)
@@ -190,7 +208,8 @@ final class EqualizerModel: ObservableObject {
     /// False for an empty name or a full list.
     func saveCurve(named typed: String) -> Bool {
         var new = curves
-        guard Equalizer.save(typed, gains: settings.gains, in: &new) != nil else { return false }
+        guard let index = Equalizer.save(typed, gains: settings.gains, in: &new) else { return false }
+        chosen = .saved(index)
         setCurves(new)
         return true
     }
@@ -207,6 +226,9 @@ final class EqualizerModel: ObservableObject {
         guard curves.indices.contains(index) else { return }
         var new = curves
         new.remove(at: index)
+        if case .saved(let picked) = chosen {
+            chosen = picked == index ? nil : .saved(picked > index ? picked - 1 : picked)
+        }
         setCurves(new)
     }
 

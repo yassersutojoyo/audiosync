@@ -139,13 +139,13 @@ struct EqualizerView: View {
         let shown = text.equalizerCurveName(model.shownCurve, saved: model.curves)
         return Menu {
             ForEach(Equalizer.presets, id: \.id) { preset in
-                Button(text.equalizerPreset(preset.id)) { model.pick(gains: preset.gains) }
+                Button(text.equalizerPreset(preset.id)) { model.pick(.preset(preset.id)) }
             }
             if !model.curves.isEmpty {
                 Divider()
                 ForEach(model.curves.indices, id: \.self) { index in
                     let curve = model.curves[index]
-                    Button(curve.name) { model.pick(gains: curve.gains) }
+                    Button(curve.name) { model.pick(.saved(index)) }
                 }
             }
             Divider()
