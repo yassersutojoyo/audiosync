@@ -109,6 +109,7 @@ dependencies = [
  "audiosync-cast",
  "audiosync-remote",
  "criterion",
+ "libc",
  "proptest",
  "zeroize",
 ]
