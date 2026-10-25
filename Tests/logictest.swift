@@ -2959,16 +2959,16 @@ do {
           "EC5 source: choosing the same source changes nothing")
     let repick = SourceSwitch.decide(from: music, to: music, streaming: true)
     check(SourceSwitch.noticesCleared(by: repick, streaming: true) == [Notice.source],
-          "EC5 source: picking the playing source again clears the failed switch notice (S163)")
+          "EC5 source: picking the playing source again clears the failed switch notice")
     check(SourceSwitch.noticesCleared(by: InputChannelPair.change(from: 1, to: 1, streaming: true), streaming: true)
             == [Notice.source],
-          "EC5 source: picking the playing channel pair again clears the failed switch notice (S163)")
+          "EC5 source: picking the playing channel pair again clears the failed switch notice")
     check(SourceSwitch.noticesCleared(by: SourceSwitch.decide(from: music, to: music, streaming: false), streaming: false)
             .isEmpty,
-          "EC5 source: picking the stopped source again keeps the notice of why it stopped (S163)")
+          "EC5 source: picking the stopped source again keeps the notice of why it stopped")
     check(SourceSwitch.noticesCleared(by: SourceSwitch.decide(from: .system, to: music, streaming: true), streaming: true)
             == [Notice.source, Notice.capture],
-          "EC5 source: picking another source clears the old source's notices (S163)")
+          "EC5 source: picking another source clears the old source's notices")
     do {
         let tv = SpeakerKey.make(id: "tv", airplay: true)
         var list = NoticeList()
@@ -2978,7 +2978,7 @@ do {
         list.post("still on", subject: Notice.source)
         list.clear(SourceSwitch.noticesCleared(by: repick, streaming: true))
         check(list.items.map(\.subject) == [Notice.airplayPtp, Notice.airplaySender, tv],
-              "EC5 source: picking the playing source again leaves the AirPlay pairing and sender notices (S163)")
+              "EC5 source: picking the playing source again leaves the AirPlay pairing and sender notices")
     }
 
     // EC5: a switch while streaming keeps the speakers connected (S141, S14).
