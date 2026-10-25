@@ -68,9 +68,17 @@ impl Driver {
             .as_ref()
             .and_then(|control| self.speakers.get(control))
             .is_some_and(|speaker| !speaker.removing);
+        // The members' options carry the host's stored credentials before
+        // any member is a speaker of this run.
+        let paired = |key: &DeviceKey| {
+            self.homekit_paired(key)
+                || members.iter().any(|(member, options, _)| {
+                    member == key && options.homekit_credentials.is_some()
+                })
+        };
         let airplay2 = self.airplay2
             && in_view.iter().any(|device| {
-                device.choose_path_paired(true, None, self.homekit_paired(&device.key))
+                device.choose_path_paired(true, None, paired(&device.key))
                     == Ok(ProtocolPath::AirPlay2)
             });
         self.driven.insert(

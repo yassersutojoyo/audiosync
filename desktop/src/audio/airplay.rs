@@ -607,15 +607,21 @@ pub fn availability(info: &ReceiverInfo, paired: bool) -> AirPlayAvailability {
 }
 
 /// Whether the sender reaches a receiver over AirPlay 2: only with the
-/// switch on, and only one that AirPlay 1 can't drive, by discovery or by
-/// how its last AirPlay 1 attempt ended (`airplay1_outcome`, P2), the input
-/// the sender decides on.
+/// switch on, and then always with HomeKit credentials stored
+/// (`homekit_stored`), otherwise only when AirPlay 1 can't drive it, by
+/// discovery or by how its last AirPlay 1 attempt ended
+/// (`airplay1_outcome`, P2), the input the sender decides on.
 pub fn reached_over_airplay2(
     info: &ReceiverInfo,
     airplay2: bool,
     airplay1_outcome: Option<ErrorKind>,
+    homekit_stored: bool,
 ) -> bool {
-    airplay2 && info.device.choose_path(true, airplay1_outcome) == Ok(ProtocolPath::AirPlay2)
+    airplay2
+        && info
+            .device
+            .choose_path_paired(true, airplay1_outcome, homekit_stored)
+            == Ok(ProtocolPath::AirPlay2)
 }
 
 /// Whether a receiver reached over AirPlay 2 can play: one whose flags ask
@@ -1495,6 +1501,11 @@ impl AirPlaySpeakers {
     /// What discovery and the credentials kept say about a receiver, on
     /// the path the sender takes to it.
     fn availability_of(&self, id: &str, info: &ReceiverInfo) -> AirPlayAvailability {
+        // A speaker with HomeKit credentials never plays over AirPlay 1, so
+        // its RAOP record says nothing about it (P2).
+        if self.store.homekit(id).is_some() && !self.link.airplay2() {
+            return AirPlayAvailability::AirPlay2NotYet;
+        }
         if !self.reached_over_airplay2(id, info) {
             return availability(info, self.legacy_paired(id));
         }
@@ -1548,7 +1559,8 @@ impl AirPlaySpeakers {
 
     fn reached_over_airplay2(&self, id: &str, info: &ReceiverInfo) -> bool {
         let outcome = self.airplay1_outcome.get(id).copied();
-        reached_over_airplay2(info, self.link.airplay2(), outcome)
+        let homekit_stored = self.store.homekit(id).is_some();
+        reached_over_airplay2(info, self.link.airplay2(), outcome, homekit_stored)
     }
 
     /// Whether a listed speaker can join the stream: it can play, or it asks
@@ -4448,6 +4460,60 @@ pub mod tests {
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
         );
+    }
+
+    /// A speaker with stored AirPlay 2 credentials shows nothing a RAOP
+    /// record says, since any host can publish one under its id (P2).
+    #[test]
+    fn a_homekit_paired_speaker_never_shows_its_raop_record() {
+        use crate::audio::pairings::tests::homekit;
+
+        let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 12]);
+        let airplay = ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: "Den".to_owned(),
+            host: "speaker-12.local".to_owned(),
+            port: 7000,
+            txt: vec![
+                format!("deviceid={device_id}").into_bytes(),
+                b"features=0x0,0x40".to_vec(),
+                b"flags=0x0".to_vec(),
+            ],
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 13)))],
+        };
+        let forged_raop = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: format!("{device_id}@Den"),
+            host: "elsewhere.local".to_owned(),
+            port: 5000,
+            txt: vec![b"et=0".to_vec(), b"pw=true".to_vec()],
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66)))],
+        };
+        let den =
+            Device::from_records(DeviceKey::Id(device_id), Some(&forged_raop), Some(&airplay))
+                .expect("a device");
+        let id = id_of(&den);
+        for airplay2 in [true, false] {
+            let fake = FakeAirPlay::new();
+            fake.set_airplay2(airplay2);
+            let mut airplay = speakers(&fake);
+            fake.appear(&den);
+            airplay.poll();
+            let row = &airplay.speakers()[0];
+            assert!(!row.airplay2, "unpaired, AirPlay 1 serves it");
+            assert_eq!(row.availability, AirPlayAvailability::NeedsPassword);
+
+            airplay.store.open_airplay2();
+            airplay.store.insert_homekit(&id, homekit(0x33)).unwrap();
+            let row = &airplay.speakers()[0];
+            assert_eq!(row.airplay2, airplay2);
+            let expected = if airplay2 {
+                AirPlayAvailability::Open
+            } else {
+                AirPlayAvailability::AirPlay2NotYet
+            };
+            assert_eq!(row.availability, expected);
+        }
     }
 
     /// Loft paired with a PIN, played, and was switched off; the user
