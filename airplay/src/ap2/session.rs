@@ -44,6 +44,8 @@ pub const FEEDBACK_INTERVAL: Duration = Duration::from_secs(2);
 pub const FEEDBACK_MISSES: u8 = 3;
 /// Failed volume reads in a row after which a session stops reading (P184).
 pub const VOLUME_READ_FAILURES: u8 = 3;
+/// How often a playing stream reads the volume the host asked for (P184).
+pub const VOLUME_READ_INTERVAL: Duration = Duration::from_secs(1);
 /// A read-back this close to a refused volume means the receiver applied
 /// it; a Samsung TV rounds to a 0.6 dB grid (P183).
 const APPLIED_TOLERANCE_DB: f64 = 0.5;
@@ -366,6 +368,8 @@ pub struct Ap2Session {
     stream_torn_down: bool,
     receiver_timing_peer: Option<plist::Dictionary>,
     feedback_due: Option<Instant>,
+    /// The next volume read tick while the stream plays (P184).
+    read_due: Option<Instant>,
     feedback_wanted: bool,
     feedback_misses: u8,
     pending_volume: Option<Volume>,
@@ -387,7 +391,7 @@ pub struct Ap2Session {
     volume_generation: u32,
     /// Failed reads in a row; three stop the reads (P184).
     volume_read_failures: u8,
-    /// CSeqs of reads given up at a feedback tick and of artwork given up
+    /// CSeqs of reads given up at a read tick and of artwork given up
     /// after the usual wait, whose answers are dropped.
     late_answers: Vec<u32>,
     volume_reads_stopped: bool,
@@ -477,6 +481,7 @@ impl Ap2Session {
             stream_torn_down: false,
             receiver_timing_peer: None,
             feedback_due: None,
+            read_due: None,
             feedback_wanted: false,
             feedback_misses: 0,
             pending_volume: None,
@@ -642,6 +647,9 @@ impl Ap2Session {
         }
         if self.state != Ap2State::TearingDown {
             times.extend(self.feedback_due);
+        }
+        if self.state == Ap2State::Ready {
+            times.extend(self.read_due);
         }
         times.into_iter().min()
     }
@@ -883,27 +891,25 @@ impl Ap2Session {
                     .push_back(Output::ConnectEvents(with_port(remote, port)));
             }
         }
+        if self.state == Ap2State::Ready
+            && let Some(due) = self.read_due
+            && now >= due
+        {
+            self.read_due = Some(now + VOLUME_READ_INTERVAL);
+            self.read_tick(now);
+        }
         if self.state != Ap2State::TearingDown
             && let Some(due) = self.feedback_due
             && now >= due
         {
             self.feedback_due = Some(now + FEEDBACK_INTERVAL);
-            // A refused volume's check read sent less than one feedback
-            // interval ago waits for the next tick (P183).
-            let checking = matches!(self.volume_retry, VolumeRetry::Checking { .. });
-            if let Some(in_flight) = &self.in_flight
-                && matches!(in_flight.kind, Kind::VolumeRead(_))
-                && !(checking && now < in_flight.sent_at + FEEDBACK_INTERVAL)
+            if self.state == Ap2State::Ready
+                && self.volume_retry == VolumeRetry::Due
+                && self.pending_volume.is_none()
             {
-                // P184: an unanswered read fails here instead of ending the
-                // session (P134), and its late answer is dropped.
-                let cseq = in_flight.cseq;
-                self.in_flight = None;
-                self.late_answers.push(cseq);
-                self.volume_read_failed();
-            }
-            if self.state == Ap2State::Ready {
-                self.volume_tick();
+                // The one resend of a refused volume (P183).
+                self.volume_retry = VolumeRetry::Resent;
+                self.pending_volume = Some(self.config.initial_volume);
             }
             let waiting = self
                 .in_flight
@@ -935,12 +941,20 @@ impl Ap2Session {
         self.drive(now);
     }
 
-    /// The feedback tick's volume work in a playing stream: the one resend
-    /// of a refused volume (P183) and a read the host asked for (P184).
-    fn volume_tick(&mut self) {
-        if self.volume_retry == VolumeRetry::Due && self.pending_volume.is_none() {
-            self.volume_retry = VolumeRetry::Resent;
-            self.pending_volume = Some(self.config.initial_volume);
+    /// The read tick of a playing stream (P184): a read sent at least one
+    /// interval ago and still unanswered fails, and a read the host asked
+    /// for goes out.
+    fn read_tick(&mut self, now: Instant) {
+        if let Some(in_flight) = &self.in_flight
+            && matches!(in_flight.kind, Kind::VolumeRead(_))
+            && now >= in_flight.sent_at + VOLUME_READ_INTERVAL
+        {
+            // Fails here instead of ending the session (P134); its late
+            // answer is dropped.
+            let cseq = in_flight.cseq;
+            self.in_flight = None;
+            self.late_answers.push(cseq);
+            self.volume_read_failed();
         }
         let reading = self
             .in_flight
@@ -957,7 +971,7 @@ impl Ap2Session {
     }
 
     /// A read with an error status, without a level or left unanswered
-    /// until the next feedback tick (P184).
+    /// until a read tick (P184).
     fn volume_read_failed(&mut self) {
         if let VolumeRetry::Checking { resent, status, .. } = self.volume_retry {
             self.volume_refused(resent, status);
@@ -1069,8 +1083,8 @@ impl Ap2Session {
         }
     }
 
-    /// The host wants the receiver's volume: a read goes with the next
-    /// feedback while the stream plays (P184). The level comes as
+    /// The host wants the receiver's volume: a read goes at the next
+    /// 1 s read tick while the stream plays (P184). The level comes as
     /// [`Ap2Event::VolumeReported`]; after three failed reads none comes.
     pub fn read_volume(&mut self, _now: Instant) {
         self.config.read_volume = true;
@@ -1195,6 +1209,7 @@ impl Ap2Session {
         self.teardown_deadline = None;
         self.last_timing_request = None;
         self.feedback_due = None;
+        self.read_due = None;
         self.events_retry_at = None;
         self.pending_volume = None;
         self.metadata_queue.clear();
@@ -1230,6 +1245,7 @@ impl Ap2Session {
         self.session_header = None;
         self.metadata_queue.clear();
         self.feedback_due = None;
+        self.read_due = None;
         self.feedback_wanted = false;
         self.feedback_misses = 0;
         self.last_timing_request = None;
@@ -1634,6 +1650,7 @@ impl Ap2Session {
                     && let Some(stream) = self.stream
                 {
                     self.state = Ap2State::Ready;
+                    self.read_due = Some(now + VOLUME_READ_INTERVAL);
                     // Ahead of the audio and of metadata (P183): a receiver
                     // may refuse a volume sent before the stream SETUP.
                     self.startup_volume_sent = true;
