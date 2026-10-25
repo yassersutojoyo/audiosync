@@ -223,6 +223,9 @@ pub struct FakeAp2 {
     pub pause: HashMap<String, Duration>,
     /// A body in place of the usual answer, by key.
     pub bodies: HashMap<String, Vec<u8>>,
+    /// Every volume SET_PARAMETER, whatever its status, sets the level a
+    /// GET_PARAMETER answers, down to this step in dB.
+    pub applies_volume: Option<f64>,
     /// The body of the answer to the second `/info`, in place of the
     /// initial volume alone.
     pub second_info_body: Option<Vec<u8>>,
@@ -266,6 +269,7 @@ impl FakeAp2 {
             held: Vec::new(),
             pause: HashMap::new(),
             bodies: HashMap::new(),
+            applies_volume: None,
             second_info_body: None,
             record_headers: Vec::new(),
             no_data_port: false,
@@ -329,6 +333,18 @@ impl FakeAp2 {
             };
             self.requests.push((request.clone(), framed));
             let key = request_key(&request);
+            if let Some(step) = self.applies_volume
+                && key == "SET_PARAMETER"
+                && let Some(level) = String::from_utf8_lossy(&request.body)
+                    .strip_prefix("volume:")
+                    .and_then(|rest| rest.trim().parse::<f64>().ok())
+            {
+                let applied = (level / step).floor() * step;
+                self.bodies.insert(
+                    "GET_PARAMETER".to_owned(),
+                    format!("volume: {applied:.6}\r\n").into_bytes(),
+                );
+            }
             if self.silent.contains(&key) {
                 continue;
             }

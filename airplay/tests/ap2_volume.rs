@@ -180,6 +180,61 @@ fn an_accepted_resend_leaves_the_volume_alone_after_it() {
     assert!(rig.failure().is_none());
 }
 
+// covers: P183
+#[test]
+fn a_refused_volume_the_read_back_shows_applied_neither_warns_nor_goes_again() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert(SET.to_owned(), 500);
+    fake.applies_volume = Some(0.3);
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-28.110378), now);
+    rig.pump();
+    rig.advance(Duration::from_secs(10));
+    assert_eq!(
+        volume_sets(&rig),
+        ["volume: -15.000000\r\n", "volume: -28.110378\r\n"]
+    );
+    assert_eq!(rig.times_of(READ).len(), 2, "{:?}", rig.keys());
+    assert!(warnings(&rig).is_empty(), "{:?}", rig.events);
+    // The host never asked for the level.
+    assert!(reported(&rig).is_empty());
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+}
+
+// covers: P183
+#[test]
+fn a_refused_volume_the_read_back_shows_unapplied_warns_and_goes_once_more() {
+    let mut fake = answering("-20.000000");
+    fake.status.insert(SET.to_owned(), 500);
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    rig.advance(Duration::from_secs(10));
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-10.0), now);
+    rig.pump();
+    rig.advance(Duration::from_secs(10));
+    assert_eq!(
+        volume_sets(&rig),
+        [
+            "volume: -15.000000\r\n",
+            "volume: -15.000000\r\n",
+            "volume: -10.000000\r\n",
+            "volume: -10.000000\r\n"
+        ]
+    );
+    assert!(rig.keys().contains(&READ), "{:?}", rig.keys());
+    assert_eq!(
+        warnings(&rig),
+        [&Warning::RequestFailed {
+            method: Method::SetParameter,
+            status: 500
+        }]
+    );
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+}
+
 // covers: P122, P184
 #[test]
 fn reads_once_after_the_initial_volume_then_only_when_asked_at_most_every_2_s() {
