@@ -718,6 +718,14 @@ impl Driver {
                 }
             }
             Ap2Event::Ready(_) => {
+                // A pair-verify that led to playing clears the turn-down,
+                // as the host's mark is cleared (P154).
+                if self
+                    .ap2_active(key)
+                    .is_some_and(|active| active.session.pair_verified())
+                {
+                    self.homekit_turned_down.remove(key);
+                }
                 self.ap2_ready(key, now);
                 if let Some(speaker) = self.speakers.get_mut(key) {
                     speaker.backoff.on_playing();

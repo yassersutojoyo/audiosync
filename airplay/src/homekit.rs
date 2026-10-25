@@ -92,9 +92,10 @@ pub enum Stored {
     None,
     /// Credentials of an earlier pairing.
     Kept,
-    /// Credentials an answer turned down earlier in this sender's life.
-    /// They stay, since a reset receiver and an impostor answer alike, and
-    /// only a new pairing replaces them.
+    /// Credentials an answer turned down earlier in this sender's life,
+    /// with no session played on a pair-verify with them since. They stay,
+    /// since a reset receiver and an impostor answer alike, and only a new
+    /// pairing replaces them.
     TurnedDown,
 }
 
