@@ -4480,6 +4480,11 @@ do {
     airPlayMs = 2100
     check(shown(air) == "2100 ms" && shown("builtin") == nil && shown("gone") == nil,
           "delay value: the AirPlay delay row shows L; the reference and an unlisted row show none")
+    let traced = [DelayBadge.traceLine(id: "usb", shows: shown("usb") ?? ""),
+                  DelayBadge.traceLine(id: "builtin", shows: shown("builtin") ?? "")]
+    check(traced == ["[AudioSync] delay value usb shows +30 ms",
+                     "[AudioSync] delay value builtin shows none (reference speaker or no longer listed)"],
+          "delay value: the debug log names a row that shows no value instead of leaving it blank", "\(traced)")
 }
 
 // MARK: Delay field rings — one ring at a time; red replaces the focus ring while invalid (DelayFieldRings)
