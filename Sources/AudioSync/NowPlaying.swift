@@ -72,25 +72,61 @@ final class NowPlayingMonitor {
     /// Whether a reading that finds no track replaces the track shown, kept
     /// apart from AppKit so the logic suite can drive it.
     struct EmptyReadings {
-        // A player can answer a read or two with nothing after a long pause
-        // (Spotify after five paused minutes); three in a row is about 4 s at the 2 s poll.
+        // Three in a row is about 4 s at the 2 s poll.
         static let dropAfter = 3
         private(set) var inARow = 0
 
-        /// The track to show after a reading: `reading` when it found one;
-        /// else `last` while `lastPlayerRuns` (its player still runs and is
-        /// still a candidate) and fewer than `dropAfter` readings in a row
-        /// found nothing. A player that quit drops its track at once.
-        mutating func next(reading: Track?, last: Track?, lastPlayerRuns: Bool) -> Track? {
-            guard reading == nil, let last, lastPlayerRuns else {
+        enum Drop: Equatable {
+            case stopped, unreadable(Int), quit
+
+            var reason: String {
+                switch self {
+                case .stopped: return "stopped"
+                case .unreadable(let n): return "unreadable x\(n)"
+                case .quit: return "quit"
+                }
+            }
+        }
+        /// Why the last call dropped the track shown; nil when it didn't.
+        private(set) var dropped: Drop?
+
+        /// The track to show after a reading: `reading` when it found one.
+        /// Else `last` goes when its player quit (or is no longer a
+        /// candidate) or said it stopped. A paused `last` stays through any
+        /// number of unreadable readings, since a long-paused Spotify answers
+        /// with errors or an empty name for minutes; a playing one stays for
+        /// fewer than `dropAfter` in a row.
+        mutating func next(reading: Track?, last: Track?, lastPlayerRuns: Bool,
+                           lastPlayerStopped: Bool = false) -> Track? {
+            dropped = nil
+            guard reading == nil, let last else {
                 inARow = 0
                 return reading
             }
-            inARow += 1
-            return inARow < Self.dropAfter ? last : nil
+            if !lastPlayerRuns {
+                dropped = .quit
+            } else if lastPlayerStopped {
+                dropped = .stopped
+            } else {
+                inARow += 1
+                if !last.isPlaying || inARow < Self.dropAfter { return last }
+                dropped = .unreadable(inARow)
+            }
+            inARow = 0
+            return nil
         }
 
-        mutating func reset() { inARow = 0 }
+        mutating func reset() {
+            inARow = 0
+            dropped = nil
+        }
+    }
+
+    /// What one player answered.
+    enum Answer {
+        case track(Track)
+        case stopped
+        case unreadable
     }
 
     enum Command { case playPause, next, previous }
@@ -191,10 +227,16 @@ final class NowPlayingMonitor {
             guard let self else { return }
             var found: Track?
             var fallback: Track?
+            var stopped: Set<String> = []
             for bundleID in candidates where Self.isRunning(bundleID) {
-                guard let t = self.query(bundleID) else { continue }
-                if t.isPlaying { found = t; break }
-                if fallback == nil { fallback = t }
+                switch self.query(bundleID) {
+                case .track(let t):
+                    if t.isPlaying { found = t }
+                    if fallback == nil { fallback = t }
+                case .stopped: stopped.insert(bundleID)
+                case .unreadable: break
+                }
+                if found != nil { break }
             }
             var next = found ?? fallback
             if var t = next {
@@ -207,8 +249,13 @@ final class NowPlayingMonitor {
                 let last = self.track
                 let lastPlayerRuns = last.map { self.candidates().contains($0.bundleID) && Self.isRunning($0.bundleID) }
                     ?? false
-                self.publish(self.emptyReadings.next(reading: next, last: last, lastPlayerRuns: lastPlayerRuns),
-                             reading: true)
+                let lastPlayerStopped = last.map { stopped.contains($0.bundleID) } ?? false
+                let shown = self.emptyReadings.next(reading: next, last: last, lastPlayerRuns: lastPlayerRuns,
+                                                    lastPlayerStopped: lastPlayerStopped)
+                if let drop = self.emptyReadings.dropped, let last {
+                    DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason))")
+                }
+                self.publish(shown, reading: true)
             }
         }
     }
@@ -237,7 +284,7 @@ final class NowPlayingMonitor {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
-    private func query(_ bundleID: String) -> Track? {
+    private func query(_ bundleID: String) -> Answer {
         // Fields joined by a separator that never appears in metadata.
         let sep = "\u{1F}"
         // Spotify's duration is in ms, Music's in seconds. Whole ms avoid the locale's decimal
@@ -265,10 +312,11 @@ final class NowPlayingMonitor {
                 return trackText & timing
             end timeout
             """
-        guard let result = run(target: bundleID, script)?.stringValue else { return nil }
+        guard let result = run(target: bundleID, script)?.stringValue else { return .unreadable }
+        if result == "stopped" { return .stopped }
         let readAt = ProcessInfo.processInfo.systemUptime
         let parts = result.components(separatedBy: sep)
-        guard parts.count >= 4, !parts[1].isEmpty else { return nil }
+        guard parts.count >= 4, !parts[1].isEmpty else { return .unreadable }
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
             ?? bundleID
         let isPlaying = parts[0] == "playing"
@@ -277,8 +325,8 @@ final class NowPlayingMonitor {
             position = Position(elapsed: Double(min(max(0, elapsedMs), lengthMs)) / 1000,
                                 length: Double(lengthMs) / 1000, readAt: readAt, playing: isPlaying)
         }
-        return Track(bundleID: bundleID, appName: appName, title: parts[1], artist: parts[2],
-                     album: parts[3], isPlaying: isPlaying, artwork: nil, position: position)
+        return .track(Track(bundleID: bundleID, appName: appName, title: parts[1], artist: parts[2],
+                            album: parts[3], isPlaying: isPlaying, artwork: nil, position: position))
     }
 
     private func artwork(for t: Track) -> NSImage? {

@@ -3077,6 +3077,10 @@ do {
     for _ in 0..<300 { shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true) }
     check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
           "now playing: a paused player that still runs keeps its track and cover through 300 unreadable readings")
+    check(empty.dropped == nil, "now playing: keeping a paused track through unreadable readings logs no drop")
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayerStopped: true)
+    check(shown == nil && shows(shown).fields == untitled && empty.dropped == .stopped,
+          "now playing: an explicit stopped reading drops a paused track at once")
     let playing = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Tune", artist: "Band",
                                           album: "Record", isPlaying: true,
                                           artwork: NSImage(size: NSSize(width: 1, height: 1)))
@@ -3089,11 +3093,12 @@ do {
     check(shows(shown).fields.title == "Tune",
           "now playing: a real reading in between starts the count of empty readings after a playing track again")
     shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
-    check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral,
+    check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral
+            && stalled.dropped == .unreadable(dropAfter),
           "now playing: \(dropAfter) empty readings in a row after a playing track send the fallback")
     var quit = NowPlayingMonitor.EmptyReadings()
     shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
-    check(shown == nil && shows(shown).fields == untitled,
+    check(shown == nil && shows(shown).fields == untitled && quit.dropped == .quit,
           "now playing: a player that quit sends the fallback at the first empty reading")
 }
 
