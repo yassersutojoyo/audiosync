@@ -105,6 +105,7 @@ use super::backend::{
     AirPlayAvailability, AirPlayGroup, AirPlayGroupKind, AirPlayInfo, AirPlayPasswordPrompt,
     AirPlayPinPrompt, AirPlayProblem, BackendEvent, InTarget, PairingPhase,
 };
+use super::explicit_pause::{ExplicitPause, Step};
 use super::pairings::PairingStore;
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::Transport;
@@ -166,6 +167,13 @@ pub trait AirPlayLink {
     /// The capture restarted: every speaker is flushed and the timeline
     /// starts over (P143).
     fn restart_timeline(&mut self);
+
+    /// The user paused on purpose: every speaker gets a FLUSH and no audio
+    /// goes out until [`AirPlayLink::resume`] (P213).
+    fn pause(&mut self);
+
+    /// Continues after [`AirPlayLink::pause`] (P213).
+    fn resume(&mut self);
 
     /// What is playing, for every speaker that shows it, now and when one
     /// starts (P123 to P127).
@@ -340,6 +348,14 @@ impl AirPlayLink for SenderLink {
 
     fn restart_timeline(&mut self) {
         self.sender.restart_timeline();
+    }
+
+    fn pause(&mut self) {
+        self.sender.pause();
+    }
+
+    fn resume(&mut self) {
+        self.sender.resume();
     }
 
     fn set_now_playing(&mut self, now_playing: NowPlaying) -> Result<(), MetadataError> {
@@ -551,6 +567,13 @@ impl Drop for FeedLease {
             *self.slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(feed);
         }
     }
+}
+
+/// A playback reading as [`ExplicitPause`] takes it.
+fn playback_reading(playback: &Option<(String, bool)>) -> Option<(&str, bool)> {
+    playback
+        .as_ref()
+        .map(|(app, playing)| (app.as_str(), *playing))
 }
 
 /// A speaker's ID: the device ID it announces (12 hex digits), or, for a
@@ -1095,6 +1118,8 @@ pub struct AirPlaySpeakers {
     /// Transport controls speakers' remotes asked for, for the now-playing
     /// control.
     remote_controls: Vec<Transport>,
+    /// Whether the user paused the speakers on purpose (P213).
+    pause: ExplicitPause,
     /// The clock the remote decisions count on.
     created_at: Instant,
     log: DebugLog,
@@ -1157,6 +1182,7 @@ impl AirPlaySpeakers {
             remote: Remote::default(),
             playback: None,
             remote_controls: Vec::new(),
+            pause: ExplicitPause::default(),
             created_at: Instant::now(),
             log,
         };
@@ -1209,6 +1235,7 @@ impl AirPlaySpeakers {
     pub fn replace_link(&mut self, link: Box<dyn AirPlayLink>) {
         // The old sender stops as it is dropped.
         self.link = link;
+        self.pause.forget();
         self.listed.clear();
         self.added.clear();
         self.targets.clear();
@@ -2425,9 +2452,29 @@ impl AirPlaySpeakers {
     }
 
     /// What the now-playing control follows: the session that counts, by
-    /// app ID, and whether it plays (S274). Set before each poll.
-    pub fn set_playback(&mut self, playback: Option<(String, bool)>) {
+    /// app ID, and whether it plays (S274), as read at `now`. Set before
+    /// each poll; a paused stream resumes once the reading no longer shows
+    /// the paused app paused (P213).
+    pub fn set_playback(&mut self, playback: Option<(String, bool)>, now: Instant) {
         self.playback = playback;
+        let step = self.pause.read(playback_reading(&self.playback), now);
+        self.apply_pause(step);
+    }
+
+    /// Hands the sender an explicit pause or resume (P213).
+    fn apply_pause(&mut self, step: Step) {
+        match step {
+            Step::Pause => {
+                self.log
+                    .log(|| "AirPlay: paused on purpose, every speaker flushed".to_owned());
+                self.link.pause();
+            }
+            Step::Resume => {
+                self.log.log(|| "AirPlay: resumed after a pause".to_owned());
+                self.link.resume();
+            }
+            Step::Nothing => {}
+        }
     }
 
     /// The transport controls speakers' remotes asked for since the last
@@ -2487,6 +2534,10 @@ impl AirPlaySpeakers {
         self.log.log(|| line);
         match (decision.action, row) {
             (Action::Send(control), Some(_)) => {
+                if control == Control::PlayPause {
+                    let step = self.pause.toggled(playback_reading(&self.playback), now);
+                    self.apply_pause(step);
+                }
                 self.remote_controls.push(match control {
                     Control::PlayPause => Transport::PlayPause,
                     Control::Next => Transport::Next,
@@ -2689,12 +2740,18 @@ impl AirPlaySpeakers {
     /// Streaming started or stopped: speakers that are on join the stream or
     /// leave it.
     pub fn set_streaming(&mut self, streaming: bool) {
+        if !streaming {
+            let step = self.pause.clear();
+            self.apply_pause(step);
+        }
         self.streaming = streaming;
         self.reconcile();
     }
 
     /// A new capture started (P143).
     pub fn restart_timeline(&mut self) {
+        let step = self.pause.clear();
+        self.apply_pause(step);
         self.link.restart_timeline();
         let before = self.sent_delays();
         let rows = self.stream_rows(&[]);
@@ -3848,6 +3905,7 @@ pub mod tests {
 
     use super::*;
     use crate::audio::backend::{AudioBackend, SourceId};
+    use crate::audio::explicit_pause::STALE_READING;
     use crate::audio::mock::MockBackend;
 
     #[test]
@@ -3990,6 +4048,8 @@ pub mod tests {
         TargetVolume(String, Volume),
         TargetDelay(String, Duration),
         RestartTimeline,
+        Pause,
+        Resume,
         /// Lf, in frames.
         Latency(u32),
         NowPlaying(NowPlaying),
@@ -4277,6 +4337,14 @@ pub mod tests {
 
         fn restart_timeline(&mut self) {
             self.0.borrow_mut().calls.push(Call::RestartTimeline);
+        }
+
+        fn pause(&mut self) {
+            self.0.borrow_mut().calls.push(Call::Pause);
+        }
+
+        fn resume(&mut self) {
+            self.0.borrow_mut().calls.push(Call::Resume);
         }
 
         fn set_now_playing(&mut self, now_playing: NowPlaying) -> Result<(), MetadataError> {
@@ -6661,7 +6729,7 @@ pub mod tests {
             airplay.take_remote_controls().is_empty(),
             "no app to control"
         );
-        airplay.set_playback(Some(("Spotify.exe".to_owned(), false)));
+        airplay.set_playback(Some(("Spotify.exe".to_owned(), false)), Instant::now());
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();
         assert!(airplay.take_remote_controls().is_empty(), "already paused");
@@ -6669,6 +6737,136 @@ pub mod tests {
         airplay.poll();
         assert_eq!(airplay.take_remote_controls(), [Transport::PlayPause]);
         assert!(fake.take_calls().is_empty(), "no volume moved");
+    }
+
+    /// The pause and resume calls since the last take.
+    fn pause_calls(fake: &FakeAirPlay) -> Vec<Call> {
+        fake.take_calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::Pause | Call::Resume))
+            .collect()
+    }
+
+    fn spotify(playing: bool) -> Option<(String, bool)> {
+        Some(("Spotify.exe".to_owned(), playing))
+    }
+
+    // covers: P213
+    #[test]
+    fn a_remote_pause_of_a_playing_app_pauses_the_speakers_and_play_resumes() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        assert_eq!(airplay.take_remote_controls(), [Transport::PlayPause]);
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        airplay.set_playback(spotify(false), t0);
+        remote(&fake, &kitchen, RemoteCommand::Play);
+        airplay.poll();
+        assert_eq!(airplay.take_remote_controls(), [Transport::PlayPause]);
+        assert_eq!(pause_calls(&fake), [Call::Resume]);
+    }
+
+    // covers: P213
+    #[test]
+    fn a_remote_play_pause_follows_the_reading_both_ways() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        remote(&fake, &kitchen, RemoteCommand::PlayPause);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        airplay.set_playback(spotify(false), t0);
+        std::thread::sleep(Duration::from_millis(350));
+        remote(&fake, &kitchen, RemoteCommand::PlayPause);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), [Call::Resume]);
+        assert_eq!(
+            airplay.take_remote_controls(),
+            [Transport::PlayPause, Transport::PlayPause]
+        );
+    }
+
+    // covers: P213
+    #[test]
+    fn a_remote_pause_with_no_reading_or_an_app_paused_sends_no_flush() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(None, t0);
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        airplay.set_playback(spotify(false), t0);
+        std::thread::sleep(Duration::from_millis(350));
+        remote(&fake, &kitchen, RemoteCommand::PlayPause);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), []);
+    }
+
+    // covers: P213
+    #[test]
+    fn readings_alone_never_pause_the_speakers() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        for (i, playing) in [true, false, true, false].into_iter().enumerate() {
+            airplay.set_playback(spotify(playing), t0 + STALE_READING * (i as u32));
+            airplay.poll();
+        }
+        airplay.set_playback(None, t0 + STALE_READING * 5);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), []);
+    }
+
+    // covers: P213
+    #[test]
+    fn the_app_playing_again_after_a_pause_resumes_the_speakers() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        let at = Instant::now();
+        airplay.set_playback(spotify(true), at);
+        assert_eq!(
+            pause_calls(&fake),
+            [],
+            "a reading that may predate the pause"
+        );
+        airplay.set_playback(spotify(false), at + STALE_READING);
+        assert_eq!(pause_calls(&fake), [], "the app shows paused");
+        airplay.set_playback(spotify(true), at + STALE_READING * 2);
+        assert_eq!(pause_calls(&fake), [Call::Resume]);
+    }
+
+    // covers: P213
+    #[test]
+    fn a_new_capture_or_the_stream_stopping_resumes_a_paused_stream() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        airplay.set_playback(spotify(true), t0);
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        airplay.restart_timeline();
+        let calls = fake.take_calls();
+        let resume = calls.iter().position(|call| *call == Call::Resume);
+        let restart = calls.iter().position(|call| *call == Call::RestartTimeline);
+        assert!(resume.is_some() && resume < restart, "{calls:?}");
+
+        airplay.set_playback(spotify(true), t0);
+        std::thread::sleep(Duration::from_millis(350));
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), [Call::Pause]);
+        airplay.set_streaming(false);
+        assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
     // covers: S275, S271
