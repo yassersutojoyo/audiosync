@@ -360,9 +360,30 @@ struct ExplicitPause {
     /// undoes the flush audibly.
     static let staleReading: TimeInterval = 3
 
+    /// A sample louder than this, -60 dBFS, is sound: digital silence and
+    /// dither stay below it.
+    static let soundLevel: Float = 0.001
+
+    /// How much sound the capture carries, in total, before a paused stream
+    /// resumes on its own.
+    static let soundToResume: Double = 0.2
+
     /// The player the pause was taken for, and when.
     private var pausedApp: String?
     private var pausedAt: Date?
+    /// The capture's sound total when `staleReading` had passed since the pause.
+    private var heardFrom: Double?
+
+    /// The stereo frames of interleaved `block` with a sample louder than
+    /// `soundLevel`. Real-time safe.
+    @inline(__always)
+    static func soundFrames(_ block: UnsafePointer<Float>, frames: Int) -> Int {
+        var count = 0
+        for frame in 0..<frames where abs(block[2 * frame]) > soundLevel || abs(block[2 * frame + 1]) > soundLevel {
+            count += 1
+        }
+        return count
+    }
 
     var isPaused: Bool { pausedAt != nil }
 
@@ -374,7 +395,19 @@ struct ExplicitPause {
         guard let app, playing == true else { return .nothing }
         pausedApp = app
         pausedAt = now
+        heardFrom = nil
         return .pause
+    }
+
+    /// The capture carried `sound` seconds of sound so far, a running total.
+    /// A paused stream resumes once `soundToResume` of it came after
+    /// `staleReading` past the pause: another app plays, whatever the reading
+    /// says. Sound before that may be the paused player's last audio.
+    mutating func heard(sound: Double, at now: Date) -> Step {
+        guard let pausedAt = pausedAt, now.timeIntervalSince(pausedAt) >= Self.staleReading else { return .nothing }
+        let from = heardFrom ?? sound
+        heardFrom = from
+        return sound - from >= Self.soundToResume ? clear() : .nothing
     }
 
     /// A reading that started at `readAt`. A paused stream resumes once a
@@ -391,6 +424,7 @@ struct ExplicitPause {
         guard isPaused else { return .nothing }
         pausedApp = nil
         pausedAt = nil
+        heardFrom = nil
         return .resume
     }
 }

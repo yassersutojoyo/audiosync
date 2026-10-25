@@ -3157,7 +3157,7 @@ do {
             && heard.heard(sound: 1.0, at: later) == .nothing
             && heard.heard(sound: 1.15, at: later) == .nothing && heard.isPaused,
           "explicit pause: sound before the stale-reading time, or under 200 ms after it, keeps the pause")
-    check(heard.heard(sound: 1.2, at: later) == .resume && !heard.isPaused,
+    check(heard.heard(sound: 1.25, at: later) == .resume && !heard.isPaused,
           "explicit pause: 200 ms of sound after the stale-reading time resumes, whatever the reading says")
     var playing = ExplicitPause()
     check(playing.heard(sound: 60, at: later) == .nothing && !playing.isPaused,

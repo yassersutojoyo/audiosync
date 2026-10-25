@@ -52,6 +52,8 @@ final class NativeAirPlay {
     var onRemote: ((NowPlayingMonitor.Command) -> Void)?
     /// Whether the user paused the speakers on purpose (main queue, P213).
     private var explicitPause = ExplicitPause()
+    /// While paused, checks whether the capture carries sound again (main queue).
+    private var soundWatch: Timer?
     /// The hold-back last asked for (main queue), and the one the sender
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
@@ -205,6 +207,15 @@ final class NativeAirPlay {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
             if step == .pause { asc_airplay_pause(handle) } else { asc_airplay_resume(handle) }
+        }
+        if step == .resume {
+            soundWatch?.invalidate()
+            soundWatch = nil
+        } else if soundWatch == nil {
+            soundWatch = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                self.applyPause(self.explicitPause.heard(sound: NativeAirPlayTap.soundSeconds, at: Date()))
+            }
         }
     }
 
