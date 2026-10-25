@@ -7,7 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ## [0.8.0] - unreleased
 
 <!-- Placeholder: the release date replaces "unreleased" when 0.8.0 is published. -->
-<!-- Placeholder: security fixes not on main yet, to add once merged: the pairing-trust fixes (stored HomeKit credentials kept on rejection, no fall back to AirPlay 1 while pinned), the bounded queues, and the silent session stop. -->
+<!-- Placeholder: security fixes, to add once merged. -->
 
 ### Added
 
@@ -96,7 +96,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Windows and Linux (preview, not released yet)
 
-- The first release with the Windows 11 version, for x64 and ARM64 PCs, is still to come. It isn't code-signed, so SmartScreen may warn the first time you open it. It has the 0.6.0 changes too, except where an entry says "On the Mac". Google Cast speakers play on Windows as well, "Switch to All System Audio When the Source App Quits" is in the File menu, the Guide's diagrams have descriptions for Narrator, and a click on the empty space of an open delay panel closes it.
+- The first release with the Windows 11 version, for x64 and ARM64 PCs, is still to come. It isn't code-signed, so SmartScreen may warn the first time you open it. It has the changes above and in 0.6.0 too, except where an entry says "On the Mac". Google Cast speakers play on Windows as well, "Switch to All System Audio When the Source App Quits" is in the File menu, the Guide's diagrams have descriptions for Narrator, and a click on the empty space of an open delay panel closes it.
 - You can rename a speaker: double-click its name, or right-click it or use its … button and choose Rename. Press Enter to keep the new name or Escape to cancel; a click outside the field keeps it too. The name stays after a restart and shows in the notification area flyout, in notices and in the AirPlay code and password dialogs. Leave it empty to go back to the device's own name, which the name's tooltip keeps showing while it's renamed.
 - A Now Playing card in the main window follows what Windows reports as playing, with the track, artist and artwork, and Previous Track, play or pause and Next Track buttons.
 - View > Appearance shows AudioSync's windows in Light or Dark, or follows Windows with Match System. Ctrl+W closes the window you're in, and Ctrl+Q exits AudioSync from any of its windows.
@@ -290,7 +290,7 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...HEAD
 [0.8.0]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...v0.8.0
 [0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.5.0
