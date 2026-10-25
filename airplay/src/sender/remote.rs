@@ -150,7 +150,7 @@ impl Table {
     }
 }
 
-/// Each peer's 403s in its current window (P194).
+/// Each peer's 403s in its current window (P191).
 #[derive(Default)]
 struct Strikes(HashMap<IpAddr, (Instant, u32)>);
 
@@ -758,7 +758,7 @@ mod tests {
         Duration::from_millis(n)
     }
 
-    // covers: P194
+    // covers: P191
     #[test]
     fn strikes_block_a_peer_at_the_limit_for_the_rest_of_its_window() {
         let t0 = Instant::now();
