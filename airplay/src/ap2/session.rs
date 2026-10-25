@@ -1632,7 +1632,8 @@ impl Ap2Session {
                     if self.volume_retry == VolumeRetry::Resent {
                         self.volume_retry = VolumeRetry::Idle;
                     }
-                } else if self.pending_volume.is_none() {
+                } else if self.pending_volume.is_none() && volume == self.config.initial_volume {
+                    // A level kept since this set went is never resent (S291).
                     let resent = self.volume_retry == VolumeRetry::Resent;
                     if self.volume_reads_stopped {
                         self.volume_refused(resent, code);
