@@ -812,6 +812,24 @@ impl Sender {
         self.command(Command::RestartTimeline);
     }
 
+    /// The host paused playback on purpose (P213): a Pause or pausing
+    /// PlayPause from a speaker's remote, a media key or the app's pause
+    /// button, never silence. Every speaker gets a FLUSH, so its buffer
+    /// drops at once, and no audio goes out until [`Sender::resume`]; the
+    /// sessions stay up. A pause while paused, or with nothing playing yet,
+    /// sends nothing.
+    pub fn pause(&self) {
+        self.command(Command::Pause);
+    }
+
+    /// The host resumed after [`Sender::pause`] (P213): every speaker
+    /// continues from its flush point, in step, without a new request,
+    /// starting with the first whole packet of the frames written from
+    /// now on. A resume while playing does nothing.
+    pub fn resume(&self) {
+        self.command(Command::Resume);
+    }
+
     /// The next event, if one is waiting.
     pub fn poll_event(&self) -> Option<SenderEvent> {
         self.events.try_recv().ok()

@@ -464,6 +464,9 @@ struct Speaker {
     first_pending: bool,
     /// Anything sent since RECORD.
     started: bool,
+    /// The FLUSH of an explicit pause is not answered yet; a resume waits
+    /// for it (P213).
+    awaiting_flush: bool,
     sync_seq: u16,
     history: Box<[Sent]>,
     own: Option<OwnEncoding>,
@@ -786,6 +789,8 @@ pub struct Stream {
     silence_pcm: Box<[u8]>,
     silence_alac: Box<[u8]>,
     speakers: Vec<Speaker>,
+    /// The host paused the stream (P213): packets are cut but not sent.
+    paused: bool,
     next_speaker: u64,
     transmits: VecDeque<Transmit>,
     events: VecDeque<StreamEvent>,
@@ -821,6 +826,7 @@ impl Stream {
             silence_pcm,
             silence_alac: Box::new(silence_alac),
             speakers: Vec::new(),
+            paused: false,
             next_speaker: 0,
             transmits: VecDeque::new(),
             events: VecDeque::new(),
@@ -985,7 +991,7 @@ impl Stream {
     pub fn poll_timeout(&self) -> Option<Instant> {
         let context = self.context();
         let mut next = context.cut_due(self.next_cut);
-        for speaker in &self.speakers {
+        for speaker in self.speakers.iter().filter(|s| self.sending(s)) {
             if let Some((_, at)) = speaker.pending_delay {
                 next = next.min(at);
             }
@@ -1022,7 +1028,11 @@ impl Stream {
         }
         let context = context!(self);
         let silence = (&*self.silence_pcm, &*self.silence_alac);
+        let paused = self.paused;
         for speaker in &mut self.speakers {
+            if paused || speaker.awaiting_flush {
+                continue;
+            }
             if let Some((delay, at)) = speaker.pending_delay
                 && at <= t + DUE_TOLERANCE
             {
@@ -1096,6 +1106,7 @@ impl Stream {
             rtp_offset: 0,
             first_pending: true,
             started: false,
+            awaiting_flush: false,
             sync_seq: 0,
             history: vec![Sent::default(); HISTORY_PACKETS].into_boxed_slice(),
             own,
@@ -1129,7 +1140,9 @@ impl Stream {
                 }
             }
         }
-        report_first_sound(&mut speaker, &context, &mut self.events);
+        if !self.paused {
+            report_first_sound(&mut speaker, &context, &mut self.events);
+        }
         let sounding = self.sounding(t);
         self.speakers.push(speaker);
         if sounding {
@@ -1170,7 +1183,11 @@ impl Stream {
         };
         let context = context!(self);
         let speaker = &mut self.speakers[index];
-        if !speaker.started {
+        if self.paused && !speaker.started {
+            // The resume places it (P213).
+            speaker.delay = delay;
+            speaker.pending_delay = None;
+        } else if !speaker.started {
             speaker.delay = delay;
             speaker.pending_delay = None;
             let first = context.first_due(delay, t);
@@ -1211,7 +1228,7 @@ impl Stream {
         let frames = frames.clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES);
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
-        if self.sounding(t) {
+        if self.paused || self.sounding(t) {
             if frames == self.latency_frames {
                 self.pending_latency = None;
             } else if self.pending_latency != Some(frames) {
@@ -1275,9 +1292,14 @@ impl Stream {
         self.model.ensure(last_frame(0));
         let latency = self.latency();
         let context = context!(self);
+        let paused = self.paused;
         for speaker in &mut self.speakers {
             if let Some((delay, _)) = speaker.pending_delay.take() {
                 speaker.delay = delay;
+            }
+            if paused {
+                // Flushed at the pause; the resume places it (P213).
+                continue;
             }
             if speaker.started {
                 flush(speaker, &context, t, &mut self.events);
@@ -1292,6 +1314,101 @@ impl Stream {
             origin: self.origin,
             restarted: true,
         });
+    }
+
+    /// The host paused the stream (P213): every speaker that has sent
+    /// audio gets a FLUSH naming the first packet it has not sent, and no
+    /// audio or sync goes out until [`Stream::resume`]. Packets already cut
+    /// for later sends are dropped and earlier ones are no longer resent;
+    /// the host's frames are still counted. False when already paused.
+    pub fn pause(&mut self, now: Instant) -> bool {
+        if self.paused {
+            return false;
+        }
+        self.handle_timeout(now);
+        self.paused = true;
+        for speaker in self.speakers.iter_mut().filter(|s| s.started) {
+            speaker.awaiting_flush = true;
+            for sent in speaker.history.iter_mut() {
+                sent.valid = false;
+            }
+            self.events.push_back(StreamEvent::Flush {
+                speaker: speaker.id,
+                seq: speaker.next_seq,
+                rtptime: speaker.next_rtptime(),
+            });
+        }
+        true
+    }
+
+    /// The host resumed the stream (P213): with no new request, every
+    /// speaker continues from its flush point with the first whole packet
+    /// at or after the first frame the host delivers from now, flagged as
+    /// the first, in step with the others. Delay and Lf changes held during
+    /// the pause apply here. A speaker whose pause FLUSH is unanswered
+    /// waits for [`Stream::flush_answered`]. False when not paused.
+    pub fn resume(&mut self, now: Instant) -> bool {
+        if !self.paused {
+            return false;
+        }
+        self.handle_timeout(now);
+        self.paused = false;
+        let mut latency_changed = false;
+        if let Some(frames) = self.pending_latency.take()
+            && frames != self.latency_frames
+        {
+            self.latency_frames = frames;
+            latency_changed = true;
+        }
+        let first_frame = (self.input.written() as i64 - self.origin).max(0) as u64;
+        let packet = first_frame.div_ceil(PACKET_FRAMES).max(self.next_cut);
+        let context = context!(self);
+        for speaker in &mut self.speakers {
+            if let Some((delay, _)) = speaker.pending_delay.take() {
+                speaker.delay = delay;
+            }
+            let rtptime = if speaker.started {
+                speaker.next_rtptime()
+            } else {
+                speaker.first_rtptime
+            };
+            speaker.start_at(packet, rtptime);
+            report_first_sound(speaker, &context, &mut self.events);
+        }
+        if latency_changed {
+            self.events.push_back(StreamEvent::Timeline {
+                latency: self.latency(),
+                origin: self.origin,
+                restarted: false,
+            });
+        }
+        self.publish();
+        true
+    }
+
+    /// True between [`Stream::pause`] and [`Stream::resume`].
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// The speaker's session answered a FLUSH, or will send none: a resume
+    /// no longer waits for it (P213).
+    pub fn flush_answered(&mut self, id: SpeakerId) {
+        if let Some(speaker) = self.speakers.iter_mut().find(|s| s.id == id) {
+            speaker.awaiting_flush = false;
+        }
+    }
+
+    /// The speaker's pause FLUSH is not answered yet (P213).
+    pub fn waits_for_flush(&self, id: SpeakerId) -> bool {
+        self.speakers
+            .iter()
+            .any(|speaker| speaker.id == id && speaker.awaiting_flush)
+    }
+
+    /// Whether a speaker's packets are on schedule now.
+    fn sending(&self, speaker: &Speaker) -> bool {
+        !self.paused && !speaker.awaiting_flush
     }
 
     /// A packet from the receiver on a speaker's control socket: a

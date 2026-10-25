@@ -125,6 +125,9 @@ pub struct Behavior {
     /// The `Public` header of the OPTIONS answer, in place of the full
     /// method list (P27).
     pub public: Option<String>,
+    /// Requests answered only after this long, by key; read per request,
+    /// so a test may change it mid-session.
+    pub answer_delay: HashMap<String, Duration>,
 }
 
 impl Default for Behavior {
@@ -142,6 +145,7 @@ impl Default for Behavior {
             close_after_verify: 0,
             timing_quirks: None,
             public: None,
+            answer_delay: HashMap::new(),
         }
     }
 }
@@ -462,6 +466,13 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
                         on_setup(&shared, &request, peer);
                     }
                     let answer = fake.feed(&request.encode());
+                    let delay = lock(&shared.behavior)
+                        .answer_delay
+                        .get(&key(&request))
+                        .copied();
+                    if let Some(delay) = delay {
+                        thread::sleep(delay);
+                    }
                     if !answer.is_empty() && stream.write_all(&answer).is_err() {
                         return closed(&shared);
                     }

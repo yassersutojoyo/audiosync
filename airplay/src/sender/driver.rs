@@ -85,6 +85,8 @@ pub(crate) enum Command {
     SetNowPlaying(NowPlaying),
     SetLatency(u32),
     RestartTimeline,
+    Pause,
+    Resume,
     StartDiscovery(Box<dyn Browser + Send>),
     StopDiscovery,
     ArrivalTime(i64, mpsc::SyncSender<Instant>),
@@ -937,6 +939,21 @@ impl Driver {
         }
     }
 
+    /// A session's FLUSH got its answer, success or not. A resume from a
+    /// pause waits until no FLUSH of that session is queued or in flight,
+    /// so the answer to an earlier delay FLUSH doesn't release it (P213).
+    fn flush_answered(&mut self, key: &DeviceKey) {
+        let id = match self.active(key) {
+            Some(active) => (!active.session.flushing()).then_some(active.stream_id),
+            None => self
+                .ap2_active(key)
+                .and_then(|active| (!active.session.flushing()).then_some(active.stream_id)),
+        };
+        if let Some(Some(id)) = id {
+            self.stream.flush_answered(id);
+        }
+    }
+
     /// Closes a session's sockets and takes it off the stream (P141).
     fn release(&mut self, key: &DeviceKey) {
         let Some(active) = self.active(key) else {
@@ -993,7 +1010,7 @@ impl Driver {
             SessionEvent::Warning(warning) => {
                 self.emit_speaker(key, SpeakerEvent::Warning(warning))
             }
-            SessionEvent::Flushed { .. } => {}
+            SessionEvent::Flushed { .. } => self.flush_answered(key),
             SessionEvent::Recording {
                 first_seq,
                 first_rtptime,
@@ -1238,10 +1255,13 @@ impl Driver {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
                     return;
                 };
-                if let Some(active) = self.active(&key) {
-                    active.session.flush(seq, rtptime, now);
+                let sent = match self.active(&key) {
+                    Some(active) => active.session.flush(seq, rtptime, now),
+                    None => self.ap2_flush(&key, seq, rtptime, now),
+                };
+                if !sent {
+                    self.stream.flush_answered(speaker);
                 }
-                self.ap2_flush(&key, seq, rtptime, now);
             }
             StreamEvent::FirstSound { speaker, .. } => {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
@@ -1417,6 +1437,12 @@ impl Driver {
             }
             Command::SetLatency(frames) => self.stream.set_latency(frames, now),
             Command::RestartTimeline => self.stream.restart(now),
+            Command::Pause => {
+                self.stream.pause(now);
+            }
+            Command::Resume => {
+                self.stream.resume(now);
+            }
             Command::SetAirPlay2DeviceId(id) => self.device_id = id,
             Command::StartDiscovery(browser) => {
                 self.browser = Some(browser);
@@ -2036,6 +2062,47 @@ mod tests {
             progress_at(progress, set_at, set_at + Duration::from_secs(11)),
             None
         );
+    }
+
+    // A pause FLUSH that no session sends (no AirPlay 1 session, and
+    // `ap2_flush` gives false) doesn't hold the resume (P213).
+    #[test]
+    fn a_pause_flush_no_session_sends_does_not_hold_the_resume() {
+        use crate::discovery::DeviceId;
+        use crate::session::{MediaDestinations, ReceiverPorts};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        let destinations = MediaDestinations::new(
+            "192.0.2.21:7000".parse().expect("address"),
+            ReceiverPorts {
+                server_port: 50_000,
+                control_port: 50_001,
+                timing_port: 50_002,
+            },
+        );
+        let config = SpeakerConfig::new(Codec::Alac, destinations, 1, 7, 99);
+        let id = driver.stream.add_speaker(config, now);
+        let key = DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 1]));
+        driver.stream_ids.insert(id, key);
+        let mut later = now;
+        for _ in 0..100 {
+            later += Duration::from_millis(10);
+            driver.stream.handle_timeout(later);
+        }
+        while driver.stream.poll_transmit().is_some() {}
+        while driver.stream.poll_event().is_some() {}
+
+        driver.command(Command::Pause, later);
+        assert!(driver.stream.waits_for_flush(id));
+        while let Some(event) = driver.stream.poll_event() {
+            driver.stream_event(event, later);
+        }
+        assert!(!driver.stream.waits_for_flush(id));
     }
 
     // A thread that outlives its session's close, such as an RTSP writer

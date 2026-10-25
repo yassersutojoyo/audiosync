@@ -821,6 +821,69 @@ fn ap2_audio_reaches_the_receiver() {
     sender.shutdown();
 }
 
+// Part of P213 on the AirPlay 2 path: the pause sends the realtime FLUSH,
+// whose answer releases the resume while the answer to a delay FLUSH still
+// in flight does not, and POST /feedback goes on while paused.
+#[test]
+fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
+    const ANSWER: Duration = Duration::from_millis(800);
+    let _serial = serial();
+    let udp = Udp::bind();
+    let server = Ap2Server::start(udp.fake(FakeAp2::new()));
+    let clock = SenderClock::new(Instant::now());
+    let (sender, _host) = start(clock, free_ptp_ports(), udp.ptp_ports());
+    let mut events = Events::default();
+    let speaker = device(&server, 62, "0x0,0x10040");
+    let key = speaker.key.clone();
+    sender.add_speaker(speaker, options());
+    assert!(playing(&mut events, &sender, &key, 1));
+    assert!(udp.data.wait_for(|_| true).is_some());
+    let count = |server: &Ap2Server, wanted: &str| {
+        server.fake().keys().iter().filter(|k| *k == wanted).count()
+    };
+
+    // Paused for a while: no audio, the feedback goes on.
+    let feedback = count(&server, "POST /feedback");
+    sender.pause();
+    let paused = Instant::now();
+    assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
+    let quiet = paused + Duration::from_millis(50);
+    std::thread::sleep(Duration::from_millis(4_500));
+    assert!(count(&server, "POST /feedback") >= feedback + 2);
+    assert!(udp.data.take().iter().all(|(at, _, _)| *at <= quiet));
+    assert_eq!(count(&server, "FLUSHBUFFERED"), 0);
+    let (seq, rtptime) = rtp_info(&server);
+    sender.resume();
+    let (_, _, bytes) = udp.data.wait_for(|_| true).expect("audio after the resume");
+    assert_eq!(seq_of(&bytes), seq);
+    assert_eq!(bytes[1], 0xE0);
+    assert_eq!(u32_at(&bytes, 4), rtptime);
+
+    // A delay FLUSH in flight when the pause comes: only the pause FLUSH's
+    // answer, about 2 ANSWER after the pause, lets the audio out.
+    server.fake().pause.insert("FLUSH".to_owned(), ANSWER);
+    sender.set_delay(&key, Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(400));
+    udp.data.take();
+    sender.pause();
+    let paused = Instant::now();
+    sender.resume();
+    let quiet = paused + Duration::from_millis(50);
+    let (at, _, bytes) = udp
+        .data
+        .wait_for(|(at, _, _)| *at > quiet)
+        .expect("audio after the resume");
+    assert!(
+        at >= paused + ANSWER + ANSWER / 2,
+        "audio {:?} after the pause",
+        at - paused
+    );
+    assert_eq!(count(&server, "FLUSH"), 4);
+    assert_eq!(seq_of(&bytes), rtp_info(&server).0);
+    assert_eq!(bytes[1], 0xE0);
+    sender.shutdown();
+}
+
 fn ptp_fake() -> FakeAp2 {
     let mut fake = FakeAp2::new();
     fake.info_body = plist(dict(&[

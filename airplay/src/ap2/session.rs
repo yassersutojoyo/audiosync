@@ -197,6 +197,9 @@ pub enum Ap2Event {
     TimingChosen(Timing),
     /// The stream is set up and flushed (P42).
     Ready(StreamPorts),
+    /// A FLUSH after the stream was ready got its answer, success or not
+    /// (P100, P213).
+    Flushed,
     /// A volume read's level, one the user set on the speaker (P184).
     VolumeReported(f64),
     Warning(Warning),
@@ -586,13 +589,24 @@ impl Ap2Session {
     /// Restarts the stream through a FLUSH naming the first packet that
     /// follows it (P34, P100, P143); the stream key and its nonce counter go
     /// on (P156).
-    pub fn flush(&mut self, seq: u16, rtptime: u32, now: Instant) {
+    /// False when the stream is not ready, so no FLUSH goes out.
+    pub fn flush(&mut self, seq: u16, rtptime: u32, now: Instant) -> bool {
         if self.state != Ap2State::Ready {
-            return;
+            return false;
         }
         self.flush_point = (seq, rtptime);
         self.flush_pending = true;
         self.drive(now);
+        true
+    }
+
+    /// A FLUSH is queued or waiting for its answer (P213).
+    pub fn flushing(&self) -> bool {
+        self.flush_pending
+            || self
+                .in_flight
+                .as_ref()
+                .is_some_and(|in_flight| in_flight.kind == Kind::Flush)
     }
 
     /// The result of an audio, sync or resend datagram: two unreachable in
@@ -1670,6 +1684,8 @@ impl Ap2Session {
                     self.startup_read_due = true;
                     self.send(Kind::Volume(self.config.initial_volume), now, false);
                     self.event(Ap2Event::Ready(stream));
+                } else if self.state == Ap2State::Ready {
+                    self.event(Ap2Event::Flushed);
                 }
             }
             Kind::Metadata(Metadata::Artwork { .. }) => {
