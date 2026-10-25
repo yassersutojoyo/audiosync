@@ -210,6 +210,35 @@ fn a_file_others_may_read_is_made_owner_only_and_still_used() {
 // covers: S224
 #[cfg(unix)]
 #[test]
+fn an_ignored_file_others_may_read_still_reports_it_was_tightened() {
+    use audiosync_core::airplay_pairings::Access;
+    use std::os::unix::fs::PermissionsExt;
+    let folder = folder("ignored-open-to-others");
+    fs::create_dir_all(&folder).expect("folder made");
+    let mut newer = MAGIC.to_vec();
+    newer.push(VERSION + 1);
+    for (name, bytes) in [
+        ("corrupt.dat", b"not a pairings file".to_vec()),
+        ("newer.dat", newer),
+    ] {
+        let path = folder.join(name);
+        fs::write(&path, bytes).expect("written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("mode set");
+
+        let (store, loaded) = PairingStore::open(path.clone());
+        assert!(
+            matches!(loaded, Loaded::Ignored(_) | Loaded::Newer(_)),
+            "{name}: {loaded:?}"
+        );
+        assert_eq!(store.access(), Access::Tightened, "{name}");
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{name}");
+    }
+}
+
+// covers: S224
+#[cfg(unix)]
+#[test]
 fn a_symbolic_link_in_the_files_place_is_not_followed() {
     use std::os::unix::fs::PermissionsExt;
     let folder = folder("symlink");
