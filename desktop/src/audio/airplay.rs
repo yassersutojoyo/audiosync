@@ -1742,6 +1742,7 @@ impl AirPlaySpeakers {
                         playing: self.is_playing(id),
                         paired: false,
                         holds_password: false,
+                        holds_credentials: false,
                         pairing: false,
                         code_every_time: false,
                         airplay2: target
@@ -1768,6 +1769,7 @@ impl AirPlaySpeakers {
                     playing: self.is_playing(id),
                     paired: self.legacy_paired(id) || self.shows_homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
+                    holds_credentials: self.store.contains(id) || self.store.homekit(id).is_some(),
                     pairing: self.pairings.contains_key(id),
                     code_every_time: self.asks_every_time(id),
                     airplay2: self.over_airplay2(id),
@@ -3349,15 +3351,19 @@ impl AirPlaySpeakers {
         };
         let was_playing = added.state == SpeakerState::Playing;
         added.state = state;
+        let mut relisted = false;
         if state == SpeakerState::Playing {
             // Its password worked: one turned down later turns it off.
             self.password_attempts.remove(id);
             self.paired_in_attempt.remove(id);
+            // Playing on them shows whatever turned them down is gone,
+            // unless a password the user typed carried the session (P154).
+            relisted = !self.passwords.contains_key(id) && self.credentials_turned_down.remove(id);
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
         }
-        was_playing != (state == SpeakerState::Playing)
+        relisted || was_playing != (state == SpeakerState::Playing)
     }
 
     /// Takes in a state or error of a member of the added target `target`:
@@ -5477,6 +5483,10 @@ pub mod tests {
             problem: AirPlayProblem::NeedsPin
         }));
         assert!(!airplay.speakers()[0].paired, "it asks for its PIN");
+        assert!(
+            airplay.speakers()[0].holds_credentials,
+            "Forget Pairing stays on offer"
+        );
         assert_eq!(airplay.store.get(&id), Some(&first));
         let (on_disk, _) = PairingStore::open(path.clone(), sealer());
         assert_eq!(on_disk.get(&id), Some(&first), "still in the file");
@@ -5520,6 +5530,10 @@ pub mod tests {
         fake.fail(&tv, ErrorKind::PairingRequired);
         airplay.poll();
         assert!(!airplay.speakers()[0].paired, "it asks for its PIN");
+        assert!(
+            airplay.speakers()[0].holds_credentials,
+            "Forget Pairing stays on offer"
+        );
         assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
         let (mut on_disk, _) = PairingStore::open(path.clone(), sealer());
         on_disk.open_airplay2();
@@ -5544,6 +5558,37 @@ pub mod tests {
         let (mut on_disk, _) = PairingStore::open(path, sealer());
         on_disk.open_airplay2();
         assert_eq!(on_disk.homekit(&id), Some(&homekit(0x44)), "replaced");
+    }
+
+    // Playing on them shows that whatever turned them down is gone (P154).
+    #[test]
+    fn turned_down_credentials_a_session_plays_on_list_as_paired_again() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay2-homekit-plays-again").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path, sealer());
+        store.open_airplay2();
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        store.insert_homekit(&id, homekit(0x33)).expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        airplay.poll();
+        // The switch-on gate keeps a turned-down speaker off, so the mark is
+        // set on one already playing.
+        airplay.credentials_turned_down.insert(id.clone());
+        assert!(!airplay.speakers()[0].paired);
+
+        fake.state(&tv, SpeakerState::Playing);
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        assert!(!airplay.credentials_turned_down.contains(&id));
     }
 
     #[test]

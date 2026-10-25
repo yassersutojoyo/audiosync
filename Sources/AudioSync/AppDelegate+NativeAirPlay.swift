@@ -138,10 +138,6 @@ extension AppDelegate {
             nativeSenderFailed()
         case .startPairing(let receiver):
             startNativePairing(receiver)
-        case .repair(let receiver):
-            nativeAirPlay?.forgetPairing(receiver)   // the sender's queue runs it before the pairing starts
-            DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) refused its stored pairing; forgotten, pairing again")
-            startNativePairing(receiver)
         case .cancelPairing(let receiver):
             nativeAirPlay?.cancelPairing(receiver)
         case .prompt:
