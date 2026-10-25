@@ -6147,6 +6147,141 @@ mod tests {
         assert_eq!(again.get("02005E005351"), None);
     }
 
+    /// HomeKit credentials made from `fill`, for telling two pairings apart.
+    fn homekit_blob(fill: u8) -> HomeKitCredentials {
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
+        blob.extend_from_slice(&[fill; 64]);
+        blob.extend_from_slice(b"receiver");
+        HomeKitCredentials::from_bytes(&blob).expect("a credential blob")
+    }
+
+    /// The error a session that needed a pairing ends with.
+    fn pairing_required() -> SpeakerEvent {
+        SpeakerEvent::Error(SpeakerError {
+            error: audiosync_airplay::error::SessionError::new(ErrorKind::PairingRequired),
+            reason: UserReason::PairingRequired,
+            retry_at: None,
+        })
+    }
+
+    // A turn-down proves nothing (a reset receiver and an impostor look the
+    // same), so the credentials stay on disk until a new pairing succeeds.
+    #[test]
+    fn airplay2_credentials_turned_down_stay_on_disk_until_a_new_pairing_replaces_them() {
+        let folder = scratch("airplay2-identity-turned-down");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        let mut record = airplay2_only();
+        record.txt.push(b"flags=0x200".to_vec());
+        let device =
+            Device::from_records(record.device_key(), None, Some(&record)).expect("a device");
+        let id = receiver_id(&device.key);
+        let key = device.key.clone();
+        let mut info = ReceiverInfo::new(device);
+        info.plan = Ok(());
+        inside(handle).listed.insert(id.clone(), info.clone());
+        let first = homekit_blob(7);
+        let second = homekit_blob(8);
+        inside(handle).pairing.insert(id.clone(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key: key.clone(),
+            event: PairingEvent::HomeKitPaired(first.clone()),
+        });
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+        assert_eq!(report.availability, AIRPLAY_AVAILABLE);
+
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: pairing_required(),
+        });
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+        assert_eq!(
+            report.availability, AIRPLAY_NEEDS_PIN,
+            "it asks for its PIN"
+        );
+        assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
+        assert_eq!(inside(handle).identity.get(&id), Some(&first));
+        let (on_disk, _) = IdentityStore::open(path.clone());
+        assert_eq!(on_disk.get(&id), Some(&first), "still on disk");
+
+        inside(handle).pairing.insert(id.clone(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key,
+            event: PairingEvent::HomeKitPaired(second.clone()),
+        });
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
+        assert_eq!(report.availability, AIRPLAY_AVAILABLE);
+        let (on_disk, _) = IdentityStore::open(path);
+        assert_eq!(on_disk.get(&id), Some(&second), "replaced");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn a_turned_down_legacy_pairing_stays_on_disk_until_a_new_pairing_replaces_it() {
+        let folder = scratch("airplay-pairings-turned-down");
+        let path = folder.join("pairings.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let id = "02005E005376";
+        let mut handle = listing(vec![raop(id, "Den TV", APPLE_TV)]);
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(asc_airplay_open_pairings(handle, c_path.as_ptr()), 0);
+        }
+        let _ = next(handle, 1);
+        let key = inside(handle).listed[id].device.key.clone();
+        let credentials = |client: &str, fill: u8| {
+            audiosync_airplay::pairing::Credentials::new(
+                client,
+                [fill; audiosync_airplay::pairing::SECRET_BYTES],
+            )
+            .expect("valid credentials")
+        };
+        let first = credentials("0123456789ABCDEF", 7);
+        let second = credentials("FEDCBA9876543210", 8);
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key: key.clone(),
+            event: PairingEvent::Paired(first.clone()),
+        });
+        assert_eq!(next(handle, 1)[0].availability, AIRPLAY_AVAILABLE);
+
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: pairing_required(),
+        });
+        assert_eq!(
+            next(handle, 1)[0].availability,
+            AIRPLAY_NEEDS_PIN,
+            "it asks for its PIN"
+        );
+        let (on_disk, _) = PairingStore::open(path.clone());
+        assert_eq!(on_disk.get(id), Some(&first), "still on disk");
+
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key,
+            event: PairingEvent::Paired(second.clone()),
+        });
+        assert_eq!(next(handle, 1)[0].availability, AIRPLAY_AVAILABLE);
+        let (on_disk, _) = PairingStore::open(path);
+        assert_eq!(on_disk.get(id), Some(&second), "replaced");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     /// A speaker the host added, straight into the handle, at `position`
     /// and set long enough ago for its volume reads to count.
     fn add_for_volume(handle: *mut AscAirPlay, id: &str, key: DeviceKey, position: f64) {
@@ -6922,13 +7057,13 @@ mod tests {
         blob.extend_from_slice(&[7; 64]);
         blob.extend_from_slice(b"receiver");
         let credentials = HomeKitCredentials::from_bytes(&blob).expect("a credential blob");
-        let _ = inside(handle).identity.insert(&id, credentials);
+        let _ = inside(handle).identity.insert(&id, credentials.clone());
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
         assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
         assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
         assert_ne!(report.flags & AIRPLAY_FLAG_CODE_EVERY_TIME, 0);
 
-        // A PIN pairing stores nothing and drops the refused keys; the
+        // A PIN pairing stores nothing and keeps the stored keys; the
         // receiver can play until its session ends.
         inside(handle).pairing.insert(id.clone(), key.clone());
         inside(handle).take_in(SenderEvent::Pairing {
@@ -6951,7 +7086,11 @@ mod tests {
             pairing_events(&events),
             vec![(AIRPLAY_EVENT_PAIRED, id.clone(), 0)]
         );
-        assert_eq!(inside(handle).identity.get(&id), None);
+        assert_eq!(
+            inside(handle).identity.get(&id),
+            Some(&credentials),
+            "an answer during the pairing proves nothing about them"
+        );
         inside(handle).take_in(SenderEvent::Speaker {
             key,
             event: SpeakerEvent::Error(SpeakerError {

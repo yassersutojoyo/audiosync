@@ -1200,3 +1200,135 @@ fn stored_credentials_go_once_a_receiver_asks_every_time() {
     assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
     sender.shutdown();
 }
+
+/// Whether a speaker event reports on the session, not on its credentials.
+fn session_status(event: &SpeakerEvent) -> bool {
+    matches!(
+        event,
+        SpeakerEvent::State(_)
+            | SpeakerEvent::Error(_)
+            | SpeakerEvent::Warning(_)
+            | SpeakerEvent::Latency(_)
+            | SpeakerEvent::Methods(_)
+            | SpeakerEvent::Server(_)
+            | SpeakerEvent::AudioJack(_)
+            | SpeakerEvent::VolumeReported(_)
+            | SpeakerEvent::PtpOpened
+            | SpeakerEvent::Trace(_)
+    )
+}
+
+/// What a host at a paired speaker's address may answer without the
+/// receiver's keys: each one only marks the speaker as needing a pairing.
+#[derive(Debug, Clone, Copy)]
+enum Impostor {
+    RefusesVerify,
+    SignsWithItsOwnKey,
+    AsksCodeEveryTime,
+}
+
+// An unauthenticated rejection keeps the stored credentials: once the
+// impostor is gone, the next start verifies with them again.
+// covers: P61, P154
+#[test]
+fn an_unauthenticated_rejection_keeps_the_stored_credentials() {
+    let _serial = serial();
+    for (id, impostor) in [
+        (58, Impostor::RefusesVerify),
+        (59, Impostor::SignsWithItsOwnKey),
+        (60, Impostor::AsksCodeEveryTime),
+    ] {
+        let mut fake = FakeAp2::new();
+        fake.hap.code = "4821".to_owned();
+        fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+            "statusFlags",
+            common::ap2::int(0x244),
+        )]));
+        let server = Ap2Server::start(fake);
+        let (sender, _host) = start();
+        let mut events = Events::default();
+        let device = airplay2_only(&server, id);
+        let key = device.key.clone();
+        let credentials = pair_first_time(&server, &sender, &mut events, &device);
+        let mut paired_options = options();
+        paired_options.homekit_credentials = Some(credentials);
+
+        {
+            let mut fake = server.fake();
+            match impostor {
+                Impostor::RefusesVerify => fake
+                    .hap
+                    .answers
+                    .push((("/pair-verify", 1), Answer::Status(403))),
+                Impostor::SignsWithItsOwnKey => fake.hap.seed = [0x77; 32],
+                Impostor::AsksCodeEveryTime => {
+                    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+                        "statusFlags",
+                        common::ap2::int(0x8),
+                    )]))
+                }
+            }
+        }
+        sender.add_speaker(device.clone(), paired_options.clone());
+        assert!(
+            events
+                .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+                .is_some(),
+            "{impostor:?} {:?}",
+            events.of(&key)
+        );
+        let reasons: Vec<(ErrorKind, UserReason)> = events
+            .of(&key)
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeakerEvent::Error(error) => Some((error.error.kind, error.reason)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reasons,
+            [(ErrorKind::PairingRequired, UserReason::PairingRequired)],
+            "{impostor:?}"
+        );
+        let about_credentials: Vec<SpeakerEvent> = events
+            .of(&key)
+            .into_iter()
+            .filter(|event| !session_status(event))
+            .collect();
+        assert!(
+            about_credentials.is_empty(),
+            "{impostor:?}: nothing tells the host to delete its copy: {about_credentials:?}"
+        );
+        sender.remove_speaker(&key);
+        assert!(
+            events
+                .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+                .is_some()
+        );
+
+        // The impostor is gone: the same credentials verify again.
+        {
+            let mut fake = server.fake();
+            fake.hap.answers.clear();
+            fake.hap.seed = [0x42; 32];
+            fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+                "statusFlags",
+                common::ap2::int(0x244),
+            )]));
+            fake.requests.clear();
+        }
+        sender.add_speaker(device, paired_options);
+        assert!(
+            events
+                .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+                .is_some(),
+            "{impostor:?} {:?} {:?}",
+            events.of(&key),
+            server.fake().keys()
+        );
+        let keys = server.fake().keys();
+        assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+        assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+        sender.shutdown();
+    }
+}

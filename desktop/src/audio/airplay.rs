@@ -4596,8 +4596,8 @@ pub mod tests {
         );
         assert_eq!(
             airplay.store.homekit(&id),
-            None,
-            "the refused keys are gone"
+            Some(&homekit(0x5A)),
+            "an answer during the pairing proves nothing about them"
         );
         let row = &airplay.speakers()[0];
         assert!(row.enabled && !row.paired);
@@ -5423,6 +5423,101 @@ pub mod tests {
         }));
         assert!(!airplay.speakers()[0].paired);
         assert!(airplay.enabled_ids().is_empty());
+    }
+
+    // A turn-down proves nothing (a reset receiver and an impostor look the
+    // same), so the pairing stays in the file until a new one succeeds.
+    #[test]
+    fn a_legacy_pairing_turned_down_stays_in_the_file_until_a_new_pairing_replaces_it() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, sealer};
+
+        let path = crate::debug_log::test_dir("airplay-legacy-turned-down").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        let first = credentials("0123456789ABCDEF", 3);
+        store.insert(&id, first.clone()).expect("saved");
+        let fake = FakeAirPlay::new();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayFailed {
+            id: id.clone(),
+            problem: AirPlayProblem::NeedsPin
+        }));
+        assert!(!airplay.speakers()[0].paired, "it asks for its PIN");
+        assert_eq!(airplay.store.get(&id), Some(&first));
+        let (on_disk, _) = PairingStore::open(path.clone(), sealer());
+        assert_eq!(on_disk.get(&id), Some(&first), "still in the file");
+
+        fake.take_calls();
+        assert_eq!(
+            airplay.set_enabled(&id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
+        airplay.start_pairing(&id).expect("the pairing starts");
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert!(airplay.submit_pin(&id, "4821"));
+        let second = credentials("FEDCBA9876543210", 4);
+        fake.pairing(&tv, PairingEvent::Paired(second.clone()));
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        let (on_disk, _) = PairingStore::open(path, sealer());
+        assert_eq!(on_disk.get(&id), Some(&second), "replaced");
+    }
+
+    #[test]
+    fn airplay2_credentials_turned_down_stay_in_the_file_until_a_new_pairing_replaces_them() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay2-homekit-turned-down").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store.open_airplay2();
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        store.insert_homekit(&id, homekit(0x33)).expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].paired, "it asks for its PIN");
+        assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
+        let (mut on_disk, _) = PairingStore::open(path.clone(), sealer());
+        on_disk.open_airplay2();
+        assert_eq!(
+            on_disk.homekit(&id),
+            Some(&homekit(0x33)),
+            "still in the file"
+        );
+
+        fake.take_calls();
+        assert_eq!(
+            airplay.set_enabled(&id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
+        airplay.start_pairing(&id).expect("the pairing starts");
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::HomeKitPaired(homekit(0x44)));
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        let (mut on_disk, _) = PairingStore::open(path, sealer());
+        on_disk.open_airplay2();
+        assert_eq!(on_disk.homekit(&id), Some(&homekit(0x44)), "replaced");
     }
 
     #[test]
