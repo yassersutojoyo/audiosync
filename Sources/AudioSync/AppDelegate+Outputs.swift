@@ -230,7 +230,7 @@ extension AppDelegate {
     func setSource(_ source: AudioSource) {
         let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
         microphoneRequest.picked(change)   // a switch still waiting on the prompt is out of date
-        clearNotices(SourceSwitch.noticesCleared(by: change))
+        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else { return }
         let old = audioSource
         audioSource = source
@@ -255,7 +255,7 @@ extension AppDelegate {
         guard case .input(let uid) = audioSource else { return }
         let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
         microphoneRequest.picked(change)   // a switch still waiting on the prompt is out of date
-        clearNotices(SourceSwitch.noticesCleared(by: change))
+        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else { return }
         let old = currentInputPair
         inputPairs[uid] = index == 0 ? nil : index

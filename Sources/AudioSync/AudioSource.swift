@@ -170,7 +170,7 @@ enum SourceSwitch {
     /// The notice subjects a pick of a source or channel pair clears (S163).
     /// Picking the one that plays again answers "still on <old>", so that
     /// notice goes; a capture notice is still about what plays.
-    static func noticesCleared(by step: Step) -> [String] {
+    static func noticesCleared(by step: Step, streaming: Bool) -> [String] {
         step == .none ? [Notice.source] : [Notice.source, Notice.capture]
     }
 }

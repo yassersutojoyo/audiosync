@@ -2957,13 +2957,18 @@ do {
           "EC5 source: switching while stopped only remembers the choice")
     check(SourceSwitch.decide(from: music, to: music, streaming: true) == .none,
           "EC5 source: choosing the same source changes nothing")
-    check(SourceSwitch.noticesCleared(by: SourceSwitch.decide(from: music, to: music, streaming: true)) == [Notice.source],
+    check(SourceSwitch.noticesCleared(by: SourceSwitch.decide(from: music, to: music, streaming: true), streaming: true)
+            == [Notice.source],
           "EC5 source: picking the source that plays again clears only the failed switch notice")
-    check(SourceSwitch.noticesCleared(by: InputChannelPair.change(from: 1, to: 1, streaming: true)) == [Notice.source],
+    check(SourceSwitch.noticesCleared(by: InputChannelPair.change(from: 1, to: 1, streaming: true), streaming: true)
+            == [Notice.source],
           "EC5 source: picking the channel pair that plays again clears only the failed switch notice")
-    check(SourceSwitch.noticesCleared(by: SourceSwitch.decide(from: .system, to: music, streaming: true))
+    check(SourceSwitch.noticesCleared(by: SourceSwitch.decide(from: .system, to: music, streaming: true), streaming: true)
             == [Notice.source, Notice.capture],
           "EC5 source: picking another source clears the old source's notices")
+    check(SourceSwitch.noticesCleared(by: SourceSwitch.decide(from: music, to: music, streaming: false), streaming: false)
+            .isEmpty,
+          "EC5 source: picking the stopped source again keeps the notice of why it stopped")
 
     // EC5: a switch while streaming keeps the speakers connected (S141, S14).
     let toMusic = CaptureSwitch.Change.source(from: .system, to: music)
