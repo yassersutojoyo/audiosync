@@ -27,13 +27,6 @@ struct MicrophoneRequestGate {
         superseded = true
     }
 
-    /// The user picked a source or pair; `step` is what the pick does. Every
-    /// step drops a waiting switch, `.none` too: picking the source that plays
-    /// again means staying on it (S141).
-    mutating func picked(_ step: SourceSwitch.Step) {
-        supersedeSwitch()
-    }
-
     /// The origin of the one start (or denied notice) the answer runs; nil
     /// when no request was out. Read `switching` first: this clears it.
     mutating func answer() -> StartOrigin? {
