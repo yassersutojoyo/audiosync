@@ -484,6 +484,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     private func appQuit(bundleID: String?) {
         let report = AppLifecycle.SourceQuitReport.terminated(bundleID: bundleID, streaming: engine.isRunning)
+        // Shows whether macOS reported a quit at all, and under which bundle ID.
+        DebugTrace.log("[AudioSync] app terminated: \(bundleID ?? "no bundle ID"), streaming \(engine.isRunning)")
         if let bundleID, AppLifecycle.waitsForRecheck(report, source: audioSource) {
             recheckMixQuit(bundleID)
         } else if let quit = AppLifecycle.sourceQuit(report, source: audioSource, setting: whenSourceQuits) {
