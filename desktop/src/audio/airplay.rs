@@ -1503,8 +1503,15 @@ impl AirPlaySpeakers {
     fn availability_of(&self, id: &str, info: &ReceiverInfo) -> AirPlayAvailability {
         // A speaker with HomeKit credentials never plays over AirPlay 1, so
         // its RAOP record says nothing about it (P2).
-        if self.store.homekit(id).is_some() && !self.link.airplay2() {
-            return AirPlayAvailability::AirPlay2NotYet;
+        if self.store.homekit(id).is_some() {
+            if !self.link.airplay2() {
+                return AirPlayAvailability::AirPlay2NotYet;
+            }
+            // Only its RAOP record is in view: switched on, the sender
+            // reports it unreachable instead of playing over AirPlay 1.
+            if info.device.airplay.is_none() {
+                return AirPlayAvailability::Open;
+            }
         }
         if !self.reached_over_airplay2(id, info) {
             return availability(info, self.legacy_paired(id));
@@ -4468,15 +4475,13 @@ pub mod tests {
         );
     }
 
-    /// A speaker with stored AirPlay 2 credentials shows nothing a RAOP
-    /// record says, since any host can publish one under its id (P2).
-    #[test]
-    fn a_homekit_paired_speaker_never_shows_its_raop_record() {
-        use crate::audio::pairings::tests::homekit;
-
+    /// A speaker under the id of device 12 whose RAOP record, with `raop`
+    /// as its TXT, points at another host; with `airplay_flags`, next to
+    /// the speaker's own AirPlay record with those status flags.
+    fn den_with_forged_raop(raop: &[&str], airplay_flags: Option<&str>) -> Device {
         let id = 12;
         let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
-        let airplay = ServiceRecord {
+        let airplay = airplay_flags.map(|flags| ServiceRecord {
             kind: ServiceKind::AirPlay,
             instance: "Den".to_owned(),
             host: format!("speaker-{id}.local"),
@@ -4484,21 +4489,33 @@ pub mod tests {
             txt: vec![
                 format!("deviceid={device_id}").into_bytes(),
                 b"features=0x0,0x40".to_vec(),
-                b"flags=0x0".to_vec(),
+                format!("flags={flags}").into_bytes(),
             ],
             addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 13)))],
-        };
+        });
         let forged_raop = ServiceRecord {
             kind: ServiceKind::Raop,
             instance: format!("{device_id}@Den"),
             host: format!("forger-{id}.local"),
             port: 5000,
-            txt: vec![b"et=0".to_vec(), b"pw=true".to_vec()],
+            txt: raop.iter().map(|s| s.as_bytes().to_vec()).collect(),
             addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66)))],
         };
-        let den =
-            Device::from_records(DeviceKey::Id(device_id), Some(&forged_raop), Some(&airplay))
-                .expect("a device");
+        Device::from_records(
+            DeviceKey::Id(device_id),
+            Some(&forged_raop),
+            airplay.as_ref(),
+        )
+        .expect("a device")
+    }
+
+    /// A speaker with stored AirPlay 2 credentials shows nothing a RAOP
+    /// record says, since any host can publish one under its id (P2).
+    #[test]
+    fn a_homekit_paired_speaker_never_shows_its_raop_record() {
+        use crate::audio::pairings::tests::homekit;
+
+        let den = den_with_forged_raop(&["et=0", "pw=true"], Some("0x0"));
         let id = id_of(&den);
         for airplay2 in [true, false] {
             let fake = FakeAirPlay::new();
@@ -4521,6 +4538,64 @@ pub mod tests {
             };
             assert_eq!(row.availability, expected);
         }
+    }
+
+    /// Asking for a code every time, by its own flags or by a forged RAOP
+    /// `sf`, hides the pairing but never Forget Pairing, the one way out of
+    /// the AirPlay 2 pin (P2).
+    #[test]
+    fn a_pinned_speaker_asking_for_a_code_every_time_keeps_forget_pairing() {
+        use crate::audio::pairings::tests::homekit;
+
+        for (raop, flags) in [
+            (&["et=0", "pw=true"][..], "0x4c"),
+            (&["et=0", "pw=true", "sf=0x8"][..], "0x0"),
+        ] {
+            let den = den_with_forged_raop(raop, Some(flags));
+            let id = id_of(&den);
+            let fake = FakeAirPlay::new();
+            let mut airplay = speakers(&fake);
+            airplay.store.open_airplay2();
+            airplay.store.insert_homekit(&id, homekit(0x33)).unwrap();
+            fake.appear(&den);
+            airplay.poll();
+            let row = &airplay.speakers()[0];
+            assert!(!row.paired, "{flags}: it asks for a code every time");
+            assert!(row.holds_credentials, "{flags}: Forget Pairing is on offer");
+            assert!(!row.airplay2, "{flags}: the switch is off");
+            assert_eq!(row.availability, AirPlayAvailability::AirPlay2NotYet);
+
+            airplay.forget_pairing(&id);
+            assert_eq!(airplay.store.homekit(&id), None);
+            let row = &airplay.speakers()[0];
+            assert!(!row.holds_credentials);
+            assert_eq!(
+                row.availability,
+                AirPlayAvailability::NeedsPassword,
+                "{flags}: unpinned, AirPlay 1 serves it as before"
+            );
+        }
+    }
+
+    /// With the switch on and only a RAOP record in view, a pinned speaker
+    /// reads as its AirPlay 2 path, whatever the record's flags say (P2).
+    #[test]
+    fn a_pinned_speaker_with_only_a_raop_record_shows_its_airplay2_view() {
+        use crate::audio::pairings::tests::homekit;
+
+        let den = den_with_forged_raop(&["et=0", "pw=true", "sf=0x8"], None);
+        let id = id_of(&den);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.store.open_airplay2();
+        airplay.store.insert_homekit(&id, homekit(0x33)).unwrap();
+        fake.appear(&den);
+        airplay.poll();
+        let row = &airplay.speakers()[0];
+        assert!(row.airplay2);
+        assert!(row.holds_credentials);
+        assert_eq!(row.availability, AirPlayAvailability::Open);
     }
 
     /// Loft paired with a PIN, played, and was switched off; the user
