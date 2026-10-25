@@ -186,7 +186,7 @@ extension AppDelegate {
             case .none: return
             case .rebuild: startEngine(origin: .automatic, rebuild: true)
             case .start: startEngine(origin: .automatic)
-            case .stop: stopEngine()
+            case .stop: stopEngine(.captureLost, detail: "streaming was switched off while the mix waited to rebuild")
             }
         }
     }
