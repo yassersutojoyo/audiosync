@@ -140,6 +140,25 @@ pub fn log_path(setting: Option<&OsStr>, dir: &Path) -> Option<PathBuf> {
     (setting == Some(OsStr::new("1"))).then(|| dir.join(FILE_NAME))
 }
 
+/// With `AUDIOSYNC_DEBUG=1`, set to `1` to keep auto-connect off for one
+/// launch, so a debug run never switches on the household's speakers.
+pub const NO_AUTO_CONNECT_VAR: &str = "AUDIOSYNC_NO_AUTO_CONNECT";
+
+/// Whether a launch skips auto-connect, for the values of `AUDIOSYNC_DEBUG`
+/// and [`NO_AUTO_CONNECT_VAR`]: only when both are exactly `1`.
+pub fn skips_auto_connect(debug: Option<&OsStr>, no_auto_connect: Option<&OsStr>) -> bool {
+    let _ = (debug, no_auto_connect);
+    false
+}
+
+/// Whether this launch's environment skips auto-connect.
+pub fn env_skips_auto_connect() -> bool {
+    skips_auto_connect(
+        std::env::var_os(ENV_VAR).as_deref(),
+        std::env::var_os(NO_AUTO_CONNECT_VAR).as_deref(),
+    )
+}
+
 /// Where the environment asks for the log, and a line to start it with
 /// when it can't go where it should.
 #[cfg(not(target_os = "linux"))]

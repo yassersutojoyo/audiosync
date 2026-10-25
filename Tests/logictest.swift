@@ -544,6 +544,13 @@ do {
           && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": ""])
           && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "true"]),
           "debug log: off unless the variable is exactly 1")
+    check(LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "1", "AUDIOSYNC_NO_AUTO_CONNECT": "1"]),
+          "auto-connect: skipped with AUDIOSYNC_NO_AUTO_CONNECT=1 in a debug launch")
+    check(!LaunchAutoConnect.skips(environment: ["AUDIOSYNC_NO_AUTO_CONNECT": "1"])
+          && !LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "0", "AUDIOSYNC_NO_AUTO_CONNECT": "1"])
+          && !LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "1"])
+          && !LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "1", "AUDIOSYNC_NO_AUTO_CONNECT": "true"]),
+          "auto-connect: ignored without the debug log, and unless it is exactly 1")
     if !DebugTrace.enabled {
         var built = false
         DebugTrace.log({ () -> String in built = true; return "never" }())

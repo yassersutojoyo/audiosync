@@ -81,6 +81,23 @@ enum DebugTrace {
     }
 }
 
+/// A debug launch that switches no speaker on by itself, so a soak or a test
+/// run never reaches the household's speakers. Nothing is saved: the next
+/// launch auto-connects as the settings mark it.
+enum LaunchAutoConnect {
+    /// Set to exactly `1`, next to `AUDIOSYNC_DEBUG=1`, to skip auto-connect.
+    static let environmentKey = "AUDIOSYNC_NO_AUTO_CONNECT"
+
+    /// True when this run skips auto-connect.
+    static let skipped = skips(environment: ProcessInfo.processInfo.environment)
+
+    /// Whether `environment` skips auto-connect: both this switch and the
+    /// debug log's set to exactly `1`; without the debug log it is ignored.
+    static func skips(environment: [String: String]) -> Bool {
+        false
+    }
+}
+
 /// Hands finished lines to one serial queue that does all the file work, so a
 /// thread that logs never takes the file's lock or waits on the disk. Each
 /// line keeps the time it was handed over, and lines land in that order.

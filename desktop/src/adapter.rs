@@ -458,6 +458,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     cast_probe: fn(&CastAddress) -> bool,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
+    /// A debug launch keeps auto-connect off until it quits, the marks
+    /// above saved as they are ([`crate::debug_log::NO_AUTO_CONNECT_VAR`]).
+    auto_connect_skipped: bool,
     /// The speakers hidden with Hide Speaker, in the order they were hidden.
     hidden: Vec<SavedHidden>,
     /// The channel pair each input device plays, by endpoint ID; 1-2 for
@@ -556,15 +559,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
         AudioAdapter::with_settings(audio, clock, log, SettingsFile::in_memory())
     }
 
-    /// The adapter over `audio` with the settings in `settings_file`,
-    /// stopped unless an auto-connect speaker is there, with the sources and
-    /// outputs listed now. `clock` gives the time a notice shows; what
-    /// happens goes to `log`.
+    /// [`AudioAdapter::launched`] with auto-connect as the settings mark it.
+    #[cfg(test)]
     pub fn with_settings(
         audio: A,
         clock: fn() -> String,
         log: DebugLog,
         settings_file: SettingsFile,
+    ) -> AudioAdapter<A> {
+        AudioAdapter::launched(audio, clock, log, settings_file, false)
+    }
+
+    /// The adapter over `audio` with the settings in `settings_file`,
+    /// stopped unless an auto-connect speaker is there, with the sources and
+    /// outputs listed now. `clock` gives the time a notice shows; what
+    /// happens goes to `log`. With `skip_auto_connect`, no speaker is
+    /// auto-connected in this run and the saved marks stay as they are.
+    pub fn launched(
+        audio: A,
+        clock: fn() -> String,
+        log: DebugLog,
+        settings_file: SettingsFile,
+        skip_auto_connect: bool,
     ) -> AudioAdapter<A> {
         let (saved, loaded) = settings_file.load();
         if settings_file.path().is_some() {
@@ -597,6 +613,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_addresses: Vec::new(),
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
+            auto_connect_skipped: skip_auto_connect,
             hidden: Vec::new(),
             input_pairs: BTreeMap::new(),
             custom_names: SpeakerNames::default(),
@@ -9020,6 +9037,65 @@ mod tests {
         adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
         adapter.poll();
         assert_eq!(playing(&adapter), [HEADPHONES]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_debug_launch_without_auto_connect_lists_every_speaker_and_switches_none_on() {
+        use crate::debug_log::skips_auto_connect;
+        use std::ffi::OsStr;
+        let one = Some(OsStr::new("1"));
+        assert!(skips_auto_connect(one, one));
+        assert!(!skips_auto_connect(None, one), "ignored without the debug log");
+        assert!(!skips_auto_connect(Some(OsStr::new("0")), one));
+        assert!(!skips_auto_connect(one, None));
+        assert!(!skips_auto_connect(one, Some(OsStr::new("true"))));
+
+        let dir = test_dir("adapter-settings-no-auto-connect");
+        let path = dir.join(settings::FILE_NAME);
+        let fake = FakeAirPlay::new();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let audio = || {
+            let mut audio = launch_audio();
+            audio.set_airplay(fake.link(), None);
+            audio
+        };
+        fake.appear(&kitchen);
+        let mut adapter = launch(audio(), &path);
+        adapter.poll();
+        adapter.set_auto_connect(&key(HEADPHONES), true);
+        adapter.set_auto_connect(&ap(&kitchen), true);
+        adapter.save_settings();
+
+        let file = SettingsFile::at(path.clone());
+        let mut adapter =
+            AudioAdapter::launched(audio(), || "09.41".to_owned(), DebugLog::default(), file, true);
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        let headphones = state.speaker(&key(HEADPHONES)).expect("listed");
+        let kitchen_row = state.speaker(&ap(&kitchen)).expect("listed");
+        assert!(!headphones.enabled && headphones.auto_connect);
+        assert!(!kitchen_row.enabled && kitchen_row.auto_connect);
+        assert!(adapter.audio.enabled_airplay().is_empty());
+        assert!(adapter.audio.enabled_outputs().is_empty());
+
+        // Appearing later doesn't switch it on either.
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        adapter.poll();
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+
+        // A click still works, and the marks are saved as they were.
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        adapter.save_settings();
+        drop(adapter);
+        let adapter = launch(audio(), &path);
+        assert!(adapter.snapshot().running, "the next launch auto-connects");
+        assert!(playing(&adapter).contains(&HEADPHONES.to_owned()));
         let _ = std::fs::remove_dir_all(dir);
     }
 
