@@ -3199,7 +3199,7 @@ check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(
       && !NowPlayingMonitor.meansNoTrack(-2753),
       "AppleScript: Automation refused (-1743) and other errors are still logged")
 
-// MARK: Track info — a paused player keeps its track on receivers until it quits or stays empty
+// MARK: Track info — a paused player keeps its track on receivers until it stops or quits
 do {
     let spotify = NowPlayingMonitor.spotify
     let source = AudioSource.app(bundleID: spotify)
@@ -3215,18 +3215,90 @@ do {
     shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
     check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
           "now playing: one empty reading of a paused player keeps its track and cover, not the fallback")
-    shown = empty.next(reading: paused, last: shown, lastPlayerRuns: true)
-    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
-    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
-    check(shows(shown).fields.title == "Song",
-          "now playing: a real reading in between starts the count of empty readings again")
-    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
-    check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral,
-          "now playing: \(NowPlayingMonitor.EmptyReadings.dropAfter) empty readings in a row send the fallback")
+    for _ in 0..<300 { shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true) }
+    check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
+          "now playing: a paused player that still runs keeps its track and cover through 300 unreadable readings")
+    check(empty.dropped == nil, "now playing: keeping a paused track through unreadable readings logs no drop")
+    shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .stopped)
+    check(shown == nil && shows(shown).fields == untitled && empty.dropped == .stopped,
+          "now playing: an explicit stopped reading drops a paused track at once")
+    let playing = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Tune", artist: "Band",
+                                          album: "Record", isPlaying: true,
+                                          artwork: NSImage(size: NSSize(width: 1, height: 1)))
+    let dropAfter = NowPlayingMonitor.EmptyReadings.dropAfter
+    var stalled = NowPlayingMonitor.EmptyReadings()
+    shown = stalled.next(reading: playing, last: nil, lastPlayerRuns: true)
+    shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
+    shown = stalled.next(reading: playing, last: shown, lastPlayerRuns: true)
+    for _ in 1..<dropAfter { shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true) }
+    check(shows(shown).fields.title == "Tune",
+          "now playing: a real reading in between starts the count of empty readings after a playing track again")
+    shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
+    check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral
+            && stalled.dropped == .unreadable(dropAfter),
+          "now playing: \(dropAfter) empty readings in a row after a playing track send the fallback")
     var quit = NowPlayingMonitor.EmptyReadings()
     shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
-    check(shown == nil && shows(shown).fields == untitled,
+    check(shown == nil && shows(shown).fields == untitled && quit.dropped == .quit,
           "now playing: a player that quit sends the fallback at the first empty reading")
+    var nameless = NowPlayingMonitor.EmptyReadings()
+    shown = nameless.next(reading: paused, last: nil, lastPlayerRuns: true)
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true)
+    for _ in 2..<dropAfter {
+        shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
+    }
+    check(shows(shown).fields.title == "Song",
+          "now playing: a paused track stays through fewer than \(dropAfter) readings that play without a name")
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
+    check(shown == nil && shows(shown).fields == untitled && nameless.dropped == .playingNameless(dropAfter),
+          "now playing: \(dropAfter) readings that play something without a name drop a paused track")
+    var denied = NowPlayingMonitor.EmptyReadings()
+    shown = denied.next(reading: nil, last: paused, lastPlayerRuns: true, lastPlayer: .denied)
+    check(shown == nil && shows(shown).fields == untitled && denied.dropped == .denied,
+          "now playing: a player that refuses Apple Events drops a paused track at once")
+}
+
+// MARK: Track info — with the whole system as source, the player that played last keeps its paused track
+do {
+    typealias Track = NowPlayingMonitor.Track
+    let spotify = NowPlayingMonitor.spotify, music = NowPlayingMonitor.music
+    let cover = NSImage(size: NSSize(width: 1, height: 1))
+    func track(_ app: String, _ title: String, playing: Bool) -> Track {
+        Track(bundleID: app, appName: "Player", title: title, artist: "Band", album: "Record",
+              isPlaying: playing, artwork: cover)
+    }
+    let untitled = TrackMetadata.Fields(title: "AudioSync", artist: "All System Audio", album: "From your Mac")
+    var played = NowPlayingMonitor.LastPlayed()
+    func shows(_ t: Track?) -> ReceiverInfo {
+        ReceiverInfo.decide(track: t, source: .system, sourceName: "All System Audio", untitled: untitled,
+                            lastPlayed: played.bundleID)
+    }
+    played.note(source: .system)
+    let spotifyPlays = track(spotify, "Song", playing: true)
+    let spotifyPaused = track(spotify, "Song", playing: false)
+    played.note(shown: spotifyPlays, last: nil, dropped: false)
+    played.note(shown: spotifyPaused, last: spotifyPlays, dropped: false)
+    check(shows(spotifyPaused).fields.title == "Song" && shows(spotifyPaused).artwork == .track,
+          "receiver info: system source, paused Spotify, no other player: its track and cover stay")
+    let musicPaused = track(music, "Old", playing: false)
+    check(NowPlayingMonitor.pausedPick([musicPaused, spotifyPaused], lastPlayed: played.bundleID) == spotifyPaused
+            && NowPlayingMonitor.pausedPick([musicPaused, spotifyPaused], lastPlayed: nil) == musicPaused,
+          "now playing: with no player playing, the paused player that played last is followed")
+    check(shows(musicPaused).fields == untitled,
+          "receiver info: system source: a paused player that didn't play last doesn't show")
+    let musicPlays = track(music, "Tune", playing: true)
+    played.note(shown: musicPlays, last: spotifyPaused, dropped: false)
+    check(shows(musicPlays).fields.title == "Tune" && shows(spotifyPaused).fields == untitled,
+          "receiver info: system source, paused Spotify, then Music plays: Music wins")
+    played.note(source: .app(bundleID: "com.google.Chrome"))
+    played.note(source: .system)
+    check(played.bundleID == nil && shows(track(music, "Tune", playing: false)).fields == untitled,
+          "receiver info: the source changes: a paused track goes to the fallback")
+    played.note(shown: spotifyPlays, last: nil, dropped: false)
+    played.note(shown: nil, last: spotifyPaused, dropped: true)
+    check(played.bundleID == nil && shows(spotifyPaused).fields == untitled,
+          "receiver info: system source: the player that played last stops or quits: the fallback")
 }
 
 // MARK: Track info — what AirPlay receivers with a screen show
@@ -3266,7 +3338,7 @@ do {
           "receiver info: whole system with nothing playing: the source picker's label as the artist")
     check(decide(track(spotify, playing: false), .system, system)
             == ReceiverInfo(fields: noTrack(system), artwork: .neutral),
-          "receiver info: whole system as source: a paused player's track isn't what plays")
+          "receiver info: whole system as source: a paused track whose player didn't play last doesn't show")
     check(decide(track(spotify, playing: false), .app(bundleID: spotify), "Spotify").fields == song,
           "receiver info: a paused track still shows while its player is the source")
     check(decide(track(spotify, playing: false), .app(bundleID: music), "Music").fields == noTrack("Music"),

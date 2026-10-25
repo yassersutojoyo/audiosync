@@ -298,7 +298,8 @@ extension AppDelegate {
 
     private func castShows() -> (info: ReceiverInfo, artwork: NSImage?) {
         let track = nowPlaying.hasReading ? nowPlaying.track : nil
-        return (ReceiverInfo.decideForCast(track: track, source: audioSource), track?.artwork)
+        return (ReceiverInfo.decideForCast(track: track, source: audioSource,
+                                           lastPlayed: nowPlaying.lastPlayedBundleID), track?.artwork)
     }
 
     // MARK: - Rows and names

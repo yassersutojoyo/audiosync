@@ -224,6 +224,9 @@ extension AppDelegate {
         case .mix: nowPlaying.preferredBundleID = nil
         case .input: nowPlaying.preferredBundleID = ""
         }
+        if nowPlaying.noteSource(audioSource) {
+            DispatchQueue.main.async { [weak self] in self?.sendTrackInfo() }
+        }
         nowPlaying.refresh()
     }
 

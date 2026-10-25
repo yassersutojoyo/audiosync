@@ -254,7 +254,7 @@ extension AppDelegate {
         let untitled = TrackMetadata.Fields(title: text.receiverUntitled, artist: text.receiverUnnamedSource,
                                             album: text.receiverAlbum)
         let info = ReceiverInfo.decide(track: track, source: audioSource, sourceName: sourceName,
-                                       untitled: untitled)
+                                       untitled: untitled, lastPlayed: nowPlaying.lastPlayedBundleID)
         return (info, track?.artwork)
     }
 
