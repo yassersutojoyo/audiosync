@@ -341,8 +341,8 @@ final class SourceCapture {
         DispatchQueue.main.async { body() }
     }
 
-    /// The apps' audio processes changed: follow them (S11).
-    private func followApp() {
+    /// The apps' audio processes or the running apps changed: follow them (S11).
+    private func followApp(secondLook: Bool = false) {
         guard let source else { return }
         let excluding = tapExcludes
         let apps: [String]
@@ -360,7 +360,7 @@ final class SourceCapture {
             guard let own = AudioProcesses.processObject(for: getpid()) else { return }
             decision = AppTapFollow.decideExcluding(tapped: tapped, found: found, own: own)
         } else {
-            decision = AppTapFollow.decide(tapped: tapped, found: found, appRunning: !pids.isEmpty)
+            decision = AppTapFollow.look(tapped: tapped, found: found, appRunning: !pids.isEmpty, secondLook: secondLook)
         }
         switch decision {
         case .keep:
@@ -370,7 +370,11 @@ final class SourceCapture {
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process now; waiting for one")
         case .lookAgain:
-            return
+            let mark = sessionMark
+            DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
+                guard let self, self.isCurrent(mark) else { return }
+                self.followApp(secondLook: true)
+            }
         case .lost:
             closeCapture()
             tapped = []

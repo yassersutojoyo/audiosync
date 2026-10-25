@@ -246,7 +246,8 @@ enum AppTapFollow: Equatable {
     /// apps can miss apps that still run, so only a second look loses the source.
     static func look(tapped: [AudioObjectID], found: [AudioObjectID], appRunning: Bool,
                      secondLook: Bool) -> AppTapFollow {
-        decide(tapped: tapped, found: found, appRunning: appRunning)
+        let decision = decide(tapped: tapped, found: found, appRunning: appRunning)
+        return decision == .lost && !secondLook ? .lookAgain : decision
     }
 
     /// The processes an app tap may cover: the app's audio processes, sorted,
