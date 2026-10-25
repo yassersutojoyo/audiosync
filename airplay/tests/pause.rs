@@ -63,7 +63,11 @@ fn pause_flushes_and_resumes() {
         let flush = flushes(&rig, id);
         assert_eq!(flush.len(), 1, "one FLUSH per session");
         // The flush point is the first packet not sent.
-        let last = rig.audio(id).last().cloned().expect("audio before the pause");
+        let last = rig
+            .audio(id)
+            .last()
+            .cloned()
+            .expect("audio before the pause");
         assert_eq!(flush[0].0, last.header.seq.wrapping_add(1));
         assert_eq!(flush[0].1, last.header.timestamp.wrapping_add(352));
     }
