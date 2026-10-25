@@ -259,6 +259,14 @@ enum AppTapFollow: Equatable {
     static func quitApp(of apps: [String], ranBefore: [String]) -> String {
         apps.first(where: ranBefore.contains) ?? apps.first ?? ""
     }
+
+    /// Whether the capture of `source` looks at its apps again whenever macOS's
+    /// list of running apps changes: an app quitting without an audio process
+    /// changes no audio process, and macOS can still list an app as running
+    /// when its last audio process ends. An "all except" tap outlives its apps.
+    static func followsRunningApps(_ source: AudioSource) -> Bool {
+        false
+    }
 }
 
 /// Moves an app tap to a new process list (`AppTapFollow.retap`) without

@@ -5129,6 +5129,39 @@ do {
     check(afterLoss(changed: false, stopped: false, running: false, newSession: true) == .none
             && afterLoss(changed: true, stopped: true, running: false, newSession: true) == .none,
           "mix quit: a loss's wait ends without acting once streaming was started again within it, so a later loss keeps its own wait")
+    // The mix's last app quits while it has no audio process, so no audio process goes away.
+    let pair = AudioSource.mixed(.only, bundleIDs: ["com.apple.Music", "com.apple.podcasts"])
+    check(AppTapFollow.followsRunningApps(pair) && AppTapFollow.followsRunningApps(.app(bundleID: "com.apple.Music"))
+            && !AppTapFollow.followsRunningApps(.system)
+            && !AppTapFollow.followsRunningApps(.mixed(.allExcept, bundleIDs: ["com.apple.Music", "com.apple.podcasts"]))
+            && !AppTapFollow.followsRunningApps(.input(uid: "BuiltInMicrophoneDevice")),
+          "mix quit: an app source's capture looks at its apps again whenever an app quits, audio process or not")
+    func lastQuit(_ setting: WhenSourceQuits) -> String {
+        guard AppTapFollow.followsRunningApps(pair) else { return "unseen" }
+        guard AppTapFollow.decide(tapped: [], found: [], appRunning: false) == .lost else { return "waits" }
+        let named = AppTapFollow.quitApp(of: pair.capturedApps, ranBefore: ["com.apple.podcasts"])
+        guard AppLifecycle.waitsForRecheck(.captureLost(.appNotRunning(named)), source: pair),
+              afterLoss(changed: false, stopped: false, running: false) == .rebuild else { return "no rebuild" }
+        guard let answer = AppLifecycle.sourceQuit(.rebuildFailed(SourceCapture.CaptureError.appNotRunning(named)),
+                                                   source: pair, setting: setting, isRunning: { _ in false })
+        else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    check(lastQuit(.system) == "switchToSystem com.apple.podcasts" && lastQuit(.stop) == "stop com.apple.podcasts",
+          "mix quit: the mix's last app quitting with no audio process is judged again and acts as set",
+          "\(lastQuit(.system)), \(lastQuit(.stop))")
+    func noticeQuit(_ report: Report) -> String {
+        guard let answer = AppLifecycle.sourceQuit(report, source: pair, setting: .system, isRunning: { _ in false })
+        else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    check(AppLifecycle.waitsForRecheck(.terminated(bundleID: "com.apple.Podcasts", streaming: true), source: pair)
+            && noticeQuit(.mixAppGone(bundleID: "com.apple.Podcasts", streaming: true)) == "switchToSystem com.apple.podcasts"
+            && AppLifecycle.sourceQuit(.terminated(bundleID: "COM.APPLE.MUSIC", streaming: true),
+                                       source: .app(bundleID: "com.apple.Music"), setting: .stop,
+                                       isRunning: { _ in false })?.action == .stop,
+          "mix quit: macOS's quit notice matches the source's app in any letter case, as macOS compares bundle IDs (S164)",
+          noticeQuit(.mixAppGone(bundleID: "com.apple.Podcasts", streaming: true)))
     // After a switch the source is the whole system; after a stop nothing streams.
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
