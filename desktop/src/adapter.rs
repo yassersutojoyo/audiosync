@@ -658,6 +658,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             settings::Loaded::Read { version, .. } if version < settings::ZONES_VERSION
         );
         adapter.restore(saved);
+        if skip_auto_connect {
+            adapter.log.log(|| {
+                format!(
+                    "auto-connect: skipped in this run ({}=1 with {}=1); the marks stay saved",
+                    crate::debug_log::NO_AUTO_CONNECT_VAR,
+                    crate::debug_log::ENV_VAR
+                )
+            });
+        }
         // The first launch with zones says what became of the groups, once:
         // the next save marks them migrated.
         if had_groups && !adapter.zones.list().is_empty() {
@@ -2567,7 +2576,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.auto_connect.contains(&key) && !self.is_hidden(&key)
             })
             .collect();
-        if hits.is_empty() {
+        if hits.is_empty() || self.auto_connect_skipped {
             return;
         }
         self.log.log(|| {
@@ -2698,7 +2707,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.auto_connect.contains(&key) && !self.is_hidden(&key)
             })
             .collect();
-        if hits.is_empty() {
+        if hits.is_empty() || self.auto_connect_skipped {
             return;
         }
         self.log.log(|| {
@@ -9046,21 +9055,25 @@ mod tests {
         use std::ffi::OsStr;
         let one = Some(OsStr::new("1"));
         assert!(skips_auto_connect(one, one));
-        assert!(!skips_auto_connect(None, one), "ignored without the debug log");
+        assert!(
+            !skips_auto_connect(None, one),
+            "ignored without the debug log"
+        );
         assert!(!skips_auto_connect(Some(OsStr::new("0")), one));
         assert!(!skips_auto_connect(one, None));
         assert!(!skips_auto_connect(one, Some(OsStr::new("true"))));
 
         let dir = test_dir("adapter-settings-no-auto-connect");
         let path = dir.join(settings::FILE_NAME);
-        let fake = FakeAirPlay::new();
         let kitchen = device(1, "Kitchen", OPEN_TXT);
+        // Each launch has its own sender, which finds Kitchen.
         let audio = || {
+            let fake = FakeAirPlay::new();
             let mut audio = launch_audio();
             audio.set_airplay(fake.link(), None);
+            fake.appear(&kitchen);
             audio
         };
-        fake.appear(&kitchen);
         let mut adapter = launch(audio(), &path);
         adapter.poll();
         adapter.set_auto_connect(&key(HEADPHONES), true);
@@ -9068,8 +9081,13 @@ mod tests {
         adapter.save_settings();
 
         let file = SettingsFile::at(path.clone());
-        let mut adapter =
-            AudioAdapter::launched(audio(), || "09.41".to_owned(), DebugLog::default(), file, true);
+        let mut adapter = AudioAdapter::launched(
+            audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+            file,
+            true,
+        );
         adapter.poll();
         adapter.poll();
         let state = adapter.snapshot();
@@ -9093,9 +9111,11 @@ mod tests {
         assert_eq!(playing(&adapter), [SPEAKERS]);
         adapter.save_settings();
         drop(adapter);
-        let adapter = launch(audio(), &path);
+        let mut adapter = launch(audio(), &path);
+        adapter.poll();
         assert!(adapter.snapshot().running, "the next launch auto-connects");
         assert!(playing(&adapter).contains(&HEADPHONES.to_owned()));
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
         let _ = std::fs::remove_dir_all(dir);
     }
 

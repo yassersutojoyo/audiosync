@@ -63,6 +63,14 @@ AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync
 
 It writes to `/tmp/audiosync-debug.log`, which starts over at every launch and stops at 50 MB with a line that says so. Each line starts with the time in UTC, like the Windows log; the first one names the app and macOS versions and the Mac's local time.
 
+To debug without waking the speakers you marked Auto-Connect (say, the living room TV), add `AUDIOSYNC_NO_AUTO_CONNECT=1`:
+
+```bash
+AUDIOSYNC_NO_AUTO_CONNECT=1 AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync
+```
+
+For that one run nothing switches on by itself, not at launch and not when a speaker shows up later. The speaker list still fills and you can still switch any speaker on yourself. A speaker that was still on when you last quit keeps its switch on, though, and plays as soon as you start streaming, so switch it off first. The marks stay saved, so the next normal launch connects as usual, and the log says once that auto-connect was skipped. Without `AUDIOSYNC_DEBUG=1` the variable does nothing. The Windows and Linux app reads it the same way.
+
 Every local output that's switched on has its own macOS volume and mute read through Core Audio (`DeviceVolume.swift`), and followed with property listeners until it's switched off or unplugged. The log gets one line when an output is first read (`output <UID> device volume: 13%, not muted; volume settable on the main element, …`), one when what its row shows changes (`fine → low`), and one per click on the fix, with what was written, how each write went and what the device reports afterwards. The only write is that click; nothing else touches a device's own volume.
 
 `AUDIOSYNC_BT_IO_FRAMES` is a diagnostic switch for one listening session, not a setting: set to a whole number from 256 to 4096, every Bluetooth output (Classic or LE) asks macOS for that IO buffer size, clamped to the device's range, before it starts; other outputs, and every output without the variable, stay exactly as they are. It tells whether a smaller or bigger buffer changes the chop you hear with two or more Bluetooth outputs at once. With the debug log on, each Bluetooth output that starts gets one `BT IO buffer:` line with the device, its transport, the request, the device's range, the size before and the size read back. Try one size at or below 1024 and 4096 in the same setup. For example: `AUDIOSYNC_BT_IO_FRAMES=1024 AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`.

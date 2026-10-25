@@ -94,7 +94,7 @@ enum LaunchAutoConnect {
     /// Whether `environment` skips auto-connect: both this switch and the
     /// debug log's set to exactly `1`; without the debug log it is ignored.
     static func skips(environment: [String: String]) -> Bool {
-        false
+        DebugTrace.isEnabled(environment: environment) && environment[environmentKey] == "1"
     }
 }
 

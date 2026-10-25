@@ -147,8 +147,8 @@ pub const NO_AUTO_CONNECT_VAR: &str = "AUDIOSYNC_NO_AUTO_CONNECT";
 /// Whether a launch skips auto-connect, for the values of `AUDIOSYNC_DEBUG`
 /// and [`NO_AUTO_CONNECT_VAR`]: only when both are exactly `1`.
 pub fn skips_auto_connect(debug: Option<&OsStr>, no_auto_connect: Option<&OsStr>) -> bool {
-    let _ = (debug, no_auto_connect);
-    false
+    let one = Some(OsStr::new("1"));
+    debug == one && no_auto_connect == one
 }
 
 /// Whether this launch's environment skips auto-connect.

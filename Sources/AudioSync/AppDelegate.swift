@@ -314,6 +314,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         DebugTrace.beginLaunchLog()   // each launch starts a fresh debug log (S170)
+        if LaunchAutoConnect.skipped {
+            DebugTrace.log("[AudioSync] auto-connect: skipped in this run (\(LaunchAutoConnect.environmentKey)=1 with \(DebugTrace.environmentKey)=1); the marks stay saved")
+        }
         appearance.apply()   // before any window or alert exists
         // Every window stands on its own: no tab items in the menus, and the
         // Equalizer and the Guide never open as tabs of the main window.
