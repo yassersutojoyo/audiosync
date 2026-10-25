@@ -3279,6 +3279,7 @@ impl AirPlaySpeakers {
                     self.log
                         .log(|| format!("AirPlay receiver gone: {}", self.label(&id)));
                 }
+                self.forget_name_unless_used(&id);
             }
             // Listed only while the AirPlay 2 switch is on, as on the Mac.
             ReceiverEvent::Target(_) if !self.link.airplay2() => {}
@@ -3330,11 +3331,41 @@ impl AirPlaySpeakers {
                             )
                         });
                     }
-                } else if self.targets.remove(&id).is_some() {
+                } else if let Some(target) = self.targets.remove(&id) {
                     self.log
                         .log(|| format!("AirPlay target gone: {}", self.label(&id)));
+                    self.forget_name_unless_used(&id);
+                    for member in &target.members {
+                        self.forget_name_unless_used(&speaker_id(&member.key));
+                    }
                 }
             }
+        }
+    }
+
+    /// Drops the name of a speaker or target that left discovery, unless
+    /// a setting, session, prompt, pairing, zone or target still names it:
+    /// otherwise every record a LAN host announces would stay until quit.
+    fn forget_name_unless_used(&mut self, id: &str) {
+        let used = self.listed.contains_key(id)
+            || self.settings.contains_key(id)
+            || self.added.contains_key(id)
+            || self.added_target_of(id).is_some()
+            || self.targets.contains_key(id)
+            || self.targets.values().any(|target| {
+                target
+                    .members
+                    .iter()
+                    .any(|member| speaker_id(&member.key) == id)
+            })
+            || self.pairings.contains_key(id)
+            || self.ending.contains(id)
+            || self.password_asks.contains_key(id)
+            || self.passwords.contains_key(id)
+            || self.homekit_keys.contains_key(id)
+            || self.zones.contains_key(id);
+        if !used {
+            self.names.remove(id);
         }
     }
 
