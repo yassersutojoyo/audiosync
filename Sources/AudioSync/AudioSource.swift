@@ -182,6 +182,59 @@ enum CaptureSwitch {
             if case .source = self { return .sourceChanged }
             return .inputPairChanged
         }
+
+        /// The capture a failed switch falls back to: the old source with
+        /// its stored pair (`pairOf` a device UID), or the old pair.
+        func oldCapture(pairOf: (String) -> Int) -> (source: AudioSource, pair: Int) {
+            switch self {
+            case .source(_, let to): return (to, 0)
+            case .inputPair(let uid, _, let to): return (.input(uid: uid), to)
+            }
+        }
+    }
+
+    /// The microphone permission a switch's new source needs.
+    enum Microphone: Equatable {
+        case notNeeded
+        case allowed
+        case undetermined
+        case denied
+    }
+
+    /// How a switch begins, before any capture is touched.
+    enum Start: Equatable {
+        /// Only the capture is rebuilt, under the speakers.
+        case rebuildCapture
+        /// No speaker is on, so nothing can play: the session stops.
+        case stopSession
+        /// macOS asks for the microphone first. The old source is stored
+        /// again and plays on, so the picker and the level meter show it,
+        /// until the answer.
+        case askMicrophone
+        /// The microphone is denied: the old capture plays on.
+        case keepOld
+    }
+
+    static func start(hasSpeaker: Bool, microphone: Microphone) -> Start {
+        .rebuildCapture
+    }
+
+    /// What macOS's answer to the microphone prompt of a switch does.
+    enum Answer: Equatable {
+        /// The user picked something else while macOS asked.
+        case none
+        /// Streaming stopped meanwhile: the new choice is only stored.
+        case remember
+        /// The new choice is stored and the capture rebuilt under the speakers.
+        case switchNow
+        /// Denied: the old capture plays on, and the alert says where to allow it.
+        case keepOld
+    }
+
+    /// `source` and `pair` are what is stored when the answer comes
+    /// (`pair` the stored pair of `source` when it is an input device).
+    static func answer(granted: Bool, to change: Change, source: AudioSource, pair: Int, running: Bool) -> Answer {
+        .none
     }
 
     enum Failure: Equatable {

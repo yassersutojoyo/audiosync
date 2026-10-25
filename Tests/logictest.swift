@@ -2977,6 +2977,37 @@ do {
     check(UIStrings().sourceSwitchFailed(new: "Music", old: "All System Audio")
             == "Couldn't start Music, still on All System Audio.",
           "EC5 source: the failed switch notice names both sources plainly")
+    check(CaptureSwitch.start(hasSpeaker: true, microphone: .notNeeded) == .rebuildCapture
+            && CaptureSwitch.start(hasSpeaker: true, microphone: .allowed) == .rebuildCapture,
+          "EC5 source: a switch rebuilds only the capture and keeps the session")
+    check(CaptureSwitch.start(hasSpeaker: false, microphone: .allowed) == .stopSession,
+          "EC5 source: a switch with no speaker on stops the session")
+    check(CaptureSwitch.start(hasSpeaker: true, microphone: .undetermined) == .askMicrophone,
+          "EC5 source: a switch to an input macOS still has to allow keeps the old source until the answer")
+    check(CaptureSwitch.start(hasSpeaker: true, microphone: .denied) == .keepOld,
+          "EC5 source: a switch to an input the microphone permission denies keeps the old capture")
+    let mic = AudioSource.input(uid: "mic")
+    let toMic = CaptureSwitch.Change.source(from: music, to: mic)
+    let backToMusic = toMic.oldCapture { $0 == "mic" ? 1 : 0 }
+    let fromMic = CaptureSwitch.Change.source(from: mic, to: music).oldCapture { $0 == "mic" ? 1 : 0 }
+    let backToPair = toPair.oldCapture { _ in 1 }
+    check(backToMusic.source == music && backToMusic.pair == 0 && fromMic.source == mic && fromMic.pair == 1
+            && backToPair.source == mic && backToPair.pair == 0,
+          "EC5 source: a failed switch starts the old source on its own stored pair, or the old pair",
+          "\(backToMusic) \(fromMic) \(backToPair)")
+    check(CaptureSwitch.answer(granted: true, to: toMic, source: music, pair: 0, running: true) == .switchNow,
+          "EC5 source: an allowed microphone switches to the input under the same speakers")
+    check(CaptureSwitch.answer(granted: false, to: toMic, source: music, pair: 0, running: true) == .keepOld,
+          "EC5 source: a microphone denied at the prompt keeps the old source playing")
+    check(CaptureSwitch.answer(granted: true, to: toMic, source: .system, pair: 0, running: true) == .none
+            && CaptureSwitch.answer(granted: false, to: toMic, source: .system, pair: 0, running: true) == .none,
+          "EC5 source: an answer after the user picked another source changes nothing")
+    check(CaptureSwitch.answer(granted: true, to: toMic, source: music, pair: 0, running: false) == .remember
+            && CaptureSwitch.answer(granted: false, to: toMic, source: music, pair: 0, running: false) == .none,
+          "EC5 source: an answer after streaming stopped only stores an allowed input")
+    check(CaptureSwitch.answer(granted: true, to: toPair, source: mic, pair: 0, running: true) == .switchNow
+            && CaptureSwitch.answer(granted: true, to: toPair, source: mic, pair: 2, running: true) == .none,
+          "EC5 source: a pair switch waits on the prompt only while the old pair is still stored")
     check(toMusic.stop == .sourceChanged && toPair.stop == .inputPairChanged,
           "EC5 source: the log names a source change and a pair change apart")
 
@@ -7608,6 +7639,15 @@ do {
           "microphone: after the answer, a new start may ask again")
     var unasked = MicrophoneRequestGate()
     check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
+    var switches = MicrophoneRequestGate()
+    let toInput = CaptureSwitch.Change.source(from: .system, to: .input(uid: "a"))
+    let toOther = CaptureSwitch.Change.source(from: .system, to: .input(uid: "b"))
+    _ = switches.begin(origin: .user, switching: toInput)
+    _ = switches.begin(origin: .user, switching: toOther)
+    let pending = switches.switching
+    _ = switches.answer()
+    check(pending == toOther && switches.switching == nil,
+          "microphone: the answer runs the latest switch once", "\(String(describing: pending))")
 }
 
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)
