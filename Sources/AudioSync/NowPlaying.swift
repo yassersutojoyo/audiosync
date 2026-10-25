@@ -467,9 +467,10 @@ final class NowPlayingMonitor {
 
 /// When the AirPlay speakers take an explicit pause (P213): a play-pause the
 /// user sent to the player, from a speaker's remote or the window's button,
-/// with the player read as playing. Play-pause reaches the player as a
-/// toggle, so the direction comes from the reading; without one the speakers
-/// keep playing. Nothing here looks at the audio: silence never pauses.
+/// with the player read as playing, or the player itself seen going from
+/// playing to paused. Play-pause reaches the player as a toggle, so its
+/// direction comes from the reading; without one the speakers keep playing.
+/// Nothing here looks at the audio: silence never pauses.
 struct ExplicitPause {
     enum Step { case nothing, pause, resume }
 
@@ -491,6 +492,8 @@ struct ExplicitPause {
     private var pausedAt: Date?
     /// The capture's sound total when `staleReading` had passed since the pause.
     private var heardFrom: Double?
+    /// The previous reading, so only a change the readings show counts.
+    private var last: (app: String, playing: Bool)?
 
     /// The stereo frames of interleaved `block` with a sample louder than
     /// `soundLevel`. Real-time safe.
@@ -528,16 +531,39 @@ struct ExplicitPause {
         return sound - from >= Self.soundToResume ? clear() : .nothing
     }
 
-    /// A reading that started at `readAt`. A paused stream resumes once a
-    /// reading started `staleReading` after the pause shows anything but the
-    /// same player paused: it plays, another player counts, or none does.
+    /// A reading that started at `readAt`. The player seen going from playing
+    /// to paused pauses a stream the speakers play (`sending`); seen going
+    /// from paused to playing, it resumes one at once. A paused stream also
+    /// resumes once a reading started `staleReading` after the pause shows
+    /// anything but the same player paused: it plays, another player counts,
+    /// or none does.
     mutating func read(app: String?, playing: Bool?, at readAt: Date, sending: Bool) -> Step {
+        let previous = last
+        if let app, let playing { last = (app, playing) } else { last = nil }
+        var turned: Bool?
+        if let previous, let app, let playing, previous.app == app, previous.playing != playing { turned = playing }
+        if !isPaused {
+            guard turned == false, sending, let app else { return .nothing }
+            pausedApp = app
+            pausedAt = readAt
+            heardFrom = nil
+            return .pause
+        }
+        if turned == true { return clear() }
         guard let pausedAt = pausedAt, readAt.timeIntervalSince(pausedAt) >= Self.staleReading else { return .nothing }
         if let app, app == pausedApp, playing == false { return .nothing }
         return clear()
     }
 
-    /// The capture restarted or the readings stopped: a paused stream resumes.
+    /// The readings stopped: the next one starts afresh, and a paused stream
+    /// resumes.
+    mutating func readingsStopped() -> Step {
+        last = nil
+        return clear()
+    }
+
+    /// The capture restarted or a play-pause came while paused: a paused
+    /// stream resumes.
     mutating func clear() -> Step {
         guard isPaused else { return .nothing }
         pausedApp = nil

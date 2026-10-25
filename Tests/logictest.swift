@@ -3383,6 +3383,12 @@ do {
     check(switched.read(app: music, playing: false, at: t0, sending: true) == .pause,
           "explicit pause: the active player's own pause counts after a switch")
 
+    var restarted = ExplicitPause()
+    _ = restarted.read(app: spotify, playing: true, at: t0, sending: true)
+    _ = restarted.readingsStopped()
+    check(restarted.read(app: spotify, playing: false, at: t0, sending: true) == .nothing && !restarted.isPaused,
+          "explicit pause: the first reading after the readings start again is no transition")
+
     var idle = ExplicitPause()
     _ = idle.read(app: spotify, playing: true, at: t0, sending: false)
     check(idle.read(app: spotify, playing: false, at: t0, sending: false) == .nothing && !idle.isPaused,

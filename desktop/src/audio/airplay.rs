@@ -2554,8 +2554,9 @@ impl AirPlaySpeakers {
 
     /// What the now-playing control follows: the session that counts, by
     /// app ID, and whether it plays (S274), as read at `now`. Set before
-    /// each poll; a paused stream resumes once the reading no longer shows
-    /// the paused app paused (P213).
+    /// each poll; the app seen pausing pauses a stream that plays, and a
+    /// paused stream resumes once the reading no longer shows the paused app
+    /// paused (P213).
     pub fn set_playback(&mut self, playback: Option<(String, bool)>, now: Instant) {
         self.playback = playback;
         let step = self

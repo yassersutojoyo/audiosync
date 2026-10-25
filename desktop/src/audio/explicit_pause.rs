@@ -1,8 +1,9 @@
 //! When the AirPlay speakers take an explicit pause (P213): a play-pause the
 //! user sent to the source app, from a speaker's remote or the app's own
-//! button, with the app known to play. The direction comes from the
-//! now-playing reading, since play-pause reaches the app as a toggle; with
-//! no reading the speakers keep playing. Nothing here looks at the audio:
+//! button, with the app known to play, or the app itself seen going from
+//! playing to paused. The direction of a play-pause comes from the
+//! now-playing reading, since it reaches the app as a toggle; with no
+//! reading the speakers keep playing. Nothing here looks at the audio:
 //! silence never pauses.
 
 use std::time::{Duration, Instant};
@@ -51,6 +52,8 @@ struct Paused {
 #[derive(Debug, Default)]
 pub struct ExplicitPause {
     paused: Option<Paused>,
+    /// The previous reading, so only a change the readings show counts.
+    last: Option<(String, bool)>,
 }
 
 impl ExplicitPause {
@@ -80,13 +83,43 @@ impl ExplicitPause {
         }
     }
 
-    /// A now-playing reading taken at `read_at`. A paused stream resumes
-    /// once a reading taken [`STALE_READING`] after the pause shows anything
-    /// but the same app paused: the app plays, another one counts, or none.
-    pub fn read(&mut self, playback: Option<(&str, bool)>, read_at: Instant, _streaming: bool) -> Step {
+    /// A now-playing reading taken at `read_at`. The app seen going from
+    /// playing to paused pauses a stream the speakers play (`streaming`);
+    /// seen going from paused to playing, it resumes one at once. A paused
+    /// stream also resumes once a reading taken [`STALE_READING`] after the
+    /// pause shows anything but the same app paused: the app plays, another
+    /// one counts, or none.
+    pub fn read(
+        &mut self,
+        playback: Option<(&str, bool)>,
+        read_at: Instant,
+        streaming: bool,
+    ) -> Step {
+        let previous = self.last.take();
+        self.last = playback.map(|(app, playing)| (app.to_owned(), playing));
+        let turned = match (previous, playback) {
+            (Some((was_app, was_playing)), Some((app, playing)))
+                if was_app == app && was_playing != playing =>
+            {
+                Some(playing)
+            }
+            _ => None,
+        };
         let Some(paused) = &self.paused else {
+            if turned == Some(false) && streaming {
+                self.paused = Some(Paused {
+                    app: playback.map(|(app, _)| app.to_owned()),
+                    at: read_at,
+                    heard_from: None,
+                });
+                return Step::Pause;
+            }
             return Step::Nothing;
         };
+        if turned == Some(true) {
+            self.paused = None;
+            return Step::Resume;
+        }
         if read_at.saturating_duration_since(paused.at) < STALE_READING {
             return Step::Nothing;
         }
@@ -186,7 +219,10 @@ mod tests {
         assert_eq!(pause.read(Some((SPOTIFY, false)), t0, true), Step::Pause);
         assert!(pause.is_paused());
         let later = t0 + STALE_READING * 2;
-        assert_eq!(pause.read(Some((SPOTIFY, false)), later, true), Step::Nothing);
+        assert_eq!(
+            pause.read(Some((SPOTIFY, false)), later, true),
+            Step::Nothing
+        );
         assert!(pause.is_paused());
     }
 
@@ -292,7 +328,10 @@ mod tests {
         let t0 = Instant::now();
         let later = t0 + STALE_READING;
         let mut pause = paused_at(t0);
-        assert_eq!(pause.read(Some(("chrome.exe", false)), later, true), Step::Resume);
+        assert_eq!(
+            pause.read(Some(("chrome.exe", false)), later, true),
+            Step::Resume
+        );
         let mut pause = paused_at(t0);
         assert_eq!(pause.read(None, later, true), Step::Resume);
     }

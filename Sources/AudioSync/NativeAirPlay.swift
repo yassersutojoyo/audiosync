@@ -184,15 +184,17 @@ final class NativeAirPlay {
         applyPause(explicitPause.toggled(app: app, playing: playing, at: Date()))
     }
 
-    /// A reading of the players that started at `startedAt`: a paused stream
-    /// resumes once it no longer shows the player paused (P213). Main queue.
+    /// A reading of the players that started at `startedAt`: the player seen
+    /// pausing pauses the speakers while they play (`sending`), and a paused
+    /// stream resumes once the reading no longer shows the player paused
+    /// (P213). Main queue.
     func readPause(app: String?, playing: Bool?, startedAt: Date, sending: Bool) {
         applyPause(explicitPause.read(app: app, playing: playing, at: startedAt, sending: sending))
     }
 
     /// The readings stopped: a paused stream resumes. Main queue.
     func clearPause() {
-        applyPause(explicitPause.clear())
+        applyPause(explicitPause.readingsStopped())
     }
 
     private func applyPause(_ step: ExplicitPause.Step) {
@@ -373,7 +375,7 @@ final class NativeAirPlay {
     /// A new capture session started (P143): the speakers are flushed and the
     /// timeline starts over.
     func restartTimeline() {
-        clearPause()
+        applyPause(explicitPause.clear())
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
             asc_airplay_restart_timeline(handle)
