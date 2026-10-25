@@ -8160,7 +8160,7 @@ mod tests {
             (
                 ui_model::AirPlayProblem::ReceiverUnverified,
                 "Den TV",
-                "Den TV didn't prove it's the speaker you paired, so AudioSync didn't connect and turned it off.",
+                "Den TV didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
             ),
         ] {
             let text = notice_text(

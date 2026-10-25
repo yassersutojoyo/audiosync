@@ -659,7 +659,7 @@ export global Strings {
             return @tr("{} plays through its home theater speakers, and AudioSync already plays to them, so it's off. Turn the group off to play to the Apple TV itself.", speaker);
         }
         if problem == AirPlayProblem.receiver-unverified {
-            return @tr("{} didn't prove it's the speaker you paired, so AudioSync didn't connect and turned it off.", speaker);
+            return @tr("{} didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and turn it on to pair again with its PIN.", speaker);
         }
         if problem == AirPlayProblem.apple-tv-plays {
             return @tr("AudioSync already plays to {}'s Apple TV, so the group is off. Turn the Apple TV off to play to the group.", speaker);

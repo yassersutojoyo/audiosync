@@ -2117,7 +2117,8 @@ do {
     check(impostor.apply(.error(id: "A9", .receiverUnverified, retryMs: nil, detail: ""))
                 == .turnOff("native:A9", .receiverUnverified)
             && UIStrings().nativeAirPlayReceiverUnverified(name: "Den TV")
-                == "Den TV didn't prove it's the speaker you paired, so AudioSync didn't connect and turned it off.",
+                == "Den TV didn't answer as the speaker you paired, so it's off. "
+                    + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
           "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
             == "Loft needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.",

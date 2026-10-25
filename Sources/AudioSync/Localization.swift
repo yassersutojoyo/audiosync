@@ -610,7 +610,8 @@ struct UIStrings {
 
     /// A paired receiver's pair-verify signature didn't check out (P56).
     func nativeAirPlayReceiverUnverified(name: String) -> String {
-        "\(name) didn't prove it's the speaker you paired, so AudioSync didn't connect and turned it off."
+        "\(name) didn't answer as the speaker you paired, so it's off. "
+            + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN."
     }
 
     /// PTP port 319 or 320 couldn't be bound (P158): the AirPlay 2 speakers
