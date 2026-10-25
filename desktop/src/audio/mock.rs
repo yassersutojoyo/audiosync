@@ -258,6 +258,8 @@ pub struct MockDriver {
     listing_error: Option<BackendError>,
     output_errors: BTreeMap<String, BackendError>,
     capture_error: Option<BackendError>,
+    /// The error only the next capture start fails with.
+    next_capture_error: Option<BackendError>,
     capture: Option<Arc<Mutex<CaptureLink>>>,
     /// Every output started that hasn't ended by itself.
     renderers: Vec<RendererLink>,
@@ -315,6 +317,7 @@ impl MockDriver {
             listing_error: None,
             output_errors: BTreeMap::new(),
             capture_error: None,
+            next_capture_error: None,
             capture: None,
             renderers: Vec::new(),
             active_sessions: BTreeMap::new(),
@@ -609,6 +612,9 @@ impl Driver for MockDriver {
         feeds: Feeds,
     ) -> Result<MockCapture, BackendError> {
         self.capture_attempts += 1;
+        if let Some(error) = self.next_capture_error.take() {
+            return Err(error);
+        }
         if let Some(error) = &self.capture_error {
             return Err(error.clone());
         }
@@ -922,6 +928,11 @@ impl Controller<MockDriver> {
     /// with `None`.
     pub fn refuse_captures(&mut self, error: Option<BackendError>) {
         self.driver_mut().capture_error = error;
+    }
+
+    /// Makes only the next capture start fail with `error`.
+    pub fn refuse_next_capture(&mut self, error: BackendError) {
+        self.driver_mut().next_capture_error = Some(error);
     }
 
     /// Makes the running capture fail with `error`.

@@ -107,7 +107,7 @@ use crate::ui_model::{
     CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
     HiddenSpeaker, InTarget, LeftOutRow, MixApp, Notice, NoticeMessage, PasswordPrompt, PinPhase,
     PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, Source, SourceKind, SourceName,
-    Speaker, SpeakerKind, ViewSettings, Waiting, ZoneError, ZoneSheet, clamp_delay_ms,
+    Speaker, SpeakerKind, SwitchName, ViewSettings, Waiting, ZoneError, ZoneSheet, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -8019,6 +8019,149 @@ mod tests {
             "the speaker stays in the stream, only its timeline restarts (S141)"
         );
         assert!(adapter.snapshot().running);
+    }
+
+    fn switch_failed(new: SwitchName, old: SwitchName) -> NoticeMessage {
+        NoticeMessage::SwitchFailed { new, old }
+    }
+
+    fn player_name() -> SwitchName {
+        SwitchName::Source(SourceName::Named("Player".into()))
+    }
+
+    // covers: S141
+    #[test]
+    fn a_source_that_cant_start_gives_way_to_the_old_one_under_the_same_airplay_speaker() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.take_calls();
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_source(&player());
+        let state = adapter.snapshot();
+        assert!(state.running, "streaming goes on");
+        assert_eq!(state.source_id, "system", "the old source is stored again");
+        assert_eq!(adapter.audio.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(
+            fake.take_calls(),
+            [Call::RestartTimeline],
+            "the speaker stays in the stream, only its timeline restarts"
+        );
+        assert_eq!(
+            messages(&adapter),
+            [switch_failed(player_name(), SwitchName::System)]
+        );
+
+        // Another pick clears the notice, and this time the player starts.
+        adapter.select_source(&player());
+        assert!(messages(&adapter).is_empty());
+        assert_eq!(
+            adapter.audio.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            })
+        );
+
+        // Only when the old source can't start again either does streaming
+        // stop, with the new choice stored and the start notice.
+        adapter.audio.refuse_captures(Some(BackendError::DeviceGone));
+        adapter.select_source("system");
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        assert_eq!(state.source_id, "system");
+        assert_eq!(messages(&adapter), [NoticeMessage::CaptureFailed]);
+    }
+
+    // covers: S141
+    #[test]
+    fn a_source_that_fails_once_the_old_outputs_faded_gives_way_under_the_same_cast_speaker() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.audio.add_app(PLAYER_PID, "player.exe");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert!(adapter.snapshot().running);
+        assert_eq!(fake.state().started, [cast_device(CAST_KITCHEN)]);
+
+        adapter.audio.driver().hold_fades(true);
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_source(&player());
+        adapter.audio.driver().hold_fades(false);
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.running, "streaming goes on");
+        assert_eq!(state.source_id, "system", "the old source is stored again");
+        assert_eq!(fake.state().stops, 0, "the Cast session goes on");
+        assert_eq!(fake.state().started.len(), 1, "and isn't started again");
+        assert_eq!(playing(&adapter), [SPEAKERS], "the local output plays again");
+        assert_eq!(
+            messages(&adapter),
+            [switch_failed(player_name(), SwitchName::System)]
+        );
+
+        // The user's stop clears the notice.
+        adapter.set_running(false);
+        assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S141
+    #[test]
+    fn an_input_or_channel_pair_that_cant_start_gives_way_to_the_old_one() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 6);
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+
+        // A microphone Windows blocks: the old source plays on, and the
+        // notice says where to allow it.
+        adapter
+            .audio
+            .refuse_next_capture(BackendError::MicrophoneBlocked);
+        adapter.select_source(&mic());
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert_eq!(state.source_id, "system");
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::MicrophoneBlocked {
+                source: "Interface (USB Audio)".to_owned()
+            }]
+        );
+
+        adapter.select_source(&mic());
+        assert!(messages(&adapter).is_empty());
+        assert_eq!(input_pair_captures(&adapter), [(MIC.to_owned(), 0)]);
+
+        // Channels 3-4 can't start: 1-2 play on and stay stored.
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_input_pair(1);
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert_eq!(state.source_id, mic());
+        assert_eq!(state.input_pair, 0, "the old pair is stored again");
+        assert!(adapter.current_settings().input_pairs.is_empty());
+        assert_eq!(
+            input_pair_captures(&adapter),
+            [(MIC.to_owned(), 0), (MIC.to_owned(), 0)]
+        );
+        assert_eq!(
+            messages(&adapter),
+            [switch_failed(
+                SwitchName::Channels { first: 3, last: 4 },
+                SwitchName::Channels { first: 1, last: 2 }
+            )]
+        );
+
+        // Picking the pair again tries it again and clears the notice.
+        adapter.select_input_pair(1);
+        assert!(messages(&adapter).is_empty());
+        assert_eq!(
+            input_pair_captures(&adapter).last(),
+            Some(&(MIC.to_owned(), 1))
+        );
     }
 
     #[test]

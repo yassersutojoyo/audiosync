@@ -41,7 +41,7 @@ use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transpo
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
     MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
-    SourceKind, SourceName, SpeakerState, ViewSettings, WindowFrame,
+    SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
@@ -4571,6 +4571,17 @@ fn source_name(strings: &Strings<'_>, source: &SourceName) -> SharedString {
     }
 }
 
+/// A source or channel pair as the source picker names it.
+fn switch_name(strings: &Strings<'_>, name: &SwitchName) -> SharedString {
+    match name {
+        SwitchName::System => strings.get_source_system(),
+        SwitchName::Source(source) => source_name(strings, source),
+        SwitchName::Channels { first, last } => {
+            strings.invoke_input_channel_pair(i32::from(*first), i32::from(*last))
+        }
+    }
+}
+
 /// Output names as one list in the UI's words: what every notice and the
 /// guide name outputs with.
 fn joined(strings: &Strings<'_>, names: &[String]) -> SharedString {
@@ -4651,6 +4662,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SourceSwitched { source } => {
             strings.invoke_notice_source_switched(source.as_str().into())
         }
+        NoticeMessage::SwitchFailed { new, old } => strings.invoke_notice_switch_failed(
+            switch_name(strings, new),
+            switch_name(strings, old),
+        ),
         NoticeMessage::SourceNotRunning { source } => {
             strings.invoke_notice_source_not_running(source.as_str().into())
         }
@@ -4806,6 +4821,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::NoSpeaker => (NoticeKind::NoSpeaker, ""),
         NoticeMessage::SourceQuit { source } => (NoticeKind::SourceQuit, source.as_str()),
         NoticeMessage::SourceSwitched { source } => (NoticeKind::SourceSwitched, source.as_str()),
+        NoticeMessage::SwitchFailed { .. } => (NoticeKind::SwitchFailed, ""),
         NoticeMessage::SourceNotRunning { source } => {
             (NoticeKind::SourceNotRunning, source.as_str())
         }
