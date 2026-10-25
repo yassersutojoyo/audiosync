@@ -28,6 +28,14 @@ const ACCEPT_POLL: Duration = Duration::from_millis(10);
 const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 /// How often the driver rolls the rate limits over (P195).
 const ROLL_EVERY: Duration = Duration::from_millis(250);
+/// 403s a peer may get within `STRIKE_WINDOW` of its first one before its
+/// connections are closed unread for the rest of the window (P191): room
+/// for a receiver retrying a stale value, about 42 years on average to
+/// guess a 32-bit Active-Remote.
+const STRIKE_LIMIT: u32 = 8;
+const STRIKE_WINDOW: Duration = Duration::from_secs(5);
+/// Peers tracked at once; the oldest window gives way to a new one.
+const STRIKE_PEERS: usize = 64;
 
 /// The command server's counters (P144, P195), read without locks.
 #[derive(Debug, Default)]
@@ -142,6 +150,36 @@ impl Table {
     }
 }
 
+/// Each peer's 403s in its current window (P194).
+#[derive(Default)]
+struct Strikes(HashMap<IpAddr, (Instant, u32)>);
+
+impl Strikes {
+    fn blocked(&self, peer: IpAddr, now: Instant) -> bool {
+        self.0
+            .get(&peer)
+            .is_some_and(|(since, count)| *count >= STRIKE_LIMIT && now < *since + STRIKE_WINDOW)
+    }
+
+    /// Counts a 403 for `peer`; true when this one reaches the limit.
+    fn strike(&mut self, peer: IpAddr, now: Instant) -> bool {
+        self.0.retain(|_, (since, _)| now < *since + STRIKE_WINDOW);
+        if self.0.len() >= STRIKE_PEERS
+            && !self.0.contains_key(&peer)
+            && let Some(oldest) = self
+                .0
+                .iter()
+                .min_by_key(|(_, (since, _))| *since)
+                .map(|(ip, _)| *ip)
+        {
+            self.0.remove(&oldest);
+        }
+        let (_, count) = self.0.entry(peer).or_insert((now, 0));
+        *count += 1;
+        *count == STRIKE_LIMIT
+    }
+}
+
 type Sink = Arc<dyn Fn(RemoteInput) -> bool + Send + Sync>;
 
 struct Shared {
@@ -149,6 +187,7 @@ struct Shared {
     /// Held from an answer's write to its event's hand-over, so events
     /// reach the driver in the order the requests were answered (P193).
     deliver: Mutex<()>,
+    strikes: Mutex<Strikes>,
     open: AtomicUsize,
     counters: Arc<DacpCounters>,
     sink: Sink,
@@ -213,6 +252,7 @@ impl Server {
             shared: Arc::new(Shared {
                 table: Mutex::new(Table::default()),
                 deliver: Mutex::new(()),
+                strikes: Mutex::new(Strikes::default()),
                 open: AtomicUsize::new(0),
                 counters: Arc::new(DacpCounters::default()),
                 sink,
@@ -491,7 +531,9 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>, stop: &AtomicBool) 
         match listener.accept() {
             Ok((stream, peer)) => {
                 let peer = peer.ip().to_canonical();
-                if !lock(&shared.table).admits(peer) {
+                if !lock(&shared.table).admits(peer)
+                    || lock(&shared.strikes).blocked(peer, Instant::now())
+                {
                     let _ = stream.shutdown(Shutdown::Both);
                     continue;
                 }
@@ -594,9 +636,11 @@ fn serve(mut stream: TcpStream, peer: IpAddr, shared: &Shared) {
             }
         }
         buffer.drain(..length + head.content_length);
-        let close = head.wants_close();
-        handle(&mut stream, peer, &head, close, shared);
-        if close {
+        if lock(&shared.strikes).blocked(peer, Instant::now()) {
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        }
+        if handle(&mut stream, peer, &head, shared) {
             let _ = stream.shutdown(Shutdown::Both);
             return;
         }
@@ -612,14 +656,9 @@ fn refuse_malformed(stream: &mut TcpStream, peer: IpAddr, shared: &Shared) {
     shared.log(format!("DACP {peer}: malformed request -> 400"));
 }
 
-/// Answers one request, then hands its event to the driver (P189, P193).
-fn handle(
-    stream: &mut TcpStream,
-    peer: IpAddr,
-    head: &dacp::RequestHead,
-    close: bool,
-    shared: &Shared,
-) {
+/// Answers one request, then hands its event to the driver (P189, P193);
+/// true when the connection closes after it (P191).
+fn handle(stream: &mut TcpStream, peer: IpAddr, head: &dacp::RequestHead, shared: &Shared) -> bool {
     let now = Instant::now();
     let what = dacp::log_command(&head.target);
     let (answer, who, admitted, ended) = {
@@ -646,6 +685,11 @@ fn handle(
         };
         (answer, who, admitted, ended)
     };
+    let forbidden = answer.status == 403;
+    let close = forbidden || head.wants_close();
+    // Counted before the answer goes out, so the peer's next connection
+    // already sees the cap.
+    let capped = forbidden && lock(&shared.strikes).strike(peer, now);
     if !admitted {
         shared.counters.over_limit.fetch_add(1, Ordering::Relaxed);
     } else {
@@ -674,4 +718,11 @@ fn handle(
         };
         shared.log(format!("DACP {who}: {what} -> {}{note}", answer.status));
     }
+    if capped {
+        shared.log(format!(
+            "DACP {peer}: {STRIKE_LIMIT} requests refused with 403 -> connections closed for {} s",
+            STRIKE_WINDOW.as_secs()
+        ));
+    }
+    close
 }
