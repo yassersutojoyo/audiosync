@@ -1539,6 +1539,23 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// Whether a session of `id` that plays proved the receiver holds the
+    /// stored credentials, so whatever turned them down is gone (P154):
+    /// AirPlay 2 verifies its signature with them, AirPlay 1 only when they
+    /// carry its key (P56), and a password the user typed proves nothing.
+    fn playing_proves_credentials(&self, id: &str) -> bool {
+        if self.passwords.contains_key(id) {
+            return false;
+        }
+        if self.over_airplay2(id) {
+            self.store.homekit(id).is_some()
+        } else {
+            self.store
+                .get(id)
+                .is_some_and(|credentials| credentials.receiver_key().is_some())
+        }
+    }
+
     /// Whether the sender reaches the listed speaker `id` over AirPlay 2.
     fn over_airplay2(&self, id: &str) -> bool {
         self.listed
@@ -3344,9 +3361,8 @@ impl AirPlaySpeakers {
             // Its password worked: one turned down later turns it off.
             self.password_attempts.remove(id);
             self.paired_in_attempt.remove(id);
-            // Playing on them shows whatever turned them down is gone,
-            // unless a password the user typed carried the session (P154).
-            relisted = !self.passwords.contains_key(id) && self.credentials_turned_down.remove(id);
+            relisted =
+                self.playing_proves_credentials(id) && self.credentials_turned_down.remove(id);
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
