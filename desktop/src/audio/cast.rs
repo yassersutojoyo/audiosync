@@ -87,7 +87,7 @@ const DEFAULT_VOLUME_STEP: f64 = 1.0;
 const MAX_UNANSWERED: usize = 16;
 
 /// Discovery answers handled per UI tick, so a flood of mDNS answers
-/// cannot stall the UI thread; the rest wait for the next tick.
+/// cannot stall the UI thread; the rest wait for the next tick (C106).
 const MAX_BROWSE_PER_POLL: usize = 256;
 
 /// What a Cast device shows of the playing track (C53): only what the
@@ -1833,6 +1833,7 @@ pub mod tests {
             .status
     }
 
+    // covers: C106
     #[test]
     fn a_discovery_burst_beyond_the_cap_waits_for_the_next_tick() {
         let fake = FakeCast::default();

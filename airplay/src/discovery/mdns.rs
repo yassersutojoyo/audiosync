@@ -366,19 +366,24 @@ impl DacpAdvertiser for MdnsAdvertiser {
     }
 }
 
-/// The renames among the first [`MONITOR_READS`] daemon events; an
-/// address record's rename is the host name's.
+/// The renames among the first [`MONITOR_READS`] daemon events, once per
+/// name and interface: the daemon reports each renamed record (SRV and
+/// TXT, or A and AAAA), and an address record's rename is the host name's.
 fn name_conflicts(events: impl Iterator<Item = DaemonEvent>) -> Vec<NameConflict> {
-    events
-        .take(MONITOR_READS)
-        .filter_map(|event| match event {
-            DaemonEvent::NameChange(change) => Some(NameConflict {
-                host: matches!(change.rr_type, RRType::A | RRType::AAAA),
-                interface: change.intf_name,
-            }),
-            _ => None,
-        })
-        .collect()
+    let mut conflicts: Vec<NameConflict> = Vec::new();
+    for event in events.take(MONITOR_READS) {
+        let DaemonEvent::NameChange(change) = event else {
+            continue;
+        };
+        let conflict = NameConflict {
+            host: matches!(change.rr_type, RRType::A | RRType::AAAA),
+            interface: change.intf_name,
+        };
+        if !conflicts.contains(&conflict) {
+            conflicts.push(conflict);
+        }
+    }
+    conflicts
 }
 
 impl Drop for MdnsAdvertiser {
@@ -417,25 +422,36 @@ mod tests {
         let events = [
             DaemonEvent::Respond("eth0".to_owned()),
             rename(RRType::SRV, "eth0"),
-            rename(RRType::TXT, "eth0"),
             rename(RRType::A, "wlan0"),
-            rename(RRType::AAAA, "wlan0"),
+            rename(RRType::SRV, "wlan0"),
         ];
         assert_eq!(
             name_conflicts(events.into_iter()),
             [
                 conflict(false, "eth0"),
-                conflict(false, "eth0"),
                 conflict(true, "wlan0"),
-                conflict(true, "wlan0"),
+                conflict(false, "wlan0"),
             ]
         );
     }
 
     #[test]
+    fn a_conflict_renaming_several_records_is_one_conflict() {
+        let events = [
+            rename(RRType::SRV, "eth0"),
+            rename(RRType::TXT, "eth0"),
+            rename(RRType::A, "eth0"),
+            rename(RRType::AAAA, "eth0"),
+        ];
+        assert_eq!(
+            name_conflicts(events.into_iter()),
+            [conflict(false, "eth0"), conflict(true, "eth0")]
+        );
+    }
+
+    #[test]
     fn at_most_the_cap_is_read_per_call() {
-        let mut events =
-            std::iter::repeat_with(|| rename(RRType::SRV, "eth0")).take(MONITOR_READS + 5);
+        let mut events = (0..MONITOR_READS + 5).map(|n| rename(RRType::SRV, &format!("if{n}")));
         assert_eq!(name_conflicts(events.by_ref()).len(), MONITOR_READS);
         assert_eq!(events.count(), 5);
     }
