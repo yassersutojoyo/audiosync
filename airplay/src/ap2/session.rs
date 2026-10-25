@@ -1110,6 +1110,10 @@ impl Ap2Session {
             return;
         }
         self.config.initial_volume = volume;
+        // A resend already queued would undo the level set on the speaker.
+        if matches!(self.volume_retry, VolumeRetry::Due | VolumeRetry::Resent) {
+            self.pending_volume = None;
+        }
         self.volume_retry = VolumeRetry::Idle;
     }
 
