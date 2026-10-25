@@ -370,7 +370,9 @@ pub const AIRPLAY_PAIRINGS_NEWER: i32 = -3;
 
 /// What [`asc_airplay_pairings_access`] and
 /// [`asc_airplay_airplay2_identity_access`] return for a null or dead
-/// handle, or an identity file left unread because AirPlay 2 is off.
+/// handle, an identity file left unread because AirPlay 2 is off, or a
+/// file that wasn't read: another account owns it, it isn't a regular
+/// file, or opening it failed.
 pub const AIRPLAY_FILE_UNREAD: i32 = -1;
 /// Only its owner could read or write the file, or there was none.
 pub const AIRPLAY_FILE_PRIVATE: i32 = 0;
@@ -3285,13 +3287,14 @@ fn access_code(access: Access) -> i32 {
         Access::Private => AIRPLAY_FILE_PRIVATE,
         Access::Tightened => AIRPLAY_FILE_TIGHTENED,
         Access::StillOpen => AIRPLAY_FILE_STILL_OPEN,
+        Access::Unread => AIRPLAY_FILE_UNREAD,
     }
 }
 
 /// How private [`asc_airplay_open_pairings`] found the pairings file (S224),
 /// for the host's log: [`AIRPLAY_FILE_PRIVATE`] also when there was no
-/// file, or none was opened; [`AIRPLAY_FILE_UNREAD`] for a null or dead
-/// handle.
+/// file, or none was opened; [`AIRPLAY_FILE_UNREAD`] for a file it didn't
+/// read, or a null or dead handle.
 ///
 /// # Safety
 ///
@@ -3309,8 +3312,9 @@ pub unsafe extern "C" fn asc_airplay_pairings_access(airplay: *const AscAirPlay)
 
 /// How private [`asc_airplay_open_airplay2_identity`] found the AirPlay 2
 /// identity file (S224), for the host's log: [`AIRPLAY_FILE_PRIVATE`] also
-/// when there was no file, or none was opened; [`AIRPLAY_FILE_UNREAD`] with
-/// the hidden AirPlay 2 switch off, or for a null or dead handle.
+/// when there was no file, or none was opened; [`AIRPLAY_FILE_UNREAD`] for a
+/// file it didn't read, with the hidden AirPlay 2 switch off, or for a null
+/// or dead handle.
 ///
 /// # Safety
 ///
@@ -6257,6 +6261,7 @@ mod tests {
         assert_eq!(access_code(Access::Private), AIRPLAY_FILE_PRIVATE);
         assert_eq!(access_code(Access::Tightened), AIRPLAY_FILE_TIGHTENED);
         assert_eq!(access_code(Access::StillOpen), AIRPLAY_FILE_STILL_OPEN);
+        assert_eq!(access_code(Access::Unread), AIRPLAY_FILE_UNREAD);
         let folder = scratch("file-access");
         let pairings = folder.join("pairings.dat");
         let identity = folder.join("identity.dat");

@@ -199,6 +199,12 @@ fn fresh() -> (Airplay2Identity, bool) {
     }
 }
 
+fn left_as_it_is(error: &std::io::Error) -> Loaded {
+    Loaded::Ignored(format!(
+        "the file can't be read, so it is left as it is: {error}"
+    ))
+}
+
 impl IdentityStore {
     /// A store with no file and a fresh device ID, which forgets everything
     /// when dropped.
@@ -218,7 +224,7 @@ impl IdentityStore {
     /// A file other accounts may read or write is made owner-only first;
     /// one another account owns is ignored and replaced ([`read_private`]).
     pub fn open(path: PathBuf) -> (IdentityStore, Loaded) {
-        let mut access = Access::Private;
+        let mut access = Access::Unread;
         let (identity, writable, loaded) = match read_private(&path) {
             Ok(Contents::Foreign(reason)) => {
                 let (identity, random) = fresh();
@@ -240,15 +246,17 @@ impl IdentityStore {
                 }
             }
             Ok(Contents::Missing) => {
+                access = Access::Private;
                 let (identity, random) = fresh();
                 (identity, random, Loaded::NoFile)
             }
             // A permission or disk error may pass, and the file may still
             // hold the device ID and credentials.
-            Err(error) => {
-                let reason = format!("the file can't be read, so it is left as it is: {error}");
-                (fresh().0, false, Loaded::Ignored(reason))
+            Ok(Contents::Failed(error, found)) => {
+                access = found;
+                (fresh().0, false, left_as_it_is(&error))
             }
+            Err(error) => (fresh().0, false, left_as_it_is(&error)),
         };
         let store = IdentityStore {
             path: Some(path),
@@ -421,5 +429,27 @@ mod tests {
         let mode = fs::metadata(&path).expect("metadata").permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         let _ = fs::remove_file(&path);
+    }
+
+    // covers: S224
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_isnt_read_is_reported_unread_and_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let target = scratch("link-target.dat");
+        let _ = IdentityStore::open(target.clone());
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("mode set");
+        let path = scratch("link.dat");
+        std::os::unix::fs::symlink(&target, &path).expect("a symbolic link");
+        let (store, loaded) = IdentityStore::open(path.clone());
+        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert_eq!(store.access(), Access::Unread);
+        let mode = fs::metadata(&target)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644, "the link's target is left alone");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&target);
     }
 }

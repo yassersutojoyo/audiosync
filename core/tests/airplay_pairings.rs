@@ -254,9 +254,37 @@ fn a_symbolic_link_in_the_files_place_is_not_followed() {
     let (store, loaded) = PairingStore::open(path.clone());
     assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
     assert!(store.is_empty());
+    assert_eq!(
+        store.access(),
+        audiosync_core::airplay_pairings::Access::Unread
+    );
     let mode = fs::metadata(&target)
         .expect("metadata")
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o644, "the link's target is left alone");
+}
+
+// covers: S224
+#[cfg(unix)]
+#[test]
+fn a_file_another_account_owns_is_reported_unread() {
+    use audiosync_core::airplay_pairings::Access;
+    use std::os::unix::fs::MetadataExt;
+    let mine = folder("foreign").join("mine.dat");
+    fs::create_dir_all(mine.parent().expect("a folder")).expect("folder made");
+    fs::write(&mine, b"x").expect("written");
+    let me = fs::metadata(&mine).expect("metadata").uid();
+    // A system file root owns; running as root there is no other account.
+    let foreign = PathBuf::from("/etc/hosts");
+    let Ok(metadata) = fs::metadata(&foreign) else {
+        return;
+    };
+    if metadata.uid() == me {
+        return;
+    }
+    let (store, loaded) = PairingStore::open(foreign);
+    assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+    assert!(store.is_empty());
+    assert_eq!(store.access(), Access::Unread);
 }

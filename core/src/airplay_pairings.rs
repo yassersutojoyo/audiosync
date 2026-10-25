@@ -216,14 +216,14 @@ fn read(
     match read_private(path) {
         Ok(Contents::Read(bytes, access)) => (parse(&bytes).map(Some), access),
         Ok(Contents::Missing) => (Ok(None), Access::Private),
-        Ok(Contents::Foreign(reason)) => (Err(Unreadable::Ignored(reason)), Access::Private),
-        Err(error) => (
-            Err(Unreadable::Ignored(format!(
-                "the file can't be read: {error}"
-            ))),
-            Access::Private,
-        ),
+        Ok(Contents::Foreign(reason)) => (Err(Unreadable::Ignored(reason)), Access::Unread),
+        Ok(Contents::Failed(error, access)) => (Err(unreadable(&error)), access),
+        Err(error) => (Err(unreadable(&error)), Access::Unread),
     }
+}
+
+fn unreadable(error: &io::Error) -> Unreadable {
+    Unreadable::Ignored(format!("the file can't be read: {error}"))
 }
 
 /// The entries in the file's contents `plain`.
@@ -349,12 +349,22 @@ pub enum Access {
     Tightened,
     /// Other accounts can read or write it, and its mode couldn't be changed.
     StillOpen,
+    /// It wasn't read: another account owns it, it isn't a regular file, or
+    /// opening it failed.
+    Unread,
 }
 
 /// What reading a private file found.
 pub(crate) enum Contents {
     Missing,
     Read(Zeroizing<Vec<u8>>, Access),
+    /// Reading failed after the file's mode was checked, and tightened when
+    /// it had to be.
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "only Unix hosts check the mode first")
+    )]
+    Failed(io::Error, Access),
     /// Another account owns the file, so it isn't read; why, for the log.
     #[cfg_attr(
         not(unix),
@@ -430,8 +440,10 @@ pub(crate) fn read_private(path: &Path) -> io::Result<Contents> {
     // Sized up front, so growing never leaves a copy of a secret behind.
     let size = usize::try_from(metadata.len()).unwrap_or(0);
     let mut bytes = Zeroizing::new(Vec::with_capacity(size));
-    file.read_to_end(&mut bytes)?;
-    Ok(Contents::Read(bytes, access))
+    match file.read_to_end(&mut bytes) {
+        Ok(_) => Ok(Contents::Read(bytes, access)),
+        Err(error) => Ok(Contents::Failed(error, access)),
+    }
 }
 
 /// Windows keeps these files in the user's own profile.
