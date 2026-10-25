@@ -310,6 +310,9 @@ pub(crate) struct Driver {
     ptp_timing: BTreeSet<DeviceKey>,
     /// HomeKit credentials a password pairing gave during this run (P152).
     homekit: BTreeMap<DeviceKey, HomeKitCredentials>,
+    /// Devices whose HomeKit credentials an answer turned down during this
+    /// run (P154); a new pairing takes them off.
+    homekit_turned_down: BTreeSet<DeviceKey>,
     /// The random device ID of the AirPlay 2 session SETUP (P5, P43).
     device_id: [u8; 6],
     /// The PTP service, bound only while an AirPlay 2 session may need it
@@ -380,6 +383,7 @@ impl Driver {
             airplay2: false,
             ptp_timing: BTreeSet::new(),
             homekit: BTreeMap::new(),
+            homekit_turned_down: BTreeSet::new(),
             device_id: random_device_id(),
             ptp: None,
             ptp_ports: crate::ptp::PtpPorts::default(),
@@ -2177,8 +2181,11 @@ mod tests {
             vec![1, 0, 0, 0]
         }
 
-        fn second_request(&mut self, _first_response: &[u8]) -> Option<Vec<u8>> {
-            Some(vec![0, 0, 0, 0])
+        fn second_request(
+            &mut self,
+            _first_response: &[u8],
+        ) -> Result<Vec<u8>, crate::session::VerifyFailure> {
+            Ok(vec![0, 0, 0, 0])
         }
     }
 

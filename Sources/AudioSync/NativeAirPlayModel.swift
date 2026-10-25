@@ -109,6 +109,9 @@ enum NativeSpeakerEvent: Equatable {
         /// An Apple TV whose home theater group plays, or a group whose
         /// Apple TV plays by itself (P177).
         case playsThroughSpeakers = "plays through its speakers"
+        /// A paired receiver didn't prove it is the one that was paired; its
+        /// stored pairing stays (P56).
+        case receiverUnverified = "receiver unverified"
 
         /// The sender tries again by itself, so the speaker stays on; any
         /// other problem turns it off, except a speaker waiting for the
@@ -132,6 +135,7 @@ enum NativeSpeakerEvent: Equatable {
             case .airPlay2Only: return .needsAirPlay2
             case .timingUnavailable: return .timingUnavailable
             case .playsThroughSpeakers: return .playsThroughSpeakers
+            case .receiverUnverified: return .receiverUnverified
             }
         }
     }
@@ -243,6 +247,8 @@ enum NativeTurnOff: Equatable {
     case timingUnavailable
     /// An Apple TV and its home theater group never play at once (P177).
     case playsThroughSpeakers
+    /// It didn't prove it is the receiver that was paired (P56).
+    case receiverUnverified
     /// A member of the target (its receiver ID) asks for a password
     /// AudioSync doesn't have, outside the user's attempt (P176).
     case memberNeedsPassword(String)

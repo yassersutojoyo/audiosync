@@ -411,10 +411,6 @@ pub enum SpeakerEvent {
     /// them back in [`SpeakerOptions::homekit_credentials`]. The sender
     /// keeps them too, until it stops. `Debug` shows the identifiers only.
     HomeKitPaired(HomeKitCredentials),
-    /// The receiver no longer takes the speaker's HomeKit credentials
-    /// (P154): the sender dropped its copy, and the host deletes the stored
-    /// one, so the next start pairs again. A PairingRequired error follows.
-    HomeKitRejected,
     /// A line for the host's debug log, only with [`SpeakerOptions::trace`].
     Trace(String),
 }

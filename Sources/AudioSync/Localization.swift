@@ -608,6 +608,12 @@ struct UIStrings {
             + "Another app may be using ports 319 and 320."
     }
 
+    /// A paired receiver's pair-verify signature didn't check out (P56).
+    func nativeAirPlayReceiverUnverified(name: String) -> String {
+        "\(name) didn't answer as the speaker you paired, so it's off. "
+            + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN."
+    }
+
     /// PTP port 319 or 320 couldn't be bound (P158): the AirPlay 2 speakers
     /// that need PTP timing can't play until it is free.
     let nativeAirPlayPtpPortsTaken = "Another app is using port 319 or 320, so AirPlay speakers that need "

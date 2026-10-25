@@ -86,13 +86,28 @@ pub fn asks_code_every_time(flags: u64) -> bool {
     flags & FLAG_PIN != 0
 }
 
+/// The HomeKit credentials a session starts with (P61, P154).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stored {
+    None,
+    /// Credentials of an earlier pairing.
+    Kept,
+    /// Credentials an answer turned down earlier in this sender's life.
+    /// They stay, since a reset receiver and an impostor answer alike, and
+    /// only a new pairing replaces them.
+    TurnedDown,
+}
+
 /// P61's order: flags bit 3 (a PIN every time, stored credentials or not),
-/// then stored credentials, then bit 9 (PIN), then bit 7 (password),
-/// otherwise transient.
-pub fn choose_mode(flags: u64, has_credentials: bool) -> Mode {
+/// then a password pairing in place of turned-down credentials, then stored
+/// credentials, then bit 9 (PIN), then bit 7 (password), otherwise
+/// transient.
+pub fn choose_mode(flags: u64, stored: Stored) -> Mode {
     if asks_code_every_time(flags) {
         Mode::Pin
-    } else if has_credentials {
+    } else if stored == Stored::TurnedDown && flags & FLAG_PASSWORD != 0 {
+        Mode::Password
+    } else if stored != Stored::None {
         Mode::Verify
     } else if flags & (FLAG_ONE_TIME | FLAG_PIN) != 0 {
         Mode::Pin
