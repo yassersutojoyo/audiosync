@@ -1553,7 +1553,10 @@ fn a_forger_refusing_the_verify_never_moves_a_paired_speaker_to_airplay1() {
         events.seen
     );
     let keys = forger_ap2.fake().keys();
-    assert!(keys.contains(&"POST /pair-pin-start".to_owned()), "{keys:?}");
+    assert!(
+        keys.contains(&"POST /pair-pin-start".to_owned()),
+        "{keys:?}"
+    );
     assert_untouched(&forger);
     sender.shutdown();
 }
