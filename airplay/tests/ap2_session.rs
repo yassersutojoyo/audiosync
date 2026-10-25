@@ -933,3 +933,69 @@ fn an_untraced_session_logs_no_set_parameter_lines() {
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
     assert!(traces(&rig).is_empty(), "{:?}", traces(&rig));
 }
+
+/// The `Session` header of every request after the session SETUP.
+fn session_headers(rig: &Ap2Rig) -> Vec<(Method, Option<String>)> {
+    rig.fake
+        .requests
+        .iter()
+        .map(|(request, _)| request)
+        .skip_while(|request| request.method != Method::Setup)
+        .skip(1)
+        .map(|request| {
+            let session = request.headers.get("Session").map(str::to_owned);
+            (request.method, session)
+        })
+        .collect()
+}
+
+// covers: P25
+#[test]
+fn the_session_setup_answers_session_goes_on_every_later_rtsp_request() {
+    let mut fake = FakeAp2::new();
+    fake.session = Some("5A1B2C3D".to_owned());
+    let mut config = ap2_config();
+    config.read_volume = true;
+    let mut rig = Ap2Rig::new(config, fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-20.0), now);
+    rig.pump();
+    rig.advance(Duration::from_secs(4));
+    let now = rig.now;
+    rig.session.teardown(now);
+    rig.pump();
+    let carrying = [
+        Method::Record,
+        Method::SetParameter,
+        Method::GetParameter,
+        Method::Flush,
+        Method::Teardown,
+    ];
+    let headers = session_headers(&rig);
+    for method in carrying {
+        assert!(headers.iter().any(|(m, _)| *m == method), "{headers:?}");
+    }
+    for (method, session) in &headers {
+        if carrying.contains(method) {
+            assert_eq!(session.as_deref(), Some("5A1B2C3D"), "{method:?}");
+        }
+    }
+    let warned = rig
+        .events
+        .iter()
+        .any(|event| matches!(event, Ap2Event::Warning(_)));
+    assert!(!warned, "{:?}", rig.events);
+}
+
+// covers: P25
+#[test]
+fn a_session_setup_answer_without_session_leaves_the_header_out() {
+    let mut rig = transient();
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let now = rig.now;
+    rig.session.teardown(now);
+    rig.pump();
+    let headers = session_headers(&rig);
+    assert!(headers.iter().all(|(_, s)| s.is_none()), "{headers:?}");
+}

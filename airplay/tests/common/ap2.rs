@@ -226,6 +226,9 @@ pub struct FakeAp2 {
     /// Every volume SET_PARAMETER, whatever its status, sets the level a
     /// GET_PARAMETER answers, rounded to this step in dB.
     pub applies_volume: Option<f64>,
+    /// The session SETUP answer's `Session`, which every later
+    /// SET_PARAMETER must carry or get 500 (P25).
+    pub session: Option<String>,
     /// The body of the answer to the second `/info`, in place of the
     /// initial volume alone.
     pub second_info_body: Option<Vec<u8>>,
@@ -270,6 +273,7 @@ impl FakeAp2 {
             pause: HashMap::new(),
             bodies: HashMap::new(),
             applies_volume: None,
+            session: None,
             second_info_body: None,
             record_headers: Vec::new(),
             no_data_port: false,
@@ -379,9 +383,21 @@ impl FakeAp2 {
                 Response::new(code, "Refused")
             } else if pairing && !self.status.contains_key(&key) {
                 self.hap.answer(&request)
+            } else if key == "SET_PARAMETER"
+                && self.session.is_some()
+                && request.headers.get("Session") != self.session.as_deref()
+            {
+                Response::new(500, "Internal Server Error")
             } else {
                 self.answer(&request, &key)
             };
+            if key == "SETUP session"
+                && let Some(session) = &self.session
+            {
+                response
+                    .headers
+                    .push("Session", format!("{session};timeout=60"));
+            }
             let cseq = request.headers.get("CSeq").unwrap_or("0").to_owned();
             response.headers.push("CSeq", cseq);
             response.headers.push("Server", "AirTunes/fake");
