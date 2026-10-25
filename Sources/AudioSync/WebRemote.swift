@@ -303,7 +303,10 @@ final class WebRemote {
         case .setEnabled(let id, let on):
             if let s = speaker(id) { model.setEnabled(s, on, origin: .remote) }
         case .setVolume(let id, let position):
-            if let s = speaker(id) { model.setVolume(s, position) }
+            if let s = speaker(id) {
+                model.setVolume(s, position)
+                if s.tag != .airplay && s.tag != .cast { model.actions.localVolumeSettled(id) }
+            }
         case .setLocalOffset(let id, let ms): model.actions.setLocalOffset(id, ms)
         case .setCastOffset(let id, let ms): model.actions.setCastOffset(id, ms)
         case .setAirPlayDelay(let ms): model.actions.setAirPlayDelay(ms)
