@@ -398,6 +398,31 @@ fn every_pin_asked_for_again_says_why() {
         ]
     );
 
+    // An M4 whose proof doesn't verify is a refusal too.
+    let mut fake = pin_receiver();
+    fake.hap.wrong_m4_proof = true;
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert_eq!(
+        rig.turned_down(),
+        [
+            "the receiver turned the PIN down: an M4 with a proof that didn't check; the PIN is asked for again"
+        ]
+    );
+
+    // A receiver that reads B padded turns down a B that starts with a zero byte.
+    let mut fake = pin_receiver();
+    fake.hap.hash_padded = true;
+    fake.hap.zero_led_b = 1;
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert_eq!(
+        rig.turned_down(),
+        [
+            "the receiver turned the PIN down: error 2 (authentication) in answer to M3, with B or S shorter than 384 bytes (P151); the PIN is asked for again"
+        ]
+    );
+
     // A right PIN that pairs gives no reason.
     let mut rig = PinRig::new(pin_receiver());
     assert_eq!(rig.submit(PIN), Ok(()));

@@ -551,7 +551,7 @@ impl PairSetup {
             } else {
                 ""
             };
-            self.refusal = Some(format!("{how} in answer to M3{short}"));
+            self.refusal = Some(format!("{how}{short}"));
             self.code = None;
             if self.same_code_retried {
                 self.same_code_retried = false;
@@ -652,7 +652,7 @@ impl PairSetup {
         if let Some(code) = reply.get(tlv8::ERROR) {
             let code = code.first().copied().unwrap_or(1);
             if code == 2 && self.stage == SetupStage::M3 {
-                return self.authentication_after_m3("error 2 (authentication)");
+                return self.authentication_after_m3("error 2 (authentication) in answer to M3");
             }
             return self.error_item(code, &reply);
         }
@@ -749,7 +749,7 @@ impl PairSetup {
         let proof = reply.get(tlv8::PROOF).unwrap_or_default();
         let matches: bool = proof.ct_eq(&self.server_proof).into();
         if !matches {
-            return self.authentication_after_m3("an M4 whose proof didn't check");
+            return self.authentication_after_m3("an M4 with a proof that didn't check");
         }
         let Some(identity) = self.identity.clone() else {
             self.stage = SetupStage::Done;

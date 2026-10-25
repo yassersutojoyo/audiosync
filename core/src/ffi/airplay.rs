@@ -1326,8 +1326,10 @@ impl AscAirPlay {
         let (kind, error, unsupported, detail) = match event {
             // Why the prompt comes again: a debug log line only.
             PairingEvent::PinTurnedDown(why) => {
-                let line = SpeakerEvent::Trace(format!("pairing: {why}"));
-                self.queue_event(Pending::Speaker(id, line));
+                if debug_trace_on() {
+                    let line = SpeakerEvent::Trace(format!("pairing: {why}"));
+                    self.queue_event(Pending::Speaker(id, line));
+                }
                 return;
             }
             PairingEvent::PinRequested => (
@@ -7518,7 +7520,7 @@ mod tests {
                 c"1234".as_ptr()
             ));
         }
-        // Turned down, it says why in the debug log before asking again.
+        // Turned down, it says why before asking again, in the debug log only.
         let key = inside(handle).listed[id].device.key.clone();
         for event in [
             PairingEvent::PinTurnedDown("error 2 (authentication) in answer to M3".to_owned()),
@@ -7536,17 +7538,17 @@ mod tests {
             .iter()
             .map(|e| (e.kind, e.id.as_str(), e.detail.as_str()))
             .collect();
-        assert_eq!(
-            lines,
-            [
-                (
-                    AIRPLAY_EVENT_TRACE,
-                    id,
-                    "pairing: error 2 (authentication) in answer to M3"
-                ),
-                (AIRPLAY_EVENT_PIN_NEEDED, id, "")
-            ]
+        let why = (
+            AIRPLAY_EVENT_TRACE,
+            id,
+            "pairing: error 2 (authentication) in answer to M3",
         );
+        let prompt = (AIRPLAY_EVENT_PIN_NEEDED, id, "");
+        if debug_trace_on() {
+            assert_eq!(lines, [why, prompt]);
+        } else {
+            assert_eq!(lines, [prompt]);
+        }
         // SAFETY: as above.
         unsafe {
             asc_airplay_cancel_pairing(handle, c_id.as_ptr());
