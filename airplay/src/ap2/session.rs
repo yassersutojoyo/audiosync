@@ -23,7 +23,7 @@ use crate::latency::ReportedLatency;
 use crate::metadata::{
     Artwork, ArtworkLadder, ArtworkSize, Metadata, MetadataError, MetadataSupport, Queued,
 };
-use crate::rtsp::{Headers, Message, Method, Parser, Request, Response};
+use crate::rtsp::{self, Headers, Message, Method, Parser, Request, Response};
 use crate::secret::Secret;
 use crate::session::{
     CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, TEARDOWN_TIMEOUT, TIMING_SILENCE, UdpSendResult,
@@ -340,6 +340,8 @@ pub struct Ap2Session {
     outputs: VecDeque<Output>,
     /// The session SETUP was answered 200.
     set_up: bool,
+    /// The session SETUP answer's `Session` ID, without its timeout (P25).
+    session_header: Option<String>,
     /// RECORD was answered 200 (P137).
     recorded: bool,
     /// The initial volume went out after the FLUSH answer (P183).
@@ -455,6 +457,7 @@ impl Ap2Session {
             stream_key,
             outputs: VecDeque::new(),
             set_up: false,
+            session_header: None,
             recorded: false,
             startup_volume_sent: false,
             startup_read_due: false,
@@ -1212,6 +1215,7 @@ impl Ap2Session {
         self.late_answers.clear();
         self.auth = None;
         self.set_up = false;
+        self.session_header = None;
         self.metadata_queue.clear();
         self.feedback_due = None;
         self.feedback_wanted = false;
@@ -1372,6 +1376,17 @@ impl Ap2Session {
                 request.body = bodies::session_teardown();
             }
             Kind::PairSetup | Kind::PairVerify | Kind::Record | Kind::Feedback => {}
+        }
+        let carries_session = matches!(
+            request.method,
+            Method::Record
+                | Method::SetParameter
+                | Method::GetParameter
+                | Method::Flush
+                | Method::Teardown
+        );
+        if carries_session && let Some(session) = &self.session_header {
+            request.headers.push("Session", session.clone());
         }
         let mut nonce = None;
         if let (Some(auth), Some(password)) = (&mut self.auth, &self.config.password) {
@@ -1983,6 +1998,11 @@ impl Ap2Session {
             self.receiver_timing_peer = answer.timing_peer_info;
         }
         self.set_up = true;
+        self.session_header = response
+            .headers
+            .get("Session")
+            .and_then(rtsp::session_id)
+            .map(str::to_owned);
         self.state = Ap2State::Starting;
         self.event_port = Some(event_port);
         self.event(Ap2Event::TimingChosen(self.timing));
