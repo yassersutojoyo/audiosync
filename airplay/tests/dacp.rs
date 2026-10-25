@@ -1055,6 +1055,31 @@ fn dacp_events_name_the_speaker() {
     sender.shutdown();
 }
 
+// covers: P191, P194
+#[test]
+fn dacp_refusals_close() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let (_, remote) = play(&sender, &mut events, &receiver, 1);
+    let port = sender.dacp_counters().port();
+    let unknown = (dacp::parse_active_remote(&remote).expect("number") ^ 1).to_string();
+
+    let mut client = Client::connect(LOOPBACK, port);
+    let reply = client.request("/ctrl-int/1/playpause", Some(&unknown));
+    assert_eq!(reply.status, 403);
+    assert_eq!(reply.header("Connection"), Some("close"), "{reply:?}");
+    let _ = client
+        .stream
+        .write_all(&get("/ctrl-int/1/beginff", Some(&remote)));
+    assert!(
+        client.reply().is_none(),
+        "a request after a 403 on the same connection is not answered"
+    );
+    sender.shutdown();
+}
+
 // covers: P194
 #[test]
 fn dacp_limits() {
