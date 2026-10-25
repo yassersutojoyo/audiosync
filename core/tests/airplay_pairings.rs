@@ -182,10 +182,11 @@ fn an_in_memory_store_writes_nothing() {
 #[cfg(unix)]
 #[test]
 fn a_file_others_may_read_is_made_owner_only_and_still_used() {
+    use audiosync_core::airplay_pairings::Access;
     use std::os::unix::fs::PermissionsExt;
     let path = folder("open-to-others").join("airplay-pairings.dat");
     let (mut store, _) = PairingStore::open(path.clone());
-    assert!(!store.tightened());
+    assert_eq!(store.access(), Access::Private);
     store
         .insert("02005E005301", credentials("0123456789ABCDEF", 3))
         .expect("written");
@@ -193,11 +194,40 @@ fn a_file_others_may_read_is_made_owner_only_and_still_used() {
 
     let (store, loaded) = PairingStore::open(path.clone());
     assert_eq!(loaded, Loaded::Receivers(1));
-    assert!(store.tightened(), "the host is told, so it can log it");
+    assert_eq!(store.access(), Access::Tightened);
     let mode = fs::metadata(&path).expect("metadata").permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
 
     let (store, loaded) = PairingStore::open(path);
     assert_eq!(loaded, Loaded::Receivers(1));
-    assert!(!store.tightened(), "an owner-only file is left as it is");
+    assert_eq!(
+        store.access(),
+        Access::Private,
+        "an owner-only file is left as it is"
+    );
+}
+
+// covers: S224
+#[cfg(unix)]
+#[test]
+fn a_symbolic_link_in_the_files_place_is_not_followed() {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = folder("symlink");
+    let target = folder.join("elsewhere.dat");
+    let (mut store, _) = PairingStore::open(target.clone());
+    store
+        .insert("02005E005301", credentials("0123456789ABCDEF", 5))
+        .expect("written");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("mode set");
+    let path = folder.join("airplay-pairings.dat");
+    std::os::unix::fs::symlink(&target, &path).expect("a symbolic link");
+
+    let (store, loaded) = PairingStore::open(path.clone());
+    assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+    assert!(store.is_empty());
+    let mode = fs::metadata(&target)
+        .expect("metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o644, "the link's target is left alone");
 }
