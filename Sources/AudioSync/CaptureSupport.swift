@@ -253,6 +253,12 @@ enum AppTapFollow: Equatable {
         let excluded = Set(found).union([own])
         return excluded == Set(tapped) ? .keep : .retap(excluded.sorted())
     }
+
+    /// The app to name once none of `apps` runs: one that still ran at the
+    /// last look (`ranBefore`), so the notice names the app that quit last.
+    static func quitApp(of apps: [String], ranBefore: [String]) -> String {
+        apps.first ?? ""
+    }
 }
 
 /// Moves an app tap to a new process list (`AppTapFollow.retap`) without

@@ -104,6 +104,11 @@ do {
             && AppTapFollow.decideExcluding(tapped: [3], found: [9, 5], own: 3) == .retap([3, 5, 9])
             && AppTapFollow.decideExcluding(tapped: [3, 5, 9], found: [9], own: 3) == .retap([3, 9]),
           "mix: an all-except tap follows the excluded apps' processes and always leaves AudioSync out")
+    check(AppTapFollow.quitApp(of: [music, safari], ranBefore: [safari]) == safari
+            && AppTapFollow.quitApp(of: [music, safari], ranBefore: [music, safari]) == music
+            && AppTapFollow.quitApp(of: [music, safari], ranBefore: ["com.other"]) == music
+            && AppTapFollow.quitApp(of: [], ranBefore: [safari]).isEmpty,
+          "mix: a mix's lost capture names an app that still ran at the last look, not simply the mix's first app")
 
     let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: music, name: "Music")], inputs: [],
                                      chosen: both, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") })
@@ -5110,8 +5115,9 @@ do {
             && !AppLifecycle.waitsForRecheck(quitWhileStreaming,
                                              source: .mixed(.allExcept, bundleIDs: ["com.apple.TextEdit", "com.apple.Safari"])),
           "mix quit: only an app of an only-these mix quitting while it streams, or that mix's capture losing its apps, waits")
-    func afterLoss(changed: Bool, stopped: Bool, running: Bool) -> AppLifecycle.MixLossStep {
-        AppLifecycle.afterMixLoss(sourceChanged: changed, userStopped: stopped, engineRunning: running)
+    func afterLoss(changed: Bool, stopped: Bool, running: Bool, newSession: Bool = false) -> AppLifecycle.MixLossStep {
+        AppLifecycle.afterMixLoss(sourceChanged: changed, userStopped: stopped, engineRunning: running,
+                                  sessionChanged: newSession)
     }
     check(afterLoss(changed: false, stopped: false, running: false) == .rebuild
             && afterLoss(changed: true, stopped: false, running: false) == .start
@@ -5120,6 +5126,9 @@ do {
             && afterLoss(changed: true, stopped: false, running: true) == .none
             && afterLoss(changed: false, stopped: false, running: true) == .none,
           "mix quit: after a mix's capture loss, a source picked in the wait starts, a stop finishes cleanly, else the mix rebuilds")
+    check(afterLoss(changed: false, stopped: false, running: false, newSession: true) == .none
+            && afterLoss(changed: true, stopped: true, running: false, newSession: true) == .none,
+          "mix quit: a loss's wait ends without acting once streaming was started again within it, so a later loss keeps its own wait")
     // After a switch the source is the whole system; after a stop nothing streams.
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",

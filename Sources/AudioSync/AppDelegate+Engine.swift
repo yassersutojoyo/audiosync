@@ -179,7 +179,7 @@ extension AppDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + AppLifecycle.mixQuitRecheck) { [weak self] in
             guard let self else { return }
             switch AppLifecycle.afterMixLoss(sourceChanged: audioSource != mix, userStopped: userStopped,
-                                             engineRunning: engine.isRunning) {
+                                             engineRunning: engine.isRunning, sessionChanged: false) {
             case .none: return
             case .rebuild: startEngine(origin: .automatic, rebuild: true)
             case .start: startEngine(origin: .automatic)

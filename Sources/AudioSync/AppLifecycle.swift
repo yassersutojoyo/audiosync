@@ -134,7 +134,8 @@ enum AppLifecycle {
         case stop
     }
 
-    static func afterMixLoss(sourceChanged: Bool, userStopped: Bool, engineRunning: Bool) -> MixLossStep {
+    static func afterMixLoss(sourceChanged: Bool, userStopped: Bool, engineRunning: Bool,
+                             sessionChanged: Bool) -> MixLossStep {
         if engineRunning { return .none }
         if userStopped { return .stop }
         return sourceChanged ? .start : .rebuild
