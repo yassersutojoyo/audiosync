@@ -232,12 +232,12 @@ extension AppDelegate {
 
     func setSource(_ source: AudioSource) {
         let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
+        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else { return }
         microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
         let old = audioSource
         audioSource = source
         updateNowPlayingTarget()
-        clearNotices([Notice.source, Notice.capture])   // about the old source
         // The tap is built for one source; switching rebuilds only it, under
         // the speakers (S141).
         autoStartFailed = false
@@ -257,11 +257,11 @@ extension AppDelegate {
     func setInputPair(_ index: Int) {
         guard case .input(let uid) = audioSource else { return }
         let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
+        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else { return }
         microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
         let old = currentInputPair
         inputPairs[uid] = index == 0 ? nil : index
-        clearNotices([Notice.source, Notice.capture])   // about the old pair
         autoStartFailed = false
         if change == .restart { startEngine(origin: .user, switching: .inputPair(uid: uid, from: old, to: index)) }
         pushModel()
