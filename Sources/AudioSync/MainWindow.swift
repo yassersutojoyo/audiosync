@@ -1451,9 +1451,11 @@ private struct MenuAnchor: NSViewRepresentable {
 /// A main-window column that scrolls when the window is too short for it.
 /// Cards scrolling under the header fade out instead of meeting a hard edge;
 /// the fade lies in the gap above the column and in the window's bottom margin.
+/// An edge fades only while content lies past it.
 private struct FadingScroll<Content: View>: View {
     let onBlankTap: () -> Void
     let content: Content
+    @StateObject private var edges = ScrollEdgeState()
 
     init(onBlankTap: @escaping () -> Void, @ViewBuilder content: () -> Content) {
         self.onBlankTap = onBlankTap
@@ -1472,28 +1474,51 @@ private struct FadingScroll<Content: View>: View {
                     .padding(.vertical, Self.fade)
                     // Blank space under a short column is outside every control too.
                     .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
+                    // The scroll geometry callback may not run before the first
+                    // scroll, so a column already too long at open is seeded here.
+                    .background(GeometryReader { column in
+                        Color.clear.onAppear {
+                            edges.fades = ScrollEdgeFades.of(contentHeight: column.size.height, visibleTop: 0,
+                                                             visibleHeight: viewport.size.height, fade: Self.fade)
+                        }
+                    })
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onBlankTap)
             }
             // The faded edges show there is more; a scroller would cover the
             // cards' right edge and appear on one column only.
             .scrollIndicators(.never)
+            .scrollBounceBehavior(.basedOnSize)
+            .onScrollGeometryChange(for: ScrollEdgeFades.self) { geometry in
+                ScrollEdgeFades.of(contentHeight: geometry.contentSize.height,
+                                   visibleTop: geometry.visibleRect.minY,
+                                   visibleHeight: geometry.visibleRect.height, fade: Self.fade)
+            } action: { _, fades in
+                edges.fades = fades
+            }
         }
-        .mask(ScrollEdgeFade(height: Self.fade))
+        .mask(ScrollEdgeFade(height: Self.fade, fades: edges.fades))
         .padding(.vertical, -Self.fade)
     }
 }
 
+private final class ScrollEdgeState: ObservableObject {
+    @Published var fades = ScrollEdgeFades.none
+}
+
 /// The scroll list's mask: opaque, fading out over `height` at the top and
-/// the bottom.
+/// the bottom as strongly as `fades` says.
 private struct ScrollEdgeFade: View {
     let height: CGFloat
+    let fades: ScrollEdgeFades
 
     var body: some View {
         VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: height)
+            LinearGradient(colors: [.black.opacity(1 - fades.top), .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: height)
             Color.black
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: height)
+            LinearGradient(colors: [.black, .black.opacity(1 - fades.bottom)], startPoint: .top, endPoint: .bottom)
+                .frame(height: height)
         }
     }
 }
