@@ -4837,8 +4837,8 @@ mod tests {
     use super::*;
     use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{
-        APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, airplay2_every_time_tv, airplay2_tv, device,
-        id_of,
+        APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, airplay2_device, airplay2_every_time_tv,
+        airplay2_tv, device, id_of,
     };
     use crate::audio::capture::{CaptureTarget, LoopbackMode};
     use crate::audio::cast::tests::{
@@ -7162,6 +7162,95 @@ mod tests {
                 .iter()
                 .any(|call| matches!(call, Call::Remove(_))),
             "a session under way isn't ended for it"
+        );
+    }
+
+    /// [`airplay2_adapter`] with Study, which plays over AirPlay 2 with no
+    /// code, switched on by auto-connect as it appeared, not by hand.
+    fn auto_connected_study() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let study = airplay2_device(11, "Study", false);
+        fake.appear(&study);
+        adapter.poll();
+        adapter.set_auto_connect(&ap(&study), true);
+        fake.gone(&study);
+        adapter.poll();
+        fake.appear(&study);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&study)).unwrap().enabled);
+        fake.take_calls();
+        (adapter, fake, study)
+    }
+
+    #[test]
+    fn a_listed_speaker_on_by_itself_goes_off_once_it_asks_every_time() {
+        let (mut adapter, fake, study) = auto_connected_study();
+        let id = ap(&study);
+
+        fake.change(&airplay2_every_time_tv(11, "Study"));
+        adapter.poll();
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(row.code_every_time);
+        assert!(!row.enabled, "it waits for the user");
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_))),
+            "no code is asked for by itself"
+        );
+    }
+
+    #[test]
+    fn a_listed_speaker_on_by_itself_that_plays_keeps_its_session_when_it_asks_every_time() {
+        let (mut adapter, fake, study) = auto_connected_study();
+        let id = ap(&study);
+        fake.state(&study, AirPlayState::Playing);
+        adapter.poll();
+        fake.take_calls();
+
+        fake.change(&airplay2_every_time_tv(11, "Study"));
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Remove(_))),
+            "a session that plays isn't ended for it"
+        );
+    }
+
+    #[test]
+    fn no_session_starts_for_a_speaker_whose_pin_pairing_runs() {
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        let id = ap(&loft);
+        adapter.set_auto_connect(&id, true);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.take_calls();
+
+        // It drops out of view and comes back listed as able to play, so
+        // auto-connect switches it on.
+        fake.gone(&loft);
+        adapter.poll();
+        fake.appear(&airplay2_device(9, "Loft", false));
+        adapter.poll();
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Add { .. } | Call::StartPairing(_))),
+            "a session would pair anew, and the TV would show a new code"
+        );
+        assert_eq!(
+            adapter
+                .snapshot()
+                .pin_prompt
+                .map(|prompt| prompt.speaker_id),
+            Some(id)
         );
     }
 
