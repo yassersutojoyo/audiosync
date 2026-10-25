@@ -1233,7 +1233,7 @@ fn credential_events(events: &Events, key: &DeviceKey) -> Vec<SpeakerEvent> {
 /// receiver's keys: each one only marks the speaker as needing a pairing.
 #[derive(Debug, Clone, Copy)]
 enum Impostor {
-    RefusesVerify,
+    RefusesVerify(u16),
     SignsWithItsOwnKey,
     AsksCodeEveryTime,
 }
@@ -1245,7 +1245,8 @@ enum Impostor {
 fn an_unauthenticated_rejection_keeps_the_stored_credentials() {
     let _serial = serial();
     for (id, impostor) in [
-        (58, Impostor::RefusesVerify),
+        (58, Impostor::RefusesVerify(403)),
+        (61, Impostor::RefusesVerify(470)),
         (59, Impostor::SignsWithItsOwnKey),
         (60, Impostor::AsksCodeEveryTime),
     ] {
@@ -1267,10 +1268,10 @@ fn an_unauthenticated_rejection_keeps_the_stored_credentials() {
         {
             let mut fake = server.fake();
             match impostor {
-                Impostor::RefusesVerify => fake
+                Impostor::RefusesVerify(status) => fake
                     .hap
                     .answers
-                    .push((("/pair-verify", 1), Answer::Status(403))),
+                    .push((("/pair-verify", 1), Answer::Status(status))),
                 Impostor::SignsWithItsOwnKey => fake.hap.seed = [0x77; 32],
                 Impostor::AsksCodeEveryTime => {
                     fake.info_body = common::ap2::plist(common::ap2::dict(&[(
