@@ -799,6 +799,12 @@ do {
           "eq curves: a picked preset shows as the preset beside a saved curve with its gains")
     flatish.pick(.saved(1))
     check(flatish.shownSavedIndex == 1, "eq curves: picking that saved curve shows it again")
+    var moved = flatish.settings
+    moved.gains[0] = 3
+    flatish.set(moved)
+    check(flatish.shownSavedIndex == nil && flatish.shownCurve == nil,
+          "eq curves: moving a band off the picked saved curve shows Custom")
+    flatish.pick(.saved(1))
     flatish.reset()
     check(flatish.shownCurve == .preset(.flat), "eq curves: Reset shows Flat beside a saved curve with its gains")
     flatish.deleteCurve(0)

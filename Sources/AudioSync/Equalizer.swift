@@ -177,7 +177,8 @@ final class EqualizerModel: ObservableObject {
     }
 
     /// The curve last picked, saved or reset to, so the picker tells a preset
-    /// from a saved curve with the same gains.
+    /// from a saved curve with the same gains. Not stored on purpose: at launch
+    /// `matching` picks from the gains alone.
     @Published private(set) var chosen: Equalizer.CurveMatch?
 
     var shownCurve: Equalizer.CurveMatch? { Equalizer.matching(settings.gains, saved: curves, chosen: chosen) }
