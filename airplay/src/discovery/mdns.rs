@@ -20,10 +20,12 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{
+    DaemonEvent, RRType, ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo,
+};
 
 use super::{BrowseEvent, Browser, ScopedAddr, ServiceKind, ServiceRecord};
-use crate::dacp::{AdvertiseError, DacpAdvertiser, DacpRecord, SERVICE_TYPE};
+use crate::dacp::{AdvertiseError, DacpAdvertiser, DacpRecord, NameConflict, SERVICE_TYPE};
 
 /// The live browser could not start.
 #[derive(Debug)]
@@ -284,9 +286,15 @@ pub fn instance_name(fullname: &str, kind: ServiceKind) -> Option<String> {
 #[derive(Default)]
 pub struct MdnsAdvertiser {
     daemon: Option<ServiceDaemon>,
+    /// The daemon's own events, read for its renames after a conflict.
+    monitor: Option<mdns_sd::Receiver<DaemonEvent>>,
     /// The registered record's full name.
     registered: Option<String>,
 }
+
+/// Monitor events read per call: the daemon keeps sending while they are
+/// read, so an unbounded loop could never end.
+const MONITOR_READS: usize = 100;
 
 impl fmt::Debug for MdnsAdvertiser {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -308,7 +316,9 @@ impl DacpAdvertiser for MdnsAdvertiser {
         let failed = |error: mdns_sd::Error| AdvertiseError(error.to_string());
         if self.daemon.is_none() {
             DAEMONS_STARTED.fetch_add(1, Ordering::SeqCst);
-            self.daemon = Some(ServiceDaemon::new().map_err(failed)?);
+            let daemon = ServiceDaemon::new().map_err(failed)?;
+            self.monitor = daemon.monitor().ok();
+            self.daemon = Some(daemon);
         }
         let Some(daemon) = self.daemon.as_ref() else {
             return Err(AdvertiseError("no daemon".to_owned()));
@@ -346,6 +356,23 @@ impl DacpAdvertiser for MdnsAdvertiser {
         if let (Some(daemon), Some(name)) = (self.daemon.as_ref(), self.registered.take()) {
             let _ = daemon.unregister(&name);
         }
+    }
+
+    fn conflicts(&mut self) -> Vec<NameConflict> {
+        let Some(monitor) = self.monitor.as_ref() else {
+            return Vec::new();
+        };
+        monitor
+            .try_iter()
+            .take(MONITOR_READS)
+            .filter_map(|event| match event {
+                DaemonEvent::NameChange(change) => Some(NameConflict {
+                    host: matches!(change.rr_type, RRType::A | RRType::AAAA),
+                    interface: change.intf_name,
+                }),
+                _ => None,
+            })
+            .collect()
     }
 }
 
