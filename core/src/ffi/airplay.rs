@@ -171,8 +171,8 @@ pub const AIRPLAY_FLAG_BUSY: u32 = 64;
 pub const AIRPLAY_FLAG_AIRPLAY2: u32 = 128;
 /// The AirPlay 2 switch is on and the sender reaches it over AirPlay 2.
 pub const AIRPLAY_FLAG_OVER_AIRPLAY2: u32 = 256;
-/// Credentials are kept for it (a PIN pairing's, either path), which
-/// [`asc_airplay_forget_pairing`] drops.
+/// Credentials are kept for it (a PIN pairing's, either path), and no
+/// answer turned them down this run (P154).
 pub const AIRPLAY_FLAG_PAIRED: u32 = 512;
 /// A stereo pair or home theater group (P176): its ID is `pair:<tsid>` or
 /// `theater:<group>`, and the host adds it like a speaker. Listed only with
@@ -185,6 +185,9 @@ pub const AIRPLAY_FLAG_INCOMPLETE: u32 = 2048;
 /// The sender reaches it over AirPlay 2 and it asks for a code every time
 /// it connects (P61): auto-connect leaves it off.
 pub const AIRPLAY_FLAG_CODE_EVERY_TIME: u32 = 4096;
+/// Credentials are stored for it, also ones an answer turned down (P154),
+/// which [`asc_airplay_forget_pairing`] drops.
+pub const AIRPLAY_FLAG_CREDENTIALS_KEPT: u32 = 8192;
 
 /// What a sender event reports ([`AscAirPlayEvent::kind`]): a speaker's
 /// state changed ([`AscAirPlayEvent::state`]).
@@ -1555,6 +1558,9 @@ impl AscAirPlay {
                 };
                 if paired {
                     flags |= AIRPLAY_FLAG_PAIRED;
+                }
+                if self.store.contains(&id) || self.identity.get(&id).is_some() {
+                    flags |= AIRPLAY_FLAG_CREDENTIALS_KEPT;
                 }
                 if self.airplay2
                     && let Some(id) = &info.target
@@ -6182,6 +6188,11 @@ mod tests {
             "it asks for its PIN"
         );
         assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
+        assert_ne!(
+            report.flags & AIRPLAY_FLAG_CREDENTIALS_KEPT,
+            0,
+            "Forget Pairing stays on offer"
+        );
         assert_eq!(inside(handle).identity.get(&id), Some(&first));
         let (on_disk, _) = IdentityStore::open(path.clone());
         assert_eq!(on_disk.get(&id), Some(&first), "still on disk");

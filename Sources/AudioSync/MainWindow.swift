@@ -972,7 +972,7 @@ struct SpeakerRow: View {
             if cast.removable { Button(t.castRemove) { model.actions.removeCastAddress(speaker.id) } }
         } else {
             autoConnectToggle(t)
-            if speaker.paired {
+            if speaker.paired || speaker.holdsCredentials {
                 Button(t.forgetPairing) { model.actions.forgetAirPlayPairing(speaker.id) }
                     .help(t.forgetPairingHelp)
             } else if speaker.holdsPassword {

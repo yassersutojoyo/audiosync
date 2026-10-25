@@ -2336,7 +2336,11 @@ do {
         check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .startPairing("B2")
                 && m.stages["B2"] == .pairing(afterWrongPin: false),
               "native pairing: within the user's attempt, a refused stored pairing pairs again without being forgotten first, though still listed as paired")
-        m.apply(.changed(receiver("B2", "B2", .needsPin)))   // the core lists the turned-down pairing as needing its PIN
+        var turnedDown = receiver("B2", "B2", .needsPin)   // the core lists the turned-down pairing as needing its PIN
+        turnedDown.credentialsKept = true
+        m.apply(.changed(turnedDown))
+        check(!m.isPaired("B2") && m.keepsCredentials("B2"),
+              "native pairing: a stored pairing it turned down still offers Forget Pairing")
         m.removed("B2")   // it leaves the sender while it pairs
         check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,
               "native pairing: while it pairs again, the speaker waits instead of going off")

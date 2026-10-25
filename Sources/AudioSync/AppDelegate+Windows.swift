@@ -420,6 +420,7 @@ extension AppDelegate {
                                     airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
                                     waitingForAirPlay2: receiver.map { native?.isWaiting($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
+                                    holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,
                                     airPlayTarget: receiver.flatMap { native?.targetRow($0) })
         }

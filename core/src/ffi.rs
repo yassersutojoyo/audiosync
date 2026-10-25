@@ -983,6 +983,10 @@ mod tests {
                 "ASC_AIRPLAY_FLAG_CODE_EVERY_TIME",
                 AIRPLAY_FLAG_CODE_EVERY_TIME.to_string(),
             ),
+            (
+                "ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT",
+                AIRPLAY_FLAG_CREDENTIALS_KEPT.to_string(),
+            ),
             ("ASC_AIRPLAY_FLAG_RAOP", AIRPLAY_FLAG_RAOP.to_string()),
             ("ASC_AIRPLAY_FLAG_AIRPLAY", AIRPLAY_FLAG_AIRPLAY.to_string()),
             (

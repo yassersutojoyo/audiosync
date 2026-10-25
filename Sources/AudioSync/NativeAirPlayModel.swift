@@ -465,9 +465,13 @@ struct NativeAirPlayModel {
         return receivers[id]?.overAirPlay2 == true
     }
 
-    /// Whether credentials are kept for the listed receiver `id`: its row
-    /// offers Forget Pairing.
+    /// Whether credentials no answer turned down are kept for the listed
+    /// receiver `id`.
     func isPaired(_ id: String) -> Bool { receivers[id]?.paired == true }
+
+    /// Whether credentials are stored for the listed receiver `id`, also ones
+    /// it turned down (P154): its row offers Forget Pairing.
+    func keepsCredentials(_ id: String) -> Bool { receivers[id]?.credentialsKept == true }
 
     /// Whether the sender holds a password the user typed for the listed
     /// receiver `id` this run: its row offers Forget Password.

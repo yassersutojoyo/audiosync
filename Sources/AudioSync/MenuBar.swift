@@ -35,6 +35,9 @@ final class AppModel: ObservableObject {
         var waitingForAirPlay2 = false
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
+        /// An AirPlay speaker with stored credentials, also ones it turned
+        /// down: Forget Pairing drops them.
+        var holdsCredentials = false
         /// An AirPlay speaker whose password AudioSync holds until it quits.
         var holdsPassword = false
         /// A stereo pair or home theater group: its kind and members (P176).
