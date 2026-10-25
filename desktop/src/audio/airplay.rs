@@ -61,6 +61,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -699,6 +700,22 @@ const VOLUME_TOLERANCE_DB: f64 = 0.5;
 /// press later can land that close too (S271).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
+/// The address a receiver announces first, AirPlay service before RAOP.
+fn first_address(device: &Device) -> Option<IpAddr> {
+    device
+        .airplay
+        .iter()
+        .chain(&device.raop)
+        .flat_map(|endpoint| &endpoint.addresses)
+        .map(|address| address.ip)
+        .next()
+}
+
+/// The most receivers listed under one announced address, a bridge that
+/// fronts many speakers from one host included. The announcer picks that
+/// address, so this bounds one address, not one host.
+const MAX_LISTED_PER_ADDRESS: usize = 64;
+
 /// The volume reads of one row in the sender.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct VolumeRead {
@@ -969,6 +986,9 @@ pub struct AirPlaySpeakers {
     gone_targets: BTreeSet<String>,
     /// The last name of every speaker seen, for logs and notices.
     names: BTreeMap<String, String>,
+    /// The addresses that announced more receivers than
+    /// [`MAX_LISTED_PER_ADDRESS`], each logged once.
+    crowded: BTreeSet<IpAddr>,
     /// The credentials of the paired Apple TVs.
     store: PairingStore,
     /// The key of every speaker the sender paired on AirPlay 2, by speaker
@@ -1099,6 +1119,7 @@ impl AirPlaySpeakers {
             target_missing: BTreeMap::new(),
             gone_targets: BTreeSet::new(),
             names: BTreeMap::new(),
+            crowded: BTreeSet::new(),
             store,
             homekit_keys: BTreeMap::new(),
             pairings: BTreeMap::new(),
@@ -3245,6 +3266,19 @@ impl AirPlaySpeakers {
         match event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 let id = speaker_id(&info.device.key);
+                if !self.listed.contains_key(&id)
+                    && let Some(address) = first_address(&info.device)
+                    && self.listed_at(address) >= MAX_LISTED_PER_ADDRESS
+                {
+                    if self.crowded.insert(address) {
+                        self.log.log(|| {
+                            format!(
+                                "AirPlay receivers at {address} past the first {MAX_LISTED_PER_ADDRESS} not listed"
+                            )
+                        });
+                    }
+                    return;
+                }
                 let availability = self.availability_of(&id, &info);
                 let appeared = !self.listed.contains_key(&id);
                 self.names.insert(id.clone(), info.device.name.clone());
@@ -3279,6 +3313,7 @@ impl AirPlaySpeakers {
                     self.log
                         .log(|| format!("AirPlay receiver gone: {}", self.label(&id)));
                 }
+                self.forget_name_unless_used(&id);
             }
             // Listed only while the AirPlay 2 switch is on, as on the Mac.
             ReceiverEvent::Target(_) if !self.link.airplay2() => {}
@@ -3330,11 +3365,49 @@ impl AirPlaySpeakers {
                             )
                         });
                     }
-                } else if self.targets.remove(&id).is_some() {
+                } else if let Some(target) = self.targets.remove(&id) {
                     self.log
                         .log(|| format!("AirPlay target gone: {}", self.label(&id)));
+                    self.forget_name_unless_used(&id);
+                    for member in &target.members {
+                        self.forget_name_unless_used(&speaker_id(&member.key));
+                    }
                 }
             }
+        }
+    }
+
+    /// How many listed receivers announce `address` first.
+    fn listed_at(&self, address: IpAddr) -> usize {
+        self.listed
+            .values()
+            .filter(|listed| first_address(listed.device()) == Some(address))
+            .count()
+    }
+
+    /// Drops the name of a speaker or target that left discovery, unless
+    /// a setting, session, prompt, pairing, zone or target still names it:
+    /// otherwise every record a LAN host announces would stay until quit.
+    fn forget_name_unless_used(&mut self, id: &str) {
+        let used = self.listed.contains_key(id)
+            || self.settings.contains_key(id)
+            || self.added.contains_key(id)
+            || self.added_target_of(id).is_some()
+            || self.targets.contains_key(id)
+            || self.targets.values().any(|target| {
+                target
+                    .members
+                    .iter()
+                    .any(|member| speaker_id(&member.key) == id)
+            })
+            || self.pairings.contains_key(id)
+            || self.ending.contains(id)
+            || self.password_asks.contains_key(id)
+            || self.passwords.contains_key(id)
+            || self.homekit_keys.contains_key(id)
+            || self.zones.contains_key(id);
+        if !used {
+            self.names.remove(id);
         }
     }
 
@@ -4321,6 +4394,68 @@ pub mod tests {
         fake.gone(&kitchen);
         airplay.poll();
         assert_eq!(airplay.speakers().len(), 1);
+    }
+
+    #[test]
+    fn a_gone_speaker_keeps_its_name_only_while_something_refers_to_it() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let forged: Vec<Device> = (1..=50)
+            .map(|n| device(100 + n, &format!("Forged {n}"), OPEN_TXT))
+            .collect();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        for speaker in forged.iter().chain([&kitchen]) {
+            fake.appear(speaker);
+        }
+        airplay.poll();
+        airplay.set_delay(&id_of(&kitchen), 40.0);
+        for speaker in forged.iter().chain([&kitchen]) {
+            fake.gone(speaker);
+        }
+        airplay.poll();
+        assert!(
+            forged
+                .iter()
+                .all(|speaker| airplay.listed_name(&id_of(speaker)).is_none())
+        );
+        assert_eq!(airplay.listed_name(&id_of(&kitchen)), Some("Kitchen"));
+    }
+
+    #[test]
+    fn one_address_lists_at_most_its_share_of_speakers() {
+        let path = crate::debug_log::test_dir("airplay-crowded-address").join("log.txt");
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
+        let flood = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66));
+        let announced: Vec<Device> = (1..=MAX_LISTED_PER_ADDRESS as u8 + 6)
+            .map(|n| device_at(n, &format!("Forged {n}"), OPEN_TXT, flood, 7000))
+            .collect();
+        for speaker in &announced {
+            fake.appear(speaker);
+        }
+        let kitchen = device(200, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        airplay.poll();
+        let listed = airplay.speakers();
+        assert_eq!(listed.len(), MAX_LISTED_PER_ADDRESS + 1);
+        assert!(listed.iter().any(|speaker| speaker.name == "Kitchen"));
+        // A listed one that changes keeps its row; the unlisted ones that
+        // announce again stay out and log nothing new.
+        fake.change(&device_at(1, "Renamed", OPEN_TXT, flood, 7000));
+        for speaker in &announced[MAX_LISTED_PER_ADDRESS..] {
+            fake.change(speaker);
+        }
+        airplay.poll();
+        let listed = airplay.speakers();
+        assert_eq!(listed.len(), MAX_LISTED_PER_ADDRESS + 1);
+        assert!(listed.iter().any(|speaker| speaker.name == "Renamed"));
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let crowded = crate::debug_log::read_messages(&path)
+            .iter()
+            .filter(|message| message.contains("192.0.2.66 past the first"))
+            .count();
+        assert_eq!(crowded, 1);
     }
 
     /// A failed pairing, wrong PIN or not.
