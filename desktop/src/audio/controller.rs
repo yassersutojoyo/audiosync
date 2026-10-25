@@ -346,6 +346,14 @@ struct Playing<R> {
     handle: R,
 }
 
+/// A running session's source, and for an input device the channel pair it
+/// captured, kept while a switch away from it starts.
+#[derive(Clone)]
+struct SwitchFrom {
+    source: SourceId,
+    pair: Option<(String, u16)>,
+}
+
 /// Outputs asked to fade out, waiting for their devices to play the fade
 /// before they are dropped (S185, S186): those of a session that ended, with
 /// its capture and ring, which they still read until then, or those switched
@@ -431,6 +439,9 @@ pub struct Controller<D: Driver> {
     /// A start that waits for the last session's outputs to fade out: the
     /// first poll after they have faded starts it (S186).
     next_start: Option<SourceId>,
+    /// While a source switch waits in `next_start`, what the last session
+    /// played: a new source that can't start gives way to it (S141).
+    switch_from: Option<SwitchFrom>,
     /// Polls left before `next_start` restarts a capture that was lost
     /// ([`RESTART_DELAY_POLLS`]); `None` when it isn't a restart.
     restart_wait: Option<u32>,
@@ -513,6 +524,7 @@ impl<D: Driver> Controller<D> {
             waiting_store: None,
             retiring: Vec::new(),
             next_start: None,
+            switch_from: None,
             restart_wait: None,
             restart_tries_left: 0,
             quit_watch: SourceQuitWatch::default(),
@@ -1602,6 +1614,7 @@ impl<D: Driver> Controller<D> {
             return;
         };
         let restart = self.restart_wait.take().is_some();
+        let from = self.switch_from.take();
         match self.start_rebuilt(&source) {
             Ok(()) => {
                 if restart {
@@ -1630,11 +1643,97 @@ impl<D: Driver> Controller<D> {
                         format!("the start failed: {error}")
                     }
                 });
+                if let Some(from) = from
+                    && self.start_old_source(from, &error, true)
+                {
+                    self.follow_device_volumes();
+                    return;
+                }
                 self.airplay_streaming(false);
                 self.release_busy();
                 self.pending.push(BackendEvent::Stopped {
                     reason: StopReason::CaptureFailed(error),
                 });
+            }
+        }
+    }
+
+    /// What the running session plays, for a switch away from it; while a
+    /// switch waits, what the session before it played, since the waiting
+    /// source never played; while an old source that a failed switch gave
+    /// way to waits for the fade, that source. Nothing while a lost capture
+    /// waits to restart.
+    fn switch_origin(&self) -> Option<SwitchFrom> {
+        let Some(session) = &self.session else {
+            if self.switch_from.is_some() {
+                return self.switch_from.clone();
+            }
+            if self.restart_wait.is_some() {
+                return None;
+            }
+            return self.next_start.as_ref().map(|source| {
+                let pair = match source {
+                    SourceId::Input { endpoint_id } => Some((
+                        endpoint_id.clone(),
+                        self.input_pairs.get(endpoint_id).copied().unwrap_or(0),
+                    )),
+                    _ => None,
+                };
+                SwitchFrom {
+                    source: source.clone(),
+                    pair,
+                }
+            });
+        };
+        let pair = match &session.target {
+            CaptureTarget::Input { endpoint_id, pair } => Some((endpoint_id.clone(), *pair)),
+            CaptureTarget::Loopback(_) | CaptureTarget::Mix(_) => None,
+        };
+        Some(SwitchFrom {
+            source: session.source.clone(),
+            pair,
+        })
+    }
+
+    /// Starts the source the last session played again, on the channel pair
+    /// it played, after `error` kept the new one from starting (S141); the
+    /// AirPlay and Google Cast speakers never left the stream. `faded` says
+    /// whether the old outputs are done fading, so it can start at once.
+    /// Returns whether it started; if not, the new pair stays stored.
+    fn start_old_source(&mut self, from: SwitchFrom, error: &BackendError, faded: bool) -> bool {
+        let new_pair = from.pair.as_ref().map(|(endpoint_id, _)| {
+            let pair = self.input_pairs.get(endpoint_id).copied().unwrap_or(0);
+            (endpoint_id.clone(), pair)
+        });
+        if let Some((endpoint_id, pair)) = &from.pair {
+            self.set_input_pair(endpoint_id, *pair);
+        }
+        let started = if faded {
+            self.start_session(&from.source)
+        } else {
+            self.begin_session(&from.source)
+        };
+        match started {
+            Ok(()) => {
+                self.log.log(|| {
+                    format!(
+                        "the new source couldn't start, so {} plays again; the AirPlay and Google \
+                         Cast speakers stayed in the stream",
+                        describe_source(&from.source)
+                    )
+                });
+                self.pending.push(BackendEvent::SwitchFailed {
+                    error: error.clone(),
+                });
+                true
+            }
+            Err(again) => {
+                self.log
+                    .log(|| format!("the source before it couldn't start again either: {again}"));
+                if let Some((endpoint_id, pair)) = new_pair {
+                    self.set_input_pair(&endpoint_id, pair);
+                }
+                false
             }
         }
     }
@@ -2072,15 +2171,36 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn start(&mut self, source: &SourceId) -> Result<(), BackendError> {
         self.quit_watch.source_picked();
+        let from = self.switch_origin();
+        self.switch_from = None;
         self.end_session();
         self.log
             .log(|| format!("starting: capturing {}", describe_source(source)));
-        let started = self.begin_session(source).inspect_err(|error| {
-            self.log.log(|| format!("the start failed: {error}"));
-        });
+        let started = match self.begin_session(source) {
+            Ok(()) => {
+                if self.next_start.is_some() {
+                    self.switch_from = from;
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.log.log(|| format!("the start failed: {error}"));
+                if let Some(from) = from
+                    && self.start_old_source(from, &error, false)
+                {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        };
         // Outputs that couldn't start were turned off.
         self.follow_device_volumes();
         started
+    }
+
+    fn switch_waits(&self) -> bool {
+        self.switch_from.is_some()
     }
 
     fn stop(&mut self) {
@@ -2088,6 +2208,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.log.log(|| "stopping".to_owned());
         }
         self.next_start = None;
+        self.switch_from = None;
         self.restart_wait = None;
         self.end_session();
         self.airplay_streaming(false);
@@ -3218,6 +3339,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::SwitchedToSystem => {
             "the captured app quit: the whole system is the source now".to_owned()
         }
+        BackendEvent::SwitchFailed { error } => {
+            format!("the new source couldn't start ({error}): the one before it plays again")
+        }
         BackendEvent::HeardTwice { paths } if paths.is_empty() => {
             "the source is heard only through AudioSync again".to_owned()
         }
@@ -3635,13 +3759,28 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         assert_eq!(backend.running_source(), Some(app.clone()));
 
-        // A source that can't be captured is refused at once; one whose
-        // capture fails when it starts at the poll stops with that reason.
+        // A source that can't be captured gives way at once to the one that
+        // played, which starts once the old outputs faded (S141); another
+        // pick during that fade that fails at the poll gives way to it too.
         backend.driver().hold_fades(true);
-        assert_eq!(
-            backend.start(&SourceId::App { root_pid: 4321 }),
-            Err(BackendError::SourceGone)
-        );
+        backend.start(&SourceId::App { root_pid: 4321 }).unwrap();
+        assert_eq!(backend.running_source(), Some(app.clone()));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.refuse_next_capture(BackendError::DeviceGone);
+        backend.driver().hold_fades(false);
+        let events = backend.poll();
+        assert!(events.contains(&BackendEvent::SwitchFailed {
+            error: BackendError::SourceGone,
+        }));
+        assert!(events.contains(&BackendEvent::SwitchFailed {
+            error: BackendError::DeviceGone,
+        }));
+        assert_eq!(backend.running_source(), Some(app.clone()));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+
+        // Only when the old source can't start again either does streaming
+        // stop, with the new one's reason.
+        backend.driver().hold_fades(true);
         backend.start(&SourceId::WholeSystem).unwrap();
         backend.refuse_captures(Some(BackendError::DeviceGone));
         backend.driver().hold_fades(false);

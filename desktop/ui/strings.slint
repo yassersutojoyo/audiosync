@@ -537,6 +537,12 @@ export global Strings {
         return @tr("{} quit, so AudioSync switched to All System Audio.", source);
     }
 
+    // A source or channel pair picked while streaming couldn't start, so the
+    // one before it plays on: both as the source picker names them.
+    public pure function notice-switch-failed(new: string, old: string) -> string {
+        return @tr("Couldn't start {}, still on {}.", new, old);
+    }
+
     // Streaming was turned on while the chosen app wasn't running.
     public pure function notice-source-not-running(source: string) -> string {
         return @tr("{} is not running. Open it first, or pick another source.", source);
@@ -916,6 +922,9 @@ export global Strings {
         }
         if kind == NoticeKind.source-quit || kind == NoticeKind.source-switched {
             return @tr("{} quit", name);
+        }
+        if kind == NoticeKind.switch-failed {
+            return @tr("{} didn't start", name);
         }
         if kind == NoticeKind.source-not-running {
             return @tr("{} not running", name);

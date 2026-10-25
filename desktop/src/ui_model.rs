@@ -470,6 +470,19 @@ pub enum SourceName {
     AllAppsExcept(Vec<String>),
 }
 
+/// What a source switch that couldn't start names: a source as the picker
+/// shows it, or an input device's channel pair.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SwitchName {
+    System,
+    Source(SourceName),
+    /// Channels numbered from 1; the same one twice for a lone channel.
+    Channels {
+        first: u16,
+        last: u16,
+    },
+}
+
 /// What a notice says. The UI words it (the notice texts in
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -485,6 +498,9 @@ pub enum NoticeMessage {
     /// The app being captured quit, so streaming went on with the whole
     /// system (spec S227).
     SourceSwitched { source: String },
+    /// A source or channel pair picked while streaming couldn't start, so
+    /// the one before it plays on, to the same speakers (spec S141).
+    SwitchFailed { new: SwitchName, old: SwitchName },
     /// The chosen app isn't running, so streaming didn't start.
     SourceNotRunning { source: String },
     /// Capturing the chosen app would capture AudioSync's own sound too, so
