@@ -7,6 +7,7 @@
 mod common;
 
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -304,30 +305,34 @@ fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped
 }
 
 // Part of P184 with S291 (docs/ENGINE_SPEC.md): the sender reports every
-// level read, and the host, which drops reports until its first ask after a
-// set, takes the first one within 0.5 dB of the level it sent as that
-// level's echo. So that report must lie within 0.5 dB of the level sent,
-// never an older level from a read that went out before the set, and the
-// reports after it stay on that echo.
+// level read, and the host takes the first report within 0.5 dB of a level
+// it sent as that level's echo. Each set here goes out while a read is in
+// flight, so the answer to that read, the older level, must be dropped:
+// every report after the set lies within 0.5 dB of it and on its echo.
 // covers: P184
 #[test]
 fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
     let _serial = serial();
     let mut fake = FakeAp2::samsung();
-    // Keeps each read in flight a while, so some sets come during one.
+    // Each read stays in flight this long once the receiver has it.
     fake.pause
-        .insert("GET_PARAMETER".to_owned(), Duration::from_millis(150));
+        .insert("GET_PARAMETER".to_owned(), Duration::from_millis(300));
+    let reads_seen = fake.reads_seen.clone();
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     tv.run(Duration::from_secs(2), true);
     let levels = [-28.110378, -25.748351, -20.0, -26.949231, -29.517];
-    for (n, sent) in levels.into_iter().enumerate() {
-        tv.run(Duration::from_millis(230 * n as u64), true);
+    for sent in levels {
+        let before = reads_seen.load(Ordering::SeqCst);
+        let deadline = Instant::now() + LONG;
+        while reads_seen.load(Ordering::SeqCst) == before {
+            assert!(Instant::now() < deadline, "no read before {sent}");
+            tv.run(Duration::from_millis(5), true);
+        }
         let at = Instant::now();
         tv.sender.set_volume(&tv.key, Volume::Db(sent));
         tv.run(Duration::from_millis(3300), true);
-        let asked = tv.asks.iter().copied().find(|ask| *ask >= at);
-        let reports = tv.reported_after(asked.expect("an ask after the set"));
+        let reports = tv.reported_after(at);
         let Some(&(_, echo)) = reports.first() else {
             panic!("nothing reported after {sent}");
         };
@@ -348,6 +353,59 @@ fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
     }
     assert!(tv.warnings().is_empty(), "{:?}", tv.events.of(&tv.key));
     no_session_header(&server);
+    tv.assert_no_error();
+    tv.sender.shutdown();
+}
+
+// Part of P184 with S291: the television's remote moves its level in
+// 0.3 dB steps, so one press from the echo of a set lands off the 0.6 dB
+// grid of its sets. That reading is reported as read, within about 1 s,
+// and lies further than 0.05 dB from the echo, so the host takes it as a
+// level set on the speaker.
+// covers: P184
+#[test]
+fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
+    let _serial = serial();
+    let server = Ap2Server::start(FakeAp2::samsung());
+    let mut tv = play(&server);
+    tv.run(Duration::from_secs(1), true);
+    tv.sender.set_volume(&tv.key, Volume::Db(-26.949231));
+    tv.run(Duration::from_secs(3), true);
+    let echo = tv.reported_after(Instant::now() - Duration::from_secs(1));
+    let echo = echo.last().map(|(_, db)| *db);
+    assert!(echo.is_some_and(|db| (db + 27.0).abs() < 0.001), "{echo:?}");
+
+    let presses = Instant::now();
+    for (pressed_to, read_as) in [(-26.7, -26.700001), (-27.0, -27.0), (-27.3, -27.299999)] {
+        tv.run(Duration::from_millis(410), true);
+        let pressed = Instant::now();
+        server.fake().set_on_tv(pressed_to);
+        tv.run(Duration::from_millis(2500), true);
+        let seen = tv
+            .reported_after(pressed)
+            .into_iter()
+            .find(|(_, level)| (level - read_as).abs() < 0.000_01);
+        let Some((at, _)) = seen else {
+            panic!(
+                "{pressed_to} never reported as {read_as}: {:?}",
+                tv.reported_after(pressed)
+            );
+        };
+        assert!(
+            at - pressed <= Duration::from_millis(1600),
+            "{pressed_to} reported {:?} after the press",
+            at - pressed
+        );
+    }
+    let reports = tv.reported_after(presses);
+    assert!(
+        reports
+            .iter()
+            .any(|(_, db)| (db + 26.700001).abs() < 0.000_01
+                && (db - echo.unwrap_or_default()).abs() > BASELINE_DB),
+        "{reports:?}"
+    );
+    assert!(tv.warnings().is_empty(), "{:?}", tv.events.of(&tv.key));
     tv.assert_no_error();
     tv.sender.shutdown();
 }

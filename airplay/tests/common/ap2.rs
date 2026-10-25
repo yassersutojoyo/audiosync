@@ -229,8 +229,14 @@ pub struct FakeAp2 {
     /// A read answers its level as a single-precision value prints,
     /// -28.2 as -28.200001.
     pub single_precision: bool,
+    /// The step in dB of a level set on the television's remote
+    /// ([`FakeAp2::set_on_tv`]).
+    pub remote_step: Option<f64>,
     /// A status in place of 200 for every volume SET_PARAMETER and no other.
     pub volume_status: Option<u16>,
+    /// GET_PARAMETERs read so far, counted before any pause of the answer
+    /// and outside the lock an [`Ap2Server`] holds while it answers.
+    pub reads_seen: Arc<AtomicUsize>,
     /// The session SETUP answer's `Session` (see [`FakeAp2::session_id`]),
     /// which every later SET_PARAMETER must carry or get 500 (P25).
     pub session: Option<String>,
@@ -279,7 +285,9 @@ impl FakeAp2 {
             bodies: HashMap::new(),
             applies_volume: None,
             single_precision: false,
+            remote_step: None,
             volume_status: None,
+            reads_seen: Arc::new(AtomicUsize::new(0)),
             session: None,
             second_info_body: None,
             record_headers: Vec::new(),
@@ -296,15 +304,16 @@ impl FakeAp2 {
         }
     }
 
-    /// The Samsung UT5500 television as traced on 2026-10-25 (P25, P183,
-    /// P184): `initialVolume` in `/info`, every volume set answered 500 and
-    /// applied, reads answered on its 0.6 dB grid, and no `Session` header
-    /// on any answer.
+    /// The Samsung UT5500 television as traced on 2026-10-24 and 25 (P25,
+    /// P183, P184): `initialVolume` in `/info`, every volume set answered
+    /// 500 and applied on a 0.6 dB grid, its remote moving the level in
+    /// 0.3 dB steps, and no `Session` header on any answer.
     pub fn samsung() -> FakeAp2 {
         let mut fake = FakeAp2::new();
         fake.second_info_body = Some(plist(dict(&[("initialVolume", Value::Real(-28.200001))])));
         fake.volume_status = Some(500);
         fake.applies_volume = Some(0.6);
+        fake.remote_step = Some(0.3);
         fake.single_precision = true;
         fake.session = None;
         fake.set_on_tv(-28.2);
@@ -312,12 +321,16 @@ impl FakeAp2 {
     }
 
     /// The level reads answer from now on, as when the user moves it with
-    /// the television's remote; on the grid of [`FakeAp2::applies_volume`].
+    /// the television's remote; on the grid of [`FakeAp2::remote_step`].
     pub fn set_on_tv(&mut self, db: f64) {
-        let mut level = match self.applies_volume {
+        let level = match self.remote_step {
             Some(step) => (db / step).round() * step,
             None => db,
         };
+        self.answer_level(level);
+    }
+
+    fn answer_level(&mut self, mut level: f64) {
         if self.single_precision {
             level = f64::from(level as f32);
         }
@@ -386,13 +399,16 @@ impl FakeAp2 {
             self.requests.push((request.clone(), framed));
             let key = request_key(&request);
             let volume_set = key == "SET_PARAMETER" && request.body.starts_with(b"volume:");
-            if self.applies_volume.is_some()
+            if let Some(step) = self.applies_volume
                 && volume_set
                 && let Some(level) = String::from_utf8_lossy(&request.body)
                     .strip_prefix("volume:")
                     .and_then(|rest| rest.trim().parse::<f64>().ok())
             {
-                self.set_on_tv(level);
+                self.answer_level((level / step).round() * step);
+            }
+            if key == "GET_PARAMETER" {
+                self.reads_seen.fetch_add(1, Ordering::SeqCst);
             }
             if self.silent.contains(&key) {
                 continue;
