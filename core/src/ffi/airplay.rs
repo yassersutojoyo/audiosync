@@ -1481,14 +1481,16 @@ impl AscAirPlay {
     }
 
     /// Whether the sender reaches the receiver `id` over AirPlay 2: only
-    /// with the switch on, on the path its records and its last AirPlay 1
-    /// attempt choose (P2).
+    /// with the switch on, and then always with HomeKit credentials stored,
+    /// otherwise on the path its records and its last AirPlay 1 attempt
+    /// choose (P2), as the sender decides.
     fn over_airplay2(&self, id: &str, info: &ReceiverInfo) -> bool {
         self.airplay2
-            && info
-                .device
-                .choose_path(true, self.airplay1_outcome.get(id).copied())
-                == Ok(ProtocolPath::AirPlay2)
+            && info.device.choose_path_paired(
+                true,
+                self.airplay1_outcome.get(id).copied(),
+                self.identity.get(id).is_some(),
+            ) == Ok(ProtocolPath::AirPlay2)
     }
 
     /// Keeps how an AirPlay 1 attempt ended when, with the switch on, the
