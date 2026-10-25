@@ -1160,6 +1160,8 @@ struct NativeSpeakerCounters: Equatable {
     var latePackets: UInt64 = 0
     var resendRequests: UInt64 = 0
     var packetsResent: UInt64 = 0
+    /// Requested packets not resent: no longer held, or resent three times.
+    var notHeld: UInt64 = 0
     var timingReplies: UInt64 = 0
     var foreignDatagrams: UInt64 = 0
     var sessions: UInt32 = 1
@@ -1202,6 +1204,7 @@ enum NativeAirPlayStatus {
             if counters.sessions > 1 { text += ", \(counters.sessions) members summed" }
             text += "; \(counters.packetsSent) packets sent, \(counters.latePackets) late"
                 + ", \(counters.resendRequests) resend requests, \(counters.packetsResent) resent"
+                + ", \(counters.notHeld) not held"
                 + ", \(counters.timingReplies) timing replies"
                 + ", \(counters.foreignDatagrams) datagrams from other addresses dropped"
         }

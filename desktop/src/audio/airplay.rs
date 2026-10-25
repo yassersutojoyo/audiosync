@@ -3731,12 +3731,13 @@ impl AirPlaySpeakers {
                     text.push_str(&format!("\n    member {}", self.label(member)));
                 }
                 text.push_str(&format!(
-                    "; {} packets sent, {} late, {} resend requests, {} resent, {} timing replies, \
-                     {} datagrams from other addresses dropped",
+                    "; {} packets sent, {} late, {} resend requests, {} resent, {} not held, \
+                     {} timing replies, {} datagrams from other addresses dropped",
                     counters.packets_sent(),
                     counters.late_packets(),
                     counters.resend_requests(),
                     counters.packets_resent(),
+                    counters.not_held(),
                     counters.timing_replies(),
                     counters.foreign_datagrams(),
                 ));

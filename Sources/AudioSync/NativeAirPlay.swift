@@ -751,7 +751,7 @@ final class NativeAirPlay {
 extension NativeSpeakerCounters {
     init(_ raw: AscAirPlayCounters) {
         self.init(packetsSent: raw.packets_sent, latePackets: raw.late_packets, resendRequests: raw.resend_requests,
-                  packetsResent: raw.packets_resent, timingReplies: raw.timing_replies,
+                  packetsResent: raw.packets_resent, notHeld: raw.not_held, timingReplies: raw.timing_replies,
                   foreignDatagrams: raw.foreign_datagrams, sessions: raw.sessions)
     }
 }
