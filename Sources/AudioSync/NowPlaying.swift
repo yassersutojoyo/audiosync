@@ -148,6 +148,43 @@ final class NowPlayingMonitor {
         case empty(EmptyReadings.Empty)
     }
 
+    /// The player seen playing last since the source was chosen: with the
+    /// whole system as source its paused track keeps showing (S218).
+    struct LastPlayed {
+        private(set) var bundleID: String?
+        private var source: AudioSource?
+
+        /// Returns whether a new source forgot the player that played last.
+        @discardableResult
+        mutating func note(source: AudioSource) -> Bool {
+            guard source != self.source else { return false }
+            self.source = source
+            let forgot = bundleID != nil
+            bundleID = nil
+            return forgot
+        }
+
+        /// After a reading: `shown` is the track shown now, `last` the one
+        /// before, `dropped` whether the reading dropped `last`.
+        mutating func note(shown: Track?, last: Track?, dropped: Bool) {
+            if let shown, shown.isPlaying {
+                bundleID = shown.bundleID
+            } else if dropped, last?.bundleID == bundleID {
+                bundleID = nil
+            }
+        }
+    }
+
+    /// The paused track to follow when no player plays: the one of the player
+    /// that played last, else, with no such player, the first one read. While
+    /// the player that played last gives no track, nothing (its own answer
+    /// decides through `EmptyReadings`), so another player's paused track
+    /// doesn't take its place.
+    static func pausedPick(_ paused: [Track], lastPlayed: String?) -> Track? {
+        guard let lastPlayed else { return paused.first }
+        return paused.first { $0.bundleID == lastPlayed }
+    }
+
     enum Command { case playPause, next, previous }
 
     static let spotify = "com.spotify.client"
@@ -190,6 +227,16 @@ final class NowPlayingMonitor {
     private(set) var reading: Track?
     private var refreshing = false
     private var emptyReadings = EmptyReadings()
+    private var played = LastPlayed()
+    /// The player seen playing last since the source was chosen (`LastPlayed`).
+    var lastPlayedBundleID: String? { played.bundleID }
+
+    /// The source changed (main thread). Returns whether that forgot the
+    /// player that played last, so what receivers show needs deciding again.
+    @discardableResult
+    func noteSource(_ source: AudioSource) -> Bool {
+        played.note(source: source)
+    }
 
     // Scripts queue only.
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
@@ -242,21 +289,21 @@ final class NowPlayingMonitor {
         guard !refreshing else { return }
         refreshing = true
         let candidates = candidates()
+        let lastPlayed = played.bundleID
         scripts.async { [weak self] in
             guard let self else { return }
             var found: Track?
-            var fallback: Track?
+            var paused: [Track] = []
             var empties: [String: EmptyReadings.Empty] = [:]
             for bundleID in candidates where Self.isRunning(bundleID) {
                 switch self.query(bundleID) {
                 case .track(let t):
-                    if t.isPlaying { found = t }
-                    if fallback == nil { fallback = t }
+                    if t.isPlaying { found = t } else { paused.append(t) }
                 case .empty(let e): empties[bundleID] = e
                 }
                 if found != nil { break }
             }
-            var next = found ?? fallback
+            var next = found ?? Self.pausedPick(paused, lastPlayed: lastPlayed)
             if var t = next {
                 t.artwork = self.artwork(for: t)
                 next = t
@@ -273,6 +320,7 @@ final class NowPlayingMonitor {
                 if let drop = self.emptyReadings.dropped, let last {
                     DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason))")
                 }
+                self.played.note(shown: shown, last: last, dropped: self.emptyReadings.dropped != nil)
                 self.publish(shown, reading: true)
             }
         }
