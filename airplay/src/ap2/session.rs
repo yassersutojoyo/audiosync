@@ -64,9 +64,10 @@ pub struct Ap2Config {
     pub features: Features,
     /// HomeKit credentials of an earlier pairing (P152).
     pub credentials: Option<HomeKitCredentials>,
-    /// An answer turned `credentials` down earlier in the sender's life
-    /// (P154): a password pairing takes their place when the flags allow
-    /// one, and otherwise they verify again.
+    /// An answer turned `credentials` down earlier in the sender's life and
+    /// no session has played on a pair-verify with them since (P154): a
+    /// password pairing takes their place when the flags allow one, and
+    /// otherwise they verify again.
     pub credentials_turned_down: bool,
     /// The speaker's password, for a password pairing (P61) and a digest
     /// challenge (P36).
@@ -310,6 +311,8 @@ pub struct Ap2Session {
     state: Ap2State,
     timing: Timing,
     ptp_retried: bool,
+    /// A pair-verify on this session succeeded (P66).
+    pair_verified: bool,
     attempt: usize,
     attempt_started: Instant,
     remote: Option<SocketAddr>,
@@ -425,6 +428,7 @@ impl Ap2Session {
             state: Ap2State::Connecting,
             timing,
             ptp_retried: timing == Timing::Ptp,
+            pair_verified: false,
             attempt: 0,
             attempt_started: now,
             remote: None,
@@ -534,6 +538,12 @@ impl Ap2Session {
     /// The stream as set up, once the stream SETUP is answered.
     pub fn stream(&self) -> Option<StreamPorts> {
         self.stream
+    }
+
+    /// Whether a pair-verify on this session succeeded, which proves the
+    /// receiver holds the credentials it verified with (P154).
+    pub fn pair_verified(&self) -> bool {
+        self.pair_verified
     }
 
     /// The address the session connected to (P17).
@@ -1808,7 +1818,10 @@ impl Ap2Session {
         };
         match verify.handle_response(response) {
             VerifyStep::Send(_) => self.send(Kind::PairVerify, now, false),
-            VerifyStep::Verified(secret) => self.start_framing(secret, now),
+            VerifyStep::Verified(secret) => {
+                self.pair_verified = true;
+                self.start_framing(secret, now)
+            }
             VerifyStep::Failed(failure) => self.fail_with(failure.error),
             VerifyStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,

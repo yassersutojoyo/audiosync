@@ -1342,6 +1342,90 @@ fn an_unauthenticated_rejection_keeps_the_stored_credentials() {
     }
 }
 
+// A session whose pair-verify with the turned-down credentials plays proves
+// the receiver holds them, so they count as kept again: a password the
+// receiver asks for later no longer takes their place.
+// covers: P61, P154
+#[test]
+fn turned_down_credentials_a_session_verifies_and_plays_on_are_kept_again() {
+    let _serial = serial();
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x244),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, 62);
+    let key = device.key.clone();
+    let credentials = pair_first_time(&server, &sender, &mut events, &device);
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    paired_options.password = Some(Secret::new("4821".to_owned()));
+
+    server
+        .fake()
+        .hap
+        .answers
+        .push((("/pair-verify", 1), Answer::Status(470)));
+    sender.add_speaker(device.clone(), paired_options.clone());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+            .is_some(),
+        "{:?}",
+        events.of(&key)
+    );
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    server.fake().hap.answers.clear();
+    sender.add_speaker(device.clone(), paired_options.clone());
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // The receiver now asks for a password: proven credentials verify.
+    {
+        let mut fake = server.fake();
+        fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+            "statusFlags",
+            common::ap2::int(0x2C4),
+        )]));
+        fake.requests.clear();
+    }
+    sender.add_speaker(device, paired_options);
+    assert!(
+        events
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Playing)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    let keys = server.fake().keys();
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    sender.shutdown();
+}
+
 /// The paired speaker's own `_airplay._tcp` record next to a `_raop._tcp`
 /// record that names its device id but points at another host, as any host
 /// on the LAN can publish one.
