@@ -274,7 +274,10 @@ impl Client {
             if left.is_zero() {
                 return None;
             }
-            self.stream.set_read_timeout(Some(left)).expect("timeout");
+            // macOS answers EINVAL here once the server has closed the socket.
+            if self.stream.set_read_timeout(Some(left)).is_err() {
+                return None;
+            }
             let mut chunk = [0u8; 1024];
             match self.stream.read(&mut chunk) {
                 Ok(0) | Err(_) => return None,
@@ -292,7 +295,9 @@ impl Client {
             if left.is_zero() {
                 return None;
             }
-            self.stream.set_read_timeout(Some(left)).expect("timeout");
+            if self.stream.set_read_timeout(Some(left)).is_err() {
+                return Some(self.sent_at.elapsed());
+            }
             let mut chunk = [0u8; 1024];
             match self.stream.read(&mut chunk) {
                 Ok(0) => return Some(self.sent_at.elapsed()),
