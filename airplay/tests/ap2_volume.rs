@@ -272,6 +272,35 @@ fn reads_stopped_by_refused_volumes_warn_at_the_hosts_first_ask() {
     assert!(reported(&rig).is_empty());
 }
 
+// covers: P183, P184
+#[test]
+fn a_check_read_sent_just_before_a_feedback_tick_gets_until_the_next_one() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert(SET.to_owned(), 500);
+    fake.applies_volume = Some(0.6);
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    rig.advance(Duration::from_secs(3));
+    let last_tick = *rig.times_of(FEEDBACK).last().expect("feedback");
+    let before_tick = last_tick + Duration::from_millis(1900);
+    rig.advance(before_tick.saturating_duration_since(rig.now));
+
+    rig.fake.hold = Some(READ.to_owned());
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-20.0), now);
+    rig.pump();
+    assert_eq!(rig.times_of(READ).len(), 2, "{:?}", rig.keys());
+    rig.advance(Duration::from_secs(1));
+    rig.release();
+    rig.advance(Duration::from_secs(8));
+    assert_eq!(
+        volume_sets(&rig),
+        ["volume: -15.000000\r\n", "volume: -20.000000\r\n"]
+    );
+    assert!(warnings(&rig).is_empty(), "{:?}", rig.events);
+    assert!(rig.failure().is_none(), "{:?}", rig.events);
+}
+
 // covers: P122, P184
 #[test]
 fn reads_once_after_the_initial_volume_then_only_when_asked_at_most_every_2_s() {

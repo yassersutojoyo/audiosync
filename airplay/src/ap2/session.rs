@@ -888,8 +888,12 @@ impl Ap2Session {
             && now >= due
         {
             self.feedback_due = Some(now + FEEDBACK_INTERVAL);
+            // A refused volume's check read sent less than one feedback
+            // interval ago waits for the next tick (P183).
+            let checking = matches!(self.volume_retry, VolumeRetry::Checking { .. });
             if let Some(in_flight) = &self.in_flight
                 && matches!(in_flight.kind, Kind::VolumeRead(_))
+                && !(checking && now < in_flight.sent_at + FEEDBACK_INTERVAL)
             {
                 // P184: an unanswered read fails here instead of ending the
                 // session (P134), and its late answer is dropped.
