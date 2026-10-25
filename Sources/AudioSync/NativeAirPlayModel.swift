@@ -53,6 +53,25 @@ enum NativeTarget {
 
 /// What a stereo pair or home theater group row says about its members
 /// (P176, P181).
+/// The speakers (app IDs) the user switched on by hand this run, kept
+/// apart from the sender's model so they outlive a sender Retry: one that
+/// asks for a code every time stays on when it appears again.
+struct EveryTimeGuard: Equatable {
+    private(set) var byHand: Set<String> = []
+
+    mutating func turnedOnByHand(_ ids: [String]) {
+        byHand.formUnion(ids)
+    }
+
+    /// Of `appeared` (rows that appeared asking for a code every time), the
+    /// ones that go off: on from the last run, not switched on by hand. A
+    /// speaker no longer on is forgotten first.
+    mutating func turnsOff(_ appeared: [String], enabled: Set<String>) -> [String] {
+        byHand.formIntersection(enabled)
+        return appeared.filter { enabled.contains($0) && !byHand.contains($0) }
+    }
+}
+
 struct AirPlayTargetRow: Equatable {
     enum Kind: Equatable { case stereoPair, homeTheater }
     let kind: Kind
@@ -477,13 +496,27 @@ struct NativeAirPlayModel {
     /// The rows (app IDs) missing from `known` whose receiver is listed as
     /// able to play: the ones auto-connect may switch on. None for rows a
     /// stop rebuilt (`stopped`), as auto-connect would restart streaming
-    /// from inside the stop.
+    /// from inside the stop, and never one that asks for a code every time.
     func joinable(_ rows: [String], after known: Set<String>, stopped: Bool) -> [String] {
         guard !stopped else { return [] }
         return rows.filter { id in
             guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
-                  !refusedOff.contains(receiver) else { return false }
+                  !refusedOff.contains(receiver), !asksEveryTime(receiver) else { return false }
             return receivers[receiver]?.availability == .available
+        }
+    }
+
+    /// Whether the listed receiver asks for a code every time it connects.
+    func asksEveryTime(_ receiver: String) -> Bool {
+        receivers[receiver]?.codeEveryTime == true
+    }
+
+    /// The rows (app IDs) missing from `known` whose receiver asks for a
+    /// code every time: they go off as they appear, also when they were on
+    /// from the last run, so no code request comes by itself.
+    func appearedAskingEveryTime(_ rows: [String], after known: Set<String>) -> [String] {
+        rows.filter { id in
+            !known.contains(id) && NativeAirPlayID.receiver(id).map(asksEveryTime) == true
         }
     }
 

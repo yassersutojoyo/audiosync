@@ -1516,7 +1516,8 @@ export component SpeakerRow inherits Rectangle {
     // of one that can't simply play, or that is on but can't play right now
     // ("Waiting for device", "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group-note);
-    property <string> state-note: Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.row-note(root.item.state);
+    property <string> availability-note: Strings.speaker-availability(root.item.availability, root.item.code-every-time, root.item.state);
+    property <string> state-note: root.availability-note != "" ? root.availability-note : Strings.row-note(root.item.state);
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
     property <string> caption: Strings.speaker-caption(root.item.show-kind && !root.item.cast-group ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
@@ -1675,7 +1676,7 @@ export component SpeakerRow inherits Rectangle {
                             state: root.item.state;
                             enabled: !root.item.missing;
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
-                            description: Strings.with-group-note(root.item.group-note, Strings.availability(root.item.availability) != "" ? Strings.availability(root.item.availability) : Strings.help(root.item.state));
+                            description: Strings.with-group-note(root.item.group-note, root.availability-note != "" ? root.availability-note : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();
                             }

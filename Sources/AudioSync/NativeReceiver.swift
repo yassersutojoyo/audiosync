@@ -40,6 +40,9 @@ struct NativeReceiver: Equatable {
     /// A target with a member out of view, playing nothing, or reporting its
     /// partner unreachable (P181).
     var incomplete = false
+    /// Reached over AirPlay 2, it asks for a code every time it connects
+    /// (P61): auto-connect leaves it off, and only the user turns it on.
+    var codeEveryTime = false
 
     /// How the speaker list shows it, if at all: one that can play is open;
     /// one that asks for a PIN or a password needs a code, which AudioSync

@@ -136,6 +136,7 @@ struct UIStrings {
         switch a {
         case .open: return nil
         case .needsCode: return "Asks for a code"
+        case .codeEveryTime: return "Asks for a code every time"
         }
     }
 
@@ -145,6 +146,8 @@ struct UIStrings {
         case .open: return nil
         case .needsCode:
             return "This speaker asks for a PIN or password. AudioSync asks you for it when you turn the speaker on."
+        case .codeEveryTime:
+            return "This speaker asks for a code each time it connects, so auto-connect leaves it off. AudioSync asks you for the code when you turn the speaker on."
         }
     }
     func volume(of name: String) -> String { "\(name) volume" }
@@ -1597,6 +1600,9 @@ struct UIStrings {
               AudioSync starts. If a
               code doesn't work, AudioSync asks again; if you cancel, the speaker
               turns off. Turn it on again to retry.
+            - 'Asks for a code every time': the speaker is set to ask for a code
+              every time. Auto-connect leaves it off, also at launch; AudioSync
+              asks for the code each time you turn it on.
             """
     }
 }

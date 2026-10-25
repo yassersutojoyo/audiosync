@@ -196,6 +196,9 @@ pub struct AirPlayInfo {
     pub holds_password: bool,
     /// Whether a pairing with it is running.
     pub pairing: bool,
+    /// It asks for a code every time it connects over AirPlay 2 (status
+    /// flag bit 3, P61), so auto-connect leaves it off.
+    pub code_every_time: bool,
     /// AudioSync reaches it over AirPlay 2, which happens only while the
     /// AirPlay 2 switch is on.
     pub airplay2: bool,

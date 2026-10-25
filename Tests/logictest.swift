@@ -913,6 +913,15 @@ check(SpeakerState.off.clickTurnsOn, "speaker: click on an off speaker turns it 
 check(SpeakerAvailability(.open) == .open, "availability: open")
 check(SpeakerAvailability(.code(password: false)) == .needsCode, "availability: PIN asks for a code")
 check(SpeakerAvailability(.code(password: true)) == .needsCode, "availability: password asks for a code")
+check(UIStrings().availability(.codeEveryTime) == "Asks for a code every time"
+        && UIStrings().availabilityHelp(.codeEveryTime) != nil,
+      "availability: a speaker that asks for a code every time says so under its name")
+check(SpeakerAvailability(.code(password: false), everyTime: true, on: true) == .codeEveryTime
+        && SpeakerAvailability(.open, everyTime: true, on: false) == .codeEveryTime
+        && SpeakerAvailability(.open, everyTime: true, on: true) == .open
+        && SpeakerAvailability(.code(password: false), everyTime: false, on: false) == .needsCode
+        && SpeakerAvailability(.open, everyTime: false, on: false) == .open,
+      "availability: asks for a code every time while it asks or is off; paired for this run and on, it is open")
 
 // MARK: Device volume — a turned-down or muted output shows a hint and a one-click fix (S192 to S202)
 do {
@@ -1943,6 +1952,49 @@ do {
           "\(model.joinable(model.rows(enabled: []), after: [], stopped: false))")
     check(model.joinable(model.rows(enabled: []), after: [], stopped: true).isEmpty,
           "native airplay: rows rebuilt by a stop are not auto-connected, so the stop doesn't restart streaming")
+
+    // Lounge was paired by hand this run, so it can play until its session ends.
+    var lounge = receiver("G7", "Lounge", .available)
+    lounge.codeEveryTime = true
+    var den = receiver("H8", "Den", .needsPin)
+    den.codeEveryTime = true
+    var asking = NativeAirPlayModel()
+    for r in [lounge, den, receiver("A1", "kitchen", .available), receiver("B2", "Den TV", .needsPin)] {
+        asking.apply(.appeared(r))
+    }
+    let askingRows = asking.rows(enabled: [])
+    check(asking.joinable(askingRows, after: [], stopped: false) == ["native:A1"],
+          "native airplay: auto-connect never switches on a receiver that asks for a code every time",
+          "\(asking.joinable(askingRows, after: [], stopped: false))")
+    check(asking.appearedAskingEveryTime(askingRows, after: ["native:H8"]) == ["native:G7"]
+            && asking.asksEveryTime("H8") && !asking.asksEveryTime("B2") && !asking.asksEveryTime("A1"),
+          "native airplay: a receiver that asks for a code every time goes off when it appears, at launch or later",
+          "\(asking.appearedAskingEveryTime(askingRows, after: ["native:H8"]))")
+
+    // Lounge was switched on by hand, Den was on from the last run; a sender
+    // Retry starts a new model that lists both as new.
+    var handOn = EveryTimeGuard()
+    handOn.turnedOnByHand(["native:G7"])
+    var retried = NativeAirPlayModel()
+    for r in [lounge, den] { retried.apply(.appeared(r)) }
+    let relisted = retried.appearedAskingEveryTime(retried.rows(enabled: []), after: [])
+    let goOff = handOn.turnsOff(relisted, enabled: ["native:G7", "native:H8"])
+    check(goOff == ["native:H8"],
+          "native airplay: a speaker that asks every time and was switched on by hand stays on when it appears again, also after a Retry",
+          "\(goOff)")
+    let afterOff = handOn.turnsOff(["native:G7"], enabled: [])
+    let onAgain = handOn.turnsOff(["native:G7"], enabled: ["native:G7"])
+    check(afterOff.isEmpty && onAgain == ["native:G7"],
+          "native airplay: switched off, it is no longer on by hand", "\(onAgain)")
+
+    // The TV setting changes while it is listed: a row already known is
+    // left as it is, so a session under way keeps playing.
+    var toggled = NativeAirPlayModel()
+    toggled.apply(.appeared(receiver("G7", "Lounge", .available)))
+    toggled.apply(.changed(lounge))
+    check(toggled.asksEveryTime("G7")
+            && toggled.appearedAskingEveryTime(toggled.rows(enabled: []), after: ["native:G7"]).isEmpty,
+          "native airplay: a listed speaker that starts asking every time isn't switched off")
 
     let all: Set<String> = ["native:A1", "native:B2", "native:C3", "native:D4", "123456789012"]
     check(model.plan(streaming: false, enabled: all).isEmpty, "native airplay: nothing joins while not streaming")

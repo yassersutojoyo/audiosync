@@ -679,6 +679,7 @@ mod tests {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            code_every_time: false,
             device_volume: None,
             waiting: None,
             cast: None,

@@ -31,12 +31,21 @@ enum SpeakerAvailability: Equatable {
     case open
     /// Asks for a PIN or password, which AudioSync asks for when it's turned on.
     case needsCode
+    /// Asks for a code every time it connects, so auto-connect leaves it off.
+    case codeEveryTime
 
     init(_ access: AirPlayPairing.Access) {
         switch access {
         case .open: self = .open
         case .code: self = .needsCode
         }
+    }
+
+    /// A row's availability: one that asks for a code every time says so
+    /// while it asks for one or is off (paired for this run, it is open).
+    init(_ access: AirPlayPairing.Access, everyTime: Bool, on: Bool) {
+        let shown = SpeakerAvailability(access)
+        self = everyTime && (shown == .needsCode || !on) ? .codeEveryTime : shown
     }
 }
 

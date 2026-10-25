@@ -150,6 +150,9 @@ export struct SpeakerItem {
     // An AirPlay speaker whose password AudioSync holds until it quits:
     // its menu offers Forget Password.
     holds-password: bool,
+    // An AirPlay speaker that asks for a code every time it connects:
+    // auto-connect leaves it off, and its note says so.
+    code-every-time: bool,
     // The output's own volume in Windows, when it is low or muted, and its
     // whole percent.
     device-volume: DeviceVolumeHint,

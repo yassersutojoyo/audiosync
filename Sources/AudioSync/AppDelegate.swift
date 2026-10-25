@@ -187,6 +187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet { retimeLocalOutputs() }   // a chosen speaker may have come or gone (S79, S177)
     }
     var airplayNames: [String: String] = [:]
+    /// Outlives the sender, so a Retry keeps what the user turned on.
+    var everyTimeGuard = EveryTimeGuard()
     var airplayAccess: [String: AirPlayPairing.Access] = [:]
     /// The Mac is asleep: the AirPlay reconcile waits for the wake (EC3).
     var macAsleep = false

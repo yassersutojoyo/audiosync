@@ -1506,6 +1506,16 @@ impl AirPlaySpeakers {
         self.store.homekit(id).is_some() && !info.device.verdict.code_every_time
     }
 
+    /// Whether the listed speaker `id`, reached over AirPlay 2, asks for a
+    /// code every time it connects. Over AirPlay 1 the same flag marks the
+    /// legacy pairing, which asks once.
+    fn asks_every_time(&self, id: &str) -> bool {
+        self.listed.get(id).is_some_and(|listed| {
+            listed.info.device.verdict.code_every_time
+                && self.reached_over_airplay2(id, &listed.info)
+        })
+    }
+
     /// Whether the row of `id` shows its AirPlay 2 credentials as a
     /// pairing; one not listed now keeps showing them.
     fn shows_homekit_paired(&self, id: &str) -> bool {
@@ -1707,6 +1717,7 @@ impl AirPlaySpeakers {
                         paired: false,
                         holds_password: false,
                         pairing: false,
+                        code_every_time: false,
                         airplay2: target
                             .members
                             .iter()
@@ -1732,6 +1743,7 @@ impl AirPlaySpeakers {
                     paired: self.store.contains(id) || self.shows_homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
                     pairing: self.pairings.contains_key(id),
+                    code_every_time: self.asks_every_time(id),
                     airplay2: self.over_airplay2(id),
                     group: None,
                 }

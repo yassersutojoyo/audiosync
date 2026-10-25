@@ -115,6 +115,7 @@ extern "C" {
 #define ASC_AIRPLAY_FLAG_PAIRED 512        /* credentials are kept for it, which asc_airplay_forget_pairing drops */
 #define ASC_AIRPLAY_FLAG_TARGET 1024       /* a stereo pair or home theater group, added like a speaker; only with the AirPlay 2 switch on */
 #define ASC_AIRPLAY_FLAG_INCOMPLETE 2048   /* a target with a member out of view, playing nothing, or reporting its partner unreachable */
+#define ASC_AIRPLAY_FLAG_CODE_EVERY_TIME 4096 /* reached over AirPlay 2, it asks for a code every time it connects; auto-connect leaves it off */
 
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
