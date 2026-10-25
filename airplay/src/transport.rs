@@ -522,7 +522,10 @@ impl Backlog {
     /// Only one thread admits; the writer only takes away, so the check
     /// can't be overtaken.
     fn admit(&self, len: usize, limit: BacklogLimit) -> bool {
-        let _ = limit;
+        let (messages, bytes) = self.queued();
+        if messages >= limit.messages || bytes.saturating_add(len) > limit.bytes {
+            return false;
+        }
         self.add(len);
         true
     }
@@ -623,6 +626,11 @@ impl RtspIo {
             return Queued::Dropped;
         }
         if !self.backlog.admit(bytes.len(), limit) {
+            self.backlog.overflowed.store(true, Ordering::Release);
+            // The stop flag stays clear, so the reader reports the close.
+            if let Some(tcp) = &self.tcp {
+                let _ = tcp.shutdown(Shutdown::Both);
+            }
             return Queued::Overflowed;
         }
         let _ = writer.send(bytes);

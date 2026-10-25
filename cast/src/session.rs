@@ -284,11 +284,12 @@ struct LoggedTypes(Vec<String>);
 impl LoggedTypes {
     /// The type as it is logged, the first time it is seen.
     fn first_sight(&mut self, kind: &str) -> Option<String> {
-        if self.0.iter().any(|known| known == kind) {
+        let kind: String = kind.chars().take(MAX_TYPE_CHARS).collect();
+        if self.0.len() >= MAX_LOGGED_TYPES || self.0.contains(&kind) {
             return None;
         }
-        self.0.push(kind.to_owned());
-        Some(kind.to_owned())
+        self.0.push(kind.clone());
+        Some(kind)
     }
 }
 

@@ -390,7 +390,7 @@ impl Responses {
 
     /// Serves a group: one response per address, at most `limit` at once.
     pub fn set_group_limit(&mut self, limit: usize) {
-        self.group_limit = Some(limit.max(1));
+        self.group_limit = Some(limit.clamp(1, MAX_GROUP_RESPONSES));
     }
 
     /// Opens a response for a `GET` from `from` and returns its id, and

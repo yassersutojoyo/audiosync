@@ -105,12 +105,17 @@ impl MemberList {
     pub fn apply(&mut self, message: &MultizoneMessage) -> bool {
         let before = self.members.clone();
         match message {
-            MultizoneMessage::Status(members) => self.members = Some(members.clone()),
+            MultizoneMessage::Status(members) => {
+                let kept = members.len().min(MAX_GROUP_MEMBERS);
+                self.members = Some(members[..kept].to_vec());
+            }
             MultizoneMessage::Upsert(member) => {
                 let list = self.members.get_or_insert_with(Vec::new);
+                let full = list.len() >= MAX_GROUP_MEMBERS;
                 match list.iter_mut().find(|known| known.is(&member.device_id)) {
                     Some(known) => *known = member.clone(),
-                    None => list.push(member.clone()),
+                    None if !full => list.push(member.clone()),
+                    None => {}
                 }
             }
             MultizoneMessage::Removed(device_id) => {

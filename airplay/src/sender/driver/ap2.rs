@@ -16,7 +16,7 @@ use crate::error::{UnsupportedReason, Warning};
 use crate::ptp::{MessageType, PtpService, clock_identity};
 use crate::session::{Connection, MediaDestinations};
 use crate::stream::Ap2Audio;
-use crate::transport::PtpIo;
+use crate::transport::{PtpIo, Queued};
 
 /// How often a session waiting for the old PTP service's ports looks again.
 const PTP_PORTS_POLL: Duration = Duration::from_millis(10);
@@ -406,11 +406,20 @@ impl Driver {
                 }
             }
             Ap2Output::SendEvents(bytes) => {
-                if let Some(io) = self
+                let Some(io) = self
                     .ap2_active(key)
                     .and_then(|active| active.events_io.as_ref())
-                {
-                    io.write(bytes);
+                else {
+                    return;
+                };
+                if io.write_bounded(bytes, transport::EVENT_BACKLOG) == Queued::Overflowed {
+                    let line = format!(
+                        "warning: the receiver left more than {} event answers or {} bytes unread; \
+                         closing the event connection",
+                        transport::EVENT_BACKLOG.messages,
+                        transport::EVENT_BACKLOG.bytes
+                    );
+                    self.emit_speaker(key, SpeakerEvent::Trace(line));
                 }
             }
             Ap2Output::Close => self.release_ap2(key),
