@@ -19,8 +19,8 @@ final class NativeAirPlay {
     /// How often the queue asks the sender for discovery changes and events.
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
     /// Every how many polls the speakers are asked for their own volume
-    /// (2 s), so a change made on a speaker reaches its slider.
-    static let volumeReadPolls = 8
+    /// (1 s, S291), so a change made on a speaker reaches its row.
+    static let volumeReadPolls = 4
     /// The receivers the debug hook AUDIOSYNC_AIRPLAY_PCM names; the core
     /// reads the same variable and lets them use PCM when they are added.
     static let pcmDebugIDs = NativeAirPlayID.pcmDebugIDs(ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY_PCM"])
@@ -141,6 +141,15 @@ final class NativeAirPlay {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
             _ = asc_airplay_set_volume(handle, id, volume)
+        }
+    }
+
+    /// A row move (S290): the speaker `id` stores own volume `own` and
+    /// gets device level `level`, live.
+    func setDeviceLevel(_ id: String, own: Double, level: Double) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_airplay_set_device_level(handle, id, own, level)
         }
     }
 
@@ -648,7 +657,7 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_EVENT_PAIRED:
             return .paired(id: id, storeNote: text(raw.detail))
         case ASC_AIRPLAY_EVENT_VOLUME:
-            return .volume(id: id, position: raw.volume)
+            return .volume(id: id, position: raw.volume, level: raw.device_level)
         case ASC_AIRPLAY_EVENT_WARNING:
             if raw.warning == ASC_AIRPLAY_WARNING_PTP_FREE { return .ptpFree(id: id) }
             return .warning(id: id, ptpPortsTaken: raw.warning == ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN,

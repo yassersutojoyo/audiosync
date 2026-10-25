@@ -389,6 +389,19 @@ double asc_output_gain(double local_position, double master_position);
  * at zone 100 bit-identical to asc_output_gain. */
 double asc_zone_output_gain(double local_position, double zone_position, double master_position);
 
+/* An AirPlay speaker's device level D, 0 to 100: own x zone x master as
+ * fractions, times 100 (zone 100 outside a zone). */
+double asc_airplay_device_level(double own_position, double zone_position, double master_position);
+
+/* The whole number an AirPlay row shows for device level D: D rounded down. */
+double asc_airplay_row_level(double device_level);
+
+/* An AirPlay row moved to `row`: writes the own volume to store and the
+ * device level to send. False, writing nothing, when zone x master is 0,
+ * row isn't finite or a pointer is NULL. */
+bool asc_airplay_row_move(double row, double zone_position, double master_position,
+                          double *own_position, double *device_level);
+
 /*
  * Multiplies frames x 2 interleaved samples by gain, in place. Gain 0 (or a
  * negative or non-finite gain) gives exact zeros; any NaN or infinity in the
@@ -1513,6 +1526,7 @@ typedef struct AscAirPlayEvent {
     int32_t remote;                  /* a remote event's ASC_AIRPLAY_REMOTE_* */
     int64_t receiver_latency_us;     /* a latency event's reported latency R_s in microseconds; 0 when no source gave one */
     uint32_t receiver_latency_sources; /* a latency event's ASC_AIRPLAY_LATENCY_SOURCE_* bits; 0 when none */
+    double device_level;             /* a volume event's device level D, 0 to 100 (show asc_airplay_row_level of it) */
 } AscAirPlayEvent;
 
 /*
@@ -1599,6 +1613,15 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
  * volume isn't finite.
  */
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
+
+/*
+ * An AirPlay row move (asc_airplay_row_move's results): stores own volume
+ * `own_position` for the speaker added under `id` and sends it device level
+ * `device_level`, live. Returns false, changing nothing, when the handle or
+ * id is NULL, no speaker was added under id, or a value isn't finite.
+ */
+bool asc_airplay_set_device_level(AscAirPlay *airplay, const char *id, double own_position,
+                                  double device_level);
 
 /*
  * Tells whether the user is dragging the volume slider of the speaker added

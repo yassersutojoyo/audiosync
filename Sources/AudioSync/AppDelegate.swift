@@ -123,6 +123,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var airplayVolume: [String: Double] {
         didSet { if airplayVolume != oldValue { store.save(levels: airplayVolume, forKey: Keys.airplayVolumes) } }
     }
+    /// Each AirPlay speaker's device level from a row move or the speaker
+    /// itself, by output ID, for this run (S290).
+    var airplayDeviceLevel: [String: AirPlayDeviceLevel] = [:]
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }

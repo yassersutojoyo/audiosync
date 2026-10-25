@@ -103,7 +103,10 @@ use crate::policy::remote::{
 };
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
-use crate::volume::{NO_ZONE_POSITION, own_position_for_level, stage_level};
+use crate::volume::{
+    NO_ZONE_POSITION, device_level, device_level_for_db, own_for_device_level,
+    own_position_for_level, row_level, stage_level,
+};
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
 /// found a receiver.
@@ -431,6 +434,9 @@ pub struct AscAirPlayEvent {
     pub receiver_latency_us: i64,
     /// A latency event's `AIRPLAY_LATENCY_SOURCE_*` bits, 0 when none.
     pub receiver_latency_sources: u32,
+    /// A volume event's device level D, 0 to 100, which the row shows
+    /// rounded down (S290).
+    pub device_level: f64,
 }
 
 /// A speaker the host added.
@@ -446,6 +452,10 @@ struct Added {
     unreadable: bool,
     /// The user drags its own slider, so read-backs are ignored (S271).
     dragging: bool,
+    /// The dB last sent whose echo no reading has given yet (S291).
+    echo_of: Option<f64>,
+    /// The reading that the next ones are compared with (S291).
+    baseline: Option<f64>,
     /// Set when the host added a stereo pair or home theater group.
     target: Option<TargetId>,
     /// A target's member IDs.
@@ -477,11 +487,16 @@ impl Added {
             volume_set_at: Some(Instant::now()),
             unreadable: false,
             dragging: false,
+            echo_of: None,
+            baseline: None,
             offset: Duration::ZERO,
         }
     }
 
-    fn set_volume(&self, sender: &Sender, volume: Volume) {
+    /// Sends `volume`; the first reading near it is its echo (S291).
+    fn set_volume(&mut self, sender: &Sender, volume: Volume) {
+        self.echo_of = Some(volume.wire_db());
+        self.baseline = None;
         match &self.target {
             Some(id) => sender.set_target_volume(id, volume),
             None => sender.set_volume(&self.key, volume),
@@ -519,8 +534,9 @@ impl Added {
 /// A sender event the host hasn't taken yet.
 enum Pending {
     Speaker(String, SpeakerEvent),
-    /// A slider position the speaker's own volume change led to.
-    Volume(String, f64),
+    /// The own volume and the device level a level set on the speaker
+    /// itself led to (S290).
+    Volume(String, f64, f64),
     Warning(String, Warning),
     /// A transport control a speaker's remote asked for, by the row's ID.
     Remote(String, Control),
@@ -851,6 +867,16 @@ fn speaker_volume(position: f64, zone: f64, master: f64) -> Volume {
     }
 }
 
+/// The volume an AirPlay speaker gets for device level `level`, 0 to 100,
+/// on the default line (S289): −30 + 0.3 × D dB, muted at 0.
+fn device_volume(level: f64) -> Volume {
+    if level > 0.0 {
+        Volume::Db(MIN_DB * (1.0 - level.min(100.0) / 100.0))
+    } else {
+        Volume::Muted
+    }
+}
+
 /// The slider position, rounded to a whole step, that plays at `db` through
 /// the zone and the master ([`speaker_volume`] backwards, S250): 0 at −30 dB
 /// and below, muted included. None when zone × master is 0, where every
@@ -862,9 +888,13 @@ fn slider_position(db: f64, zone: f64, master: f64) -> Option<f64> {
     own_position_for_level((1.0 - db / MIN_DB).clamp(0.0, 1.0), zone, master)
 }
 
-/// Within [`VOLUME_SETTLE`] of a set, a reported level this close to the
-/// one sent is the speaker rounding it, not a person's change (S271).
+/// A reported level this close to the one sent is the speaker rounding it,
+/// not a person's change: the first such read (S291), or a DACP volume
+/// within [`VOLUME_SETTLE`] of the set (S271).
 const VOLUME_TOLERANCE_DB: f64 = 0.5;
+
+/// After the echo, a reading this close to the baseline changes nothing (S291).
+const BASELINE_TOLERANCE_DB: f64 = 0.05;
 
 /// How long after the host sets a volume [`VOLUME_TOLERANCE_DB`] applies:
 /// a receiver that rounds to 0.3 dB steps can echo the set within 0.5 dB,
@@ -1105,10 +1135,12 @@ impl AscAirPlay {
             .map(|(target, _)| target.clone())
     }
 
-    /// A volume read answered `db` (S271): read after the host last set the
-    /// volume, not during a drag and not the speaker's echo of that set, it
-    /// becomes the speaker's slider position, the sender's level for it, and
-    /// goes to the host, which shows it without sending it back.
+    /// A volume read answered `db` (S291): read after the host last set the
+    /// volume and not during a drag, the first reading near a level sent is
+    /// its echo and the baseline; any other reading away from the baseline
+    /// is a level set on the speaker, which sets the device level and the
+    /// own volume (S290), becomes the sender's level for it and goes to the
+    /// host, which shows it without sending it back.
     fn volume_reported(&mut self, id: &str, db: f64) {
         let Some(owner) = self.reporting_for(id) else {
             return;
@@ -1119,28 +1151,36 @@ impl AscAirPlay {
             return;
         };
         let asked = std::mem::take(&mut added.reading);
-        if !asked || added.dragging {
+        if !asked || added.dragging || !db.is_finite() {
             return;
         }
-        let recent = added
-            .volume_set_at
-            .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
-        let sent = speaker_volume(added.position, zone, master).wire_db();
-        if recent && (db - sent).abs() < VOLUME_TOLERANCE_DB {
+        if let Some(sent) = added.echo_of.take() {
+            if (db - sent).abs() < VOLUME_TOLERANCE_DB {
+                added.baseline = Some(db);
+                return;
+            }
+        } else if added
+            .baseline
+            .is_some_and(|baseline| (db - baseline).abs() <= BASELINE_TOLERANCE_DB)
+        {
             return;
         }
-        let Some(position) = slider_position(db, zone, master) else {
+        added.baseline = Some(db);
+        let Some(level) = device_level_for_db(db) else {
             return;
         };
-        if position == added.position.round() {
+        let position = own_for_device_level(level, zone, master).unwrap_or(added.position);
+        let unchanged = position == added.position
+            && row_level(level) == row_level(device_level(position, zone, master));
+        if unchanged {
             return;
         }
         added.position = position;
         // The sender keeps the level too, for a reconnect or a target
-        // member that starts late (P119, P180); its next read is within
-        // the tolerance, so this isn't reported back.
-        added.set_volume(&self.sender, speaker_volume(position, zone, master));
-        self.queue_event(Pending::Volume(owner, position));
+        // member that starts late (P119, P180); its next read is the echo,
+        // so this isn't reported back.
+        added.set_volume(&self.sender, device_volume(level));
+        self.queue_event(Pending::Volume(owner, position, level));
     }
 
     /// A speaker's remote asked for `command` (P193): the core's decision
@@ -1196,7 +1236,13 @@ impl AscAirPlay {
             (Action::Send(control), Some(row)) => {
                 self.queue_event(Pending::Remote(row, control));
             }
-            (Action::Move { to, .. }, Some(row)) => self.move_own(&row, to),
+            (Action::Move { to, .. }, Some(row)) => {
+                let level = match command {
+                    Command::DeviceVolume(db) => device_level_for_db(db),
+                    _ => None,
+                };
+                self.move_own(&row, to, level);
+            }
             _ => {}
         }
     }
@@ -1231,7 +1277,9 @@ impl AscAirPlay {
     /// A remote moved `row`'s own volume to `position`: as at the end of a
     /// drag, the speaker gets its new level, which starts S271's window, and
     /// the host shows the position without sending it back (S275 to S277).
-    fn move_own(&mut self, row: &str, position: f64) {
+    /// A DeviceVolume's `level` is the device level the speaker gets and
+    /// the row shows; a step's is the own volume through k (S290).
+    fn move_own(&mut self, row: &str, position: f64, level: Option<f64>) {
         let master = self.master;
         let zone = zone_in(&self.zones, row);
         let Some(added) = self.added.get_mut(row) else {
@@ -1239,8 +1287,15 @@ impl AscAirPlay {
         };
         added.position = position;
         added.volume_set();
-        added.set_volume(&self.sender, speaker_volume(position, zone, master));
-        self.queue_event(Pending::Volume(row.to_owned(), position));
+        let (volume, level) = match level {
+            Some(level) => (device_volume(level), level),
+            None => (
+                speaker_volume(position, zone, master),
+                device_level(position, zone, master),
+            ),
+        };
+        added.set_volume(&self.sender, volume);
+        self.queue_event(Pending::Volume(row.to_owned(), position, level));
     }
 
     /// A speaker's warning goes to the host. One that turned a volume read
@@ -1697,6 +1752,7 @@ impl AscAirPlay {
             remote: 0,
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
+            device_level: 0.0,
         };
         let (id, detail) = match pending {
             Pending::Remote(id, control) => {
@@ -1735,9 +1791,10 @@ impl AscAirPlay {
                 event.retry_ms = retry_at.map_or(-1, millis_until);
                 (id, error.to_string())
             }
-            Pending::Volume(id, position) => {
+            Pending::Volume(id, position, level) => {
                 event.kind = AIRPLAY_EVENT_VOLUME;
                 event.volume = position;
+                event.device_level = level;
                 (id, String::new())
             }
             Pending::Warning(id, warning) => {
@@ -2404,7 +2461,8 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                         .sender
                         .add_target(target.clone(), options, member_credentials(airplay));
                 let key = DeviceKey::Instance(ServiceKind::AirPlay, id.to_owned());
-                let added = Added::new(
+                let initial = speaker_volume(position, zone_in(&airplay.zones, id), airplay.master);
+                let mut added = Added::new(
                     key,
                     position,
                     Some(target_id),
@@ -2414,6 +2472,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                         .map(|(key, counters)| (receiver_id(&key), counters))
                         .collect(),
                 );
+                added.echo_of = Some(initial.wire_db());
                 airplay.added.insert(id.to_owned(), added);
                 airplay.remote.forget(id);
                 return true;
@@ -2425,7 +2484,8 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             let position = volume.clamp(0.0, 100.0);
             let key = device.key.clone();
             let zone = zone_in(&airplay.zones, id);
-            let mut options = SpeakerOptions::new(speaker_volume(position, zone, airplay.master));
+            let initial = speaker_volume(position, zone, airplay.master);
+            let mut options = SpeakerOptions::new(initial);
             options.delay = airplay.hold_back;
             options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
@@ -2438,13 +2498,14 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                     .as_deref(),
             );
             let counters = airplay.sender.add_speaker(device, options);
-            let added = Added::new(
+            let mut added = Added::new(
                 key,
                 position,
                 None,
                 Vec::new(),
                 vec![(id.to_owned(), counters)],
             );
+            added.echo_of = Some(initial.wire_db());
             airplay.added.insert(id.to_owned(), added);
             airplay.remote.forget(id);
             true
@@ -2533,6 +2594,49 @@ pub unsafe extern "C" fn asc_airplay_set_volume(
             added.set_volume(
                 &airplay.sender,
                 speaker_volume(added.position, zone, master),
+            );
+            airplay.remote.forget(id);
+            true
+        })
+    }
+}
+
+/// An AirPlay row move ([`crate::ffi::asc_airplay_row_move`]'s results,
+/// S290): stores own volume `own_position` for the speaker added under `id`
+/// and sends it device level `device_level`, live. False, changing nothing,
+/// when the handle or `id` is null, no speaker was added under `id`, or a
+/// value isn't finite.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `id` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_device_level(
+    airplay: *mut AscAirPlay,
+    id: *const c_char,
+    own_position: f64,
+    device_level: f64,
+) -> bool {
+    // SAFETY: by the caller's contract null or a NUL-terminated string.
+    let Some(id) = (unsafe { host_text(id) }) else {
+        return false;
+    };
+    if !own_position.is_finite() || !device_level.is_finite() {
+        return false;
+    }
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            let Some(added) = airplay.added.get_mut(id) else {
+                return false;
+            };
+            added.position = own_position.clamp(0.0, 100.0);
+            added.volume_set();
+            added.set_volume(
+                &airplay.sender,
+                device_volume(device_level.clamp(0.0, 100.0)),
             );
             airplay.remote.forget(id);
             true
@@ -4087,6 +4191,7 @@ mod tests {
         remote: i32,
         receiver_latency_us: i64,
         receiver_latency_sources: u32,
+        device_level: f64,
     }
 
     fn blank_event() -> AscAirPlayEvent {
@@ -4106,6 +4211,7 @@ mod tests {
             remote: 0,
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
+            device_level: 0.0,
         }
     }
 
@@ -4134,6 +4240,7 @@ mod tests {
                     remote: raw.remote,
                     receiver_latency_us: raw.receiver_latency_us,
                     receiver_latency_sources: raw.receiver_latency_sources,
+                    device_level: raw.device_level,
                 });
             } else {
                 std::thread::sleep(Duration::from_millis(10));
@@ -4419,6 +4526,7 @@ mod tests {
                 remote: 0,
                 receiver_latency_us: 0,
                 receiver_latency_sources: 0,
+                device_level: 0.0,
             }
         );
         // SAFETY: a live handle, used by this thread only.
@@ -5310,7 +5418,7 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
-    // covers: S250
+    // covers: S250, S290
     #[test]
     fn a_read_back_with_zone_0_leaves_the_own_volume() {
         let mut handle = create_with(quiet);
@@ -5323,7 +5431,16 @@ mod tests {
         // SAFETY: as above.
         unsafe { asc_airplay_read_volumes(handle) };
         report_volume(handle, &key, -6.0);
-        assert!(inside(handle).events.is_empty());
+        // The row shows the speaker's level; the own volume stays.
+        let levels: Vec<(String, f64, f64)> = inside(handle)
+            .events
+            .drain(..)
+            .filter_map(|(_, pending)| match pending {
+                Pending::Volume(id, position, level) => Some((id, position, level)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(levels, vec![(id.to_owned(), 50.0, 80.0)]);
         assert_eq!(inside(handle).added[id].position, 50.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
@@ -5344,9 +5461,9 @@ mod tests {
         report_volume(handle, key, db);
     }
 
-    // covers: S271
+    // covers: S291
     #[test]
-    fn a_read_back_near_the_sent_level_is_ignored_for_3_s_only() {
+    fn the_first_read_near_a_sent_level_is_its_echo_and_the_baseline() {
         let mut handle = create_with(quiet);
         let id = "02005E005370";
         let c_id = c_string(id);
@@ -5354,21 +5471,71 @@ mod tests {
         add_for_volume(handle, id, key.clone(), 50.0);
         // SAFETY: a live handle, used by this thread only; a C string.
         unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 10.0)) };
-        // Sent −27 dB; the speaker rounds it 0.3 dB off: its echo.
+        // Sent −27 dB; the speaker rounds it 0.3 dB off: its echo, however late.
+        set_ago(handle, id, Duration::from_secs(10));
         read_back(handle, &key, -27.3);
         assert_eq!(inside(handle).added[id].position, 10.0);
-        set_ago(handle, id, Duration::from_millis(2_900));
-        read_back(handle, &key, -26.7);
-        assert_eq!(inside(handle).added[id].position, 10.0);
-        // After 3 s the same reading is a remote press: level 0.09, so 9.
-        set_ago(handle, id, Duration::from_secs(3));
         read_back(handle, &key, -27.3);
-        assert_eq!(inside(handle).added[id].position, 9.0);
-        // Within 3 s, a reading further than 0.5 dB off counts at once.
+        assert_eq!(inside(handle).added[id].position, 10.0);
+        assert!(volume_events(handle).is_empty());
+        // One press down from the baseline: level 8, so own 8.
+        read_back(handle, &key, -27.6);
+        assert_eq!(inside(handle).added[id].position, 8.0);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 8.0)]);
+        // More than 0.5 dB from a level just sent is a change at once.
         // SAFETY: as above.
         unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 10.0)) };
         read_back(handle, &key, -26.4);
         assert_eq!(inside(handle).added[id].position, 12.0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S290, S291
+    #[test]
+    fn a_row_move_on_a_0_6_db_grid_keeps_the_row_until_the_speaker_moves() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005376";
+        let c_id = c_string(id);
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x76]));
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { asc_airplay_set_master(handle, 63.0) };
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // The row moved to 20 with the master at 63: own 32, level 20 sent.
+        let moved = crate::volume::row_move(20.0, 100.0, 63.0).expect("k above 0");
+        // SAFETY: as above; a C string.
+        unsafe {
+            assert!(asc_airplay_set_device_level(
+                handle,
+                c_id.as_ptr(),
+                moved.own_position,
+                moved.device_level
+            ));
+        }
+        assert_eq!(inside(handle).added[id].position, 32.0);
+        assert_eq!(inside(handle).added[id].echo_of, Some(-24.0));
+        // The television reads −24 back on its 0.6 dB grid: no event.
+        read_back(handle, &key, -24.200_001);
+        read_back(handle, &key, -24.200_001);
+        assert!(volume_events(handle).is_empty());
+        assert_eq!(inside(handle).added[id].position, 32.0);
+        // Its remote moves it to −23.6 dB: level 21.3, row 21, own 34.
+        read_back(handle, &key, -23.6);
+        let levels: Vec<(f64, f64)> = inside(handle)
+            .events
+            .drain(..)
+            .filter_map(|(_, pending)| match pending {
+                Pending::Volume(_, position, level) => Some((position, row_level(level))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(levels, vec![(34.0, 21.0)]);
+        // A master move keeps own 34 and sends 34 × 0.5 = level 17.
+        // SAFETY: as above.
+        unsafe { asc_airplay_set_master(handle, 50.0) };
+        assert_eq!(inside(handle).added[id].position, 34.0);
+        let sent = inside(handle).added[id].echo_of.expect("sent");
+        assert!((sent - (-30.0 + 0.3 * 17.0)).abs() < 1e-9, "{sent}");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -5427,9 +5594,9 @@ mod tests {
         add_for_volume(handle, b, other, 50.0);
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_set_master(handle, 50.0) };
-        set_ago(handle, a, Duration::from_secs(4));
-        // Sent −22.5 dB (level 0.25); one press up is −22.2 dB, level 0.26,
-        // so 0.26 ÷ 0.5 = 52.
+        // Sent −22.5 dB (level 0.25), read back as its echo; one press up
+        // is −22.2 dB, level 0.26, so 0.26 ÷ 0.5 = 52.
+        read_back(handle, &key, -22.5);
         read_back(handle, &key, -22.2);
         let events = events_until(handle, |events| {
             events.iter().any(|e| e.kind == AIRPLAY_EVENT_VOLUME)
@@ -5710,6 +5877,7 @@ mod tests {
             remote: 0,
             receiver_latency_us: 0,
             receiver_latency_sources: 0,
+            device_level: 0.0,
         }
     }
 
@@ -6381,6 +6549,9 @@ mod tests {
     fn add_for_volume(handle: *mut AscAirPlay, id: &str, key: DeviceKey, position: f64) {
         let mut added = Added::new(key, position, None, Vec::new(), Vec::new());
         added.volume_set_at = None;
+        // As a real add sends it: the first read near it is its echo (S291).
+        let zone = zone_in(&inside(handle).zones, id);
+        added.echo_of = Some(speaker_volume(position, zone, inside(handle).master).wire_db());
         inside(handle).added.insert(id.to_owned(), added);
     }
 
@@ -6395,7 +6566,8 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     fn the_event_layout_matches_the_header() {
         // The Swift smoke test checks the same size against the header.
-        assert_eq!(std::mem::size_of::<AscAirPlayEvent>(), 104);
+        assert_eq!(std::mem::size_of::<AscAirPlayEvent>(), 112);
+        assert_eq!(std::mem::offset_of!(AscAirPlayEvent, device_level), 104);
         assert_eq!(std::mem::offset_of!(AscAirPlayEvent, volume), 72);
         assert_eq!(std::mem::offset_of!(AscAirPlayEvent, warning), 80);
         assert_eq!(
@@ -6429,7 +6601,7 @@ mod tests {
             .events
             .drain(..)
             .filter_map(|(_, pending)| match pending {
-                Pending::Volume(id, position) => Some((id, position)),
+                Pending::Volume(id, position, _) => Some((id, position)),
                 _ => None,
             })
             .collect()
@@ -7691,6 +7863,7 @@ mod tests {
                 remote: raw.remote,
                 receiver_latency_us: raw.receiver_latency_us,
                 receiver_latency_sources: raw.receiver_latency_sources,
+                device_level: raw.device_level,
             });
         }
     }

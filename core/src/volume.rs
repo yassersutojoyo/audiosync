@@ -101,6 +101,86 @@ pub fn own_position_for_level(level: f64, zone_position: f64, master_position: f
     )
 }
 
+/// The dB an AirPlay device level of 0 maps to; 100 is 0 dB (S289).
+const DEVICE_FLOOR_DB: f64 = -30.0;
+
+/// Slack for float error when a device level is rounded down for its row (S290).
+const ROW_SLACK: f64 = 0.01;
+
+/// k of S290: zone × master, each `position / 100` clamped to 0…1.
+fn stage_scale(zone_position: f64, master_position: f64) -> f64 {
+    (zone_position / MAX_POSITION).clamp(0.0, 1.0)
+        * (master_position / MAX_POSITION).clamp(0.0, 1.0)
+}
+
+/// An AirPlay speaker's device level D, 0…100, for its own volume through
+/// the zone and the master: s × k (S290).
+pub fn device_level(own_position: f64, zone_position: f64, master_position: f64) -> f64 {
+    stage_level(own_position, zone_position, master_position) * MAX_POSITION
+}
+
+/// The whole number an AirPlay row shows for device level `level`: rounded
+/// down, as the measured television shows it (S290). 0 when not finite.
+pub fn row_level(level: f64) -> f64 {
+    if !level.is_finite() {
+        return MIN_POSITION;
+    }
+    (level + ROW_SLACK)
+        .floor()
+        .clamp(MIN_POSITION, MAX_POSITION)
+}
+
+/// The device level of a volume read as `db` on the default line (S289):
+/// 0 at −30 dB and below (muted's −144 included), 100 at 0 dB. None when
+/// `db` isn't finite.
+pub fn device_level_for_db(db: f64) -> Option<f64> {
+    if !db.is_finite() {
+        return None;
+    }
+    if db <= DEVICE_FLOOR_DB {
+        return Some(MIN_POSITION);
+    }
+    Some((MAX_POSITION * (db - DEVICE_FLOOR_DB) / -DEVICE_FLOOR_DB).min(MAX_POSITION))
+}
+
+/// What a row move sets (S290): the stored own volume and the device level sent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RowMove {
+    pub own_position: f64,
+    pub device_level: f64,
+}
+
+/// An AirPlay row moved to `row` (rounded to a whole number, S290): the
+/// smallest whole own volume s with s × k ≥ row, and the device level sent,
+/// the row itself; past the ceiling of the zone and the master s is 100 and
+/// the level 100 × k. None when k is 0, where the move sends nothing, or
+/// `row` isn't finite.
+pub fn row_move(row: f64, zone_position: f64, master_position: f64) -> Option<RowMove> {
+    let scale = stage_scale(zone_position, master_position);
+    if scale.is_nan() || scale <= 0.0 || !row.is_finite() {
+        return None;
+    }
+    let row = row.round().clamp(MIN_POSITION, MAX_POSITION);
+    // The small bias keeps an exact quotient such as 63 ÷ 0.63 from rounding up a step.
+    let own = (row / scale - 1e-9).ceil().max(MIN_POSITION);
+    if own > MAX_POSITION {
+        return Some(RowMove {
+            own_position: MAX_POSITION,
+            device_level: MAX_POSITION * scale,
+        });
+    }
+    Some(RowMove {
+        own_position: own,
+        device_level: row,
+    })
+}
+
+/// The own volume a device level reported by the speaker leads to (S290):
+/// D ÷ k rounded and clamped to 0…100. None when k is 0, where s stays.
+pub fn own_for_device_level(level: f64, zone_position: f64, master_position: f64) -> Option<f64> {
+    own_position_for_level(level / MAX_POSITION, zone_position, master_position)
+}
+
 /// Migrates a legacy linear percentage (0…150) to a position:
 /// `p(pct / 100)`, clamped, so 3.49 % becomes 32.68 and anything from 100 %
 /// up becomes 100 (S75).

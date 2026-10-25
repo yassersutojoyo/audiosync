@@ -423,7 +423,7 @@ extension AppDelegate {
                                     name: shownName(airPlay: id),
                                     tag: .airplay,
                                     enabled: enabledAirPlay.contains(id),
-                                    volume: airplayVolume[id] ?? defaultVolume,
+                                    volume: airPlayRowLevel(id),
                                     offsetMs: nil,
                                     autoConnect: autoConnect.contains(SpeakerKey.make(id: id, airplay: true)),
                                     availability: SpeakerAvailability(airplayAccess[id] ?? .open,
