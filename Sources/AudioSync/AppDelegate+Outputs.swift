@@ -229,10 +229,13 @@ extension AppDelegate {
 
     func setSource(_ source: AudioSource) {
         let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
-        // Even a pick of the source that plays makes a switch waiting on the prompt out of date.
-        microphoneRequest.supersedeSwitch()
-        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
-        guard change != .none else { return }
+        // A re-pick changes nothing; the line shows whether one comes during a PIN prompt.
+        guard change != .none else {
+            DebugTrace.log("[AudioSync] source picked again: \(source.defaultsValue), nothing changes")
+            return
+        }
+        microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
+        clearNotices([Notice.source, Notice.capture])   // about the old source
         let old = audioSource
         audioSource = source
         updateNowPlayingTarget()
@@ -255,9 +258,12 @@ extension AppDelegate {
     func setInputPair(_ index: Int) {
         guard case .input(let uid) = audioSource else { return }
         let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
-        microphoneRequest.supersedeSwitch()   // even a pick of the pair that plays
-        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
-        guard change != .none else { return }
+        guard change != .none else {
+            DebugTrace.log("[AudioSync] channel pair picked again: \(index), nothing changes")
+            return
+        }
+        microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
+        clearNotices([Notice.source, Notice.capture])   // about the old pair
         let old = currentInputPair
         inputPairs[uid] = index == 0 ? nil : index
         autoStartFailed = false

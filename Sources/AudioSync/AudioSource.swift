@@ -166,14 +166,6 @@ enum SourceSwitch {
         if chosen == current { return .none }
         return streaming ? .restart : .remember
     }
-
-    /// The notice subjects a pick of a source or channel pair clears (S163).
-    /// Picking the one that plays again answers "still on <old>", so that
-    /// notice goes; once stopped, the notice says why and stays.
-    static func noticesCleared(by step: Step, streaming: Bool) -> [String] {
-        guard step == .none else { return [Notice.source, Notice.capture] }
-        return streaming ? [Notice.source] : []
-    }
 }
 
 /// A running session moving to another source or input channel pair (S141,
