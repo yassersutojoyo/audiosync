@@ -257,7 +257,7 @@ enum AppTapFollow: Equatable {
     /// The app to name once none of `apps` runs: one that still ran at the
     /// last look (`ranBefore`), so the notice names the app that quit last.
     static func quitApp(of apps: [String], ranBefore: [String]) -> String {
-        apps.first ?? ""
+        apps.first(where: ranBefore.contains) ?? apps.first ?? ""
     }
 }
 

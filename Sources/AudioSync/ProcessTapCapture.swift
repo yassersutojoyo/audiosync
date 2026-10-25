@@ -118,6 +118,9 @@ final class SourceCapture {
     private var tapMark: UInt64 = 0
     /// Set once `onInterrupted` was called, until the next start or stop.
     private var interrupted = false
+    /// The source's apps that ran at the last look where any ran. Kept over a
+    /// stop, so the rebuild after a mix's loss names the app that quit last.
+    private var appsRunning: [String] = []
 
     init() {}
 
@@ -185,8 +188,12 @@ final class SourceCapture {
     /// an app starts while the tap is being built is picked up too.
     private func startApps(_ bundleIDs: [String]) throws {
         let label = bundleIDs.joined(separator: ", ")
-        let pids = bundleIDs.flatMap(Self.runningPIDs(of:))
-        guard !pids.isEmpty else { throw CaptureError.appNotRunning(bundleIDs.first ?? "") }
+        let pidsByApp = bundleIDs.map(Self.runningPIDs(of:))
+        let pids = pidsByApp.flatMap { $0 }
+        guard !pids.isEmpty else {
+            throw CaptureError.appNotRunning(AppTapFollow.quitApp(of: bundleIDs, ranBefore: appsRunning))
+        }
+        appsRunning = zip(bundleIDs, pidsByApp).filter { !$0.1.isEmpty }.map { $0.0 }
         watchAppProcesses()
         let found = Self.audioProcesses(of: pids)
         guard !found.isEmpty else {
@@ -339,8 +346,12 @@ final class SourceCapture {
         if case .mix(_, let ids) = source { apps = ids } else { apps = source.capturedApps }
         guard !apps.isEmpty else { return }
         let bundleID = apps.joined(separator: ", ")
-        let pids = apps.flatMap(Self.runningPIDs(of:))
+        let pidsByApp = apps.map(Self.runningPIDs(of:))
+        let pids = pidsByApp.flatMap { $0 }
         let found = Self.audioProcesses(of: pids)
+        let ranBefore = appsRunning
+        let runningNow = zip(apps, pidsByApp).filter { !$0.1.isEmpty }.map { $0.0 }
+        if !runningNow.isEmpty { appsRunning = runningNow }
         let decision: AppTapFollow
         if excluding {
             guard let own = AudioProcesses.processObject(for: getpid()) else { return }
@@ -359,7 +370,7 @@ final class SourceCapture {
             closeCapture()
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) is gone")
-            interrupt(.sourceLost(.appNotRunning(apps[0])))
+            interrupt(.sourceLost(.appNotRunning(AppTapFollow.quitApp(of: apps, ranBefore: ranBefore))))
         case .retap(let processes):
             retap(bundleID, to: processes)
         }

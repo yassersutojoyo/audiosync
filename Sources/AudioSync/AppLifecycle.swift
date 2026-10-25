@@ -122,7 +122,8 @@ enum AppLifecycle {
     /// (`waitsForRecheck`). The engine stopped the session at the loss, but
     /// the senders and the streaming switch still count it as on.
     enum MixLossStep: Equatable {
-        /// The user started streaming again meanwhile.
+        /// The user started streaming again meanwhile, even if a later loss
+        /// stopped it again: that loss waits on its own.
         case none
         /// Rebuild the mix's session (S227 e).
         case rebuild
@@ -136,7 +137,7 @@ enum AppLifecycle {
 
     static func afterMixLoss(sourceChanged: Bool, userStopped: Bool, engineRunning: Bool,
                              sessionChanged: Bool) -> MixLossStep {
-        if engineRunning { return .none }
+        if engineRunning || sessionChanged { return .none }
         if userStopped { return .stop }
         return sourceChanged ? .start : .rebuild
     }
