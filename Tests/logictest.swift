@@ -2958,6 +2958,102 @@ do {
     check(SourceSwitch.decide(from: music, to: music, streaming: true) == .none,
           "EC5 source: choosing the same source changes nothing")
 
+    // EC5: a switch while streaming keeps the speakers connected (S141, S14).
+    let toMusic = CaptureSwitch.Change.source(from: .system, to: music)
+    let toPair = CaptureSwitch.Change.inputPair(uid: "mic", from: 0, to: 1)
+    let switchName: (AudioSource) -> String = { $0 == .system ? "All System Audio" : "Music" }
+    let switchPair: (String, Int) -> String = { _, index in index == 0 ? "Channels 1-2" : "Channels 3-4" }
+    check(CaptureSwitch.outcome(failure: nil, oldRunning: false) == .switched,
+          "EC5 source: a switch whose new capture starts plays it")
+    check(CaptureSwitch.logLine(.switched, kept: 3, fromRate: 48000, toRate: 48000)
+            == "[AudioSync] source switch: 3 AirPlay or Cast speaker(s) stayed connected, the capture runs at 48000 Hz",
+          "EC5 source: a switch keeps the speakers connected and says how many",
+          CaptureSwitch.logLine(.switched, kept: 3, fromRate: 48000, toRate: 48000))
+    check(CaptureSwitch.logLine(.switched, kept: 2, fromRate: 44100, toRate: 48000)
+            == "[AudioSync] source switch: 2 AirPlay or Cast speaker(s) stayed connected, the capture went from 44100 to 48000 Hz",
+          "EC5 source: a switch from a 44.1 kHz input to a 48 kHz app keeps the speakers at the new rate",
+          CaptureSwitch.logLine(.switched, kept: 2, fromRate: 44100, toRate: 48000))
+    check(CaptureSwitch.outcome(failure: .startFailed, oldRunning: true) == .keptOld(.startFailed),
+          "EC5 source: a new source that can't start gives way to the old one")
+    check(CaptureSwitch.outcome(failure: .microphoneDenied, oldRunning: true) == .keptOld(.microphoneDenied),
+          "EC5 source: a denied microphone keeps the old source playing")
+    check(CaptureSwitch.outcome(failure: .startFailed, oldRunning: false) == .stopped,
+          "EC5 source: streaming stops only when the old source can't start again either")
+    check(CaptureSwitch.message(.keptOld(.startFailed), change: toMusic, sourceName: switchName, pairName: switchPair)
+            == .stillOnOld(new: "Music", old: "All System Audio"),
+          "EC5 source: a failed switch names the new source and the one still playing")
+    check(CaptureSwitch.message(.keptOld(.startFailed), change: toPair, sourceName: switchName, pairName: switchPair)
+            == .stillOnOld(new: "Channels 3-4", old: "Channels 1-2"),
+          "EC5 source: a failed channel pair switch names both pairs")
+    check(CaptureSwitch.message(.keptOld(.microphoneDenied), change: toPair, sourceName: switchName,
+                                pairName: switchPair) == .microphoneDenied,
+          "EC5 source: a denied microphone says where to allow it")
+    check(CaptureSwitch.message(.switched, change: toMusic, sourceName: switchName, pairName: switchPair) == .none
+            && CaptureSwitch.message(.stopped, change: toMusic, sourceName: switchName, pairName: switchPair) == .none,
+          "EC5 source: a switch that works, or a stop with its own start notice, adds no switch notice")
+    check(CaptureSwitch.logLine(.keptOld(.startFailed), kept: 1, fromRate: 48000, toRate: 48000)
+            == "[AudioSync] source switch failed (the new capture didn't start): the old source plays on, "
+            + "1 AirPlay or Cast speaker(s) stayed connected",
+          "EC5 source: a failed switch logs that the speakers stayed",
+          CaptureSwitch.logLine(.keptOld(.startFailed), kept: 1, fromRate: 48000, toRate: 48000))
+    check(UIStrings().sourceSwitchFailed(new: "Music", old: "All System Audio")
+            == "Couldn't start Music, still on All System Audio.",
+          "EC5 source: the failed switch notice names both sources plainly")
+    check(CaptureSwitch.start(hasSpeaker: true, microphone: .notNeeded) == .rebuildCapture
+            && CaptureSwitch.start(hasSpeaker: true, microphone: .allowed) == .rebuildCapture,
+          "EC5 source: a switch rebuilds only the capture and keeps the session")
+    check(CaptureSwitch.start(hasSpeaker: false, microphone: .allowed) == .stopSession,
+          "EC5 source: a switch with no speaker on stops the session")
+    check(CaptureSwitch.start(hasSpeaker: true, microphone: .undetermined) == .askMicrophone,
+          "EC5 source: a switch to an input macOS still has to allow keeps the old source until the answer")
+    check(CaptureSwitch.start(hasSpeaker: true, microphone: .denied) == .keepOld,
+          "EC5 source: a switch to an input the microphone permission denies keeps the old capture")
+    let mic = AudioSource.input(uid: "mic")
+    let toMic = CaptureSwitch.Change.source(from: music, to: mic)
+    let backToMusic = toMic.oldCapture { $0 == "mic" ? 1 : 0 }
+    let fromMic = CaptureSwitch.Change.source(from: mic, to: music).oldCapture { $0 == "mic" ? 1 : 0 }
+    let backToPair = toPair.oldCapture { _ in 1 }
+    check(backToMusic?.source == music && backToMusic?.pair == 0 && fromMic?.source == mic && fromMic?.pair == 1
+            && backToPair?.source == mic && backToPair?.pair == 0,
+          "EC5 source: a failed switch starts the old source on its own stored pair, or the old pair",
+          String(describing: (backToMusic, fromMic, backToPair)))
+    check(CaptureSwitch.answer(granted: true, to: toMic, source: music, pair: 0, running: true) == .switchNow,
+          "EC5 source: an allowed microphone switches to the input under the same speakers")
+    check(CaptureSwitch.answer(granted: false, to: toMic, source: music, pair: 0, running: true) == .keepOld,
+          "EC5 source: a microphone denied at the prompt keeps the old source playing")
+    check(CaptureSwitch.answer(granted: true, to: toMic, source: .system, pair: 0, running: true) == .none
+            && CaptureSwitch.answer(granted: false, to: toMic, source: .system, pair: 0, running: true) == .none,
+          "EC5 source: an answer after the user picked another source changes nothing")
+    check(CaptureSwitch.answer(granted: true, to: toMic, source: music, pair: 0, running: false) == .remember
+            && CaptureSwitch.answer(granted: false, to: toMic, source: music, pair: 0, running: false) == .none,
+          "EC5 source: an answer after streaming stopped only stores an allowed input")
+    check(CaptureSwitch.answer(granted: true, to: toPair, source: mic, pair: 0, running: true) == .switchNow
+            && CaptureSwitch.answer(granted: true, to: toPair, source: mic, pair: 2, running: true) == .none,
+          "EC5 source: a pair switch waits on the prompt only while the old pair is still stored")
+    check(toMusic.stop == .sourceChanged && toPair.stop == .inputPairChanged,
+          "EC5 source: the log names a source change and a pair change apart")
+
+    // S227 Switch: the source app quitting moves the session to the whole
+    // system the way a switch does, under the same speakers.
+    let musicQuits = CaptureSwitch.Change.sourceAppQuit(bundleID: "com.apple.Music")
+    let quitSwitched = CaptureSwitch.logLine(.switched, change: musicQuits, kept: 2, fromRate: 44100, toRate: 48000)
+    check(quitSwitched == "[AudioSync] source app quit (com.apple.Music), the whole system plays: "
+            + "2 AirPlay or Cast speaker(s) stayed connected, the capture went from 44100 to 48000 Hz",
+          "EC6 app quit: switching to the whole system keeps the AirPlay and Cast speakers connected (S227)",
+          quitSwitched)
+    check(musicQuits.stop == .sourceSwitchedToSystem && musicQuits.stop.restarts,
+          "EC6 app quit: the switch to the whole system rebuilds only the capture and logs why (S227)")
+    let quitStopped = CaptureSwitch.logLine(.stopped, change: musicQuits, kept: 0, fromRate: 48000, toRate: 48000)
+    let quitStopLine: String = "[AudioSync] source app quit (com.apple.Music) and the whole system didn't start: "
+        + "streaming stops"
+    let quitNoNotice = CaptureSwitch.message(.stopped, change: musicQuits, sourceName: switchName,
+                                             pairName: switchPair) == .none
+    check(musicQuits.oldCapture { _ in 0 } == nil && quitStopped == quitStopLine && quitNoNotice,
+          "EC6 app quit: a whole system that can't start stops streaming, with no app to go back to (S227)",
+          quitStopped)
+    check(CaptureSwitch.answer(granted: true, to: musicQuits, source: .system, pair: 0, running: true) == .none,
+          "EC6 app quit: the switch to the whole system never waits on the microphone prompt (S227)")
+
     // EC8: every speaker off, then one on again.
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: streaming stops when the last speaker is switched off")
@@ -7620,6 +7716,25 @@ do {
           "microphone: after the answer, a new start may ask again")
     var unasked = MicrophoneRequestGate()
     check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
+    var switches = MicrophoneRequestGate()
+    let toInput = CaptureSwitch.Change.source(from: .system, to: .input(uid: "a"))
+    let toOther = CaptureSwitch.Change.source(from: .system, to: .input(uid: "b"))
+    _ = switches.begin(origin: .user, switching: toInput)
+    _ = switches.begin(origin: .user, switching: toOther)
+    let pending = switches.switching
+    _ = switches.answer()
+    check(pending == toOther && switches.switching == nil,
+          "microphone: the answer runs the latest switch once", "\(String(describing: pending))")
+    var picked = MicrophoneRequestGate()
+    _ = picked.begin(origin: .user, switching: toInput)
+    picked.supersedeSwitch()
+    let droppedSwitch = picked.switching
+    check(droppedSwitch == nil && picked.answer() == nil && picked.begin(origin: .user),
+          "microphone: a later pick drops the switch waiting on the prompt, and its answer runs nothing")
+    var plainStart = MicrophoneRequestGate()
+    _ = plainStart.begin(origin: .user)
+    plainStart.supersedeSwitch()
+    check(plainStart.answer() == .user, "microphone: a later pick leaves a plain start's answer alone")
 }
 
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)
