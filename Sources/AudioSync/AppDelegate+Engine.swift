@@ -45,7 +45,7 @@ extension AppDelegate {
             engine.stop()
         }
         do {
-            try engine.start(source: audioSource, inputPair: currentInputPair)
+            try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
         } catch {
             DebugTrace.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
             if rebuild, let quit = AppLifecycle.sourceQuit(.rebuildFailed(error), source: audioSource,

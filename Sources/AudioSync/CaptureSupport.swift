@@ -1,4 +1,5 @@
 import CoreAudio
+import Foundation
 
 // The parts of the capture stage that need no audio hardware, so the logic
 // suite can check them: how the IOProc turns whatever buffers Core Audio hands
@@ -250,6 +251,32 @@ enum AppTapFollow: Equatable {
         return decision == .lost && !secondLook ? .lookAgain : decision
     }
 
+    /// One instance of an app as macOS lists it at the moment of a look.
+    struct ListedApp: Equatable {
+        let bundleID: String?
+        let pid: pid_t
+        let terminated: Bool
+    }
+
+    /// The processes of `bundleID` that are alive now, sorted, once each;
+    /// none means the app quit (S164). They are the instances macOS lists
+    /// under that ID in any letter case plus the ones an earlier look found
+    /// (`seen`): pausing ends an app's audio process but not the app, macOS's
+    /// list can miss a running app, and an app can quit without a terminate
+    /// notice while the list still shows it, so a live process decides.
+    static func runningPIDs(of bundleID: String, listed: [ListedApp], seen: [pid_t],
+                            alive: (pid_t) -> Bool) -> [pid_t] {
+        let named = listed.filter {
+            !$0.terminated && $0.bundleID?.caseInsensitiveCompare(bundleID) == .orderedSame
+        }
+        return Set(named.map(\.pid) + seen).filter { $0 > 0 && alive($0) }.sorted()
+    }
+
+    /// Whether process `pid` exists; EPERM means it does, under another user.
+    static func processExists(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
+    }
+
     /// The processes an app tap may cover: the app's audio processes, sorted,
     /// once each, never AudioSync's own (`own`). AudioSync counts as one of the
     /// app's processes when the app launched it (a terminal, say), and tapping
@@ -278,6 +305,15 @@ enum AppTapFollow: Equatable {
     /// when its last audio process ends. An "all except" tap outlives its apps.
     static func followsRunningApps(_ source: AudioSource) -> Bool {
         !source.capturedApps.isEmpty
+    }
+
+    /// Whether the capture looks for its apps' quit every `AppLifecycle.waitRecheck`
+    /// (S164): only while an app source waits for an audio process, since a
+    /// paused app that quits then ends no audio process and may send no
+    /// terminate notice.
+    static func rechecksWhileWaiting(_ source: AudioSource?, tapped: [AudioObjectID], interrupted: Bool) -> Bool {
+        guard let source, !interrupted else { return false }
+        return followsRunningApps(source) && tapped.isEmpty
     }
 }
 
