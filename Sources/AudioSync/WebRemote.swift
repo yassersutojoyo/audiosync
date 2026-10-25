@@ -77,6 +77,9 @@ final class WebRemote {
     /// The server accepts only the `.local` name it started with as a Host.
     private var startedLocalName: String?
     private var nowPlayingNeeded = false
+    /// The port the debug switch started this run's remote on; never saved,
+    /// and dropped once the user changes the setting.
+    private var debugPort: Int?
 
     var isRunning: Bool { handle != nil }
     /// A remote nobody paired with costs no Now Playing polling and raises no Automation prompt.
@@ -95,7 +98,10 @@ final class WebRemote {
     }
 
     func startIfEnabled() {
-        if settings.enabled { start() }
+        debugPort = RemoteDebugSwitch.port(environment: ProcessInfo.processInfo.environment,
+                                           debugLog: DebugTrace.enabled, savedPort: settings.port)
+        if debugPort != nil { DebugTrace.log("[AudioSync] web remote: remote: on for this run (debug switch)") }
+        if settings.enabled || debugPort != nil { start() }
     }
 
     /// The window opened: a code shown earlier stops working (design: a new code each time).
@@ -111,6 +117,7 @@ final class WebRemote {
     private func setEnabled(_ on: Bool) {
         guard on != settings.enabled else { return }
         settings.enabled = on
+        debugPort = nil
         store.save(webRemote: on)
         DebugTrace.log("[AudioSync] web remote turned \(on ? "on" : "off")")
         if on { start() } else { stop() }
@@ -118,6 +125,7 @@ final class WebRemote {
 
     private func usePort(_ port: Int) {
         settings.port = port
+        debugPort = nil
         store.save(webRemotePort: port)
         guard settings.enabled else { return }
         stop()
@@ -159,7 +167,8 @@ final class WebRemote {
         guard handle == nil else { return }
         refreshAddresses()
         startedLocalName = settings.addresses.localHostName
-        let config = RemoteStartConfig.make(port: settings.port, localName: startedLocalName,
+        let port = debugPort ?? settings.port
+        let config = RemoteStartConfig.make(port: port, localName: startedLocalName,
                                             devicesPath: Self.devicesFile?.path, debugLog: DebugTrace.enabled)
         guard let data = try? JSONSerialization.data(withJSONObject: config) else { return }
         let box = Unmanaged.passRetained(RemoteInbox(owner: self))
@@ -169,8 +178,8 @@ final class WebRemote {
         }
         guard let created else {
             box.release()
-            settings.status = .failed(error: error, port: settings.port)
-            DebugTrace.log("[AudioSync] web remote didn't start on port \(settings.port): error \(error)")
+            settings.status = .failed(error: error, port: port)
+            DebugTrace.log("[AudioSync] web remote didn't start on port \(port): error \(error)")
             return
         }
         handle = created

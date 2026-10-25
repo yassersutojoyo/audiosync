@@ -63,6 +63,31 @@ pub fn parse_port(text: &str) -> Option<u16> {
         .filter(|port| *port >= MIN_PORT)
 }
 
+/// Set to `1` with the debug log on, starts the web remote for this run
+/// without touching its setting, so a browser check needs no click in the window.
+pub const DEBUG_SWITCH_VAR: &str = "AUDIOSYNC_WEB_REMOTE";
+/// The port for [`DEBUG_SWITCH_VAR`]'s run.
+pub const DEBUG_PORT_VAR: &str = "AUDIOSYNC_WEB_REMOTE_PORT";
+
+/// The port the debug switch starts the remote on: [`DEBUG_PORT_VAR`] when
+/// the setting would take it, the saved port otherwise. None unless the
+/// debug log is on and the switch is exactly `1`.
+pub fn debug_switch_port(
+    debug_log: bool,
+    switch: Option<&std::ffi::OsStr>,
+    port: Option<&std::ffi::OsStr>,
+    saved: RemoteSettings,
+) -> Option<u16> {
+    if !debug_log || switch.and_then(std::ffi::OsStr::to_str) != Some("1") {
+        return None;
+    }
+    Some(
+        port.and_then(std::ffi::OsStr::to_str)
+            .and_then(parse_port)
+            .unwrap_or(saved.clamped().port),
+    )
+}
+
 /// Whether Use Port takes `text`: a valid port other than `current`, or
 /// `current` again after listening on it failed.
 pub fn use_port_enabled(text: &str, current: u16, failed_on_port: bool) -> bool {

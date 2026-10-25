@@ -390,6 +390,20 @@ enum RemoteStartConfig {
     }
 }
 
+/// `AUDIOSYNC_WEB_REMOTE=1` with the debug log on starts the web remote for
+/// one run without touching its setting, so a browser check needs no click.
+enum RemoteDebugSwitch {
+    static let switchKey = "AUDIOSYNC_WEB_REMOTE"
+    static let portKey = "AUDIOSYNC_WEB_REMOTE_PORT"
+
+    /// The port for that run: `AUDIOSYNC_WEB_REMOTE_PORT` when the setting
+    /// would take it, the saved port otherwise; nil when the switch is off.
+    static func port(environment: [String: String], debugLog: Bool, savedPort: Int) -> Int? {
+        guard debugLog, environment[switchKey] == "1" else { return nil }
+        return environment[portKey].flatMap(RemotePort.parse) ?? savedPort
+    }
+}
+
 /// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…], "seen": [Unix seconds…]}`),
 /// read and cleared here while the remote is off, so a lost phone can be
 /// unpaired before the remote is turned on again.
