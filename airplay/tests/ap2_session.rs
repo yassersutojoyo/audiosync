@@ -17,7 +17,7 @@ use plist::Value;
 
 use common::ap2::{
     Ap2Rig, DATA_PORT, EVENT_PORT, FakeAp2, FakeFraming, RECEIVER_CONTROL_PORT, STREAM_ID,
-    ap2_config, dict, int, plist, read_dict, read_value,
+    ap2_config, dict, int, plist, read_dict, read_value, request_key,
 };
 use common::{CONTROL_PORT, RECEIVER, SENDER, TIMING_PORT, ids};
 
@@ -934,28 +934,34 @@ fn an_untraced_session_logs_no_set_parameter_lines() {
     assert!(traces(&rig).is_empty(), "{:?}", traces(&rig));
 }
 
-/// The `Session` header of every request after the session SETUP.
-fn session_headers(rig: &Ap2Rig) -> Vec<(Method, Option<String>)> {
+/// Every request's key and `Session` header, in order.
+fn session_headers(rig: &Ap2Rig) -> Vec<(String, Option<String>)> {
     rig.fake
         .requests
         .iter()
-        .map(|(request, _)| request)
-        .skip_while(|request| request.method != Method::Setup)
-        .skip(1)
-        .map(|request| {
+        .map(|(request, _)| {
             let session = request.headers.get("Session").map(str::to_owned);
-            (request.method, session)
+            (request_key(request), session)
         })
         .collect()
 }
 
-// covers: P25
-#[test]
-fn the_session_setup_answers_session_goes_on_every_later_rtsp_request() {
-    let mut fake = FakeAp2::new();
-    fake.session = Some("5A1B2C3D".to_owned());
+const CARRYING: [&str; 5] = [
+    "RECORD",
+    "SET_PARAMETER",
+    "GET_PARAMETER",
+    "FLUSH",
+    "TEARDOWN",
+];
+
+/// Plays 4 s with reads on, sets a volume, then tears down; every one of
+/// the five methods went out and nothing warned.
+fn play_and_tear_down(fake: FakeAp2, ptp: bool) -> Ap2Rig {
     let mut config = ap2_config();
     config.read_volume = true;
+    if ptp {
+        config.ptp = Some(ptp_peer());
+    }
     let mut rig = Ap2Rig::new(config, fake);
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
     let now = rig.now;
@@ -965,37 +971,60 @@ fn the_session_setup_answers_session_goes_on_every_later_rtsp_request() {
     let now = rig.now;
     rig.session.teardown(now);
     rig.pump();
-    let carrying = [
-        Method::Record,
-        Method::SetParameter,
-        Method::GetParameter,
-        Method::Flush,
-        Method::Teardown,
-    ];
     let headers = session_headers(&rig);
-    for method in carrying {
-        assert!(headers.iter().any(|(m, _)| *m == method), "{headers:?}");
-    }
-    for (method, session) in &headers {
-        if carrying.contains(method) {
-            assert_eq!(session.as_deref(), Some("5A1B2C3D"), "{method:?}");
-        }
+    for key in CARRYING {
+        assert!(headers.iter().any(|(k, _)| k == key), "{headers:?}");
     }
     let warned = rig
         .events
         .iter()
         .any(|event| matches!(event, Ap2Event::Warning(_)));
     assert!(!warned, "{:?}", rig.events);
+    rig
+}
+
+/// Nothing up to the last session SETUP carries `Session`; after it the
+/// five methods carry `id` and the stream SETUP none.
+fn assert_session_after_setup(rig: &Ap2Rig, id: &str) {
+    let headers = session_headers(rig);
+    let setup = headers
+        .iter()
+        .rposition(|(key, _)| key == "SETUP session")
+        .expect("session SETUP");
+    for (key, session) in &headers[..=setup] {
+        assert_eq!(session.as_deref(), None, "{key}: {headers:?}");
+    }
+    for (key, session) in &headers[setup + 1..] {
+        let wanted = CARRYING.contains(&key.as_str()).then_some(id);
+        assert_eq!(session.as_deref(), wanted, "{key}: {headers:?}");
+    }
+    assert!(headers.iter().any(|(key, _)| key == "SETUP stream"));
+}
+
+// covers: P25
+#[test]
+fn the_session_setup_answers_session_goes_on_every_later_rtsp_request() {
+    let mut fake = FakeAp2::new();
+    fake.session = Some("5A1B2C3D".to_owned());
+    let rig = play_and_tear_down(fake, false);
+    assert_session_after_setup(&rig, "5A1B2C3D");
 }
 
 // covers: P25
 #[test]
 fn a_session_setup_answer_without_session_leaves_the_header_out() {
-    let mut rig = transient();
-    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
-    let now = rig.now;
-    rig.session.teardown(now);
-    rig.pump();
+    let rig = play_and_tear_down(FakeAp2::new(), false);
     let headers = session_headers(&rig);
     assert!(headers.iter().all(|(_, s)| s.is_none()), "{headers:?}");
+}
+
+// covers: P25, P157
+#[test]
+fn a_session_setup_retried_on_a_new_connection_uses_only_the_new_answers_session() {
+    let mut fake = ptp_fake();
+    fake.session = Some("5A1B2C3D".to_owned());
+    fake.status_once.insert("SETUP session".to_owned(), 501);
+    let rig = play_and_tear_down(fake, true);
+    assert_eq!(rig.fake.connections, 2);
+    assert_session_after_setup(&rig, "5A1B2C3D-2");
 }

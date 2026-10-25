@@ -226,8 +226,8 @@ pub struct FakeAp2 {
     /// Every volume SET_PARAMETER, whatever its status, sets the level a
     /// GET_PARAMETER answers, rounded to this step in dB.
     pub applies_volume: Option<f64>,
-    /// The session SETUP answer's `Session`, which every later
-    /// SET_PARAMETER must carry or get 500 (P25).
+    /// The session SETUP answer's `Session` (see [`FakeAp2::session_id`]),
+    /// which every later SET_PARAMETER must carry or get 500 (P25).
     pub session: Option<String>,
     /// The body of the answer to the second `/info`, in place of the
     /// initial volume alone.
@@ -287,6 +287,16 @@ impl FakeAp2 {
             transient: false,
             parser: Parser::new(),
         }
+    }
+
+    /// The `Session` ID handed out on the current connection: `session`
+    /// on the first, with `-<connection>` appended on a later one.
+    pub fn session_id(&self) -> Option<String> {
+        let session = self.session.as_ref()?;
+        Some(match self.connections {
+            0 | 1 => session.clone(),
+            n => format!("{session}-{n}"),
+        })
     }
 
     /// A new RTSP connection: plain text again.
@@ -385,14 +395,14 @@ impl FakeAp2 {
                 self.hap.answer(&request)
             } else if key == "SET_PARAMETER"
                 && self.session.is_some()
-                && request.headers.get("Session") != self.session.as_deref()
+                && request.headers.get("Session") != self.session_id().as_deref()
             {
                 Response::new(500, "Internal Server Error")
             } else {
                 self.answer(&request, &key)
             };
             if key == "SETUP session"
-                && let Some(session) = &self.session
+                && let Some(session) = self.session_id()
             {
                 response
                     .headers
