@@ -296,6 +296,9 @@ pub enum AirPlayProblem {
     /// An Apple TV whose home theater group plays: its sound goes to those
     /// speakers, so it is off.
     PlaysThroughSpeakers,
+    /// A paired Apple TV didn't prove it is the one that was paired, so it
+    /// is off; its stored pairing stays (P56).
+    ReceiverUnverified,
     /// A home theater group whose Apple TV plays by itself, so the group is
     /// off.
     AppleTvPlays,

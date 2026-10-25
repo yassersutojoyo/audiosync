@@ -645,6 +645,7 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
         // A session to an Apple TV whose credentials it turned down, or a
         // receiver that wants another kind of pairing.
         UserReason::PairingRequired => AirPlayProblem::PairingNotYet,
+        UserReason::ReceiverUnverified => AirPlayProblem::ReceiverUnverified,
         UserReason::Unsupported(UnsupportedReason::AirPlay2Only) => AirPlayProblem::AirPlay2NotYet,
         UserReason::Unsupported(UnsupportedReason::Timing) => AirPlayProblem::TimingUnavailable,
         UserReason::Unsupported(UnsupportedReason::OneAirPlay2Session) => {
@@ -5421,6 +5422,37 @@ pub mod tests {
             problem: AirPlayProblem::NeedsPin
         }));
         assert!(!airplay.speakers()[0].paired);
+        assert!(airplay.enabled_ids().is_empty());
+    }
+
+    #[test]
+    fn a_tv_that_fails_its_signature_check_goes_off_and_keeps_its_credentials() {
+        let fake = FakeAirPlay::new();
+        let mut store = PairingStore::in_memory();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        store
+            .insert(
+                &id,
+                crate::audio::pairings::tests::credentials("0123456789ABCDEF", 3),
+            )
+            .unwrap();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.fail(&tv, ErrorKind::ReceiverUnverified);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::ReceiverUnverified
+            }),
+            "{events:?}"
+        );
+        assert!(airplay.store.contains(&id), "the pairing stays");
+        assert!(airplay.speakers()[0].paired);
         assert!(airplay.enabled_ids().is_empty());
     }
 

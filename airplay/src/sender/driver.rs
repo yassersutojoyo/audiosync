@@ -2125,8 +2125,11 @@ mod tests {
             vec![1, 0, 0, 0]
         }
 
-        fn second_request(&mut self, _first_response: &[u8]) -> Option<Vec<u8>> {
-            Some(vec![0, 0, 0, 0])
+        fn second_request(
+            &mut self,
+            _first_response: &[u8],
+        ) -> Result<Vec<u8>, crate::session::VerifyFailure> {
+            Ok(vec![0, 0, 0, 0])
         }
     }
 

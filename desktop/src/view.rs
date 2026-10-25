@@ -3889,6 +3889,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::TimingUnavailable => AirPlayProblem::TimingUnavailable,
         P::OneAirPlay2Speaker => AirPlayProblem::OneAirplay2Speaker,
         P::PlaysThroughSpeakers => AirPlayProblem::PlaysThroughSpeakers,
+        P::ReceiverUnverified => AirPlayProblem::ReceiverUnverified,
         P::AppleTvPlays => AirPlayProblem::AppleTvPlays,
         P::PlaysInGroup => AirPlayProblem::PlaysInGroup,
         P::Unsupported => AirPlayProblem::Unsupported,
@@ -8155,6 +8156,11 @@ mod tests {
                 ui_model::AirPlayProblem::PlaysInGroup,
                 "Right",
                 "Right plays as part of its stereo pair or home theater group",
+            ),
+            (
+                ui_model::AirPlayProblem::ReceiverUnverified,
+                "Den TV",
+                "Den TV didn't prove it's the speaker you paired, so AudioSync didn't connect and turned it off.",
             ),
         ] {
             let text = notice_text(

@@ -364,7 +364,6 @@ fn legacy_pairing_vector_is_reproduced() {
     let second = verifier.second_request(&answer).expect("a second body");
     assert_eq!(second[..4], [0, 0, 0, 0]);
     assert_eq!(second[4..], hex(p145::ENCRYPTED_SIGNATURE)[..]);
-    assert_eq!(verifier.take_warning(), None, "no receiver key to check");
 }
 
 // covers: P50

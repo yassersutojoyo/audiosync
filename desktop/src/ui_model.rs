@@ -184,6 +184,8 @@ pub enum AirPlayProblem {
     OneAirPlay2Speaker,
     /// An Apple TV whose home theater group plays, so it is off.
     PlaysThroughSpeakers,
+    /// It didn't prove it is the speaker that was paired, so it is off.
+    ReceiverUnverified,
     /// A home theater group whose Apple TV plays by itself, so it is off.
     AppleTvPlays,
     /// A member of a pair or group that plays as part of it, so it is off.

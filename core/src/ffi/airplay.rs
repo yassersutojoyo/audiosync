@@ -285,8 +285,6 @@ pub const AIRPLAY_WARNING_AUTH_SETUP_FAILED: i32 = 2;
 /// A volume, metadata, flush or keep-alive request failed (P127, P131,
 /// P138).
 pub const AIRPLAY_WARNING_REQUEST_FAILED: i32 = 3;
-/// The receiver's pair-verify signature didn't check out (P56).
-pub const AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID: i32 = 4;
 /// PTP port 319 or 320 can't be bound, so receivers that need PTP timing
 /// can't play; reported once per sender (P158).
 pub const AIRPLAY_WARNING_PTP_PORTS_TAKEN: i32 = 5;
@@ -349,6 +347,9 @@ pub const AIRPLAY_ERROR_PAIRING_REQUIRED: i32 = 8;
 pub const AIRPLAY_ERROR_UNSUPPORTED: i32 = 9;
 /// A pairing's receiver turned the PIN down (P52).
 pub const AIRPLAY_ERROR_WRONG_PIN: i32 = 10;
+/// A paired speaker didn't prove it is the one that was paired, so the
+/// sender didn't connect; its stored credentials stay (P56).
+pub const AIRPLAY_ERROR_RECEIVER_UNVERIFIED: i32 = 11;
 
 /// What [`asc_airplay_open_pairings`] returns when it can't open a store:
 /// a null or dead handle, or a path that isn't UTF-8.
@@ -746,6 +747,7 @@ fn error_code(reason: UserReason) -> (i32, i32) {
         UserReason::WrongPassword => (AIRPLAY_ERROR_WRONG_PASSWORD, AIRPLAY_REASON_NONE),
         UserReason::PairingRequired => (AIRPLAY_ERROR_PAIRING_REQUIRED, AIRPLAY_REASON_NONE),
         UserReason::Unsupported(reason) => (AIRPLAY_ERROR_UNSUPPORTED, reason_code(reason)),
+        UserReason::ReceiverUnverified => (AIRPLAY_ERROR_RECEIVER_UNVERIFIED, AIRPLAY_REASON_NONE),
     }
 }
 
@@ -868,7 +870,6 @@ fn warning_code(warning: &Warning) -> i32 {
         Warning::JackDisconnected => AIRPLAY_WARNING_JACK_DISCONNECTED,
         Warning::AuthSetupFailed { .. } => AIRPLAY_WARNING_AUTH_SETUP_FAILED,
         Warning::RequestFailed { .. } => AIRPLAY_WARNING_REQUEST_FAILED,
-        Warning::ReceiverSignatureInvalid => AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID,
         Warning::PtpUnavailable => AIRPLAY_WARNING_PTP_PORTS_TAKEN,
         Warning::PtpOutsideFamily => AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY,
         Warning::VolumeReadsStopped => AIRPLAY_WARNING_VOLUME_READS_STOPPED,
@@ -5617,6 +5618,10 @@ mod tests {
         .collect();
         assert_eq!(codes, (1..=9).collect::<Vec<i32>>());
         assert_eq!(
+            error_code(UserReason::ReceiverUnverified),
+            (AIRPLAY_ERROR_RECEIVER_UNVERIFIED, AIRPLAY_REASON_NONE)
+        );
+        assert_eq!(
             error_code(UserReason::Unsupported(UnsupportedReason::Timing)),
             (AIRPLAY_ERROR_UNSUPPORTED, AIRPLAY_REASON_TIMING)
         );
@@ -7228,6 +7233,27 @@ mod tests {
         );
         assert!(!paired.detail.contains("0123456789ABCDEF"));
         assert!(inside(handle).pairing.is_empty());
+
+        // A device at its address that can't sign as it: the user is told,
+        // and the credentials stay, so it can't wipe the pairing.
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::Error(SpeakerError {
+                error: audiosync_airplay::error::SessionError::new(ErrorKind::ReceiverUnverified),
+                reason: UserReason::ReceiverUnverified,
+                retry_at: None,
+            }),
+        });
+        let events = events_until(handle, |events| {
+            events.iter().any(|e| e.kind == AIRPLAY_EVENT_ERROR)
+        });
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == AIRPLAY_EVENT_ERROR
+                    && e.error == AIRPLAY_ERROR_RECEIVER_UNVERIFIED)
+        );
+        assert!(inside(handle).store.contains(id), "kept");
 
         // The Apple TV was reset: it turns the credentials down.
         inside(handle).take_in(SenderEvent::Speaker {

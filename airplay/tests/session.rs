@@ -7,7 +7,7 @@ mod common;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::Duration;
 
-use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
+use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
 use audiosync_airplay::ids::{Entropy, EntropyUnavailable, OsEntropy, SessionIds};
 use audiosync_airplay::metadata::{Artwork, Metadata, MetadataError, MetadataSupport, TrackInfo};
 use audiosync_airplay::rtsp::{JackKind, JackStatus, Method};
@@ -15,7 +15,7 @@ use audiosync_airplay::sdp::{self, Codec};
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::session::{
     MediaDestinations, Output, RESPONSE_TIMEOUT, ReceiverPorts, SessionConfig, SessionEvent, State,
-    UdpSendResult, Verifier,
+    UdpSendResult, Verifier, VerifyFailure,
 };
 use audiosync_airplay::volume::Volume;
 use common::{
@@ -155,8 +155,8 @@ fn media_waits_for_the_record_answer_and_stops_at_teardown() {
 #[derive(Default)]
 struct FakeVerifier {
     seen: Vec<Vec<u8>>,
-    /// Reported after each second request.
-    warn: bool,
+    /// The receiver's signature fails the check.
+    unverified: bool,
     renewals: usize,
 }
 
@@ -165,13 +165,15 @@ impl Verifier for FakeVerifier {
         vec![1, 0, 0, 0]
     }
 
-    fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>> {
+    fn second_request(&mut self, first_response: &[u8]) -> Result<Vec<u8>, VerifyFailure> {
         self.seen.push(first_response.to_vec());
-        (first_response.len() == 96).then(|| vec![0, 0, 0, 0])
-    }
-
-    fn take_warning(&mut self) -> Option<Warning> {
-        self.warn.then_some(Warning::ReceiverSignatureInvalid)
+        if first_response.len() != 96 {
+            return Err(VerifyFailure::Malformed);
+        }
+        if self.unverified {
+            return Err(VerifyFailure::ReceiverUnverified);
+        }
+        Ok(vec![0, 0, 0, 0])
     }
 
     fn renew(&mut self) -> bool {
@@ -244,16 +246,21 @@ fn a_verify_answer_that_is_not_96_bytes_is_a_failed_verification() {
 
 // covers: P56
 #[test]
-fn a_receiver_signature_that_fails_its_check_is_only_a_warning() {
+fn a_receiver_signature_that_fails_its_check_ends_the_session_without_a_retry() {
     let mut config = common::config();
     config.verifier = Some(Box::new(FakeVerifier {
-        warn: true,
+        unverified: true,
         ..FakeVerifier::default()
     }));
     let mut link = Link::new(config, FakeReceiver::new());
     link.connect();
-    assert_eq!(link.session.state(), State::Playing);
-    assert_eq!(warnings(&link), [Warning::ReceiverSignatureInvalid]);
+    let error = link.failure().expect("failed");
+    assert_eq!(error.kind, ErrorKind::ReceiverUnverified);
+    assert_eq!(error.kind.user_reason(), UserReason::ReceiverUnverified);
+    assert!(error.kind.needs_user());
+    assert_eq!(link.keys(), ["POST /pair-verify"]);
+    assert!(link.closed);
+    assert!(warnings(&link).is_empty());
 }
 
 // covers: P58
