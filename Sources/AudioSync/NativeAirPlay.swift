@@ -212,10 +212,13 @@ final class NativeAirPlay {
             soundWatch?.invalidate()
             soundWatch = nil
         } else if soundWatch == nil {
-            soundWatch = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] timer in
+            // Common modes, so an open menu doesn't hold the resume back.
+            let watch = Timer(timeInterval: 0.25, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
                 self.applyPause(self.explicitPause.heard(sound: NativeAirPlayTap.soundSeconds, at: Date()))
             }
+            RunLoop.main.add(watch, forMode: .common)
+            soundWatch = watch
         }
     }
 
