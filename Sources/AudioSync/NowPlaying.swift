@@ -22,12 +22,15 @@ final class NowPlayingMonitor {
         var artwork: NSImage?
         /// Nil when the player gives no length, as for a radio stream.
         var position: Position? = nil
+        /// As the explicit pause reads it (`ExplicitPause.playerState`).
+        var playerState: Bool? = nil
 
         /// Leaves `position` out: it moves on all the time, and only a jump
         /// is news (`Position.jumped`).
         static func == (a: Track, b: Track) -> Bool {
             a.bundleID == b.bundleID && a.title == b.title && a.artist == b.artist
-                && a.album == b.album && a.isPlaying == b.isPlaying && (a.artwork == nil) == (b.artwork == nil)
+                && a.album == b.album && a.isPlaying == b.isPlaying && a.playerState == b.playerState
+                && (a.artwork == nil) == (b.artwork == nil)
         }
     }
 
@@ -402,7 +405,8 @@ final class NowPlayingMonitor {
                                 length: Double(lengthMs) / 1000, readAt: readAt, playing: isPlaying)
         }
         return .track(Track(bundleID: bundleID, appName: appName, title: parts[1], artist: parts[2],
-                            album: parts[3], isPlaying: isPlaying, artwork: nil, position: position))
+                            album: parts[3], isPlaying: isPlaying, artwork: nil, position: position,
+                            playerState: ExplicitPause.playerState(parts[0])))
     }
 
     private func artwork(for t: Track) -> NSImage? {
@@ -493,9 +497,14 @@ struct ExplicitPause {
 
     var isPaused: Bool { pausedAt != nil }
 
-    /// A player's scripted `state` as the pause reads it.
+    /// A player's scripted `state` as the pause reads it: playing, paused,
+    /// or nil for any other, so seeking or a stop is never taken for a pause.
     static func playerState(_ state: String) -> Bool? {
-        state == "playing"
+        switch state {
+        case "playing": return true
+        case "paused": return false
+        default: return nil
+        }
     }
 
     /// A play-pause goes to `app`, read as playing, paused or (nil) not at

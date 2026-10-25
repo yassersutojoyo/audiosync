@@ -242,10 +242,13 @@ extension AppDelegate {
         nowPlaying.send(command)
     }
 
-    /// A reading of the players that started at `startedAt` (P213).
+    /// A reading of the players that started at `startedAt` (P213), with
+    /// the player's state as the pause reads it.
     func nowPlayingRead(startedAt: Date) {
-        let playback = controlledPlayback
-        nativeAirPlay?.readPause(app: playback.app, playing: playback.playing, startedAt: startedAt,
+        let controlled = nowPlaying.controlledBundleID
+        let reading = nowPlaying.hasReading ? nowPlaying.track : nil
+        let playing = reading.flatMap { $0.bundleID == controlled ? $0.playerState : nil }
+        nativeAirPlay?.readPause(app: controlled, playing: playing, startedAt: startedAt,
                                  sending: sendsTrackInfo)
     }
 

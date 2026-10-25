@@ -544,9 +544,12 @@ impl TrackInfo {
     }
 
     /// The session that counts as the explicit pause reads it (S292): its
-    /// app ID and whether it plays.
+    /// app ID and whether it plays; `None` unless it plays or is paused,
+    /// so a stop or a track change is never taken for a pause.
     pub fn player_state(&self) -> Option<(String, bool)> {
-        self.playback()
+        self.following.as_ref()?;
+        let session = &self.reading.as_ref()?.track.as_ref()?.session;
+        (session.playing || session.paused).then(|| (session.app_id.clone(), session.playing))
     }
 
     /// Sends a speaker remote's control to the session that counts.
