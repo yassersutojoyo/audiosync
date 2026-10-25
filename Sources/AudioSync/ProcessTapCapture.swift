@@ -369,6 +369,8 @@ final class SourceCapture {
             closeCapture()
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process now; waiting for one")
+        case .lookAgain:
+            return
         case .lost:
             closeCapture()
             tapped = []

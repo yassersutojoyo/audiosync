@@ -5138,7 +5138,8 @@ do {
           "mix quit: an app source's capture looks at its apps again whenever an app quits, audio process or not")
     func lastQuit(_ setting: WhenSourceQuits) -> String {
         guard AppTapFollow.followsRunningApps(pair) else { return "unseen" }
-        guard AppTapFollow.decide(tapped: [], found: [], appRunning: false) == .lost else { return "waits" }
+        guard AppTapFollow.look(tapped: [], found: [], appRunning: false, secondLook: false) == .lookAgain,
+              AppTapFollow.look(tapped: [], found: [], appRunning: false, secondLook: true) == .lost else { return "waits" }
         let named = AppTapFollow.quitApp(of: pair.capturedApps, ranBefore: ["com.apple.podcasts"])
         guard AppLifecycle.waitsForRecheck(.captureLost(.appNotRunning(named)), source: pair),
               afterLoss(changed: false, stopped: false, running: false) == .rebuild else { return "no rebuild" }
@@ -5150,6 +5151,26 @@ do {
     check(lastQuit(.system) == "switchToSystem com.apple.podcasts" && lastQuit(.stop) == "stop com.apple.podcasts",
           "mix quit: the mix's last app quitting with no audio process is judged again and acts as set",
           "\(lastQuit(.system)), \(lastQuit(.stop))")
+    check(AppTapFollow.look(tapped: [5], found: [], appRunning: false, secondLook: false) == .lookAgain
+            && AppTapFollow.look(tapped: [5], found: [], appRunning: false, secondLook: true) == .lost
+            && AppTapFollow.look(tapped: [5], found: [5, 9], appRunning: true, secondLook: false) == .retap([5, 9])
+            && AppTapFollow.look(tapped: [5], found: [], appRunning: true, secondLook: false) == .wait,
+          "mix quit: a look that finds none of the apps running looks again a moment later before the source counts as lost")
+    // Podcasts quits while Music runs on; in that turn macOS's list can miss Music too.
+    func memberQuits() -> String {
+        let first = AppTapFollow.look(tapped: [5, 8], found: [], appRunning: false, secondLook: false)
+        guard first == .lookAgain else { return "capture lost at once (\(first))" }
+        let second = AppTapFollow.look(tapped: [5, 8], found: [5], appRunning: true, secondLook: true)
+        guard second == .retap([5]) else { return "second look: \(second)" }
+        let notice = Report.terminated(bundleID: "com.apple.podcasts", streaming: true)
+        guard AppLifecycle.waitsForRecheck(notice, source: pair) else { return "judged in the quit's turn" }
+        let judged = AppLifecycle.sourceQuit(.mixAppGone(bundleID: "com.apple.podcasts", streaming: true), source: pair,
+                                             setting: .system, isRunning: { $0 == "com.apple.Music" })
+        return judged.map { "\($0.action) \($0.bundleID)" } ?? "keep"
+    }
+    check(memberQuits() == "keep",
+          "mix quit: an app of a mix quitting while another runs loses no capture; its own quit notice is judged and the mix goes on",
+          memberQuits())
     func noticeQuit(_ report: Report) -> String {
         guard let answer = AppLifecycle.sourceQuit(report, source: pair, setting: .system, isRunning: { _ in false })
         else { return "keep" }
