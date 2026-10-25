@@ -151,6 +151,13 @@ struct AppSettings: Equatable {
 
     /// Reads every setting through `read`, which returns what is stored for a
     /// key (UserDefaults' `object(forKey:)`), or nil.
+    /// The settings a launch starts from. `holdingSpeakersOff` (a debug launch
+    /// without auto-connect, `LaunchAutoConnect`) leaves every speaker off,
+    /// whatever was saved as on.
+    func atLaunch(holdingSpeakersOff: Bool) -> AppSettings {
+        self
+    }
+
     static func load(_ read: (String) -> Any?) -> AppSettings {
         var s = AppSettings()
         s.source = AudioSource(defaultsValue: read(Keys.source) as? String)
@@ -270,6 +277,13 @@ struct SettingsStore {
     static var standard: SettingsStore {
         SettingsStore(read: { UserDefaults.standard.object(forKey: $0) },
                       write: { UserDefaults.standard.set($0, forKey: $1) })
+    }
+
+    /// This store with every write kept in memory for the run: reads see the
+    /// run's own changes, and nothing reaches `self`. A debug launch without
+    /// auto-connect (`LaunchAutoConnect`) leaves the saved settings as they were.
+    func memoryOnly() -> SettingsStore {
+        self
     }
 
     /// Brings older forms up to date (`migrate`, `migrateZones`,

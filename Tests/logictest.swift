@@ -551,6 +551,30 @@ do {
           && !LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "1"])
           && !LaunchAutoConnect.skips(environment: ["AUDIOSYNC_DEBUG": "1", "AUDIOSYNC_NO_AUTO_CONNECT": "true"]),
           "auto-connect: ignored without the debug log, and unless it is exactly 1")
+    typealias Keys = AppSettings.Keys
+    final class Saved { var values: [String: Any] = [:] }
+    let saved = Saved()
+    let disk = SettingsStore(read: { saved.values[$0] }, write: { value, key in saved.values[key] = value })
+    disk.save(ids: ["native:AABBCCDDEE01"], forKey: Keys.enabledAirPlay)
+    disk.save(ids: ["BuiltInSpeakerDevice"], forKey: Keys.enabledLocal)
+    disk.save(ids: ["ap:native:AABBCCDDEE01"], forKey: Keys.autoConnect)
+    _ = disk.load()
+    let before = NSDictionary(dictionary: saved.values)
+    let run = disk.memoryOnly()
+    let held = run.load().atLaunch(holdingSpeakersOff: true)
+    check(held.enabledAirPlay.isEmpty && held.enabledLocal.isEmpty && held.autoConnect == ["ap:native:AABBCCDDEE01"],
+          "auto-connect skipped: the speakers saved as on start off, the marks stay", "\(held.enabledAirPlay) \(held.enabledLocal)")
+    run.save(ids: ["Headphones"], forKey: Keys.enabledLocal)
+    run.save(ids: [], forKey: Keys.autoConnect)
+    run.write(nil, Keys.enabledAirPlay)
+    check(AppSettings.ids(run.read(Keys.enabledLocal)) == ["Headphones"] && run.read(Keys.enabledAirPlay) == nil,
+          "auto-connect skipped: the run reads its own changes")
+    check(NSDictionary(dictionary: saved.values) == before,
+          "auto-connect skipped: nothing the run changes is saved")
+    let next = disk.load().atLaunch(holdingSpeakersOff: false)
+    check(next.enabledAirPlay == ["native:AABBCCDDEE01"] && next.enabledLocal == ["BuiltInSpeakerDevice"]
+          && next.autoConnect == ["ap:native:AABBCCDDEE01"],
+          "auto-connect skipped: the next launch starts from the speakers saved before")
     if !DebugTrace.enabled {
         var built = false
         DebugTrace.log({ () -> String in built = true; return "never" }())

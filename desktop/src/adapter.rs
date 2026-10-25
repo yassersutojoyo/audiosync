@@ -9120,6 +9120,67 @@ mod tests {
     }
 
     #[test]
+    fn a_debug_launch_without_auto_connect_holds_the_speakers_on_off_and_saves_nothing() {
+        let dir = test_dir("adapter-settings-no-auto-connect-held");
+        let path = dir.join(settings::FILE_NAME);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let audio = || {
+            let fake = FakeAirPlay::new();
+            let mut audio = launch_audio();
+            audio.set_airplay(fake.link(), None);
+            fake.appear(&kitchen);
+            audio
+        };
+        let mut adapter = launch(audio(), &path);
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_auto_connect(&key(HEADPHONES), true);
+        adapter.save_settings();
+        drop(adapter);
+        let before = std::fs::read(&path).expect("saved");
+
+        let file = SettingsFile::at(path.clone());
+        let mut adapter = AudioAdapter::launched(
+            audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+            file,
+            true,
+        );
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        for id in [key(SPEAKERS), key(HEADPHONES), ap(&kitchen)] {
+            assert!(
+                !state.speaker(&id).expect("listed").enabled,
+                "{id} held off"
+            );
+        }
+        assert!(adapter.audio.enabled_outputs().is_empty());
+        assert!(adapter.audio.enabled_airplay().is_empty());
+
+        // A click plays, and nothing of the run reaches the file.
+        adapter.set_speaker_enabled(&key(HEADPHONES), true);
+        assert_eq!(playing(&adapter), [HEADPHONES]);
+        adapter.set_auto_connect(&key(HEADPHONES), false);
+        adapter.set_speaker_volume(&key(HEADPHONES), 12.0);
+        adapter.poll();
+        adapter.save_settings();
+        drop(adapter);
+        assert_eq!(std::fs::read(&path).expect("still there"), before);
+
+        let mut adapter = launch(audio(), &path);
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.speaker(&key(SPEAKERS)).unwrap().enabled);
+        assert!(state.speaker(&ap(&kitchen)).unwrap().enabled);
+        assert!(state.speaker(&key(HEADPHONES)).unwrap().auto_connect);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_device_missing_at_launch_keeps_its_settings_until_it_is_back() {
         let dir = test_dir("adapter-settings-missing");
         let path = dir.join(settings::FILE_NAME);
