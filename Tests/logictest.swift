@@ -783,13 +783,35 @@ do {
           "eq curves: a saved curve keeps its trimmed name")
     check(Equalizer.matching(gains, saved: curves) == .saved(0), "eq curves: the gains match the saved curve")
     let model = EqualizerModel(settings: Equalizer.Settings(enabled: false, preamp: -3, gains: gains), curves: curves)
-    model.pick(gains: Equalizer.presets[1].gains)
-    model.pick(gains: curves[0].gains)
+    model.pick(.preset(Equalizer.presets[1].id))
+    model.pick(.saved(0))
     check(model.shownCurve == .saved(0) && model.settings.preamp == -3 && model.settings.enabled,
           "eq curves: picking a curve keeps the preamp and turns the equalizer on")
     check(Equalizer.save("Flat-ish", gains: Equalizer.presets[0].gains, in: &curves) == 1
-            && Equalizer.matching(Equalizer.presets[0].gains, saved: curves) == .preset(.flat),
-          "eq curves: a preset matches before a saved curve with its gains")
+            && Equalizer.matching(Equalizer.presets[0].gains, saved: curves) == .saved(1),
+          "eq curves: a saved curve with a preset's gains resolves to the saved curve")
+    let flatish = EqualizerModel(settings: Equalizer.Settings(enabled: true, preamp: 0, gains: Equalizer.presets[0].gains),
+                                 curves: curves)
+    check(flatish.shownSavedIndex == 1,
+          "eq curves: a saved curve with a preset's gains keeps Rename and Delete")
+    flatish.pick(.preset(.flat))
+    check(flatish.shownCurve == .preset(.flat) && flatish.shownSavedIndex == nil,
+          "eq curves: a picked preset shows as the preset beside a saved curve with its gains")
+    flatish.pick(.saved(1))
+    check(flatish.shownSavedIndex == 1, "eq curves: picking that saved curve shows it again")
+    var moved = flatish.settings
+    moved.gains[0] = 3
+    flatish.set(moved)
+    check(flatish.shownSavedIndex == nil && flatish.shownCurve == nil,
+          "eq curves: moving a band off the picked saved curve shows Custom")
+    flatish.pick(.saved(1))
+    flatish.reset()
+    check(flatish.shownCurve == .preset(.flat), "eq curves: Reset shows Flat beside a saved curve with its gains")
+    flatish.deleteCurve(0)
+    flatish.pick(.saved(0))
+    flatish.deleteCurve(0)
+    check(flatish.shownCurve == .preset(.flat) && flatish.chosen == nil,
+          "eq curves: deleting the shown saved curve falls back to the preset")
     check(Equalizer.save("DESK", gains: Equalizer.presets[1].gains, in: &curves) == 0 && curves.count == 2,
           "eq curves: saving under a taken name, ignoring case, replaces that curve")
     check(Equalizer.save("   ", gains: gains, in: &curves) == nil, "eq curves: an empty name saves nothing")

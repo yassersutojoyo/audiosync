@@ -1355,16 +1355,23 @@ struct SourcePicker: View {
     private func sourceIcon(_ source: AppModel.Source?) -> some View {
         let edge: CGFloat = large ? 20 : 18
         if let source, source.isInput {
-            Image(systemName: "mic.fill")
+            Self.unnamedSymbol("mic.fill")
                 .frame(width: edge, height: edge)
                 .foregroundStyle(Brand.tealText)
         } else if let icon = source?.icon {
             Image(nsImage: icon).resizable().frame(width: edge, height: edge)
         } else {
-            Image(systemName: "speaker.wave.3.fill")
+            Self.unnamedSymbol("speaker.wave.3.fill")
                 .frame(width: edge, height: edge)
                 .foregroundStyle(Brand.tealText)
         }
+    }
+
+    /// The menu hands its label image to AppKit, which ignores
+    /// `accessibilityHidden`; `Image(systemName:)` made VoiceOver read the
+    /// symbol's name ("Volume Higher") before the label.
+    private static func unnamedSymbol(_ name: String) -> Image {
+        Image(nsImage: NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage())
     }
 }
 
