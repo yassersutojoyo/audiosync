@@ -973,10 +973,8 @@ impl AscAirPlay {
                         self.relist(&id);
                     }
                 }
-                // Playing on them shows whatever turned them down is gone,
-                // unless a password the user typed carried the session (P154).
                 if matches!(event, SpeakerEvent::State(SpeakerState::Playing))
-                    && !self.passwords.contains_key(&id)
+                    && self.playing_proves_credentials(&id)
                     && self.credentials_turned_down.remove(&id)
                 {
                     self.relist(&id);
@@ -1462,6 +1460,24 @@ impl AscAirPlay {
     /// far.
     fn queue_event(&mut self, pending: Pending) {
         self.events.push_back((self.receivers_queued, pending));
+    }
+
+    /// Whether a session of `id` that plays proved the receiver holds the
+    /// stored credentials, so whatever turned them down is gone (P154):
+    /// AirPlay 2 verifies its signature with them, AirPlay 1 only when they
+    /// carry its key (P56), and a password the user typed proves nothing.
+    fn playing_proves_credentials(&self, id: &str) -> bool {
+        if self.passwords.contains_key(id) {
+            return false;
+        }
+        match self.listed.get(id) {
+            Some(info) if self.over_airplay2(id, info) => self.identity.get(id).is_some(),
+            Some(_) => self
+                .store
+                .get(id)
+                .is_some_and(|credentials| credentials.receiver_key().is_some()),
+            None => false,
+        }
     }
 
     /// Whether the sender reaches the receiver `id` over AirPlay 2: only

@@ -1557,6 +1557,23 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// Whether a session of `id` that plays proved the receiver holds the
+    /// stored credentials, so whatever turned them down is gone (P154):
+    /// AirPlay 2 verifies its signature with them, AirPlay 1 only when they
+    /// carry its key (P56), and a password the user typed proves nothing.
+    fn playing_proves_credentials(&self, id: &str) -> bool {
+        if self.passwords.contains_key(id) {
+            return false;
+        }
+        if self.over_airplay2(id) {
+            self.store.homekit(id).is_some()
+        } else {
+            self.store
+                .get(id)
+                .is_some_and(|credentials| credentials.receiver_key().is_some())
+        }
+    }
+
     /// Whether the sender reaches the listed speaker `id` over AirPlay 2.
     fn over_airplay2(&self, id: &str) -> bool {
         self.listed
@@ -3363,9 +3380,8 @@ impl AirPlaySpeakers {
             // Its password worked: one turned down later turns it off.
             self.password_attempts.remove(id);
             self.paired_in_attempt.remove(id);
-            // Playing on them shows whatever turned them down is gone,
-            // unless a password the user typed carried the session (P154).
-            relisted = !self.passwords.contains_key(id) && self.credentials_turned_down.remove(id);
+            relisted =
+                self.playing_proves_credentials(id) && self.credentials_turned_down.remove(id);
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
@@ -5664,6 +5680,59 @@ pub mod tests {
         airplay.poll();
         assert!(airplay.speakers()[0].paired);
         assert!(!airplay.credentials_turned_down.contains(&id));
+    }
+
+    // An impostor plays on credentials it never had to prove: AirPlay 1
+    // checks no AirPlay 2 credentials, and legacy ones without the
+    // receiver's key skip the signature check (P56).
+    #[test]
+    fn a_session_that_proves_nothing_leaves_turned_down_credentials_marked() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay-unproven-plays").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path, sealer());
+        store.open_airplay2();
+        let homekit_only = device(6, "Den TV", OPEN_TXT);
+        let without_key = device(7, "Study", OPEN_TXT);
+        let with_key = device(8, "Loft", OPEN_TXT);
+        store
+            .insert_homekit(&id_of(&homekit_only), homekit(0x33))
+            .expect("saved");
+        store
+            .insert(&id_of(&without_key), credentials("0123456789ABCDEF", 3))
+            .expect("saved");
+        let proven = credentials("FEDCBA9876543210", 4).with_receiver_key([9; 32]);
+        store.insert(&id_of(&with_key), proven).expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        let tvs = [&homekit_only, &without_key, &with_key];
+        for tv in tvs {
+            fake.appear(tv);
+        }
+        airplay.poll();
+        for tv in tvs {
+            assert_eq!(airplay.set_enabled(&id_of(tv), true), Ok(()));
+        }
+        airplay.set_streaming(true);
+        airplay.poll();
+        for tv in tvs {
+            airplay.credentials_turned_down.insert(id_of(tv));
+            fake.state(tv, SpeakerState::Playing);
+        }
+        airplay.poll();
+        assert!(
+            airplay
+                .credentials_turned_down
+                .contains(&id_of(&homekit_only))
+        );
+        assert!(
+            airplay
+                .credentials_turned_down
+                .contains(&id_of(&without_key))
+        );
+        assert!(!airplay.credentials_turned_down.contains(&id_of(&with_key)));
     }
 
     #[test]
