@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_airplay::dacp::{
     self, ActiveRemotes, AdvertiseError, DacpAdvertiser, DacpId, DacpRecord, HeadRead,
-    RemoteCommand,
+    NameConflict, RemoteCommand,
 };
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
@@ -54,6 +54,8 @@ enum Call {
 struct FakeAdvertiser {
     calls: Arc<Mutex<Vec<Call>>>,
     fail: bool,
+    /// Handed out at the next `conflicts` call.
+    conflicts: Arc<Mutex<Vec<NameConflict>>>,
 }
 
 impl FakeAdvertiser {
@@ -75,6 +77,10 @@ impl DacpAdvertiser for FakeAdvertiser {
     fn withdraw(&mut self) {
         let call = Call::Withdraw;
         self.calls.lock().expect("calls").push(call);
+    }
+
+    fn conflicts(&mut self) -> Vec<NameConflict> {
+        std::mem::take(&mut *self.conflicts.lock().expect("conflicts"))
     }
 }
 
@@ -1381,5 +1387,45 @@ fn dacp_log_lines() {
     assert_eq!(counters.bad(), 2);
     assert_eq!(counters.over_limit(), 5);
     assert_eq!(counters.accepted(), 3 + 10);
+    sender.shutdown();
+}
+
+// covers: P195
+#[test]
+fn dacp_name_conflicts_are_logged() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let advertiser = FakeAdvertiser::default();
+    let (sender, _host) = start();
+    sender.set_dacp_advertiser(Box::new(advertiser.clone()));
+    let mut events = Events::default();
+    let (_, remote) = play(&sender, &mut events, &receiver, 1);
+    let id = last_header(&receiver, "DACP-ID").expect("DACP-ID");
+
+    advertiser.conflicts.lock().expect("conflicts").extend([
+        NameConflict {
+            host: false,
+            interface: "eth0".to_owned(),
+        },
+        NameConflict {
+            host: true,
+            interface: "eth0".to_owned(),
+        },
+    ]);
+    assert!(wait_until(LONG, || {
+        events.drain(&sender);
+        log_lines(&events)
+            .iter()
+            .filter(|line| line.contains("eth0 claimed"))
+            .count()
+            == 2
+    }));
+    let lines = log_lines(&events);
+    assert!(lines.iter().any(|line| line.contains("service name")));
+    assert!(lines.iter().any(|line| line.contains("host name")));
+    for line in &lines {
+        assert!(!line.contains(&id), "no DACP ID: {line}");
+        assert!(!line.contains(&remote), "no Active-Remote: {line}");
+    }
     sender.shutdown();
 }

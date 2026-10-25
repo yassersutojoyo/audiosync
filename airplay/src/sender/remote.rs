@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use crate::dacp::{
     self, ACCEPT_BACKOFF, ActiveRemotes, AdvertiseError, DacpAdvertiser, DacpId, DacpRecord,
-    HEAD_TIMEOUT, HeadRead, IDLE_TIMEOUT, LINGER, MAX_CONNECTIONS, RateLimit, RemoteCommand,
-    SessionCheck,
+    HEAD_TIMEOUT, HeadRead, IDLE_TIMEOUT, LINGER, MAX_CONNECTIONS, NameConflict, RateLimit,
+    RemoteCommand, SessionCheck,
 };
 use crate::discovery::DeviceKey;
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
@@ -456,6 +456,11 @@ impl Server {
         if self.next_roll.is_some_and(|at| at <= now) {
             self.next_roll = self.running.then_some(now + ROLL_EVERY);
             self.roll(now);
+            if let Some(advertiser) = self.advertiser.as_mut() {
+                for conflict in advertiser.conflicts() {
+                    self.shared.log(name_conflict_line(&conflict));
+                }
+            }
         }
         match self.stop_at {
             Some(at) if at <= now && self.live.is_empty() => self.stop(),
@@ -500,6 +505,19 @@ impl Server {
 
 fn over_limit_line(name: &str, over: u32) -> String {
     format!("DACP {name}: {over} requests over the limit -> 204, no event")
+}
+
+/// Leaves both names out: they carry the DACP ID (P195).
+fn name_conflict_line(conflict: &NameConflict) -> String {
+    let which = if conflict.host {
+        "host name"
+    } else {
+        "service name"
+    };
+    format!(
+        "DACP: another device on {} claimed the remote-control {which}; it is announced with a suffix, so speakers may not find their remote buttons",
+        conflict.interface
+    )
 }
 
 fn bind(ip: IpAddr, scope: u32, port: u16) -> io::Result<TcpListener> {

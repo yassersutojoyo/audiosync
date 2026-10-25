@@ -86,6 +86,10 @@ const DEFAULT_VOLUME_STEP: f64 = 1.0;
 /// sends one every 100 ms at most (C70).
 const MAX_UNANSWERED: usize = 16;
 
+/// Discovery answers handled per UI tick, so a flood of mDNS answers
+/// cannot stall the UI thread; the rest wait for the next tick.
+const MAX_BROWSE_PER_POLL: usize = 256;
+
 /// What a Cast device shows of the playing track (C53): only what the
 /// track itself has, never a label or the app's icon in place of a missing
 /// field.
@@ -1401,7 +1405,10 @@ impl CastSpeakers {
 
     /// Handles what discovery and the sender reported since the last poll.
     pub fn poll(&mut self) -> Vec<BackendEvent> {
-        while let Some(event) = self.link.as_mut().and_then(|link| link.poll_browse()) {
+        for _ in 0..MAX_BROWSE_PER_POLL {
+            let Some(event) = self.link.as_mut().and_then(|link| link.poll_browse()) else {
+                break;
+            };
             match self.list.apply(event) {
                 ListEvent::Skipped(_) => {}
                 change => {
@@ -1824,6 +1831,21 @@ pub mod tests {
             .find(|speaker| speaker.id == id)
             .expect("listed")
             .status
+    }
+
+    #[test]
+    fn a_discovery_burst_beyond_the_cap_waits_for_the_next_tick() {
+        let fake = FakeCast::default();
+        let extra = 10;
+        for n in 0..MAX_BROWSE_PER_POLL + extra {
+            let id = format!("{n:032x}");
+            fake.announce(&id, &format!("Speaker {n}"), DEVICE_PORT);
+        }
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.poll();
+        assert_eq!(fake.state().browse.len(), extra);
+        cast.poll();
+        assert!(fake.state().browse.is_empty());
     }
 
     #[test]

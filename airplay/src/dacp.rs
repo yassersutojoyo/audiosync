@@ -167,6 +167,22 @@ pub trait DacpAdvertiser {
     fn register(&mut self, record: &DacpRecord) -> Result<(), AdvertiseError>;
     /// Withdraws the registered record with a goodbye (RFC 6762 §10.1).
     fn withdraw(&mut self);
+    /// The names given up to another device since the last call (RFC 6762
+    /// §9). Receivers look the record up by its exact name (P188), so a
+    /// renamed record silently stops the speaker's remote buttons.
+    fn conflicts(&mut self) -> Vec<NameConflict> {
+        Vec::new()
+    }
+}
+
+/// A name of the advertised record that another device on the network
+/// claimed, so the advertiser announces it with a suffix now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameConflict {
+    /// The host name rather than the service instance name.
+    pub host: bool,
+    /// The network interface the conflict was seen on.
+    pub interface: String,
 }
 
 /// What a receiver's command asks the host to do (P192).
