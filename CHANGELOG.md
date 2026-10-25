@@ -97,7 +97,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a mix keeps playing when one of its apps quits while the others still run. Before, it could switch to All System Audio or stop. A source you pick or a stop you make right then is carried out too.
 - A paired AirPlay speaker that can't prove it's the same speaker no longer plays. AudioSync turns it off with its own notice and keeps the pairing.
 - When a speaker turns down its stored pairing, AudioSync keeps it until a new pairing replaces it, on the Mac and on Windows. Cancelling the PIN prompt no longer loses it, and Forget Pairing stays in the speaker's menu.
-- A speaker you paired with a PIN always plays over AirPlay 2 and never falls back to AirPlay 1 on its own. With AirPlay 2 off, its row reads AirPlay 2 only until you forget the pairing.
+- A speaker you paired over AirPlay 2 always plays over AirPlay 2 and never falls back to AirPlay 1 on its own. With AirPlay 2 off, its row reads AirPlay 2 only until you forget the pairing.
 - An AirPlay 2 speaker or a Google Cast group can no longer make AudioSync hold an endless amount of data. Past a fixed limit, AudioSync closes that connection.
 - The connection an AirPlay speaker's remote buttons use closes after a wrong code, and a device that keeps trying is held off for a few seconds.
 - On the Mac, the Web Remote's pairing code and a wrong-code lock stay when the Mac's network name changes, instead of starting over.
