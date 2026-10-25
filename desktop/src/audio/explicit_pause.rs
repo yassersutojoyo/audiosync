@@ -1,0 +1,209 @@
+//! When the AirPlay speakers take an explicit pause (P213): a play-pause the
+//! user sent to the source app, from a speaker's remote or the app's own
+//! button, with the app known to play. The direction comes from the
+//! now-playing reading, since play-pause reaches the app as a toggle; with
+//! no reading the speakers keep playing. Nothing here looks at the audio:
+//! silence never pauses.
+
+use std::time::{Duration, Instant};
+
+/// How long after a pause a reading may still predate the app's own pause;
+/// later readings that don't show the app paused resume. Longer than the
+/// receivers' buffer, so the flush it bought is never undone audibly.
+pub const STALE_READING: Duration = Duration::from_secs(3);
+
+/// What the sender gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Nothing,
+    Pause,
+    Resume,
+}
+
+/// The app the pause was taken for, and when.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Paused {
+    app: Option<String>,
+    at: Instant,
+}
+
+#[derive(Debug, Default)]
+pub struct ExplicitPause {
+    paused: Option<Paused>,
+}
+
+impl ExplicitPause {
+    #[cfg(test)]
+    pub fn is_paused(&self) -> bool {
+        self.paused.is_some()
+    }
+
+    /// A play-pause goes to the app the now-playing control follows, which
+    /// the latest reading shows as `playback` (its app and whether it
+    /// plays; `None` without a reading). A paused stream resumes whatever
+    /// the reading says, so a toggle never leaves the speakers silent.
+    pub fn toggled(&mut self, playback: Option<(&str, bool)>, now: Instant) -> Step {
+        if self.paused.take().is_some() {
+            return Step::Resume;
+        }
+        match playback {
+            Some((app, true)) => {
+                self.paused = Some(Paused {
+                    app: Some(app.to_owned()),
+                    at: now,
+                });
+                Step::Pause
+            }
+            _ => Step::Nothing,
+        }
+    }
+
+    /// A now-playing reading taken at `read_at`. A paused stream resumes
+    /// once a reading taken [`STALE_READING`] after the pause shows anything
+    /// but the same app paused: the app plays, another one counts, or none.
+    pub fn read(&mut self, playback: Option<(&str, bool)>, read_at: Instant) -> Step {
+        let Some(paused) = &self.paused else {
+            return Step::Nothing;
+        };
+        if read_at.saturating_duration_since(paused.at) < STALE_READING {
+            return Step::Nothing;
+        }
+        match playback {
+            Some((app, false)) if paused.app.as_deref() == Some(app) => Step::Nothing,
+            _ => {
+                self.paused = None;
+                Step::Resume
+            }
+        }
+    }
+
+    /// The source changed or the stream stopped: a paused stream resumes,
+    /// so the next audio plays.
+    pub fn clear(&mut self) -> Step {
+        if self.paused.take().is_some() {
+            Step::Resume
+        } else {
+            Step::Nothing
+        }
+    }
+
+    /// A new sender, which starts unpaused.
+    pub fn forget(&mut self) {
+        self.paused = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SPOTIFY: &str = "Spotify.exe";
+
+    fn paused_at(t0: Instant) -> ExplicitPause {
+        let mut pause = ExplicitPause::default();
+        assert_eq!(pause.toggled(Some((SPOTIFY, true)), t0), Step::Pause);
+        pause
+    }
+
+    // covers: P213
+    #[test]
+    fn a_toggle_while_the_app_plays_pauses() {
+        let t0 = Instant::now();
+        let pause = paused_at(t0);
+        assert!(pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn a_toggle_while_paused_resumes_whatever_the_reading_says() {
+        let t0 = Instant::now();
+        for reading in [Some((SPOTIFY, false)), Some((SPOTIFY, true)), None] {
+            let mut pause = paused_at(t0);
+            assert_eq!(pause.toggled(reading, t0), Step::Resume, "{reading:?}");
+            assert!(!pause.is_paused());
+        }
+    }
+
+    // covers: P213
+    #[test]
+    fn a_toggle_with_the_app_paused_or_unknown_does_nothing() {
+        let t0 = Instant::now();
+        let mut pause = ExplicitPause::default();
+        assert_eq!(pause.toggled(Some((SPOTIFY, false)), t0), Step::Nothing);
+        assert_eq!(pause.toggled(None, t0), Step::Nothing);
+        assert!(!pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn readings_alone_never_pause() {
+        let t0 = Instant::now();
+        let mut pause = ExplicitPause::default();
+        for (i, reading) in [Some((SPOTIFY, true)), Some((SPOTIFY, false)), None]
+            .into_iter()
+            .enumerate()
+        {
+            let at = t0 + STALE_READING * (i as u32 + 1);
+            assert_eq!(pause.read(reading, at), Step::Nothing);
+        }
+        assert!(!pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn the_app_shown_paused_keeps_the_pause() {
+        let t0 = Instant::now();
+        let mut pause = paused_at(t0);
+        assert_eq!(
+            pause.read(Some((SPOTIFY, false)), t0 + STALE_READING * 4),
+            Step::Nothing
+        );
+        assert!(pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn a_stale_reading_right_after_the_pause_keeps_it() {
+        let t0 = Instant::now();
+        let mut pause = paused_at(t0);
+        let soon = t0 + STALE_READING - Duration::from_millis(1);
+        assert_eq!(pause.read(Some((SPOTIFY, true)), soon), Step::Nothing);
+        assert_eq!(pause.read(None, soon), Step::Nothing);
+        assert!(pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn the_app_playing_again_resumes() {
+        let t0 = Instant::now();
+        let mut pause = paused_at(t0);
+        assert_eq!(
+            pause.read(Some((SPOTIFY, true)), t0 + STALE_READING),
+            Step::Resume
+        );
+        assert!(!pause.is_paused());
+    }
+
+    // covers: P213
+    #[test]
+    fn another_app_or_no_reading_resumes() {
+        let t0 = Instant::now();
+        let later = t0 + STALE_READING;
+        let mut pause = paused_at(t0);
+        assert_eq!(pause.read(Some(("chrome.exe", false)), later), Step::Resume);
+        let mut pause = paused_at(t0);
+        assert_eq!(pause.read(None, later), Step::Resume);
+    }
+
+    // covers: P213
+    #[test]
+    fn clearing_resumes_only_a_paused_stream() {
+        let t0 = Instant::now();
+        let mut pause = paused_at(t0);
+        assert_eq!(pause.clear(), Step::Resume);
+        assert_eq!(pause.clear(), Step::Nothing);
+        let mut pause = paused_at(t0);
+        pause.forget();
+        assert!(!pause.is_paused());
+    }
+}
