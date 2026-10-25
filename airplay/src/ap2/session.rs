@@ -391,6 +391,9 @@ pub struct Ap2Session {
     /// after the usual wait, whose answers are dropped.
     late_answers: Vec<u32>,
     volume_reads_stopped: bool,
+    /// Reads stopped by refused-volume checks before the host asked for one
+    /// warn at its first ask instead (P184).
+    volume_reads_stopped_warned: bool,
     /// What the receiver reported of its latency in this session (P196
     /// to P198).
     reported_latency: ReportedLatency,
@@ -491,6 +494,7 @@ impl Ap2Session {
             volume_read_failures: 0,
             late_answers: Vec::new(),
             volume_reads_stopped: false,
+            volume_reads_stopped_warned: false,
             reported_latency: ReportedLatency::default(),
             last_volume_trace: None,
         };
@@ -960,6 +964,7 @@ impl Ap2Session {
             self.volume_read_wanted = false;
             self.volume_read_asked = false;
             if self.config.read_volume {
+                self.volume_reads_stopped_warned = true;
                 self.event(Ap2Event::Warning(Warning::VolumeReadsStopped));
             }
         }
@@ -1067,6 +1072,9 @@ impl Ap2Session {
         self.config.read_volume = true;
         if !self.volume_reads_stopped {
             self.volume_read_asked = true;
+        } else if !self.volume_reads_stopped_warned {
+            self.volume_reads_stopped_warned = true;
+            self.event(Ap2Event::Warning(Warning::VolumeReadsStopped));
         }
     }
 

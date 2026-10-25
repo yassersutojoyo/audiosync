@@ -241,6 +241,37 @@ fn a_refused_volume_the_read_back_shows_unapplied_warns_and_goes_once_more() {
     assert!(rig.failure().is_none(), "{:?}", rig.events);
 }
 
+// covers: P183, P184
+#[test]
+fn reads_stopped_by_refused_volumes_warn_at_the_hosts_first_ask() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert(SET.to_owned(), 500);
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    rig.advance(Duration::from_secs(4));
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(-10.0), now);
+    rig.pump();
+    rig.advance(Duration::from_secs(4));
+    // Three failed checks stopped the reads before the host asked for one.
+    assert_eq!(rig.times_of(READ).len(), 3, "{:?}", rig.keys());
+    assert_eq!(warnings(&rig).len(), 1, "{:?}", rig.events);
+
+    ask_for(&mut rig, Duration::from_secs(4));
+    assert_eq!(rig.times_of(READ).len(), 3, "{:?}", rig.keys());
+    assert_eq!(
+        warnings(&rig),
+        [
+            &Warning::RequestFailed {
+                method: Method::SetParameter,
+                status: 500
+            },
+            &Warning::VolumeReadsStopped
+        ]
+    );
+    assert!(reported(&rig).is_empty());
+}
+
 // covers: P122, P184
 #[test]
 fn reads_once_after_the_initial_volume_then_only_when_asked_at_most_every_2_s() {
