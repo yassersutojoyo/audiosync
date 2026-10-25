@@ -297,6 +297,13 @@ do {
             SpeakerZone(id: "z3", name: "Office", members: ["ap:\(denNew)"], volume: 100)],
           "speaker IDs: zone members are renamed in place, and a zone already holding the new key keeps it",
           "\(movedZones)")
+    var namedZoned = zoned
+    namedZoned.zones[0].memberNames = ["ap:\(tvOld)": "TV", "lc:usb:out": "USB"]
+    namedZoned.zones[1].memberNames = ["ap:\(denOld)": "Den speaker"]
+    let renamedNames = Migration.migrate(namedZoned, receivers: receivers).zones.map(\.memberNames)
+    check(renamedNames == [["ap:\(tvNew)": "TV", "lc:usb:out": "USB"], nil, nil],
+          "speaker IDs: a zone member's kept name moves with its key, and goes when a zone already holds the new key",
+          "\(renamedNames)")
     let flat = [Double](repeating: 0, count: 10)
     let preset = SpeakerPreset(id: "p1", name: "Evening",
                                members: [.init(key: "ap:\(tvOld)", volume: 35), .init(key: "lc:usb:out", volume: 50),
@@ -370,6 +377,38 @@ do {
     stored.values[Keys.zones] = Data("not json".utf8)
     check(store.load().zones.isEmpty && stored.values[Keys.zonesMigrated] as? Bool == true,
           "zones: unreadable zones read as none and never migrate again")
+
+    let unnamed = [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:native:X", "lc:blank"], volume: 80),
+                   SpeakerZone(id: "z2", name: "Den", members: [], volume: 100)]
+    let named = SpeakerZone.remembering(["ap:native:X": "Kitchen HomePod", "lc:blank": " ", "lc:other": "Desk"],
+                                        in: unnamed)
+    store.save(zones: named)
+    let reloaded = store.load().zones
+    let moved = ZoneEdit.moving("ap:native:X", to: "z2", in: reloaded)
+    let removed = ZoneEdit.removing("ap:native:X", from: moved)
+    let older = try? JSONDecoder().decode([SpeakerZone].self,
+                                          from: Data(#"[{"id":"z","name":"Z","members":["lc:x"],"volume":50}]"#.utf8))
+    let rewritten = (try? JSONEncoder().encode(older ?? [])).map { String(decoding: $0, as: UTF8.self) } ?? ""
+    check(SpeakerZone.storedName(of: "ap:native:X", in: reloaded) == "Kitchen HomePod"
+            && SpeakerZone.storedName(of: "lc:blank", in: reloaded) == nil
+            && SpeakerZone.storedName(of: "lc:other", in: reloaded) == nil
+            && SpeakerZone.remembering(["ap:native:X": "Kitchen HomePod"], in: reloaded) == reloaded
+            && SpeakerZone.storedName(of: "ap:native:X", in: moved) == "Kitchen HomePod"
+            && SpeakerZone.storedName(of: "ap:native:X", in: removed) == nil
+            && removed.allSatisfy { $0.memberNames == nil }
+            && older == [SpeakerZone(id: "z", name: "Z", members: ["lc:x"], volume: 50)]
+            && !rewritten.contains("memberNames"),
+          "zones: an absent member shows its last listed name after a reload, and zones stored before it load unchanged",
+          "\(reloaded)")
+    var louder = reloaded
+    louder[0].volume = 30
+    check(SpeakerZone.systemName(of: "ap:native:X", listed: "", in: reloaded) == "Kitchen HomePod"
+            && SpeakerZone.systemName(of: "ap:native:X", listed: "Kitchen", in: reloaded) == "Kitchen"
+            && SpeakerZone.systemName(of: "lc:blank", listed: "", in: reloaded) == ""
+            && SpeakerZone.differInNamesOnly(reloaded, unnamed)
+            && !SpeakerZone.differInNamesOnly(louder, unnamed)
+            && !SpeakerZone.differInNamesOnly(ZoneEdit.removing("lc:blank", from: unnamed), unnamed),
+          "zones: an absent member reads its kept name, a listed one its name now, and a name alone re-applies no volume")
 }
 
 // MARK: Presets — overlapping groups become presets once (Presets.swift, AppSettings.swift, S251, S254)

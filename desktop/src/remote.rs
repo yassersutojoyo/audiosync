@@ -995,12 +995,14 @@ mod tests {
                 name: "Downstairs".into(),
                 members: vec!["kitchen".into(), "loop".into(), "desk".into(), "tv".into()],
                 volume: 80.0,
+                member_names: Default::default(),
             },
             Zone {
                 id: "zone:b".into(),
                 name: "Studio".into(),
                 members: vec!["loop".into()],
                 volume: 100.0,
+                member_names: Default::default(),
             },
         ];
         state.presets = vec![

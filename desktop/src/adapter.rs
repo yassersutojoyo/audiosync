@@ -705,6 +705,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             name: zone.name.clone(),
             members: zone.members.clone(),
             volume: zone.volume,
+            member_names: zone.member_names.clone(),
         }));
         self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
         self.push_zone_volumes();
@@ -2527,7 +2528,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// The zone members neither `speakers` nor `hidden` holds, by the name
-    /// the user gave them, else the one last listed.
+    /// the user gave them, else the one last listed, in this run or before
+    /// (S286).
     fn absent_members(&self, speakers: &[Speaker], hidden: &[HiddenSpeaker]) -> Vec<AbsentMember> {
         let known = |key: &String| {
             speakers.iter().any(|speaker| speaker.id == *key)
@@ -2552,15 +2554,44 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     Some(SpeakerKey::Cast(id)) => (self.cast_names.get(&id), SpeakerKind::Cast),
                     None => (None, SpeakerKind::Other),
                 };
+                let last = last
+                    .map(String::as_str)
+                    .filter(|name| !name.is_empty())
+                    .or_else(|| self.zones.member_name(key))
+                    .unwrap_or("");
                 AbsentMember {
                     id: key.clone(),
-                    name: self
-                        .custom_names
-                        .shown(key, last.map_or("", String::as_str)),
+                    name: self.custom_names.shown(key, last),
                     kind,
                 }
             })
             .collect()
+    }
+
+    /// Keeps with its zone the name each member was last listed under in
+    /// this run (S286), so a relaunch without it still shows that name.
+    fn remember_zone_names(&mut self) -> bool {
+        let fresh: Vec<(String, String)> = self
+            .zones
+            .list()
+            .iter()
+            .flat_map(|zone| &zone.members)
+            .filter_map(|key| {
+                let name = match SpeakerKey::parse(key)? {
+                    SpeakerKey::Local(id) => self.names.get(&id),
+                    SpeakerKey::AirPlay(id) => self.airplay_names.get(&id),
+                    SpeakerKey::Cast(id) => self.cast_names.get(&id),
+                }?;
+                let kept = self.zones.member_name(key);
+                (!name.trim().is_empty() && kept != Some(name.as_str()))
+                    .then(|| (key.clone(), name.clone()))
+            })
+            .collect();
+        let mut changed = false;
+        for (key, name) in fresh {
+            changed |= self.zones.remember_name(&key, &name);
+        }
+        changed
     }
 
     /// Whether speaker `key` is hidden with Hide Speaker.
@@ -4253,6 +4284,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         changed |= self.count_airplay_quiet();
         changed |= self.count_cast_quiet();
         changed |= self.keep_settings_aside(true);
+        changed |= self.remember_zone_names();
         changed |= self.tick_calibration();
         changed |= self.follow_calibration_context();
         changed |= self.follow_calibrate_all();
@@ -7700,6 +7732,37 @@ mod tests {
         assert!(saved.speaker_names.is_empty(), "cleared, nothing is kept");
     }
 
+    // covers: S286
+    #[test]
+    fn an_absent_zone_member_keeps_its_last_name_after_a_relaunch() {
+        let dir = test_dir("adapter-zone-member-name");
+        let path = dir.join(settings::FILE_NAME);
+        let zoned = Settings {
+            speaker_zones: vec![zone(vec![key(HEADPHONES)])],
+            ..Settings::default()
+        };
+        SettingsFile::at(path.clone()).save(&zoned).unwrap();
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        adapter.save_settings();
+
+        let mut audio = launch_audio();
+        audio.disconnect_output(HEADPHONES);
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        let state = adapter.snapshot();
+        let absent = state.absent_member(&key(HEADPHONES)).expect("absent");
+        assert_eq!(absent.name, "Headphones");
+
+        // A zone saved before the names were kept still loads.
+        let older: SavedZone =
+            serde_json::from_str(r#"{"id":"z","name":"Z","members":["lc:x"],"volume":50}"#)
+                .unwrap();
+        assert!(older.member_names.is_empty());
+        let written = serde_json::to_string(&older).unwrap();
+        assert!(!written.contains("member_names"), "left out while empty");
+    }
+
     fn hidden_entry(adapter: &AudioAdapter<MockBackend>, id: &str) -> HiddenSpeaker {
         adapter
             .snapshot()
@@ -9440,6 +9503,7 @@ mod tests {
             name: "Downstairs".to_owned(),
             members,
             volume: 80.0,
+            member_names: BTreeMap::new(),
         }
     }
 
@@ -9760,6 +9824,7 @@ mod tests {
                 name: "Group 2".to_owned(),
                 members: Vec::new(),
                 volume: 100.0,
+                member_names: BTreeMap::new(),
             }
         );
         // A later launch keeps the zones as saved, whatever the groups are.

@@ -128,7 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// The zones (S245), migrated from the groups once (S248).
     var zones: [SpeakerZone] {
-        didSet { if zones != oldValue { store.save(zones: zones); applyZoneVolumes() } }
+        didSet {
+            guard zones != oldValue else { return }
+            store.save(zones: zones)
+            if !SpeakerZone.differInNamesOnly(zones, oldValue) { applyZoneVolumes() }
+        }
     }
     /// The groups became zones and this launch says so in a notice, once.
     private let zonesNoticeDue: Bool
