@@ -124,7 +124,7 @@ final class StreamEngine {
     /// waiting for its outputs' fades finishes first, which takes at most
     /// 500 ms (S186). An input source reads the channel pair stored as
     /// `inputPair` (`InputChannelPair.index`).
-    func start(source: AudioSource, inputPair: Int = 0) throws {
+    func start(source: AudioSource, inputPair: Int = 0, rebuild: Bool = false) throws {
         guard !isRunning else {
             DebugTrace.log("[AudioSync] session start ignored: a session is already running")
             return
@@ -137,7 +137,7 @@ final class StreamEngine {
             DebugTrace.log("[AudioSync] session not started: \(StartError.coreUnavailable)")
             throw StartError.coreUnavailable
         }
-        try capture.start(source: source, parts: parts, inputPair: inputPair)
+        try capture.start(source: source, parts: parts, inputPair: inputPair, rebuild: rebuild)
         self.parts = parts
         isRunning = true
         DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")

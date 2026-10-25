@@ -133,8 +133,9 @@ final class SourceCapture {
     /// Starts capturing `source` into `parts`. Once the capture rate is known,
     /// `parts.prepare(captureRate:)` runs before the first IOProc callback. On
     /// any failure everything is released again and the error is thrown. An
-    /// input source reads the channel pair stored as `inputPair`.
-    func start(source: AudioSource, parts: EngineParts, inputPair: Int = 0) throws {
+    /// input source reads the channel pair stored as `inputPair`. A `rebuild`
+    /// (S20, S227 e) also counts the app processes the last session found.
+    func start(source: AudioSource, parts: EngineParts, inputPair: Int = 0, rebuild: Bool = false) throws {
         halt()   // a start always follows a halt; this keeps a stray second start harmless
         sessionMark &+= 1
         self.source = source
@@ -143,16 +144,16 @@ final class SourceCapture {
         _ = Self.runHeard   // the static's lazy init runs here, never on the IO thread
         sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(source))
         sampleRate = CaptureRate.fallback
-        do { try startSource(source) } catch { halt(); throw error }
+        do { try startSource(source, rebuild: rebuild) } catch { halt(); throw error }
     }
 
     /// Builds whatever reading `source` takes; on failure the caller releases
     /// what was built so far.
-    private func startSource(_ source: AudioSource) throws {
+    private func startSource(_ source: AudioSource, rebuild: Bool) throws {
         switch source {
         case .system: try startSystem()
-        case .app(let bundleID): try startApps([bundleID])
-        case .mix(.only, let bundleIDs): try startApps(bundleIDs)
+        case .app(let bundleID): try startApps([bundleID], rebuild: rebuild)
+        case .mix(.only, let bundleIDs): try startApps(bundleIDs, rebuild: rebuild)
         case .mix(.allExcept, let bundleIDs): try startExcluding(bundleIDs)
         case .input(let uid): try startInput(uid)
         }
@@ -191,9 +192,11 @@ final class SourceCapture {
     /// one tap. An app that isn't running is skipped; only none of them
     /// running fails. The process list is watched from the start, so a process
     /// an app starts while the tap is being built is picked up too.
-    private func startApps(_ bundleIDs: [String]) throws {
+    private func startApps(_ bundleIDs: [String], rebuild: Bool) throws {
         let label = bundleIDs.joined(separator: ", ")
-        let pidsByApp = bundleIDs.map { Self.runningPIDs(of: $0) }
+        // A rebuild keeps the last session's processes; at a fresh start they may be long gone and reused.
+        let seen = rebuild ? seenPIDs : [:]
+        let pidsByApp = bundleIDs.map { Self.runningPIDs(of: $0, seen: seen[$0] ?? []) }
         let pids = pidsByApp.flatMap { $0 }
         seenPIDs = Dictionary(zip(bundleIDs, pidsByApp), uniquingKeysWith: { first, _ in first })
         guard !pids.isEmpty else {
