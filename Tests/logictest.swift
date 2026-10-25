@@ -6946,6 +6946,12 @@ do {
     check(RemoteDevicesFile.canForget(count: 0, failed: true) && RemoteDevicesFile.canForget(count: 2, failed: false)
             && !RemoteDevicesFile.canForget(count: 0, failed: false),
           "web remote: Forget All stays available after a failed save, when no device is left in memory")
+    let debugStart = RemoteStartConfig.make(port: 7655, localName: nil, devicesPath: nil, debugLog: true)
+    let normalStart = RemoteStartConfig.make(port: 8080, localName: "den", devicesPath: "/devices.json", debugLog: false)
+    check(debugStart["log_pairing_codes"] as? Bool == true && debugStart["port"] as? Int == 7655
+            && debugStart["local_name"] == nil && normalStart["log_pairing_codes"] == nil
+            && normalStart["local_name"] as? String == "den" && normalStart["devices_path"] as? String == "/devices.json",
+          "web remote: only the debug log asks the core for the pairing codes")
     let fresh = AppSettings.load { _ in nil }
     let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
     let kept = AppSettings.load { stored[$0] }

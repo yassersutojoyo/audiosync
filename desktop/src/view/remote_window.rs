@@ -838,6 +838,54 @@ mod tests {
         assert!(app.remote_window.get_forget_failed());
     }
 
+    fn current_code(app: &super::App) -> String {
+        let host = app.remote.borrow();
+        host.server
+            .as_ref()
+            .and_then(audiosync_remote::RemoteServer::pairing_code)
+            .expect("a code in force")
+    }
+
+    #[test]
+    fn the_debug_log_gets_each_pairing_code_and_a_normal_run_none() {
+        use crate::debug_log::{self, DebugLog};
+
+        let path = debug_log::test_dir("remote-codes").join(debug_log::FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        let app = super::super::tests::app_logging(MockBackend::new(), log.clone());
+        app.remote.borrow_mut().listen = vec![Ipv4Addr::LOCALHOST.into()];
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        let first = current_code(&app);
+        app.remote_window.invoke_new_code_requested();
+        let second = current_code(&app);
+        app.poll_remote();
+        app.remote_window.invoke_remote_toggled(false);
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let messages = debug_log::read_messages(&path);
+        debug_log::assert_in_order(
+            &messages,
+            &[
+                &format!("remote: pairing code {first} (debug only)"),
+                &format!("remote: pairing code {second} (debug only)"),
+            ],
+        );
+
+        let quiet = over_loopback(MockBackend::new());
+        quiet.ui.borrow_mut().remote.port = free_port();
+        quiet.remote_window.invoke_remote_toggled(true);
+        quiet.remote_window.invoke_new_code_requested();
+        let host = quiet.remote.borrow();
+        let server = host.server.as_ref().expect("listening");
+        let events: Vec<String> = std::iter::from_fn(|| server.poll_event())
+            .map(|event| event.to_string())
+            .collect();
+        assert!(
+            events.iter().all(|line| !line.contains("pairing code")),
+            "{events:?}"
+        );
+    }
+
     #[test]
     fn a_command_from_the_page_works_like_the_windows_controls() {
         let app = over_loopback(MockBackend::new());

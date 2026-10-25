@@ -495,6 +495,60 @@ mod tests {
         assert_eq!(received.lock().unwrap().len(), 1);
     }
 
+    fn log_lines(remote: *mut AscRemote) -> Vec<String> {
+        let mut lines = Vec::new();
+        loop {
+            // SAFETY: a live handle.
+            let line = unsafe { asc_remote_next_log(remote) };
+            if line.is_null() {
+                return lines;
+            }
+            // SAFETY: the handle's string, copied before the next call.
+            lines.push(
+                unsafe { CStr::from_ptr(line) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+
+    #[test]
+    fn debug_mode_puts_each_pairing_code_in_the_log_lines() {
+        let received = Mutex::new(Vec::<String>::new());
+        let context = &received as *const Mutex<Vec<String>> as *mut c_void;
+        let mut error = -1;
+        // SAFETY: a C string literal, a live context that outlives the stop,
+        // a writable error.
+        let mut remote = unsafe {
+            asc_remote_start(
+                c"{\"port\": 0, \"listen\": [\"127.0.0.1\"], \"log_pairing_codes\": true}".as_ptr(),
+                Some(record),
+                context,
+                &mut error,
+            )
+        };
+        assert!(!remote.is_null());
+        // SAFETY: a live handle; each string is copied before the next call.
+        let (first, fresh) = unsafe {
+            let first = CStr::from_ptr(asc_remote_pairing_code(remote))
+                .to_string_lossy()
+                .into_owned();
+            let fresh = CStr::from_ptr(asc_remote_rotate_code(remote))
+                .to_string_lossy()
+                .into_owned();
+            (first, fresh)
+        };
+        assert_eq!(
+            log_lines(remote),
+            [
+                format!("remote: pairing code {first} (debug only)"),
+                format!("remote: pairing code {fresh} (debug only)"),
+            ]
+        );
+        // SAFETY: the host's pointer to a live handle.
+        unsafe { asc_remote_stop(&mut remote) };
+    }
+
     #[test]
     fn a_bad_start_says_why() {
         let start = |config: &CStr, command: AscRemoteCommand| {
