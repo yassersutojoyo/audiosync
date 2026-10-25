@@ -392,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                     return
                 }
                 // A notice, never a modal alert: nobody clicked anything (S21).
-                stopEngine()
+                stopEngine(.captureLost)
                 postNotice(text.sourceStopped(error), subject: Notice.source)
             }
         }
@@ -564,7 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         dueTimer?.invalidate()
         // Nothing needs to reach the views any more.
         localNetworkProbe.onChange = { _ in }
-        stopEngine()
+        stopEngine(.quitting)
         engine.finishStopping()   // local outputs finish their fades and capture halts before the sender's teardown
         nativeAirPlay?.shutdown()   // AudioSync's own sender: every speaker gets its TEARDOWN
         nowPlaying.stopWatching()

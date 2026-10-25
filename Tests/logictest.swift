@@ -7409,5 +7409,29 @@ do {
           "late callbacks: suppressed-count line")
 }
 
+// MARK: Every session stop names its reason in the debug log (SessionStop in AppLifecycle.swift)
+do {
+    let all: [SessionStop] = [
+        .powerSwitch(input: "click in NSPanel"), .menuItem(input: "key code 36 in NSWindow"), .noSpeakerOn,
+        .startFailed, .sourceAppQuit(bundleID: "com.spotify.client"),
+        .sourceSwitchedToSystem(bundleID: "com.spotify.client"), .sourceChanged, .inputPairChanged, .captureLost,
+        .rebuild, .quitting,
+    ]
+    let lines = all.map(\.logLine)
+    check(Set(lines).count == all.count, "session stop: every reason has its own log line", lines.joined(separator: " | "))
+    check(lines.allSatisfy { $0.hasPrefix("[AudioSync] session stops: ") || $0.hasPrefix("[AudioSync] session restarts: ") },
+          "session stop: each line says whether the session stops or restarts", lines.joined(separator: " | "))
+    check(all.filter(\.restarts) == [.sourceSwitchedToSystem(bundleID: "com.spotify.client"), .sourceChanged,
+                                     .inputPairChanged, .rebuild],
+          "session stop: only a source switch, a channel pair change and a rebuild restart")
+    check(SessionStop.powerSwitch(input: "key code 49 in NSWindow").logLine.contains("key code 49 in NSWindow"),
+          "session stop: the power switch line names the input event, so a key press tells from a click")
+    check(SessionStop.sourceAppQuit(bundleID: "com.spotify.client").logLine.contains("com.spotify.client"),
+          "session stop: a quit source app is named")
+    // Built-in output still on with the AirPlay speaker gone: not idle, so "no speaker is on" can't be the stop.
+    check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: ["BuiltInSpeakerDevice"]),
+          "session stop: a local speaker that is on keeps the session from counting as idle")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

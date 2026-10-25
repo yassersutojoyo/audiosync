@@ -65,7 +65,7 @@ extension AppDelegate {
     func stopIfIdle() {
         if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                   enabledLocal: enabledLocal) {
-            stopEngine()
+            stopEngine(.noSpeakerOn)
         }
     }
 
@@ -231,7 +231,7 @@ extension AppDelegate {
         // AirPlay selection stays as it is (deselecting would race the reselect).
         autoStartFailed = false
         if change == .restart {
-            stopEngine()
+            stopEngine(.sourceChanged)
             startEngine(origin: .user)
         }
         pushModel()
@@ -254,7 +254,7 @@ extension AppDelegate {
         clearNotices([Notice.capture])   // about the old pair
         autoStartFailed = false
         if change == .restart {
-            stopEngine()
+            stopEngine(.inputPairChanged)
             startEngine(origin: .user)
         }
         pushModel()

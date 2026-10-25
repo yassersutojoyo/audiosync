@@ -202,14 +202,27 @@ extension AppDelegate {
 
     /// The power switch. Switching off by hand also keeps auto-connect from
     /// starting streaming again until the user turns it back on.
-    private func setStreaming(_ on: Bool) {
+    private func setStreaming(_ on: Bool, fromMenu: Bool = false) {
         defer { pushModel() }
         guard on else {
             userStopped = true
-            stopEngine()
+            let input = Self.inputEventNote()
+            stopEngine(fromMenu ? .menuItem(input: input) : .powerSwitch(input: input))
             return
         }
         startEngine(origin: .user)
+    }
+
+    /// The event AppKit is handling, for the debug log, so a stop by a key
+    /// press or a script can be told from a click.
+    private static func inputEventNote() -> String {
+        guard let event = NSApp.currentEvent else { return "no input event" }
+        let window = event.window.map { String(describing: type(of: $0)) } ?? "no window"
+        switch event.type {
+        case .keyDown, .keyUp: return "key code \(event.keyCode) in \(window)"
+        case .leftMouseDown, .leftMouseUp: return "click in \(window)"
+        default: return "event type \(event.type.rawValue) in \(window)"
+        }
     }
 
     /// Lists the outputs afresh, asks the AirPlay sender again and reads the
@@ -574,7 +587,7 @@ extension AppDelegate {
 
     @objc func showWebRemote(_ sender: Any?) { openWebRemoteWindow() }
 
-    @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning) }
+    @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning, fromMenu: true) }
 
     @objc func newZone(_ sender: Any?) { promptNewZone() }
 

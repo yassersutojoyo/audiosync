@@ -198,3 +198,50 @@ final class SignalQuit: @unchecked Sendable {
         exitProcess(status)
     }
 }
+
+/// Why a running session stops, written to the debug log before the engine
+/// stops so no stop goes unexplained there. A restart case is followed at
+/// once by a new session.
+enum SessionStop: Equatable {
+    /// The power switch in the window or the menu bar panel; `input` names
+    /// the event AppKit was handling, a click or a key press.
+    case powerSwitch(input: String)
+    /// Turn Streaming Off in the Speakers menu.
+    case menuItem(input: String)
+    /// The last speaker that was on went off (`StreamingPolicy.isIdle`).
+    case noSpeakerOn
+    case startFailed
+    case sourceAppQuit(bundleID: String)
+    case sourceSwitchedToSystem(bundleID: String)
+    case sourceChanged
+    case inputPairChanged
+    case captureLost
+    /// A start found a session running and builds it again.
+    case rebuild
+    case quitting
+
+    var restarts: Bool {
+        switch self {
+        case .sourceSwitchedToSystem, .sourceChanged, .inputPairChanged, .rebuild: return true
+        default: return false
+        }
+    }
+
+    var logLine: String {
+        let why: String
+        switch self {
+        case .powerSwitch(let input): why = "the power switch turned streaming off (\(input))"
+        case .menuItem(let input): why = "Turn Streaming Off in the Speakers menu (\(input))"
+        case .noSpeakerOn: why = "no speaker is on"
+        case .startFailed: why = "the start failed"
+        case .sourceAppQuit(let bundleID): why = "the source app \(bundleID) quit"
+        case .sourceSwitchedToSystem(let bundleID): why = "the source app \(bundleID) quit, the whole system plays now"
+        case .sourceChanged: why = "the source changed"
+        case .inputPairChanged: why = "the input channel pair changed"
+        case .captureLost: why = "the capture was lost"
+        case .rebuild: why = "a start found it running"
+        case .quitting: why = "AudioSync quits"
+        }
+        return "[AudioSync] session \(restarts ? "restarts" : "stops"): \(why)"
+    }
+}
