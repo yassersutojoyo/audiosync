@@ -2045,15 +2045,6 @@ do {
     check(afterOff.isEmpty && onAgain == ["native:G7"],
           "native airplay: switched off, it is no longer on by hand", "\(onAgain)")
 
-    // The TV setting changes while it is listed: a row already known is
-    // left as it is, so a session under way keeps playing.
-    var toggled = NativeAirPlayModel()
-    toggled.apply(.appeared(receiver("G7", "Lounge", .available)))
-    toggled.apply(.changed(lounge))
-    check(toggled.asksEveryTime("G7")
-            && toggled.appearedAskingEveryTime(toggled.rows(enabled: []), after: ["native:G7"]).isEmpty,
-          "native airplay: a listed speaker that starts asking every time isn't switched off")
-
     let all: Set<String> = ["native:A1", "native:B2", "native:C3", "native:D4", "123456789012"]
     check(model.plan(streaming: false, enabled: all).isEmpty, "native airplay: nothing joins while not streaming")
     check(model.plan(streaming: true, enabled: all)
@@ -2643,6 +2634,61 @@ do {
     episode.turnedOff("native:H1", timing: true)
     check(episode.shown && episode.raises == 5,
           "ptp notice: a new report starts a new episode, in which the same speaker raises it again")
+}
+
+// MARK: Speakers that ask for a code every time: off unless switched on by hand; an open PIN prompt is never restarted
+do {
+    func tv(_ id: String, _ availability: NativeReceiver.Availability, everyTime: Bool) -> NativeReceiver {
+        var receiver = NativeReceiver(id: id, name: id, model: "", availability: availability, reason: nil, hints: [])
+        receiver.codeEveryTime = everyTime
+        return receiver
+    }
+
+    // Listed before its every-time flag is known, on from the last run.
+    var late = NativeAirPlayModel()
+    late.apply(.appeared(tv("T1", .needsPin, everyTime: false)))
+    let lateListed = Set(late.rows(enabled: ["native:T1"]))
+    late.apply(.changed(tv("T1", .needsPin, everyTime: true)))
+    var restored = EveryTimeGuard()
+    let lateOff = restored.turnsOff(late.appearedAskingEveryTime(late.rows(enabled: ["native:T1"]), after: lateListed),
+                                    enabled: ["native:T1"])
+    check(lateOff == ["native:T1"],
+          "every time: a speaker on from the last run goes off once it asks for a code every time, also when listed before that",
+          "\(lateOff)")
+
+    // The TV setting changes while it plays: the session under way keeps playing.
+    var playing = NativeAirPlayModel()
+    playing.apply(.appeared(tv("T2", .available, everyTime: false)))
+    playing.added("T2")
+    _ = playing.apply(.state(id: "T2", .playing, retryMs: nil))
+    let playingListed = Set(playing.rows(enabled: ["native:T2"]))
+    playing.apply(.changed(tv("T2", .available, everyTime: true)))
+    check(playing.appearedAskingEveryTime(playing.rows(enabled: ["native:T2"]), after: playingListed).isEmpty,
+          "every time: a speaker that plays when it starts asking for a code every time keeps playing")
+
+    // Switched on by hand: it pairs and its PIN prompt opens.
+    var pin = NativeAirPlayModel()
+    pin.apply(.appeared(tv("P1", .needsPin, everyTime: true)))
+    let started = pin.turnedOnByUser("P1")
+    let asked = pin.apply(.pinNeeded(id: "P1"))
+    let prompt = pin.nextPrompt()
+    check(started == .startPairing("P1") && asked == .prompt && prompt != nil,
+          "every time: switched on by hand, it pairs and asks for the PIN")
+    // Neither a reconcile nor the 30 s safety net starts a session for it
+    // while the prompt is open, even when it is listed as able to play.
+    pin.apply(.changed(tv("P1", .available, everyTime: true)))
+    let during = pin.plan(streaming: true, enabled: ["native:P1"])
+    check(during.add.isEmpty, "every time: no session starts for a speaker whose PIN prompt is open", "\(during)")
+    // A session that was in the sender anyway and is refused starts no
+    // second pairing: a new /pair-pin-start makes the TV show a new code.
+    pin.added("P1")
+    let refused = pin.apply(.error(id: "P1", .pairingRequired, retryMs: nil, detail: ""))
+    check(refused == nil && pin.withdrawPrompt() == nil,
+          "every time: a refusal while the PIN prompt is open starts no second pairing and keeps the prompt",
+          "\(String(describing: refused))")
+    let retrying = pin.apply(.error(id: "P1", .connectionLost, retryMs: 1000, detail: "Lost"))
+    check(retrying == nil && pin.withdrawPrompt() == nil,
+          "every time: a retry while the PIN prompt is open starts no pairing and keeps the prompt")
 }
 
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")
