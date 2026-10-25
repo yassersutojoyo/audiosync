@@ -152,10 +152,10 @@ fn tlv8_encoding() {
     assert_eq!(verify.get(tlv8::ENCRYPTED_DATA).map(<[u8]>::len), Some(120));
 }
 
-// covers: P61
+// covers: P61, P154
 #[test]
 fn the_pairing_is_chosen_from_credentials_then_status_flags() {
-    use homekit::{check_mode, choose_mode, status_flags};
+    use homekit::{Stored, check_mode, choose_mode, status_flags};
     // statusFlags of /info first, the TXT flags only without it.
     assert_eq!(status_flags(Some(0x80), Some(0x8)), 0x80);
     assert_eq!(status_flags(None, Some(0x8)), 0x8);
@@ -163,17 +163,23 @@ fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     // Bit 3 asks for a code every time, stored credentials or not; they
     // win over every other flag. The two values come from one TV set to
     // ask every time (0x4c) and only the first time (0x244).
-    assert_eq!(choose_mode(0x8 | 0x80 | 0x200, true), Mode::Pin);
-    assert_eq!(choose_mode(0x4c, true), Mode::Pin);
-    assert_eq!(choose_mode(0x80 | 0x200, true), Mode::Verify);
-    assert_eq!(choose_mode(0x244, true), Mode::Verify);
+    assert_eq!(choose_mode(0x8 | 0x80 | 0x200, Stored::Kept), Mode::Pin);
+    assert_eq!(choose_mode(0x4c, Stored::Kept), Mode::Pin);
+    assert_eq!(choose_mode(0x80 | 0x200, Stored::Kept), Mode::Verify);
+    assert_eq!(choose_mode(0x244, Stored::Kept), Mode::Verify);
     assert!(homekit::asks_code_every_time(0x4c));
     assert!(!homekit::asks_code_every_time(0x244));
-    assert_eq!(choose_mode(1 << 9, false), Mode::Pin);
-    assert_eq!(choose_mode(1 << 3, false), Mode::Pin);
-    assert_eq!(choose_mode((1 << 3) | (1 << 7), false), Mode::Pin);
-    assert_eq!(choose_mode(1 << 7, false), Mode::Password);
-    assert_eq!(choose_mode(0x4 | (1 << 17), false), Mode::Transient);
+    assert_eq!(choose_mode(1 << 9, Stored::None), Mode::Pin);
+    assert_eq!(choose_mode(1 << 3, Stored::None), Mode::Pin);
+    assert_eq!(choose_mode((1 << 3) | (1 << 7), Stored::None), Mode::Pin);
+    assert_eq!(choose_mode(1 << 7, Stored::None), Mode::Password);
+    assert_eq!(choose_mode(0x4 | (1 << 17), Stored::None), Mode::Transient);
+    // Turned-down credentials verify again, unless the password can pair
+    // anew; they never fall back to a transient pairing (P154).
+    assert_eq!(choose_mode(0x80, Stored::TurnedDown), Mode::Password);
+    assert_eq!(choose_mode(0x244, Stored::TurnedDown), Mode::Verify);
+    assert_eq!(choose_mode(0x4, Stored::TurnedDown), Mode::Verify);
+    assert_eq!(choose_mode(0x4c, Stored::TurnedDown), Mode::Pin);
     // A PIN pairing waits for the host; a password pairing for the password.
     assert_eq!(
         check_mode(Mode::Pin, false, true),

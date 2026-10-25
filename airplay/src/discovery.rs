@@ -633,6 +633,24 @@ impl Device {
         }
     }
 
+    /// The protocol path for a device the host may hold HomeKit credentials
+    /// for (P2): with them it is AirPlay 2, or "AirPlay 2 only" with the
+    /// path off, and never AirPlay 1, because any host on the LAN can
+    /// publish a `_raop._tcp` record under the device's id. Without them it
+    /// is [`Device::choose_path`].
+    pub fn choose_path_paired(
+        &self,
+        airplay2_enabled: bool,
+        airplay1_outcome: Option<ErrorKind>,
+        homekit_paired: bool,
+    ) -> Result<ProtocolPath, UnsupportedReason> {
+        match (homekit_paired, airplay2_enabled) {
+            (false, _) => self.choose_path(airplay2_enabled, airplay1_outcome),
+            (true, true) => Ok(ProtocolPath::AirPlay2),
+            (true, false) => Err(UnsupportedReason::AirPlay2Only),
+        }
+    }
+
     /// Whether an AirPlay 1 session may start (P46, P139): an unsupported
     /// device is reported without connecting. For an Apple TV that needs
     /// the legacy pairing and has no stored credentials it answers

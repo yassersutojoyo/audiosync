@@ -607,15 +607,21 @@ pub fn availability(info: &ReceiverInfo, paired: bool) -> AirPlayAvailability {
 }
 
 /// Whether the sender reaches a receiver over AirPlay 2: only with the
-/// switch on, and only one that AirPlay 1 can't drive, by discovery or by
-/// how its last AirPlay 1 attempt ended (`airplay1_outcome`, P2), the input
-/// the sender decides on.
+/// switch on, and then always with HomeKit credentials stored
+/// (`homekit_stored`), otherwise only when AirPlay 1 can't drive it, by
+/// discovery or by how its last AirPlay 1 attempt ended
+/// (`airplay1_outcome`, P2), the input the sender decides on.
 pub fn reached_over_airplay2(
     info: &ReceiverInfo,
     airplay2: bool,
     airplay1_outcome: Option<ErrorKind>,
+    homekit_stored: bool,
 ) -> bool {
-    airplay2 && info.device.choose_path(true, airplay1_outcome) == Ok(ProtocolPath::AirPlay2)
+    airplay2
+        && info
+            .device
+            .choose_path_paired(true, airplay1_outcome, homekit_stored)
+            == Ok(ProtocolPath::AirPlay2)
 }
 
 /// Whether a receiver reached over AirPlay 2 can play: one whose flags ask
@@ -999,6 +1005,11 @@ pub struct AirPlaySpeakers {
     /// pairing their flags didn't announce (P61): they count as asking for
     /// one until paired or AudioSync quits.
     pin_seen: BTreeSet<String>,
+    /// The speakers whose stored credentials an answer turned down: listed
+    /// as needing a PIN until a new pairing replaces the credentials or
+    /// AudioSync quits. The credentials stay, since a reset receiver and an
+    /// impostor at its address answer alike (P154).
+    credentials_turned_down: BTreeSet<String>,
     /// The speakers in `password_attempts` that paired with a PIN during
     /// it: one that asks for a pairing again is turned off, not paired again.
     paired_in_attempt: BTreeSet<String>,
@@ -1099,6 +1110,7 @@ impl AirPlaySpeakers {
             password_attempts: BTreeSet::new(),
             password_seen: BTreeSet::new(),
             pin_seen: BTreeSet::new(),
+            credentials_turned_down: BTreeSet::new(),
             paired_in_attempt: BTreeSet::new(),
             paired_for_session: BTreeSet::new(),
             airplay1_outcome: BTreeMap::new(),
@@ -1489,8 +1501,20 @@ impl AirPlaySpeakers {
     /// What discovery and the credentials kept say about a receiver, on
     /// the path the sender takes to it.
     fn availability_of(&self, id: &str, info: &ReceiverInfo) -> AirPlayAvailability {
+        // A speaker with HomeKit credentials never plays over AirPlay 1, so
+        // its RAOP record says nothing about it (P2).
+        if self.store.homekit(id).is_some() {
+            if !self.link.airplay2() {
+                return AirPlayAvailability::AirPlay2NotYet;
+            }
+            // Only its RAOP record is in view: switched on, the sender
+            // reports it unreachable instead of playing over AirPlay 1.
+            if info.device.airplay.is_none() {
+                return AirPlayAvailability::Open;
+            }
+        }
         if !self.reached_over_airplay2(id, info) {
-            return availability(info, self.store.contains(id));
+            return availability(info, self.legacy_paired(id));
         }
         let paired = self.homekit_paired(id, info) || self.paired_for_session.contains(id);
         match airplay2_availability(info, paired) {
@@ -1504,7 +1528,14 @@ impl AirPlaySpeakers {
     /// Whether stored AirPlay 2 credentials pair the speaker: never with
     /// one that asks for a code every time, which refuses them (P61).
     fn homekit_paired(&self, id: &str, info: &ReceiverInfo) -> bool {
-        self.store.homekit(id).is_some() && !info.device.verdict.code_every_time
+        self.store.homekit(id).is_some()
+            && !info.device.verdict.code_every_time
+            && !self.credentials_turned_down.contains(id)
+    }
+
+    /// Whether stored legacy credentials pair the speaker.
+    fn legacy_paired(&self, id: &str) -> bool {
+        self.store.contains(id) && !self.credentials_turned_down.contains(id)
     }
 
     /// Whether the listed speaker `id`, reached over AirPlay 2, asks for a
@@ -1522,7 +1553,24 @@ impl AirPlaySpeakers {
     fn shows_homekit_paired(&self, id: &str) -> bool {
         match self.listed.get(id) {
             Some(listed) => self.homekit_paired(id, &listed.info),
-            None => self.store.homekit(id).is_some(),
+            None => self.store.homekit(id).is_some() && !self.credentials_turned_down.contains(id),
+        }
+    }
+
+    /// Whether a session of `id` that plays proved the receiver holds the
+    /// stored credentials, so whatever turned them down is gone (P154):
+    /// AirPlay 2 verifies its signature with them, AirPlay 1 only when they
+    /// carry its key (P56), and a password the user typed proves nothing.
+    fn playing_proves_credentials(&self, id: &str) -> bool {
+        if self.passwords.contains_key(id) {
+            return false;
+        }
+        if self.over_airplay2(id) {
+            self.store.homekit(id).is_some()
+        } else {
+            self.store
+                .get(id)
+                .is_some_and(|credentials| credentials.receiver_key().is_some())
         }
     }
 
@@ -1535,7 +1583,8 @@ impl AirPlaySpeakers {
 
     fn reached_over_airplay2(&self, id: &str, info: &ReceiverInfo) -> bool {
         let outcome = self.airplay1_outcome.get(id).copied();
-        reached_over_airplay2(info, self.link.airplay2(), outcome)
+        let homekit_stored = self.store.homekit(id).is_some();
+        reached_over_airplay2(info, self.link.airplay2(), outcome, homekit_stored)
     }
 
     /// Whether a listed speaker can join the stream: it can play, or it asks
@@ -1717,6 +1766,7 @@ impl AirPlaySpeakers {
                         playing: self.is_playing(id),
                         paired: false,
                         holds_password: false,
+                        holds_credentials: false,
                         pairing: false,
                         code_every_time: false,
                         airplay2: target
@@ -1741,8 +1791,9 @@ impl AirPlaySpeakers {
                     delay_ms: settings.delay_ms,
                     reported_latency_ms: self.estimate_of(id),
                     playing: self.is_playing(id),
-                    paired: self.store.contains(id) || self.shows_homekit_paired(id),
+                    paired: self.legacy_paired(id) || self.shows_homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
+                    holds_credentials: self.store.contains(id) || self.store.homekit(id).is_some(),
                     pairing: self.pairings.contains_key(id),
                     code_every_time: self.asks_every_time(id),
                     airplay2: self.over_airplay2(id),
@@ -1963,6 +2014,7 @@ impl AirPlaySpeakers {
             self.log
                 .log(|| format!("AirPlay {}: password forgotten", self.label(id)));
         }
+        self.credentials_turned_down.remove(id);
         let homekit_or_password = self.forget_homekit(id) || password;
         match self.store.remove(id) {
             Ok(true) => {
@@ -2808,14 +2860,8 @@ impl AirPlaySpeakers {
                 }
                 SenderEvent::Speaker { key, event } => {
                     let id = speaker_id(&key);
-                    match event {
-                        SpeakerEvent::HomeKitPaired(_) => {
-                            self.homekit_keys.insert(id.clone(), key);
-                        }
-                        SpeakerEvent::HomeKitRejected => {
-                            self.homekit_keys.remove(&id);
-                        }
-                        _ => {}
+                    if let SpeakerEvent::HomeKitPaired(_) = event {
+                        self.homekit_keys.insert(id.clone(), key);
                     }
                     changed |= self.speaker_event(&id, event, &mut events);
                 }
@@ -2985,13 +3031,9 @@ impl AirPlaySpeakers {
                 if self.pairings.remove(id).is_none() {
                     return false;
                 }
+                // Stored keys stay: the flags that made this pairing one for
+                // the session came unauthenticated (P61, P154).
                 self.paired_for_session.insert(id.to_owned());
-                // Keys kept from before it asked every time never verify
-                // again (P61).
-                if self.store.homekit(id).is_some() {
-                    let saved = self.store.remove_homekit(id);
-                    self.store_written(saved.is_ok());
-                }
                 if self.password_attempts.contains(id) {
                     self.paired_in_attempt.insert(id.to_owned());
                 }
@@ -3117,6 +3159,7 @@ impl AirPlaySpeakers {
 
     /// Stores the credentials a pairing with the speaker `id` gave.
     fn keep_credentials(&mut self, id: &str, credentials: Credentials) {
+        self.credentials_turned_down.remove(id);
         let stored = self.store.insert(id, credentials);
         self.store_written(stored.is_ok());
         match stored {
@@ -3163,11 +3206,27 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// Lists the speaker `id` as needing a PIN after an answer turned its
+    /// stored `what` down. They stay stored: a reset receiver and an
+    /// impostor at its address answer alike, so only a new pairing replaces
+    /// them (P154).
+    fn turn_down_credentials(&mut self, id: &str, what: &str) {
+        if self.credentials_turned_down.insert(id.to_owned()) {
+            self.log.log(|| {
+                format!(
+                    "AirPlay pairing {}: the speaker turned the stored {what} down; they stay until a new pairing replaces them",
+                    self.label(id)
+                )
+            });
+        }
+    }
+
     /// Keeps the AirPlay 2 credentials a pairing with the speaker `id` gave
     /// (P152); when the file can't be written they last until AudioSync
     /// quits.
     fn keep_homekit(&mut self, id: &str, credentials: HomeKitCredentials) {
         self.pin_seen.remove(id);
+        self.credentials_turned_down.remove(id);
         let saved = self.store.insert_homekit(id, credentials);
         self.store_written(saved.is_ok());
         self.log.log(|| {
@@ -3316,15 +3375,18 @@ impl AirPlaySpeakers {
         };
         let was_playing = added.state == SpeakerState::Playing;
         added.state = state;
+        let mut relisted = false;
         if state == SpeakerState::Playing {
             // Its password worked: one turned down later turns it off.
             self.password_attempts.remove(id);
             self.paired_in_attempt.remove(id);
+            relisted =
+                self.playing_proves_credentials(id) && self.credentials_turned_down.remove(id);
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
         }
-        was_playing != (state == SpeakerState::Playing)
+        relisted || was_playing != (state == SpeakerState::Playing)
     }
 
     /// Takes in a state or error of a member of the added target `target`:
@@ -3501,6 +3563,9 @@ impl AirPlaySpeakers {
                 // switching it on pairs it with a PIN, or with its password
                 // when it asks for one (P61, P154).
                 if problem == AirPlayProblem::PairingNotYet && self.over_airplay2(id) {
+                    if self.store.homekit(id).is_some() {
+                        self.turn_down_credentials(id, "AirPlay 2 credentials");
+                    }
                     if self.asks_password_only(id) {
                         problem = AirPlayProblem::NeedsPassword;
                     } else {
@@ -3508,22 +3573,9 @@ impl AirPlaySpeakers {
                         self.pin_seen.insert(id.to_owned());
                     }
                 } else if problem == AirPlayProblem::PairingNotYet && self.store.contains(id) {
-                    // The Apple TV turned the stored credentials down (it
-                    // was reset, or the pairing was removed on it): they are
-                    // forgotten, and switching it on pairs it again.
+                    // Switching it on pairs it again (P154).
                     problem = AirPlayProblem::NeedsPin;
-                    let forgotten = self.store.remove(id);
-                    self.store_written(forgotten.is_ok());
-                    self.log.log(|| {
-                        let saved = match &forgotten {
-                            Ok(_) => String::new(),
-                            Err(error) => format!(" (the store couldn't be written: {error})"),
-                        };
-                        format!(
-                            "AirPlay pairing {}: the Apple TV turned the stored credentials down; they are forgotten{saved}",
-                            self.label(id)
-                        )
-                    });
+                    self.turn_down_credentials(id, "credentials");
                 }
                 // The password it had, if any, is no good: it asks for one
                 // even if discovery didn't say so.
@@ -3641,21 +3693,6 @@ impl AirPlaySpeakers {
             }
             SpeakerEvent::HomeKitPaired(credentials) => {
                 self.keep_homekit(id, credentials);
-                false
-            }
-            SpeakerEvent::HomeKitRejected => {
-                let saved = self.store.remove_homekit(id);
-                self.store_written(saved.is_ok());
-                self.log.log(|| {
-                    let saved = match &saved {
-                        Ok(()) => String::new(),
-                        Err(error) => format!(" (the file couldn't be written: {error})"),
-                    };
-                    format!(
-                        "AirPlay speaker {}: turned down its AirPlay 2 credentials, forgotten{saved}",
-                        self.label(id)
-                    )
-                });
                 false
             }
             SpeakerEvent::Trace(line) => {
@@ -4391,32 +4428,6 @@ pub mod tests {
     }
 
     #[test]
-    fn homekit_credentials_a_receiver_rejects_are_deleted_from_the_file() {
-        use crate::audio::pairings::FILE_NAME;
-        use crate::audio::pairings::tests::{homekit, sealer};
-
-        let path = crate::debug_log::test_dir("airplay2-homekit-rejected").join(FILE_NAME);
-        let (mut store, _) = PairingStore::open(path.clone(), sealer());
-        store.open_airplay2();
-        let tv = device(6, "Den TV", APPLE_TV_TXT);
-        let id = id_of(&tv);
-        store.insert_homekit(&id, homekit(0x5A)).expect("saved");
-        let fake = FakeAirPlay::new();
-        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
-        fake.push(SenderEvent::Speaker {
-            key: tv.key.clone(),
-            event: SpeakerEvent::HomeKitRejected,
-        });
-        airplay.poll();
-        assert_eq!(airplay.store.homekit(&id), None);
-        drop(airplay);
-
-        let (mut store, _) = PairingStore::open(path, sealer());
-        store.open_airplay2();
-        assert_eq!(store.homekit(&id), None, "gone from the file too");
-    }
-
-    #[test]
     fn an_airplay2_speaker_pairs_with_a_pin_only_while_the_switch_is_on() {
         use crate::audio::pairings::tests::homekit;
 
@@ -4480,6 +4491,129 @@ pub mod tests {
         );
     }
 
+    /// A speaker under the id of device 12 whose RAOP record, with `raop`
+    /// as its TXT, points at another host; with `airplay_flags`, next to
+    /// the speaker's own AirPlay record with those status flags.
+    fn den_with_forged_raop(raop: &[&str], airplay_flags: Option<&str>) -> Device {
+        let id = 12;
+        let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
+        let airplay = airplay_flags.map(|flags| ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: "Den".to_owned(),
+            host: format!("speaker-{id}.local"),
+            port: 7000,
+            txt: vec![
+                format!("deviceid={device_id}").into_bytes(),
+                b"features=0x0,0x40".to_vec(),
+                format!("flags={flags}").into_bytes(),
+            ],
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 13)))],
+        });
+        let forged_raop = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: format!("{device_id}@Den"),
+            host: format!("forger-{id}.local"),
+            port: 5000,
+            txt: raop.iter().map(|s| s.as_bytes().to_vec()).collect(),
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66)))],
+        };
+        Device::from_records(
+            DeviceKey::Id(device_id),
+            Some(&forged_raop),
+            airplay.as_ref(),
+        )
+        .expect("a device")
+    }
+
+    /// A speaker with stored AirPlay 2 credentials shows nothing a RAOP
+    /// record says, since any host can publish one under its id (P2).
+    #[test]
+    fn a_homekit_paired_speaker_never_shows_its_raop_record() {
+        use crate::audio::pairings::tests::homekit;
+
+        let den = den_with_forged_raop(&["et=0", "pw=true"], Some("0x0"));
+        let id = id_of(&den);
+        for airplay2 in [true, false] {
+            let fake = FakeAirPlay::new();
+            fake.set_airplay2(airplay2);
+            let mut airplay = speakers(&fake);
+            fake.appear(&den);
+            airplay.poll();
+            let row = &airplay.speakers()[0];
+            assert!(!row.airplay2, "unpaired, AirPlay 1 serves it");
+            assert_eq!(row.availability, AirPlayAvailability::NeedsPassword);
+
+            airplay.store.open_airplay2();
+            airplay.store.insert_homekit(&id, homekit(0x33)).unwrap();
+            let row = &airplay.speakers()[0];
+            assert_eq!(row.airplay2, airplay2);
+            let expected = if airplay2 {
+                AirPlayAvailability::Open
+            } else {
+                AirPlayAvailability::AirPlay2NotYet
+            };
+            assert_eq!(row.availability, expected);
+        }
+    }
+
+    /// Asking for a code every time, by its own flags or by a forged RAOP
+    /// `sf`, hides the pairing but never Forget Pairing, the one way out of
+    /// the AirPlay 2 pin (P2).
+    #[test]
+    fn a_pinned_speaker_asking_for_a_code_every_time_keeps_forget_pairing() {
+        use crate::audio::pairings::tests::homekit;
+
+        for (raop, flags) in [
+            (&["et=0", "pw=true"][..], "0x4c"),
+            (&["et=0", "pw=true", "sf=0x8"][..], "0x0"),
+        ] {
+            let den = den_with_forged_raop(raop, Some(flags));
+            let id = id_of(&den);
+            let fake = FakeAirPlay::new();
+            let mut airplay = speakers(&fake);
+            airplay.store.open_airplay2();
+            airplay.store.insert_homekit(&id, homekit(0x33)).unwrap();
+            fake.appear(&den);
+            airplay.poll();
+            let row = &airplay.speakers()[0];
+            assert!(!row.paired, "{flags}: it asks for a code every time");
+            assert!(row.holds_credentials, "{flags}: Forget Pairing is on offer");
+            assert!(!row.airplay2, "{flags}: the switch is off");
+            assert_eq!(row.availability, AirPlayAvailability::AirPlay2NotYet);
+
+            airplay.forget_pairing(&id);
+            assert_eq!(airplay.store.homekit(&id), None);
+            let row = &airplay.speakers()[0];
+            assert!(!row.holds_credentials);
+            assert_eq!(
+                row.availability,
+                AirPlayAvailability::NeedsPassword,
+                "{flags}: unpinned, AirPlay 1 serves it as before"
+            );
+        }
+    }
+
+    /// With the switch on and only a RAOP record in view, a pinned speaker
+    /// reads as its AirPlay 2 path, whatever the record's flags say (P2).
+    #[test]
+    fn a_pinned_speaker_with_only_a_raop_record_shows_its_airplay2_view() {
+        use crate::audio::pairings::tests::homekit;
+
+        let den = den_with_forged_raop(&["et=0", "pw=true", "sf=0x8"], None);
+        let id = id_of(&den);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.store.open_airplay2();
+        airplay.store.insert_homekit(&id, homekit(0x33)).unwrap();
+        fake.appear(&den);
+        airplay.poll();
+        let row = &airplay.speakers()[0];
+        assert!(row.airplay2);
+        assert!(row.holds_credentials);
+        assert_eq!(row.availability, AirPlayAvailability::Open);
+    }
+
     /// Loft paired with a PIN, played, and was switched off; the user
     /// switches it on again and it turns its stored key down.
     fn loft_turns_its_key_down_on_a_switch_on(fake: &FakeAirPlay, tv: &Device) -> AirPlaySpeakers {
@@ -4500,10 +4634,6 @@ pub mod tests {
         assert_eq!(airplay.set_enabled(&id, true), Ok(()));
         airplay.begin_attempt(&id);
         fake.take_calls();
-        fake.push(SenderEvent::Speaker {
-            key: tv.key.clone(),
-            event: SpeakerEvent::HomeKitRejected,
-        });
         fake.fail(tv, ErrorKind::PairingRequired);
         let events = airplay.poll();
         assert!(
@@ -4544,10 +4674,6 @@ pub mod tests {
         // Turned down again in the same attempt: no pairing loop, it stops
         // with the notice.
         fake.take_calls();
-        fake.push(SenderEvent::Speaker {
-            key: tv.key.clone(),
-            event: SpeakerEvent::HomeKitRejected,
-        });
         fake.fail(&tv, ErrorKind::PairingRequired);
         let events = airplay.poll();
         assert!(
@@ -4596,8 +4722,8 @@ pub mod tests {
         );
         assert_eq!(
             airplay.store.homekit(&id),
-            None,
-            "the refused keys are gone"
+            Some(&homekit(0x5A)),
+            "an answer during the pairing proves nothing about them"
         );
         let row = &airplay.speakers()[0];
         assert!(row.enabled && !row.paired);
@@ -4715,7 +4841,7 @@ pub mod tests {
     }
 
     #[test]
-    fn a_receiver_rejecting_its_airplay2_credentials_drops_the_senders_key() {
+    fn a_receiver_turning_its_airplay2_credentials_down_keeps_the_senders_key() {
         use crate::audio::pairings::tests::homekit;
 
         let tv = airplay2_tv(9, "Loft");
@@ -4729,13 +4855,10 @@ pub mod tests {
         });
         airplay.poll();
         assert!(airplay.homekit_keys.contains_key(&id));
-        fake.push(SenderEvent::Speaker {
-            key: tv.key.clone(),
-            event: SpeakerEvent::HomeKitRejected,
-        });
+        fake.fail(&tv, ErrorKind::PairingRequired);
         airplay.poll();
-        assert!(!airplay.homekit_keys.contains_key(&id));
-        assert_eq!(airplay.store.homekit(&id), None);
+        assert!(airplay.homekit_keys.contains_key(&id));
+        assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
     }
 
     #[test]
@@ -5423,6 +5546,194 @@ pub mod tests {
         }));
         assert!(!airplay.speakers()[0].paired);
         assert!(airplay.enabled_ids().is_empty());
+    }
+
+    // A turn-down proves nothing (a reset receiver and an impostor look the
+    // same), so the pairing stays in the file until a new one succeeds.
+    #[test]
+    fn a_legacy_pairing_turned_down_stays_in_the_file_until_a_new_pairing_replaces_it() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, sealer};
+
+        let path = crate::debug_log::test_dir("airplay-legacy-turned-down").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        let first = credentials("0123456789ABCDEF", 3);
+        store.insert(&id, first.clone()).expect("saved");
+        let fake = FakeAirPlay::new();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayFailed {
+            id: id.clone(),
+            problem: AirPlayProblem::NeedsPin
+        }));
+        assert!(!airplay.speakers()[0].paired, "it asks for its PIN");
+        assert!(
+            airplay.speakers()[0].holds_credentials,
+            "Forget Pairing stays on offer"
+        );
+        assert_eq!(airplay.store.get(&id), Some(&first));
+        let (on_disk, _) = PairingStore::open(path.clone(), sealer());
+        assert_eq!(on_disk.get(&id), Some(&first), "still in the file");
+
+        fake.take_calls();
+        assert_eq!(
+            airplay.set_enabled(&id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
+        airplay.start_pairing(&id).expect("the pairing starts");
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert!(airplay.submit_pin(&id, "4821"));
+        let second = credentials("FEDCBA9876543210", 4);
+        fake.pairing(&tv, PairingEvent::Paired(second.clone()));
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        let (on_disk, _) = PairingStore::open(path, sealer());
+        assert_eq!(on_disk.get(&id), Some(&second), "replaced");
+    }
+
+    #[test]
+    fn airplay2_credentials_turned_down_stay_in_the_file_until_a_new_pairing_replaces_them() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay2-homekit-turned-down").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store.open_airplay2();
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        store.insert_homekit(&id, homekit(0x33)).expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].paired, "it asks for its PIN");
+        assert!(
+            airplay.speakers()[0].holds_credentials,
+            "Forget Pairing stays on offer"
+        );
+        assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
+        let (mut on_disk, _) = PairingStore::open(path.clone(), sealer());
+        on_disk.open_airplay2();
+        assert_eq!(
+            on_disk.homekit(&id),
+            Some(&homekit(0x33)),
+            "still in the file"
+        );
+
+        fake.take_calls();
+        assert_eq!(
+            airplay.set_enabled(&id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
+        airplay.start_pairing(&id).expect("the pairing starts");
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::HomeKitPaired(homekit(0x44)));
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        let (mut on_disk, _) = PairingStore::open(path, sealer());
+        on_disk.open_airplay2();
+        assert_eq!(on_disk.homekit(&id), Some(&homekit(0x44)), "replaced");
+    }
+
+    // Playing on them shows that whatever turned them down is gone (P154).
+    #[test]
+    fn turned_down_credentials_a_session_plays_on_list_as_paired_again() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay2-homekit-plays-again").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path, sealer());
+        store.open_airplay2();
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        store.insert_homekit(&id, homekit(0x33)).expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        airplay.poll();
+        // The switch-on gate keeps a turned-down speaker off, so the mark is
+        // set on one already playing.
+        airplay.credentials_turned_down.insert(id.clone());
+        assert!(!airplay.speakers()[0].paired);
+
+        fake.state(&tv, SpeakerState::Playing);
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        assert!(!airplay.credentials_turned_down.contains(&id));
+    }
+
+    // An impostor plays on legacy credentials without the receiver's key,
+    // which skip the signature check (P56). AirPlay 2 credentials pin the
+    // speaker to AirPlay 2, whose pair-verify proves them, so playing there
+    // clears the mark.
+    #[test]
+    fn a_session_that_proves_nothing_leaves_turned_down_credentials_marked() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay-unproven-plays").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path, sealer());
+        store.open_airplay2();
+        let homekit_only = device(6, "Den TV", OPEN_TXT);
+        let without_key = device(7, "Study", OPEN_TXT);
+        let with_key = device(8, "Loft", OPEN_TXT);
+        store
+            .insert_homekit(&id_of(&homekit_only), homekit(0x33))
+            .expect("saved");
+        store
+            .insert(&id_of(&without_key), credentials("0123456789ABCDEF", 3))
+            .expect("saved");
+        let proven = credentials("FEDCBA9876543210", 4).with_receiver_key([9; 32]);
+        store.insert(&id_of(&with_key), proven).expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        let tvs = [&homekit_only, &without_key, &with_key];
+        for tv in tvs {
+            fake.appear(tv);
+        }
+        airplay.poll();
+        for tv in tvs {
+            assert_eq!(airplay.set_enabled(&id_of(tv), true), Ok(()));
+        }
+        airplay.set_streaming(true);
+        airplay.poll();
+        for tv in tvs {
+            airplay.credentials_turned_down.insert(id_of(tv));
+            fake.state(tv, SpeakerState::Playing);
+        }
+        airplay.poll();
+        assert!(
+            !airplay
+                .credentials_turned_down
+                .contains(&id_of(&homekit_only))
+        );
+        assert!(
+            airplay
+                .credentials_turned_down
+                .contains(&id_of(&without_key))
+        );
+        assert!(!airplay.credentials_turned_down.contains(&id_of(&with_key)));
     }
 
     #[test]

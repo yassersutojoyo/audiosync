@@ -194,6 +194,9 @@ pub struct AirPlayInfo {
     /// Whether AudioSync holds the password the user typed for it, until
     /// AudioSync quits.
     pub holds_password: bool,
+    /// Whether AudioSync stores pairing credentials for it, also ones the
+    /// speaker turned down (P154), which Forget Pairing drops.
+    pub holds_credentials: bool,
     /// Whether a pairing with it is running.
     pub pairing: bool,
     /// It asks for a code every time it connects over AirPlay 2 (status

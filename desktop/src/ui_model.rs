@@ -219,6 +219,9 @@ pub struct Speaker {
     /// An AirPlay speaker whose password AudioSync holds until it quits,
     /// which the user can forget.
     pub holds_password: bool,
+    /// An AirPlay speaker AudioSync stores pairing credentials for, also
+    /// ones it turned down, which the user can forget.
+    pub holds_credentials: bool,
     /// An AirPlay speaker that asks for a code every time it connects:
     /// auto-connect leaves it off, and its row says why.
     pub code_every_time: bool,
@@ -1599,6 +1602,7 @@ impl MockBackend {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            holds_credentials: false,
             code_every_time: false,
             device_volume: None,
             waiting: None,
@@ -2256,6 +2260,7 @@ impl Backend for MockBackend {
                 availability: Availability::Open,
                 paired: false,
                 holds_password: false,
+                holds_credentials: false,
                 code_every_time: false,
                 device_volume: None,
                 waiting: None,
@@ -2643,6 +2648,7 @@ mod tests {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            holds_credentials: false,
             code_every_time: false,
             device_volume: None,
             waiting: None,

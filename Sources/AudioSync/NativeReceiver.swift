@@ -28,8 +28,8 @@ struct NativeReceiver: Equatable {
     /// The sender reaches it over AirPlay 2, which only the AirPlay 2
     /// switch allows.
     var overAirPlay2 = false
-    /// A PIN pairing's credentials are kept for it (either path), which
-    /// Forget Pairing drops.
+    /// A PIN pairing's credentials are kept for it (either path), and no
+    /// answer turned them down this run.
     var paired = false
     /// The "pair:<tsid>" or "theater:<group>" ID of the stereo pair or home
     /// theater group it plays in (P176), or "". Set only with the AirPlay 2
@@ -43,6 +43,9 @@ struct NativeReceiver: Equatable {
     /// Reached over AirPlay 2, it asks for a code every time it connects
     /// (P61): auto-connect leaves it off, and only the user turns it on.
     var codeEveryTime = false
+    /// Credentials are stored for it, also ones an answer turned down (P154),
+    /// which Forget Pairing drops.
+    var credentialsKept = false
 
     /// How the speaker list shows it, if at all: one that can play is open;
     /// one that asks for a PIN or a password needs a code, which AudioSync

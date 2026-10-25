@@ -2264,6 +2264,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            holds_credentials: false,
             code_every_time: false,
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
@@ -3507,6 +3508,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             },
             paired: speaker.paired,
             holds_password: speaker.holds_password,
+            holds_credentials: speaker.holds_credentials,
             code_every_time: speaker.code_every_time,
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
@@ -3553,6 +3555,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            holds_credentials: false,
             code_every_time: false,
             // Read only while the output is on (S192).
             device_volume: output
@@ -7210,8 +7213,8 @@ mod tests {
 
     /// After `speaker` turned its stored key down: the row asks for a code
     /// again, it is off with a notice saying it needs a PIN, and switching it
-    /// on starts a new pairing.
-    fn assert_key_forgotten(
+    /// on starts a new pairing, which replaces the kept key.
+    fn assert_asks_for_its_pin_again(
         adapter: &mut AudioAdapter<MockBackend>,
         fake: &FakeAirPlay,
         speaker: &Device,
@@ -7254,13 +7257,12 @@ mod tests {
 
         fake.fail(&tv, ErrorKind::PairingRequired);
         adapter.poll();
-        assert_key_forgotten(&mut adapter, &fake, &tv, "Den TV");
+        assert_asks_for_its_pin_again(&mut adapter, &fake, &tv, "Den TV");
     }
 
     #[test]
     fn an_airplay2_speaker_that_turns_its_stored_key_down_asks_for_a_pin_again() {
         use crate::audio::pairings::tests::homekit;
-        use audiosync_airplay::sender::SpeakerEvent as AirPlayEvent;
 
         let (mut adapter, fake, loft) = airplay2_adapter(true);
         let id = ap(&loft);
@@ -7272,13 +7274,9 @@ mod tests {
         adapter.poll();
         assert!(adapter.snapshot().speaker(&id).unwrap().paired);
 
-        fake.push(SenderEvent::Speaker {
-            key: loft.key.clone(),
-            event: AirPlayEvent::HomeKitRejected,
-        });
         fake.fail(&loft, ErrorKind::PairingRequired);
         adapter.poll();
-        assert_key_forgotten(&mut adapter, &fake, &loft, "Loft");
+        assert_asks_for_its_pin_again(&mut adapter, &fake, &loft, "Loft");
     }
 
     #[test]
