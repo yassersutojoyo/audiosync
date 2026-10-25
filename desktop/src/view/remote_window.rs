@@ -848,6 +848,40 @@ mod tests {
     }
 
     #[test]
+    fn the_debug_switch_starts_the_remote_for_this_run_and_saves_nothing() {
+        use crate::debug_log::{self, DebugLog};
+
+        let path = debug_log::test_dir("remote-switch").join(debug_log::FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        let app = super::super::tests::app_logging(MockBackend::new(), log.clone());
+        app.remote.borrow_mut().listen = vec![Ipv4Addr::LOCALHOST.into()];
+        let before = app.backend.borrow().view_settings();
+        assert!(!before.remote.on);
+
+        app.restore_remote_with(None);
+        assert!(!app.remote_listening(), "no switch, no remote");
+
+        let port = free_port();
+        app.restore_remote_with(Some(port));
+        assert!(app.remote_listening());
+        assert_eq!(app.remote.borrow().server.as_ref().map(|s| s.port()), Some(port));
+        app.remember_view();
+        assert_eq!(
+            app.backend.borrow().view_settings(),
+            before,
+            "the saved setting stays off with its port"
+        );
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        debug_log::assert_in_order(
+            &debug_log::read_messages(&path),
+            &[
+                "remote: on for this run (debug switch)",
+                &format!("web remote: listening on port {port}"),
+            ],
+        );
+    }
+
+    #[test]
     fn the_debug_log_gets_each_pairing_code_and_a_normal_run_none() {
         use crate::debug_log::{self, DebugLog};
 

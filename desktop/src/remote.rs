@@ -549,6 +549,35 @@ mod tests {
     use audiosync_core::policy::zones::Zone;
     use audiosync_remote::{SpeakerChange, ZoneChange};
 
+    #[test]
+    fn the_debug_switch_starts_the_remote_only_with_the_debug_log() {
+        use std::ffi::OsStr;
+
+        let saved = RemoteSettings {
+            on: false,
+            port: 8080,
+        };
+        let one = Some(OsStr::new("1"));
+        let port = |text: &'static str| Some(OsStr::new(text));
+        assert_eq!(debug_switch_port(true, one, None, saved), Some(8080));
+        assert_eq!(
+            debug_switch_port(true, one, port("9000"), saved),
+            Some(9000)
+        );
+        assert_eq!(
+            debug_switch_port(true, one, port("80"), saved),
+            Some(8080),
+            "a port the setting wouldn't take falls back to the saved one"
+        );
+        assert_eq!(
+            debug_switch_port(true, one, None, RemoteSettings { on: false, port: 0 }),
+            Some(DEFAULT_PORT)
+        );
+        assert_eq!(debug_switch_port(false, one, port("9000"), saved), None);
+        assert_eq!(debug_switch_port(true, None, port("9000"), saved), None);
+        assert_eq!(debug_switch_port(true, port("true"), None, saved), None);
+    }
+
     struct Text;
 
     impl RowText for Text {

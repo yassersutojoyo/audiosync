@@ -6952,6 +6952,15 @@ do {
             && debugStart["local_name"] == nil && normalStart["log_pairing_codes"] == nil
             && normalStart["local_name"] as? String == "den" && normalStart["devices_path"] as? String == "/devices.json",
           "web remote: only the debug log asks the core for the pairing codes")
+    let switchOn = ["AUDIOSYNC_WEB_REMOTE": "1"]
+    check(RemoteDebugSwitch.port(environment: switchOn, debugLog: true, savedPort: 8080) == 8080
+            && RemoteDebugSwitch.port(environment: switchOn.merging(["AUDIOSYNC_WEB_REMOTE_PORT": "9000"]) { $1 },
+                                      debugLog: true, savedPort: 8080) == 9000
+            && RemoteDebugSwitch.port(environment: switchOn.merging(["AUDIOSYNC_WEB_REMOTE_PORT": "80"]) { $1 },
+                                      debugLog: true, savedPort: 8080) == 8080
+            && RemoteDebugSwitch.port(environment: switchOn, debugLog: false, savedPort: 8080) == nil
+            && RemoteDebugSwitch.port(environment: ["AUDIOSYNC_WEB_REMOTE": "true"], debugLog: true, savedPort: 8080) == nil,
+          "web remote: the debug switch starts it for one run on the saved or given port, only with the debug log")
     let fresh = AppSettings.load { _ in nil }
     let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
     let kept = AppSettings.load { stored[$0] }
