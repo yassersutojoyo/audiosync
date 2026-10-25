@@ -2229,6 +2229,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            holds_credentials: false,
             code_every_time: false,
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
@@ -3472,6 +3473,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             },
             paired: speaker.paired,
             holds_password: speaker.holds_password,
+            holds_credentials: speaker.holds_credentials,
             code_every_time: speaker.code_every_time,
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
@@ -3518,6 +3520,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            holds_credentials: false,
             code_every_time: false,
             // Read only while the output is on (S192).
             device_volume: output

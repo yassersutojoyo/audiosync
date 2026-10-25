@@ -1730,6 +1730,7 @@ impl AirPlaySpeakers {
                         playing: self.is_playing(id),
                         paired: false,
                         holds_password: false,
+                        holds_credentials: false,
                         pairing: false,
                         code_every_time: false,
                         airplay2: target
@@ -1756,6 +1757,8 @@ impl AirPlaySpeakers {
                     playing: self.is_playing(id),
                     paired: self.legacy_paired(id) || self.shows_homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
+                    holds_credentials: self.store.contains(id)
+                        || self.store.homekit(id).is_some(),
                     pairing: self.pairings.contains_key(id),
                     code_every_time: self.asks_every_time(id),
                     airplay2: self.over_airplay2(id),
@@ -5410,6 +5413,10 @@ pub mod tests {
             problem: AirPlayProblem::NeedsPin
         }));
         assert!(!airplay.speakers()[0].paired, "it asks for its PIN");
+        assert!(
+            airplay.speakers()[0].holds_credentials,
+            "Forget Pairing stays on offer"
+        );
         assert_eq!(airplay.store.get(&id), Some(&first));
         let (on_disk, _) = PairingStore::open(path.clone(), sealer());
         assert_eq!(on_disk.get(&id), Some(&first), "still in the file");
@@ -5453,6 +5460,10 @@ pub mod tests {
         fake.fail(&tv, ErrorKind::PairingRequired);
         airplay.poll();
         assert!(!airplay.speakers()[0].paired, "it asks for its PIN");
+        assert!(
+            airplay.speakers()[0].holds_credentials,
+            "Forget Pairing stays on offer"
+        );
         assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
         let (mut on_disk, _) = PairingStore::open(path.clone(), sealer());
         on_disk.open_airplay2();
