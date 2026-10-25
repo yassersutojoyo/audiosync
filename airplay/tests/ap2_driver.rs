@@ -1200,3 +1200,128 @@ fn stored_credentials_go_once_a_receiver_asks_every_time() {
     assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
     sender.shutdown();
 }
+
+/// The paired speaker's own `_airplay._tcp` record next to a `_raop._tcp`
+/// record that names its device id but points at another host, as any host
+/// on the LAN can publish one.
+fn with_forged_raop(server: &Ap2Server, forger: &NetReceiver, id: u8) -> Device {
+    let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
+    let raop = forger.record(id, PCM_TXT);
+    let airplay = airplay_record(server.address.port(), id);
+    Device::from_records(DeviceKey::Id(device_id), Some(&raop), Some(&airplay)).expect("device")
+}
+
+fn assert_untouched(forger: &NetReceiver) {
+    let log = forger.log();
+    assert!(log.connections.is_empty(), "{:?}", log.keys());
+    assert!(log.requests.is_empty(), "{:?}", log.keys());
+}
+
+// covers: P2
+#[test]
+fn a_forged_raop_record_never_moves_a_homekit_paired_speaker_to_airplay1() {
+    let _serial = serial();
+    let server = ask_once_receiver();
+    let forger = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let id = 59;
+    let paired = airplay2_only(&server, id);
+    let key = paired.key.clone();
+    let credentials = pair_first_time(&server, &sender, &mut events, &paired);
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    let forged = with_forged_raop(&server, &forger, id);
+
+    for round in 1..=2 {
+        server.fake().requests.clear();
+        sender.add_speaker(forged.clone(), paired_options.clone());
+        assert!(
+            events
+                .wait_state(&sender, &key, round, LONG, |s| *s == SpeakerState::Playing)
+                .is_some(),
+            "{:?} {:?}",
+            events.of(&key),
+            server.fake().keys()
+        );
+        let keys = server.fake().keys();
+        assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+        assert_untouched(&forger);
+        // Switching the speaker off and on starts the path choice over.
+        sender.remove_speaker(&key);
+        assert!(
+            events
+                .wait_state(&sender, &key, round, LONG, |s| *s == SpeakerState::Stopped)
+                .is_some()
+        );
+    }
+
+    // Without its `_airplay._tcp` record the speaker can't be reached on
+    // the path it is paired on, and it is not played over AirPlay 1.
+    sender.add_speaker(forger.device(id, PCM_TXT), paired_options);
+    let refused = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
+    });
+    assert!(refused.is_some(), "{:?}", events.of(&key));
+    assert_eq!(errors(&events, &key), [ErrorKind::Unreachable]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_untouched(&forger);
+    sender.remove_speaker(&key);
+    assert!(
+        events
+            .wait_state(&sender, &key, 3, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some()
+    );
+
+    // Forgetting the pairing lifts the pin: an unpaired speaker takes
+    // AirPlay 1 as before.
+    sender.forget_homekit(&key);
+    sender.add_speaker(forged, options());
+    assert!(
+        wait_until(LONG, || !forger.log().requests.is_empty()),
+        "{:?}",
+        events.of(&key)
+    );
+    sender.shutdown();
+}
+
+// covers: P2
+#[test]
+fn a_homekit_paired_speaker_with_the_airplay2_switch_off_is_not_played_over_airplay1() {
+    let _serial = serial();
+    let server = ask_once_receiver();
+    let forger = NetReceiver::start(Behavior::default());
+    let id = 60;
+    let credentials = {
+        let (sender, _host) = start();
+        let mut events = Events::default();
+        let paired = airplay2_only(&server, id);
+        let credentials = pair_first_time(&server, &sender, &mut events, &paired);
+        sender.shutdown();
+        credentials
+    };
+    let (sender, writer) = Sender::start(SenderConfig {
+        airplay2: false,
+        airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        ..SenderConfig::default()
+    })
+    .expect("the sender starts");
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let forged = with_forged_raop(&server, &forger, id);
+    let key = forged.key.clone();
+    let mut paired_options = options();
+    paired_options.homekit_credentials = Some(credentials);
+    sender.add_speaker(forged, paired_options);
+    let refused = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
+    });
+    assert!(refused.is_some(), "{:?}", events.of(&key));
+    assert_eq!(
+        errors(&events, &key),
+        [ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only)]
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert_untouched(&forger);
+    sender.shutdown();
+}
