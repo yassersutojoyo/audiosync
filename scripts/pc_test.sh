@@ -36,7 +36,8 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$main/windows/target}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
 export CARGO_INCREMENTAL=0
 
-git ls-files -z "${crates[@]}" | xargs -0 touch
+# All five, since the crates build each other by path in the shared target.
+git ls-files -z desktop core airplay cast remote | xargs -0 touch
 
 failed=()
 for crate in "${crates[@]}"; do

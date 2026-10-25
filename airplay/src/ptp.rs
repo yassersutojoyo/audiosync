@@ -117,10 +117,11 @@ impl Default for PtpPorts {
 /// program that binds another address.
 pub const NO_LAN_TESTS: &str = "AUDIOSYNC_NO_LAN_TESTS";
 
-/// Whether [`NO_LAN_TESTS`] is set to something.
+/// Whether [`NO_LAN_TESTS`] is set to something. Release builds ignore it,
+/// so a shipped app always binds every address.
 #[doc(hidden)]
 pub fn no_lan_tests() -> bool {
-    std::env::var_os(NO_LAN_TESTS).is_some_and(|value| !value.is_empty())
+    cfg!(debug_assertions) && std::env::var_os(NO_LAN_TESTS).is_some_and(|value| !value.is_empty())
 }
 
 /// The address the PTP service binds for receivers of `family`'s kind: every
