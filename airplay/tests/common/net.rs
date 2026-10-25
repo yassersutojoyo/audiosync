@@ -244,6 +244,20 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Waits for the sender's bytes in a peek: on Windows a read that times out
+/// as bytes land can drop them (core/NOTES.md, `SO_RCVTIMEO`).
+pub fn read_queued(stream: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<usize> {
+    const ERROR_IO_PENDING: i32 = 997;
+    match stream.peek(buf) {
+        Ok(0) => Ok(0),
+        Ok(_) => stream.read(buf),
+        Err(error) if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) => {
+            Err(std::io::ErrorKind::TimedOut.into())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub struct NetReceiver {
     pub address: SocketAddr,
     shared: Arc<Shared>,
@@ -451,7 +465,7 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
             thread::sleep(POLL);
             continue;
         }
-        match stream.read(&mut buf) {
+        match read_queued(&mut stream, &mut buf) {
             Ok(0) => return closed(&shared),
             Ok(len) => {
                 parser.push(&buf[..len]);
