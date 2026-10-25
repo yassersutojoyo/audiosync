@@ -76,6 +76,12 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// Per drag, not per step: a slider sends many positions while it moves.
+    func logLocalVolume(_ uid: String) {
+        guard let v = localVolume[uid] else { return }
+        DebugTrace.log("[AudioSync] volume of \(uid) set to \(String(format: "%.2f", v))")
+    }
+
     /// The master scales every speaker AudioSync plays: a local speaker's
     /// gain, each AirPlay speaker's volume, which AudioSync's own sender
     /// scales by it, and the Cast speaker's device volume (C104).

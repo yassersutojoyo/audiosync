@@ -120,6 +120,7 @@ extension AppDelegate {
         a.forgetAirPlayPairing = { [weak self] id in self?.forgetNativePairing(id) }
         a.setLocalEnabled = { [weak self] uid, on, origin in self?.setLocalEnabled(uid, on, origin: origin) }
         a.setLocalVolume = { [weak self] uid, position in self?.setLocalVolume(uid, position) }
+        a.localVolumeSettled = { [weak self] uid in self?.logLocalVolume(uid) }
         a.setLocalOffset = { [weak self] uid, ms in self?.setLocalOffset(uid, ms) }
         a.calibrate = { [weak self] uid in self?.startCalibration(uid) }
         a.cancelCalibration = { [weak self] in self?.cancelCalibration() }
