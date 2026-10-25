@@ -526,6 +526,17 @@ impl Added {
         }
     }
 
+    /// Keeps `volume`, read from the speaker, without sending it back; the
+    /// reading is already the baseline (S291). A target's members still get
+    /// it as a set, so they stay at one level (P180).
+    fn keep_volume(&mut self, sender: &Sender, volume: Volume) {
+        if self.target.is_some() {
+            return self.set_volume(sender, volume);
+        }
+        self.level = device_level_for_db(volume.wire_db()).unwrap_or(0.0);
+        sender.keep_volume(&self.key, volume);
+    }
+
     fn set_delay(&self, sender: &Sender, delay: Duration) {
         match &self.target {
             Some(id) => sender.set_target_delay(id, delay),
@@ -1189,9 +1200,8 @@ impl AscAirPlay {
         };
         added.position = position;
         // The sender keeps the level too, for a reconnect or a target
-        // member that starts late (P119, P180); its next read is the echo,
-        // so this isn't reported back.
-        added.set_volume(&self.sender, device_volume(level));
+        // member that starts late (P119, P180).
+        added.keep_volume(&self.sender, device_volume(level));
         self.queue_event(Pending::Volume(owner, position, level));
     }
 
@@ -7294,11 +7304,10 @@ mod tests {
         // Turned up to −6 dB on the speaker: slider 80 with the master at 100.
         report_volume(handle, &key, -6.0);
         assert_eq!(inside(handle).added[id].position, 80.0);
-        assert!(
-            wait_for(|| volumes().contains(&reported)),
-            "{:?}",
-            volumes()
-        );
+        // Never sent back: a receiver that rounds sets more coarsely than
+        // its remote steps would undo the press (S291).
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(!volumes().contains(&reported), "{:?}", volumes());
         let before = volumes().len();
         receiver.hang_up();
         assert!(

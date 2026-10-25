@@ -153,6 +153,10 @@ pub trait AirPlayLink {
     /// Sets a speaker's volume.
     fn set_volume(&mut self, key: &DeviceKey, volume: Volume);
 
+    /// Takes a level set on the speaker itself as its volume, sending
+    /// nothing (S291).
+    fn keep_volume(&mut self, key: &DeviceKey, volume: Volume);
+
     /// Asks a playing speaker for its own volume (P122); the answer comes
     /// as [`SpeakerEvent::VolumeReported`].
     fn read_volume(&mut self, key: &DeviceKey);
@@ -332,6 +336,10 @@ impl AirPlayLink for SenderLink {
 
     fn set_volume(&mut self, key: &DeviceKey, volume: Volume) {
         self.sender.set_volume(key, volume);
+    }
+
+    fn keep_volume(&mut self, key: &DeviceKey, volume: Volume) {
+        self.sender.keep_volume(key, volume);
     }
 
     fn read_volume(&mut self, key: &DeviceKey) {
@@ -979,6 +987,15 @@ impl Added {
         match &self.joined {
             Joined::Speaker(key) => link.set_volume(key, volume),
             Joined::Target(id) => link.set_target_volume(id, volume),
+        }
+    }
+
+    /// Keeps a level set on the speaker. A target's members still get it
+    /// as a set, so they stay at one level (P180).
+    fn keep_volume(&mut self, link: &mut dyn AirPlayLink, volume: Volume) {
+        match &self.joined {
+            Joined::Speaker(key) => link.keep_volume(key, volume),
+            Joined::Target(_) => self.set_volume(link, volume),
         }
     }
 
@@ -2728,9 +2745,9 @@ impl AirPlaySpeakers {
     /// not during a drag, the first reading near a level sent is its echo
     /// and the baseline; any other reading away from the baseline is a
     /// level set on the speaker, which sets the row's device level and the
-    /// own volume (S290). The sender keeps that level, so a session that
-    /// starts again or a member that joins late gets it, and it doesn't go
-    /// back as a row move. Returns whether the speaker list changed.
+    /// own volume (S290). The sender keeps that level without sending it
+    /// back, so a session that starts again or a member that joins late
+    /// gets it. Returns whether the speaker list changed.
     fn volume_reported(&mut self, id: &str, db: f64) -> bool {
         let Some(row) = self.row_of(id) else {
             return false;
@@ -2757,7 +2774,7 @@ impl AirPlaySpeakers {
         } else {
             Volume::from_db(db).unwrap_or(Volume::Muted)
         };
-        added.set_volume(self.link.as_mut(), level);
+        added.keep_volume(self.link.as_mut(), level);
         let entry = self.entry(&row);
         entry.volume = moved.own_position;
         entry.level = Some(SetLevel {
@@ -4167,6 +4184,7 @@ pub mod tests {
         },
         Remove(String),
         Volume(String, Volume),
+        KeepVolume(String, Volume),
         Delay(String, Duration),
         /// A target added, with its members' speaker IDs.
         AddTarget {
@@ -4449,6 +4467,13 @@ pub mod tests {
                 .borrow_mut()
                 .calls
                 .push(Call::Volume(speaker_id(key), volume));
+        }
+
+        fn keep_volume(&mut self, key: &DeviceKey, volume: Volume) {
+            self.0
+                .borrow_mut()
+                .calls
+                .push(Call::KeepVolume(speaker_id(key), volume));
         }
 
         fn read_volume(&mut self, key: &DeviceKey) {
@@ -7269,7 +7294,7 @@ pub mod tests {
         assert_eq!(row_of(&airplay, &id), 26.0);
         assert_eq!(
             fake.take_calls(),
-            [Call::Volume(id.clone(), Volume::Db(-22.2))]
+            [Call::KeepVolume(id.clone(), Volume::Db(-22.2))]
         );
         // With the master at 0 the own volume stays.
         airplay.set_master(0.0);
@@ -7379,8 +7404,12 @@ pub mod tests {
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(row_of(&airplay, &id), 21.0);
         assert_eq!(airplay.speakers()[0].volume, 33.0);
-        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-23.7))]);
-        // The sender's own echo of that level changes nothing.
+        // Sent back, −23.7 dB would land on −24 dB and undo the press.
+        assert_eq!(
+            fake.take_calls(),
+            [Call::KeepVolume(id.clone(), Volume::Db(-23.7))]
+        );
+        // The same level read again changes nothing.
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -23.7);
         assert!(airplay.poll().is_empty());
@@ -7481,15 +7510,36 @@ pub mod tests {
         report_volume(&fake, &kitchen, -6.0);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(airplay.speakers()[0].volume, 80.0);
-        // The sender keeps the level for a restart; nothing else goes out.
+        // The sender keeps the level for a restart; nothing goes out.
         assert_eq!(
             fake.take_calls(),
-            [Call::Volume(id.clone(), Volume::Db(-6.0))]
+            [Call::KeepVolume(id.clone(), Volume::Db(-6.0))]
         );
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -6.0);
         assert!(airplay.poll().is_empty(), "the same level is no news");
         assert!(fake.take_calls().is_empty());
+    }
+
+    #[test]
+    fn a_level_set_on_the_speaker_never_goes_back_to_it() {
+        // A television that keeps sets on a 0.6 dB grid turns a −26.7 dB
+        // sent back into −27 dB, undoing its remote's 0.3 dB press (S291).
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_volume(&id, 40.0);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -18.0);
+        assert!(airplay.poll().is_empty());
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -26.7);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 11.0);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::KeepVolume(id.clone(), Volume::Db(-26.7))]
+        );
     }
 
     #[test]
@@ -7508,7 +7558,7 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].volume, 100.0);
         assert_eq!(
             fake.take_calls(),
-            [Call::Volume(id.clone(), Volume::Db(-3.0))]
+            [Call::KeepVolume(id.clone(), Volume::Db(-3.0))]
         );
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -3.0);
@@ -7522,7 +7572,7 @@ pub mod tests {
         assert_eq!(row_of(&airplay, &id), 96.0);
         assert_eq!(
             fake.take_calls(),
-            [Call::Volume(id.clone(), Volume::Db(-1.0))]
+            [Call::KeepVolume(id.clone(), Volume::Db(-1.0))]
         );
     }
 
@@ -7615,7 +7665,7 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].volume, 0.0);
         assert_eq!(
             fake.take_calls(),
-            [Call::Volume(id.clone(), Volume::Db(-29.9))]
+            [Call::KeepVolume(id.clone(), Volume::Db(-29.9))]
         );
     }
 
@@ -7646,7 +7696,7 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].volume, 0.0);
         assert_eq!(
             fake.take_calls(),
-            [Call::Volume(id.clone(), Volume::Db(MIN_DB))]
+            [Call::KeepVolume(id.clone(), Volume::Db(MIN_DB))]
         );
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -40.0);
