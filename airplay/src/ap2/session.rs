@@ -1080,13 +1080,18 @@ impl Ap2Session {
     }
 
     /// Ends the session: TEARDOWN of the stream, then of the session, at
-    /// most 2 s in all (P35, P42, P129). Before the session SETUP is
-    /// answered there is nothing to tear down and the connection just
-    /// closes.
+    /// most 2 s in all (P35, P42, P129). Before the session SETUP goes
+    /// out there is nothing to tear down and the connection just closes;
+    /// one already sent is waited for, since the receiver may have made the
+    /// session it asked for.
     pub fn teardown(&mut self, now: Instant) {
+        let setup_in_flight = self
+            .in_flight
+            .as_ref()
+            .is_some_and(|in_flight| matches!(in_flight.kind, Kind::SessionSetup));
         match self.state {
             Ap2State::Closed | Ap2State::TearingDown => {}
-            _ if !self.set_up => self.finish(),
+            _ if !self.set_up && !setup_in_flight => self.finish(),
             _ => {
                 self.state = Ap2State::TearingDown;
                 self.teardown_deadline = Some(now + TEARDOWN_TIMEOUT);
@@ -1418,6 +1423,8 @@ impl Ap2Session {
                 Kind::TeardownSession => self.finish(),
                 Kind::TeardownStream => self.stream_torn_down = true,
                 Kind::StreamSetup if response.is_success() => self.record_stream(&response),
+                Kind::SessionSetup if response.is_success() => self.set_up = true,
+                Kind::SessionSetup => self.finish(),
                 _ => {}
             }
             return;
