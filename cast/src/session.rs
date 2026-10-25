@@ -888,6 +888,7 @@ fn make_room(events: &mut VecDeque<SessionEvent>) {
             SessionEvent::Diagnostics(_)
                 | SessionEvent::Stream(_)
                 | SessionEvent::Volume(_)
+                | SessionEvent::Rebuffering
                 | SessionEvent::GroupMessage(_)
         )
     });
@@ -953,6 +954,20 @@ mod tests {
         let mut events: VecDeque<SessionEvent> =
             (0..MAX_SESSION_EVENTS - 1).map(|_| failure()).collect();
         events.insert(5, SessionEvent::GroupMessage("x".to_owned()));
+        make_room(&mut events);
+        assert_eq!(events.len(), MAX_SESSION_EVENTS - 1);
+        assert!(
+            events
+                .iter()
+                .all(|event| matches!(event, SessionEvent::ConnectFailed { .. }))
+        );
+    }
+
+    #[test]
+    fn rebuffering_makes_room_like_the_hosts_routine_events() {
+        let mut events: VecDeque<SessionEvent> =
+            (0..MAX_SESSION_EVENTS - 1).map(|_| failure()).collect();
+        events.insert(5, SessionEvent::Rebuffering);
         make_room(&mut events);
         assert_eq!(events.len(), MAX_SESSION_EVENTS - 1);
         assert!(
