@@ -63,12 +63,12 @@ struct EveryTimeGuard: Equatable {
         byHand.formUnion(ids)
     }
 
-    /// Of `appeared` (rows that appeared asking for a code every time), the
-    /// ones that go off: on from the last run, not switched on by hand. A
-    /// speaker no longer on is forgotten first.
-    mutating func turnsOff(_ appeared: [String], enabled: Set<String>) -> [String] {
+    /// Of `asking` (rows asking for a code every time,
+    /// `NativeAirPlayModel.askingEveryTime`), the ones that go off: on, not
+    /// switched on by hand. A speaker no longer on is forgotten first.
+    mutating func turnsOff(_ asking: [String], enabled: Set<String>) -> [String] {
         byHand.formIntersection(enabled)
-        return appeared.filter { enabled.contains($0) && !byHand.contains($0) }
+        return asking.filter { enabled.contains($0) && !byHand.contains($0) }
     }
 }
 
@@ -519,12 +519,15 @@ struct NativeAirPlayModel {
         receivers[receiver]?.codeEveryTime == true
     }
 
-    /// The rows (app IDs) missing from `known` whose receiver asks for a
-    /// code every time: they go off as they appear, also when they were on
-    /// from the last run, so no code request comes by itself.
-    func appearedAskingEveryTime(_ rows: [String], after known: Set<String>) -> [String] {
+    /// The rows (app IDs) whose receiver asks for a code every time and
+    /// doesn't play: they go off unless switched on by hand, also when they
+    /// were on from the last run or start asking once listed (a late TXT
+    /// update), so no code request comes by itself. One that plays keeps
+    /// its session.
+    func askingEveryTime(_ rows: [String]) -> [String] {
         rows.filter { id in
-            !known.contains(id) && NativeAirPlayID.receiver(id).map(asksEveryTime) == true
+            guard let receiver = NativeAirPlayID.receiver(id) else { return false }
+            return asksEveryTime(receiver) && !isPlaying(receiver)
         }
     }
 
@@ -713,13 +716,16 @@ struct NativeAirPlayModel {
     /// receiver that turned its stored pairing down pairs again, once,
     /// whatever its listing still says; otherwise it goes off
     /// with why, and one refused pairing stays off (`refusedOff`).
-    private mutating func accessNeeded(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome {
+    private mutating func accessNeeded(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome? {
         let app = NativeAirPlayID.app(id)
         if problem == .wrongPassword || problem == .passwordRequired { passwords.remove(id) }
         if problem == .pairingRequired && (!attempts.contains(id) || pairedInAttempt.contains(id)) {
             refusedOff.insert(id)
         }
         guard attempts.contains(id) else { return .turnOff(app, problem.turnOff) }
+        // Its pairing runs, maybe with the PIN prompt open: a second one
+        // would make the receiver show a new code.
+        if problem == .pairingRequired && stages[id]?.pairingRuns == true { return nil }
         switch problem {
         case .passwordRequired, .wrongPassword:
             return ask(id, .askingPassword(wrong: problem == .wrongPassword))
@@ -818,6 +824,9 @@ struct NativeAirPlayModel {
             case .available? where refusedOff.contains(id):
                 // Switched on without a new attempt (a recalled preset): off again, once.
                 plan.turnOff.append(.init(id: id, reason: .needsCode))
+            case .available? where stages[id]?.pairingRuns == true:
+                // A session would pair anew, and the receiver would show a new code.
+                break
             case .available?:
                 plan.add.append(id)
             case .needsPin? where stages[id] == nil && !pairedInAttempt.contains(id):
