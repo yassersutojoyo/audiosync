@@ -7411,26 +7411,24 @@ do {
 
 // MARK: Every session stop names its reason in the debug log (SessionStop in AppLifecycle.swift)
 do {
-    let all: [SessionStop] = [
-        .powerSwitch(input: "click in NSPanel"), .menuItem(input: "key code 36 in NSWindow"), .noSpeakerOn,
-        .startFailed, .sourceAppQuit(bundleID: "com.spotify.client"),
-        .sourceSwitchedToSystem(bundleID: "com.spotify.client"), .sourceChanged, .inputPairChanged, .captureLost,
-        .rebuild, .quitting,
-    ]
-    let lines = all.map(\.logLine)
+    let all = SessionStop.allCases
+    let lines = all.map { $0.logLine() }
     check(Set(lines).count == all.count, "session stop: every reason has its own log line", lines.joined(separator: " | "))
     check(lines.allSatisfy { $0.hasPrefix("[AudioSync] session stops: ") || $0.hasPrefix("[AudioSync] session restarts: ") },
           "session stop: each line says whether the session stops or restarts", lines.joined(separator: " | "))
-    check(all.filter(\.restarts) == [.sourceSwitchedToSystem(bundleID: "com.spotify.client"), .sourceChanged,
-                                     .inputPairChanged, .rebuild],
-          "session stop: only a source switch, a channel pair change and a rebuild restart")
-    check(SessionStop.powerSwitch(input: "key code 49 in NSWindow").logLine.contains("key code 49 in NSWindow"),
+    check(all.filter(\.restarts) == [.sourceSwitchedToSystem, .sourceChanged, .inputPairChanged, .formatChanged, .rebuild],
+          "session stop: only a source switch, a channel pair change, a format change and a rebuild restart")
+    check(SessionStop.powerSwitch.logLine(detail: "key code 49 in NSWindow")
+            == "[AudioSync] session stops: the power switch turned streaming off (key code 49 in NSWindow)",
           "session stop: the power switch line names the input event, so a key press tells from a click")
-    check(SessionStop.sourceAppQuit(bundleID: "com.spotify.client").logLine.contains("com.spotify.client"),
+    check(SessionStop.sourceAppQuit.logLine(detail: "com.spotify.client")
+            == "[AudioSync] session stops: the source app quit (com.spotify.client)",
           "session stop: a quit source app is named")
-    // Built-in output still on with the AirPlay speaker gone: not idle, so "no speaker is on" can't be the stop.
-    check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: ["BuiltInSpeakerDevice"]),
-          "session stop: a local speaker that is on keeps the session from counting as idle")
+    // Capture lost: the engine stops the session before it reports the loss, so nothing runs when the host stops.
+    check(SessionStop.logs(running: false, interrupted: true) && SessionStop.logs(running: true, interrupted: false),
+          "session stop: a stop after a capture interruption is logged although the engine already stopped")
+    check(!SessionStop.logs(running: false, interrupted: false),
+          "session stop: a stop with no session running and no interruption writes no line")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

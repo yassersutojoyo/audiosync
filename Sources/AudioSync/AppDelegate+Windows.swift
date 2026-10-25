@@ -206,8 +206,7 @@ extension AppDelegate {
         defer { pushModel() }
         guard on else {
             userStopped = true
-            let input = Self.inputEventNote()
-            stopEngine(fromMenu ? .menuItem(input: input) : .powerSwitch(input: input))
+            stopEngine(fromMenu ? .menuItem : .powerSwitch, detail: Self.inputEventNote())
             return
         }
         startEngine(origin: .user)

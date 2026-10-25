@@ -41,7 +41,7 @@ extension AppDelegate {
         // E.g. a format change: rebuild at the new rate. The start waits for
         // the old outputs' fade-outs (at most 500 ms, S186).
         if engine.isRunning {
-            DebugTrace.log(SessionStop.rebuild.logLine)
+            DebugTrace.log(SessionStop.rebuild.logLine())
             engine.stop()
         }
         do {
@@ -141,14 +141,14 @@ extension AppDelegate {
         case .keep:
             return
         case .stop:
-            stopEngine(.sourceAppQuit(bundleID: bundleID))
+            stopEngine(.sourceAppQuit, detail: bundleID)
             postNotice(text.sourceTerminated(name: name), subject: Notice.source)
         case .switchToSystem:
             audioSource = .system
             updateNowPlayingTarget()
             clearNotices([Notice.source, Notice.capture])   // about the app
             autoStartFailed = false
-            stopEngine(.sourceSwitchedToSystem(bundleID: bundleID))
+            stopEngine(.sourceSwitchedToSystem, detail: bundleID)
             // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
             startEngine(origin: .automatic)
             // A failed start has its own "start" notice; this one still says which app quit.
@@ -160,8 +160,10 @@ extension AppDelegate {
 
     /// Streaming off: the session stops, and AudioSync's own sender's
     /// speakers leave (`syncNativeSpeakers`); their switches stay as they are.
-    func stopEngine(_ reason: SessionStop) {
-        if engine.isRunning { DebugTrace.log(reason.logLine) }
+    func stopEngine(_ reason: SessionStop, detail: @autoclosure () -> String? = nil) {
+        if SessionStop.logs(running: engine.isRunning, interrupted: captureInterrupted) {
+            DebugTrace.log(reason.logLine(detail: detail()))
+        }
         engine.stop()   // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
         syncNativeSpeakers()   // nothing streams: AudioSync's own sender's speakers leave
         syncCast()   // and the Cast session ends
