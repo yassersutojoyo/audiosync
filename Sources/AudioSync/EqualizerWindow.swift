@@ -103,7 +103,6 @@ struct EqualizerView: View {
                     .accessibilityHidden(true)   // the picker carries the label
                 curvePicker
                     .frame(width: 170)
-                    .accessibilityLabel(text.equalizerCurve)
             }
 
             HStack(alignment: .bottom, spacing: 6) {
@@ -137,7 +136,8 @@ struct EqualizerView: View {
     /// match, or Custom, which is not an entry.
     private var curvePicker: some View {
         let saved = model.shownSavedIndex
-        return Menu(text.equalizerCurveName(model.shownCurve, saved: model.curves)) {
+        let shown = text.equalizerCurveName(model.shownCurve, saved: model.curves)
+        return Menu {
             ForEach(Equalizer.presets, id: \.id) { preset in
                 Button(text.equalizerPreset(preset.id)) { model.pick(gains: preset.gains) }
             }
@@ -155,7 +155,16 @@ struct EqualizerView: View {
                 Button(text.equalizerRenameCurve(name)) { askRename(saved) }
                 Button(text.equalizerDeleteCurve(name)) { model.deleteCurve(saved) }
             }
+        } label: {
+            // The menu takes its title from this content, which read the
+            // curve name instead of the fixed label.
+            Text(shown)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(text.equalizerCurve)
+                .accessibilityValue(shown)
         }
+        .accessibilityLabel(text.equalizerCurve)
+        .accessibilityValue(shown)
     }
 
     /// `label` is the short text under the slider; `name` is what VoiceOver reads.
