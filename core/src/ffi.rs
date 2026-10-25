@@ -1195,6 +1195,16 @@ mod tests {
                 "ASC_AIRPLAY_PAIRINGS_NEWER",
                 AIRPLAY_PAIRINGS_NEWER.to_string(),
             ),
+            ("ASC_AIRPLAY_FILE_UNREAD", AIRPLAY_FILE_UNREAD.to_string()),
+            ("ASC_AIRPLAY_FILE_PRIVATE", AIRPLAY_FILE_PRIVATE.to_string()),
+            (
+                "ASC_AIRPLAY_FILE_TIGHTENED",
+                AIRPLAY_FILE_TIGHTENED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_FILE_STILL_OPEN",
+                AIRPLAY_FILE_STILL_OPEN.to_string(),
+            ),
             (
                 "ASC_DEVICE_VOLUME_UNKNOWN",
                 DEVICE_VOLUME_UNKNOWN.to_string(),
