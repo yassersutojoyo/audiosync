@@ -2329,13 +2329,14 @@ do {
         check(recalled.add.isEmpty && recalled.turnOff == [.init(id: "B2", reason: .needsCode)],
               "native pairing: a refused speaker switched on without a new attempt (a recalled preset) goes off again with a notice")
 
-        // A refused stored pairing is forgotten and pairs again, once per attempt.
+        // A refused stored pairing pairs again, once per attempt; it stays stored
+        // until the new pairing replaces it (P154).
         check(m.turnedOnByUser("B2") == nil && m.refusedOff.isEmpty, "native pairing: a paired Apple TV just joins")
         m.added("B2")
-        check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .repair("B2")
+        check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .startPairing("B2")
                 && m.stages["B2"] == .pairing(afterWrongPin: false),
-              "native pairing: within the user's attempt, a refused stored pairing is forgotten and pairs again, though still listed as paired")
-        m.apply(.changed(receiver("B2", "B2", .needsPin)))   // the sender forgot the pairing it turned down
+              "native pairing: within the user's attempt, a refused stored pairing pairs again without being forgotten first, though still listed as paired")
+        m.apply(.changed(receiver("B2", "B2", .needsPin)))   // the core lists the turned-down pairing as needing its PIN
         m.removed("B2")   // it leaves the sender while it pairs
         check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,
               "native pairing: while it pairs again, the speaker waits instead of going off")
