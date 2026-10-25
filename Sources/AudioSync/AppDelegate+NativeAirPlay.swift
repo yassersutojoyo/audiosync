@@ -478,6 +478,17 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// A zone move keeps each own volume, so the AirPlay rows whose zone
+    /// volume changed show own × zone × master again (S290).
+    func forgetAirPlayDeviceLevels(zonedFrom old: [SpeakerZone]) {
+        let before: [String: Double] = SpeakerZone.volumes(old, kind: .airplay)
+        let after: [String: Double] = SpeakerZone.volumes(zones, kind: .airplay)
+        let ids: Set<String> = Set(before.keys).union(after.keys)
+        for id in ids where before[id] != after[id] {
+            airplayDeviceLevel[id] = nil
+        }
+    }
+
     /// The zone volume of AirPlay speaker `id` (app ID), 100 in no zone (S249).
     func airPlayZoneVolume(_ id: String) -> Double {
         SpeakerZone.volumes(zones, kind: .airplay)[id] ?? SpeakerZone.noZoneVolume
