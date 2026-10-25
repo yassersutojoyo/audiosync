@@ -105,6 +105,10 @@ enum AppLifecycle {
     /// mix's other apps and make the quitting app look like the last one.
     static let mixQuitRecheck: TimeInterval = 1
 
+    /// How often a capture waiting for its app's audio process looks whether
+    /// the app still runs (S164, `AppTapFollow.rechecksWhileWaiting`).
+    static let waitRecheck: TimeInterval = 5
+
     /// Whether `report` is judged only `mixQuitRecheck` later: an app of an
     /// "only these" mix quitting while it streams comes back as `mixAppGone`,
     /// and the capture of such a mix finding none of its apps rebuilds the

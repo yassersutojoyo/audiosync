@@ -306,6 +306,15 @@ enum AppTapFollow: Equatable {
     static func followsRunningApps(_ source: AudioSource) -> Bool {
         !source.capturedApps.isEmpty
     }
+
+    /// Whether the capture looks for its apps' quit every `AppLifecycle.waitRecheck`
+    /// (S164): only while an app source waits for an audio process, since a
+    /// paused app that quits then ends no audio process and may send no
+    /// terminate notice.
+    static func rechecksWhileWaiting(_ source: AudioSource?, tapped: [AudioObjectID], interrupted: Bool) -> Bool {
+        guard let source, !interrupted else { return false }
+        return followsRunningApps(source) && tapped.isEmpty
+    }
 }
 
 /// Moves an app tap to a new process list (`AppTapFollow.retap`) without

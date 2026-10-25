@@ -111,6 +111,9 @@ final class SourceCapture {
     private var sessionListeners = Listeners()
     /// The session's watch on macOS's list of running apps (`AppTapFollow.followsRunningApps`).
     private var runningAppsWatch: NSKeyValueObservation?
+    /// Looks whether the source's apps still run while the tap waits for an
+    /// audio process (`AppTapFollow.rechecksWhileWaiting`); nil otherwise.
+    private var waitRecheck: DispatchSourceTimer?
     /// Listeners for the current tap and aggregate device only.
     private var tapListeners = Listeners()
     /// Bumped by every start and stop, so a listener call that was already
@@ -166,6 +169,7 @@ final class SourceCapture {
         sessionMark &+= 1
         sessionListeners.removeAll()
         runningAppsWatch = nil
+        stopWaitRecheck()
         closeCapture()
         if let sink {
             DebugTrace.log("[AudioSync] capture stopped: \(sink.callbacks.load(ordering: .relaxed)) callbacks, "
@@ -210,6 +214,7 @@ final class SourceCapture {
             // helper once a page plays): nothing to tap until one appears.
             parts?.prepare(captureRate: sampleRate)
             DebugTrace.log("[AudioSync] capture: \(label) has no audio process yet; waiting for one")
+            followWaitRecheck()
             return
         }
         tapped = found
@@ -371,13 +376,14 @@ final class SourceCapture {
         }
         switch decision {
         case .keep:
-            return
+            followWaitRecheck()
         case .wait:
             closeCapture()
             tapped = []
             DebugTrace.log("[AudioSync] capture: \(bundleID) has no audio process now; waiting for one")
             // A quitting app ends its audio process before itself, and some quit with no terminate notice.
             if !secondLook { lookAgainLater() }
+            followWaitRecheck()
         case .lookAgain:
             lookAgainLater()
         case .lost:
@@ -386,6 +392,7 @@ final class SourceCapture {
             DebugTrace.log("[AudioSync] capture: \(bundleID) is gone")
             interrupt(.sourceLost(.appNotRunning(AppTapFollow.quitApp(of: apps, ranBefore: ranBefore))))
         case .retap(let processes):
+            stopWaitRecheck()
             retap(bundleID, to: processes)
         }
     }
@@ -396,6 +403,32 @@ final class SourceCapture {
             guard let self, self.isCurrent(mark) else { return }
             self.followApp(secondLook: true)
         }
+    }
+
+    /// Starts or stops `waitRecheck` to match the session's state now. Each
+    /// tick is a look like any other, so a paused app that quit without a
+    /// terminate notice is judged as on that notice (S164).
+    private func followWaitRecheck() {
+        guard AppTapFollow.rechecksWhileWaiting(source, tapped: tapped, interrupted: interrupted) else {
+            stopWaitRecheck()
+            return
+        }
+        guard waitRecheck == nil else { return }
+        let mark = sessionMark
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + AppLifecycle.waitRecheck, repeating: AppLifecycle.waitRecheck,
+                       leeway: .milliseconds(500))
+        timer.setEventHandler { [weak self] in
+            guard let self, self.isCurrent(mark) else { return }
+            self.followApp()
+        }
+        timer.resume()
+        waitRecheck = timer
+    }
+
+    private func stopWaitRecheck() {
+        waitRecheck?.cancel()
+        waitRecheck = nil
     }
 
     /// Moves the app tap to `processes` (S11) while the old tap keeps the app
@@ -522,6 +555,7 @@ final class SourceCapture {
     private func interrupt(_ reason: Interruption) {
         guard !interrupted else { return }
         interrupted = true
+        stopWaitRecheck()
         onInterrupted?(reason)
     }
 
