@@ -23,7 +23,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2};
-use common::net::{Events, HostAudio, serial, wait_until};
+use common::net::{Events, HostAudio, recv_queued, serial, wait_until};
 
 const LONG: Duration = Duration::from_secs(15);
 /// The host asks a playing speaker for its level once a second (S291 of
@@ -431,8 +431,8 @@ fn data_port() -> (UdpSocket, Arc<Mutex<Vec<Datagram>>>) {
     thread::spawn(move || {
         let mut buffer = [0u8; 4096];
         loop {
-            match reader.recv(&mut buffer) {
-                Ok(n) if n >= 12 => {
+            match recv_queued(&reader, &mut buffer) {
+                Ok((n, _)) if n >= 12 => {
                     let datagram = Datagram {
                         at: Instant::now(),
                         seq: u16::from_be_bytes([buffer[2], buffer[3]]),

@@ -8,7 +8,7 @@
 //! crate's `ap2` module. [`Ap2Rig`] wires it to an `Ap2Session`.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -990,7 +990,7 @@ fn read_some(stream: &mut TcpStream, line: &Lifeline, generation: usize) -> Opti
         if line.ended(generation) {
             return None;
         }
-        match stream.read(&mut buffer) {
+        match super::net::read_queued(stream, &mut buffer) {
             Ok(0) => return None,
             Ok(count) => return Some(buffer[..count].to_vec()),
             Err(error)

@@ -704,6 +704,17 @@ fn a_verify_back_off_keeps_the_credentials_and_delays_the_retry() {
     sender.shutdown();
 }
 
+fn pairing_events(events: &Events, key: &DeviceKey) -> Vec<PairingEvent> {
+    events
+        .seen
+        .iter()
+        .filter_map(|(_, event)| match event {
+            SenderEvent::Pairing { key: k, event } if k == key => Some(event.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Waits for the `nth` (from 1) pairing event of a device that `wanted`
 /// accepts.
 fn wait_pairing(
@@ -835,7 +846,12 @@ fn the_host_pairs_an_airplay2_speaker_with_a_pin() {
     let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
     assert!(wait_pairing(&mut events, &sender, &key, 1, pin_requested).is_some());
     sender.submit_pin(&key, "1111").expect("digits");
-    assert!(wait_pairing(&mut events, &sender, &key, 2, pin_requested).is_some());
+    assert!(
+        wait_pairing(&mut events, &sender, &key, 2, pin_requested).is_some(),
+        "{:?} {:?}",
+        pairing_events(&events, &key),
+        server.fake().keys()
+    );
     assert!(
         !events.seen.iter().any(|(_, event)| matches!(
             event,
@@ -1118,7 +1134,11 @@ fn pair_first_time(
         matches!(event, PairingEvent::HomeKitPaired(_))
     });
     let Some(PairingEvent::HomeKitPaired(credentials)) = paired else {
-        panic!("{paired:?} {:?}", server.fake().keys());
+        panic!(
+            "{:?} {:?}",
+            pairing_events(events, &key),
+            server.fake().keys()
+        );
     };
     sender.cancel_pairing(&key);
     credentials

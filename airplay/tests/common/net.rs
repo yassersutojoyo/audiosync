@@ -250,6 +250,32 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Waits for the sender's bytes in a peek: on Windows a read that times out
+/// as bytes land can drop them (core/NOTES.md, `SO_RCVTIMEO`).
+pub fn read_queued(stream: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<usize> {
+    const ERROR_IO_PENDING: i32 = 997;
+    match stream.peek(buf) {
+        Ok(0) => Ok(0),
+        Ok(_) => stream.read(buf),
+        Err(error) if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) => {
+            Err(std::io::ErrorKind::TimedOut.into())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// `read_queued` for a datagram: a peek that times out leaves it queued.
+pub fn recv_queued(socket: &UdpSocket, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+    const ERROR_IO_PENDING: i32 = 997;
+    match socket.peek_from(buf) {
+        Ok(_) => socket.recv_from(buf),
+        Err(error) if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) => {
+            Err(std::io::ErrorKind::TimedOut.into())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub struct NetReceiver {
     pub address: SocketAddr,
     shared: Arc<Shared>,
@@ -457,7 +483,7 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
             thread::sleep(POLL);
             continue;
         }
-        match stream.read(&mut buf) {
+        match read_queued(&mut stream, &mut buf) {
             Ok(0) => return closed(&shared),
             Ok(len) => {
                 parser.push(&buf[..len]);
@@ -564,7 +590,7 @@ fn probe_timing(ip: IpAddr, to: SocketAddr) -> Option<SocketAddr> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut buf = [0u8; 64];
     while Instant::now() < deadline {
-        if let Ok((len, from)) = socket.recv_from(&mut buf) {
+        if let Ok((len, from)) = recv_queued(&socket, &mut buf) {
             let reply = TimingPacket::parse(&buf[..len])?;
             if reply.reply && reply.seq == 7 {
                 return Some(from);
