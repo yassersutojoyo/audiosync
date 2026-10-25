@@ -581,6 +581,7 @@ pub fn pairing_summary(event: &PairingEvent) -> String {
             format!("failed: {error}{pin}")
         }
         PairingEvent::Stopped => "stopped".to_owned(),
+        PairingEvent::PinTurnedDown(why) => why.clone(),
     }
 }
 
@@ -3111,6 +3112,8 @@ impl AirPlaySpeakers {
             // A shutdown, already taken in. (The end of a pairing the user
             // cancelled comes while it is `ending`.)
             PairingEvent::Stopped => false,
+            // Logged above; the PIN prompt follows.
+            PairingEvent::PinTurnedDown(_) => false,
         }
     }
 
@@ -3138,7 +3141,7 @@ impl AirPlaySpeakers {
         });
         let paired = match event {
             // Its PIN is no one's to type now.
-            PairingEvent::PinRequested => return false,
+            PairingEvent::PinRequested | PairingEvent::PinTurnedDown(_) => return false,
             PairingEvent::Paired(credentials) => {
                 self.keep_credentials(id, credentials);
                 true
@@ -3872,6 +3875,11 @@ pub mod tests {
         assert_eq!(
             pairing_summary(&PairingEvent::PinRequested),
             "the Apple TV shows a PIN"
+        );
+        let why = "the receiver turned the PIN down: error 2 (authentication) in answer to M3";
+        assert_eq!(
+            pairing_summary(&PairingEvent::PinTurnedDown(why.to_owned())),
+            why
         );
     }
 

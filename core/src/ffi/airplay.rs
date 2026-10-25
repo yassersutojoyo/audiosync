@@ -1324,6 +1324,12 @@ impl AscAirPlay {
             return;
         }
         let (kind, error, unsupported, detail) = match event {
+            // Why the prompt comes again: a debug log line only.
+            PairingEvent::PinTurnedDown(why) => {
+                let line = SpeakerEvent::Trace(format!("pairing: {why}"));
+                self.queue_event(Pending::Speaker(id, line));
+                return;
+            }
             PairingEvent::PinRequested => (
                 AIRPLAY_EVENT_PIN_NEEDED,
                 0,
@@ -1398,7 +1404,7 @@ impl AscAirPlay {
     /// only.
     fn ending_pairing_event(&mut self, id: &str, event: PairingEvent) {
         let paired = match event {
-            PairingEvent::PinRequested => return,
+            PairingEvent::PinRequested | PairingEvent::PinTurnedDown(_) => return,
             PairingEvent::Paired(credentials) => Some(self.store_paired(id, credentials)),
             PairingEvent::HomeKitPaired(credentials) => {
                 Some(self.store_homekit_paired(id, credentials))
@@ -7511,6 +7517,38 @@ mod tests {
                 c_id.as_ptr(),
                 c"1234".as_ptr()
             ));
+        }
+        // Turned down, it says why in the debug log before asking again.
+        let key = inside(handle).listed[id].device.key.clone();
+        for event in [
+            PairingEvent::PinTurnedDown("error 2 (authentication) in answer to M3".to_owned()),
+            PairingEvent::PinRequested,
+        ] {
+            inside(handle).take_in(SenderEvent::Pairing {
+                key: key.clone(),
+                event,
+            });
+        }
+        let events = events_until(handle, |events| {
+            events.iter().any(|e| e.kind == AIRPLAY_EVENT_PIN_NEEDED)
+        });
+        let lines: Vec<_> = events
+            .iter()
+            .map(|e| (e.kind, e.id.as_str(), e.detail.as_str()))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                (
+                    AIRPLAY_EVENT_TRACE,
+                    id,
+                    "pairing: error 2 (authentication) in answer to M3"
+                ),
+                (AIRPLAY_EVENT_PIN_NEEDED, id, "")
+            ]
+        );
+        // SAFETY: as above.
+        unsafe {
             asc_airplay_cancel_pairing(handle, c_id.as_ptr());
             assert!(inside(handle).pairing.is_empty(), "cancelled");
             assert!(
