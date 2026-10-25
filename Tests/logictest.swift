@@ -5089,6 +5089,45 @@ do {
           "\(quit(rebuild)), \(quit(rebuild, music, .system))")
     check(quit(.rebuildFailed(SourceCapture.CaptureError.formatUnusable(1)), music, .system) == "keep",
           "source quit: a rebuild that fails for another cause is no app quit")
+    // macOS's app list can miss the mix's other apps in the turn one of them quits.
+    let mix3 = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.apple.Safari", "com.apple.TextEdit"])
+    func mixQuit(_ report: Report, running: Set<String> = []) -> String {
+        guard let answer = AppLifecycle.sourceQuit(report, source: mix3, setting: .system,
+                                                   isRunning: { running.contains($0) }) else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    check(mixQuit(.terminated(bundleID: "com.apple.TextEdit", streaming: true)) == "keep"
+            && mixQuit(.captureLost(.appNotRunning("com.spotify.client"))) == "keep",
+          "mix quit: an app of a mix quitting is never judged from the app list of the turn it quit in (S164)",
+          "\(mixQuit(.terminated(bundleID: "com.apple.TextEdit", streaming: true))), "
+              + mixQuit(.captureLost(.appNotRunning("com.spotify.client"))))
+    let textEditGone = Report.mixAppGone(bundleID: "com.apple.TextEdit", streaming: true)
+    check(mixQuit(textEditGone, running: ["com.apple.Safari"]) == "keep"
+            && mixQuit(textEditGone) == "switchToSystem com.apple.TextEdit"
+            && mixQuit(.mixAppGone(bundleID: "com.apple.TextEdit", streaming: false)) == "keep",
+          "mix quit: judged again a moment later, the mix goes on while another of its apps runs, and acts as set once none does",
+          "\(mixQuit(textEditGone, running: ["com.apple.Safari"])), \(mixQuit(textEditGone))")
+    let quitWhileStreaming = Report.terminated(bundleID: "com.apple.TextEdit", streaming: true)
+    check(AppLifecycle.waitsForRecheck(quitWhileStreaming, source: mix3)
+            && AppLifecycle.waitsForRecheck(.captureLost(.appNotRunning("com.spotify.client")), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: "com.apple.TextEdit", streaming: false), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: "com.apple.Music", streaming: true), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.terminated(bundleID: nil, streaming: true), source: mix3)
+            && !AppLifecycle.waitsForRecheck(.captureLost(.inputDisconnected), source: mix3)
+            && !AppLifecycle.waitsForRecheck(quitWhileStreaming, source: .app(bundleID: "com.apple.TextEdit"))
+            && !AppLifecycle.waitsForRecheck(quitWhileStreaming,
+                                             source: .mixed(.allExcept, bundleIDs: ["com.apple.TextEdit", "com.apple.Safari"])),
+          "mix quit: only an app of an only-these mix quitting while it streams, or that mix's capture losing its apps, waits")
+    func afterLoss(changed: Bool, stopped: Bool, running: Bool) -> AppLifecycle.MixLossStep {
+        AppLifecycle.afterMixLoss(sourceChanged: changed, userStopped: stopped, engineRunning: running)
+    }
+    check(afterLoss(changed: false, stopped: false, running: false) == .rebuild
+            && afterLoss(changed: true, stopped: false, running: false) == .start
+            && afterLoss(changed: true, stopped: true, running: false) == .stop
+            && afterLoss(changed: false, stopped: true, running: false) == .stop
+            && afterLoss(changed: true, stopped: false, running: true) == .none
+            && afterLoss(changed: false, stopped: false, running: true) == .none,
+          "mix quit: after a mix's capture loss, a source picked in the wait starts, a stop finishes cleanly, else the mix rebuilds")
     // After a switch the source is the whole system; after a stop nothing streams.
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",

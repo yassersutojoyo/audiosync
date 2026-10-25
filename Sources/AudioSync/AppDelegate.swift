@@ -394,6 +394,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 }
             case .sourceLost(let error):
                 DebugTrace.log("[AudioSync] capture lost: \(error)")
+                if AppLifecycle.waitsForRecheck(.captureLost(error), source: audioSource) {
+                    rebuildMixLater()
+                    return
+                }
                 if let quit = AppLifecycle.sourceQuit(.captureLost(error), source: audioSource,
                                                       setting: whenSourceQuits) {
                     sourceAppQuit(quit.bundleID, quit.action)
@@ -487,8 +491,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func appQuit(bundleID: String?) {
-        if let quit = AppLifecycle.sourceQuit(.terminated(bundleID: bundleID, streaming: engine.isRunning),
-                                              source: audioSource, setting: whenSourceQuits) {
+        let report = AppLifecycle.SourceQuitReport.terminated(bundleID: bundleID, streaming: engine.isRunning)
+        if let bundleID, AppLifecycle.waitsForRecheck(report, source: audioSource) {
+            recheckMixQuit(bundleID)
+        } else if let quit = AppLifecycle.sourceQuit(report, source: audioSource, setting: whenSourceQuits) {
             sourceAppQuit(quit.bundleID, quit.action)
         }
         pushSources()

@@ -89,24 +89,74 @@ enum AppLifecycle {
     enum SourceQuitReport {
         /// macOS says an app quit; `streaming` is whether a session runs.
         case terminated(bundleID: String?, streaming: Bool)
+        /// An app of an "only these" mix quit `mixQuitRecheck` ago
+        /// (`waitsForRecheck`); `streaming` is whether a session runs now.
+        case mixAppGone(bundleID: String, streaming: Bool)
         /// The running capture found its app gone and stopped the session.
         case captureLost(SourceCapture.CaptureError)
-        /// The rebuild after a capture format change couldn't start.
+        /// The rebuild after a capture format change, or after a mix's
+        /// capture lost its apps, couldn't start.
         case rebuildFailed(Error)
+    }
+
+    /// How long a mix waits after one of its apps quit before it is judged
+    /// (S164). macOS refreshes its list of running apps on later turns of the
+    /// main run loop, so in the turn an app quits in, the list can miss the
+    /// mix's other apps and make the quitting app look like the last one.
+    static let mixQuitRecheck: TimeInterval = 1
+
+    /// Whether `report` is judged only `mixQuitRecheck` later: an app of an
+    /// "only these" mix quitting while it streams comes back as `mixAppGone`,
+    /// and the capture of such a mix finding none of its apps rebuilds the
+    /// session, which goes on with the apps left or fails as a quit (S227 e).
+    static func waitsForRecheck(_ report: SourceQuitReport, source: AudioSource) -> Bool {
+        guard case .mix(.only, let ids) = source else { return false }
+        switch report {
+        case .terminated(let bundleID?, true): return ids.contains(bundleID)
+        case .captureLost(.appNotRunning): return true
+        default: return false
+        }
+    }
+
+    /// What ends the second a mix waits after its capture lost its apps
+    /// (`waitsForRecheck`). The engine stopped the session at the loss, but
+    /// the senders and the streaming switch still count it as on.
+    enum MixLossStep: Equatable {
+        /// The user started streaming again meanwhile.
+        case none
+        /// Rebuild the mix's session (S227 e).
+        case rebuild
+        /// Start the source the user picked meanwhile: with no session
+        /// running, picking it only stored it (S163).
+        case start
+        /// The user switched streaming off: finish the stop, so the AirPlay
+        /// and Cast senders leave too.
+        case stop
+    }
+
+    static func afterMixLoss(sourceChanged: Bool, userStopped: Bool, engineRunning: Bool) -> MixLossStep {
+        if engineRunning { return .none }
+        if userStopped { return .stop }
+        return sourceChanged ? .start : .rebuild
     }
 
     /// The app that quit and what the session does about it (S142, S164,
     /// S227, EC6), or nil when the report concerns no session: another app,
-    /// nothing streaming, a source that isn't an app, a loss with another cause.
+    /// nothing streaming, a source that isn't an app, a loss with another cause,
+    /// or a report that `waitsForRecheck`.
     /// A second report of the same quit finds the session stopped or the
     /// source switched, so it gives nil.
     static func sourceQuit(_ report: SourceQuitReport, source: AudioSource,
                            setting: WhenSourceQuits, isRunning: (String) -> Bool = SourceApps.isRunning)
         -> (bundleID: String, action: SourceQuit.Action)? {
+        if waitsForRecheck(report, source: source) { return nil }
         let quit: String?
         let streaming: SourceQuit.Streaming
         switch report {
         case .terminated(let bundleID, let running):
+            quit = bundleID
+            streaming = running ? .running : .off
+        case .mixAppGone(let bundleID, let running):
             quit = bundleID
             streaming = running ? .running : .off
         case .captureLost(let error):
