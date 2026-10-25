@@ -35,7 +35,6 @@ use crate::latency::ReportedLatency;
 use crate::metadata::Metadata;
 use crate::pairing::{self, LegacyVerifier, Pairing, PairingEvent, PairingState};
 use crate::reconnect::Backoff;
-use crate::rtsp::Method;
 use crate::sdp::Codec;
 use crate::secret::Secret;
 use crate::session::{Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT};
@@ -940,14 +939,17 @@ impl Driver {
         }
     }
 
-    /// A session's FLUSH was answered, refused or all the same: a resume
-    /// from a pause stops waiting for it (P213).
+    /// A session's FLUSH got its answer, success or not. A resume from a
+    /// pause waits until no FLUSH of that session is queued or in flight,
+    /// so the answer to an earlier delay FLUSH doesn't release it (P213).
     fn flush_answered(&mut self, key: &DeviceKey) {
         let id = match self.active(key) {
-            Some(active) => active.stream_id,
-            None => self.ap2_active(key).and_then(|active| active.stream_id),
+            Some(active) => (!active.session.flushing()).then_some(active.stream_id),
+            None => self
+                .ap2_active(key)
+                .and_then(|active| (!active.session.flushing()).then_some(active.stream_id)),
         };
-        if let Some(id) = id {
+        if let Some(Some(id)) = id {
             self.stream.flush_answered(id);
         }
     }
@@ -1006,15 +1008,6 @@ impl Driver {
                 self.emit_speaker(key, SpeakerEvent::VolumeReported(db))
             }
             SessionEvent::Warning(warning) => {
-                if matches!(
-                    warning,
-                    Warning::RequestFailed {
-                        method: Method::Flush,
-                        ..
-                    }
-                ) {
-                    self.flush_answered(key);
-                }
                 self.emit_speaker(key, SpeakerEvent::Warning(warning))
             }
             SessionEvent::Flushed { .. } => self.flush_answered(key),
@@ -2096,8 +2089,11 @@ mod tests {
         let id = driver.stream.add_speaker(config, now);
         let key = DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 1]));
         driver.stream_ids.insert(id, key);
-        let later = now + Duration::from_secs(2);
-        driver.stream.handle_timeout(later);
+        let mut later = now;
+        for _ in 0..100 {
+            later += Duration::from_millis(10);
+            driver.stream.handle_timeout(later);
+        }
         while driver.stream.poll_transmit().is_some() {}
         while driver.stream.poll_event().is_some() {}
 

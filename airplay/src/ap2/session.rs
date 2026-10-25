@@ -594,6 +594,15 @@ impl Ap2Session {
         true
     }
 
+    /// A FLUSH is queued or waiting for its answer (P213).
+    pub fn flushing(&self) -> bool {
+        self.flush_pending
+            || self
+                .in_flight
+                .as_ref()
+                .is_some_and(|in_flight| in_flight.kind == Kind::Flush)
+    }
+
     /// The result of an audio, sync or resend datagram: two unreachable in
     /// a row lose the speaker (P141).
     pub fn handle_udp_send(&mut self, result: UdpSendResult, _now: Instant) {

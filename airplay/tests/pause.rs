@@ -467,7 +467,7 @@ fn timing_and_volume_go_on_while_paused() {
     );
     assert_eq!(
         events.of(&key).iter().rev().find_map(|event| match event {
-            SpeakerEvent::State(state) => Some(state.clone()),
+            SpeakerEvent::State(state) => Some(*state),
             _ => None,
         }),
         Some(SpeakerState::Playing)

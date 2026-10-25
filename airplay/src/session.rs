@@ -266,7 +266,8 @@ pub enum SessionEvent {
         receiver_ports: ReceiverPorts,
         destinations: MediaDestinations,
     },
-    /// A FLUSH was answered with success (P34).
+    /// A FLUSH was answered (P34); a failure status comes as a warning
+    /// first.
     Flushed { seq: u16, rtptime: u32 },
     /// The level a GET_PARAMETER answer reported (P122). The session's own
     /// volume doesn't change.
@@ -507,6 +508,15 @@ impl Session {
     /// Whether audio, sync and retransmission packets may be sent: only after
     /// RECORD was answered with 200, and not once teardown has started (P26,
     /// P35).
+    /// A FLUSH is queued or waiting for its answer (P213).
+    pub fn flushing(&self) -> bool {
+        self.pending_flush.is_some()
+            || self
+                .in_flight
+                .as_ref()
+                .is_some_and(|in_flight| matches!(in_flight.kind, Kind::Flush { .. }))
+    }
+
     pub fn media_allowed(&self) -> bool {
         self.state == State::Playing
     }
@@ -1254,9 +1264,7 @@ impl Session {
             Kind::Metadata(Metadata::Artwork { .. }) => {
                 self.artwork_answered(success, Some(code));
             }
-            Kind::Volume(_) | Kind::Metadata(_) | Kind::ReadVolume | Kind::Flush { .. }
-                if !success =>
-            {
+            Kind::Volume(_) | Kind::Metadata(_) | Kind::ReadVolume if !success => {
                 self.event(SessionEvent::Warning(Warning::RequestFailed {
                     method,
                     status: code,
@@ -1268,6 +1276,12 @@ impl Session {
                 }
             }
             Kind::Flush { seq, rtptime } => {
+                if !success {
+                    self.event(SessionEvent::Warning(Warning::RequestFailed {
+                        method,
+                        status: code,
+                    }));
+                }
                 // An RTP-Info header in the answer is ignored (P34).
                 self.event(SessionEvent::Flushed { seq, rtptime });
             }

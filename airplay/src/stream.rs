@@ -1399,6 +1399,13 @@ impl Stream {
         }
     }
 
+    /// The speaker's pause FLUSH is not answered yet (P213).
+    pub fn waits_for_flush(&self, id: SpeakerId) -> bool {
+        self.speakers
+            .iter()
+            .any(|speaker| speaker.id == id && speaker.awaiting_flush)
+    }
+
     /// Whether a speaker's packets are on schedule now.
     fn sending(&self, speaker: &Speaker) -> bool {
         !self.paused && !speaker.awaiting_flush
