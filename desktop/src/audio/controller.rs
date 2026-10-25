@@ -2519,6 +2519,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn airplay_play_pause_pressed(&mut self, app: &str, playing: bool) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.play_pause_pressed(app, playing, Instant::now());
+        }
+    }
+
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_delay(id, delay_ms);
@@ -2791,7 +2797,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
         // What the AirPlay sender reported.
         if let Some(airplay) = self.airplay.as_mut() {
-            airplay.set_playback(self.track_info.playback());
+            let now = Instant::now();
+            airplay.heard(self.feed.as_ref().map_or(0.0, FeedSlot::sound_seconds), now);
+            airplay.set_playback(self.track_info.playback(), now);
             let events = airplay.poll();
             for control in airplay.take_remote_controls() {
                 self.track_info.send(control);

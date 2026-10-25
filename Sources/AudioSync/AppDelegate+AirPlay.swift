@@ -208,6 +208,7 @@ extension AppDelegate {
             } else {
                 nowPlaying.stopWatching()
                 sendPlayback()
+                nativeAirPlay?.clearPause()
             }
         }
         let airPlayStarts = trackInfoFeed.modelUpdated(sending: sending)
@@ -218,10 +219,33 @@ extension AppDelegate {
     /// Tells the native sender which player a speaker's remote controls and
     /// whether it plays (S274).
     func sendPlayback() {
+        let playback = controlledPlayback
+        nativeAirPlay?.setPlayback(app: playback.app, playing: playback.playing)
+    }
+
+    /// The player the now-playing control drives, and whether the reading
+    /// shows it playing; nil without a reading of it.
+    var controlledPlayback: (app: String?, playing: Bool?) {
         let controlled = nowPlaying.controlledBundleID
         let reading = nowPlaying.hasReading ? nowPlaying.track : nil
-        let playing = reading.flatMap { $0.bundleID == controlled ? $0.isPlaying : nil }
-        nativeAirPlay?.setPlayback(app: controlled, playing: playing)
+        return (controlled, reading.flatMap { $0.bundleID == controlled ? $0.isPlaying : nil })
+    }
+
+    /// A transport control from a speaker's remote or the window's buttons
+    /// goes to the player; a play-pause to a player read as playing pauses
+    /// the speakers too, so their buffer drops at once (P213).
+    func sendTransport(_ command: NowPlayingMonitor.Command) {
+        if command == .playPause {
+            let playback = controlledPlayback
+            nativeAirPlay?.togglePause(app: playback.app, playing: playback.playing)
+        }
+        nowPlaying.send(command)
+    }
+
+    /// A reading of the players that started at `startedAt` (P213).
+    func nowPlayingRead(startedAt: Date) {
+        let playback = controlledPlayback
+        nativeAirPlay?.readPause(app: playback.app, playing: playback.playing, startedAt: startedAt)
     }
 
     /// A new sender knows nothing of what plays: send everything again.

@@ -1136,6 +1136,14 @@ impl App {
             _ => Transport::Next,
         };
         self.log.log(|| format!("now playing: {command:?} pressed"));
+        let shown = self
+            .now_playing
+            .borrow()
+            .track()
+            .map(|track| (track.app_id.clone(), track.playing));
+        if let (Transport::PlayPause, Some((app, playing))) = (command, shown) {
+            self.backend.borrow_mut().play_pause_pressed(&app, playing);
+        }
         self.now_playing.borrow_mut().send(command);
     }
 
@@ -5110,6 +5118,37 @@ mod tests {
         assert!(
             app.ui.borrow().airplay2_experimental,
             "dismissing keeps it on"
+        );
+    }
+
+    // covers: P213
+    #[test]
+    fn the_now_playing_play_pause_tells_the_backend_what_the_card_showed() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        let backend = MockBackend::new();
+        let pressed = backend.play_pauses.clone();
+        let app = app_over(backend);
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        app.main.invoke_now_playing_transport(1);
+        assert!(pressed.borrow().is_empty(), "no session shown");
+
+        fake.read(Some(track("Spotify.exe", "Song", "", true)));
+        app.poll();
+        app.main.invoke_now_playing_transport(0);
+        app.main.invoke_now_playing_transport(1);
+        app.main.invoke_now_playing_transport(2);
+        fake.read(Some(track("Spotify.exe", "Song", "", false)));
+        app.poll();
+        app.main.invoke_now_playing_transport(1);
+        assert_eq!(
+            *pressed.borrow(),
+            [
+                ("Spotify.exe".to_owned(), true),
+                ("Spotify.exe".to_owned(), false)
+            ]
         );
     }
 

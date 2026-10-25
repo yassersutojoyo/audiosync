@@ -3324,6 +3324,82 @@ do {
           "receiver info: system source: the player that played last stops or quits: the fallback")
 }
 
+// MARK: Explicit pause of the AirPlay speakers (P213, ExplicitPause in NowPlaying.swift)
+do {
+    let spotify = NowPlayingMonitor.spotify, music = NowPlayingMonitor.music
+    let t0 = Date(timeIntervalSinceReferenceDate: 0)
+    let later = t0.addingTimeInterval(ExplicitPause.staleReading)
+    func pausedAt(_ t: Date) -> ExplicitPause {
+        var pause = ExplicitPause()
+        _ = pause.toggled(app: spotify, playing: true, at: t)
+        return pause
+    }
+
+    var pause = ExplicitPause()
+    check(pause.toggled(app: spotify, playing: true, at: t0) == .pause && pause.isPaused,
+          "explicit pause: a play-pause to a player read as playing pauses the speakers")
+    check(pause.toggled(app: spotify, playing: false, at: t0) == .resume && !pause.isPaused,
+          "explicit pause: a play-pause while paused resumes")
+    for playing in [true, nil] as [Bool?] {
+        var toggled = pausedAt(t0)
+        check(toggled.toggled(app: spotify, playing: playing, at: t0) == .resume,
+              "explicit pause: a play-pause while paused resumes whatever the reading says",
+              String(describing: playing))
+    }
+    var unknown = ExplicitPause()
+    check(unknown.toggled(app: spotify, playing: nil, at: t0) == .nothing
+            && unknown.toggled(app: nil, playing: nil, at: t0) == .nothing
+            && unknown.toggled(app: spotify, playing: false, at: t0) == .nothing && !unknown.isPaused,
+          "explicit pause: a play-pause to a player read as paused, or not read, sends no flush")
+
+    var readings = ExplicitPause()
+    let silentRun = [(spotify, true), (spotify, false), (music, false)] as [(String, Bool)]
+    for (i, (app, playing)) in silentRun.enumerated() {
+        _ = readings.read(app: app, playing: playing, at: t0.addingTimeInterval(Double(i) * 10))
+    }
+    check(readings.read(app: nil, playing: nil, at: later) == .nothing && !readings.isPaused,
+          "explicit pause: readings alone, a player going quiet included, never pause")
+
+    var stale = pausedAt(t0)
+    let soon = t0.addingTimeInterval(ExplicitPause.staleReading - 0.01)
+    check(stale.read(app: spotify, playing: true, at: soon) == .nothing
+            && stale.read(app: nil, playing: nil, at: soon) == .nothing && stale.isPaused,
+          "explicit pause: a reading that may predate the player's own pause keeps the pause")
+    check(stale.read(app: spotify, playing: false, at: later) == .nothing && stale.isPaused,
+          "explicit pause: the player read as paused keeps the pause")
+    check(stale.read(app: spotify, playing: true, at: later) == .resume && !stale.isPaused,
+          "explicit pause: the player read as playing again resumes")
+    var other = pausedAt(t0)
+    check(other.read(app: music, playing: false, at: later) == .resume,
+          "explicit pause: another player counting resumes")
+    var none = pausedAt(t0)
+    check(none.read(app: spotify, playing: nil, at: later) == .resume,
+          "explicit pause: no reading of the player resumes")
+
+    var restart = pausedAt(t0)
+    check(restart.clear() == .resume && restart.clear() == .nothing,
+          "explicit pause: a new capture or stopped readings resume a paused stream once")
+
+    func loud(_ samples: [Float]) -> Int {
+        samples.withUnsafeBufferPointer { ExplicitPause.soundFrames($0.baseAddress!, frames: samples.count / 2) }
+    }
+    check(loud([0, 0, 0, 0]) == 0 && loud([3e-5, -3e-5, 2e-5, -1e-5]) == 0,
+          "explicit pause: digital silence and dither are no sound")
+    check(loud([0.002, 0, 0, -0.002, 0, 0]) == 2 && loud([0.5, 0.5, -0.5, -0.5]) == 2,
+          "explicit pause: a frame with a sample above -60 dBFS is sound")
+
+    var heard = pausedAt(t0)
+    check(heard.heard(sound: 1.0, at: t0.addingTimeInterval(1)) == .nothing
+            && heard.heard(sound: 1.0, at: later) == .nothing
+            && heard.heard(sound: 1.15, at: later) == .nothing && heard.isPaused,
+          "explicit pause: sound before the stale-reading time, or under 200 ms after it, keeps the pause")
+    check(heard.heard(sound: 1.25, at: later) == .resume && !heard.isPaused,
+          "explicit pause: 200 ms of sound after the stale-reading time resumes, whatever the reading says")
+    var playing = ExplicitPause()
+    check(playing.heard(sound: 60, at: later) == .nothing && !playing.isPaused,
+          "explicit pause: sound never pauses")
+}
+
 // MARK: Track info — what AirPlay receivers with a screen show
 do {
     typealias Track = NowPlayingMonitor.Track

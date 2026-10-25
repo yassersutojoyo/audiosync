@@ -23,6 +23,7 @@ extension AppDelegate {
         equalizerWindow = EqualizerWindowController(model: equalizerModel)
 
         nowPlaying.onChange = { [weak self] track in self?.nowPlayingChanged(track) }
+        nowPlaying.onReading = { [weak self] startedAt in self?.nowPlayingRead(startedAt: startedAt) }
         nowPlaying.onAutomationDenied = { [weak self] bundleID, denied in
             self?.automationChanged(bundleID, denied: denied)
         }
@@ -189,7 +190,7 @@ extension AppDelegate {
             self?.pushModel()
         }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
-        a.transport = { [weak self] command in self?.nowPlaying.send(command) }
+        a.transport = { [weak self] command in self?.sendTransport(command) }
         a.quit = { NSApp.terminate(nil) }
         a.retryAirPlay = { [weak self] in
             self?.retryNativeAirPlay()

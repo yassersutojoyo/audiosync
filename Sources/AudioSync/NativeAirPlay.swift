@@ -50,6 +50,10 @@ final class NativeAirPlay {
     private var playback: (app: String?, state: Int32) = (nil, ASC_AIRPLAY_PLAYBACK_UNKNOWN)
     /// Gets each transport control a speaker's remote asked for (main queue).
     var onRemote: ((NowPlayingMonitor.Command) -> Void)?
+    /// Whether the user paused the speakers on purpose (main queue, P213).
+    private var explicitPause = ExplicitPause()
+    /// While paused, checks whether the capture carries sound again (main queue).
+    private var soundWatch: Timer?
     /// The hold-back last asked for (main queue), and the one the sender
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
@@ -171,6 +175,50 @@ final class NativeAirPlay {
             guard let self, self.playback.app != app || self.playback.state != state else { return }
             self.playback = (app, state)
             if let handle = self.handle { _ = asc_airplay_set_playback(handle, app, state) }
+        }
+    }
+
+    /// A play-pause goes to `app`, read as playing, paused or (nil) not at
+    /// all: the speakers pause or resume with it (P213). Main queue.
+    func togglePause(app: String?, playing: Bool?) {
+        applyPause(explicitPause.toggled(app: app, playing: playing, at: Date()))
+    }
+
+    /// A reading of the players that started at `startedAt`: a paused stream
+    /// resumes once it no longer shows the player paused (P213). Main queue.
+    func readPause(app: String?, playing: Bool?, startedAt: Date) {
+        applyPause(explicitPause.read(app: app, playing: playing, at: startedAt))
+    }
+
+    /// The readings stopped: a paused stream resumes. Main queue.
+    func clearPause() {
+        applyPause(explicitPause.clear())
+    }
+
+    private func applyPause(_ step: ExplicitPause.Step) {
+        switch step {
+        case .nothing:
+            return
+        case .pause:
+            DebugTrace.log("[AudioSync] native AirPlay: paused on purpose, every speaker flushed")
+        case .resume:
+            DebugTrace.log("[AudioSync] native AirPlay: resumed after a pause")
+        }
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            if step == .pause { asc_airplay_pause(handle) } else { asc_airplay_resume(handle) }
+        }
+        if step == .resume {
+            soundWatch?.invalidate()
+            soundWatch = nil
+        } else if soundWatch == nil {
+            // Common modes, so an open menu doesn't hold the resume back.
+            let watch = Timer(timeInterval: 0.25, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                self.applyPause(self.explicitPause.heard(sound: NativeAirPlayTap.soundSeconds, at: Date()))
+            }
+            RunLoop.main.add(watch, forMode: .common)
+            soundWatch = watch
         }
     }
 
@@ -325,6 +373,7 @@ final class NativeAirPlay {
     /// A new capture session started (P143): the speakers are flushed and the
     /// timeline starts over.
     func restartTimeline() {
+        clearPause()
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
             asc_airplay_restart_timeline(handle)
