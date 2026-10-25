@@ -262,8 +262,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var loggedInputs: [String] = []
 
     override init() {
-        store = .standard
-        let saved = store.load()
+        store = LaunchAutoConnect.skipped ? SettingsStore.standard.memoryOnly() : .standard
+        let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
         // A hidden speaker is never switched on, not even by the saved on-state.
         enabledAirPlay = saved.enabledAirPlay.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: true)) }
@@ -315,7 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationWillFinishLaunching(_ notification: Notification) {
         DebugTrace.beginLaunchLog()   // each launch starts a fresh debug log (S170)
         if LaunchAutoConnect.skipped {
-            DebugTrace.log("[AudioSync] auto-connect: skipped in this run (\(LaunchAutoConnect.environmentKey)=1 with \(DebugTrace.environmentKey)=1); the marks stay saved")
+            DebugTrace.log("[AudioSync] auto-connect: skipped in this run (\(LaunchAutoConnect.environmentKey)=1 with \(DebugTrace.environmentKey)=1); speakers saved as on stay off, and nothing is saved until the next launch")
         }
         appearance.apply()   // before any window or alert exists
         // Every window stands on its own: no tab items in the menus, and the

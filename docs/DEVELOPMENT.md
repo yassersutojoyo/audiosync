@@ -63,13 +63,13 @@ AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync
 
 It writes to `/tmp/audiosync-debug.log`, which starts over at every launch and stops at 50 MB with a line that says so. Each line starts with the time in UTC, like the Windows log; the first one names the app and macOS versions and the Mac's local time.
 
-To debug without waking the speakers you marked Auto-Connect (say, the living room TV), add `AUDIOSYNC_NO_AUTO_CONNECT=1`:
+To debug without waking the speakers you marked Auto-Connect or left on (say, the living room TV), add `AUDIOSYNC_NO_AUTO_CONNECT=1`:
 
 ```bash
 AUDIOSYNC_NO_AUTO_CONNECT=1 AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync
 ```
 
-For that one run nothing switches on by itself, not at launch and not when a speaker shows up later. The speaker list still fills and you can still switch any speaker on yourself. A speaker that was still on when you last quit keeps its switch on, though, and plays as soon as you start streaming, so switch it off first. The marks stay saved, so the next normal launch connects as usual, and the log says once that auto-connect was skipped. Without `AUDIOSYNC_DEBUG=1` the variable does nothing. The Windows and Linux app reads it the same way.
+For that one run every speaker starts off, including the ones that were on when you last quit, and nothing switches on by itself, not at launch and not when a speaker shows up later. The speaker list still fills and you can still switch any speaker on yourself. Nothing you change in that run is saved, not the speakers you switch, not the Auto-Connect marks, zones, volumes or the equalizer. The next normal launch starts from your settings exactly as they were. The log says once at the start that auto-connect was skipped. Without `AUDIOSYNC_DEBUG=1` the variable does nothing. The Windows and Linux app reads it the same way.
 
 Every local output that's switched on has its own macOS volume and mute read through Core Audio (`DeviceVolume.swift`), and followed with property listeners until it's switched off or unplugged. The log gets one line when an output is first read (`output <UID> device volume: 13%, not muted; volume settable on the main element, …`), one when what its row shows changes (`fine → low`), and one per click on the fix, with what was written, how each write went and what the device reports afterwards. The only write is that click; nothing else touches a device's own volume.
 

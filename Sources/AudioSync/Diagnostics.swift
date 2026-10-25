@@ -81,9 +81,10 @@ enum DebugTrace {
     }
 }
 
-/// A debug launch that switches no speaker on by itself, so a soak or a test
-/// run never reaches the household's speakers. Nothing is saved: the next
-/// launch auto-connects as the settings mark it.
+/// A debug launch that switches no speaker on by itself and starts with every
+/// speaker off, so a soak or a test run never reaches the household's
+/// speakers. Nothing is saved: the next launch starts from the settings as
+/// they were.
 enum LaunchAutoConnect {
     /// Set to exactly `1`, next to `AUDIOSYNC_DEBUG=1`, to skip auto-connect.
     static let environmentKey = "AUDIOSYNC_NO_AUTO_CONNECT"

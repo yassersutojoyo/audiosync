@@ -59,7 +59,7 @@ extension AppDelegate {
 
     private func equalizerChanged(_ settings: Equalizer.Settings) {
         engine.updateEqualizer(settings)
-        if let data = StoredEqualizer.encode(settings) {
+        if !LaunchAutoConnect.skipped, let data = StoredEqualizer.encode(settings) {
             UserDefaults.standard.set(data, forKey: Keys.equalizer)
         }
         publish(\.equalizerOn, settings.enabled)
@@ -68,7 +68,7 @@ extension AppDelegate {
     }
 
     private func equalizerCurvesChanged(_ curves: [Equalizer.Curve]) {
-        if let data = StoredCurves.encode(curves) {
+        if !LaunchAutoConnect.skipped, let data = StoredCurves.encode(curves) {
             UserDefaults.standard.set(data, forKey: Keys.equalizerCurves)
         }
         publishEqualizerCurve()

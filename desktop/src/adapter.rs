@@ -458,8 +458,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     cast_probe: fn(&CastAddress) -> bool,
     /// The speaker keys marked auto-connect.
     auto_connect: BTreeSet<String>,
-    /// A debug launch keeps auto-connect off until it quits, the marks
-    /// above saved as they are ([`crate::debug_log::NO_AUTO_CONNECT_VAR`]).
+    /// A debug launch keeps auto-connect off until it quits, holds the
+    /// speakers saved as on off and writes no settings
+    /// ([`crate::debug_log::NO_AUTO_CONNECT_VAR`]).
     auto_connect_skipped: bool,
     /// The speakers hidden with Hide Speaker, in the order they were hidden.
     hidden: Vec<SavedHidden>,
@@ -574,7 +575,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// stopped unless an auto-connect speaker is there, with the sources and
     /// outputs listed now. `clock` gives the time a notice shows; what
     /// happens goes to `log`. With `skip_auto_connect`, no speaker is
-    /// auto-connected in this run and the saved marks stay as they are.
+    /// switched on by itself in this run and nothing is saved.
     pub fn launched(
         audio: A,
         clock: fn() -> String,
@@ -661,7 +662,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if skip_auto_connect {
             adapter.log.log(|| {
                 format!(
-                    "auto-connect: skipped in this run ({}=1 with {}=1); the marks stay saved",
+                    "auto-connect: skipped in this run ({}=1 with {}=1); speakers saved as on \
+                     stay off, and nothing is saved until the next launch",
                     crate::debug_log::NO_AUTO_CONNECT_VAR,
                     crate::debug_log::ENV_VAR
                 )
@@ -713,7 +715,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.audio.set_output_delay(id, speaker.delay_ms);
             }
             self.audio.set_output_volume(id, speaker.volume);
-            if speaker.enabled && !self.is_hidden(&speaker_key(id)) {
+            if speaker.enabled && !self.is_hidden(&speaker_key(id)) && !self.auto_connect_skipped {
                 // Nothing streams yet, so this only marks it on.
                 let _ = self.audio.set_output_enabled(id, true);
             }
@@ -723,6 +725,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.audio.set_airplay_delay(id, speaker.delay_ms);
             if speaker.enabled
                 && !self.is_hidden(&airplay_key(id))
+                && !self.auto_connect_skipped
                 && self.audio.set_airplay_enabled(id, true).is_err()
             {
                 self.airplay_unrestored.insert(id.clone());
@@ -916,6 +919,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// the first save, [`AudioAdapter::persist`]). Returns whether the
     /// notices changed.
     fn keep_settings_aside(&mut self, due: bool) -> bool {
+        if self.auto_connect_skipped {
+            return false;
+        }
         let kept = if due {
             self.settings_file.keep_ignored_aside_if_due()
         } else {
@@ -970,7 +976,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// copy's name. Nothing is written while an older file's delays wait for
     /// their migration. Returns whether the notices changed.
     fn persist(&mut self) -> bool {
-        if self.delays_to_migrate {
+        if self.delays_to_migrate || self.auto_connect_skipped {
             return false;
         }
         let current = self.current_settings();
@@ -1690,6 +1696,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// changed since the last write. One that can't be written gets the
     /// settings' notice: the change lasts until AudioSync quits.
     fn save_cast_memory(&mut self) {
+        if self.auto_connect_skipped {
+            return;
+        }
         let (Some(path), Some(json)) = (self.cast_file.as_ref(), self.audio.cast_memory_json())
         else {
             return;
