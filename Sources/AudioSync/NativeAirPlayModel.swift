@@ -342,11 +342,9 @@ enum NativeAirPlayOutcome: Equatable {
     case latencyChanged
     /// The sender stopped working: the app drops it and offers Retry.
     case senderFailed
-    /// Start a PIN pairing with the receiver (receiver ID).
+    /// Start a PIN pairing with the receiver (receiver ID). A stored pairing
+    /// it turned down stays until the new one replaces it (P154).
     case startPairing(String)
-    /// Forget the receiver's stored pairing, which it refused, then start a
-    /// PIN pairing with it (receiver ID).
-    case repair(String)
     /// Stop the pairing with the receiver (receiver ID): nobody waits for it.
     case cancelPairing(String)
     /// A PIN or password prompt was queued: show the next one.
@@ -708,8 +706,8 @@ struct NativeAirPlayModel {
 
     /// A speaker's session asked for a password or a pairing (`problem`):
     /// within the user's attempt, a password is asked for (again) and a
-    /// receiver that turned its stored pairing down forgets it and pairs
-    /// again, once, whatever its listing still says; otherwise it goes off
+    /// receiver that turned its stored pairing down pairs again, once,
+    /// whatever its listing still says; otherwise it goes off
     /// with why, and one refused pairing stays off (`refusedOff`).
     private mutating func accessNeeded(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome {
         let app = NativeAirPlayID.app(id)
@@ -725,7 +723,7 @@ struct NativeAirPlayModel {
             return .turnOff(app, .stillNeedsCode)
         case .pairingRequired:
             stages[id] = .pairing(afterWrongPin: false)
-            return .repair(id)
+            return .startPairing(id)
         default:
             return .turnOff(app, problem.turnOff)
         }
