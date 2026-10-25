@@ -29,7 +29,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_millis(100);
 /// How often the driver rolls the rate limits over (P195).
 const ROLL_EVERY: Duration = Duration::from_millis(250);
 /// 403s a peer may get within `STRIKE_WINDOW` of its first one before its
-/// connections are closed unread for the rest of the window (P194): room
+/// connections are closed unread for the rest of the window (P191): room
 /// for a receiver retrying a stale value, about 42 years on average to
 /// guess a 32-bit Active-Remote.
 const STRIKE_LIMIT: u32 = 8;
