@@ -28,7 +28,9 @@ use audiosync_airplay::stream::{Ap2Audio, PacketKind, SpeakerConfig, StreamEvent
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2, dict, int, open_packet, plist, read_dict, stream_key};
-use common::net::{Events, HostAudio, free_ptp_ports, host_frame_of, serial, wait_until};
+use common::net::{
+    Events, HostAudio, free_ptp_ports, host_frame_of, ptp_bind_v4, serial, wait_until,
+};
 use common::rig::{Rig, decode, speaker};
 
 const LONG: Duration = Duration::from_secs(15);
@@ -663,8 +665,8 @@ impl Udp {
 
 /// Whether someone else could bind both of `ports` now.
 fn ports_free(ports: PtpPorts) -> bool {
-    UdpSocket::bind(("0.0.0.0", ports.event)).is_ok()
-        && UdpSocket::bind(("0.0.0.0", ports.general)).is_ok()
+    UdpSocket::bind((ptp_bind_v4(), ports.event)).is_ok()
+        && UdpSocket::bind((ptp_bind_v4(), ports.general)).is_ok()
 }
 
 fn device(server: &Ap2Server, id: u8, features: &str) -> Device {
@@ -1053,7 +1055,7 @@ fn ap2_ptp_unavailable() {
     let server = Ap2Server::start(udp.fake(fake));
     let local = free_ptp_ports();
     // Another PTP stack holds the event port.
-    let _holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
+    let _holder = UdpSocket::bind((ptp_bind_v4(), local.event)).expect("the port");
     let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
     let mut events = Events::default();
     let speaker = device(&server, 63, PTP_FEATURES);
@@ -1112,7 +1114,7 @@ fn ap2_ptp_clash_is_told_again_after_ptp_bound() {
     fake.status.insert("SETUP session".to_owned(), 501);
     let server = Ap2Server::start(udp.fake(fake));
     let local = free_ptp_ports();
-    let holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
+    let holder = UdpSocket::bind((ptp_bind_v4(), local.event)).expect("the port");
     let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
     let mut events = Events::default();
     let speaker = device(&server, 65, PTP_FEATURES);
@@ -1151,7 +1153,7 @@ fn ap2_ptp_clash_is_told_again_after_ptp_bound() {
     assert_eq!((told(&events), opened(&events)), (1, 1));
     // It takes the port again: the clash is told once more.
     assert!(wait_until(LONG, || ports_free(local)));
-    let _holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
+    let _holder = UdpSocket::bind((ptp_bind_v4(), local.event)).expect("the port");
     attempt(&mut events, 3);
     assert_eq!((told(&events), opened(&events)), (2, 1));
     sender.shutdown();

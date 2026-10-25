@@ -520,6 +520,11 @@ pub fn spaced_digits(code: &str) -> String {
 /// This PC's IPv4 address on the home network: the one its default route
 /// leaves from, when it is private. Nothing is sent.
 pub fn lan_address() -> Option<Ipv4Addr> {
+    // The wildcard bind could make Windows Firewall ask about the test program.
+    #[cfg(test)]
+    if audiosync_airplay::ptp::no_lan_tests() {
+        return None;
+    }
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     // A documentation address (RFC 5737): connecting only picks the route.
     socket

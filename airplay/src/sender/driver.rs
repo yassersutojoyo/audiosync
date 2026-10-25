@@ -2173,10 +2173,11 @@ mod tests {
         let (events, _events) = mpsc::channel();
         let latency = Arc::new(AtomicU32::new(0));
         // Both sockets are held until both are bound, so the two ports
-        // differ, and on the wildcard address the driver binds.
+        // differ, and on the address the driver binds.
+        let bind_ip = crate::ptp::service_bind_ip(IpAddr::V4(Ipv4Addr::LOCALHOST));
         let free = || {
             let [event, general] = [(); 2].map(|()| {
-                UdpSocket::bind("0.0.0.0:0")
+                UdpSocket::bind((bind_ip, 0))
                     .and_then(|socket| Ok((socket.local_addr()?.port(), socket)))
                     .expect("a free port")
             });
