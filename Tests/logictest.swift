@@ -788,8 +788,12 @@ do {
     check(model.shownCurve == .saved(0) && model.settings.preamp == -3 && model.settings.enabled,
           "eq curves: picking a curve keeps the preamp and turns the equalizer on")
     check(Equalizer.save("Flat-ish", gains: Equalizer.presets[0].gains, in: &curves) == 1
-            && Equalizer.matching(Equalizer.presets[0].gains, saved: curves) == .preset(.flat),
-          "eq curves: a preset matches before a saved curve with its gains")
+            && Equalizer.matching(Equalizer.presets[0].gains, saved: curves) == .saved(1),
+          "eq curves: a saved curve with a preset's gains resolves to the saved curve")
+    let flatish = EqualizerModel(settings: Equalizer.Settings(enabled: true, preamp: 0, gains: Equalizer.presets[0].gains),
+                                 curves: curves)
+    check(flatish.shownSavedIndex == 1,
+          "eq curves: a saved curve with a preset's gains keeps Rename and Delete")
     check(Equalizer.save("DESK", gains: Equalizer.presets[1].gains, in: &curves) == 0 && curves.count == 2,
           "eq curves: saving under a taken name, ignoring case, replaces that curve")
     check(Equalizer.save("   ", gains: gains, in: &curves) == nil, "eq curves: an empty name saves nothing")
