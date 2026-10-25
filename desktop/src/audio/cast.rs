@@ -352,7 +352,7 @@ impl CastFeed {
     /// Returns false when it has to wait for a later [`CastFeed::flush`]:
     /// the handoff is full and the tap is lent to a capture that hasn't
     /// pushed since.
-    fn hand(&mut self, writer: Option<AudioWriter>) -> bool {
+    pub(crate) fn hand(&mut self, writer: Option<AudioWriter>) -> bool {
         self.waiting = Some(writer.map(CastWriter::new));
         self.flush()
     }

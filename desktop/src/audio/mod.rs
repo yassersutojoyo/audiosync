@@ -51,6 +51,8 @@ pub mod capture;
 pub mod cast;
 pub mod cast_address;
 pub mod controller;
+#[cfg(all(test, target_os = "linux"))]
+mod mdns_live_tests;
 #[cfg(any(windows, target_os = "linux", test))]
 pub mod media_sessions;
 pub mod mix;
