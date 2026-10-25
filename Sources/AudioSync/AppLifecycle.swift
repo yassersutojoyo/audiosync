@@ -112,7 +112,7 @@ enum AppLifecycle {
     static func waitsForRecheck(_ report: SourceQuitReport, source: AudioSource) -> Bool {
         guard case .mix(.only, let ids) = source else { return false }
         switch report {
-        case .terminated(let bundleID?, true): return ids.contains(bundleID)
+        case .terminated(let bundleID?, true): return ids.contains(sourceSpelling(of: bundleID, in: source))
         case .captureLost(.appNotRunning): return true
         default: return false
         }
@@ -140,6 +140,12 @@ enum AppLifecycle {
         if engineRunning || sessionChanged { return .none }
         if userStopped { return .stop }
         return sourceChanged ? .start : .rebuild
+    }
+
+    /// `bundleID` as `source` stores it when it names one of the source's
+    /// apps, else as given: macOS compares bundle IDs regardless of letter case.
+    static func sourceSpelling(of bundleID: String, in source: AudioSource) -> String {
+        source.capturedApps.first { $0.caseInsensitiveCompare(bundleID) == .orderedSame } ?? bundleID
     }
 
     /// The app that quit and what the session does about it (S142, S164,
@@ -170,7 +176,7 @@ enum AppLifecycle {
             quit = bundleID
             streaming = .rebuilding
         }
-        guard let quit else { return nil }
+        guard let quit = quit.map({ sourceSpelling(of: $0, in: source) }) else { return nil }
         let action = SourceQuit.decide(setting: setting, source: source, quitBundleID: quit, streaming: streaming,
                                        isRunning: isRunning)
         return action == .keep ? nil : (quit, action)

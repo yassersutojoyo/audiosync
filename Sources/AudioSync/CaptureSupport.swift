@@ -265,7 +265,7 @@ enum AppTapFollow: Equatable {
     /// changes no audio process, and macOS can still list an app as running
     /// when its last audio process ends. An "all except" tap outlives its apps.
     static func followsRunningApps(_ source: AudioSource) -> Bool {
-        false
+        !source.capturedApps.isEmpty
     }
 }
 

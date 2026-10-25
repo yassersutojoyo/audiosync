@@ -109,6 +109,8 @@ final class SourceCapture {
     private var tapped: [AudioObjectID] = []
     /// Listeners for the whole session: the app's processes, the input device.
     private var sessionListeners = Listeners()
+    /// The session's watch on macOS's list of running apps (`AppTapFollow.followsRunningApps`).
+    private var runningAppsWatch: NSKeyValueObservation?
     /// Listeners for the current tap and aggregate device only.
     private var tapListeners = Listeners()
     /// Bumped by every start and stop, so a listener call that was already
@@ -160,6 +162,7 @@ final class SourceCapture {
     func halt() {
         sessionMark &+= 1
         sessionListeners.removeAll()
+        runningAppsWatch = nil
         closeCapture()
         if let sink {
             DebugTrace.log("[AudioSync] capture stopped: \(sink.callbacks.load(ordering: .relaxed)) callbacks, "
@@ -428,6 +431,13 @@ final class SourceCapture {
             [weak self] in
             guard let self, self.isCurrent(mark) else { return }
             self.followApp()
+        }
+        guard let source, AppTapFollow.followsRunningApps(source) else { return }
+        runningAppsWatch = NSWorkspace.shared.observe(\.runningApplications) { [weak self] _, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isCurrent(mark) else { return }
+                self.followApp()
+            }
         }
     }
 
