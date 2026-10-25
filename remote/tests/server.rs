@@ -52,6 +52,7 @@ fn config(name: &str, timing: Timing) -> Config {
         devices_path: Some(scratch(name)),
         timing,
         capacity: Capacity::default(),
+        log_pairing_codes: false,
     }
 }
 
@@ -1182,6 +1183,57 @@ fn a_busy_port_is_reported_as_such() {
         |_: &Command| {},
     );
     assert!(taken.unwrap_err().port_in_use());
+}
+
+fn pairing_code_lines(remote: &Remote) -> Vec<String> {
+    std::iter::from_fn(|| remote.server.poll_event())
+        .map(|event| event.to_string())
+        .filter(|line| line.contains("pairing code"))
+        .collect()
+}
+
+#[test]
+fn debug_mode_logs_each_new_pairing_code_and_a_normal_run_never_does() {
+    let line = |code: &str| format!("remote: pairing code {code} (debug only)");
+    let remote = start_with(Config {
+        log_pairing_codes: true,
+        ..config("debug-codes", Timing::default())
+    });
+    let first = remote.server.pairing_code().unwrap();
+    assert_eq!(pairing_code_lines(&remote), [line(&first)]);
+    let rotated = remote.server.rotate_code().unwrap();
+    assert_eq!(pairing_code_lines(&remote), [line(&rotated)]);
+    pair(&remote);
+    let after_use = remote.server.pairing_code().unwrap();
+    assert_ne!(after_use, rotated, "single use");
+    assert_eq!(pairing_code_lines(&remote), [line(&after_use)]);
+
+    let quiet = start("quiet-codes");
+    let codes = [
+        quiet.server.pairing_code().unwrap(),
+        quiet.server.rotate_code().unwrap(),
+    ];
+    pair(&quiet);
+    let events: Vec<String> = std::iter::from_fn(|| quiet.server.poll_event())
+        .map(|event| event.to_string())
+        .collect();
+    assert!(
+        events.iter().all(|line| !line.contains("pairing code")
+            && codes.iter().all(|code| !line.contains(code.as_str()))),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn the_pairing_code_switch_reads_from_json_and_is_off_by_default() {
+    assert!(!Config::default().log_pairing_codes);
+    assert!(!Config::from_json("{}").unwrap().log_pairing_codes);
+    assert!(
+        Config::from_json(r#"{"log_pairing_codes": true}"#)
+            .unwrap()
+            .log_pairing_codes
+    );
+    assert!(Config::from_json(r#"{"log_pairing_codes": 1}"#).is_none());
 }
 
 /// Any method, with the headers a same-origin JSON request carries.

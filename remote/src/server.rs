@@ -95,6 +95,9 @@ pub struct Config {
     pub devices_path: Option<PathBuf>,
     pub timing: Timing,
     pub capacity: Capacity,
+    /// Reports each new pairing code as [`ServerEvent::PairingCode`], for a
+    /// debug log only: whoever reads that log can pair while the code works.
+    pub log_pairing_codes: bool,
 }
 
 /// How many connections the server holds; the defaults are the product's,
@@ -137,14 +140,16 @@ impl Default for Config {
             devices_path: None,
             timing: Timing::default(),
             capacity: Capacity::default(),
+            log_pairing_codes: false,
         }
     }
 }
 
 impl Config {
-    /// Reads `{"port"?, "local_name"?, "devices_path"?, "listen"?}`, the
-    /// defaults filling in what is missing; `listen` is a list of IP
-    /// literals. None when a field has the wrong type or value.
+    /// Reads `{"port"?, "local_name"?, "devices_path"?, "listen"?,
+    /// "log_pairing_codes"?}`, the defaults filling in what is missing;
+    /// `listen` is a list of IP literals. None when a field has the wrong
+    /// type or value.
     pub fn from_json(text: &str) -> Option<Config> {
         let value: serde_json::Value = serde_json::from_str(text).ok()?;
         let object = value.as_object()?;
@@ -165,6 +170,9 @@ impl Config {
                 .iter()
                 .map(|address| address.as_str()?.parse().ok())
                 .collect::<Option<_>>()?;
+        }
+        if let Some(log) = object.get("log_pairing_codes") {
+            config.log_pairing_codes = log.as_bool()?;
         }
         Some(config)
     }
@@ -202,7 +210,8 @@ impl fmt::Display for RemoteError {
 impl std::error::Error for RemoteError {}
 
 /// What the server reports for the debug log: who paired, failed or was
-/// refused, never a code or a token.
+/// refused, never a token, and a pairing code only with
+/// [`Config::log_pairing_codes`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerEvent {
     Paired {
@@ -242,6 +251,9 @@ pub enum ServerEvent {
     AcceptFailed(String),
     /// A connection's thread panicked; only that connection ended.
     ConnectionPanicked,
+    /// A new pairing code: at start, on a rotation and after a pairing used
+    /// the last one. Only with [`Config::log_pairing_codes`].
+    PairingCode(String),
 }
 
 impl fmt::Display for ServerEvent {
@@ -288,6 +300,9 @@ impl fmt::Display for ServerEvent {
             }
             ServerEvent::AcceptFailed(error) => write!(f, "remote: accepting failed: {error}"),
             ServerEvent::ConnectionPanicked => f.write_str("remote: a connection ended in a panic"),
+            ServerEvent::PairingCode(code) => {
+                write!(f, "remote: pairing code {code} (debug only)")
+            }
         }
     }
 }
@@ -330,6 +345,7 @@ struct Shared {
     heartbeat: Duration,
     request_timeout: Duration,
     capacity: Capacity,
+    log_pairing_codes: bool,
     pairing: Mutex<Pairing>,
     devices: Mutex<TokenStore>,
     device_file: DeviceFile,
@@ -564,7 +580,12 @@ impl RemoteServer {
             code_lifetime: config.timing.code_lifetime,
             window: config.timing.wrong_code_window,
         };
-        let pairing = Pairing::new(limits, Instant::now()).map_err(|_| RemoteError::Random)?;
+        let now = Instant::now();
+        let pairing = Pairing::new(limits, now).map_err(|_| RemoteError::Random)?;
+        let first_code = config
+            .log_pairing_codes
+            .then(|| pairing.current(now).map(str::to_owned))
+            .flatten();
         let (devices, problem) = TokenStore::open(config.devices_path.clone());
         let (listeners, port) = bind_all(&config)?;
         let shared = Arc::new(Shared {
@@ -574,6 +595,7 @@ impl RemoteServer {
             heartbeat: config.timing.heartbeat,
             request_timeout: config.timing.request,
             capacity: config.capacity,
+            log_pairing_codes: config.log_pairing_codes,
             pairing: Mutex::new(pairing),
             devices: Mutex::new(devices),
             device_file: DeviceFile::default(),
@@ -595,6 +617,9 @@ impl RemoteServer {
                 ));
             }
             None => {}
+        }
+        if let Some(code) = first_code {
+            shared.report(ServerEvent::PairingCode(code));
         }
         let rewrite = lock(&shared.devices).take_rewrite();
         if let Some(snapshot) = rewrite {
@@ -664,9 +689,13 @@ impl RemoteServer {
     /// A new pairing code, for when the user opens the setting: the old one
     /// stops working and a lockout ends.
     pub fn rotate_code(&self) -> Result<String, RemoteError> {
-        lock(&self.shared.pairing)
+        let code = lock(&self.shared.pairing)
             .rotate(Instant::now())
-            .map_err(|_| RemoteError::Random)
+            .map_err(|_| RemoteError::Random)?;
+        if self.shared.log_pairing_codes {
+            self.shared.report(ServerEvent::PairingCode(code.clone()));
+        }
+        Ok(code)
     }
 
     /// Makes `<name>.local` the accepted `Host` name in place of the one
@@ -1129,7 +1158,15 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
     let Ok(token) = auth::random_token() else {
         return error(text::not_ready());
     };
-    let outcome = lock(&shared.pairing).attempt(from, &code, Instant::now());
+    let (outcome, next_code) = {
+        let mut pairing = lock(&shared.pairing);
+        let now = Instant::now();
+        let outcome = pairing.attempt(from, &code, now);
+        let next_code = (shared.log_pairing_codes && outcome == PairOutcome::Paired)
+            .then(|| pairing.current(now).map(str::to_owned))
+            .flatten();
+        (outcome, next_code)
+    };
     let failure = match outcome {
         PairOutcome::Paired => None,
         PairOutcome::Wrong => Some(text::wrong_code()),
@@ -1145,6 +1182,9 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
     let snapshot = lock(&shared.devices).add(&token, SystemTime::now());
     shared.save(snapshot);
     shared.report(ServerEvent::Paired { from });
+    if let Some(next_code) = next_code {
+        shared.report(ServerEvent::PairingCode(next_code));
+    }
     Response::json(200, json!({ "paired": true }).to_string())
         .with("Set-Cookie", token_cookie(&token, COOKIE_MAX_AGE))
         .into()

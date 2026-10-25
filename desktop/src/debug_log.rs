@@ -88,15 +88,7 @@ impl DebugLog {
 
     /// A log written to `path`, emptied first when `empty` is set.
     fn open(path: Option<PathBuf>, max_bytes: u64, empty: bool) -> DebugLog {
-        // Emptied, then reopened for appending: every write lands at the
-        // end even if something else truncates or writes the file meanwhile.
-        let file = path.and_then(|path| {
-            if empty {
-                File::create(&path).ok()?;
-            }
-            OpenOptions::new().append(true).create(true).open(path).ok()
-        });
-        let Some(file) = file else {
+        let Some(file) = path.and_then(|path| open_file(&path, empty)) else {
             return DebugLog::default();
         };
         let (writer, requests) = mpsc::channel();
@@ -132,6 +124,47 @@ impl DebugLog {
         let (done, answer) = mpsc::channel();
         writer.send(Request::Flush(done)).is_ok() && answer.recv_timeout(timeout).is_ok()
     }
+}
+
+/// Opens the log for appending, so every write lands at the end even if
+/// something else truncates or writes the file meanwhile.
+#[cfg(not(target_os = "linux"))]
+fn open_file(path: &Path, empty: bool) -> Option<File> {
+    if empty {
+        File::create(path).ok()?;
+    }
+    OpenOptions::new().append(true).create(true).open(path).ok()
+}
+
+/// Opens the log for appending, readable by this user only: it can hold a
+/// live pairing code, and the `/tmp` fallback is shared by every user. A
+/// symlink, a non-regular file, a hard-linked one or another user's file at
+/// the path is refused.
+#[cfg(target_os = "linux")]
+fn open_file(path: &Path, empty: bool) -> Option<File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    // O_NONBLOCK keeps a FIFO at the path from blocking the open.
+    let file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    let info = file.metadata().ok()?;
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let me = unsafe { libc::getuid() };
+    if !info.is_file() || info.uid() != me || info.nlink() != 1 {
+        return None;
+    }
+    // An older log may have been readable by everyone.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .ok()?;
+    if empty {
+        file.set_len(0).ok()?;
+    }
+    Some(file)
 }
 
 /// Where the log goes for the value of `AUDIOSYNC_DEBUG`: [`FILE_NAME`] in
@@ -477,6 +510,32 @@ mod tests {
         assert!(!bytes.contains(&0), "no gap of NUL bytes");
         assert_eq!(read_messages(&path), ["after"]);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_log_file_is_private_to_this_user_and_a_symlink_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = test_dir("private");
+        let fresh = dir.join(FILE_NAME);
+        let log = DebugLog::new(Some(fresh.clone()));
+        assert!(log.enabled());
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&fresh), 0o600, "a new log");
+
+        let older = dir.join("older.log");
+        std::fs::write(&older, "").unwrap();
+        std::fs::set_permissions(&older, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(DebugLog::new(Some(older.clone())).enabled());
+        assert_eq!(mode(&older), 0o600, "an older log readable by everyone");
+
+        let link = dir.join("link.log");
+        std::os::unix::fs::symlink(&older, &link).unwrap();
+        assert!(!DebugLog::new(Some(link)).enabled());
+        let hard = dir.join("hard.log");
+        std::fs::hard_link(&older, &hard).unwrap();
+        assert!(!DebugLog::new(Some(hard)).enabled());
     }
 
     #[test]

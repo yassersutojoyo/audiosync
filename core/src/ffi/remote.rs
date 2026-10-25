@@ -120,9 +120,10 @@ fn keep(slot: &mut CString, text: String) -> *const c_char {
 }
 
 /// Starts the remote: `config_json` is `{"port"?, "local_name"?,
-/// "devices_path"?, "listen"?}` (the defaults: [`REMOTE_DEFAULT_PORT`], no
-/// `.local` name, devices kept in memory only, every IPv6 and IPv4
-/// address). A null `config_json` takes every default; one that isn't
+/// "devices_path"?, "listen"?, "log_pairing_codes"?}` (the defaults:
+/// [`REMOTE_DEFAULT_PORT`], no `.local` name, devices kept in memory only,
+/// every IPv6 and IPv4 address, no pairing codes in the log lines; only a
+/// host writing its debug log sets that one). A null `config_json` takes every default; one that isn't
 /// UTF-8 fails with [`REMOTE_ERROR_CONFIG`]. `command` gets each accepted
 /// change with `context`. Null on failure, with the reason in `*error` (one
 /// of the `REMOTE_ERROR_` codes) when `error` isn't null.
@@ -313,7 +314,8 @@ pub unsafe extern "C" fn asc_remote_forget_all(remote: *mut AscRemote) -> bool {
 }
 
 /// The oldest debug-log line not taken yet (pairing, refusals, file
-/// problems; never a code or a token), or null when there is none. The
+/// problems; never a token, and a pairing code only when the start's
+/// `log_pairing_codes` was true), or null when there is none. The
 /// string is the handle's, valid until the next call of this on it or its
 /// stop.
 ///
@@ -512,6 +514,61 @@ mod tests {
         }
         assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err());
         assert_eq!(received.lock().unwrap().len(), 1);
+    }
+
+    fn log_lines(remote: *mut AscRemote) -> Vec<String> {
+        let mut lines = Vec::new();
+        loop {
+            // SAFETY: a live handle.
+            let line = unsafe { asc_remote_next_log(remote) };
+            if line.is_null() {
+                return lines;
+            }
+            // SAFETY: the handle's string, copied before the next call.
+            lines.push(
+                unsafe { CStr::from_ptr(line) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+
+    // covers: S287
+    #[test]
+    fn debug_mode_puts_each_pairing_code_in_the_log_lines() {
+        let received = Mutex::new(Vec::<String>::new());
+        let context = &received as *const Mutex<Vec<String>> as *mut c_void;
+        let mut error = -1;
+        // SAFETY: a C string literal, a live context that outlives the stop,
+        // a writable error.
+        let mut remote = unsafe {
+            asc_remote_start(
+                c"{\"port\": 0, \"listen\": [\"127.0.0.1\"], \"log_pairing_codes\": true}".as_ptr(),
+                Some(record),
+                context,
+                &mut error,
+            )
+        };
+        assert!(!remote.is_null());
+        // SAFETY: a live handle; each string is copied before the next call.
+        let (first, fresh) = unsafe {
+            let first = CStr::from_ptr(asc_remote_pairing_code(remote))
+                .to_string_lossy()
+                .into_owned();
+            let fresh = CStr::from_ptr(asc_remote_rotate_code(remote))
+                .to_string_lossy()
+                .into_owned();
+            (first, fresh)
+        };
+        assert_eq!(
+            log_lines(remote),
+            [
+                format!("remote: pairing code {first} (debug only)"),
+                format!("remote: pairing code {fresh} (debug only)"),
+            ]
+        );
+        // SAFETY: the host's pointer to a live handle.
+        unsafe { asc_remote_stop(&mut remote) };
     }
 
     #[test]
