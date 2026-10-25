@@ -305,6 +305,23 @@ fn median_offset(left: &[f32], right: &[f32]) -> i64 {
     offsets[offsets.len() / 2]
 }
 
+/// How many frames further along the ring `b` anchored than `a` would have
+/// in `b`'s cycle: the frames written between their anchors less the frames
+/// due in the time between those cycles. A writer that falls behind and
+/// catches up between the two anchors makes it nonzero, and `b` then plays
+/// that much earlier. Also returns its uncertainty, the frames written while
+/// either anchoring callback ran.
+fn anchor_skew(a: &playback::Playback, b: &playback::Playback) -> (i64, i64) {
+    let [a_before, a_after, a_ns] = a.anchor();
+    let [b_before, b_after, b_ns] = b.anchor();
+    assert!(a_ns > 0 && b_ns > 0, "an output never anchored");
+    let due = ((b_ns - a_ns) as f64 * RATE as f64 / 1e9).round() as i64;
+    (
+        b_before - a_before - due,
+        (a_after - a_before) + (b_after - b_before),
+    )
+}
+
 #[test]
 #[ignore = "needs the CI job's PipeWire daemon and sinks as-a and as-b"]
 fn outputs_follow_the_default_and_hotplug() {
@@ -362,6 +379,7 @@ fn outputs_play_at_their_delay_and_gain() {
     std::thread::sleep(Duration::from_secs(4));
     let running = !a.has_ended() && !b.has_ended();
     let latencies = [a.reported_latency_ns(), b.reported_latency_ns()];
+    let equal_skew = anchor_skew(&a, &b);
     drop((a, b));
     let (left, right) = recorder.finish();
     let equal = median_offset(&left, &right);
@@ -371,24 +389,35 @@ fn outputs_play_at_their_delay_and_gain() {
     let a = output(&ring, "as-a", 0, 1.0);
     let b = output(&ring, "as-b", 4800, 1.0);
     std::thread::sleep(Duration::from_secs(4));
+    let delayed_skew = anchor_skew(&a, &b);
     drop((a, b));
     let (left, right) = recorder.finish();
     let delayed = median_offset(&left, &right);
 
     let report = format!(
-        "offsets {equal} (equal delays) and {delayed} (4800 apart) frames, latencies {latencies:?} ns"
+        "offsets {equal} (equal delays) and {delayed} (4800 apart) frames, anchor skews {equal_skew:?} and {delayed_skew:?} frames, latencies {latencies:?} ns"
     );
     assert!(running, "an output ended: {report}");
+    // Each output anchors at W less its delay, so where this producer thread
+    // stood at each anchor moves it: on a loaded runner the pair once played
+    // 1440 frames (three of its blocks) apart at equal delays. That skew is
+    // the writer's, not the delay's, and is added back.
+    let equal_aligned = equal + equal_skew.0;
+    let delayed_aligned = delayed + delayed_skew.0;
     // Null sinks report no delay, and in CI the two played a quantum apart at
     // equal delays (likely driver and follower), so the delay is measured
     // from that baseline. The absolute latency goes unchecked: pw-record's
     // file carries no clock time to set against the time a frame was due.
+    let slack = 64 + equal_skew.1;
     assert!(
-        equal.abs() <= 64 || (equal.abs() - 1024).abs() <= 64,
+        equal_aligned.abs() <= slack || (equal_aligned.abs() - 1024).abs() <= slack,
         "{report}"
     );
     // The offsets CI measured fall on a 64-frame grid.
-    assert!((delayed - equal - 4800).abs() <= 64, "{report}");
+    assert!(
+        (delayed_aligned - equal_aligned - 4800).abs() <= slack + delayed_skew.1,
+        "{report}"
+    );
     assert!((ratio_db + 6.02).abs() <= 0.2, "gain {ratio_db} dB");
 
     stop.store(true, Ordering::Relaxed);

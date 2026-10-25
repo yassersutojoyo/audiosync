@@ -62,6 +62,10 @@ struct Status {
     /// age in ns, for the live tests' failure messages.
     #[cfg(test)]
     timing: [std::sync::atomic::AtomicI64; 4],
+    /// The ring's W just before and just after the callback that last
+    /// anchored the reader, and that callback's cycle time in ns.
+    #[cfg(test)]
+    anchor: [std::sync::atomic::AtomicI64; 3],
 }
 
 /// A running output. Dropping it stops the stream at once and waits for its
@@ -87,6 +91,16 @@ impl Playback {
                 .each_ref()
                 .map(|value| value.load(Ordering::Relaxed)),
         )
+    }
+
+    /// The ring's W just before and just after the callback that last
+    /// anchored the reader (the reader saw a W between the two), and that
+    /// callback's cycle time in ns; all 0 before the first anchor.
+    pub fn anchor(&self) -> [i64; 3] {
+        self.status
+            .anchor
+            .each_ref()
+            .map(|value| value.load(Ordering::Relaxed))
     }
 
     /// The renderer's state and counters, for a failure message.
@@ -236,6 +250,11 @@ struct Render {
     rate: u32,
     started: bool,
     reported_at_ns: Option<u64>,
+    #[cfg(test)]
+    ring: Arc<audiosync_core::ring::Ring>,
+    /// The reader's anchors counted so far.
+    #[cfg(test)]
+    anchors: u64,
 }
 
 impl Render {
@@ -285,8 +304,12 @@ impl Render {
             self.reported_at_ns = Some(now_ns);
         }
         let samples = &mut self.scratch[..frames * self.channels];
+        #[cfg(test)]
+        let written_before = self.ring.frames_written();
         self.pipeline
             .render_timed(samples, now_ns + latency.unwrap_or(0), now_ns);
+        #[cfg(test)]
+        let written_after = self.ring.frames_written();
         if let Some(bytes) = data.data() {
             for (out, sample) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(samples.iter()) {
                 out.copy_from_slice(&sample.to_le_bytes());
@@ -296,6 +319,29 @@ impl Render {
         *chunk.offset_mut() = 0;
         *chunk.stride_mut() = i32::try_from(stride).unwrap_or(0);
         *chunk.size_mut() = u32::try_from(frames * stride).unwrap_or(0);
+        #[cfg(test)]
+        self.note_anchor(stream, written_before, written_after);
+    }
+
+    /// Keeps the W around a callback in which the reader anchored, and the
+    /// callback's cycle time, for the live tests.
+    #[cfg(test)]
+    fn note_anchor(&mut self, stream: &pw::stream::Stream, before: u64, after: u64) {
+        let counters = self.control.counters();
+        let anchors =
+            counters.primes + counters.resyncs + counters.drift_skips + counters.drift_silences;
+        if anchors == self.anchors {
+            return;
+        }
+        self.anchors = anchors;
+        let cycle_ns = stream.time().map_or(0, |time| time.now());
+        for (slot, value) in self.status.anchor.iter().zip([
+            i64::try_from(before).unwrap_or(-1),
+            i64::try_from(after).unwrap_or(-1),
+            cycle_ns,
+        ]) {
+            slot.store(value, Ordering::Relaxed);
+        }
     }
 }
 
@@ -308,6 +354,8 @@ pub fn start(
     gain: Arc<SharedGain>,
 ) -> Result<Playback, BackendError> {
     let channels = usize::from(target.channels.max(1));
+    #[cfg(test)]
+    let ring = Arc::clone(reader.ring());
     let pipeline = RenderPipeline::new(reader, &control, gain, target.rate, channels)?;
     control.set_bluetooth(target.bluetooth);
     let setup = StreamSetup {
@@ -329,6 +377,10 @@ pub fn start(
         rate: target.rate,
         started: false,
         reported_at_ns: None,
+        #[cfg(test)]
+        ring,
+        #[cfg(test)]
+        anchors: 0,
     };
     let (stop, stop_receiver) = pw::channel::channel();
     let (ready, ready_receiver) = mpsc::channel();
