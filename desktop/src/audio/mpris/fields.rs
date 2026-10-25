@@ -90,6 +90,7 @@ pub fn player(bus_name: &str, properties: &HashMap<String, Field>) -> Option<Pla
             artist,
             album: owned("xesam:album"),
             playing,
+            paused: !playing,
         },
         art_url: text(meta("mpris:artUrl")).map(str::to_owned),
         timeline,
@@ -202,6 +203,7 @@ mod tests {
                 artist: "A, B".to_owned(),
                 album: "Album".to_owned(),
                 playing: true,
+                paused: false,
             }
         );
         assert_eq!(read.art_url.as_deref(), Some("file:///tmp/cover.png"));

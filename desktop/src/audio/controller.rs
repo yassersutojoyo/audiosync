@@ -2799,7 +2799,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
         if let Some(airplay) = self.airplay.as_mut() {
             let now = Instant::now();
             airplay.heard(self.feed.as_ref().map_or(0.0, FeedSlot::sound_seconds), now);
-            airplay.set_playback(self.track_info.playback(), now);
+            airplay.set_playback(
+                self.track_info.playback(),
+                self.track_info.player_state(),
+                now,
+            );
             let events = airplay.poll();
             for control in airplay.take_remote_controls() {
                 self.track_info.send(control);

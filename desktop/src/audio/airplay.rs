@@ -2571,14 +2571,20 @@ impl AirPlaySpeakers {
 
     /// What the now-playing control follows: the session that counts, by
     /// app ID, and whether it plays (S274), as read at `now`. Set before
-    /// each poll; the app seen pausing pauses a stream that plays, and a
-    /// paused stream resumes once the reading no longer shows the paused app
-    /// paused (P213).
-    pub fn set_playback(&mut self, playback: Option<(String, bool)>, now: Instant) {
+    /// each poll. `player` is the same session as the explicit pause reads
+    /// it, `None` unless it plays or is paused: the app seen pausing pauses a
+    /// stream that plays, and a paused stream resumes once the reading no
+    /// longer shows the paused app paused (P213).
+    pub fn set_playback(
+        &mut self,
+        playback: Option<(String, bool)>,
+        player: Option<(String, bool)>,
+        now: Instant,
+    ) {
         self.playback = playback;
         let step = self
             .pause
-            .read(playback_reading(&self.playback), now, self.streaming);
+            .read(playback_reading(&player), now, self.streaming);
         self.apply_pause(step);
     }
 
@@ -6888,7 +6894,11 @@ pub mod tests {
             airplay.take_remote_controls().is_empty(),
             "no app to control"
         );
-        airplay.set_playback(Some(("Spotify.exe".to_owned(), false)), Instant::now());
+        read(
+            &mut airplay,
+            Some(("Spotify.exe".to_owned(), false)),
+            Instant::now(),
+        );
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();
         assert!(airplay.take_remote_controls().is_empty(), "already paused");
@@ -6906,6 +6916,26 @@ pub mod tests {
             .collect()
     }
 
+    /// A reading of a session that plays or is paused.
+    fn read(airplay: &mut AirPlaySpeakers, playback: Option<(String, bool)>, at: Instant) {
+        airplay.set_playback(playback.clone(), playback, at);
+    }
+
+    // covers: P213
+    #[test]
+    fn an_app_that_stops_or_changes_tracks_never_pauses_the_speakers() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        let t0 = Instant::now();
+        read(&mut airplay, spotify(true), t0);
+        airplay.set_playback(spotify(false), None, t0);
+        read(&mut airplay, spotify(true), t0);
+        airplay.set_playback(spotify(false), None, t0);
+        read(&mut airplay, spotify(true), t0);
+        airplay.poll();
+        assert_eq!(pause_calls(&fake), []);
+    }
+
     fn spotify(playing: bool) -> Option<(String, bool)> {
         Some(("Spotify.exe".to_owned(), playing))
     }
@@ -6916,12 +6946,12 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();
         assert_eq!(airplay.take_remote_controls(), [Transport::PlayPause]);
         assert_eq!(pause_calls(&fake), [Call::Pause]);
-        airplay.set_playback(spotify(false), t0);
+        read(&mut airplay, spotify(false), t0);
         remote(&fake, &kitchen, RemoteCommand::Play);
         airplay.poll();
         assert_eq!(airplay.take_remote_controls(), [Transport::PlayPause]);
@@ -6934,11 +6964,11 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         remote(&fake, &kitchen, RemoteCommand::PlayPause);
         airplay.poll();
         assert_eq!(pause_calls(&fake), [Call::Pause]);
-        airplay.set_playback(spotify(false), t0);
+        read(&mut airplay, spotify(false), t0);
         std::thread::sleep(Duration::from_millis(350));
         remote(&fake, &kitchen, RemoteCommand::PlayPause);
         airplay.poll();
@@ -6955,10 +6985,10 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(None, t0);
+        read(&mut airplay, None, t0);
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();
-        airplay.set_playback(spotify(false), t0);
+        read(&mut airplay, spotify(false), t0);
         std::thread::sleep(Duration::from_millis(350));
         remote(&fake, &kitchen, RemoteCommand::PlayPause);
         airplay.poll();
@@ -6971,7 +7001,7 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         airplay.play_pause_pressed("Spotify.exe", true, t0);
         assert_eq!(pause_calls(&fake), [Call::Pause]);
         airplay.play_pause_pressed("Spotify.exe", false, t0);
@@ -6985,11 +7015,11 @@ pub mod tests {
         let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
         airplay.play_pause_pressed("Spotify.exe", true, t0);
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         airplay.play_pause_pressed("chrome.exe", true, t0);
         airplay.play_pause_pressed("Spotify.exe", false, t0);
-        airplay.set_playback(None, t0);
-        airplay.set_playback(spotify(false), t0);
+        read(&mut airplay, None, t0);
+        read(&mut airplay, spotify(false), t0);
         airplay.play_pause_pressed("Spotify.exe", true, t0);
         assert_eq!(pause_calls(&fake), []);
     }
@@ -7000,12 +7030,12 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();
         assert_eq!(pause_calls(&fake), [Call::Pause]);
         let later = Instant::now() + STALE_READING;
-        airplay.set_playback(spotify(false), later);
+        read(&mut airplay, spotify(false), later);
         airplay.heard(0.0, later);
         airplay.heard(0.1, later);
         assert_eq!(pause_calls(&fake), [], "Spotify still reads paused");
@@ -7042,15 +7072,15 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         airplay.poll();
         assert_eq!(pause_calls(&fake), []);
-        airplay.set_playback(spotify(false), t0);
+        read(&mut airplay, spotify(false), t0);
         assert_eq!(pause_calls(&fake), [Call::Pause]);
-        airplay.set_playback(spotify(false), t0 + STALE_READING * 2);
+        read(&mut airplay, spotify(false), t0 + STALE_READING * 2);
         airplay.poll();
         assert_eq!(pause_calls(&fake), [], "the same reading again");
-        airplay.set_playback(spotify(true), t0 + STALE_READING * 3);
+        read(&mut airplay, spotify(true), t0 + STALE_READING * 3);
         assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
@@ -7060,10 +7090,10 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(false), t0);
-        airplay.set_playback(spotify(true), t0);
-        airplay.set_playback(None, t0);
-        airplay.set_playback(spotify(false), t0);
+        read(&mut airplay, spotify(false), t0);
+        read(&mut airplay, spotify(true), t0);
+        read(&mut airplay, None, t0);
+        read(&mut airplay, spotify(false), t0);
         airplay.poll();
         assert_eq!(pause_calls(&fake), []);
     }
@@ -7074,11 +7104,11 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
-        airplay.set_playback(chrome(false), t0);
+        read(&mut airplay, spotify(true), t0);
+        read(&mut airplay, chrome(false), t0);
         assert_eq!(pause_calls(&fake), [], "another app that was paused");
-        airplay.set_playback(chrome(true), t0);
-        airplay.set_playback(chrome(false), t0);
+        read(&mut airplay, chrome(true), t0);
+        read(&mut airplay, chrome(false), t0);
         assert_eq!(pause_calls(&fake), [Call::Pause]);
     }
 
@@ -7089,8 +7119,8 @@ pub mod tests {
         let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
         airplay.set_streaming(false);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
-        airplay.set_playback(spotify(false), t0);
+        read(&mut airplay, spotify(true), t0);
+        read(&mut airplay, spotify(false), t0);
         airplay.set_streaming(true);
         airplay.poll();
         assert_eq!(pause_calls(&fake), []);
@@ -7102,8 +7132,8 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
-        airplay.set_playback(spotify(false), t0);
+        read(&mut airplay, spotify(true), t0);
+        read(&mut airplay, spotify(false), t0);
         assert_eq!(pause_calls(&fake), [Call::Pause]);
         let later = t0 + STALE_READING;
         airplay.heard(1.0, later);
@@ -7118,20 +7148,20 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();
         assert_eq!(pause_calls(&fake), [Call::Pause]);
         let at = Instant::now();
-        airplay.set_playback(spotify(true), at);
+        read(&mut airplay, spotify(true), at);
         assert_eq!(
             pause_calls(&fake),
             [],
             "a reading that may predate the pause"
         );
-        airplay.set_playback(spotify(false), at + STALE_READING);
+        read(&mut airplay, spotify(false), at + STALE_READING);
         assert_eq!(pause_calls(&fake), [], "the app shows paused");
-        airplay.set_playback(spotify(true), at + STALE_READING * 2);
+        read(&mut airplay, spotify(true), at + STALE_READING * 2);
         assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
@@ -7141,7 +7171,7 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
         let t0 = Instant::now();
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();
         assert_eq!(pause_calls(&fake), [Call::Pause]);
@@ -7151,7 +7181,7 @@ pub mod tests {
         let restart = calls.iter().position(|call| *call == Call::RestartTimeline);
         assert!(resume.is_some() && resume < restart, "{calls:?}");
 
-        airplay.set_playback(spotify(true), t0);
+        read(&mut airplay, spotify(true), t0);
         std::thread::sleep(Duration::from_millis(350));
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();

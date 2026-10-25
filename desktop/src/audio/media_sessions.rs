@@ -725,6 +725,7 @@ mod tests {
             artist: "Artist".to_owned(),
             album: "Album".to_owned(),
             playing: true,
+            paused: false,
         }
     }
 

@@ -493,6 +493,11 @@ struct ExplicitPause {
 
     var isPaused: Bool { pausedAt != nil }
 
+    /// A player's scripted `state` as the pause reads it.
+    static func playerState(_ state: String) -> Bool? {
+        state == "playing"
+    }
+
     /// A play-pause goes to `app`, read as playing, paused or (nil) not at
     /// all. A paused stream resumes whatever the reading says, so a toggle
     /// never leaves the speakers silent.

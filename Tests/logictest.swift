@@ -3383,6 +3383,13 @@ do {
     check(switched.read(app: music, playing: false, at: t0, sending: true) == .pause,
           "explicit pause: the active player's own pause counts after a switch")
 
+    check(ExplicitPause.playerState("playing") == true && ExplicitPause.playerState("paused") == false,
+          "explicit pause: a player reads as playing or paused from its scripted state")
+    for state in ["fast forwarding", "rewinding", "stopped", ""] {
+        check(ExplicitPause.playerState(state) == nil,
+              "explicit pause: seeking or any other scripted state is no known state", state)
+    }
+
     var restarted = ExplicitPause()
     _ = restarted.read(app: spotify, playing: true, at: t0, sending: true)
     _ = restarted.readingsStopped()
