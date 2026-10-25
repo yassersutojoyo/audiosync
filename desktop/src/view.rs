@@ -4819,7 +4819,10 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::NoSpeaker => (NoticeKind::NoSpeaker, ""),
         NoticeMessage::SourceQuit { source } => (NoticeKind::SourceQuit, source.as_str()),
         NoticeMessage::SourceSwitched { source } => (NoticeKind::SourceSwitched, source.as_str()),
-        NoticeMessage::SwitchFailed { .. } => (NoticeKind::SwitchFailed, ""),
+        NoticeMessage::SwitchFailed { new, .. } => {
+            return strings
+                .invoke_notice_title(NoticeKind::SwitchFailed, switch_name(strings, new));
+        }
         NoticeMessage::SourceNotRunning { source } => {
             (NoticeKind::SourceNotRunning, source.as_str())
         }

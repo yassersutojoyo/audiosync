@@ -1660,10 +1660,30 @@ impl<D: Driver> Controller<D> {
 
     /// What the running session plays, for a switch away from it; while a
     /// switch waits, what the session before it played, since the waiting
-    /// source never played. Nothing while a lost capture waits to restart.
+    /// source never played; while an old source that a failed switch gave
+    /// way to waits for the fade, that source. Nothing while a lost capture
+    /// waits to restart.
     fn switch_origin(&self) -> Option<SwitchFrom> {
         let Some(session) = &self.session else {
-            return self.switch_from.clone();
+            if self.switch_from.is_some() {
+                return self.switch_from.clone();
+            }
+            if self.restart_wait.is_some() {
+                return None;
+            }
+            return self.next_start.as_ref().map(|source| {
+                let pair = match source {
+                    SourceId::Input { endpoint_id } => Some((
+                        endpoint_id.clone(),
+                        self.input_pairs.get(endpoint_id).copied().unwrap_or(0),
+                    )),
+                    _ => None,
+                };
+                SwitchFrom {
+                    source: source.clone(),
+                    pair,
+                }
+            });
         };
         let pair = match &session.target {
             CaptureTarget::Input { endpoint_id, pair } => Some((endpoint_id.clone(), *pair)),

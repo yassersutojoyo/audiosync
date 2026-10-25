@@ -924,7 +924,7 @@ export global Strings {
             return @tr("{} quit", name);
         }
         if kind == NoticeKind.switch-failed {
-            return @tr("source not switched");
+            return @tr("{} didn't start", name);
         }
         if kind == NoticeKind.source-not-running {
             return @tr("{} not running", name);

@@ -1570,6 +1570,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// streaming, capture starts again from the new one (S141, S163).
     fn choose(&mut self, picked: Chosen) {
         if picked.key() == self.chosen.key() {
+            self.clear_switch_failed();
             return;
         }
         self.log
@@ -3208,7 +3209,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The notice of a switch that couldn't start goes when streaming stops.
+    /// The notice of a switch that couldn't start goes when streaming stops
+    /// or the user picks a source or pair, the one playing included.
     fn clear_switch_failed(&mut self) {
         self.clear_if(NoticeSubject::Source, |message| {
             matches!(message, NoticeMessage::SwitchFailed { .. })
@@ -3904,6 +3906,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             return;
         };
         if self.chosen_input_pair() == pair {
+            self.clear_switch_failed();
             return;
         }
         let (endpoint_id, name) = (endpoint_id.clone(), name.clone());
