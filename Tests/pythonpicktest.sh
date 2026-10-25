@@ -28,7 +28,6 @@ for dir in fallback none; do
   printf '%b' "$stub" > "$tmp/$dir/python3"
   chmod +x "$tmp/$dir/python3"
 done
-# shellcheck disable=SC2016 # "$@" is the shim's own, expanded when it runs
 printf '#!/bin/sh\nexec "%s" "$@"\n' "$real" > "$tmp/fallback/python"
 printf '%b' "$stub" > "$tmp/none/python"
 chmod +x "$tmp/fallback/python" "$tmp/none/python"
