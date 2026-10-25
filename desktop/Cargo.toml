@@ -117,6 +117,9 @@ tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"] 
 # from the MPRIS players (src/audio/mpris); version 5, the one ksni and
 # Slint's Linux backends bring, so the build has one zbus.
 zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+# Blocks on the MPRIS listing's calls asked side by side (Apache-2.0 OR
+# MIT), the runtime zbus already runs on.
+async-io = "2.6.0"
 # MPRIS artwork decoded, scaled and encoded as a JPEG (MIT OR Apache-2.0),
 # already in the build through Slint.
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }

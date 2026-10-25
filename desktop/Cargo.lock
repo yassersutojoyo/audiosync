@@ -580,6 +580,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "alac",
+ "async-io",
  "audiosync-airplay",
  "audiosync-cast",
  "audiosync-core",
