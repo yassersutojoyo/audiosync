@@ -5081,6 +5081,18 @@ do {
           "\(quit(rebuild)), \(quit(rebuild, music, .system))")
     check(quit(.rebuildFailed(SourceCapture.CaptureError.formatUnusable(1)), music, .system) == "keep",
           "source quit: a rebuild that fails for another cause is no app quit")
+    // macOS's app list can miss the mix's other apps in the turn one of them quits.
+    let mix3 = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.apple.Safari", "com.apple.TextEdit"])
+    func mixQuit(_ report: Report, running: Set<String> = []) -> String {
+        guard let answer = AppLifecycle.sourceQuit(report, source: mix3, setting: .system,
+                                                   isRunning: { running.contains($0) }) else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    check(mixQuit(.terminated(bundleID: "com.apple.TextEdit", streaming: true)) == "keep"
+            && mixQuit(.captureLost(.appNotRunning("com.spotify.client"))) == "keep",
+          "mix quit: an app of a mix quitting is never judged from the app list of the turn it quit in (S164)",
+          "\(mixQuit(.terminated(bundleID: "com.apple.TextEdit", streaming: true))), "
+              + mixQuit(.captureLost(.appNotRunning("com.spotify.client"))))
     // After a switch the source is the whole system; after a stop nothing streams.
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
