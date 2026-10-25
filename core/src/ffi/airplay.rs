@@ -456,6 +456,8 @@ struct Added {
     echo_of: Option<f64>,
     /// The reading that the next ones are compared with (S291).
     baseline: Option<f64>,
+    /// A single speaker's session plays: only then is it read (S291).
+    playing: bool,
     /// Set when the host added a stereo pair or home theater group.
     target: Option<TargetId>,
     /// A target's member IDs.
@@ -489,6 +491,7 @@ impl Added {
             dragging: false,
             echo_of: None,
             baseline: None,
+            playing: false,
             offset: Duration::ZERO,
         }
     }
@@ -1019,6 +1022,12 @@ impl AscAirPlay {
                     self.homekit_keys.insert(id, key);
                     return;
                 }
+                if let SpeakerEvent::State(state) = &event
+                    && let Some(added) = self.added.get_mut(&id)
+                    && added.target.is_none()
+                {
+                    added.playing = *state == SpeakerState::Playing;
+                }
                 if let SpeakerEvent::VolumeReported(db) = event {
                     self.volume_reported(&id, db);
                     return;
@@ -1319,9 +1328,16 @@ impl AscAirPlay {
         self.queue_event(Pending::Warning(id, warning));
     }
 
-    /// Asks every added speaker that may answer for its volume (S271).
+    /// Asks every playing added speaker that may answer for its volume (S291).
     fn read_volumes(&mut self) {
         for (id, added) in &mut self.added {
+            let playing = match added.target {
+                Some(_) => self.target_states.get(id) == Some(&SpeakerState::Playing),
+                None => added.playing,
+            };
+            if !playing {
+                continue;
+            }
             // A speaker that scales the samples itself reports a level of
             // its own, not the one the slider sets (P121).
             let software = self
@@ -2726,17 +2742,18 @@ pub unsafe extern "C" fn asc_airplay_set_zone_volume(
     }
 }
 
-/// Asks every speaker added for its own volume (P122, S271), which a person
-/// may have changed on the speaker itself; a stereo pair or home theater
-/// group asks its leader (P180). Only playing sessions answer; on the
-/// AirPlay 2 path the read goes with the session's next feedback (P184). A
-/// level that moves a slider comes as [`AIRPLAY_EVENT_VOLUME`], already the
-/// speaker's level in the sender, so a reconnect or a member that starts
-/// late plays at it and the host doesn't set it again. Dropped: a level
-/// read before the host last set the volume, one that comes while the
-/// slider is dragged, and one within 0.5 dB of the level sent in the 3 s
-/// after a set. Speakers that leave volume to the sender (`sv`, P121), and
-/// ones that turned a read down or whose reads stopped, aren't asked.
+/// Asks every playing speaker added for its own volume (P122, S291), which
+/// a person may have changed on the speaker itself; the host calls it once
+/// a second. A stereo pair or home theater group asks its leader (P180). On
+/// the AirPlay 2 path the read goes out at the session's next 1 s read tick
+/// (P184). A level that moves a row comes as [`AIRPLAY_EVENT_VOLUME`],
+/// already the speaker's level in the sender, so a reconnect or a member
+/// that starts late plays at it and the host doesn't set it again.
+/// Dropped: a level read before the host last set the volume, one that
+/// comes while the row is dragged, the first one within 0.5 dB of a level
+/// sent (its echo), and one within 0.05 dB of the last reading kept.
+/// Stopped speakers, speakers that leave volume to the sender (`sv`, P121),
+/// and ones that turned a read down or whose reads stopped aren't asked.
 ///
 /// # Safety
 ///
@@ -5491,6 +5508,29 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S291
+    #[test]
+    fn only_a_playing_speaker_is_read() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005377";
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x77]));
+        add_for_volume(handle, id, key.clone(), 50.0);
+        let state = |state| SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::State(state),
+        };
+        inside(handle).take_in(state(SpeakerState::Stopped));
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { asc_airplay_read_volumes(handle) };
+        assert!(!inside(handle).added[id].reading);
+        inside(handle).take_in(state(SpeakerState::Playing));
+        // SAFETY: as above.
+        unsafe { asc_airplay_read_volumes(handle) };
+        assert!(inside(handle).added[id].reading);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S290, S291
     #[test]
     fn a_row_move_on_a_0_6_db_grid_keeps_the_row_until_the_speaker_moves() {
@@ -6549,6 +6589,7 @@ mod tests {
     fn add_for_volume(handle: *mut AscAirPlay, id: &str, key: DeviceKey, position: f64) {
         let mut added = Added::new(key, position, None, Vec::new(), Vec::new());
         added.volume_set_at = None;
+        added.playing = true;
         // As a real add sends it: the first read near it is its echo (S291).
         let zone = zone_in(&inside(handle).zones, id);
         added.echo_of = Some(speaker_volume(position, zone, inside(handle).master).wire_db());
@@ -7112,7 +7153,14 @@ mod tests {
         inside(handle)
             .added
             .insert("pair:volume-pair".to_owned(), added);
+        // A stopped target isn't asked (S291).
         // SAFETY: a live handle, used by this thread only.
+        unsafe { asc_airplay_read_volumes(handle) };
+        assert!(!inside(handle).added["pair:volume-pair"].reading);
+        inside(handle)
+            .target_states
+            .insert("pair:volume-pair".to_owned(), SpeakerState::Playing);
+        // SAFETY: as above.
         unsafe { asc_airplay_read_volumes(handle) };
         report_volume(handle, &member, -144.0);
         let events = events_until(handle, |events| !events.is_empty());
