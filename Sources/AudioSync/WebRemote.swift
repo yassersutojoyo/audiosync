@@ -117,17 +117,25 @@ final class WebRemote {
     private func setEnabled(_ on: Bool) {
         guard on != settings.enabled else { return }
         settings.enabled = on
+        // A remote the debug switch started still listens on its port; restart it on the saved one.
+        let restart = debugPort != nil
         debugPort = nil
         store.save(webRemote: on)
         DebugTrace.log("[AudioSync] web remote turned \(on ? "on" : "off")")
-        if on { start() } else { stop() }
+        if on {
+            if restart { stop() }
+            start()
+        } else {
+            stop()
+        }
     }
 
     private func usePort(_ port: Int) {
         settings.port = port
+        let running = settings.enabled || debugPort != nil
         debugPort = nil
         store.save(webRemotePort: port)
-        guard settings.enabled else { return }
+        guard running else { return }
         stop()
         start()
     }
