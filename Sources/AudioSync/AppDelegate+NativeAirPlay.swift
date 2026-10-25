@@ -345,7 +345,7 @@ extension AppDelegate {
 
     /// Sets the AirPlay rows, names and access from `model`; returns the
     /// rows that appeared and can play, for auto-connect (none if `stopped`).
-    /// One that appears asking for a code every time goes off.
+    /// One that asks for a code every time goes off unless switched on by hand.
     private func adoptNativeRows(_ model: NativeAirPlayModel, stopped: Bool) -> [String] {
         let rows = model.rows(enabled: enabledAirPlay)
         for id in rows {
@@ -354,10 +354,7 @@ extension AppDelegate {
             airplayAccess[id] = model.access(receiver) ?? .open
         }
         let joinable = model.joinable(rows, after: Set(airplayOrder), stopped: stopped)
-        // Only a new row: a listed speaker whose setting changes is the
-        // user's choice, and its session under way keeps playing.
-        let asking = model.appearedAskingEveryTime(rows, after: Set(airplayOrder))
-        for id in everyTimeGuard.turnsOff(asking, enabled: enabledAirPlay) {
+        for id in everyTimeGuard.turnsOff(model.askingEveryTime(rows), enabled: enabledAirPlay) {
             enabledAirPlay.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) stays off, it asks for a code every time")
         }

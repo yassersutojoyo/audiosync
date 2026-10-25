@@ -2024,10 +2024,10 @@ do {
     check(asking.joinable(askingRows, after: [], stopped: false) == ["native:A1"],
           "native airplay: auto-connect never switches on a receiver that asks for a code every time",
           "\(asking.joinable(askingRows, after: [], stopped: false))")
-    check(asking.appearedAskingEveryTime(askingRows, after: ["native:H8"]) == ["native:G7"]
+    check(asking.askingEveryTime(askingRows) == ["native:H8", "native:G7"]
             && asking.asksEveryTime("H8") && !asking.asksEveryTime("B2") && !asking.asksEveryTime("A1"),
           "native airplay: a receiver that asks for a code every time goes off when it appears, at launch or later",
-          "\(asking.appearedAskingEveryTime(askingRows, after: ["native:H8"]))")
+          "\(asking.askingEveryTime(askingRows))")
 
     // Lounge was switched on by hand, Den was on from the last run; a sender
     // Retry starts a new model that lists both as new.
@@ -2035,7 +2035,7 @@ do {
     handOn.turnedOnByHand(["native:G7"])
     var retried = NativeAirPlayModel()
     for r in [lounge, den] { retried.apply(.appeared(r)) }
-    let relisted = retried.appearedAskingEveryTime(retried.rows(enabled: []), after: [])
+    let relisted = retried.askingEveryTime(retried.rows(enabled: []))
     let goOff = handOn.turnsOff(relisted, enabled: ["native:G7", "native:H8"])
     check(goOff == ["native:H8"],
           "native airplay: a speaker that asks every time and was switched on by hand stays on when it appears again, also after a Retry",
@@ -2647,10 +2647,9 @@ do {
     // Listed before its every-time flag is known, on from the last run.
     var late = NativeAirPlayModel()
     late.apply(.appeared(tv("T1", .needsPin, everyTime: false)))
-    let lateListed = Set(late.rows(enabled: ["native:T1"]))
     late.apply(.changed(tv("T1", .needsPin, everyTime: true)))
     var restored = EveryTimeGuard()
-    let lateOff = restored.turnsOff(late.appearedAskingEveryTime(late.rows(enabled: ["native:T1"]), after: lateListed),
+    let lateOff = restored.turnsOff(late.askingEveryTime(late.rows(enabled: ["native:T1"])),
                                     enabled: ["native:T1"])
     check(lateOff == ["native:T1"],
           "every time: a speaker on from the last run goes off once it asks for a code every time, also when listed before that",
@@ -2661,9 +2660,8 @@ do {
     playing.apply(.appeared(tv("T2", .available, everyTime: false)))
     playing.added("T2")
     _ = playing.apply(.state(id: "T2", .playing, retryMs: nil))
-    let playingListed = Set(playing.rows(enabled: ["native:T2"]))
     playing.apply(.changed(tv("T2", .available, everyTime: true)))
-    check(playing.appearedAskingEveryTime(playing.rows(enabled: ["native:T2"]), after: playingListed).isEmpty,
+    check(playing.askingEveryTime(playing.rows(enabled: ["native:T2"])).isEmpty,
           "every time: a speaker that plays when it starts asking for a code every time keeps playing")
 
     // Switched on by hand: it pairs and its PIN prompt opens.
