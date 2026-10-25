@@ -102,6 +102,10 @@ final class NowPlayingMonitor {
     /// Called on the main queue whenever the track or play state changes.
     var onChange: ((Track?) -> Void)?
 
+    /// Called on the main queue after every reading while polling, with
+    /// when that reading started.
+    var onReading: ((Date) -> Void)?
+
     /// Called on the main queue when macOS starts refusing (true) or allows
     /// again (false) AudioSync's Apple Events to a player, by bundle ID: the
     /// user said no to the consent prompt, or turned it off in System Settings
@@ -187,6 +191,7 @@ final class NowPlayingMonitor {
         guard !refreshing else { return }
         refreshing = true
         let candidates = candidates()
+        let startedAt = Date()
         scripts.async { [weak self] in
             guard let self else { return }
             var found: Track?
@@ -209,6 +214,7 @@ final class NowPlayingMonitor {
                     ?? false
                 self.publish(self.emptyReadings.next(reading: next, last: last, lastPlayerRuns: lastPlayerRuns),
                              reading: true)
+                if self.isRunning { self.onReading?(startedAt) }
             }
         }
     }
@@ -338,5 +344,53 @@ final class NowPlayingMonitor {
             DispatchQueue.main.async { [weak self] in self?.onAutomationDenied?(target, refused) }
         }
         return error == nil ? result : nil
+    }
+}
+
+/// When the AirPlay speakers take an explicit pause (P213): a play-pause the
+/// user sent to the player, from a speaker's remote or the window's button,
+/// with the player read as playing. Play-pause reaches the player as a
+/// toggle, so the direction comes from the reading; without one the speakers
+/// keep playing. Nothing here looks at the audio: silence never pauses.
+struct ExplicitPause {
+    enum Step { case nothing, pause, resume }
+
+    /// How long after a pause a reading may still predate the player's own
+    /// pause. Longer than the receivers' buffer, so a later resume never
+    /// undoes the flush audibly.
+    static let staleReading: TimeInterval = 3
+
+    /// The player the pause was taken for, and when.
+    private var pausedApp: String?
+    private var pausedAt: Date?
+
+    var isPaused: Bool { pausedAt != nil }
+
+    /// A play-pause goes to `app`, read as playing, paused or (nil) not at
+    /// all. A paused stream resumes whatever the reading says, so a toggle
+    /// never leaves the speakers silent.
+    mutating func toggled(app: String?, playing: Bool?, at now: Date) -> Step {
+        if isPaused { return clear() }
+        guard let app, playing == true else { return .nothing }
+        pausedApp = app
+        pausedAt = now
+        return .pause
+    }
+
+    /// A reading that started at `readAt`. A paused stream resumes once a
+    /// reading started `staleReading` after the pause shows anything but the
+    /// same player paused: it plays, another player counts, or none does.
+    mutating func read(app: String?, playing: Bool?, at readAt: Date) -> Step {
+        guard let pausedAt = pausedAt, readAt.timeIntervalSince(pausedAt) >= Self.staleReading else { return .nothing }
+        if let app, app == pausedApp, playing == false { return .nothing }
+        return clear()
+    }
+
+    /// The capture restarted or the readings stopped: a paused stream resumes.
+    mutating func clear() -> Step {
+        guard isPaused else { return .nothing }
+        pausedApp = nil
+        pausedAt = nil
+        return .resume
     }
 }
