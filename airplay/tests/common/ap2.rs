@@ -196,12 +196,22 @@ pub fn int(value: i64) -> Value {
     Value::Integer(value.into())
 }
 
+/// How the fake answered one request.
+#[derive(Debug, Clone)]
+pub struct Answered {
+    pub status: u16,
+    /// For a volume read or set, what a read answers right after it.
+    pub level: Option<String>,
+}
+
 pub struct FakeAp2 {
     pub hap: FakeHomeKit,
     /// The body of the answer to the first `/info`.
     pub info_body: Vec<u8>,
     /// Every request read, in order, with whether it arrived framed.
     pub requests: Vec<(Request, bool)>,
+    /// How each of `requests` was answered, `None` while unanswered.
+    pub answered: Vec<Option<Answered>>,
     /// A status in place of 200, by request key.
     pub status: HashMap<String, u16>,
     /// A status in place of 200 for the next request with the key only; a
@@ -274,6 +284,7 @@ impl FakeAp2 {
                 ("model", Value::String("Speaker1,1".to_owned())),
             ])),
             requests: Vec::new(),
+            answered: Vec::new(),
             status: HashMap::new(),
             status_once: HashMap::new(),
             challenge: None,
@@ -397,6 +408,7 @@ impl FakeAp2 {
                 other => panic!("the sender wrote {other:?}"),
             };
             self.requests.push((request.clone(), framed));
+            self.answered.push(None);
             let key = request_key(&request);
             let volume_set = key == "SET_PARAMETER" && request.body.starts_with(b"volume:");
             if let Some(step) = self.applies_volume
@@ -460,6 +472,16 @@ impl FakeAp2 {
                 response
                     .headers
                     .push("Session", format!("{session};timeout=60"));
+            }
+            let level = (volume_set || key == "GET_PARAMETER")
+                .then(|| self.bodies.get("GET_PARAMETER"))
+                .flatten()
+                .map(|body| String::from_utf8_lossy(body).trim().to_owned());
+            if let Some(answered) = self.answered.last_mut() {
+                *answered = Some(Answered {
+                    status: response.code,
+                    level,
+                });
             }
             let cseq = request.headers.get("CSeq").unwrap_or("0").to_owned();
             response.headers.push("CSeq", cseq);
