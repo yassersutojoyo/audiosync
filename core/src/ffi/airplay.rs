@@ -6210,6 +6210,54 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // Playing on them shows that whatever turned them down is gone (P154).
+    #[test]
+    fn turned_down_credentials_a_session_plays_on_list_as_paired_again() {
+        let folder = scratch("airplay2-identity-plays-again");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        let mut record = airplay2_only();
+        record.txt.push(b"flags=0x200".to_vec());
+        let device =
+            Device::from_records(record.device_key(), None, Some(&record)).expect("a device");
+        let id = receiver_id(&device.key);
+        let key = device.key.clone();
+        let mut info = ReceiverInfo::new(device);
+        info.plan = Ok(());
+        inside(handle).listed.insert(id.clone(), info.clone());
+        inside(handle).pairing.insert(id.clone(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key: key.clone(),
+            event: PairingEvent::HomeKitPaired(homekit_blob(7)),
+        });
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: pairing_required(),
+        });
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+        assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
+
+        inside(handle).take_in(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::State(SpeakerState::Playing),
+        });
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
+        assert_eq!(report.availability, AIRPLAY_AVAILABLE);
+        assert_ne!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     #[test]
     fn a_turned_down_legacy_pairing_stays_on_disk_until_a_new_pairing_replaces_it() {
         let folder = scratch("airplay-pairings-turned-down");

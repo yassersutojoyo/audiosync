@@ -5490,6 +5490,37 @@ pub mod tests {
         assert_eq!(on_disk.homekit(&id), Some(&homekit(0x44)), "replaced");
     }
 
+    // Playing on them shows that whatever turned them down is gone (P154).
+    #[test]
+    fn turned_down_credentials_a_session_plays_on_list_as_paired_again() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{homekit, sealer};
+
+        let path = crate::debug_log::test_dir("airplay2-homekit-plays-again").join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path, sealer());
+        store.open_airplay2();
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        store.insert_homekit(&id, homekit(0x33)).expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        airplay.poll();
+        // The switch-on gate keeps a turned-down speaker off, so the mark is
+        // set on one already playing.
+        airplay.credentials_turned_down.insert(id.clone());
+        assert!(!airplay.speakers()[0].paired);
+
+        fake.state(&tv, SpeakerState::Playing);
+        airplay.poll();
+        assert!(airplay.speakers()[0].paired);
+        assert!(!airplay.credentials_turned_down.contains(&id));
+    }
+
     #[test]
     fn a_tv_that_fails_its_signature_check_goes_off_and_keeps_its_credentials() {
         let fake = FakeAirPlay::new();
