@@ -85,6 +85,8 @@ The double-audio notice only shows up while streaming. To look at its guide with
 
 To look at the code prompt of an Apple TV pairing without an Apple TV, set `$env:AUDIOSYNC_PREVIEW_PIN="code"` (the TV shows a code) or `"wrong"` (after a wrong code): with the debug log on, the dialog opens at launch for a made-up Apple TV, and nothing is paired.
 
+To look at the Presets card without saving presets by hand, build with `cargo build --release --features mock-backend` and set `$env:AUDIOSYNC_PREVIEW_PRESETS="list"` (three presets, the first one playing), `"left-off"` (a recall that left a hidden speaker and one not found off, with its notice) or `"empty"` (no preset yet): with the debug log on, the window shows example speakers instead of yours, and nothing plays. `$env:AUDIOSYNC_PREVIEW_ZONES="1"` in the same build shows example speakers in zones instead; with both set, the zones win.
+
 To check the windows in the other appearance without changing the Windows setting, use View > Appearance, or set `$env:AUDIOSYNC_PREVIEW_THEME="light"` or `"dark"` as well: with the debug log on, every window uses that color scheme for this run, the tray flyout included, and nothing is saved. The tray icon itself keeps following the taskbar's light or dark mode. The log also says whether each window got its Windows 11 frame (Mica in the title bar, the flyout's rounded corners).
 
 ## Where things are
