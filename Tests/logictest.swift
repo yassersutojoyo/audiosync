@@ -2026,7 +2026,7 @@ do {
           "\(asking.joinable(askingRows, after: [], stopped: false))")
     check(asking.askingEveryTime(askingRows) == ["native:H8", "native:G7"]
             && asking.asksEveryTime("H8") && !asking.asksEveryTime("B2") && !asking.asksEveryTime("A1"),
-          "native airplay: a receiver that asks for a code every time goes off when it appears, at launch or later",
+          "native airplay: a receiver that asks for a code every time goes off whenever it is listed asking and doesn't play, at launch or later",
           "\(asking.askingEveryTime(askingRows))")
 
     // Lounge was switched on by hand, Den was on from the last run; a sender
@@ -2684,9 +2684,10 @@ do {
     check(refused == nil && pin.withdrawPrompt() == nil,
           "every time: a refusal while the PIN prompt is open starts no second pairing and keeps the prompt",
           "\(String(describing: refused))")
-    let retrying = pin.apply(.error(id: "P1", .connectionLost, retryMs: 1000, detail: "Lost"))
-    check(retrying == nil && pin.withdrawPrompt() == nil,
-          "every time: a retry while the PIN prompt is open starts no pairing and keeps the prompt")
+    let retried = pin.apply(.error(id: "P1", .pairingRequired, retryMs: 1000, detail: ""))
+    check(retried == nil && pin.withdrawPrompt() == nil,
+          "every time: a refusal the sender retries while the PIN prompt is open starts no second pairing and keeps the prompt",
+          "\(String(describing: retried))")
 }
 
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")
