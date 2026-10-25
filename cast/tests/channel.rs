@@ -11,6 +11,7 @@ use audiosync_cast::channel::{
 };
 use audiosync_cast::error::{EndReason, LaunchError};
 use audiosync_cast::ids::RequestIds;
+use audiosync_cast::media::MAX_DEVICE_TEXT_CHARS;
 use audiosync_cast::message::{
     CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_DEVICE_AUTH, NS_HEARTBEAT, NS_MEDIA,
     NS_MULTIZONE, NS_RECEIVER, PLATFORM, PayloadError, PayloadType, SENDER,
@@ -218,6 +219,27 @@ fn cancelled_retries_once_and_other_reasons_fail_at_once() {
             reason: "NOT_ALLOWED".to_owned()
         })]
     );
+}
+
+#[test]
+fn launch_refusal_reasons_are_cut_short_and_printable() {
+    let start = Instant::now();
+    let long = format!("BAD\n\u{1b}[2J{}", "\u{e9}".repeat(70_000));
+    let expected = format!("BAD??[2J{}", "\u{e9}".repeat(MAX_DEVICE_TEXT_CHARS - 8));
+    for kind in ["LAUNCH_ERROR", "INVALID_REQUEST"] {
+        let mut channel = ready(start, Vec::new());
+        channel.launch(start).expect("ready");
+        sent(&mut channel);
+        let reply = json!({"type": kind, "requestId": 101, "reason": long});
+        channel.handle(start, json_message(PLATFORM, SENDER, NS_RECEIVER, reply));
+        assert_eq!(
+            events(&mut channel),
+            vec![Event::LaunchFailed(LaunchError::Refused {
+                reason: expected.clone()
+            })],
+            "{kind}"
+        );
+    }
 }
 
 // covers: C39, C40, C41, C42
