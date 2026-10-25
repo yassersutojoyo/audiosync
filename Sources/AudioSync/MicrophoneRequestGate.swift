@@ -5,6 +5,7 @@ struct MicrophoneRequestGate {
     private var wanted: StartOrigin?
     /// The source or pair switch the request waits for, if a switch made it.
     private(set) var switching: CaptureSwitch.Change?
+    private var superseded = false
 
     /// Records a start that waits for the answer. True when the caller should
     /// ask macOS; false when a request is already out, which keeps only this
@@ -13,6 +14,7 @@ struct MicrophoneRequestGate {
         defer {
             wanted = origin
             switching = change
+            superseded = false
         }
         return wanted == nil
     }
@@ -20,6 +22,9 @@ struct MicrophoneRequestGate {
     /// The user picked a source or pair again while a switch waited on the
     /// prompt: that switch is dropped, and the answer runs nothing.
     mutating func supersedeSwitch() {
+        guard switching != nil else { return }
+        switching = nil
+        superseded = true
     }
 
     /// The origin of the one start (or denied notice) the answer runs; nil
@@ -28,7 +33,8 @@ struct MicrophoneRequestGate {
         defer {
             wanted = nil
             switching = nil
+            superseded = false
         }
-        return wanted
+        return superseded ? nil : wanted
     }
 }
