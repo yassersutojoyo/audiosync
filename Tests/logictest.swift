@@ -5267,6 +5267,35 @@ do {
             && AppTapFollow.look(tapped: [7, 9], found: [9], appRunning: !mixPaused.isEmpty, secondLook: false) == .retap([9])
             && mixQuitJudged == nil,
           "source app quit: a paused mix member still runs, and a member's real quit leaves the mix on its other apps")
+    // A paused app that quits later ends no audio process and Podcasts sends no notice, so a waiting capture looks again.
+    let podcastsSource = AudioSource.app(bundleID: podcasts)
+    func rechecks(_ source: AudioSource?, tapped: [AudioObjectID] = [], interrupted: Bool = false) -> Bool {
+        AppTapFollow.rechecksWhileWaiting(source, tapped: tapped, interrupted: interrupted)
+    }
+    let idleRechecks = [rechecks(podcastsSource, tapped: [7]), rechecks(podcastsSource, interrupted: true), rechecks(nil),
+                        rechecks(.system), rechecks(.mixed(.allExcept, bundleIDs: [podcasts])),
+                        rechecks(.input(uid: "BuiltInMicrophoneDevice"))]
+    check(AppLifecycle.waitRecheck == 5 && rechecks(podcastsSource) && rechecks(pair) && !idleRechecks.contains(true),
+          "source app quit: only an app source waiting for an audio process looks for its app's quit every 5 s",
+          "\(AppLifecycle.waitRecheck), \(idleRechecks)")
+    func recheckTick(live: Set<pid_t>, _ setting: WhenSourceQuits) -> String {
+        guard rechecks(podcastsSource) else { return "no recheck" }
+        let pids = running(podcasts, listed: staleListing, seen: [702], live: live)
+        let first = AppTapFollow.look(tapped: [], found: [], appRunning: !pids.isEmpty, secondLook: false)
+        if first == .keep { return rechecks(podcastsSource) ? "waiting" : "stopped waiting" }
+        guard first == .lookAgain else { return "tick: \(first)" }
+        let second = AppTapFollow.look(tapped: [], found: [], appRunning: !pids.isEmpty, secondLook: true)
+        guard second == .lost else { return "second look: \(second)" }
+        guard let answer = AppLifecycle.sourceQuit(.captureLost(.appNotRunning(podcasts)), source: podcastsSource,
+                                                   setting: setting, isRunning: { _ in false })
+        else { return "keep" }
+        return "\(answer.action) \(answer.bundleID)"
+    }
+    check(recheckTick(live: [702], .stop) == "waiting",
+          "source app quit: a re-check of a paused app that still runs keeps the capture waiting", recheckTick(live: [702], .stop))
+    check(recheckTick(live: [], .stop) == "stop \(podcasts)" && recheckTick(live: [], .system) == "switchToSystem \(podcasts)",
+          "source app quit: a re-check that finds a paused app gone judges it as a quit, as a terminate notice would",
+          "\(recheckTick(live: [], .stop)), \(recheckTick(live: [], .system))")
     func noticeQuit(_ report: Report) -> String {
         guard let answer = AppLifecycle.sourceQuit(report, source: pair, setting: .system, isRunning: { _ in false })
         else { return "keep" }
