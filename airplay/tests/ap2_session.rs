@@ -901,6 +901,31 @@ fn traced_session_shows_a_refused_set_parameter_with_its_body() {
 }
 
 #[test]
+fn traced_session_shows_the_volume_request_as_sent_and_the_refusal_as_answered() {
+    let mut fake = FakeAp2::new();
+    fake.status.insert("SET_PARAMETER".to_owned(), 500);
+    let rig = Ap2Rig::new(traced_config(), fake);
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let lines = traces(&rig);
+    let sent = lines
+        .iter()
+        .find(|line| line.starts_with("SET_PARAMETER rtsp://"))
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(sent.contains("CSeq: "), "{sent}");
+    assert!(sent.contains("Content-Type: text/parameters"), "{sent}");
+    assert!(sent.contains("body text \"volume: -"), "{sent}");
+    assert!(!sent.contains("Authorization"), "{sent}");
+    assert!(
+        lines.iter().any(
+            |line| line.starts_with("SET_PARAMETER text/parameters: status 500")
+                && line.contains(", reply ")
+                && line.contains("CSeq: ")
+        ),
+        "{lines:?}"
+    );
+}
+
+#[test]
 fn an_untraced_session_logs_no_set_parameter_lines() {
     let mut fake = FakeAp2::new();
     fake.status.insert("SET_PARAMETER".to_owned(), 500);

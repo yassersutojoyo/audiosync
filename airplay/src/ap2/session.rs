@@ -23,7 +23,7 @@ use crate::latency::ReportedLatency;
 use crate::metadata::{
     Artwork, ArtworkLadder, ArtworkSize, Metadata, MetadataError, MetadataSupport, Queued,
 };
-use crate::rtsp::{Message, Method, Parser, Request, Response};
+use crate::rtsp::{Headers, Message, Method, Parser, Request, Response};
 use crate::secret::Secret;
 use crate::session::{
     CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, TEARDOWN_TIMEOUT, TIMING_SILENCE, UdpSendResult,
@@ -1369,6 +1369,9 @@ impl Ap2Session {
         request
             .headers
             .push("Active-Remote", self.ids.active_remote.to_string());
+        if self.config.trace && matches!(kind, Kind::Volume(_)) {
+            self.trace_request(&request);
+        }
         let bytes = request.encode();
         let bytes = match self.framing.as_mut() {
             Some(framing) => framing.seal(&bytes),
@@ -1645,10 +1648,31 @@ impl Ap2Session {
             Kind::Metadata(metadata) => (metadata.content_type(), metadata.body()),
             _ => return,
         };
-        let line = format!(
+        let mut line = format!(
             "SET_PARAMETER {content_type}: status {}, body {}",
             response.code,
             bodies::trace_text(&body)
+        );
+        if !response.is_success() {
+            line.push_str(&format!(
+                ", reply {} [{}], reply body {}",
+                response.reason,
+                trace_headers(&response.headers),
+                bodies::trace_text(&response.body)
+            ));
+        }
+        self.event(Ap2Event::Trace(line));
+    }
+
+    /// The request as sent, `Authorization` left out, so a refused one can
+    /// be compared field by field with an accepted exchange.
+    fn trace_request(&mut self, request: &Request) {
+        let line = format!(
+            "{} {} [{}], body {}",
+            request.method.as_str(),
+            request.uri,
+            trace_headers(&request.headers),
+            bodies::trace_text(&request.body)
         );
         self.event(Ap2Event::Trace(line));
     }
@@ -1933,6 +1957,15 @@ pub(crate) fn with_port(remote: SocketAddr, port: u16) -> SocketAddr {
     let mut address = remote;
     address.set_port(port);
     address
+}
+
+fn trace_headers(headers: &Headers) -> String {
+    headers
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("Authorization"))
+        .map(|(name, value)| format!("{name}: {value}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// The answer to a request on the event connection (P70). `Content-Length`
