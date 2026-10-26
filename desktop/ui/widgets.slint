@@ -2144,9 +2144,10 @@ export component SpeakerRow inherits Rectangle {
 
 // A zone's header, lined up with the speaker rows: its toggle, name and
 // count, then its volume, its options and the arrow that shows or hides its
-// speakers. A click on the header toggles the zone, except on the empty
-// stretch after the name, which works like the arrow; the arrow is left out
-// of the Tab order, as Left and Right on the toggle do its work.
+// speakers. Like a speaker row's box opening its delay panel, a click
+// anywhere but the toggle, the volume and the options shows or hides the
+// speakers; the arrow is left out of the Tab order, as Left and Right on the
+// toggle do its work.
 export component ZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
@@ -2188,9 +2189,7 @@ export component ZoneHeader inherits Rectangle {
 
     hover := TouchArea {
         clicked => {
-            if root.live {
-                root.toggled();
-            }
+            root.expanded-changed(!root.item.expanded);
         }
         menu := ContextMenuArea {
             Menu {
@@ -2300,13 +2299,8 @@ export component ZoneHeader inherits Rectangle {
                             }
                         }
 
-                        // A click past the name shows or hides the speakers
-                        // instead of switching the zone, like the arrow.
-                        TouchArea {
+                        Rectangle {
                             horizontal-stretch: 1;
-                            clicked => {
-                                root.expanded-changed(!root.item.expanded);
-                            }
                         }
                     }
 

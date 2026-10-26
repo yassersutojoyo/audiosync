@@ -1328,3 +1328,25 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     }
     assert!(flyout.contains("if root.presets.length > 0: PresetPicker {"));
 }
+
+/// A zone header works like a speaker row's box: only its badge switches the
+/// zone, and a click anywhere else on the header shows or hides the speakers.
+#[test]
+fn only_a_zone_headers_badge_switches_the_zone() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let hover = header
+        .find("hover := TouchArea {")
+        .expect("the header has its box's click");
+    let click = &header[hover..hover + 120];
+    assert!(click.contains("root.expanded-changed(!root.item.expanded);"));
+    assert_eq!(header.matches("root.toggled();").count(), 1);
+    let badge = header
+        .find("badge := SpeakerBadge {")
+        .expect("the header has its badge");
+    assert!(header[badge..].find("root.toggled();").unwrap() < 800);
+    assert_eq!(
+        header.matches("TouchArea {").count(),
+        2,
+        "the box and the arrow"
+    );
+}
