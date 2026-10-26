@@ -7892,6 +7892,24 @@ pub mod tests {
         assert_eq!(row_of(&airplay, &id), 50.0);
     }
 
+    // covers: S271, S276, S290
+    #[test]
+    fn the_echo_of_a_level_held_at_k_0_changes_nothing() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_master(0.0);
+        settle(&mut airplay, &id);
+        let device_volume = RemoteCommand::DeviceVolume(Volume::Db(-18.0));
+        remote(&fake, &kitchen, device_volume);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        fake.take_calls();
+        // The speaker echoes the level sent back, inside the 3 s window.
+        remote(&fake, &kitchen, device_volume);
+        assert!(airplay.poll().is_empty());
+        assert!(sent_levels(&fake).is_empty());
+        assert_eq!(row_of(&airplay, &id), 40.0);
+    }
+
     #[test]
     fn a_level_near_the_bottom_moves_the_row_to_0_without_muting() {
         let fake = FakeAirPlay::new();

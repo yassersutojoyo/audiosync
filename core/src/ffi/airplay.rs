@@ -1273,7 +1273,10 @@ impl AscAirPlay {
             return own;
         };
         let zone = zone_in(&self.zones, row);
-        own.level = device_level(added.position, zone, self.master);
+        // With k at 0 the row shows the level set on the speaker, which
+        // s × k can't give (S290).
+        let level = device_level(added.position, zone, self.master);
+        own.level = if level == 0.0 { added.level } else { level };
         own.dragging = added.dragging;
         if let Command::DeviceVolume(db) = command {
             let recent = added
@@ -7618,7 +7621,7 @@ mod tests {
                     receiver.press(db);
                     let key = inside(handle).added[&id].key.clone();
                     let command = RemoteCommand::DeviceVolume(Volume::Db(db));
-                    remote(handle, &key, None, command.clone());
+                    remote(handle, &key, None, command);
                     let events = volume_events_of(handle, &id);
                     assert_eq!(events.len(), 1, "{name}: {step}: {events:?}");
                     (own, shown) = (events[0].volume, events[0].device_level);
