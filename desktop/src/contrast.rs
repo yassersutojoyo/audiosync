@@ -73,6 +73,71 @@ fn ratio(foreground: &str, background: &str, appearance: Appearance) -> f64 {
     contrast(composite(foreground, background, appearance), background)
 }
 
+/// The alpha of a `Fluent` fill (`hover`, `pressed`), read from the line in
+/// widgets.slint that defines it as the text color at that alpha.
+fn fluent_fill_alpha(name: &str) -> f64 {
+    let prefix = format!("out property <brush> {name}: Tokens.text.with-alpha(");
+    include_str!("../ui/widgets.slint")
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .and_then(|rest| rest.strip_suffix(");"))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("widgets.slint defines Fluent.{name} as text with an alpha"))
+}
+
+/// The fills the UI stacks on each background under the pointer. Speaker
+/// rows on a card take the hover fill, and a hovered button inside a hovered
+/// row adds its own; a playing row keeps its color, so only the button's
+/// fill lands on it.
+const HOVER_STACKS: &[(&str, &[&[&str]])] = &[
+    ("background", &[&["hover"], &["pressed"]]),
+    (
+        "surface",
+        &[
+            &["hover"],
+            &["pressed"],
+            &["hover", "hover"],
+            &["hover", "pressed"],
+        ],
+    ),
+    ("playingRow", &[&["hover"], &["pressed"]]),
+    ("notice", &[&["hover"], &["pressed"]]),
+];
+
+/// Every text pair keeps 4.5:1 under the hover and pressed fills the UI
+/// stacks on its background, in light and dark.
+#[test]
+fn every_text_pair_reaches_4_5_to_1_under_hover_fills() {
+    let mut failures = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let text = srgb("text", appearance);
+        for (foreground, background) in CONTRAST_PAIRS {
+            let Some((_, stacks)) = HOVER_STACKS.iter().find(|(name, _)| name == background)
+            else {
+                continue;
+            };
+            for stack in *stacks {
+                let filled = stack.iter().fold(srgb(background, appearance), |under, fill| {
+                    let alpha = fluent_fill_alpha(fill);
+                    [0, 1, 2].map(|i| text[i] * alpha + under[i] * (1.0 - alpha))
+                });
+                let value = contrast(composite(foreground, filled, appearance), filled);
+                if value < MIN_TEXT_CONTRAST {
+                    failures.push(format!(
+                        "{foreground} on {background}+{} ({appearance:?}): {value:.2}:1",
+                        stack.join("+")
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "below {MIN_TEXT_CONTRAST}:1: {failures:?}"
+    );
+}
+
 #[test]
 fn the_contrast_formula_matches_wcag() {
     assert!((contrast([0.0; 3], [1.0; 3]) - 21.0).abs() < 1e-9);
@@ -149,6 +214,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("about.slint", include_str!("../ui/about.slint")),
     ("guide.slint", include_str!("../ui/guide.slint")),
     ("help.slint", include_str!("../ui/help.slint")),
+    ("remote.slint", include_str!("../ui/remote.slint")),
 ];
 
 /// Token colors that are not text on a token background: the wordmark's
