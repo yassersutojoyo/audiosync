@@ -10,7 +10,7 @@ use std::time::Duration;
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::homekit::tlv8::{self, Tlv8, Truncated};
 use audiosync_airplay::homekit::{
-    self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, VerifyStep,
+    self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, SrpWork, VerifyStep,
 };
 use audiosync_airplay::rtsp::{Method, Request, Response};
 use audiosync_airplay::secret::Secret;
@@ -1020,4 +1020,33 @@ fn the_srp_step_can_run_apart_from_the_session() {
     let mut setup = PairSetup::pin(identity(&mut entropy));
     let (end, _) = run_offloaded(&mut setup, &mut fake, &mut entropy, Some("1111"));
     assert!(matches!(end, SetupStep::WrongPin), "{end:?}");
+}
+
+fn compute(step: SetupStep) -> SrpWork {
+    match step {
+        SetupStep::Compute(work) => work,
+        other => panic!("{other:?}"),
+    }
+}
+
+// covers: P223
+#[test]
+fn a_result_computed_before_a_reconnect_is_dropped() {
+    let mut entropy = TestEntropy::new();
+    let mut fake = FakeHomeKit::new(homekit::TRANSIENT_CODE);
+    let mut setup = PairSetup::transient();
+    setup.set_offload(true);
+    let m1 = setup.start();
+    let old = compute(setup.handle_response(&fake.answer(&m1), &mut entropy));
+    // The connection drops while the old step runs; the new M2 comes first.
+    fake.new_connection();
+    let m1 = setup.restart();
+    let new = compute(setup.handle_response(&fake.answer(&m1), &mut entropy));
+    assert_eq!(setup.computed(old.run()), None);
+    let m3 = match setup.computed(new.run()) {
+        Some(SetupStep::Send(m3)) => m3,
+        other => panic!("{other:?}"),
+    };
+    let end = setup.handle_response(&fake.answer(&m3), &mut entropy);
+    assert!(matches!(end, SetupStep::Transient(_)), "{end:?}");
 }
