@@ -628,6 +628,8 @@ fn keyboard_shortcuts_are_declared() {
 /// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
+/// Under the AirPlay 2 flag, off by default, the item reads Prefer AirPlay 2
+/// (spec S313).
 /// The row note and notice for a speaker that plays only AirPlay 2 name
 /// that item, and show only for a receiver the sender found; so does the
 /// note on a zone's stereo pair or home theater that needs it.
@@ -681,6 +683,7 @@ fn no_text_promises_airplay() {
                 || line.contains("plays one AirPlay 2 speaker at a time, so {} waits.")
                 || line.contains("@tr(\"Waiting for the other AirPlay 2 speaker\")")
                 || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
+                || line.contains("airplay2-prefer: @tr(\"Prefer AirPlay 2\")")
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
                 || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
                 || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
