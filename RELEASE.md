@@ -10,6 +10,8 @@ Build every release on the same Mac with the same identity, so updates keep the 
 
 ## Cutting a release
 
+Each release gets its own branch, cut from `main` as `release/x.y.z`. The version bump, the build, the soak and tests, the tag and any hotfix the release needs all happen on that branch, while `main` keeps taking work for the next version. Once the release is out, merge the release branch back into `main` (version bump, CHANGELOG and every fix included), then open the next version's heading on `main`.
+
 First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist` (`CFBundleVersion` goes up by one on every release, since Sparkle compares that number to decide whether an update is newer), set the same version in `desktop/Cargo.toml` and in the `audiosync-desktop` entry of `desktop/Cargo.lock`, and in `CHANGELOG.md` put the release date on the version's heading (it waits there as `## [x.y.z] - unreleased`; if the entries sit under `## [Unreleased]` instead, move them under a new heading). Point that version's link at the bottom to `releases/tag/vx.y.z`, like the older versions, since the tag exists once you push it below, and commit. Once the release is out, open the next version's heading as `## [x.y.z] - unreleased` with a `compare/vx.y.z...HEAD` link, so later changes have a place to go. Then:
 
 ```bash
