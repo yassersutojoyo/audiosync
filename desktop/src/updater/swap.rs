@@ -461,6 +461,32 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_restore_names_the_exe_bak_first() {
+        // Step 4 of the exe works and its rename back is refused; every
+        // rename into the notices name is refused. The user needs the exe
+        // back first, so the notice must name audiosync.exe.bak.
+        let (dir, exe, notices) = install("restore-names-exe-first");
+        let exe_renames = std::sync::atomic::AtomicUsize::new(0);
+        let files = failing(move |op, path| {
+            let refused = op == "rename"
+                && match file_name(path).as_str() {
+                    EXE_NAME => exe_renames.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0,
+                    NOTICES_NAME => true,
+                    _ => false,
+                };
+            refused.then(|| io::Error::from_raw_os_error(5))
+        });
+        let mut log = StepLog::new();
+        let result = swap(&dir, &exe, Some(&notices), &files, &mut log);
+        assert_eq!(
+            result,
+            Err(SwapError::RestoreFailed {
+                bak: "audiosync.exe.bak".to_owned()
+            })
+        );
+    }
+
+    #[test]
     fn a_failed_relaunch_restores_the_bak() {
         let (dir, exe, _) = install("relaunch-failed");
         let mut log = StepLog::new();
