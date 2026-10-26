@@ -634,9 +634,9 @@ struct UIStrings {
     func nativeAirPlayWaitingTitle(name: String) -> String { "\(name) waiting" }
     /// Under the name of a speaker waiting for the AirPlay 2 slot.
     let waitingForAirPlay2 = "Waiting for the other AirPlay 2 speaker"
-    /// Under the name of an AirPlay speaker that is on but out of view on
-    /// the network; it starts by itself once it shows up again (P215).
-    let notOnNetwork = "Not on the network right now. It plays once it's back."
+    /// Under the name of an AirPlay speaker that is not announced on the
+    /// network right now; it starts by itself once it is again (P215).
+    let notOnNetwork = "Not on the network right now, plays once it's back"
     /// An Apple TV whose home theater group AudioSync plays to (P177).
     func nativeAirPlayPlaysThroughSpeakers(name: String) -> String {
         "\(name) plays through its home theater speakers, and AudioSync already plays to them, so it's off. "

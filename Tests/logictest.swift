@@ -3167,7 +3167,7 @@ do {
             && lapsed.apply(.state(id: pair, .unannounced, retryMs: nil)) == nil,
           "P215 native airplay: going off the network or coming back without playing refreshes the row once")
     let away = t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: row)
-    check(away == "Not on the network right now. It plays once it's back." && away == t.notOnNetwork
+    check(away == "Not on the network right now, plays once it's back" && away == t.notOnNetwork
             && t.rowHint(SpeakerState(enabled: true, streaming: true), note: away).hasPrefix(t.notOnNetwork)
             && t.rowNote(cast: nil, waitingForAirPlay2: true, unannounced: true, target: row) == t.waitingForAirPlay2,
           "P215 native airplay: an unannounced row says it is off the network, also to VoiceOver; the AirPlay 2 wait says so first")
