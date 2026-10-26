@@ -495,7 +495,7 @@ mod tests {
                 RealFiles.rename(from, to)
             }
         }
-        let (dir, exe, _) = install("disk-full-copy");
+        let (dir, exe, _) = install("swap-disk-full-copy");
         let mut log = StepLog::new();
         assert_eq!(
             swap(&dir, &exe, None, &FullDisk, &mut log),
