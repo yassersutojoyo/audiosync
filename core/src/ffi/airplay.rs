@@ -8169,12 +8169,12 @@ mod tests {
         assert_eq!(paired(handle), (AIRPLAY_AVAILABLE, true, false));
 
         // Error 1 or 3 to 6 to the verify describes the receiver, not the
-        // credentials: nothing is marked.
-        for kind in [
-            ErrorKind::PairingFailed,
-            ErrorKind::Busy,
-            ErrorKind::Refused,
-            ErrorKind::Lost,
+        // credentials: nothing is marked, and the host hears a refusal.
+        for (kind, code) in [
+            (ErrorKind::PairingFailed, AIRPLAY_ERROR_REFUSED),
+            (ErrorKind::Busy, AIRPLAY_ERROR_BUSY),
+            (ErrorKind::Refused, AIRPLAY_ERROR_REFUSED),
+            (ErrorKind::Lost, AIRPLAY_ERROR_CONNECTION_LOST),
         ] {
             inside(handle).take_in(SenderEvent::Speaker {
                 key: key.clone(),
@@ -8184,6 +8184,14 @@ mod tests {
                     retry_at: None,
                 }),
             });
+            let events = events_until(handle, |seen| {
+                seen.iter().any(|e| e.kind == AIRPLAY_EVENT_ERROR)
+            });
+            let reported = events
+                .iter()
+                .find(|e| e.kind == AIRPLAY_EVENT_ERROR)
+                .map(|e| e.error);
+            assert_eq!(reported, Some(code), "{kind:?}: {events:?}");
             assert_eq!(paired(handle), (AIRPLAY_AVAILABLE, true, false), "{kind:?}");
         }
 
