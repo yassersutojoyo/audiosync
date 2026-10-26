@@ -250,6 +250,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var captureInterrupted = false
     /// The microphone permission request a start has out, if any.
     var microphoneRequest = MicrophoneRequestGate()
+    /// The permission explanations shown so far and the ones a feature waits on.
+    var permissions = PermissionAsks.load(.standard)
     /// An automatic start failed: no more automatic starts until the user acts.
     var autoStartFailed = false
     /// Counts successful starts, so a check scheduled for one session ignores the next.

@@ -27,6 +27,10 @@ extension AppDelegate {
         nowPlaying.onAutomationDenied = { [weak self] bundleID, denied in
             self?.automationChanged(bundleID, denied: denied)
         }
+        nowPlaying.mayRaisePrompt = permissions.step(.automation, state: .notAsked, userAction: false) == .go
+        nowPlaying.onPromptHeld = { [weak self] in
+            _ = self?.permissionAllows(.automation, state: .notAsked, origin: .automatic)
+        }
         // No target set here: setting one makes Now Playing read the players
         // at once. `syncTrackInfo` sets it right before polling starts.
 
@@ -105,6 +109,74 @@ extension AppDelegate {
                    settings: .automation)
     }
 
+    // MARK: - Permission explanations
+
+    /// Whether a feature may use `permission` now. True: go on, and macOS
+    /// asks itself if it still has to. False: the feature waits, after Not
+    /// Now on the explanation, or while the window and the panel offer it
+    /// (`PermissionCard`), whose Continue resumes it. Callers handle a
+    /// denied permission themselves, so `state` is `.notAsked` or `.unknown`.
+    func permissionAllows(_ permission: Permission, state: PermissionState, origin: StartOrigin) -> Bool {
+        switch permissions.step(permission, state: state, userAction: origin == .user) {
+        case .go, .denied:
+            return true
+        case .explain:
+            return explainPermission(permission)
+        case .offer:
+            permissions.hold(permission)
+            showPermissionOffer()
+            return false
+        }
+    }
+
+    /// The explanation right after the user's click, before macOS asks: a
+    /// modal alert is fine here, since the user is waiting on this answer.
+    private func explainPermission(_ permission: Permission) -> Bool {
+        menuBar?.close()   // the panel floats above alerts and would cover this one
+        NSApp.activate(ignoringOtherApps: true)
+        let prompt = NSAlert()
+        prompt.messageText = text.permissionTitle(permission)
+        prompt.informativeText = text.permissionReason(permission)
+        prompt.addButton(withTitle: text.permissionContinue)
+        prompt.addButton(withTitle: text.permissionNotNow).keyEquivalent = "\u{1b}"
+        guard prompt.runModal() == .alertFirstButtonReturn else {
+            declinePermission(permission)
+            return false
+        }
+        acceptPermission(permission)
+        return true
+    }
+
+    private func acceptPermission(_ permission: Permission) {
+        permissions.accept(permission)
+        UserDefaults.standard.set(permissions.stored, forKey: PermissionAsks.defaultsKey)
+        showPermissionOffer()
+        if permission == .automation { nowPlaying.mayRaisePrompt = true }
+    }
+
+    /// Continue on the offered explanation: the feature that waited goes on.
+    private func resumeAfterPermission(_ permission: Permission) {
+        acceptPermission(permission)
+        switch permission {
+        case .localNetwork:
+            reconcileAirPlaySpeakers()
+        case .audioCapture, .microphone:
+            if !engine.isRunning { startEngine(origin: .user) }
+        case .automation:
+            nowPlaying.refresh()
+        }
+    }
+
+    private func declinePermission(_ permission: Permission) {
+        permissions.decline(permission)
+        showPermissionOffer()
+    }
+
+    private func showPermissionOffer() {
+        let offer = permissions.offer
+        if appModel.permissionOffer != offer { appModel.permissionOffer = offer }
+    }
+
     /// What the window and the panel can ask for, each mapped to the
     /// AppDelegate method that does it.
     private func makeActions() -> AppModel.Actions {
@@ -156,6 +228,8 @@ extension AppDelegate {
             self.syncTrackInfo()
         }
         a.dismissNotice = { [weak self] subject in self?.clearNotices([subject]) }
+        a.permissionContinue = { [weak self] permission in self?.resumeAfterPermission(permission) }
+        a.permissionNotNow = { [weak self] permission in self?.declinePermission(permission) }
         a.dismissAllNotices = { [weak self] in
             guard let self, !self.appModel.notices.isEmpty else { return }
             self.appModel.notices.clearAll()
@@ -230,7 +304,7 @@ extension AppDelegate {
     /// sources. A virtual device already listed stays, even when switched off.
     private func rescanDevices() {
         reconcileLocal(keepListed: true)
-        reconcileAirPlaySpeakers()
+        reconcileAirPlaySpeakers(origin: .user)
         pushSources()
     }
 

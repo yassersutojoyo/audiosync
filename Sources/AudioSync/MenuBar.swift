@@ -157,6 +157,9 @@ final class AppModel: ObservableObject {
         /// Dismiss the notice with this subject.
         var dismissNotice: (String) -> Void = { _ in }
         var dismissAllNotices: () -> Void = {}
+        /// Continue or Not Now on the permission explanation the window offers.
+        var permissionContinue: (Permission) -> Void = { _ in }
+        var permissionNotNow: (Permission) -> Void = { _ in }
         var toggleZone: (String) -> Void = { _ in }
         var deleteZone: (String) -> Void = { _ in }
         var renameZone: (String) -> Void = { _ in }
@@ -256,6 +259,8 @@ final class AppModel: ObservableObject {
     /// newest first; shown in the window and the menu bar panel instead of a
     /// modal alert, until dismissed or their cause is gone.
     @Published var notices = NoticeList()
+    /// The permission explanation a feature waits on (`PermissionAsks.offer`).
+    @Published var permissionOffer: Permission?
     /// The device volume hints of the switched-on local outputs, by device
     /// UID: only outputs whose macOS volume is low or muted (S196).
     @Published var deviceVolumes: [String: DeviceVolumeHint] = [:]
@@ -1464,6 +1469,11 @@ struct NoticeStack: View {
     var body: some View {
         let t = model.text
         let list = model.notices
+        if let permission = model.permissionOffer {
+            PermissionCard(permission: permission, text: t,
+                           proceed: { model.actions.permissionContinue(permission) },
+                           later: { model.actions.permissionNotNow(permission) })
+        }
         if compact {
             if let newest = list.newest {
                 NoticeBanner(notice: newest, text: t, showsTime: false,
@@ -1565,6 +1575,43 @@ struct NoticeBanner<Footer: View>: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill((notice.info ? Brand.teal : Color.orange).opacity(0.12)))
+    }
+}
+
+/// Why macOS is about to ask for a permission, while the feature that needs
+/// it waits for Continue.
+struct PermissionCard: View {
+    let permission: Permission
+    let text: UIStrings
+    let proceed: () -> Void
+    let later: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "hand.raised.fill")
+                .foregroundStyle(Brand.tealText)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(text.permissionTitle(permission))
+                        .font(.caption.weight(.semibold))
+                    Text(text.permissionReason(permission))
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+                HStack(spacing: 8) {
+                    Button(text.permissionContinue, action: proceed)
+                        .buttonStyle(.borderedProminent)
+                    Button(text.permissionNotNow, action: later)
+                        .buttonStyle(.bordered)
+                }
+                .controlSize(.small)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Brand.teal.opacity(0.12)))
     }
 }
 

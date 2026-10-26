@@ -60,6 +60,7 @@ extension AppDelegate {
         case .authorized:
             break
         case .notDetermined:
+            guard permissionAllows(.microphone, state: .notAsked, origin: .user) else { return }
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 DispatchQueue.main.async {
                     guard let self, self.appModel.calibrateAll.shown else { return }

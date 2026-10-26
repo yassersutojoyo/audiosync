@@ -20,6 +20,12 @@ extension AppDelegate {
         defer { refreshStreamingViews() }   // every path, including failures, refreshes the switch
         let hasSpeaker = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                                     enabledLocal: enabledLocal)
+        // A tap's first capture raises the audio capture prompt; Not Now keeps what plays.
+        if hasSpeaker, CaptureCheck.provesPermission(audioSource),
+           !permissionAllows(.audioCapture, state: .unknown, origin: origin) {
+            if let switching { storeSwitch(switching, new: false) }
+            return
+        }
         if let switching, !beginSwitch(switching, hasSpeaker: hasSpeaker, origin: origin) { return }
         guard hasSpeaker else {
             notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
@@ -35,7 +41,7 @@ extension AppDelegate {
                 askMicrophone(origin: origin)
                 return
             default:
-                failStart(text.microphoneDenied, origin: origin)
+                failStart(text.microphoneDenied, origin: origin, settings: .microphone)
                 return
             }
         }
@@ -111,7 +117,8 @@ extension AppDelegate {
     }
 
     private func askMicrophone(origin: StartOrigin, switching: CaptureSwitch.Change? = nil) {
-        guard microphoneRequest.begin(origin: origin, switching: switching) else { return }
+        guard permissionAllows(.microphone, state: .notAsked, origin: origin),
+              microphoneRequest.begin(origin: origin, switching: switching) else { return }
         AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
             DispatchQueue.main.async { self?.microphoneAnswered(granted) }
         }
@@ -144,7 +151,7 @@ extension AppDelegate {
         case .none:
             break
         case .microphoneDenied:
-            notify(text.microphoneDenied, origin: origin, subject: Notice.start)
+            notify(text.microphoneDenied, origin: origin, subject: Notice.start, settings: .microphone)
         case .stillOnOld(let new, let old):
             postNotice(text.sourceSwitchFailed(new: new, old: old), subject: Notice.source)
         }
@@ -196,7 +203,11 @@ extension AppDelegate {
         let pending = microphoneRequest.switching
         guard let origin = microphoneRequest.answer() else { return }
         guard let switching = pending else {
-            if granted { startEngine(origin: origin) } else { failStart(text.microphoneDenied, origin: origin) }
+            if granted {
+                startEngine(origin: origin)
+            } else {
+                failStart(text.microphoneDenied, origin: origin, settings: .microphone)
+            }
             return
         }
         switch CaptureSwitch.answer(granted: granted, to: switching, source: audioSource, pair: currentInputPair,
@@ -213,12 +224,12 @@ extension AppDelegate {
         }
     }
 
-    private func failStart(_ message: String, origin: StartOrigin) {
+    private func failStart(_ message: String, origin: StartOrigin, settings: PrivacyPane? = nil) {
         if origin == .automatic { autoStartFailed = true }
         // Nothing is streaming now; don't leave the AirPlay speakers held
         // (an automatic restart after a format change can end up here).
         stopEngine(.startFailed)
-        notify(message, origin: origin, subject: Notice.start)
+        notify(message, origin: origin, subject: Notice.start, settings: settings)
     }
 
     /// Tell the user something went wrong: a modal alert when they just acted.
@@ -226,10 +237,11 @@ extension AppDelegate {
     /// `Notice`'s fixed subjects) stays in the window and the menu bar panel
     /// until it is dismissed or its cause is gone. `style` is the alert's:
     /// `.warning` for something that failed, `.informational` for a next step.
+    /// `settings`: the privacy pane that fixes it, offered as a button.
     func notify(_ message: String, origin: StartOrigin, subject: String,
-                        style: NSAlert.Style = .warning) {
-        postNotice(message, subject: subject)
-        if origin == .user { showAlert(message, style: style) }
+                style: NSAlert.Style = .warning, settings: PrivacyPane? = nil) {
+        postNotice(message, subject: subject, settings: settings)
+        if origin == .user { showAlert(message, style: style, settings: settings) }
     }
 
     func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil,
@@ -347,7 +359,8 @@ extension AppDelegate {
                 case .waiting:
                     postNotice(text.waitingForAudio(sourceDisplayName()), subject: Notice.capture)
                 default:
-                    notify(text.captureNotWorking(sourceDisplayName()), origin: .automatic, subject: Notice.capture)
+                    notify(text.captureNotWorking(sourceDisplayName()), origin: .automatic, subject: Notice.capture,
+                           settings: .screenCapture)
                 }
             }
             // Keep watching until audio flows or the session ends, so the
@@ -398,7 +411,8 @@ extension AppDelegate {
     /// A modal alert with one OK button. `style` says how serious it is:
     /// `.informational` (a next step), `.warning` (something failed) or
     /// `.critical` (only when going on could lose the user's data or work).
-    func showAlert(_ message: String, style: NSAlert.Style) {
+    /// `settings`: a privacy pane offered as a second button.
+    func showAlert(_ message: String, style: NSAlert.Style, settings: PrivacyPane? = nil) {
         menuBar?.close()   // the panel floats above alerts and would cover this one
         NSApp.activate(ignoringOtherApps: true)
         let modal = NSAlert()
@@ -406,6 +420,7 @@ extension AppDelegate {
         modal.informativeText = message
         modal.alertStyle = style
         modal.addButton(withTitle: text.alertOK)
-        modal.runModal()
+        if settings != nil { modal.addButton(withTitle: text.openSettings) }
+        if modal.runModal() == .alertSecondButtonReturn, let settings { NSWorkspace.shared.open(settings.url) }
     }
 }

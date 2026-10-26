@@ -12,9 +12,11 @@ extension AppDelegate {
     /// AudioSync's own sender starts (again after a failed start), a denied
     /// Local Network answer is asked again, and the sender's speakers follow
     /// the switches (`reconcileNativeAirPlay`). Nothing happens while the Mac
-    /// sleeps.
-    func reconcileAirPlaySpeakers() {
+    /// sleeps, or before the Local Network explanation got a Continue.
+    func reconcileAirPlaySpeakers(origin: StartOrigin = .automatic) {
         guard !macAsleep else { return }
+        // The first discovery raises the Local Network prompt.
+        guard permissionAllows(.localNetwork, state: .unknown, origin: origin) else { return }
         localNetworkProbe.recheckIfDenied()
         reconcileNativeAirPlay()
         reconcileCast()

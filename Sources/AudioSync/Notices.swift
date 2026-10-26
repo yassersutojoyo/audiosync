@@ -46,6 +46,9 @@ enum PrivacyPane: String, Equatable {
     case localNetwork = "Privacy_LocalNetwork"
     case automation = "Privacy_Automation"
     case microphone = "Privacy_Microphone"
+    /// Screen & System Audio Recording, whose "System Audio Recording Only"
+    /// list holds the process tap permission.
+    case screenCapture = "Privacy_ScreenCapture"
 
     var url: URL {
         URL(string: "x-apple.systempreferences:com.apple.preference.security?\(rawValue)")!
