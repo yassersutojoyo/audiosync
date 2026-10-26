@@ -1092,9 +1092,9 @@ struct UIStrings {
     func setupDetail(_ permission: Permission) -> String {
         switch permission {
         case .localNetwork:
-            return "Finds AirPlay and Google Cast speakers. In System Settings: Local Network."
+            return "Finds AirPlay and Google Cast speakers. In System Settings → Privacy & Security → Local Network."
         case .audioCapture:
-            return "Plays what your Mac plays on your speakers. In System Settings: Screen & System Audio Recording."
+            return "Plays what your Mac plays on your speakers. In System Settings → Privacy & Security → Screen & System Audio Recording."
         case .microphone:
             return "For an input device as the source, or to calibrate a speaker with the microphone."
         case .automation:
@@ -1116,6 +1116,17 @@ struct UIStrings {
     let setupSkip = "Skip for Now"
     /// The microphone row's own button.
     let setupAllowOne = "Allow"
+    /// VoiceOver's name for `setupAllowOne`.
+    let setupAllowMicrophone = "Allow Microphone"
+    /// VoiceOver's name for a row's Open Settings button.
+    func setupOpenSettings(_ permission: Permission) -> String {
+        switch permission {
+        case .localNetwork: return "Open Local Network Settings"
+        case .audioCapture: return "Open Screen & System Audio Recording Settings"
+        case .microphone: return "Open Microphone Settings"
+        case .automation: return "Open Automation Settings"
+        }
+    }
     /// The app menu item that opens the window again.
     let setupMenu = "Set Up Permissions…"
     /// AirPlay has found nothing for a while and AudioSync can't tell whether

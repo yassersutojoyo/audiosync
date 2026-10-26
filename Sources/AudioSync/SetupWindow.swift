@@ -145,12 +145,13 @@ struct PermissionSetupView: View {
             if let state, PermissionSetup.offersSettings(state) {
                 Button(t.openSettings) { model.actions.openSettings(permission) }
                     .controlSize(.small)
+                    .accessibilityLabel(t.setupOpenSettings(permission))
                     .accessibilityHint(t.openSettingsHint)
                     .help(t.openSettingsHint)
             } else if permission == .microphone, state == .notAsked {
                 Button(t.setupAllowOne) { model.actions.allowMicrophone() }
                     .controlSize(.small)
-                    .accessibilityHint(t.permissionTitle(permission))
+                    .accessibilityLabel(t.setupAllowMicrophone)
             }
         }
         .padding(12)

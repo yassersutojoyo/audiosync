@@ -3300,12 +3300,15 @@ do {
     check(UIStrings().sourceSwitchFailed(new: "Music", old: "All System Audio")
             == "Couldn't start Music, still on All System Audio.",
           "EC5 source: the failed switch notice names both sources plainly")
-    check(CaptureSwitch.start(microphone: .notNeeded) == .rebuildCapture
-            && CaptureSwitch.start(microphone: .allowed) == .rebuildCapture,
-          "EC5 source: a switch rebuilds only the capture and keeps the session, with or without a speaker on")
-    check(CaptureSwitch.start(microphone: .undetermined) == .askMicrophone,
+    check(CaptureSwitch.start(starts: true, microphone: .notNeeded) == .rebuildCapture
+            && CaptureSwitch.start(starts: true, microphone: .allowed) == .rebuildCapture,
+          "EC5 source: a switch rebuilds only the capture and keeps the session")
+    check(CaptureSwitch.start(starts: false, microphone: .notNeeded) == .stopSession
+            && CaptureSwitch.start(starts: false, microphone: .undetermined) == .stopSession,
+          "EC5 source: a switch the start rule refuses (no speaker on any more) stops the session")
+    check(CaptureSwitch.start(starts: true, microphone: .undetermined) == .askMicrophone,
           "EC5 source: a switch to an input macOS still has to allow keeps the old source until the answer")
-    check(CaptureSwitch.start(microphone: .denied) == .keepOld,
+    check(CaptureSwitch.start(starts: true, microphone: .denied) == .keepOld,
           "EC5 source: a switch to an input the microphone permission denies keeps the old capture")
     let mic = AudioSource.input(uid: "mic")
     let toMic = CaptureSwitch.Change.source(from: music, to: mic)
@@ -8672,13 +8675,19 @@ do {
 
     let t = UIStrings()
     let states: [SetupRowState] = [.notAsked, .waiting, .allowed, .denied, .askedUnknown]
-    let words = states.map(t.setupState) + Permission.allCases.map(t.setupDetail)
-        + [t.setupTitle, t.setupHeading, t.setupIntro, t.setupLater, t.setupAllow, t.setupAsking, t.setupDone,
-           t.setupSkip, t.setupAllowOne, t.setupMenu]
+    var words: [String] = states.map(t.setupState)
+    words += Permission.allCases.map(t.setupDetail)
+    words += Permission.allCases.map(t.setupOpenSettings)
+    words += [t.setupTitle, t.setupHeading, t.setupIntro, t.setupLater, t.setupAllow, t.setupAsking, t.setupDone,
+              t.setupSkip, t.setupAllowOne, t.setupMenu, t.setupAllowMicrophone]
     check(words.allSatisfy { !$0.isEmpty && !$0.contains("\u{2014}") }
             && Set(states.map(t.setupState)).count == states.count,
           "setup: every line is plain text without em dashes, and each state reads differently")
     check(t.setupMenu.hasSuffix("…"), "setup: the menu item that opens the window ends in an ellipsis")
+    check(Set(Permission.allCases.map(t.setupOpenSettings)).count == Permission.allCases.count,
+          "setup: each Open Settings button names its permission for VoiceOver")
+    check(t.setupDetail(.localNetwork).contains("Privacy & Security → Local Network"),
+          "setup: the Local Network row gives the full System Settings path")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

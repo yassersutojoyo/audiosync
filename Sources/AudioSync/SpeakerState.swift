@@ -68,9 +68,12 @@ enum StreamingPolicy {
     static func startsWithoutSpeaker(origin: StartOrigin) -> Bool { origin != .automatic }
 
     /// Whether a start goes ahead. `continuing`: a rebuild or a source switch
-    /// of the session; `hadSpeaker`: a speaker was on in that session.
+    /// of the session; `hadSpeaker`: a speaker was on in that session. Only a
+    /// session that began with every speaker off carries on without one: once
+    /// the last speaker went off, an automatic retry would capture, and mute,
+    /// the whole Mac for nobody.
     static func starts(hasSpeaker: Bool, continuing: Bool, hadSpeaker: Bool, origin: StartOrigin) -> Bool {
-        hasSpeaker || continuing || startsWithoutSpeaker(origin: origin)
+        hasSpeaker || (continuing && !hadSpeaker) || startsWithoutSpeaker(origin: origin)
     }
 
     /// Streaming with every speaker switched off: nothing to stream to, so it

@@ -15,6 +15,9 @@ extension AppDelegate {
     /// handled as final, for a caller that tries again (S227 g).
     func startEngine(origin: StartOrigin, rebuild: Bool = false, switching: CaptureSwitch.Change? = nil,
                      onCaptureFailure: (() -> Void)? = nil) {
+        // The permission setup's capture would write the same AirPlay and Cast feed as this one.
+        setupCaptureProbe?.halt()
+        setupCaptureProbe = nil
         if origin != .automatic {
             userStarts &+= 1
             userStopped = false
@@ -33,8 +36,9 @@ extension AppDelegate {
             if let switching { storeSwitch(switching, new: false) }
             return
         }
-        if let switching, !beginSwitch(switching, origin: origin) { return }
+        if let switching, !beginSwitch(switching, starts: starts, origin: origin) { return }
         guard starts else {
+            if engine.isRunning { stopEngine(.noSpeakerOn) }   // a rebuild with the last speaker gone
             notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
             return
         }
@@ -102,10 +106,13 @@ extension AppDelegate {
 
     /// Acts on how a switch begins (`CaptureSwitch.start`); true when its
     /// capture is rebuilt now.
-    private func beginSwitch(_ change: CaptureSwitch.Change, origin: StartOrigin) -> Bool {
-        switch CaptureSwitch.start(microphone: microphone(for: audioSource)) {
+    private func beginSwitch(_ change: CaptureSwitch.Change, starts: Bool, origin: StartOrigin) -> Bool {
+        switch CaptureSwitch.start(starts: starts, microphone: microphone(for: audioSource)) {
         case .rebuildCapture:
             return true
+        case .stopSession:
+            stopEngine(.noSpeakerOn)
+            notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
         case .askMicrophone:
             storeSwitch(change, new: false)   // the picker and the level meter show what still plays
             askMicrophone(origin: origin, switching: change)
