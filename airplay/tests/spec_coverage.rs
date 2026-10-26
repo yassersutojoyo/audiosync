@@ -1,6 +1,6 @@
 //! Spec coverage: every clause of `docs/AIRPLAY_SPEC.md` (P1 to Pn) is named
-//! by at least one `// covers: P20, P26` line in `airplay/src` or
-//! `airplay/tests`, or is listed in `airplay/tests/spec_pending.txt` with a
+//! by at least one `// covers: P20, P26` line in `airplay/tests` or in the
+//! `#[cfg(test)]` module of a file in `airplay/src`, or is listed in `airplay/tests/spec_pending.txt` with a
 //! one-line reason because a later stage implements it (audio and RTP,
 //! timing, pairing crypto, real transport, AirPlay 2). A clause is covered
 //! only when everything it asks of the sender is implemented and tested; a
@@ -93,8 +93,9 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
 /// `#[cfg(test)]` module, which ends the file by convention. A `// covers:`
 /// line above it would claim coverage for code no test runs.
 fn test_code_start(text: &str) -> usize {
-    let _ = text;
-    0
+    text.lines()
+        .position(|line| line == "#[cfg(test)]")
+        .unwrap_or_else(|| text.lines().count())
 }
 
 /// Clause numbers named by `// covers:` lines, with where each was named; and
