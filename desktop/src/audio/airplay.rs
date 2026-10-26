@@ -9061,4 +9061,221 @@ pub mod tests {
             "Den keeps d_s and plays 80 ms late, not d_s - 80"
         );
     }
+
+    /// The target delays given among `calls`, in whole ms.
+    fn target_delays(calls: &[Call]) -> Vec<(String, u64)> {
+        calls
+            .iter()
+            .filter_map(|call| match call {
+                Call::TargetDelay(id, delay) => Some((id.clone(), ms(*delay))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// AirPlay 2 receivers listed, on and streaming, each with d_s 0.
+    fn airplay2_streaming(fake: &FakeAirPlay, names: &[&str]) -> (AirPlaySpeakers, Vec<Device>) {
+        fake.set_airplay2(true);
+        let mut airplay = speakers(fake);
+        let devices: Vec<Device> = names
+            .iter()
+            .zip(1u8..)
+            .map(|(name, id)| airplay2_device(id, name, false))
+            .collect();
+        for device in &devices {
+            fake.appear(device);
+        }
+        airplay.poll();
+        for device in &devices {
+            airplay.set_delay(&id_of(device), 0.0);
+            airplay.set_enabled(&id_of(device), true).unwrap();
+        }
+        airplay.set_streaming(true);
+        (airplay, devices)
+    }
+
+    // covers: S284
+    #[test]
+    fn several_airplay2_receivers_share_lf_and_e_and_a_target_uses_its_largest_member() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        let den = airplay2_device(23, "Den", false);
+        fake.appear(&den);
+        airplay.poll();
+        airplay.set_delay(PAIR, 0.0);
+        airplay.set_delay(&id_of(&den), 0.0);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).unwrap();
+        airplay.set_enabled(&id_of(&den), true).unwrap();
+        fake.take_calls();
+        fake.report_latency(&left, 220_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(&right, 50_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(&den, 1_400_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        let calls = fake.take_calls();
+        assert_eq!(latencies(&calls), [83_790], "one Lf over all three");
+        assert_eq!(ms(airplay.latency()), 1750 + 1400, "one E: Den's");
+        assert_eq!(
+            target_delays(&calls),
+            [(PAIR.to_owned(), 1180)],
+            "the pair's e_s is Left's 220 ms: {calls:?}"
+        );
+        assert_eq!(
+            delays(&calls),
+            [(id_of(&den), 220), (id_of(&den), 0)],
+            "no member gets a delay of its own: {calls:?}"
+        );
+        let rows = airplay.speakers();
+        let pair_row = rows.iter().find(|row| row.id == PAIR).expect("the pair");
+        assert_eq!(pair_row.reported_latency_ms, 220.0);
+    }
+
+    // covers: S284
+    #[test]
+    fn an_airplay2_receiver_leaving_while_others_sound_changes_no_delay() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, devices) = airplay2_streaming(&fake, &["A1", "B2", "C3"]);
+        let [a1, b2, c3] = [&devices[0], &devices[1], &devices[2]];
+        fake.report_latency(a1, 220_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(b2, 50_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(c3, 1_400_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        assert_eq!(latencies(&fake.take_calls()), [83_790]);
+        assert_eq!(ms(airplay.latency()), 3150);
+        fake.set_sounding(true);
+        airplay.set_enabled(&id_of(c3), false).unwrap();
+        airplay.poll();
+        let calls = fake.take_calls();
+        assert_eq!(delays(&calls), [], "every d′_s held: {calls:?}");
+        assert!(
+            latencies(&calls).iter().all(|&frames| frames == 77_175),
+            "the sender holds a new Lf while a speaker sounds (P201): {calls:?}"
+        );
+        assert_eq!(ms(airplay.latency()), 3150, "E held at 1400 ms");
+        airplay.poll();
+        assert_eq!(fake.take_calls(), []);
+        airplay.restart_timeline();
+        assert_eq!(ms(airplay.latency()), 1750 + 220);
+        let calls = fake.take_calls();
+        assert_eq!(
+            delays(&calls),
+            [(id_of(a1), 0), (id_of(b2), 170)],
+            "{calls:?}"
+        );
+    }
+
+    // covers: S285
+    #[test]
+    fn every_airplay2_speaker_switched_on_goes_to_the_sender_and_only_one_it_refuses_waits_switched_on_and_on_its_own_row()
+     {
+        let fake = FakeAirPlay::new();
+        let names: Vec<String> = (1..=17).map(|n| format!("M{n}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let (mut airplay, devices) = airplay2_streaming(&fake, &names);
+        let calls = fake.take_calls();
+        let added = calls
+            .iter()
+            .filter(|call| matches!(call, Call::Add { .. }))
+            .count();
+        assert_eq!(added, 17, "the host holds none back: {calls:?}");
+        let (last, playing) = devices.split_last().expect("17 speakers");
+        for device in playing {
+            fake.state(device, SpeakerState::Playing);
+        }
+        // The sender has no code yet for the reasons of P204 and P205; P169's
+        // is the one wait it reports today, so it stands in for both.
+        fake.fail(
+            last,
+            ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session),
+        );
+        let events = airplay.poll();
+        let troubles: Vec<&BackendEvent> = events
+            .iter()
+            .filter(|event| {
+                !matches!(
+                    event,
+                    BackendEvent::AirPlayChanged | BackendEvent::AirPlayPlaying { .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            troubles,
+            [&BackendEvent::AirPlayTrouble {
+                id: id_of(last),
+                problem: AirPlayProblem::OneAirPlay2Speaker
+            }],
+            "{events:?}"
+        );
+        assert_eq!(airplay.enabled_ids().len(), 17, "the 17th stays on");
+        assert_eq!(fake.take_calls(), [], "nobody leaves or restarts");
+        let playing_ids: Vec<String> = playing.iter().map(id_of).collect();
+        let rows = airplay.speakers();
+        assert!(
+            rows.iter()
+                .all(|row| row.playing == playing_ids.contains(&row.id)),
+            "{rows:?}"
+        );
+    }
+
+    // covers: S285
+    #[test]
+    fn one_airplay2_speaker_failing_leaves_the_others_playing() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, devices) = airplay2_streaming(&fake, &["A1", "B2", "C3", "D4"]);
+        let [a1, b2, c3, d4] = [&devices[0], &devices[1], &devices[2], &devices[3]];
+        for device in [b2, c3] {
+            airplay.begin_attempt(&id_of(device));
+        }
+        fake.state(a1, SpeakerState::Playing);
+        airplay.poll();
+        fake.set_sounding(true);
+        fake.take_calls();
+        fake.fail(b2, ErrorKind::PasswordRequired);
+        fake.fail(c3, ErrorKind::PairingRequired);
+        fake.fail(d4, ErrorKind::Unreachable);
+        let mut events = airplay.poll();
+        assert_eq!(
+            airplay.password_prompt().map(|prompt| prompt.id),
+            Some(id_of(b2))
+        );
+        assert!(airplay.submit_password(&id_of(b2), "hunter1"));
+        fake.fail(b2, ErrorKind::WrongPassword);
+        events.extend(airplay.poll());
+        assert_eq!(
+            airplay
+                .password_prompt()
+                .map(|prompt| (prompt.id, prompt.wrong)),
+            Some((id_of(b2), true))
+        );
+        let a1_id = id_of(a1);
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| match call {
+                Call::Pause | Call::RestartTimeline | Call::Latency(_) => true,
+                Call::Remove(id) | Call::Delay(id, _) => *id == a1_id,
+                _ => false,
+            }),
+            "the stream and A1 play on: {calls:?}"
+        );
+        assert!(
+            calls.contains(&Call::StartPairing(id_of(c3))),
+            "C3 pairs on its own: {calls:?}"
+        );
+        let rows_named: Vec<&String> = events
+            .iter()
+            .filter_map(|event| match event {
+                BackendEvent::AirPlayTrouble { id, .. }
+                | BackendEvent::AirPlayFailed { id, .. } => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !rows_named.contains(&&a1_id) && rows_named.contains(&&id_of(d4)),
+            "each failure on its own row: {events:?}"
+        );
+        let rows = airplay.speakers();
+        let a1_row = rows.iter().find(|row| row.id == a1_id).expect("A1");
+        assert!(a1_row.playing && a1_row.enabled, "{rows:?}");
+    }
 }
