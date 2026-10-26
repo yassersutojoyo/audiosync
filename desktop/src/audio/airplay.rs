@@ -5467,6 +5467,58 @@ pub mod tests {
         assert!(!airplay.speakers()[0].airplay2, "Retry forgot the refusal");
     }
 
+    /// A sender that stops, or Retry's new one, ends every session, and no
+    /// Stopped comes from it: a dual speaker that played over AirPlay 1
+    /// reads the path a new session takes again (spec S313).
+    // covers: S313
+    #[test]
+    fn a_stopped_or_new_sender_forgets_the_path_a_session_took() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        fake.set_airplay2_preferred(true);
+        let mut airplay = speakers(&fake);
+        let den = dual_device(12, "Den");
+        let id = id_of(&den);
+        fake.appear(&den);
+        airplay.poll();
+        assert!(
+            airplay.speakers()[0].airplay2,
+            "the preference picks AirPlay 2"
+        );
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        let on_airplay1 = |fake: &FakeAirPlay| {
+            fake.push(SenderEvent::Speaker {
+                key: den.key.clone(),
+                event: SpeakerEvent::Path(ProtocolPath::AirPlay1),
+            });
+        };
+        on_airplay1(&fake);
+        airplay.poll();
+        assert!(
+            !airplay.speakers()[0].airplay2,
+            "its session plays over AirPlay 1"
+        );
+
+        fake.stop_running();
+        airplay.poll();
+        fake.run_again();
+        fake.appear(&den);
+        airplay.poll();
+        assert!(airplay.speakers()[0].airplay2, "the stop ended the session");
+
+        on_airplay1(&fake);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].airplay2);
+        let second = FakeAirPlay::new();
+        second.set_airplay2(true);
+        second.set_airplay2_preferred(true);
+        airplay.replace_link(second.link());
+        second.appear(&den);
+        airplay.poll();
+        assert!(airplay.speakers()[0].airplay2, "Retry ended the session");
+    }
+
     #[test]
     fn a_pair_switched_off_forgets_what_its_members_airplay1_said() {
         let fake = FakeAirPlay::new();
