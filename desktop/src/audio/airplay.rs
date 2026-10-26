@@ -3823,6 +3823,17 @@ impl AirPlaySpeakers {
         })
     }
 
+    /// Whether the listed speaker `id` asked for nothing: no PIN or password
+    /// in its flags and no stored AirPlay 2 credentials, so a PairingRequired
+    /// from it came before any pairing step and its notice names no code.
+    fn refused_unasked(&self, id: &str) -> bool {
+        self.store.homekit(id).is_none()
+            && self.listed.get(id).is_some_and(|listed| {
+                let verdict = &listed.info.device.verdict;
+                !verdict.needs_password && !verdict.needs_pairing
+            })
+    }
+
     /// Returns whether the speaker list changed.
     fn speaker_event(
         &mut self,
@@ -3856,6 +3867,12 @@ impl AirPlaySpeakers {
                 let mut problem = problem(reason);
                 self.paired_for_session.remove(id);
                 self.note_path_switch(id, error.kind, retry_at.is_some());
+                // Outside the user's attempt its row keeps no code request:
+                // switching it on starts one, which pairs it.
+                let unasked = problem == AirPlayProblem::PairingNotYet
+                    && self.over_airplay2(id)
+                    && !self.password_attempts.contains(id)
+                    && self.refused_unasked(id);
                 // A speaker reached over AirPlay 2 that wants a pairing:
                 // switching it on pairs it with a PIN, or with its password
                 // when it asks for one (P61, P154).
@@ -3867,7 +3884,9 @@ impl AirPlaySpeakers {
                         problem = AirPlayProblem::NeedsPassword;
                     } else {
                         problem = AirPlayProblem::NeedsPin;
-                        self.pin_seen.insert(id.to_owned());
+                        if !unasked {
+                            self.pin_seen.insert(id.to_owned());
+                        }
                     }
                 } else if problem == AirPlayProblem::PairingNotYet && self.store.contains(id) {
                     // Switching it on pairs it again (P154).
@@ -3930,6 +3949,8 @@ impl AirPlaySpeakers {
                         id: id.to_owned(),
                         problem,
                     });
+                } else if unasked {
+                    self.turn_off(id, AirPlayProblem::NotAccepted, events);
                 } else {
                     self.turn_off(id, problem, events);
                 }
@@ -5383,6 +5404,7 @@ pub mod tests {
             AirPlayAvailability::Open
         );
         assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.begin_attempt(&id);
         fake.fail(&tv, ErrorKind::PairingRequired);
         airplay.poll();
         assert_eq!(
@@ -5391,6 +5413,73 @@ pub mod tests {
         );
         airplay.start_pairing(&id).expect("the pairing starts");
         assert!(fake.take_calls().contains(&Call::StartPairing(id)));
+    }
+
+    #[test]
+    fn a_session_refused_before_any_pairing_step_names_no_code() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        // No PIN or password in its flags and no stored credentials: a TV
+        // that answers 403 to everything.
+        let tv = airplay2_device(9, "Samsung", false);
+        let id = id_of(&tv);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        fake.take_calls();
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        let problems: Vec<AirPlayProblem> = events
+            .iter()
+            .filter_map(|event| match event {
+                BackendEvent::AirPlayFailed { problem, .. } => Some(*problem),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(problems, [AirPlayProblem::NotAccepted], "{events:?}");
+        assert_ne!(
+            airplay.speakers()[0].availability,
+            AirPlayAvailability::NeedsPin,
+            "its row asks for no code"
+        );
+        assert!(airplay.pin_prompt().is_none());
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_)))
+        );
+    }
+
+    #[test]
+    fn the_same_refusal_in_the_users_attempt_pairs_with_a_pin() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        let tv = airplay2_device(9, "Samsung", false);
+        let id = id_of(&tv);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.begin_attempt(&id);
+        fake.take_calls();
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayFailed { .. })),
+            "{events:?}"
+        );
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::StartPairing(id)), "{calls:?}");
+        assert_eq!(
+            airplay.speakers()[0].availability,
+            AirPlayAvailability::NeedsPin
+        );
     }
 
     #[test]

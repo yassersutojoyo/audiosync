@@ -506,6 +506,14 @@ struct NativeAirPlayModel {
     /// it turned down (P154): its row offers Forget Pairing.
     func keepsCredentials(_ id: String) -> Bool { receivers[id]?.credentialsKept == true }
 
+    /// Whether the listed receiver `id` asked for nothing: listed as able to
+    /// play, with no stored pairing, so a refused pairing from it came before
+    /// any pairing step and its `.needsCode` notice names no code.
+    func refusedUnasked(_ id: String) -> Bool {
+        guard let receiver = receivers[id] else { return false }
+        return receiver.availability == .available && !receiver.paired && !receiver.credentialsKept
+    }
+
     /// Whether the sender holds a password the user typed for the listed
     /// receiver `id` this run: its row offers Forget Password.
     func holdsPassword(_ id: String) -> Bool { passwords.contains(id) }

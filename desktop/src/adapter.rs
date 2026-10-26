@@ -2306,6 +2306,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 problem:
                     ui_model::AirPlayProblem::NeedsPassword
                     | ui_model::AirPlayProblem::NeedsPin
+                    | ui_model::AirPlayProblem::NotAccepted
                     | ui_model::AirPlayProblem::AirPlay2NotYet
                     | ui_model::AirPlayProblem::TimingUnavailable,
                 ..
@@ -3173,6 +3174,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             AirPlayProblem::NeedsPassword
             | AirPlayProblem::PairingNotYet
             | AirPlayProblem::NeedsPin
+            | AirPlayProblem::NotAccepted
             | AirPlayProblem::PairingFailed => DropReason::NeedsCode,
             _ => DropReason::Unreachable,
         };
@@ -5015,6 +5017,7 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::Refused => P::Refused,
         AirPlayProblem::NeedsPassword => P::NeedsPassword,
         AirPlayProblem::NeedsPin => P::NeedsPin,
+        AirPlayProblem::NotAccepted => P::NotAccepted,
         AirPlayProblem::PairingFailed => P::PairingFailed,
         AirPlayProblem::PairingNotYet => P::PairingNotYet,
         AirPlayProblem::AirPlay2NotYet => P::AirPlay2NotYet,

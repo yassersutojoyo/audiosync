@@ -644,6 +644,11 @@ export global Strings {
         if problem == AirPlayProblem.needs-pin {
             return @tr("{} needs pairing with a PIN, so it's off. Turn it on again to pair.", speaker);
         }
+        // It turned the session down before any pairing step and never
+        // asked for a PIN or password, so the cause stays unnamed.
+        if problem == AirPlayProblem.not-accepted {
+            return @tr("{} didn't accept the connection, so it's off. Turn it on again to try once more.", speaker);
+        }
         if problem == AirPlayProblem.pairing-failed {
             return @tr("Pairing with {} didn't finish, so it's off. To try again, turn it on and enter the PIN it shows.", speaker);
         }

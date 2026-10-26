@@ -3896,6 +3896,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::Refused => AirPlayProblem::Refused,
         P::NeedsPassword => AirPlayProblem::NeedsPassword,
         P::NeedsPin => AirPlayProblem::NeedsPin,
+        P::NotAccepted => AirPlayProblem::NotAccepted,
         P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
@@ -7178,6 +7179,26 @@ mod tests {
             "Right plays as part of Living Room, so it stays off by itself."
         );
         assert_eq!(notice_title(&strings, &notice).as_str(), "Right can't play");
+    }
+
+    #[test]
+    fn a_refusal_before_any_pairing_step_names_no_code() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notice = NoticeMessage::AirPlayCantPlay {
+            speaker: "Samsung".to_owned(),
+            problem: ui_model::AirPlayProblem::NotAccepted,
+        };
+        let text = notice_text(&strings, &notice);
+        assert_eq!(
+            text.as_str(),
+            "Samsung didn't accept the connection, so it's off. Turn it on again to try once more."
+        );
+        assert!(
+            !["PIN", "code", "password"]
+                .iter()
+                .any(|word| text.contains(word))
+        );
     }
 
     #[test]

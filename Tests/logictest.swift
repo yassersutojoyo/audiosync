@@ -2505,6 +2505,32 @@ do {
               "native pairing: switched off, the speaker leaves the sender")
     }
     do {
+        // A receiver that asks for nothing and answers 403 to everything: its
+        // refusal comes before any pairing step, so no code is named or asked for.
+        var m = NativeAirPlayModel()
+        m.apply(.appeared(receiver("S1", "Samsung", .available)))
+        m.added("S1")
+        let off = m.apply(.error(id: "S1", .pairingRequired, retryMs: nil, detail: ""))
+        let words = UIStrings().nativeAirPlayNotAccepted(name: "Samsung")
+        check(off == .turnOff("native:S1", .needsCode) && m.refusedUnasked("S1") && m.nextPrompt() == nil
+                && !words.contains("PIN") && !words.contains("code") && !words.contains("password"),
+              "native pairing: a refusal before any pairing step turns the speaker off with neutral text and no code prompt")
+        var asking = NativeAirPlayModel()
+        asking.apply(.appeared(receiver("T1", "Den TV", .needsPin)))
+        var stored = receiver("P1", "Loft", .available)
+        stored.credentialsKept = true
+        asking.apply(.appeared(stored))
+        check(!asking.refusedUnasked("T1") && !asking.refusedUnasked("P1") && !asking.refusedUnasked("gone"),
+              "native pairing: a receiver that asks for a PIN, or holds a pairing, keeps its code text")
+        var user = NativeAirPlayModel()
+        user.apply(.appeared(receiver("S2", "Samsung", .available)))
+        check(user.turnedOnByUser("S2") == nil, "native pairing: a click on a receiver that asks for nothing just joins")
+        user.added("S2")
+        check(user.apply(.error(id: "S2", .pairingRequired, retryMs: nil, detail: "")) == .startPairing("S2")
+                && user.stages["S2"] == .pairing(afterWrongPin: false),
+              "native pairing: within the user's attempt, the same refusal from a receiver that asks for nothing pairs with a PIN")
+    }
+    do {
         // Auto-connect and restored switches never pair or prompt.
         var m = NativeAirPlayModel()
         m.apply(.appeared(receiver("B2", "B2", .available)))
