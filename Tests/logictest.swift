@@ -4499,6 +4499,49 @@ do {
           "scroll fades: one point past the bottom fades a twelfth of the way")
     check(ScrollEdgeFades.of(contentHeight: 1000, visibleTop: 300, visibleHeight: 400, fade: 0) == .none,
           "scroll fades: no fade height gives no fade")
+
+    let tap = StatusItemClick.action
+    check(tap(true, nil, 100) == .close, "menu bar icon: a click while the panel is open closes it")
+    check(tap(false, nil, 100) == .open, "menu bar icon: a click while the panel is closed opens it")
+    // The press on the icon closes the popover before its click arrives; the
+    // closing press and the latest press are the same press, read twice.
+    check(tap(false, 98.8, 98.805) == .stayClosed,
+          "menu bar icon: the click whose press closed the panel leaves it closed, however long it was held")
+    check(tap(false, 100, 100.12) == .open,
+          "menu bar icon: a quick second click after a press closed the panel opens it")
+    check(tap(false, 98, 100) == .open,
+          "menu bar icon: a click long after the panel closed under the icon opens it")
+    // Clicks 1 to 5 on the icon, 400 ms apart, open and close the panel in
+    // turn. The press of a closing click closes the popover first; AppKit may
+    // then drop that click's action or still deliver it.
+    for actionDropped in [true, false] {
+        var shown = false
+        var closingPress: TimeInterval?
+        var states: [Bool] = []
+        for press in [100.0, 100.4, 100.8, 101.2, 101.6] {
+            if shown {
+                shown = false
+                closingPress = press
+                if actionDropped { states.append(shown); continue }
+            }
+            if tap(shown, closingPress, press) == .open { shown = true }
+            closingPress = nil
+            states.append(shown)
+        }
+        let how = actionDropped ? "dropped" : "delivered"
+        check(states == [true, false, true, false, true],
+              "menu bar icon: five clicks open, close, open, close, open (closing click's action \(how))",
+              "\(states)")
+    }
+    // The status item's window in AppKit coordinates, at the top of a 900-point screen.
+    let icon = CGRect(x: 1142, y: 876, width: 24, height: 24)
+    let pressed = StatusItemClick.pressClosed
+    check(pressed(CGPoint(x: 1154, y: 888), icon, 0.05), "menu bar icon: a press on the icon closes the panel")
+    check(pressed(CGPoint(x: 1154, y: 900), icon, 0.05),
+          "menu bar icon: a press with the pointer pushed against the top of the screen counts")
+    check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
+    check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
+    check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)

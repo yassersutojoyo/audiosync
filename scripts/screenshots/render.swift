@@ -292,9 +292,8 @@ func panelShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
     let window = ShotWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
     window.appearance = look.appearance
     window.contentView = host
-    // MenuBarView draws its own hairline edge.
-    return framed(capture(host), cornerRadius: MenuBarPanel.cornerRadius, look: look,
-                  fill: look.panelFill, outline: false)
+    // In the app the popover draws the edge; here the frame does.
+    return framed(capture(host), cornerRadius: BrandTokens.Radius.panel, look: look, fill: look.panelFill)
 }
 
 // MARK: - Output

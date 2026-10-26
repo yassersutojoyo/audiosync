@@ -566,28 +566,41 @@ final class SyncDraft: ObservableObject {
 
 // MARK: - Status item and panel
 
-/// The status item and its compact panel. The panel never activates AudioSync,
-/// so opening it doesn't pull the main window in front of other apps.
-final class MenuBarController: NSObject {
+/// The status item and its compact panel, an AppKit popover hanging from the
+/// icon: the system draws its arrow, edge and shadow and animates it in and
+/// out. It never activates AudioSync, so opening it doesn't pull the main
+/// window in front of other apps.
+final class MenuBarController: NSObject, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    private let panel = MenuBarPanel()
+    private let popover = MenuBarPopover()
+    private let host: NSHostingController<MenuBarView>
     private var monitors: [Any] = []
-    /// Set while close() runs: ordering the key panel out makes it resign key,
-    /// which calls close() again.
-    private var closing = false
-    /// Where the panel hangs: the top edge stays put while its content grows or shrinks.
-    private var anchor: (top: CGFloat, midX: CGFloat, screen: NSRect)?
+    private var resignWatch: NSObjectProtocol?
+    /// Open as far as clicks on the icon go. It turns false as the close
+    /// begins, while the popover still animates out: the click that follows
+    /// the press that closed it must leave it closed.
+    private var presented = false
+    /// When the press on the icon that last closed the panel came (system
+    /// uptime): that press closes it before its click arrives.
+    private var closingPress: TimeInterval?
     private var running = false
     private var noticeCount = 0
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
+    /// What the popover's arrow and its gap under the menu bar take from the
+    /// room below it.
+    private static let arrowRoom: CGFloat = 24
+
     init(model: AppModel) {
         self.model = model
+        host = NSHostingController(rootView: MenuBarView(model: model))
         super.init()
-        panel.setRootView(MenuBarView(model: model))
-        panel.onContentSize = { [weak self] size in self?.place(size: size) }
-        panel.onCancel = { [weak self] in self?.close() }
+        // The popover follows the content's size, animating as it changes.
+        host.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = host
+        popover.behavior = .transient
+        popover.delegate = self
         if let button = statusItem.button {
             button.target = self
             button.action = #selector(togglePanel(_:))
@@ -645,140 +658,119 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func togglePanel(_ sender: Any?) {
-        if panel.isVisible { close() } else { show() }
+        // VoiceOver or the keyboard can press the button too, with no mouse press of its own.
+        let byMouse = NSApp.currentEvent.map { $0.type == .leftMouseUp || $0.type == .leftMouseDown } ?? false
+        let action = StatusItemClick.action(panelVisible: presented, closingPress: byMouse ? closingPress : nil,
+                                            latestPress: Self.latestPress)
+        closingPress = nil
+        switch action {
+        case .open: show()
+        case .close: close(); closingPress = nil   // this click closed it; the next one opens it
+        case .stayClosed: DebugTrace.log("[AudioSync] status item click: the press already closed the panel")
+        }
+    }
+
+    /// When the latest mouse press came, in system uptime. The time since it,
+    /// not the button state: a trackpad tap may already be up.
+    private static var latestPress: TimeInterval {
+        ProcessInfo.processInfo.systemUptime
+            - CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
     }
 
     func show() {
-        guard !panel.isVisible, let button = statusItem.button, let item = button.window else { return }
+        guard !presented, let button = statusItem.button, let item = button.window else { return }
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
-        anchor = (top: item.frame.minY - 5, midX: item.frame.midX, screen: screen)
         // The status item's own screen, not the one with keyboard focus.
-        model.panelRoom = item.frame.minY - 5 - screen.minY
+        model.panelRoom = item.frame.minY - Self.arrowRoom - screen.minY
         model.actions.refreshExternalState()
         model.panelSession += 1
-        place(size: panel.idealContentSize)
-        // Key without activating the app: Escape works and the controls draw
-        // as active, but the main window stays where it is.
-        panel.makeKeyAndOrderFront(nil)
+        // The app's appearance, not the menu bar's, which follows the wallpaper.
+        popover.appearance = NSApp.effectiveAppearance
+        // Open at the final size. SwiftUI applies the state set just now (the
+        // refresh can bring in the Cast "Add by Address…" row) on its next
+        // pass, which would come after the popover is shown: it would open at
+        // last time's size and then grow. A layout pass now applies that state
+        // and the size is set before showing, so even the first open after
+        // launch, before the view has been in a window, opens at it.
+        host.view.needsLayout = true
+        host.view.layoutSubtreeIfNeeded()
+        popover.contentSize = host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
+        presented = true
+        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        takeKey()
         DispatchQueue.main.async { button.highlight(true) }
         watchForOutsideClicks()
     }
 
+    /// Closes the panel, animating out. Escape, ⌘W, a click elsewhere and
+    /// the popover closing itself all end in `popoverWillClose`.
     func close() {
-        guard panel.isVisible, !closing else { return }
-        closing = true
-        defer { closing = false }
-        monitors.forEach(NSEvent.removeMonitor)
-        monitors.removeAll()
-        statusItem.button?.highlight(false)
-        panel.orderOut(nil)
+        guard presented else { return }
+        popover.performClose(nil)
+        if popover.isShown { popover.close() }   // performClose can be refused; this can't
+        finishClose()
     }
 
-    /// Like a menu: a click anywhere else closes the panel. Clicks in other
-    /// apps arrive through the global monitor, clicks in AudioSync's own
-    /// windows through the local one. Menus opened from the panel (the source
-    /// picker) aren't titled windows, so picking from them keeps it open.
+    func popoverWillClose(_ notification: Notification) { finishClose() }
+
+    /// What every close does once, however it began.
+    private func finishClose() {
+        guard presented else { return }
+        presented = false
+        let press = Self.latestPress
+        if let item = statusItem.button?.window,
+           StatusItemClick.pressClosed(pointer: NSEvent.mouseLocation, itemFrame: item.frame,
+                                       secondsSincePress: ProcessInfo.processInfo.systemUptime - press) {
+            closingPress = press
+        }
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors.removeAll()
+        if let resignWatch { NotificationCenter.default.removeObserver(resignWatch) }
+        resignWatch = nil
+        statusItem.button?.highlight(false)
+    }
+
+    /// Key without activating AudioSync, as the panel was before: Escape and
+    /// Full Keyboard Access work, and the main window stays where it is. A
+    /// popover's window takes key only in an active app, unless it is a
+    /// panel marked non-activating, so it is marked that way when it is one.
+    /// Like a menu, it goes away once focus moves elsewhere: ⌘Tab, Spotlight,
+    /// a system prompt.
+    private func takeKey() {
+        guard let window = host.view.window else { return }
+        if let panel = window as? NSPanel { panel.styleMask.insert(.nonactivatingPanel) }
+        window.makeKey()
+        resignWatch = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
+                                                             object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.close() }
+        }
+    }
+
+    /// Like a menu: a click anywhere else closes the panel. The popover sees
+    /// clicks in AudioSync's own windows, but not in other apps while
+    /// AudioSync isn't active, so those arrive through the global monitor;
+    /// the local one covers our windows too, whatever the popover does.
+    /// Menus opened from the panel (the source picker) aren't titled
+    /// windows, so picking from them keeps it open.
     private func watchForOutsideClicks() {
         let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         if let global = NSEvent.addGlobalMonitorForEvents(matching: clicks, handler: { [weak self] _ in
             self?.close()
         }) { monitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: clicks, handler: { [weak self] event in
-            if let self, let window = event.window, window !== self.panel,
+            if let self, let window = event.window, window !== self.host.view.window,
                window !== self.statusItem.button?.window, window.styleMask.contains(.titled) {
                 self.close()
             }
             return event
         }) { monitors.append(local) }
     }
-
-    private func place(size: CGSize) {
-        guard let anchor, size.width > 0, size.height > 0 else { return }
-        let x = min(max(anchor.midX - size.width / 2, anchor.screen.minX + 8),
-                    anchor.screen.maxX - 8 - size.width)
-        // Never past the bottom of the screen, whatever the content asks for.
-        let height = min(size.height, anchor.top - anchor.screen.minY - 8)
-        panel.setFrame(NSRect(x: x.rounded(), y: (anchor.top - height).rounded(),
-                              width: size.width, height: height), display: true)
-        panel.invalidateShadow()
-    }
 }
 
-/// A borderless, non-activating panel with the popover material and rounded
-/// corners, the shape of a menu bar extra.
-final class MenuBarPanel: NSPanel {
-    static let cornerRadius = BrandTokens.Radius.panel
-    var onCancel: () -> Void = {}
-    /// The content's ideal size changed (a notice appeared, a speaker left…).
-    var onContentSize: (CGSize) -> Void = { _ in }
-    private let effect = NSVisualEffectView()
-    private var hostController: NSViewController?
-    private var measure: () -> CGSize = { .zero }
-    private var sizeObservation: NSKeyValueObservation?
-
-    init() {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 280, height: 200),
-                   styleMask: [.borderless, .nonactivatingPanel],
-                   backing: .buffered, defer: true)
-        isFloatingPanel = true
-        level = .popUpMenu
-        hidesOnDeactivate = false
-        isMovable = false
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = true
-        isReleasedWhenClosed = false
-        canHide = false   // ⌘H would hide it without closing it, leaving the item highlighted
-        animationBehavior = .utilityWindow
-        collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .transient, .ignoresCycle]
-
-        effect.material = .popover
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.maskImage = Self.roundedMask(radius: Self.cornerRadius)
-        effect.autoresizingMask = [.width, .height]
-        contentView = effect
-    }
-
-    func setRootView<Content: View>(_ view: Content) {
-        let host = NSHostingController(rootView: view)
-        host.sizingOptions = [.preferredContentSize]
-        host.view.frame = effect.bounds
-        host.view.autoresizingMask = [.width, .height]
-        effect.addSubview(host.view)
-        measure = { [unowned host] in host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000)) }
-        sizeObservation = host.observe(\.preferredContentSize, options: [.new]) { [weak self] host, _ in
-            self?.onContentSize(host.preferredContentSize)
-        }
-        hostController = host
-    }
-
-    /// What the content wants, measured now.
-    var idealContentSize: CGSize { measure() }
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-    override func cancelOperation(_ sender: Any?) { onCancel() }
-    override func performClose(_ sender: Any?) { onCancel() }   // ⌘W, like Escape
-
-    /// Like a menu, it goes away once focus moves elsewhere: ⌘Tab, Spotlight,
-    /// a system prompt. Menus opened from the panel don't take key status.
-    override func resignKey() {
-        super.resignKey()
-        if isVisible { onCancel() }
-    }
-
-    private static func roundedMask(radius: CGFloat) -> NSImage {
-        let edge = 2 * radius + 1
-        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-            return true
-        }
-        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
-        image.resizingMode = .stretch
-        return image
-    }
+/// The panel's popover. Escape closes it, as it closes a menu.
+final class MenuBarPopover: NSPopover {
+    override func cancelOperation(_ sender: Any?) { performClose(sender) }
 }
 
 // MARK: - Menu bar panel view
@@ -864,9 +856,8 @@ struct MenuBarView: View {
         }
         .padding(BrandTokens.Spacing.panelPadding)
         .frame(width: 280)
-        .background(RoundedRectangle(cornerRadius: MenuBarPanel.cornerRadius).fill(Brand.panelBacking))
-        .overlay(RoundedRectangle(cornerRadius: MenuBarPanel.cornerRadius)
-            .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+        // Over the popover's material; the popover rounds it and draws the edge.
+        .background(Brand.panelBacking.ignoresSafeArea())
         .tint(accent)
     }
 
