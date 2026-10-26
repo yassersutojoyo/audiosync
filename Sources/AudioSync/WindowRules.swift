@@ -22,6 +22,41 @@ enum WindowPlacement {
     }
 }
 
+/// What a click on the menu bar icon does to its panel. The press on the icon
+/// can take key from the panel and close it before the click itself arrives,
+/// so a click right after the panel closed during a press on the icon is the
+/// click that closed it, and opening the panel again would undo it.
+enum StatusItemClick: Equatable {
+    case open
+    case close
+    /// The click that already closed the panel: leave it closed.
+    case stayClosed
+
+    /// How long a press on the icon may last and still be the one that closed the panel.
+    static let pressWindow: TimeInterval = 1.5
+
+    /// How recent a mouse press must be for the panel closing now to be its doing.
+    static let pressRecency: TimeInterval = 0.5
+
+    /// Whether the panel closing now was caused by a press on the icon: a
+    /// press came just now with the pointer on `itemFrame`. AppKit's y grows
+    /// upward, and the top edge counts: a pointer pushed against the top of
+    /// the screen sits exactly on it.
+    static func pressClosed(pointer: CGPoint, itemFrame: CGRect, secondsSincePress: TimeInterval) -> Bool {
+        secondsSincePress >= 0 && secondsSincePress < pressRecency
+            && pointer.x >= itemFrame.minX && pointer.x < itemFrame.maxX
+            && pointer.y > itemFrame.minY && pointer.y <= itemFrame.maxY
+    }
+
+    /// `closedUnderItemAt` is when the panel last closed during a press on
+    /// the icon, if it did; `now` uses the same clock (system uptime).
+    static func action(panelVisible: Bool, closedUnderItemAt: TimeInterval?, now: TimeInterval) -> StatusItemClick {
+        if panelVisible { return .close }
+        if let closed = closedUnderItemAt, now - closed >= 0, now - closed < pressWindow { return .stayClosed }
+        return .open
+    }
+}
+
 /// How strongly a scrolling column fades at its top and bottom edges, from 0
 /// (nothing hidden past that edge) to 1 (at least the fade's height hidden).
 struct ScrollEdgeFades: Equatable {

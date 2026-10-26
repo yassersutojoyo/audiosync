@@ -4202,6 +4202,27 @@ do {
           "scroll fades: one point past the bottom fades a twelfth of the way")
     check(ScrollEdgeFades.of(contentHeight: 1000, visibleTop: 300, visibleHeight: 400, fade: 0) == .none,
           "scroll fades: no fade height gives no fade")
+
+    let tap = StatusItemClick.action
+    check(tap(true, nil, 100) == .close, "menu bar icon: a click while the panel is open closes it")
+    check(tap(false, nil, 100) == .open, "menu bar icon: a click while the panel is closed opens it")
+    // On macOS 26 and later the press on the icon takes key from the panel,
+    // which closes it about 80 ms before the click arrives.
+    check(tap(false, 99.92, 100) == .stayClosed,
+          "menu bar icon: the click whose press just closed the panel leaves it closed")
+    check(tap(false, 98.8, 100) == .stayClosed,
+          "menu bar icon: a press held for over a second still counts as that click")
+    check(tap(false, 98, 100) == .open,
+          "menu bar icon: a click long after the panel closed under the icon opens it")
+    // The status item's window in AppKit coordinates, at the top of a 900-point screen.
+    let icon = CGRect(x: 1142, y: 876, width: 24, height: 24)
+    let pressed = StatusItemClick.pressClosed
+    check(pressed(CGPoint(x: 1154, y: 888), icon, 0.05), "menu bar icon: a press on the icon closes the panel")
+    check(pressed(CGPoint(x: 1154, y: 900), icon, 0.05),
+          "menu bar icon: a press with the pointer pushed against the top of the screen counts")
+    check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
+    check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
+    check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)

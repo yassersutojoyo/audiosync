@@ -570,6 +570,9 @@ final class MenuBarController: NSObject {
     /// Set while close() runs: ordering the key panel out makes it resign key,
     /// which calls close() again.
     private var closing = false
+    /// When the panel last closed during a press on the icon (system uptime):
+    /// that press closes it before its click arrives.
+    private var closedUnderItemAt: TimeInterval?
     /// Where the panel hangs: the top edge stays put while its content grows or shrinks.
     private var anchor: (top: CGFloat, midX: CGFloat, screen: NSRect)?
     private var running = false
@@ -640,7 +643,14 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func togglePanel(_ sender: Any?) {
-        if panel.isVisible { close() } else { show() }
+        let action = StatusItemClick.action(panelVisible: panel.isVisible, closedUnderItemAt: closedUnderItemAt,
+                                            now: ProcessInfo.processInfo.systemUptime)
+        closedUnderItemAt = nil
+        switch action {
+        case .open: show()
+        case .close: close(); closedUnderItemAt = nil   // this click closed it; the next one opens it
+        case .stayClosed: DebugTrace.log("[AudioSync] status item click: the press already closed the panel")
+        }
     }
 
     func show() {
@@ -653,14 +663,30 @@ final class MenuBarController: NSObject {
         model.panelSession += 1
         place(size: panel.idealContentSize)
         // Key without activating the app: Escape works and the controls draw
-        // as active, but the main window stays where it is.
+        // as active, but the main window stays where it is. A short fade-in,
+        // like a popover's; closing stays instant so the click that closes it
+        // feels immediate.
+        panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = MenuBarPanel.fadeIn
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
         DispatchQueue.main.async { button.highlight(true) }
         watchForOutsideClicks()
     }
 
     func close() {
         guard panel.isVisible, !closing else { return }
+        // The time since the last press, not the button state: a trackpad tap
+        // may already be up by now.
+        if let item = statusItem.button?.window,
+           StatusItemClick.pressClosed(pointer: NSEvent.mouseLocation, itemFrame: item.frame,
+                                       secondsSincePress: CGEventSource.secondsSinceLastEventType(
+                                           .combinedSessionState, eventType: .leftMouseDown)) {
+            closedUnderItemAt = ProcessInfo.processInfo.systemUptime
+        }
         closing = true
         defer { closing = false }
         monitors.forEach(NSEvent.removeMonitor)
@@ -703,6 +729,8 @@ final class MenuBarController: NSObject {
 /// corners, the shape of a menu bar extra.
 final class MenuBarPanel: NSPanel {
     static let cornerRadius = BrandTokens.Radius.panel
+    /// Seconds the panel takes to fade in, about what a popover takes.
+    static let fadeIn: TimeInterval = 0.15
     var onCancel: () -> Void = {}
     /// The content's ideal size changed (a notice appeared, a speaker left…).
     var onContentSize: (CGSize) -> Void = { _ in }
@@ -724,7 +752,7 @@ final class MenuBarPanel: NSPanel {
         hasShadow = true
         isReleasedWhenClosed = false
         canHide = false   // ⌘H would hide it without closing it, leaving the item highlighted
-        animationBehavior = .utilityWindow
+        animationBehavior = .none   // MenuBarController.show fades it in
         collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .transient, .ignoresCycle]
 
         effect.material = .popover
