@@ -532,10 +532,19 @@ fn a_tls_1_2_only_device_back_with_a_new_certificate_is_reconnected_and_plays_on
     );
 }
 
-/// Sends `level`, waits until the host shows `shown`, the group's answer,
-/// and returns the `SET_VOLUME` count once that answer settled for 500 ms.
+/// Sends `level`, waits until the fake logged it and the host shows `shown`,
+/// the group's answer, and returns the `SET_VOLUME` count once that answer
+/// settled for 500 ms.
 fn group_answers(session: &mut CastSession, device: &FakeDevice, level: f64, shown: f64) -> usize {
+    let before = levels_sent(device).len();
     session.set_volume(level).expect("sent");
+    // The host may already show `shown` from the previous answer, so the
+    // count is only read once the fake has logged this send.
+    let until = Instant::now() + Duration::from_secs(3);
+    while levels_sent(device).len() <= before {
+        assert!(Instant::now() < until, "SET_VOLUME {level} never reached the fake");
+        run(session, Duration::from_millis(20));
+    }
     wait_level(session, shown);
     let sent = levels_sent(device).len();
     run(session, Duration::from_millis(500));
