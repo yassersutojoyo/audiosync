@@ -75,9 +75,9 @@ struct EveryTimeGuard: Equatable {
     /// click bought, so every mark goes (a retry or a source change inside
     /// the stream keeps them, S223). Of `asking`, the speakers still on go
     /// off with the notice that they need a PIN.
-    mutating func streamEnded(_ cause: StreamEnd, streaming: Bool,
+    mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
                               asking: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
-        guard cause.endsStream(streaming: streaming) else { return [] }
+        guard cause.endsStream(streaming: streaming, midRebuild: midRebuild) else { return [] }
         byHand.removeAll()
         return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
     }
@@ -91,7 +91,7 @@ enum StreamEnd: Equatable {
     /// The Mac goes to sleep, which counts as streaming stopping.
     case sleep
 
-    func endsStream(streaming: Bool) -> Bool {
+    func endsStream(streaming: Bool, midRebuild: Bool) -> Bool {
         guard streaming else { return false }
         guard case .stopped(let reason) = self else { return true }
         // A quit leaves the switches for the next launch, which turns such a speaker off anyway.

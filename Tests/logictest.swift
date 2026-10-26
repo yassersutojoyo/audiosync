@@ -2750,6 +2750,21 @@ do {
         check(off == expected && marked.byHand.isEmpty,
               "every time: \(what) ends the stream: the by-hand mark is gone", "\(off), \(marked.byHand)")
     }
+    // A rebuild (a source change, say) stops the engine before it starts it
+    // again; when that start fails, streaming has stopped and the mark ends.
+    var rebuilt = EveryTimeGuard()
+    rebuilt.turnedOnByHand(["native:S1"])
+    let failedRebuild = rebuilt.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
+                                            asking: ["native:S1"], enabled: ["native:S1"])
+    check(failedRebuild == [.init(id: "native:S1", reason: .needsCode)] && rebuilt.byHand.isEmpty,
+          "every time: a rebuild after a source change that fails to start ends the stream: the by-hand mark is gone",
+          "\(failedRebuild), \(rebuilt.byHand)")
+    var quitMidRebuild = EveryTimeGuard()
+    quitMidRebuild.turnedOnByHand(["native:S1"])
+    let quitOff = quitMidRebuild.streamEnded(.stopped(.quitting), streaming: false, midRebuild: true,
+                                             asking: ["native:S1"], enabled: ["native:S1"])
+    check(quitOff.isEmpty && quitMidRebuild.byHand == ["native:S1"],
+          "every time: quitting during a rebuild keeps the by-hand mark", "\(quitOff)")
     // A source change rebuilds inside the stream, and quitting leaves the
     // switches for the next launch: the mark stays.
     let keeps: [(StreamEnd, Bool)] = [(.stopped(.sourceChanged), true), (.stopped(.quitting), true),
