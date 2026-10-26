@@ -81,9 +81,9 @@ use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
 use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    AIRPLAY_PCM_ENV, AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent, ReceiverInfo, Sender,
-    SenderConfig, SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions, SpeakerState,
-    airplay2_switch, pcm_debug_devices,
+    AIRPLAY_PCM_ENV, AIRPLAY2_AUTO_ENV, AIRPLAY2_SWITCH_ENV, NowPlaying, ReceiverEvent,
+    ReceiverInfo, Sender, SenderConfig, SenderEvent, SpeakerError, SpeakerEvent, SpeakerOptions,
+    SpeakerState, airplay2_auto, airplay2_switch, pcm_debug_devices,
 };
 use audiosync_airplay::stream::{
     DEFAULT_LATENCY_FRAMES, MAX_DELAY, SpeakerCounters, StreamCounters,
@@ -220,6 +220,12 @@ pub trait AirPlayLink {
         false
     }
 
+    /// Whether this sender prefers AirPlay 2 for every receiver that speaks
+    /// it (P214, S312).
+    fn airplay2_preferred(&self) -> bool {
+        false
+    }
+
     /// The stored AirPlay 2 device ID, for its AirPlay 2 sessions.
     fn set_airplay2_device_id(&mut self, _id: [u8; 6]) {}
 }
@@ -257,27 +263,47 @@ pub fn airplay2_on(saved: bool, env: Option<&str>) -> bool {
     saved || airplay2_switch(env)
 }
 
+/// Whether AirPlay 2 is automatic per receiver for this launch (S312): the
+/// build's flag, or `AUDIOSYNC_AIRPLAY2_AUTO`.
+pub fn airplay2_auto_on() -> bool {
+    airplay2_auto(std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref())
+}
+
+/// The sender's AirPlay 2 path and preference (S312): the switch is the
+/// saved setting or `switch_env`, and the flag `auto` decides what it means.
+pub fn airplay2_config(saved: bool, switch_env: Option<&str>, auto: bool) -> SenderConfig {
+    SenderConfig::default().with_airplay2_switch(auto, airplay2_on(saved, switch_env))
+}
+
 /// The real sender.
 pub struct SenderLink {
     sender: Sender,
     airplay2: bool,
+    airplay2_preferred: bool,
 }
 
 impl SenderLink {
     /// Starts the sender, whose stream and threads run from now on, and
     /// gives its audio input for the capture. `saved_airplay2` is File >
-    /// AirPlay 2 (Experimental) as read at launch.
+    /// AirPlay 2 (Experimental), or Prefer AirPlay 2 under the flag, as read
+    /// at launch.
     pub fn start(saved_airplay2: bool) -> io::Result<(SenderLink, InputWriter)> {
-        let config = SenderConfig {
-            airplay2: airplay2_on(
-                saved_airplay2,
-                std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
-            ),
-            ..SenderConfig::default()
-        };
+        let config = airplay2_config(
+            saved_airplay2,
+            std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
+            airplay2_auto_on(),
+        );
         let airplay2 = config.airplay2;
+        let airplay2_preferred = config.airplay2_preferred;
         let (sender, input) = Sender::start(config)?;
-        Ok((SenderLink { sender, airplay2 }, input))
+        Ok((
+            SenderLink {
+                sender,
+                airplay2,
+                airplay2_preferred,
+            },
+            input,
+        ))
     }
 
     /// Starts browsing for receivers, and gives the remote control its
@@ -406,6 +432,10 @@ impl AirPlayLink for SenderLink {
 
     fn airplay2(&self) -> bool {
         self.airplay2
+    }
+
+    fn airplay2_preferred(&self) -> bool {
+        self.airplay2_preferred
     }
 
     fn set_airplay2_device_id(&mut self, id: [u8; 6]) {
@@ -654,17 +684,19 @@ pub fn availability(info: &ReceiverInfo, paired: bool) -> AirPlayAvailability {
 /// switch on, and then always with HomeKit credentials stored
 /// (`homekit_stored`), otherwise only when AirPlay 1 can't drive it, by
 /// discovery or by how its last AirPlay 1 attempt ended
-/// (`airplay1_outcome`, P2), the input the sender decides on.
+/// (`airplay1_outcome`, P2), the input the sender decides on, or when the
+/// sender prefers AirPlay 2 (`preferred`, P214).
 pub fn reached_over_airplay2(
     info: &ReceiverInfo,
     airplay2: bool,
+    preferred: bool,
     airplay1_outcome: Option<ErrorKind>,
     homekit_stored: bool,
 ) -> bool {
     airplay2
         && info
             .device
-            .choose_path_paired(true, airplay1_outcome, homekit_stored)
+            .choose_path_preferring(true, preferred, airplay1_outcome, homekit_stored)
             == Ok(ProtocolPath::AirPlay2)
 }
 
@@ -1100,6 +1132,9 @@ pub struct AirPlaySpeakers {
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
     /// to AirPlay 2, as the sender keeps it while the speaker stays added.
     airplay1_outcome: BTreeMap<String, ErrorKind>,
+    /// The path each running session takes, as the sender reported it: the
+    /// row names that path until the session ends (P214, spec S313).
+    session_paths: BTreeMap<String, ProtocolPath>,
     streaming: bool,
     master: f64,
     /// The zone volume of each speaker ID in a zone (S249); one not here is
@@ -1197,6 +1232,7 @@ impl AirPlaySpeakers {
             paired_in_attempt: BTreeSet::new(),
             paired_for_session: BTreeSet::new(),
             airplay1_outcome: BTreeMap::new(),
+            session_paths: BTreeMap::new(),
             streaming: false,
             master,
             zones: BTreeMap::new(),
@@ -1282,6 +1318,7 @@ impl AirPlaySpeakers {
         self.pairings.clear();
         self.ending.clear();
         self.airplay1_outcome.clear();
+        self.session_paths.clear();
         // A password prompt still waiting (discovery stopped, the sessions
         // didn't) stays, as the speaker joins with it once listed again;
         // one for a pairing goes with the pairing, and the speaker stays off.
@@ -1337,6 +1374,7 @@ impl AirPlaySpeakers {
         self.ending.clear();
         self.password_attempts.clear();
         self.airplay1_outcome.clear();
+        self.session_paths.clear();
         // Its prompts go with it, as on the Mac. A speaker left on without
         // its password would stay silent, so it goes off with a notice.
         for (id, ask) in std::mem::take(&mut self.password_asks) {
@@ -1675,10 +1713,20 @@ impl AirPlaySpeakers {
             .is_some_and(|listed| self.reached_over_airplay2(id, &listed.info))
     }
 
+    /// A running session's own path comes first (spec S313).
     fn reached_over_airplay2(&self, id: &str, info: &ReceiverInfo) -> bool {
+        if let Some(path) = self.session_paths.get(id) {
+            return *path == ProtocolPath::AirPlay2;
+        }
         let outcome = self.airplay1_outcome.get(id).copied();
         let homekit_stored = self.store.homekit(id).is_some();
-        reached_over_airplay2(info, self.link.airplay2(), outcome, homekit_stored)
+        reached_over_airplay2(
+            info,
+            self.link.airplay2(),
+            self.link.airplay2_preferred(),
+            outcome,
+            homekit_stored,
+        )
     }
 
     /// Whether a listed speaker can join the stream: it can play, or it asks
@@ -3436,7 +3484,8 @@ impl AirPlaySpeakers {
             && matches!(kind, ErrorKind::Unsupported(_) | ErrorKind::Refused)
             && self.listed.get(id).is_some_and(|listed| {
                 let device = &listed.info.device;
-                device.choose_path(true, None) == Ok(ProtocolPath::AirPlay1)
+                device.choose_path_preferring(true, self.link.airplay2_preferred(), None, false)
+                    == Ok(ProtocolPath::AirPlay1)
                     && device.choose_path(true, Some(kind)) == Ok(ProtocolPath::AirPlay2)
             });
         if moved {
@@ -3863,6 +3912,36 @@ impl AirPlaySpeakers {
         event: SpeakerEvent,
         events: &mut Vec<BackendEvent>,
     ) -> bool {
+        let path_changed = match &event {
+            SpeakerEvent::Path(path) => return self.note_session_path(id, Some(*path)),
+            SpeakerEvent::Error(_)
+            | SpeakerEvent::State(SpeakerState::Stopped | SpeakerState::Failed) => {
+                self.note_session_path(id, None)
+            }
+            _ => false,
+        };
+        self.session_event(id, event, events) || path_changed
+    }
+
+    /// Keeps the path a session of `id` takes, or forgets it once the
+    /// session ends (`None`). Returns whether its row's path changed.
+    fn note_session_path(&mut self, id: &str, path: Option<ProtocolPath>) -> bool {
+        let before = self.over_airplay2(id);
+        match path {
+            Some(path) => self.session_paths.insert(id.to_owned(), path),
+            None => self.session_paths.remove(id),
+        };
+        before != self.over_airplay2(id)
+    }
+
+    /// Takes in any other event of a session. Returns whether the speaker
+    /// list changed.
+    fn session_event(
+        &mut self,
+        id: &str,
+        event: SpeakerEvent,
+        events: &mut Vec<BackendEvent>,
+    ) -> bool {
         // P184 stops reads for one session only: the next one is asked again.
         if let SpeakerEvent::State(state) = &event
             && *state != SpeakerState::Playing
@@ -4046,7 +4125,7 @@ impl AirPlaySpeakers {
                     .log(|| format!("AirPlay speaker {} trace: {line}", self.label(id)));
                 false
             }
-            SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) => false,
+            SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) | SpeakerEvent::Path(_) => false,
         }
     }
 
@@ -4243,6 +4322,35 @@ pub mod tests {
         Device::from_records(DeviceKey::Id(device_id), None, Some(&record)).expect("a device")
     }
 
+    /// A receiver that speaks both: an open RAOP service and an AirPlay
+    /// service that asks for nothing.
+    pub fn dual_device(id: u8, name: &str) -> Device {
+        let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
+        let address = vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 14)))];
+        let raop = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: format!("{device_id}@{name}"),
+            host: format!("speaker-{id}.local"),
+            port: 7000,
+            txt: OPEN_TXT.iter().map(|s| s.as_bytes().to_vec()).collect(),
+            addresses: address.clone(),
+        };
+        let airplay = ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: name.to_owned(),
+            host: format!("speaker-{id}.local"),
+            port: 7000,
+            txt: vec![
+                format!("deviceid={device_id}").into_bytes(),
+                b"features=0x0,0x40".to_vec(),
+                b"flags=0x0".to_vec(),
+            ],
+            addresses: address,
+        };
+        Device::from_records(DeviceKey::Id(device_id), Some(&raop), Some(&airplay))
+            .expect("a device")
+    }
+
     /// The ID the backend gives `device`.
     pub fn id_of(device: &Device) -> String {
         speaker_id(&device.key)
@@ -4304,6 +4412,8 @@ pub mod tests {
         stopped: bool,
         /// The AirPlay 2 switch.
         airplay2: bool,
+        /// The AirPlay 2 preference.
+        airplay2_preferred: bool,
     }
 
     /// A fake sender: records every call, and hands out the events a test
@@ -4323,6 +4433,11 @@ pub mod tests {
         /// Turns the AirPlay 2 switch on for the links made after.
         pub fn set_airplay2(&self, on: bool) {
             self.0.borrow_mut().airplay2 = on;
+        }
+
+        /// Sets the AirPlay 2 preference (P214) for the links made after.
+        pub fn set_airplay2_preferred(&self, on: bool) {
+            self.0.borrow_mut().airplay2_preferred = on;
         }
 
         /// A link for the backend.
@@ -4639,6 +4754,10 @@ pub mod tests {
 
         fn airplay2(&self) -> bool {
             self.0.borrow().airplay2
+        }
+
+        fn airplay2_preferred(&self) -> bool {
+            self.0.borrow().airplay2_preferred
         }
     }
 
@@ -5397,6 +5516,58 @@ pub mod tests {
         second.appear(&both);
         airplay.poll();
         assert!(!airplay.speakers()[0].airplay2, "Retry forgot the refusal");
+    }
+
+    /// A sender that stops, or Retry's new one, ends every session, and no
+    /// Stopped comes from it: a dual speaker that played over AirPlay 1
+    /// reads the path a new session takes again (spec S313).
+    // covers: S313
+    #[test]
+    fn a_stopped_or_new_sender_forgets_the_path_a_session_took() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        fake.set_airplay2_preferred(true);
+        let mut airplay = speakers(&fake);
+        let den = dual_device(12, "Den");
+        let id = id_of(&den);
+        fake.appear(&den);
+        airplay.poll();
+        assert!(
+            airplay.speakers()[0].airplay2,
+            "the preference picks AirPlay 2"
+        );
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        let on_airplay1 = |fake: &FakeAirPlay| {
+            fake.push(SenderEvent::Speaker {
+                key: den.key.clone(),
+                event: SpeakerEvent::Path(ProtocolPath::AirPlay1),
+            });
+        };
+        on_airplay1(&fake);
+        airplay.poll();
+        assert!(
+            !airplay.speakers()[0].airplay2,
+            "its session plays over AirPlay 1"
+        );
+
+        fake.stop_running();
+        airplay.poll();
+        fake.run_again();
+        fake.appear(&den);
+        airplay.poll();
+        assert!(airplay.speakers()[0].airplay2, "the stop ended the session");
+
+        on_airplay1(&fake);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].airplay2);
+        let second = FakeAirPlay::new();
+        second.set_airplay2(true);
+        second.set_airplay2_preferred(true);
+        airplay.replace_link(second.link());
+        second.appear(&den);
+        airplay.poll();
+        assert!(airplay.speakers()[0].airplay2, "Retry ended the session");
     }
 
     #[test]
@@ -6743,6 +6914,26 @@ pub mod tests {
         assert!(!airplay2_on(false, Some("0")));
         assert!(airplay2_on(true, None));
         assert!(airplay2_on(false, Some("1")));
+    }
+
+    #[test]
+    fn the_airplay2_flag_keeps_the_path_on_and_the_switch_prefers_airplay2() {
+        // Spec S312: with the flag off the switch alone sets the path.
+        for (saved, env, on) in [
+            (false, None, false),
+            (true, None, true),
+            (false, Some("1"), true),
+        ] {
+            let config = airplay2_config(saved, env, false);
+            assert_eq!(config.airplay2, on);
+            assert!(!config.airplay2_preferred);
+        }
+        let off = airplay2_config(false, None, true);
+        assert!(off.airplay2 && !off.airplay2_preferred);
+        for (saved, env) in [(true, None), (false, Some("1"))] {
+            let on = airplay2_config(saved, env, true);
+            assert!(on.airplay2 && on.airplay2_preferred);
+        }
     }
 
     #[test]

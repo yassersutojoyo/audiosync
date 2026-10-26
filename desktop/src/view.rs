@@ -2880,19 +2880,25 @@ impl App {
     /// Saved for the next launch: the running sender keeps the mode it
     /// started with, which a notice says until the item is back to it.
     fn set_airplay2_experimental(&self, on: bool) {
+        let prefer = self.backend.borrow().airplay2_auto();
         {
             let mut ui = self.ui.borrow_mut();
             ui.airplay2_experimental = on;
             ui.airplay2_notice = (on != ui.airplay2_at_launch).then(|| ui_model::Notice {
                 id: AIRPLAY2_NOTICE_ID,
                 subject: "AirPlay 2 (Experimental)".to_owned(),
-                message: NoticeMessage::AirPlay2NextLaunch { on },
+                message: NoticeMessage::AirPlay2NextLaunch { on, prefer },
                 time: crate::platform::notice_time(),
             });
         }
         self.log.log(|| {
             format!(
-                "AirPlay 2 (experimental): turned {}; applies at the next launch",
+                "{}: turned {}; applies at the next launch",
+                if prefer {
+                    "Prefer AirPlay 2"
+                } else {
+                    "AirPlay 2 (experimental)"
+                },
                 if on { "on" } else { "off" }
             )
         });
@@ -2958,6 +2964,9 @@ impl App {
     /// else the primary one, where it opens centered), maximized when it was.
     fn restore_view(&self) {
         let saved = self.backend.borrow().view_settings();
+        let airplay2_auto = self.backend.borrow().airplay2_auto();
+        self.main.set_airplay2_auto(airplay2_auto);
+        self.help.set_airplay2_auto(airplay2_auto);
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
         self.ui.borrow_mut().remote = saved.remote;
@@ -4747,12 +4756,12 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::LaunchAtLoginOffInSettings => {
             strings.get_notice_launch_at_login_off_in_settings()
         }
-        NoticeMessage::AirPlay2NextLaunch { on: true } => {
-            strings.get_notice_airplay2_on_next_launch()
-        }
-        NoticeMessage::AirPlay2NextLaunch { on: false } => {
-            strings.get_notice_airplay2_off_next_launch()
-        }
+        NoticeMessage::AirPlay2NextLaunch { on, prefer } => match (on, prefer) {
+            (true, false) => strings.get_notice_airplay2_on_next_launch(),
+            (false, false) => strings.get_notice_airplay2_off_next_launch(),
+            (true, true) => strings.get_notice_airplay2_prefer_on_next_launch(),
+            (false, true) => strings.get_notice_airplay2_prefer_off_next_launch(),
+        },
         NoticeMessage::RemoteOnPublicNetwork => strings.get_remote_public_network(),
         NoticeMessage::GroupsBecameZones => strings.get_notice_groups_became_zones(),
         NoticeMessage::PresetLeftOff {
@@ -5114,13 +5123,26 @@ mod tests {
         assert_eq!(notices.len(), 1);
         assert_eq!(
             notices[0].message,
-            NoticeMessage::AirPlay2NextLaunch { on: true }
+            NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false
+            }
         );
         assert_eq!(app.main.get_notices().row_count(), 1);
         let strings = app.main.global::<Strings>();
         assert_eq!(
             notice_item(&strings, &notices[0]).message,
             "AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+        );
+        // Under the AirPlay 2 flag the item is Prefer AirPlay 2 (spec S313).
+        let mut preferred = notices[0].clone();
+        preferred.message = NoticeMessage::AirPlay2NextLaunch {
+            on: false,
+            prefer: true,
+        };
+        assert_eq!(
+            notice_item(&strings, &preferred).message,
+            "Prefer AirPlay 2 is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
         );
 
         app.main.invoke_airplay2_experimental_toggled(false);
@@ -8556,8 +8578,14 @@ mod tests {
             NoticeMessage::LaunchAtLoginFailed,
             NoticeMessage::LaunchAtLoginNotRemoved,
             NoticeMessage::LaunchAtLoginOffInSettings,
-            NoticeMessage::AirPlay2NextLaunch { on: true },
-            NoticeMessage::AirPlay2NextLaunch { on: false },
+            NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false,
+            },
+            NoticeMessage::AirPlay2NextLaunch {
+                on: false,
+                prefer: true,
+            },
             NoticeMessage::RemoteOnPublicNetwork,
         ];
         for message in messages {
