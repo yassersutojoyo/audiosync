@@ -47,7 +47,7 @@ fn samsung_tv(server: &Ap2Server) -> Device {
 }
 
 /// The television listing the low features bits `low`, such as the
-/// metadata bits (P128).
+/// metadata bits (P14, P123).
 fn samsung_tv_showing(server: &Ap2Server, low: u32) -> Device {
     let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 0x55]);
     let record = ServiceRecord {
@@ -774,6 +774,11 @@ fn cell(id: &str, measured: &str) {
 
 /// The longest a pause may take to quiet the television (weekend sheet W2).
 const QUIET_WITHIN: Duration = Duration::from_secs(1);
+/// How long each pause is watched for audio, past [`QUIET_WITHIN`] so a
+/// sender that keeps streaming shows.
+const PAUSE_WATCH: Duration = Duration::from_secs(2);
+/// Audio sent just before the FLUSH may still be on its way.
+const IN_FLIGHT: Duration = Duration::from_millis(50);
 
 // The weekend sheet's W2 on the fake Samsung: each pause reaches the
 // television as its FLUSH within a second, and no audio arrives after it.
@@ -800,8 +805,23 @@ fn w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second() {
             thread::sleep(Duration::from_millis(1));
         }
         let flushed = flushed.unwrap_or_else(|| panic!("no FLUSH for pause {cycle}"));
-        tv.run(Duration::from_secs(1), false);
-        let last = audio.lock().expect("audio").last().expect("audio").at;
+        tv.run(PAUSE_WATCH, false);
+        let (seq, _) = flush_point(&server, flushes);
+        let flush_seen = paused + flushed + IN_FLIGHT;
+        let (late, past_flush, last) = {
+            let audio = audio.lock().expect("audio");
+            let since_pause = audio.iter().filter(|datagram| datagram.at >= paused);
+            let late = since_pause.clone().filter(|d| d.at > flush_seen).count();
+            let past_flush = since_pause
+                .filter(|datagram| datagram.seq.wrapping_sub(seq) < 0x8000)
+                .count();
+            (late, past_flush, audio.last().expect("audio").at)
+        };
+        assert_eq!(late, 0, "audio after the FLUSH of pause {cycle}");
+        assert_eq!(
+            past_flush, 0,
+            "packets at or past the FLUSH point in pause {cycle}"
+        );
         to_flush.push(flushed);
         to_quiet.push(last.saturating_duration_since(paused));
         let held = audio.lock().expect("audio").len();
@@ -817,7 +837,7 @@ fn w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second() {
     cell(
         "W2.flush",
         &format!(
-            "3 pauses on the fake Samsung: pause to FLUSH at most {} ms, last audio at most {} ms after the pause (limit 1000)",
+            "3 pauses on the fake Samsung: pause to FLUSH at most {} ms, last audio at most {} ms after the pause (limit 1000); 0 packets after the FLUSH or past its seq in 2 s",
             flush.as_millis(),
             quiet.as_millis()
         ),
@@ -913,7 +933,7 @@ fn lo4_the_samsung_remote_play_pause_and_next_reach_the_host_once_each() {
 }
 
 const SAMPLE_RATE: f64 = 44_100.0;
-/// Features bit 16: the receiver shows progress (P128).
+/// Features bit 16: the receiver shows progress (P14, P123).
 const PROGRESS_BIT: u32 = 1 << 16;
 /// How far a progress value may be off the track time it stands for.
 const PROGRESS_SLACK: f64 = 0.25;
@@ -1124,17 +1144,14 @@ fn l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off(
         ("POST /pair-verify", 403),
         ("SETUP session", 403),
     ]);
-    assert!(!refused.is_empty(), "no error reported");
-    assert!(
-        refused_sessions <= MOST_SESSIONS,
-        "{refused_sessions} sessions in {RETRY_WINDOW:?}"
-    );
+    // A 403 at pair-setup reads as a PIN the television wants; the user
+    // then acts, so the retries stop.
+    assert_eq!(refused, [UserReason::PairingRequired]);
+    assert_eq!(refused_sessions, 1, "sessions in {RETRY_WINDOW:?}");
     cell(
         "L341",
         &format!(
-            "fake Samsung busy (453): {:?}, {busy_sessions} sessions in 8 s; refusing (403): {:?}, {refused_sessions} sessions in 8 s (limit {MOST_SESSIONS})",
-            busy.first().expect("an error"),
-            refused.first().expect("an error"),
+            "fake Samsung busy (453): Busy, {busy_sessions} sessions in 8 s (limit {MOST_SESSIONS}); refusing (403): PairingRequired, 1 session in 8 s",
         ),
     );
 }
