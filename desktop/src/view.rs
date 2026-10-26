@@ -7900,6 +7900,32 @@ mod tests {
         assert!(state.speaker("airplay:kitchen").unwrap().enabled);
     }
 
+    /// Moves the main window's focus without running its `changed has-focus`
+    /// handlers, as a UI Automation client's focus and toggle in one turn
+    /// leave them, then turns `id` on: showing a dialog runs those handlers.
+    fn turn_on_with_a_focus_change_pending(app: &App, id: &str) {
+        app.main.show().unwrap();
+        draw_frames();
+        app.main.invoke_focus_streaming_switch();
+        app.main.invoke_speaker_toggled(id.into());
+    }
+
+    #[test]
+    fn a_focus_change_pending_as_the_pin_dialog_opens_is_handled() {
+        let app = app_over(MockBackend::new());
+        turn_on_with_a_focus_change_pending(&app, "airplay:living");
+        assert!(app.pin_dialog.window().is_visible());
+    }
+
+    #[test]
+    fn a_focus_change_pending_as_the_password_dialog_opens_is_handled() {
+        let mut backend = MockBackend::new();
+        backend.ask_password_when_on("airplay:kitchen");
+        let app = app_over(backend);
+        turn_on_with_a_focus_change_pending(&app, "airplay:kitchen");
+        assert!(app.password_dialog.window().is_visible());
+    }
+
     #[test]
     fn escape_on_the_password_dialog_cancels_from_the_field_or_a_button() {
         for tabs in [0, 2] {
