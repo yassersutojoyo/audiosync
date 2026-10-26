@@ -91,8 +91,10 @@ enum StreamEnd: Equatable {
     /// The Mac goes to sleep, which counts as streaming stopping.
     case sleep
 
+    /// `midRebuild`: a rebuild stopped the engine and has not started it
+    /// again, so a stop now ends the stream that ran before it.
     func endsStream(streaming: Bool, midRebuild: Bool) -> Bool {
-        guard streaming else { return false }
+        guard streaming || midRebuild else { return false }
         guard case .stopped(let reason) = self else { return true }
         // A quit leaves the switches for the next launch, which turns such a speaker off anyway.
         return !reason.restarts && reason != .quitting

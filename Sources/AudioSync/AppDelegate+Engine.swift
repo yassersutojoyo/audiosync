@@ -46,6 +46,7 @@ extension AppDelegate {
         if engine.isRunning {
             DebugTrace.log((switching?.stop ?? SessionStop.rebuild).logLine(detail: switching?.quitApp))
             engine.stop()
+            midRebuild = true
         }
         var outcome = CaptureSwitch.Outcome.switched
         do {
@@ -70,6 +71,7 @@ extension AppDelegate {
             }
         }
         clearNotices([Notice.start, Notice.source])   // streaming did start, from a working source
+        midRebuild = false
         session += 1
         restartNativeTimeline()   // a new capture: AudioSync's own sender starts a new timeline (P143)
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
@@ -314,7 +316,8 @@ extension AppDelegate {
         let wasRunning = engine.isRunning
         engine.stop()   // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
         syncNativeSpeakers()   // nothing streams: AudioSync's own sender's speakers leave
-        endNativePinSessions(.stopped(reason), streaming: wasRunning)
+        endNativePinSessions(.stopped(reason), streaming: wasRunning, midRebuild: midRebuild)
+        midRebuild = false
         syncCast()   // and the Cast session ends
         // About this session's audio, which just ended; a notice about why it
         // ended is posted after this.
