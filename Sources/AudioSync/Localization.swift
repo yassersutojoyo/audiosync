@@ -1050,6 +1050,29 @@ struct UIStrings {
     }
     let openSettings = "Open Settings"
     let openSettingsHint = "Opens System Settings at the right privacy setting"
+    /// The explanation shown before a feature makes macOS ask for `permission`.
+    func permissionTitle(_ permission: Permission) -> String {
+        switch permission {
+        case .localNetwork: return "Find speakers on your network"
+        case .audioCapture: return "Capture your Mac's audio"
+        case .microphone: return "Use the microphone or an input"
+        case .automation: return "Show Now Playing for Spotify and Music"
+        }
+    }
+    func permissionReason(_ permission: Permission) -> String {
+        switch permission {
+        case .localNetwork:
+            return "AudioSync looks for AirPlay and Google Cast speakers on your network. macOS asks you to allow this next."
+        case .audioCapture:
+            return "AudioSync captures the audio you pick so it can play it on your speakers. macOS asks you to allow this next."
+        case .microphone:
+            return "AudioSync listens to the input you pick to play it on your speakers, or to the microphone when you calibrate a speaker. macOS asks you to allow this next."
+        case .automation:
+            return "Now Playing reads the track from Spotify and Music and gives you their play controls. macOS asks once for each app."
+        }
+    }
+    let permissionContinue = "Continue"
+    let permissionNotNow = "Not Now"
     /// AirPlay has found nothing for a while and AudioSync can't tell whether
     /// Local Network access is the reason.
     let localNetworkHint = "If you expect AirPlay speakers, make sure this Mac is on the same network as them, and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
