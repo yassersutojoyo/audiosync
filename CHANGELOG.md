@@ -2,11 +2,7 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [Unreleased]
-
 ## [0.8.0] - unreleased
-
-<!-- Placeholder: the release date replaces "unreleased" when 0.8.0 is published. -->
 
 ### Added
 
@@ -18,10 +14,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A source can now be several apps at once, on the Mac and on Windows. On the Mac, Several Apps in the source menu plays Only the Checked Apps or All Apps Except the Checked Ones, and it shows a checkmark while such a mix plays. On Windows, Several Apps under the source menu has the same two choices. An app that isn't running is skipped, and AudioSync itself is never part of the mix. On Windows, All Apps Except the Checked Ones leaves out Windows system sounds, such as notification chimes; the Mac takes them in.
 - An input device with more than two channels, such as an audio interface, gets an Input Channels menu under the source, on the Mac and on Windows. Pick Channels 1-2, Channels 3-4 and so on, or the last channel alone when the count is odd, which plays on both sides. The choice is kept per device, and a pair the device no longer has plays 1-2. On Windows, Channels 1-2 keeps Windows' own stereo mix of the device, as before.
 - An input level meter under the source while a microphone or line in is captured, on the Mac and on Windows. VoiceOver and Narrator read it as Input level, in steps of 10%.
+- Web Remote: control your speakers from a phone on the same network. It's off until you turn it on under Web Remote… in the gear menu or the Window menu on the Mac, or in the File menu on Windows. Open the address it shows or scan its QR code, add the page to the Home Screen, open it from there and enter the pairing code, and the phone can switch each speaker on and off, set its volume and delay and Master Volume, and show what's playing. It uses plain HTTP, so keep it to your home network. Forget All Remote Devices unpairs every phone, also while the remote is off.
 - Web Remote: the page has an Audio source menu with the app's sources, grouped under Apps and Input devices, several apps included, so the phone can switch the source too, on the Mac and on Windows.
 - Web Remote: the page shows your zones and presets. The phone can switch a zone on or off, set its volume and recall a preset. A speaker that asks for a PIN or password stays off with a notice to pair it on the computer first, and the rest plays. While AudioSync calibrates, the page says so and only Unpair works.
 - Saved equalizer curves, on the Mac and on Windows. Save the ten bands under a name and the curve shows up in the picker after the presets, up to 50 of them. Rename and Delete act on the saved curve the picker shows, and saving under a name you already used replaces that curve. The preamp is yours: picking a preset or a saved curve leaves it alone.
-- Web Remote: control your speakers from a phone on the same network. It's off until you turn it on under Web Remote… in the gear menu or the Window menu on the Mac, or in the File menu on Windows. Open the address it shows or scan its QR code, add the page to the Home Screen, open it from there and enter the pairing code, and the phone can switch each speaker on and off, set its volume and delay and Master Volume, and show what's playing. It uses plain HTTP, so keep it to your home network. Forget All Remote Devices unpairs every phone, also while the remote is off.
 - Calibrate All Speakers, on the Mac and on Windows. It plays the test sweep on each speaker that's on, one at a time, and lists each speaker's new delay, or why it couldn't be measured. It leaves out headphones and virtual outputs, which the microphone can't hear, and so does Calibrate with Microphone under one speaker; the row says why. Include Anyway on such a row measures it with the others until the results close, for an output that reports the wrong kind. Apply sets them all as one change, Undo puts them all back, and Measure Again repeats one speaker. A Cast speaker that had no offset goes back to none on Undo, so the next run searches for it again, also after a restart.
 - The Mac Guide has a Calibration topic: measuring one speaker, Calibrate All Speakers, which outputs are left out and Include Anyway, and what to try when a speaker isn't measured clearly.
 - On Windows, Calibrate with Microphone under a local speaker sets its delay for you, as on the Mac. If the microphone is blocked, AudioSync says so and offers to open the privacy settings.
@@ -313,7 +309,6 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...HEAD
-[0.8.0]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...v0.8.0
+[0.8.0]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.5.0
