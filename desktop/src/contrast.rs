@@ -113,15 +113,16 @@ fn every_text_pair_reaches_4_5_to_1_under_hover_fills() {
     for appearance in [Appearance::Light, Appearance::Dark] {
         let text = srgb("text", appearance);
         for (foreground, background) in CONTRAST_PAIRS {
-            let Some((_, stacks)) = HOVER_STACKS.iter().find(|(name, _)| name == background)
-            else {
+            let Some((_, stacks)) = HOVER_STACKS.iter().find(|(name, _)| name == background) else {
                 continue;
             };
             for stack in *stacks {
-                let filled = stack.iter().fold(srgb(background, appearance), |under, fill| {
-                    let alpha = fluent_fill_alpha(fill);
-                    [0, 1, 2].map(|i| text[i] * alpha + under[i] * (1.0 - alpha))
-                });
+                let filled = stack
+                    .iter()
+                    .fold(srgb(background, appearance), |under, fill| {
+                        let alpha = fluent_fill_alpha(fill);
+                        [0, 1, 2].map(|i| text[i] * alpha + under[i] * (1.0 - alpha))
+                    });
                 let value = contrast(composite(foreground, filled, appearance), filled);
                 if value < MIN_TEXT_CONTRAST {
                     failures.push(format!(
@@ -714,8 +715,8 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
-        "the empty Connected Speakers list uses the plain note"
+            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+        "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
     );
     assert!(
         include_str!("../ui/main.slint").contains("note: root.airplay-none-found ? ("),

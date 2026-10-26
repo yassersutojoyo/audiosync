@@ -204,8 +204,9 @@ The tooltip is cut to the 127 characters Windows shows. AudioSync shows no
 toast for a notice: an automatic event never pops up over other apps.
 
 Text colors meet 4.5:1 on every background they're drawn on, in light and
-dark (the lowest is 5.07:1). The pairs are listed in `brand/tokens.json`, and
-a unit test in `desktop/src/contrast.rs` computes each ratio and fails below
+dark (the lowest is 5.19:1), and they stay above 4.5:1 under the hover fill of
+a speaker row with a hovered button in it. The pairs are listed in
+`brand/tokens.json`, and a unit test in `desktop/src/contrast.rs` computes each ratio and fails below
 4.5:1; another fails when a `.slint` file draws text in a token color that no
 pair covers. The focus ring reaches 3:1 on every background. Text inside the
 standard controls (buttons, lists, fields) uses the Fluent style's own colors.
