@@ -4083,6 +4083,54 @@ do {
           "track info feed: the scheduled look at the wait's end sends AudioSync's icon")
 }
 
+// MARK: Track info — Spotify paused, read as empty every 2 s for 11 minutes, never sends the fallback
+do {
+    let spotify = NowPlayingMonitor.spotify
+    let cover = NSImage(size: NSSize(width: 1, height: 1))
+    let icon = NSImage(size: NSSize(width: 2, height: 2))
+    func track(playing: Bool) -> NowPlayingMonitor.Track {
+        NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Song", artist: "Band",
+                                album: "Record", isPlaying: playing, artwork: cover)
+    }
+    let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let poll: TimeInterval = 2
+    let emptyReadings = Int(11 * 60 / poll)
+    let sources: [(AudioSource, String)] = [(.app(bundleID: spotify), "Spotify"), (.system, "All System Audio")]
+    for (source, sourceName) in sources {
+        let untitled = TrackMetadata.Fields(title: "AudioSync", artist: sourceName, album: "From your Mac")
+        var empty = NowPlayingMonitor.EmptyReadings()
+        var played = NowPlayingMonitor.LastPlayed()
+        played.note(source: source)
+        var feed = TrackInfoFeed()
+        _ = feed.modelUpdated(sending: true)
+        var last: NowPlayingMonitor.Track?
+        var fallbackAt: [TimeInterval] = []
+        // One Now Playing reading at `now`, as NowPlayingMonitor.refresh and
+        // AppDelegate.sendTrackInfo take it; a paused Spotify with no track
+        // name answers as unreadable.
+        func read(_ reading: NowPlayingMonitor.Track?, at now: Date) {
+            let shown = empty.next(reading: reading, last: last, lastPlayerRuns: true, lastPlayer: .unreadable)
+            played.note(shown: shown, last: last, dropped: empty.dropped != nil)
+            last = shown
+            let info = ReceiverInfo.decide(track: shown, source: source, sourceName: sourceName,
+                                           untitled: untitled, lastPlayed: played.bundleID)
+            let step = feed.send(sending: true, now: now, pollingSince: start, hasReading: true, icon: icon) {
+                (info, shown?.artwork)
+            }
+            if info.fields == untitled || info.artwork != .track || step.fields == untitled || step.picture === icon {
+                fallbackAt.append(now.timeIntervalSince(start))
+            }
+        }
+        read(track(playing: true), at: start)
+        read(track(playing: false), at: start + poll)
+        for n in 0..<emptyReadings { read(nil, at: start + poll * Double(n + 2)) }
+        check(fallbackAt.isEmpty && last?.title == "Song" && empty.dropped == nil
+                && feed.sent?.fields == TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record"),
+              "track info (\(sourceName)): Spotify paused and read as empty every 2 s for 11 minutes keeps its track and cover, never the fallback",
+              "fallback at \(fallbackAt.prefix(3)) s, shown \(String(describing: last?.title))")
+    }
+}
+
 // MARK: Windows and the view model (WindowRules.swift)
 do {
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 875)
