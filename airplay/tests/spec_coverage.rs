@@ -258,6 +258,11 @@ fn only_markers_in_a_source_files_test_module_count() {
         4,
         "an indented cfg(test) is not the test module; with none, nothing counts"
     );
+    let helper = "#[cfg(test)]\nfn helper() {}\n// covers: P1\nfn sender() {}\n";
+    assert!(
+        std::panic::catch_unwind(|| test_code_start(helper)).is_err(),
+        "a top-level cfg(test) that doesn't open a module is not the test module"
+    );
 }
 
 #[test]
