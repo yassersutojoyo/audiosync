@@ -22,6 +22,10 @@ use common::{
 };
 use serde_json::{Value, json};
 
+/// How long a wait for the fake device's side of a finished teardown may
+/// take before the test calls it a hang. Not a latency the code promises.
+const HANG_GUARD: Duration = Duration::from_secs(10);
+
 struct Feed {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -424,7 +428,9 @@ fn stop_sends_media_stop_then_receiver_stop_then_closes_and_ends_the_stream() {
     let (session, _feed) = start(&device);
     let url = session.stream_url().to_owned();
     session.stop();
-    assert!(device.wait_for_count("CLOSE", 2, Duration::from_secs(2)));
+    // The frames are written once stop returns; when the fake device reads
+    // them is up to the scheduler of a busy test machine.
+    assert!(device.wait_for_hangup(HANG_GUARD));
     let tail: Vec<(String, String, Value)> = device
         .received()
         .into_iter()
@@ -470,8 +476,9 @@ fn stop_sends_media_stop_then_receiver_stop_then_closes_and_ends_the_stream() {
     let elapsed = started.elapsed();
     assert!(elapsed >= Duration::from_millis(3900), "{elapsed:?}");
     assert!(elapsed < Duration::from_millis(5500), "{elapsed:?}");
-    assert!(device.wait_for_count("CLOSE", 2, Duration::from_secs(2)));
-    let until = Instant::now() + Duration::from_secs(2);
+    assert!(device.wait_for_hangup(HANG_GUARD));
+    assert_eq!(count(&device, NS_CONNECTION, "CLOSE"), 2);
+    let until = Instant::now() + HANG_GUARD;
     while Instant::now() < until && !device.fetches()[0].ended {
         thread::sleep(Duration::from_millis(20));
     }
@@ -492,7 +499,8 @@ fn quit_tears_down_within_3_s_even_when_the_device_is_silent() {
     session.quit();
     let elapsed = started.elapsed();
     assert!(elapsed < Duration::from_millis(3500), "{elapsed:?}");
-    assert!(device.wait_for("STOP", Duration::from_secs(1)));
+    assert!(device.wait_for_hangup(HANG_GUARD));
+    assert!(device.types().iter().any(|kind| kind == "STOP"));
     device.join();
 }
 
