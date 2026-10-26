@@ -315,7 +315,7 @@ extension AppDelegate {
                 return .captureFailed
             },
             later: { delay, body in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: body) },
-            stillWanted: { [weak self] in self?.systemSwitchStillWanted() ?? false },
+            stillWanted: { [weak self] in self?.systemSwitchStillWanted() ?? .drop(release: false) },
             finish: { [weak self] started in
                 guard let self else { return }
                 // A failed start has its own "start" notice; this one still says which app quit.
@@ -325,14 +325,15 @@ extension AppDelegate {
             })
     }
 
-    /// Whether the whole system's next attempt still runs: not once the user
-    /// stopped, started or picked another source during the wait. A source
-    /// picked meanwhile doesn't start it, so the speakers are let go here.
-    private func systemSwitchStillWanted() -> Bool {
-        if audioSource == .system, !userStopped, !engine.isRunning { return true }
-        DebugTrace.log("[AudioSync] the whole system's next attempt is dropped: streaming or the source changed meanwhile")
-        if !userStopped, !engine.isRunning { stopEngine(.startFailed) }
-        return false
+    /// Whether the whole system's next attempt still runs (`SystemSwitch.afterWait`).
+    private func systemSwitchStillWanted() -> AppLifecycle.SystemSwitch.AfterWait {
+        let next = AppLifecycle.SystemSwitch.afterWait(sourceIsSystem: audioSource == .system, userStopped: userStopped,
+                                                       running: engine.isRunning, userStarted: false)
+        if case .drop(let release) = next {
+            DebugTrace.log("[AudioSync] the whole system's next attempt is dropped: streaming or the source changed meanwhile")
+            if release { stopEngine(.startFailed) }
+        }
+        return next
     }
 
     /// An app of the "only these" mix quit: judge it `mixQuitRecheck` later,

@@ -5627,7 +5627,7 @@ do {
                 waits.append(delay)
                 pending.append(body)
             },
-            stillWanted: { userActsAfter != lasts.count },
+            stillWanted: { userActsAfter == lasts.count ? .drop(release: false) : .attempt },
             finish: { streaming = $0 })
         let early = lasts.count
         while !pending.isEmpty { pending.removeFirst()() }

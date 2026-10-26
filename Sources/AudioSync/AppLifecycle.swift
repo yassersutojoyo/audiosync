@@ -162,22 +162,45 @@ enum AppLifecycle {
             return settle - elapsed
         }
 
+        /// What a wait between attempts ends in.
+        enum AfterWait: Equatable {
+            case attempt
+            /// Streaming started from elsewhere (auto-connect) on the whole system.
+            case startedMeanwhile
+            /// The user took over. `release`: nothing streams and nothing else
+            /// let the speakers go, so the caller does.
+            case drop(release: Bool)
+        }
+
+        /// - Parameters:
+        ///   - userStarted: the user switched streaming on or picked a source
+        ///     since the switch began, whatever came of it.
+        static func afterWait(sourceIsSystem: Bool, userStopped: Bool, running: Bool,
+                              userStarted: Bool) -> AfterWait {
+            if sourceIsSystem, !userStopped, !running { return .attempt }
+            return .drop(release: !userStopped && !running)
+        }
+
         /// - Parameters:
         ///   - firstWait: `firstWait(sinceDestroy:)`, waited before the first attempt.
         ///   - start: one attempt; `last` says a failure is final and handled as one.
         ///   - later: runs a block the given time later.
-        ///   - stillWanted: false once the user stopped, started or changed the source meanwhile.
+        ///   - stillWanted: `afterWait`, asked after each wait.
         ///   - finish: the outcome, whether streaming runs; not called when the user took over.
         static func run(attempt: Int = 1, firstWait: TimeInterval = 0,
                         start: @escaping (_ last: Bool) -> Attempt,
                         later: @escaping (TimeInterval, @escaping () -> Void) -> Void,
-                        stillWanted: @escaping () -> Bool,
+                        stillWanted: @escaping () -> AfterWait,
                         finish: @escaping (Bool) -> Void) {
-            if firstWait > 0 {
-                later(firstWait) {
-                    guard stillWanted() else { return }
-                    run(attempt: attempt, start: start, later: later, stillWanted: stillWanted, finish: finish)
+            func next(_ attempt: Int) {
+                switch stillWanted() {
+                case .attempt: run(attempt: attempt, start: start, later: later, stillWanted: stillWanted, finish: finish)
+                case .startedMeanwhile: finish(true)
+                case .drop: return
                 }
+            }
+            if firstWait > 0 {
+                later(firstWait) { next(attempt) }
                 return
             }
             let answer = start(attempt >= attempts)
@@ -185,10 +208,7 @@ enum AppLifecycle {
                 finish(answer == .started)
                 return
             }
-            later(spacing) {
-                guard stillWanted() else { return }
-                run(attempt: attempt + 1, start: start, later: later, stillWanted: stillWanted, finish: finish)
-            }
+            later(spacing) { next(attempt + 1) }
         }
     }
 
