@@ -432,9 +432,13 @@ enum SourceApps {
 
     /// The running apps the picker offers, sorted by name.
     static func running() -> [Entry] {
+        // macOS can still list an app whose process is gone (S227), so the
+        // process is checked too, as the capture's own look does.
         let apps = NSWorkspace.shared.runningApplications.map { app in
             RunningApp(pid: app.processIdentifier, bundleID: app.bundleIdentifier, name: app.localizedName,
-                       isRegular: app.activationPolicy == .regular && !app.isTerminated, icon: app.icon)
+                       isRegular: app.activationPolicy == .regular && !app.isTerminated
+                           && AppTapFollow.processExists(app.processIdentifier),
+                       icon: app.icon)
         }
         return offered(apps, ownPID: ProcessInfo.processInfo.processIdentifier,
                        ownBundleID: Bundle.main.bundleIdentifier)
