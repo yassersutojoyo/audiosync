@@ -6,7 +6,7 @@ Notes for building AudioSync yourself and finding your way around the code. For 
 
 You need macOS 15 (Sequoia) or later, the Command Line Tools for Xcode 16 or later (`xcode-select --install`), which bring Swift 6 and the `python3` the build uses, and a Rust toolchain for the audio core in `core/`: install it with [rustup](https://rustup.rs).
 
-The first build needs network access: it adds the two Apple targets to your Rust toolchain and fetches the crates.io index for the core's test-only dependencies. Later builds work offline.
+The first build needs network access: it adds the two Apple targets to your Rust toolchain, fetches the crates.io index for the core's test-only dependencies, and has SwiftPM fetch Sparkle 2.10.0, the updater (pinned exactly in `Package.swift`). Later builds work offline.
 
 ```bash
 git clone https://github.com/yassersutojoyo/audiosync
@@ -16,7 +16,9 @@ cd audiosync
 
 `setup.sh` checks for Swift and a Rust toolchain, then runs `build.sh`.
 
-After that, `./build.sh` is all you need day to day. It builds the app, signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable, after quitting the running AudioSync. AirPlay is part of the app binary (the Rust core carries the sender), so there's nothing else to bundle. `./build.sh --no-install` stops before the install: it leaves the signed app in `.build/app/AudioSync.app` and doesn't quit anything. CI builds it that way and checks the bundle with `Tests/check-app-bundle.sh`, which you can also point at an installed copy.
+After that, `./build.sh` is all you need day to day. It builds the app, signs it, and installs it to `/Applications`, or `~/Applications` if `/Applications` isn't writable, after quitting the running AudioSync. AirPlay is part of the app binary (the Rust core carries the sender); the one framework in the bundle is Sparkle, which `build.sh` copies into `Contents/Frameworks` and signs inside out, its helpers first. `./build.sh --no-install` stops before the install: it leaves the signed app in `.build/app/AudioSync.app` and doesn't quit anything. CI builds it that way and checks the bundle with `Tests/check-app-bundle.sh`, which you can also point at an installed copy. That check fails on any framework other than Sparkle.framework.
+
+Your own builds never check for updates. The updater starts only when the built bundle's Info.plist has both a non-empty `SUPublicEDKey` and `AudioSyncReleaseBuild` set to true (`UpdateGate.swift`), and only `./build.sh --release` adds the second one, to the copy in the bundle, never to the `Info.plist` in the repository. `--release` stops at once while `SUPublicEDKey` is empty, and works with `--no-install`. Without the updater, the app menu has no Check for Updates item. `scripts/sign_appcast.sh VERSION [ZIP]` signs a release zip and writes the `appcast.xml` the feed points at; `RELEASE.md` has the steps.
 
 The app links the audio core, the Rust crate in `core/` (see `core/NOTES.md`). `build.sh` first runs `scripts/build_core.sh`, which builds it for Apple silicon and Intel (with rustup, it adds a missing target itself) and joins both into one static library, `core/target/universal-apple-darwin/release/libaudiosync_core.a`. That library exports only the functions in `core/include/audiosync_core.h`, so none of the Rust standard library's own symbols can stand in for the system's. Next to it, `licenses/rust/` gets the notices the app ships for the Rust code inside: the standard library's, and in `crates.txt` those of the crates compiled into the core (`scripts/core_notices.py`, run with `python3`). A plain `swift build`, a scratch build included, links that file: run the script first, or the link stops with "library 'audiosync_core' not found".
 
@@ -51,9 +53,16 @@ The test run starts with `scripts/shellcheck.sh`, which checks every script in `
 
 Next comes `scripts/privacy_check.py`, which fails on home-directory paths from a Mac or a Windows PC, LAN hostnames, private IP addresses and internal plan IDs in tracked files (its docstring has the details and the allowed placeholders). It also has a forbidden-names guard: a few names must never appear in the repository, and they can't be listed in a public script, so `scripts/forbidden-names.txt` holds only a salt and a salted SHA-256 per name, and the script hashes every short run of words in file contents, paths and commit messages (`--commits A..B`) against it. A hit names the place, never the text. The plain list is a local, untracked file (`$AUDIOSYNC_FORBIDDEN_NAMES`, or `info/forbidden-names` in the git directory); `--hash-names` rebuilds the hash file from it, and `--verify-names`, which `run-tests.sh` runs, checks that the two still match and skips when there's no local list. CI runs the self-test, which proves the guard on made-up names, then the tree check and the check of the pushed commits' messages.
 
-Then `scripts/text_check.py` fails on em dashes in the public docs, and three greps over `Sources/AudioSync` keep known traps out: a call inside a `DebugTrace.log(...)` message (it only runs with the debug log on), a plain `@State` (a macro the Command Line Tools can't expand, so `./build.sh` would fail there while CI passes), and logging, locks, dispatch, string building or allocation in the code the capture and microphone IOProcs run. `Tests/cargolookuptest.sh` checks how the scripts find `cargo` off the `PATH`.
+Then `scripts/text_check.py` fails on em dashes in the public docs, and three greps over `Sources/AudioSync` keep known traps out: a call inside a `DebugTrace.log(...)` message (it only runs with the debug log on), a plain `@State` (a macro the Command Line Tools can't expand, so `./build.sh` would fail there while CI passes), and logging, locks, dispatch, string building or allocation in the code the capture and microphone IOProcs run. `Tests/cargolookuptest.sh` checks how the scripts find `cargo` off the `PATH`. `Tests/installtest.sh` checks `scripts/install.sh`, the installer that fetches a release from GitHub, without the network: a fake `curl` answers from fixtures, and on a Mac it also checks that a zip with the wrong checksum stops before `/Applications` changes.
 
 `Tests/soak.sh` (an hour of silent playback, judged against a baseline) and `Tests/bench.sh` (writes that baseline) take long, so `run-tests.sh` only compiles their harness. [BENCHMARKS.md](BENCHMARKS.md) explains both.
+
+Before a feature uses a macOS permission (Local Network, audio capture, the microphone, automation of Spotify and Music), the app explains why, once (`PermissionFlow.swift`). If you clicked something, the explanation comes first and macOS asks after Continue; if AudioSync acts on its own, the feature waits and the window and the menu bar panel offer the explanation, never a modal alert. Continue is remembered under `permissionsExplained`. On the first launch of a build with this flow, `permissionsUsedBefore` records whether AudioSync had saved a source, speakers or the master volume before; if so, the permissions macOS can't report are taken as already asked. To go through it all as a new user, quit AudioSync and reset both the permissions and the settings (the second command removes every saved setting, speakers and delays included):
+
+```bash
+tccutil reset All io.github.yassersutojoyo.audiosync
+defaults delete io.github.yassersutojoyo.audiosync
+```
 
 For a debug log, quit AudioSync and start it from Terminal:
 
@@ -117,6 +126,8 @@ Everything lives in `Sources/AudioSync`. [`ENGINE_SPEC.md`](ENGINE_SPEC.md) desc
 - `WebRemote.swift`, `WebRemoteModel.swift`: the web remote through the core, and what it publishes and applies
 - `NativeAirPlay.swift`, `NativeAirPlayTap.swift`: AudioSync's own AirPlay sender through the core's C interface, and the capture's way into it
 - `NativeAirPlayModel.swift`, `NativeReceiver.swift`: what the sender lists and plays, and the decisions the app makes from it, PIN and password pairing among them (`AirPlayPairing.swift` holds the access kinds and turn-off reasons)
+- `PermissionFlow.swift`: when to explain a permission before macOS asks for it, and what is remembered
+- `AppUpdater.swift`, `UpdateGate.swift`: the Sparkle updater, and whether this build may start it
 - `TrackMetadata.swift`: the track's title, artist and album, and its artwork scaled to a small JPEG, for AirPlay speakers with a screen (`ReceiverInfo.swift` decides what they show)
 
 The app side: `AppDelegate.swift` holds app state, launch and quit (with its decisions in `AppLifecycle.swift` and the saved settings in `AppSettings.swift`), and its extensions split out windows (`+Windows`), groups and auto-connect (`+Groups`), local outputs (`+Outputs`), AirPlay speakers (`+AirPlay`, `+NativeAirPlay`) and streaming and notices (`+Engine`). The UI is SwiftUI in `MainWindow.swift` and `MenuBar.swift`, with the app menus in `MainMenu.swift`. Smaller pieces: `AudioDevices.swift` (Core Audio device helpers), `Volume.swift` (the loudness curve), `SpeakerGroups.swift`, `NowPlaying.swift` (Spotify and Music), `Diagnostics.swift` (the debug log) and `main.swift` (keeps one copy running, and quits cleanly on Ctrl-C or SIGTERM).
@@ -125,7 +136,7 @@ The app's side of the Rust core (`core/`, imported through the `CAudioSyncCore` 
 
 All user-facing text goes through `UIStrings` in `Localization.swift`. `Brand.swift` turns the design tokens into SwiftUI colors, the typeface and the wordmark; the values themselves live in `brand/tokens.json` and reach the app through the generated `BrandTokens.swift`. `BrandMark.swift` and `BrandTokens.swift` are generated, so don't edit them.
 
-Outside the app: `setup.sh` checks the tools and runs `build.sh`, which builds, signs and installs the app, `scripts/build_core.sh` builds the Rust core, and `make-dmg.sh` packages a release (see `RELEASE.md`).
+Outside the app: `setup.sh` checks the tools and runs `build.sh`, which builds, signs and installs the app, `scripts/build_core.sh` builds the Rust core, `make-dmg.sh` packages a release (see `RELEASE.md`), `scripts/sign_appcast.sh` signs it for the updater, and `scripts/install.sh` installs or updates AudioSync from a GitHub release after checking the zip against the release's `SHA256SUMS.txt` (`--dry-run` only prints what it would fetch).
 
 ## The Rust core and the Windows app
 
@@ -216,6 +227,8 @@ The design tokens (colors for light and dark, the typeface, spacing, corner radi
 The Guide's three illustrations (the signal path, what a delay does, and the two kinds of output timing) are drawn in code by `python3 -I scripts/brand/guide_art.py`, in five colors taken or mixed from the tokens. The script checks that those colors keep shapes at 4.5:1 or more against both Guides' pages and the panels in both appearances, writes the light and dark SVGs to `brand/guide/`, and embeds both in `Sources/AudioSync/GuideArtwork.swift`; where each one sits in the Mac Guide's text is `guideArtAnchor` in `Localization.swift`. The Windows Guide (`desktop/ui/help.slint`) loads the same SVGs, light or dark with the theme. With `--check` the script writes nothing and fails when any of those files is out of date, which is how CI runs it. Every image's origin is recorded in [`ASSETS.md`](ASSETS.md).
 
 CI regenerates the brand SVGs, `BrandMark.swift`, `GuideArtwork.swift` and every token output and fails on any difference, but it doesn't check the PNG, ICNS and ICO files (including `desktop/res/`), so regenerate those yourself.
+
+The disk image's window background in `brand/dmg/` (the arrow to Applications and the Open Anyway steps, at 1x and 2x) comes from `python3 -I scripts/brand/dmg_background.py`, which needs Pillow. It also writes `brand/dmg/layout.json`, the window size and icon positions `make-dmg.sh` reads, and fails on text below 4.5:1 or text that runs into an icon. CI doesn't regenerate it, so run it again after changing the tokens or the art. `make-dmg.sh` lays the window out by scripting Finder, which asks once for permission; with `--plain`, or when the art is missing or Finder can't be scripted, it makes the image without the layout and says so at the end.
 
 The screenshots in `docs/images` come from `scripts/screenshots/render.sh`. It draws the app's own SwiftUI views offscreen from mock data, in light and dark, so it needs no installed app, engine, permissions or audio devices. Control styling follows the macOS you run it on, so re-render after a UI change.
 
