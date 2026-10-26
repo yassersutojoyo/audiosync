@@ -78,10 +78,16 @@ do {
         var master = vector["master"] as? Double ?? .nan
         var own = 0.0
         var held: Double?
-        for (index, step) in (vector["steps"] as? [[String: Any]] ?? []).enumerated() {
+        let steps = vector["steps"] as? [[String: Any]] ?? []
+        check(zone.isFinite && master.isFinite && !steps.isEmpty,
+              "airplay level vectors: \(name) has a zone, a master and steps", "\(zone) \(master) \(steps.count)")
+        for (index, step) in steps.enumerated() {
             let label = "airplay level vectors: \(name), step \(index + 1)"
             let unknown = Set(step.keys).subtracting(known)
             check(unknown.isEmpty, "\(label): every key is one the Mac runs", "\(unknown.sorted())")
+            let ops = Set(step.keys).intersection(["own", "stored_own", "row_move", "step", "tv_level", "device_volume",
+                                                   "master"])
+            check(ops.count == 1, "\(label): one op, as the core runner applies only one", "\(ops.sorted())")
             var sent = true
             if let value = step["own"] as? Double {
                 // A preset's own volume (setNativeAirPlayOwnVolume).
