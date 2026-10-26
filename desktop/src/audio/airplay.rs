@@ -1129,6 +1129,10 @@ pub struct AirPlaySpeakers {
     /// PIN pairing that stored nothing: paired until their session ends or
     /// they leave the sender (P182).
     paired_for_session: BTreeSet<String>,
+    /// The speakers a pairing the user started turned on this run: they
+    /// count as switched on by the user, so a lapsed session pairing
+    /// doesn't turn them off (S223).
+    paired_by_user: BTreeSet<String>,
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
     /// to AirPlay 2, as the sender keeps it while the speaker stays added.
     airplay1_outcome: BTreeMap<String, ErrorKind>,
@@ -1231,6 +1235,7 @@ impl AirPlaySpeakers {
             credentials_turned_down: BTreeSet::new(),
             paired_in_attempt: BTreeSet::new(),
             paired_for_session: BTreeSet::new(),
+            paired_by_user: BTreeSet::new(),
             airplay1_outcome: BTreeMap::new(),
             session_paths: BTreeMap::new(),
             streaming: false,
@@ -3141,6 +3146,52 @@ impl AirPlaySpeakers {
         });
     }
 
+    /// While streaming, turns off with a notice each speaker that is on,
+    /// listed as asking for a PIN or a password it has no answer for, and
+    /// not in the user's own attempt: one restored from the last run or
+    /// switched on by auto-connect, which never pair or prompt (S222, S223).
+    /// Left on it would never join. Returns whether one went off.
+    fn turn_off_uninvited(&mut self, events: &mut Vec<BackendEvent>) -> bool {
+        if !self.streaming {
+            return false;
+        }
+        let uninvited: Vec<(String, AirPlayAvailability)> = self
+            .settings
+            .iter()
+            .filter(|(id, settings)| {
+                settings.enabled
+                    && !self.added.contains_key(*id)
+                    && !self.pairings.contains_key(*id)
+                    && !self.password_attempts.contains(*id)
+                    && !self.password_asks.contains_key(*id)
+                    && !self.paired_by_user.contains(*id)
+                    && !self.held_by_target(id)
+            })
+            .filter_map(|(id, _)| {
+                let availability = self.listed_availability(id)?;
+                let asks = match availability {
+                    AirPlayAvailability::NeedsPin => true,
+                    AirPlayAvailability::NeedsPassword => !self.passwords.contains_key(id),
+                    _ => false,
+                };
+                asks.then(|| (id.clone(), availability))
+            })
+            .collect();
+        for (id, availability) in &uninvited {
+            self.log.log(|| {
+                format!(
+                    "AirPlay speaker {} turned off: it {} and the user didn't switch it on",
+                    self.label(id),
+                    describe_availability(*availability)
+                )
+            });
+            if let Some(problem) = availability.problem() {
+                self.turn_off(id, problem, events);
+            }
+        }
+        !uninvited.is_empty()
+    }
+
     /// Takes in what the sender reported since the last call and returns
     /// what the UI should know.
     pub fn poll(&mut self) -> Vec<BackendEvent> {
@@ -3255,6 +3306,7 @@ impl AirPlaySpeakers {
         if let Some(file) = self.store_kept_aside.take() {
             events.push(BackendEvent::PairingsKeptAside { file });
         }
+        changed |= self.turn_off_uninvited(&mut events);
         if changed {
             events.insert(0, BackendEvent::AirPlayChanged);
         }
@@ -3449,6 +3501,7 @@ impl AirPlaySpeakers {
     /// The pairing the user started for the speaker `id` paired: it is
     /// turned on.
     fn turn_on_paired(&mut self, id: &str, events: &mut Vec<BackendEvent>) {
+        self.paired_by_user.insert(id.to_owned());
         self.entry(id).enabled = true;
         self.reconcile();
         events.push(BackendEvent::AirPlayPaired { id: id.to_owned() });
