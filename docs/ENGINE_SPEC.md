@@ -1955,40 +1955,48 @@ The Mac (logic suite):
 | explicit pause: 200 ms of sound after the stale-reading time resumes, whatever the reading says | S292 |
 | explicit pause: sound never pauses | S292 |
 
-### Windows updater: Windows (`cargo test` in `desktop/`), pending
+### Windows updater: Windows (`cargo test` in `desktop/`)
 
-No code yet: every row below is pending until the updater of section 19 lands, and S293 to S311, host-only, are listed in `core/tests/spec_exempt.txt`. The fake appcast is a fixture `appcast.xml` served on 127.0.0.1 next to zips signed with a throwaway test key made for the test; the release key's private half never reaches a test.
+The updater lives in `desktop/src/updater/`; S293 to S311, host-only, stay listed in `core/tests/spec_exempt.txt`. The fake appcast is a fixture `appcast.xml` next to zips signed with a throwaway test key made for the test; the release key's private half never reaches a test. Only `the_fake_appcast_on_loopback` serves it on 127.0.0.1, and only in CI (it skips without the `CI` variable, so a local run opens no listening socket); every other test feeds the appcast and the zip through an in-memory fetch.
 
 | Test | Clauses |
 |---|---|
-| the_fake_appcast_on_loopback (pending: a fixture appcast and a zip signed with a throwaway test key; the happy path downloads, verifies, unzips and swaps a stand-in exe and keeps the old one as `.bak`; a bad signature deletes the download and changes nothing; an enclosure for the other arch only offers nothing; an older or the same version offers nothing) | S294, S296, S298, S299, S300, S301, S302 |
-| only_a_release_build_on_windows_checks (pending) | S293 |
-| the_feed_is_https_only_with_its_size_and_time_limits (pending) | S294 |
-| an_appcast_with_a_doctype_is_refused_and_a_broken_item_is_skipped (pending) | S295 |
-| version_elements_win_over_enclosure_attributes (pending) | S295 |
-| versions_compare_as_dotted_numbers_and_a_non_numeric_part_skips_the_item (pending) | S296 |
-| channel_items_plain_windows_and_a_minimum_system_version_above_the_running_one_are_skipped (pending) | S296 |
-| nothing_downloads_before_the_click (pending) | S297, S306 |
-| a_download_over_its_length_or_the_cap_stops_and_is_deleted (pending) | S298 |
-| the_compiled_in_key_equals_su_public_ed_key_in_info_plist (pending) | S299 |
-| a_missing_signature_or_one_by_another_key_is_a_bad_signature (pending) | S299 |
-| zip_entries_with_folders_dot_dot_or_drive_letters_are_refused (pending) | S300 |
-| a_zip_without_audiosync_exe_or_with_an_exe_for_the_other_machine_is_refused (pending) | S300 |
-| the_running_test_binary_can_be_renamed_aside_and_back (pending; proves the rename of a running image S301 relies on) | S301 |
-| a_failed_second_rename_restores_the_bak (pending) | S301, S302 |
-| a_read_only_install_folder_offers_the_release_page (pending) | S302 |
-| a_locked_exe_reports_another_copy_and_changes_nothing (pending) | S302 |
-| a_disk_full_write_deletes_every_partial_file (pending; the write error is injected) | S302 |
-| offline_at_launch_is_quiet_and_a_manual_check_says_so (pending) | S302, S305 |
-| relaunch_waits_for_the_old_process_before_claiming_the_instance (pending) | S303 |
-| a_check_after_a_swap_without_a_relaunch_shows_relaunch_now_and_touches_no_file (pending; manual and launch check) | S301, S303, S305 |
-| a_leftover_new_is_deleted_before_the_exclusive_create (pending) | S301, S302 |
-| a_failed_relaunch_restores_the_bak (pending) | S303 |
-| leftover_new_files_and_temp_folders_go_at_launch_and_the_bak_stays (pending) | S304 |
-| the_launch_check_runs_once_a_day_and_a_failed_check_stores_no_time (pending; 23 h no, 24 h yes, a clock moved back yes) | S305 |
-| turning_the_switch_off_stops_the_launch_check_not_the_manual_one (pending) | S305 |
-| the_updater_texts (pending; every text of S308 comes from strings.slint) | S308 |
-| the_updater_writes_its_debug_log_lines (pending) | S309 |
+| the_fake_appcast_on_loopback (CI only: WinHTTP against a plain-HTTP server on 127.0.0.1 with a redirect; the happy path downloads, verifies, unzips and swaps a stand-in exe and keeps the old one as `.bak`; a bad signature deletes the download and changes nothing; an enclosure for the other arch only offers nothing; the same version offers nothing; plain HTTP is refused outside the test) | S294, S296, S298, S299, S300, S301, S302 |
+| only_a_release_build_on_windows_checks | S293 |
+| the_feed_is_https_only_with_its_size_and_time_limits | S294 |
+| an_appcast_with_a_doctype_is_refused_and_a_broken_item_is_skipped | S295 |
+| version_elements_win_over_enclosure_attributes | S295 |
+| versions_compare_as_dotted_numbers_and_a_non_numeric_part_skips_the_item | S296 |
+| channel_items_plain_windows_and_a_minimum_system_version_above_the_running_one_are_skipped | S296 |
+| nothing_downloads_before_the_click | S297, S306 |
+| a_download_over_its_length_or_the_cap_stops_and_is_deleted | S298 |
+| the_compiled_in_key_equals_su_public_ed_key_in_info_plist | S299 |
+| a_missing_signature_or_one_by_another_key_is_a_bad_signature | S299 |
+| zip_entries_with_folders_dot_dot_or_drive_letters_are_refused | S300 |
+| a_zip_without_audiosync_exe_or_with_an_exe_for_the_other_machine_is_refused | S300 |
+| the_running_test_binary_can_be_renamed_aside_and_back (proves the rename of a running image S301 relies on) | S301 |
+| a_failed_second_rename_restores_the_bak | S301, S302 |
+| a_read_only_install_folder_offers_the_release_page | S302 |
+| a_locked_exe_reports_another_copy_and_changes_nothing | S302 |
+| a_disk_full_write_deletes_every_partial_file (the write error is injected) | S302 |
+| offline_at_launch_is_quiet_and_a_manual_check_says_so | S302, S305 |
+| relaunch_waits_for_the_old_process_before_claiming_the_instance | S303 |
+| a_check_after_a_swap_without_a_relaunch_shows_relaunch_now_and_touches_no_file (manual and launch check) | S301, S303, S305 |
+| a_leftover_new_is_deleted_before_the_exclusive_create | S301, S302 |
+| a_failed_relaunch_restores_the_bak | S303 |
+| leftover_new_files_and_temp_folders_go_at_launch_and_the_bak_stays | S304 |
+| the_launch_check_runs_once_a_day_and_a_failed_check_stores_no_time (23 h no, 24 h yes, a clock moved back yes) | S305 |
+| turning_the_switch_off_stops_the_launch_check_not_the_manual_one | S305 |
+| the_updater_texts (every text of S308 comes from strings.slint) | S308 |
+| the_updater_writes_its_debug_log_lines | S309 |
+| the_fake_appcast_end_to_end_through_a_memory_fetch | S296, S298, S299, S300, S301 |
+| a_bad_signature_deletes_the_download_and_changes_nothing | S299 |
+| the_newest_above_the_running_version_wins_and_the_same_or_older_offers_nothing | S296 |
+| a_swap_keeps_the_old_exe_as_bak | S301 |
+| a_disk_full_copy_deletes_every_partial_file | S302 |
+| a_manual_check_with_nothing_newer_says_the_running_version_is_the_latest | S296, S305 |
+| a_failed_install_reports_and_try_again_retries | S302, S306 |
+| update_checks_are_on_by_default_and_keep_their_time | S305 |
 
 The Mac (pending, [MAC]):
 

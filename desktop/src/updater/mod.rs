@@ -324,6 +324,7 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         feed: FEED_URL.to_owned(),
         fetch: Arc::new(fetch::WinHttp {
             user_agent: fetch::user_agent(env!("CARGO_PKG_VERSION"), arch.name()),
+            plain_loopback: false,
         }),
         files: Arc::new(files::RealFiles),
         temp_root,

@@ -374,13 +374,13 @@ pub fn launch_check(automatic: bool, last: Option<u64>, now: u64) -> LaunchCheck
 
 #[cfg(test)]
 pub mod tests {
-
     use super::*;
     use crate::updater::archive::tests::{fake_exe, zip_of};
     use crate::updater::fetch::tests::MemoryFetch;
     use crate::updater::files::{RealFiles, Sink};
     use crate::updater::signature::test_key;
     use crate::updater::tests::test_dir;
+    use std::collections::HashMap;
 
     pub const FEED: &str = "https://feed.invalid/appcast.xml";
     pub const ZIP_URL: &str = "https://feed.invalid/AudioSync-0.9.0-windows-x64.zip";
@@ -510,6 +510,135 @@ pub mod tests {
         );
         same.env.running = Version::parse("0.9").unwrap();
         assert_eq!(check(&same.env), Checked::UpToDate);
+    }
+
+    /// Serves `files` by path over plain HTTP on 127.0.0.1, and answers
+    /// `/redirect/<path>` with a 302 to `/<path>`.
+    fn serve(files: HashMap<String, Vec<u8>>) -> u16 {
+        use std::io::{BufRead, BufReader};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let path = request.split(' ').nth(1).unwrap_or("/").to_owned();
+                let head = |status: &str, extra: &str, length: usize| {
+                    format!(
+                        "HTTP/1.1 {status}\r\n{extra}Content-Length: {length}\r\nConnection: close\r\n\r\n"
+                    )
+                };
+                let reply = if let Some(rest) = path.strip_prefix("/redirect") {
+                    head("302 Found", &format!("Location: {rest}\r\n"), 0).into_bytes()
+                } else if let Some(body) = files.get(&path) {
+                    let mut reply = head("200 OK", "", body.len()).into_bytes();
+                    reply.extend_from_slice(body);
+                    reply
+                } else {
+                    head("404 Not Found", "", 0).into_bytes()
+                };
+                let _ = stream.write_all(&reply);
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn the_fake_appcast_on_loopback() {
+        if std::env::var_os("CI").is_none() {
+            eprintln!("skipped: serves on 127.0.0.1, which runs in CI only");
+            return;
+        }
+        let zip = zip_of(&[
+            (
+                archive::EXE_NAME,
+                &fake_exe(Arch::X64.pe_machine(), b"served exe"),
+            ),
+            (archive::NOTICES_NAME, b"served notices"),
+        ]);
+        let key = test_key::new();
+        let good = test_key::sign(&key, &zip);
+        let mut files = HashMap::new();
+        files.insert("/AudioSync.zip".to_owned(), zip.clone());
+        let port = serve(files.clone());
+        let zip_url = format!("http://127.0.0.1:{port}/redirect/AudioSync.zip");
+        let appcast = |os: &str, signature: &str| {
+            appcast_with(os, zip.len(), signature).replace(ZIP_URL, &zip_url)
+        };
+        files.insert(
+            "/appcast.xml".to_owned(),
+            appcast("windows-x64", &good).into_bytes(),
+        );
+        files.insert(
+            "/bad.xml".to_owned(),
+            appcast("windows-x64", &test_key::sign(&key, b"x")).into_bytes(),
+        );
+        files.insert(
+            "/arm.xml".to_owned(),
+            appcast("windows-arm64", &good).into_bytes(),
+        );
+        let port = serve(files);
+        let feed = |name: &str| format!("http://127.0.0.1:{port}/{name}");
+        let winhttp = Arc::new(fetch::WinHttp {
+            user_agent: fetch::user_agent("0.8.0", "x64"),
+            plain_loopback: true,
+        });
+        let setup = |name: &str, feed_name: &str| {
+            let mut f = fixture(name, false, Arc::new(RealFiles), DebugLog::default());
+            f.env.fetch = winhttp.clone();
+            f.env.key = key.verifying_key();
+            f.env.feed = feed(feed_name);
+            f
+        };
+
+        let happy = setup("loopback", "appcast.xml");
+        let update = update_of(&happy.env);
+        assert_eq!(run(&happy.env, &update), Installed::Done);
+        let exe = fs::read(happy.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        assert!(exe.ends_with(b"served exe"));
+        assert_eq!(
+            fs::read(happy.env.install_dir.join("audiosync.exe.bak")).unwrap(),
+            b"old exe"
+        );
+        assert!(temp_folders(&happy.env).is_empty());
+
+        let bad = setup("loopback-bad", "bad.xml");
+        let update = update_of(&bad.env);
+        assert_eq!(run(&bad.env, &update), Installed::BadSignature);
+        assert_eq!(
+            fs::read(bad.env.install_dir.join(archive::EXE_NAME)).unwrap(),
+            b"old exe"
+        );
+        assert!(temp_folders(&bad.env).is_empty());
+
+        assert_eq!(
+            check(&setup("loopback-arm", "arm.xml").env),
+            Checked::UpToDate
+        );
+        let mut same = setup("loopback-same", "appcast.xml");
+        same.env.running = Version::parse("0.9.0").unwrap();
+        assert_eq!(check(&same.env), Checked::UpToDate);
+        assert_eq!(
+            check(&setup("loopback-404", "missing.xml").env),
+            Checked::Failed
+        );
+
+        let plain = fetch::WinHttp {
+            user_agent: fetch::user_agent("0.8.0", "x64"),
+            plain_loopback: false,
+        };
+        assert!(
+            fetch::appcast(&plain, &feed("appcast.xml")).is_err(),
+            "plain HTTP is refused"
+        );
     }
 
     #[test]

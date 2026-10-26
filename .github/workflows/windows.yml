@@ -221,6 +221,10 @@ jobs:
           rustc --version
 
       - name: Build
+        # Marks the exe as a release build, the only kind whose updater
+        # checks for updates (docs/ENGINE_SPEC.md S293).
+        env:
+          AUDIOSYNC_RELEASE_BUILD: "1"
         run: cargo build --locked --release --target ${{ matrix.target }}
 
       - name: The executable carries the manifest and the version information

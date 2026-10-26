@@ -7169,6 +7169,108 @@ mod tests {
     }
 
     #[test]
+    fn the_updater_texts() {
+        use ui_model::UpdaterNotice as N;
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notices = [
+            N::Available {
+                new: "0.9.0".to_owned(),
+                running: "0.8.0".to_owned(),
+            },
+            N::Downloading { percent: Some(42) },
+            N::Downloading { percent: None },
+            N::Installed {
+                version: "0.9.0".to_owned(),
+            },
+            N::UpToDate {
+                running: "0.8.0".to_owned(),
+            },
+            N::Unreachable,
+            N::DownloadFailed,
+            N::BadSignature,
+            N::BrokenDownload,
+            N::DiskFull,
+            N::ReadOnly,
+            N::InUse,
+            N::Failed,
+            N::RestoreFailed {
+                bak: "audiosync.exe.bak".to_owned(),
+            },
+            N::RelaunchFailed,
+        ];
+        let mut texts = HashSet::new();
+        for notice in notices {
+            let message = NoticeMessage::Update(notice.clone());
+            let text = notice_text(&strings, &message);
+            assert!(
+                !text.is_empty() && !text.contains("{}"),
+                "{notice:?}: {text}"
+            );
+            assert!(
+                texts.insert(text.to_string()),
+                "{notice:?} has its own text"
+            );
+            assert_eq!(notice_title(&strings, &message).as_str(), "update");
+            let item = notice_item(
+                &strings,
+                &ui_model::Notice {
+                    id: UPDATER_NOTICE_ID,
+                    subject: "update".to_owned(),
+                    message,
+                    time: String::new(),
+                },
+            );
+            assert_eq!(item.update_buttons.row_count(), notice.buttons().len());
+            for button in item.update_buttons.iter() {
+                assert!(!strings.invoke_update_button(button).is_empty());
+            }
+        }
+        assert_eq!(
+            notice_text(
+                &strings,
+                &NoticeMessage::Update(N::Available {
+                    new: "0.9.0".to_owned(),
+                    running: "0.8.0".to_owned()
+                })
+            )
+            .as_str(),
+            "AudioSync 0.9.0 is available. You have 0.8.0."
+        );
+        assert_eq!(
+            notice_text(
+                &strings,
+                &NoticeMessage::Update(N::Downloading { percent: Some(42) })
+            )
+            .as_str(),
+            "Downloading the update: 42%"
+        );
+        let labels: HashSet<String> = [
+            UpdateButton::Download,
+            UpdateButton::NotNow,
+            UpdateButton::Cancel,
+            UpdateButton::TryAgain,
+            UpdateButton::OpenReleasePage,
+            UpdateButton::RelaunchNow,
+        ]
+        .into_iter()
+        .map(|button| strings.invoke_update_button(button).to_string())
+        .collect();
+        assert_eq!(labels.len(), 6);
+        assert!(labels.contains("Download and Install") && labels.contains("Relaunch Now"));
+        assert_eq!(
+            strings.get_check_updates_automatically().as_str(),
+            "Check for Updates Automatically"
+        );
+        assert_eq!(
+            strings.get_menu_check_for_updates().as_str(),
+            "Check for Updates…"
+        );
+        // Local and test builds have no updater, so its menu items stay hidden.
+        assert!(!app.main.get_updater_available());
+    }
+
+    #[test]
     fn a_cast_row_names_its_kind_and_says_where_it_is() {
         let app = app_over(MockBackend::new());
         let state = MockBackend::new().snapshot();

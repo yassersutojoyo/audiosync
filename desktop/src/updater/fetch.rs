@@ -116,12 +116,26 @@ pub fn appcast(fetch: &dyn Fetch, url: &str) -> Result<Vec<u8>, FetchError> {
 
 pub struct WinHttp {
     pub user_agent: String,
+    /// Also plain `http://127.0.0.1:<port>` URLs, for the loopback test's
+    /// server only; the app never sets it.
+    pub plain_loopback: bool,
 }
 
 impl Fetch for WinHttp {
     fn get(&self, url: &str, kind: Kind, sink: &mut Sink<'_>) -> Result<(), FetchError> {
-        winhttp::get(&self.user_agent, url, kind, sink)
+        winhttp::get(&self.user_agent, self.plain_loopback, url, kind, sink)
     }
+}
+
+/// A plain `http://127.0.0.1:<port>/path` URL's target.
+fn loopback_target(url: &str) -> Option<Target> {
+    let rest = url.strip_prefix("http://127.0.0.1:")?;
+    let (port, path) = rest.split_at(rest.find('/')?);
+    Some(Target {
+        host: "127.0.0.1".to_owned(),
+        port: port.parse().ok()?,
+        path: path.to_owned(),
+    })
 }
 
 mod winhttp {
@@ -205,7 +219,13 @@ mod winhttp {
         Some(String::from_utf16_lossy(&buffer))
     }
 
-    pub fn get(agent: &str, url: &str, kind: Kind, sink: &mut Sink<'_>) -> Result<(), FetchError> {
+    pub fn get(
+        agent: &str,
+        plain_loopback: bool,
+        url: &str,
+        kind: Kind,
+        sink: &mut Sink<'_>,
+    ) -> Result<(), FetchError> {
         // SAFETY: the strings live through the call.
         let session = handle(
             unsafe {
@@ -236,8 +256,13 @@ mod winhttp {
         .map_err(failed("timeouts"))?;
         let mut url = url.to_owned();
         for _ in 0..=MAX_REDIRECTS {
-            let target = https_target(&url)
-                .ok_or_else(|| FetchError::Failed("not an https: URL".to_owned()))?;
+            let (target, secure) = match https_target(&url) {
+                Some(target) => (target, true),
+                None => match loopback_target(&url).filter(|_| plain_loopback) {
+                    Some(target) => (target, false),
+                    None => return Err(FetchError::Failed("not an https: URL".to_owned())),
+                },
+            };
             // SAFETY: the session is open; the host string lives through it.
             let connection = handle(
                 unsafe {
@@ -260,7 +285,11 @@ mod winhttp {
                         PCWSTR::null(),
                         PCWSTR::null(),
                         std::ptr::null(),
-                        WINHTTP_FLAG_SECURE,
+                        if secure {
+                            WINHTTP_FLAG_SECURE
+                        } else {
+                            WINHTTP_OPEN_REQUEST_FLAGS(0)
+                        },
                     )
                 },
                 "request",
@@ -292,8 +321,12 @@ mod winhttp {
                 let location = query_text(&request, WINHTTP_QUERY_LOCATION).ok_or_else(|| {
                     FetchError::Failed("a redirect without a location".to_owned())
                 })?;
-                url = redirect_target(&target, &location)
-                    .ok_or_else(|| FetchError::Failed("a redirect off https".to_owned()))?;
+                url = if secure {
+                    redirect_target(&target, &location)
+                        .ok_or_else(|| FetchError::Failed("a redirect off https".to_owned()))?
+                } else {
+                    format!("http://127.0.0.1:{}{location}", target.port)
+                };
                 continue;
             }
             if status != 200 {
