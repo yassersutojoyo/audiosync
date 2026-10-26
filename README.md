@@ -35,8 +35,10 @@ AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay s
 
 ## Coming in 0.8
 
-On `main` now or on the way, in both the Mac and the Windows app:
+On `main` now or on the way, in the Mac app and the Windows build that's still in preview:
 
+- Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
+- Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
 - Zones instead of groups: a zone has its own volume, one click turns its speakers on or off, and Calibrate Zone measures just that zone. Your groups turn into zones by themselves.
 - Presets: save which speakers are on with their volumes and EQ curve, and recall it all in one click or with a shortcut.
 - Several apps as one source, or every app except the ones you check.
@@ -45,22 +47,14 @@ On `main` now or on the way, in both the Mac and the Windows app:
 - Save your own EQ curves next to the presets.
 - The Web Remote can switch the source, zones and presets too.
 - On the Mac, a Bluetooth headset's call microphone isn't offered as a source anymore, since using it drops the headset to call quality.
-
-## Also coming in 0.8
-
-On the way too, in the Mac app and in the Windows build that's still in preview:
-
-- Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
-- Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
 - Calibrate with Microphone works on Windows too.
-- AirPlay can wait up to 20 s for a Cast speaker instead of 3.
 - Master Volume scales Google Cast speakers and groups too, on the device's own volume.
 - A Cast speaker that doesn't show up can be added by its IP address or host name, with Add by Address… under Connected Speakers on the Mac or in the Speakers menu on Windows.
 - Cast speakers show the track that's playing, with the title, artist, album and cover.
 - On Windows you can rename a speaker too, with a double-click on its name.
 - Hide Speaker takes a speaker you never use out of the list, and Hidden Speakers brings it back.
 
-New in 0.6:
+## New in 0.6
 
 - Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
 - Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s.
