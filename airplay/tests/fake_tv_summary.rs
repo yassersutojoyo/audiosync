@@ -8,7 +8,7 @@ use audiosync_airplay::rtsp::{Method, Request};
 use common::ap2::{dict, plist};
 use common::hap::tlv;
 use plist::Value;
-use summary::{ECHO_WINDOW_SECS, Summary};
+use summary::Summary;
 
 fn request(method: Method, uri: &str, body: &[u8]) -> Request {
     let mut request = Request::new(method, uri);
@@ -34,11 +34,11 @@ fn volume(db: f64) -> Request {
 fn pairing_counts_starts_and_completions() {
     let mut summary = Summary::default();
     let lines: Vec<Option<String>> = vec![
-        summary.request(1.0, &pair_setup(1, false), 200),
-        summary.request(2.0, &pair_setup(3, false), 200),
-        summary.request(3.0, &pair_setup(5, false), 200),
-        summary.request(9.0, &pair_setup(1, false), 200),
-        summary.request(10.0, &pair_setup(1, true), 200),
+        summary.request(1.0, &pair_setup(1, false), 200, None),
+        summary.request(2.0, &pair_setup(3, false), 200, None),
+        summary.request(3.0, &pair_setup(5, false), 200, None),
+        summary.request(9.0, &pair_setup(1, false), 200, None),
+        summary.request(10.0, &pair_setup(1, true), 200, None),
     ];
     assert_eq!(
         lines,
@@ -66,7 +66,7 @@ fn stream_requests_get_one_line_each_with_a_running_count() {
         request(Method::Teardown, "rtsp://tv/1", &[]),
     ]
     .iter()
-    .map(|request| summary.request(4.0, request, 200).expect("a line"))
+    .map(|request| summary.request(4.0, request, 200, None).expect("a line"))
     .collect();
     assert_eq!(
         lines,
@@ -80,7 +80,7 @@ fn stream_requests_get_one_line_each_with_a_running_count() {
         ]
     );
     assert_eq!(
-        summary.request(5.0, &request(Method::Flush, "rtsp://tv/1", &[]), 455),
+        summary.request(5.0, &request(Method::Flush, "rtsp://tv/1", &[]), 455, None),
         Some("[    5.000] FLUSH #3 (pause) - refused with status 455".to_owned())
     );
 }
@@ -93,7 +93,7 @@ fn requests_no_cell_judges_print_nothing() {
     let progress = request(Method::SetParameter, "rtsp://tv/1", b"progress: 1/2/3\r\n");
     let read = request(Method::GetParameter, "rtsp://tv/1", b"volume\r\n");
     for request in [feedback, info, progress, read] {
-        assert_eq!(summary.request(1.0, &request, 200), None);
+        assert_eq!(summary.request(1.0, &request, 200, None), None);
     }
 }
 
@@ -101,13 +101,13 @@ fn requests_no_cell_judges_print_nothing() {
 fn volume_from_the_app_shows_its_level_whatever_the_status() {
     let mut summary = Summary::default();
     assert_eq!(
-        summary.request(2.0, &volume(-20.0), 500),
+        summary.request(2.0, &volume(-20.0), 500, None),
         Some("[    2.000] volume from the app #1: -20.0 dB".to_owned())
     );
 }
 
 #[test]
-fn vol_then_one_read_and_no_echo() {
+fn vol_then_one_read_of_the_new_level_and_no_set_from_the_app() {
     let mut summary = Summary::default();
     let read = request(Method::GetParameter, "rtsp://tv/1", b"volume\r\n");
     assert_eq!(
@@ -115,27 +115,45 @@ fn vol_then_one_read_and_no_echo() {
         "[   10.000] volume set with vol #1: -30.0 dB"
     );
     assert_eq!(
-        summary.request(11.0, &read, 200),
+        summary.request(10.5, &read, 200, Some("volume: -20.100000")),
+        None,
+        "a read answered before vol carries the old level"
+    );
+    assert_eq!(
+        summary.request(11.0, &read, 200, Some("volume: -30.000000")),
         Some("[   11.000] app read the new level #1: -30.0 dB".to_owned())
     );
-    assert_eq!(summary.request(12.0, &read, 200), None);
-    let later = 10.0 + ECHO_WINDOW_SECS + 0.5;
     assert_eq!(
-        summary.request(later, &volume(-30.0), 500),
-        Some(format!("[{later:9.3}] volume from the app #1: -30.0 dB"))
+        summary.request(12.0, &read, 200, Some("volume: -30.000000")),
+        None
     );
 }
 
 #[test]
-fn the_app_sending_the_vol_level_back_is_an_echo() {
+fn the_app_sending_the_vol_level_back_is_an_echo_however_late() {
     let mut summary = Summary::default();
     summary.pushed(10.0, -30.0);
     assert_eq!(
-        summary.request(11.3, &volume(-29.7), 500),
-        Some("[   11.300] ECHO #1: the app sent -29.7 dB back 1.3 s after vol".to_owned())
+        summary.request(41.3, &volume(-29.7), 500, None),
+        Some("[   41.300] ECHO #1: the app sent -29.7 dB back 31.3 s after vol".to_owned())
     );
     assert_eq!(
-        summary.request(12.0, &volume(-12.0), 500),
-        Some("[   12.000] volume from the app #1: -12.0 dB".to_owned())
+        summary.request(42.0, &volume(-12.0), 500, None),
+        Some("[   42.000] volume from the app #1: -12.0 dB".to_owned())
+    );
+}
+
+#[test]
+fn the_app_undoing_the_vol_level_is_an_overwrite() {
+    let mut summary = Summary::default();
+    summary.pushed(10.0, -30.0);
+    assert_eq!(
+        summary.request(95.0, &volume(-20.0), 500, None),
+        Some("[   95.000] OVERWRITE #1: app sent -20.0 dB, TV is at -30.0 dB".to_owned())
+    );
+    assert_eq!(
+        summary.request(96.0, &volume(-30.0), 500, None),
+        Some("[   96.000] volume from the app #1: -30.0 dB".to_owned()),
+        "only the first set after a vol answers it"
     );
 }

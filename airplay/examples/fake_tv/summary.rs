@@ -10,21 +10,28 @@ use audiosync_airplay::rtsp::{Method, Request};
 use crate::common::ap2::request_key;
 use crate::common::hap::{item, untlv};
 
-/// A volume set from the app this soon after `vol`, and this close to the
-/// level `vol` set, is the app sending the television's own change back.
-pub const ECHO_WINDOW_SECS: f64 = 10.0;
+/// The first volume set from the app after `vol`, this close to the level
+/// `vol` set, is the app sending the television's own change back.
 pub const ECHO_TOLERANCE_DB: f64 = 1.0;
 
 pub fn stamp(seconds: f64) -> String {
     format!("[{seconds:9.3}]")
 }
 
+/// The level in a `volume: <dB>` text, as volume sets carry it and reads
+/// answer it.
+pub fn parse_level(text: &str) -> Option<f64> {
+    text.trim().strip_prefix("volume:")?.trim().parse().ok()
+}
+
 #[derive(Default)]
 pub struct Summary {
     counts: HashMap<&'static str, usize>,
-    /// When `vol` last moved the level, and to what.
-    pushed: Option<(f64, f64)>,
-    read_since_push: bool,
+    /// When `vol` last moved the level and to what, while no volume set
+    /// from the app has come since.
+    unanswered: Option<(f64, f64)>,
+    /// The level `vol` set, until the app has read it once.
+    unread: Option<f64>,
 }
 
 impl Summary {
@@ -32,15 +39,22 @@ impl Summary {
         self.line(at, "connection", " opened")
     }
 
-    /// `vol <dB>` typed on the fake.
+    /// `vol <dB>` typed on the fake; `db` is the level after the remote's grid.
     pub fn pushed(&mut self, at: f64, db: f64) -> String {
-        self.pushed = Some((at, db));
-        self.read_since_push = false;
+        self.unanswered = Some((at, db));
+        self.unread = Some(db);
         self.line(at, "volume set with vol", &format!(": {db:.1} dB"))
     }
 
-    /// One answered request; `None` for the kinds no cell judges.
-    pub fn request(&mut self, at: f64, request: &Request, status: u16) -> Option<String> {
+    /// One answered request with the level a read answered right after it;
+    /// `None` for the kinds no cell judges.
+    pub fn request(
+        &mut self,
+        at: f64,
+        request: &Request,
+        status: u16,
+        level: Option<&str>,
+    ) -> Option<String> {
         // The television answers every volume set with 500 and still applies
         // it, so only the other kinds report a refusal.
         let refused = if status >= 300 {
@@ -69,9 +83,13 @@ impl Summary {
             Method::Teardown => self.line(at, "TEARDOWN", &format!(" (stream ends){refused}")),
             Method::SetParameter => return self.volume_set(at, &request.body),
             Method::GetParameter if request.body.starts_with(b"volume") => {
-                let (_, db) = self.pushed.filter(|_| !self.read_since_push)?;
-                self.read_since_push = true;
-                self.line(at, "app read the new level", &format!(": {db:.1} dB"))
+                let unread = self.unread?;
+                // A read answered just before `vol` still carries the old level.
+                if level.and_then(parse_level) != Some(unread) {
+                    return None;
+                }
+                self.unread = None;
+                self.line(at, "app read the new level", &format!(": {unread:.1} dB"))
             }
             _ => return None,
         };
@@ -79,19 +97,20 @@ impl Summary {
     }
 
     fn volume_set(&mut self, at: f64, body: &[u8]) -> Option<String> {
-        let text = std::str::from_utf8(body).ok()?;
-        let db: f64 = text.strip_prefix("volume:")?.trim().parse().ok()?;
-        let echoed = self.pushed.filter(|(pushed_at, pushed_db)| {
-            at - pushed_at <= ECHO_WINDOW_SECS && (db - pushed_db).abs() <= ECHO_TOLERANCE_DB
-        });
-        Some(match echoed {
-            Some((pushed_at, _)) => self.line(
+        let db = parse_level(std::str::from_utf8(body).ok()?)?;
+        Some(match self.unanswered.take() {
+            Some((pushed_at, tv)) if (db - tv).abs() <= ECHO_TOLERANCE_DB => self.line(
                 at,
                 "ECHO",
                 &format!(
                     ": the app sent {db:.1} dB back {:.1} s after vol",
                     at - pushed_at
                 ),
+            ),
+            Some((_, tv)) => self.line(
+                at,
+                "OVERWRITE",
+                &format!(": app sent {db:.1} dB, TV is at {tv:.1} dB"),
             ),
             None => self.line(at, "volume from the app", &format!(": {db:.1} dB")),
         })

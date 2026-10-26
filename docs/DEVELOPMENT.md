@@ -161,9 +161,10 @@ Without `--pin` it pairs transiently with no code. `--pin every` asks for the co
 [   47.880] SET_PARAMETER rtsp://<address>/<session> [volume: -20.000000] (encrypted) -> 500, reads now answer volume: -19.799999
 ```
 
-With `--summary` it prints one plain line per event a dry run judges instead of every request, each with a running count, so a check reads off the counts: PIN pairing started and done (`pairing without PIN` when there is no code), each new connection, SETUP session and stream, RECORD, FLUSH, TEARDOWN, a volume from the app with its level, and a level typed with `vol` (after the 0.3 dB grid). After a `vol`, the first time the app reads the level prints `app read the new level`, and a volume from the app within 10 s of the `vol` and within 1 dB of its level prints `ECHO` instead of a volume line. A pause from the app's button should add exactly one FLUSH and no TEARDOWN, and resuming should add no SETUP or RECORD; a `vol` should show a read and no ECHO. The formatting is tested in `airplay/tests/fake_tv_summary.rs`.
+With `--summary` it prints one plain line per event a dry run judges instead of every request, each with a running count, so a check reads off the counts: PIN pairing started and done (`pairing without PIN` when there is no code), each new connection, SETUP session and stream, RECORD, FLUSH, TEARDOWN, a volume from the app with its level, and a level typed with `vol` (after the 0.3 dB grid). After a `vol`, the first read that answers the new level prints `app read the new level`. The first volume from the app after a `vol`, however late, prints `ECHO` when it is within 1 dB of the `vol` level and `OVERWRITE` (what the app sent and where the TV is) when it is not. A pause from the app's button should add exactly one FLUSH and no TEARDOWN, and resuming should add no SETUP or RECORD. A `vol` should show a read and then no volume line from the app at all: any `ECHO`, `OVERWRITE` or `volume from the app` after it is a FAIL, unless you moved the app's slider yourself. The formatting is tested in `airplay/tests/fake_tv_summary.rs`.
 
 ```text
+[    3.050] connection #1 opened
 [    3.120] PIN pairing started #1
 [   12.480] PIN pairing done #1
 [   12.950] SETUP session #1

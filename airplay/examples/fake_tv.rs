@@ -214,8 +214,9 @@ fn log_requests(
     while !stop.load(Ordering::SeqCst) {
         {
             let fake = server.fake();
-            if fake.connections != connections {
-                connections = fake.connections;
+            // Two connections can open within one poll.
+            while connections < fake.connections {
+                connections += 1;
                 match summary {
                     Some(summary) => println!("{}", lock(summary).connection(seconds(start))),
                     None => println!("{} connection {connections} opened", stamp(start)),
@@ -225,7 +226,9 @@ fn log_requests(
                 (fake.requests.get(logged), fake.answered.get(logged))
             {
                 if let Some(summary) = summary {
-                    let line = lock(summary).request(seconds(start), request, answered.status);
+                    let level = answered.level.as_deref();
+                    let line =
+                        lock(summary).request(seconds(start), request, answered.status, level);
                     if let Some(line) = line {
                         println!("{line}");
                     }
@@ -254,8 +257,7 @@ fn log_requests(
 /// The level a volume read answers now, after the remote's grid.
 fn level_read(fake: &FakeAp2) -> Option<f64> {
     let body = fake.bodies.get("GET_PARAMETER")?;
-    let text = std::str::from_utf8(body).ok()?;
-    text.strip_prefix("volume:")?.trim().parse().ok()
+    summary::parse_level(std::str::from_utf8(body).ok()?)
 }
 
 fn seconds(start: Instant) -> f64 {
