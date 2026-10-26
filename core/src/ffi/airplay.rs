@@ -6768,6 +6768,36 @@ mod tests {
         assert_eq!(reopened.get("02005E005351"), None);
     }
 
+    // covers: P217
+    #[test]
+    fn a_timing_entry_goes_with_a_forgotten_pairing_without_airplay2_credentials() {
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let id = "02005E005312";
+        let mut handle = listing(vec![raop(id, "Den TV", APPLE_TV)]);
+        let credentials = audiosync_airplay::pairing::Credentials::new(
+            "0123456789ABCDEF",
+            [7; audiosync_airplay::pairing::SECRET_BYTES],
+        )
+        .expect("valid credentials");
+        let _ = inside(handle).store.insert(id, credentials);
+        let memory = TimingMemory {
+            timing: Timing::Ptp,
+            features: 0x1_0240_0000_0000,
+            srcvers: Some("366.0".to_owned()),
+        };
+        let _ = inside(handle).timing.keep(id, memory);
+        let c_id = CString::new(id).expect("no NUL");
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert!(asc_airplay_forget_pairing(handle, c_id.as_ptr()));
+        }
+        assert_eq!(inside(handle).timing.get(id), None, "the entry goes too");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S224
     #[test]
     fn the_host_is_told_how_private_the_files_were_found() {

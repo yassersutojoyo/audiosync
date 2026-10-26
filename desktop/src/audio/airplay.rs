@@ -5436,6 +5436,38 @@ pub mod tests {
         );
     }
 
+    // covers: P217
+    #[test]
+    fn forget_pairing_drops_the_timing_entry_of_a_speaker_without_airplay2_credentials() {
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let speaker = airplay2_device(13, "Porch", false);
+        let id = id_of(&speaker);
+        fake.appear(&speaker);
+        fake.push(SenderEvent::Speaker {
+            key: speaker.key.clone(),
+            event: SpeakerEvent::TimingRemembered(TimingMemory::of(&speaker, Timing::Ptp)),
+        });
+        airplay.poll();
+        airplay
+            .passwords
+            .insert(id.clone(), Secret::from("hunter2"));
+        assert!(airplay.store.timing(&id).is_some());
+        assert!(airplay.store.homekit(&id).is_none(), "a password only");
+        fake.take_calls();
+
+        airplay.forget_pairing(&id);
+        assert!(airplay.store.timing(&id).is_none(), "the entry goes too");
+        assert!(
+            fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+            "the sender drops its copy too"
+        );
+    }
+
     #[test]
     fn a_speaker_airplay1_refuses_follows_the_sender_to_airplay2() {
         let fake = FakeAirPlay::new();
