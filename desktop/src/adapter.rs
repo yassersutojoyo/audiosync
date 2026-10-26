@@ -7580,6 +7580,265 @@ mod tests {
         );
     }
 
+    /// The sender over `audio` with the AirPlay 2 switch on, the HomeKit
+    /// credentials an earlier run kept for `tv`, and `tv` listed.
+    fn with_stored_credentials(audio: &mut MockBackend, tv: &Device) -> FakeAirPlay {
+        use crate::audio::pairings::tests::homekit;
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut store = PairingStore::in_memory();
+        store.open_airplay2();
+        store
+            .insert_homekit(&id_of(tv), homekit(0x33))
+            .expect("kept in memory");
+        audio.set_airplay_with_pairings(fake.link(), None, store);
+        fake.appear(tv);
+        fake
+    }
+
+    /// Den, which asks for a code every time, listed with the HomeKit
+    /// credentials of an earlier run and marked for auto-connect.
+    fn stored_every_time_adapter() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
+        let den = airplay2_every_time_tv(10, "Den");
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = with_stored_credentials(&mut audio, &den);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        adapter.set_auto_connect(&ap(&den), true);
+        fake.take_calls();
+        (adapter, fake, den)
+    }
+
+    /// [`stored_every_time_adapter`] after Den dropped out of view and came
+    /// back, so auto-connect switched it on.
+    fn auto_connected_with_stored_credentials() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device)
+    {
+        let (mut adapter, fake, den) = stored_every_time_adapter();
+        fake.gone(&den);
+        adapter.poll();
+        fake.appear(&den);
+        adapter.poll();
+        (adapter, fake, den)
+    }
+
+    fn starts_a_pairing(calls: &[Call]) -> bool {
+        calls
+            .iter()
+            .any(|call| matches!(call, Call::StartPairing(_)))
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn a_speaker_asking_every_time_with_stored_credentials_auto_connects_and_joins_with_them() {
+        let (adapter, fake, den) = auto_connected_with_stored_credentials();
+        let id = ap(&den);
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(row.paired && !row.code_every_time, "{row:?}");
+        assert_eq!(row.availability, Availability::Open);
+        assert!(row.enabled, "auto-connect turned it on");
+        assert!(state.running);
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::HomeKit(id_of(&den))), "{calls:?}");
+        assert!(!starts_a_pairing(&calls), "{calls:?}");
+        assert_eq!(state.pin_prompt, None);
+        assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S222, S223, P182
+    #[test]
+    fn a_speaker_asking_every_time_saved_on_with_stored_credentials_stays_on_at_a_launch() {
+        let dir = test_dir("adapter-saved-on-every-time-stored");
+        let path = dir.join(settings::FILE_NAME);
+        let launch_with = |tv: &Device| {
+            let mut audio = launch_audio();
+            let fake = with_stored_credentials(&mut audio, tv);
+            (audio, fake)
+        };
+        let (audio, _fake) = launch_with(&airplay2_tv(10, "Den"));
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        let id = ap(&airplay2_tv(10, "Den"));
+        adapter.set_speaker_enabled(&id, true);
+        adapter.set_auto_connect(&id, true);
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+        adapter.save_settings();
+        drop(adapter);
+
+        // The TV asks for a code every time now; the credentials stay.
+        let den = airplay2_every_time_tv(10, "Den");
+        let (audio, fake) = launch_with(&den);
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(row.enabled, "a switch restored as on stays on");
+        assert!(row.paired && !row.code_every_time, "{row:?}");
+        assert!(state.running);
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::HomeKit(id_of(&den))), "{calls:?}");
+        assert!(!starts_a_pairing(&calls), "{calls:?}");
+        assert!(messages(&adapter).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn a_rejected_verify_turns_an_auto_connected_every_time_speaker_off_with_a_pin_notice() {
+        let (mut adapter, fake, den) = auto_connected_with_stored_credentials();
+        let id = ap(&den);
+        fake.take_calls();
+        fake.fail(&den, ErrorKind::PairingRequired);
+        adapter.poll();
+        let state = adapter.snapshot();
+        let row = state.speaker(&id).unwrap();
+        assert!(!row.enabled);
+        assert!(row.code_every_time && !row.paired, "{row:?}");
+        assert_eq!(state.pin_prompt, None, "no prompt opens by itself");
+        assert!(
+            !starts_a_pairing(&fake.take_calls()),
+            "never paired by itself"
+        );
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }]
+        );
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn after_a_rejected_verify_an_every_time_speaker_stays_off_without_a_second_verify() {
+        let (mut adapter, fake, den) = auto_connected_with_stored_credentials();
+        let id = ap(&den);
+        fake.fail(&den, ErrorKind::PairingRequired);
+        adapter.poll();
+        fake.take_calls();
+
+        for _ in 0..2 {
+            fake.gone(&den);
+            adapter.poll();
+            fake.appear(&den);
+            adapter.poll();
+            let row = speaker_of(&adapter, &id);
+            assert!(!row.enabled && row.code_every_time, "{row:?}");
+            let calls = fake.take_calls();
+            assert!(
+                !calls
+                    .iter()
+                    .any(|call| matches!(call, Call::Add { .. } | Call::StartPairing(_))),
+                "{calls:?}"
+            );
+        }
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn a_verify_that_ends_without_a_rejection_marks_nothing_and_names_no_pin() {
+        for kind in [
+            ErrorKind::Busy,
+            ErrorKind::Refused,
+            ErrorKind::Lost,
+            ErrorKind::PairingFailed,
+        ] {
+            let (mut adapter, fake, den) = auto_connected_with_stored_credentials();
+            let id = ap(&den);
+            fake.take_calls();
+            fake.fail(&den, kind);
+            adapter.poll();
+            let state = adapter.snapshot();
+            let row = state.speaker(&id).unwrap();
+            assert!(row.paired && !row.code_every_time, "{kind:?}: {row:?}");
+            assert_eq!(state.pin_prompt, None, "{kind:?}");
+            assert!(!starts_a_pairing(&fake.take_calls()), "{kind:?}");
+            assert!(
+                !messages(&adapter).iter().any(|message| matches!(
+                    message,
+                    NoticeMessage::AirPlayCantPlay {
+                        problem: ui_model::AirPlayProblem::NeedsPin,
+                        ..
+                    }
+                )),
+                "{kind:?}: {:?}",
+                messages(&adapter)
+            );
+        }
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn credentials_turned_down_earlier_this_run_keep_an_every_time_speaker_from_auto_connecting() {
+        let den = airplay2_tv(10, "Den");
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = with_stored_credentials(&mut audio, &den);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        let id = ap(&den);
+        // Turned on by hand, it turns the stored credentials down and the
+        // user closes the PIN prompt.
+        adapter.set_speaker_enabled(&id, true);
+        fake.fail(&den, ErrorKind::PairingRequired);
+        adapter.poll();
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.cancel_pairing(&id);
+        fake.pairing(&den, PairingEvent::Stopped);
+        adapter.poll();
+        adapter.set_auto_connect(&id, true);
+        fake.take_calls();
+
+        // The TV is set to ask for a code every time, drops out of view
+        // and comes back.
+        let every_time = airplay2_every_time_tv(10, "Den");
+        fake.change(&every_time);
+        adapter.poll();
+        fake.gone(&every_time);
+        adapter.poll();
+        fake.appear(&every_time);
+        adapter.poll();
+        let row = speaker_of(&adapter, &id);
+        assert!(
+            !row.enabled && row.code_every_time && !row.paired,
+            "{row:?}"
+        );
+        let calls = fake.take_calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(call, Call::Add { .. } | Call::StartPairing(_))),
+            "{calls:?}"
+        );
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn an_every_time_speaker_with_stored_credentials_turned_on_by_hand_verifies_before_the_pin() {
+        let (mut adapter, fake, den) = stored_every_time_adapter();
+        let id = ap(&den);
+        adapter.set_speaker_enabled(&id, true);
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::HomeKit(id_of(&den))), "{calls:?}");
+        assert!(!starts_a_pairing(&calls), "no PIN before the verify");
+
+        fake.fail(&den, ErrorKind::PairingRequired);
+        adapter.poll();
+        assert!(
+            fake.take_calls().contains(&Call::StartPairing(id_of(&den))),
+            "the rejection asks for the PIN"
+        );
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.speaker(&id).unwrap().enabled, "it waits for the PIN");
+        assert_eq!(state.pin_prompt.map(|prompt| prompt.speaker_id), Some(id));
+    }
+
     /// [`airplay2_adapter`] with Study, which plays over AirPlay 2 with no
     /// code, switched on by auto-connect as it appeared, not by hand.
     fn auto_connected_study() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {

@@ -8134,6 +8134,64 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S223
+    #[test]
+    fn a_receiver_asking_every_time_with_credentials_no_answer_turned_down_reads_as_paired() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let mut record = airplay2_only();
+        record.txt.push(b"flags=0x4c".to_vec());
+        let device =
+            Device::from_records(record.device_key(), None, Some(&record)).expect("a device");
+        let id = receiver_id(&device.key);
+        let key = device.key.clone();
+        let mut info = ReceiverInfo::new(device);
+        info.plan = Ok(());
+        inside(handle).listed.insert(id.clone(), info.clone());
+        let _ = inside(handle).identity.insert(&id, homekit_blob(7));
+        let paired = |handle: *mut AscAirPlay| {
+            let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+            (
+                report.availability,
+                report.flags & AIRPLAY_FLAG_PAIRED != 0,
+                report.flags & AIRPLAY_FLAG_CODE_EVERY_TIME != 0,
+            )
+        };
+        assert_eq!(paired(handle), (AIRPLAY_AVAILABLE, true, false));
+
+        // Error 1 or 3 to 6 to the verify describes the receiver, not the
+        // credentials: nothing is marked.
+        for kind in [
+            ErrorKind::PairingFailed,
+            ErrorKind::Busy,
+            ErrorKind::Refused,
+            ErrorKind::Lost,
+        ] {
+            inside(handle).take_in(SenderEvent::Speaker {
+                key: key.clone(),
+                event: SpeakerEvent::Error(SpeakerError {
+                    error: audiosync_airplay::error::SessionError::new(kind),
+                    reason: kind.user_reason(),
+                    retry_at: None,
+                }),
+            });
+            assert_eq!(paired(handle), (AIRPLAY_AVAILABLE, true, false), "{kind:?}");
+        }
+
+        // A rejected verify turns them down: it asks for a code every time.
+        inside(handle).take_in(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::Error(SpeakerError {
+                error: audiosync_airplay::error::SessionError::new(ErrorKind::PairingRequired),
+                reason: UserReason::PairingRequired,
+                retry_at: None,
+            }),
+        });
+        assert_eq!(paired(handle), (AIRPLAY_NEEDS_PIN, false, true));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     #[test]
     fn forget_reaches_the_senders_airplay2_credentials_of_a_receiver_no_longer_listed() {
         let mut handle = create_with(quiet);
