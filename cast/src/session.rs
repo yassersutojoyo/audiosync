@@ -151,8 +151,7 @@ pub enum SessionEvent {
         relaunched: bool,
     },
     /// The device saw the stream end while the sender kept it open (C86),
-    /// or lost it during an outage (C81), and the sender loaded it again
-    /// once.
+    /// or lost it during an outage (C81), and the sender loaded it again.
     Reloaded,
     /// The device refused WAV before it played, and the sender loads FLAC
     /// once instead (C84).
@@ -270,7 +269,8 @@ pub struct CastSession {
     stall_since: Option<Instant>,
     next_diagnostics: Instant,
     error_recovered: bool,
-    finished_reloaded: bool,
+    /// When the latest unrequested `FINISHED` arrived, on `clock` (C86).
+    last_finished: Option<Instant>,
     finished_window: Duration,
     clock: Clock,
     /// Set by the host once it quits: every teardown from then on keeps to
@@ -429,7 +429,7 @@ impl CastSession {
             stall_since: None,
             next_diagnostics: Instant::now(),
             error_recovered: false,
-            finished_reloaded: false,
+            last_finished: None,
             finished_window: FINISHED_WINDOW,
             clock: Arc::new(Instant::now),
             quitting,
@@ -790,12 +790,16 @@ impl CastSession {
                 }
             }
             Event::PlaybackEnded(PlaybackEnd::Finished) => {
-                if self.finished_reloaded {
+                let now = (self.clock)();
+                let too_soon = self.last_finished.is_some_and(|previous| {
+                    now.saturating_duration_since(previous) < self.finished_window
+                });
+                if too_soon {
                     self.end(SessionEnd::Failed(
                         MediaError::Idle(IdleReason::Finished).into(),
                     ));
                 } else {
-                    self.finished_reloaded = true;
+                    self.last_finished = Some(now);
                     self.reload();
                 }
             }

@@ -217,10 +217,10 @@ fn a_load_error_ends_the_start_with_its_reason() {
     device.join();
 }
 
-// Part of C86 (pending): one reload after FINISHED, the next FINISHED ends the session.
+// covers: C86
 #[test]
 fn playback_ends_are_handled_by_their_reason() {
-    // FINISHED while the sender kept the stream open: one reload.
+    // Two unrequested FINISHED within the window: one reload, then the end.
     let device = FakeDevice::start(Behavior::default());
     let (mut session, _feed) = start(&device);
     device.send(Command::Send(media_status(
@@ -253,7 +253,7 @@ fn playback_ends_are_handled_by_their_reason() {
         )),
         "{seen:?}"
     );
-    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2, "only once");
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2, "one reload LOAD");
     device.join();
 
     // ERROR: recovery once, then the end.
@@ -341,7 +341,7 @@ fn fake_clock(session: &mut CastSession) -> Arc<Mutex<Duration>> {
     offset
 }
 
-// Part of C86 (pending): a reload per unrequested FINISHED, the end on a second one within the window.
+// covers: C86
 #[test]
 fn every_unrequested_finished_reloads_unless_the_previous_one_was_within_the_window() {
     // Twenty minutes apart on the session's clock: a reload each, and the
@@ -712,7 +712,7 @@ fn a_failed_resync_reloads_once_then_ends_with_its_reason() {
     device.join();
 }
 
-// Part of C86 (pending): a stop during the reload after FINISHED.
+// covers: C86
 #[test]
 fn a_stop_during_the_reload_after_finished_ends_as_deselected() {
     let device = FakeDevice::start(Behavior {
