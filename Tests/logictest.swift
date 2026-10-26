@@ -8175,6 +8175,26 @@ do {
           "permissions: a relaunch keeps Continue and forgets Not Now")
     check(PermissionAsks(explained: ["retired", "microphone"], usedBefore: false).stored == ["microphone"],
           "permissions: an unknown stored name is dropped")
+    // A first run saves speakers itself; the relaunch must not take that for an earlier version's use.
+    let suite = "permissions-logictest-\(ProcessInfo.processInfo.processIdentifier)"
+    if let defaults = UserDefaults(suiteName: suite) {
+        defaults.removePersistentDomain(forName: suite)
+        let firstRun = PermissionAsks.load(defaults)
+        defaults.set(["local-speaker"], forKey: AppSettings.Keys.enabledLocal)
+        let relaunch = PermissionAsks.load(defaults)
+        check(!firstRun.usedBefore && !relaunch.usedBefore
+                && relaunch.step(.localNetwork, state: .unknown, userAction: false) == .offer,
+              "permissions: settings a fresh install saved don't skip the explanation on the next launch")
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set(70, forKey: AppSettings.Keys.master)
+        let updated = PermissionAsks.load(defaults)
+        defaults.removeObject(forKey: AppSettings.Keys.master)
+        check(updated.usedBefore && PermissionAsks.load(defaults).usedBefore,
+              "permissions: an update from a version without explanations is recognized once and remembered")
+        defaults.removePersistentDomain(forName: suite)
+    } else {
+        check(false, "permissions: a test defaults suite opens")
+    }
 
     check(Permission.needed(for: .system) == .audioCapture
             && Permission.needed(for: .app(bundleID: "x")) == .audioCapture
