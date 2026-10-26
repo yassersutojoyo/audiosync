@@ -136,10 +136,10 @@ pub fn airplay2_switch(value: Option<&str>) -> bool {
 }
 
 /// The environment variable that overrides [`AIRPLAY2_AUTO`] for one
-/// launch (S293).
+/// launch (S312).
 pub const AIRPLAY2_AUTO_ENV: &str = "AUDIOSYNC_AIRPLAY2_AUTO";
 
-/// The build's flag for AirPlay 2 per receiver (S293), off until the checks
+/// The build's flag for AirPlay 2 per receiver (S312), off until the checks
 /// on real receivers pass.
 pub const AIRPLAY2_AUTO: bool = false;
 
@@ -155,7 +155,7 @@ pub fn airplay2_auto(value: Option<&str>) -> bool {
 
 impl SenderConfig {
     /// The AirPlay 2 path and preference for the flag `auto` and the user's
-    /// switch (S293): with the flag off the switch turns the path on; with
+    /// switch (S312): with the flag off the switch turns the path on; with
     /// it on the path is always on and the switch prefers AirPlay 2.
     pub fn with_airplay2_switch(self, auto: bool, switch: bool) -> SenderConfig {
         SenderConfig {

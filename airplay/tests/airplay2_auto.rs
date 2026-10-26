@@ -1,4 +1,4 @@
-//! AirPlay 2 per receiver (S293, P214) over loopback fake receivers: with
+//! AirPlay 2 per receiver (S312, P214) over loopback fake receivers: with
 //! the flag on, a device only AirPlay 2 can serve plays over AirPlay 2 while
 //! the switch is off, a device that speaks both stays on AirPlay 1 until the
 //! switch prefers AirPlay 2, and with the flag off nothing changes.

@@ -112,4 +112,4 @@ S284 Hosts only: Lf, E and each row's delay with several AirPlay 2 receivers, a 
 S285 Hosts only: every AirPlay 2 speaker playing, the two wait reasons and one speaker's failure on its own row; the Windows tests and the Mac logic suite check all but the two reasons, which the sender doesn't report yet.
 S288 Hosts only: the web remote's debug switch at launch; the Windows host's tests and the Mac logic suite check it.
 S292 Hosts only: an explicit pause from a play-pause or the player's own pause seen in the host's now-playing readings, resumed by the mirror or by sound the host counts in its own capture; the Windows tests and the Mac logic suite check it.
-S294 Hosts only: the switch's label under the AirPlay 2 flag; the Windows tests check it, the Mac logic suite once its UI follows.
+S313 Hosts only: the switch's label under the AirPlay 2 flag; the Windows tests check it, the Mac logic suite once its UI follows.
