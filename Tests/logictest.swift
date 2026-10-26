@@ -4117,6 +4117,93 @@ do {
           "track info feed: the scheduled look at the wait's end sends AudioSync's icon")
 }
 
+// MARK: Track info wiring (TrackInfoHost): a Now Playing change and a sender start
+do {
+    final class Host: TrackInfoHost {
+        var trackInfoFeed = TrackInfoFeed()
+        var sendsTrackInfo = true
+        var nowPlayingPollingSince: Date?
+        var nowPlayingHasReading = true
+        let trackInfoIcon: NSImage? = NSImage(size: NSSize(width: 1, height: 1))
+        let cover = NSImage(size: NSSize(width: 1, height: 1))
+        var track: NowPlayingMonitor.Track?
+        var shown: [NowPlayingMonitor.Track?] = []
+        var looks = 0, playbacks = 0, castLooks = 0
+        var rechecks: [Date] = []
+        var sent: [(fields: TrackMetadata.Fields?, artwork: NSImage?)] = []
+
+        func showNowPlaying(_ track: NowPlayingMonitor.Track?) {
+            shown.append(track)
+            self.track = track
+        }
+        func receiverShows() -> (info: ReceiverInfo, artwork: NSImage?) {
+            looks += 1
+            let fields = track.map { TrackMetadata.Fields(title: $0.title, artist: $0.artist, album: $0.album) }
+                ?? TrackMetadata.Fields(title: "AudioSync", artist: "", album: "")
+            return (ReceiverInfo(fields: fields, artwork: .track), track == nil ? nil : cover)
+        }
+        func sendPlayback() { playbacks += 1 }
+        func sendCastTrackInfo(now: Date) { castLooks += 1 }
+        func recheckTrackInfo(at date: Date) { rechecks.append(date) }
+        func setSenderTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?, sendsPosition: Bool,
+                                position: NowPlayingMonitor.Position?) {
+            sent.append((fields, artwork))
+        }
+    }
+    func song(_ title: String) -> NowPlayingMonitor.Track {
+        NowPlayingMonitor.Track(bundleID: "com.example.player", appName: "Player", title: title, artist: "Band",
+                                album: "Record", isPlaying: true, artwork: nil)
+    }
+    let first = TrackMetadata.Fields(title: "First", artist: "Band", album: "Record")
+    let second = TrackMetadata.Fields(title: "Second", artist: "Band", album: "Record")
+
+    let host = Host()
+    _ = host.trackInfoFeed.modelUpdated(sending: true)
+    host.nowPlayingChanged(song("First"))
+    check(host.shown.count == 1 && host.shown.first??.title == "First",
+          "track info wiring: a Now Playing change puts the track in the window's model")
+    check(host.sent.count == 1 && host.sent[0].fields == first,
+          "track info wiring: a Now Playing change sends the current track to the sender, once",
+          "\(host.sent.map { $0.fields?.title ?? "nil" })")
+    check(host.sent.first?.artwork != nil && host.sent.first?.artwork !== host.cover,
+          "track info wiring: the sender gets a copy of the artwork, since it encodes it on its own queue")
+    check(host.playbacks == 1 && host.castLooks == 1,
+          "track info wiring: each look also tells the remote's player and gives Cast its look")
+
+    host.nowPlayingChanged(song("First"))
+    check(host.sent.count == 1 && host.playbacks == 2,
+          "track info wiring: the same track again sends nothing new to the sender")
+    host.nowPlayingChanged(song("Second"))
+    check(host.sent.count == 2 && host.sent[1].fields == second,
+          "track info wiring: the next track goes to the sender once, with its own fields")
+
+    host.resendTrackInfo()
+    check(host.sent.count == 3 && host.sent[2].fields == second && host.sent[2].artwork != nil,
+          "track info wiring: a sender start sends the current track and artwork again, unchanged and once")
+    host.nowPlayingChanged(song("Second"))
+    check(host.sent.count == 3, "track info wiring: after the resend the same track sends nothing more")
+
+    let idle = Host()
+    idle.sendsTrackInfo = false
+    _ = idle.trackInfoFeed.modelUpdated(sending: false)
+    idle.nowPlayingChanged(song("First"))
+    check(idle.sent.isEmpty && idle.looks == 0 && idle.shown.count == 1,
+          "track info wiring: with no AirPlay speaker showing track info, a change reaches the window only")
+    idle.resendTrackInfo()
+    check(idle.sent.isEmpty && idle.looks == 0 && idle.playbacks == 1 && idle.trackInfoFeed.sent == nil,
+          "track info wiring: a sender start with no AirPlay speaker showing track info sends nothing")
+
+    let waiting = Host()
+    let polling = Date()
+    waiting.nowPlayingPollingSince = polling
+    waiting.nowPlayingHasReading = false
+    _ = waiting.trackInfoFeed.modelUpdated(sending: true)
+    waiting.resendTrackInfo()
+    check(waiting.sent.isEmpty && waiting.looks == 0
+            && waiting.rechecks == [polling.addingTimeInterval(ReceiverInfo.readingWait)],
+          "track info wiring: a sender start before Now Playing's first reading schedules one look, sends nothing")
+}
+
 // MARK: Track info — Spotify paused, read as empty every 2 s for 11 minutes, never sends the fallback
 do {
     let spotify = NowPlayingMonitor.spotify
@@ -4140,7 +4227,7 @@ do {
         var last: NowPlayingMonitor.Track?
         var fallbackAt: [TimeInterval] = []
         // One Now Playing reading at `now`, as NowPlayingMonitor.refresh and
-        // AppDelegate.sendTrackInfo take it; a paused Spotify with no track
+        // TrackInfoHost.sendTrackInfo take it; a paused Spotify with no track
         // name answers as unreadable.
         func read(_ reading: NowPlayingMonitor.Track?, at now: Date) {
             let shown = empty.next(reading: reading, last: last, lastPlayerRuns: true, lastPlayer: .unreadable)
