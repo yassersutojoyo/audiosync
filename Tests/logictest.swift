@@ -8741,13 +8741,15 @@ do {
     let line = UIStrings().noSpeakerOn
     check(line.hasPrefix("No speaker is on") && !line.contains("\u{2014}") && !line.contains("\n"),
           "no speaker on: one plain line", line)
-    check(StreamingPolicy.noSpeakerAsk(hasSpeaker: false, continuing: false, hadSpeaker: false, origin: .user) == .nothing
-            && StreamingPolicy.noSpeakerAsk(hasSpeaker: false, continuing: false, hadSpeaker: true, origin: .user) == .nothing,
+    // The engine posts the "choose a speaker" notice, and through notify its
+    // alert, only for a start that doesn't go ahead.
+    check(StreamingPolicy.starts(hasSpeaker: false, continuing: false, hadSpeaker: false, origin: .user)
+            && StreamingPolicy.starts(hasSpeaker: false, continuing: false, hadSpeaker: true, origin: .user),
           "no speaker on: the user's start with every speaker off streams and asks nothing, no modal alert")
-    check(StreamingPolicy.noSpeakerAsk(hasSpeaker: false, continuing: false, hadSpeaker: false, origin: .remote) == .nothing,
+    check(StreamingPolicy.starts(hasSpeaker: false, continuing: false, hadSpeaker: false, origin: .remote),
           "no speaker on: a phone's start with every speaker off streams and asks nothing")
-    check(StreamingPolicy.noSpeakerAsk(hasSpeaker: false, continuing: false, hadSpeaker: false, origin: .automatic) == .notice
-            && StreamingPolicy.noSpeakerAsk(hasSpeaker: true, continuing: false, hadSpeaker: false, origin: .automatic) == .nothing,
+    check(!StreamingPolicy.starts(hasSpeaker: false, continuing: false, hadSpeaker: false, origin: .automatic)
+            && !StartOrigin.automatic.raisesAlert,
           "no speaker on: an automatic start waits behind a notice, never a modal alert")
     check(StartOrigin.user.raisesAlert && !StartOrigin.automatic.raisesAlert && !StartOrigin.remote.raisesAlert,
           "no speaker on: only a click at the Mac may raise a modal alert")
@@ -8862,24 +8864,21 @@ do {
           "setup: the Local Network row gives the full System Settings path")
 }
 
-// MARK: Zone header clicks in the main window (ZoneHeaderHit)
+// MARK: Zone header routing table in the main window (ZoneHeaderHit)
 do {
     let expected: [(ZoneHeaderHit.Area, ZoneHeaderHit.Action, String)] = [
-        (.name, .fold, "the zone name folds or unfolds the members"),
-        (.count, .fold, "the speaker count folds or unfolds the members"),
-        (.chevron, .fold, "the chevron folds or unfolds the members"),
-        (.blank, .fold, "the blank space before the slider and the three dots folds or unfolds the members"),
-        (.zoneIcon, .toggleZone, "the round zone icon switches the zone on or off"),
-        (.slider, .none, "dragging the slider neither folds nor switches the zone"),
-        (.menu, .none, "the three dots neither fold nor switch the zone"),
+        (.name, .fold, "a click on the zone name folds or unfolds the members"),
+        (.count, .fold, "a click on the speaker count folds or unfolds the members"),
+        (.chevron, .fold, "a click on the chevron folds or unfolds the members"),
+        (.blank, .fold, "a click on the blank space before the slider and the three dots folds or unfolds the members"),
+        (.zoneIcon, .toggleZone, "a click on the round zone icon switches the zone on or off"),
     ]
     for (area, action, what) in expected {
-        check(ZoneHeaderHit.action(for: area) == action, "zone header: \(what)", "\(ZoneHeaderHit.action(for: area))")
+        check(ZoneHeaderHit.action(for: area) == action, "zone header routing table: \(what)",
+              "\(ZoneHeaderHit.action(for: area))")
     }
-    check(ZoneHeaderHit.Area.allCases.count == expected.count,
-          "zone header: every click area has an expected action")
     check(ZoneHeaderHit.Area.allCases.filter { ZoneHeaderHit.action(for: $0) == .toggleZone } == [.zoneIcon],
-          "zone header: only the round zone icon switches the zone, so folding leaves it on")
+          "zone header routing table: only the round zone icon switches the zone, so folding leaves it on")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

@@ -76,24 +76,6 @@ enum StreamingPolicy {
         hasSpeaker || (continuing && !hadSpeaker) || startsWithoutSpeaker(origin: origin)
     }
 
-    /// What a start puts in front of the user about the missing speaker.
-    enum NoSpeakerAsk: Equatable {
-        /// The start goes ahead.
-        case nothing
-        /// It waits; the "choose a speaker" notice says why.
-        case notice
-        /// It waits, and the notice comes as a modal alert too.
-        case alert
-    }
-
-    static func noSpeakerAsk(hasSpeaker: Bool, continuing: Bool, hadSpeaker: Bool,
-                             origin: StartOrigin) -> NoSpeakerAsk {
-        if starts(hasSpeaker: hasSpeaker, continuing: continuing, hadSpeaker: hadSpeaker, origin: origin) {
-            return .nothing
-        }
-        return origin.raisesAlert ? .alert : .notice
-    }
-
     /// Streaming with every speaker switched off: nothing to stream to, so it
     /// stops. A speaker that is on but unplugged or out of reach still counts.
     /// `hadSpeaker`: a speaker was on at some point in this session; one
