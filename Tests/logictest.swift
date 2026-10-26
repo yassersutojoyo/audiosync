@@ -8128,5 +8128,73 @@ do {
           "session stop: a stop with no session running and no interruption writes no line")
 }
 
+// MARK: First-run permission explanations (PermissionFlow.swift)
+do {
+    let fresh = PermissionAsks(explained: [], usedBefore: false)
+    check(fresh.step(.microphone, state: .notAsked, userAction: true) == .explain,
+          "permissions: a click that needs an unasked permission explains it first")
+    check(fresh.step(.microphone, state: .notAsked, userAction: false) == .offer,
+          "permissions: an automatic use never raises a modal, it offers the explanation in the window")
+    check(fresh.step(.microphone, state: .allowed, userAction: false) == .go
+            && fresh.step(.audioCapture, state: .allowed, userAction: true) == .go,
+          "permissions: an allowed permission goes on without any explanation")
+    check(fresh.step(.microphone, state: .denied, userAction: true) == .denied
+            && fresh.step(.automation, state: .denied, userAction: false) == .denied,
+          "permissions: a denied permission is never explained again, it shows the denied state")
+    check(fresh.step(.audioCapture, state: .unknown, userAction: true) == .explain
+            && fresh.step(.localNetwork, state: .unknown, userAction: false) == .offer,
+          "permissions: a permission macOS can't report is explained on a fresh install")
+
+    let upgraded = PermissionAsks(explained: [], usedBefore: true)
+    check(upgraded.step(.audioCapture, state: .unknown, userAction: true) == .go
+            && upgraded.step(.localNetwork, state: .unknown, userAction: false) == .go,
+          "permissions: after an update, a permission macOS can't report is not explained again")
+    check(upgraded.step(.microphone, state: .notAsked, userAction: true) == .explain,
+          "permissions: after an update, a permission macOS reports as unasked is still explained")
+
+    var asks = PermissionAsks(explained: [], usedBefore: false)
+    check(asks.offer == nil, "permissions: nothing is offered before a feature needs it")
+    asks.hold(.automation)
+    asks.hold(.localNetwork)
+    check(asks.offer == .localNetwork, "permissions: one explanation at a time, in a fixed order",
+          "\(String(describing: asks.offer))")
+    asks.accept(.localNetwork)
+    check(asks.offer == .automation && asks.step(.localNetwork, state: .unknown, userAction: false) == .go,
+          "permissions: Continue remembers the explanation and shows the next one")
+    asks.decline(.automation)
+    check(asks.offer == nil, "permissions: Not Now hides the explanation for this run")
+    asks.hold(.automation)
+    check(asks.offer == nil && asks.step(.automation, state: .notAsked, userAction: false) == .offer,
+          "permissions: after Not Now an automatic use still waits but offers nothing")
+    check(asks.step(.automation, state: .notAsked, userAction: true) == .explain,
+          "permissions: after Not Now a click explains it again")
+    check(asks.stored == ["localNetwork"], "permissions: only Continue is stored", "\(asks.stored)")
+    let relaunched = PermissionAsks(explained: asks.stored, usedBefore: false)
+    check(relaunched.step(.localNetwork, state: .unknown, userAction: false) == .go
+            && relaunched.step(.automation, state: .notAsked, userAction: false) == .offer,
+          "permissions: a relaunch keeps Continue and forgets Not Now")
+    check(PermissionAsks(explained: ["retired", "microphone"], usedBefore: false).stored == ["microphone"],
+          "permissions: an unknown stored name is dropped")
+
+    check(Permission.needed(for: .system) == .audioCapture
+            && Permission.needed(for: .app(bundleID: "x")) == .audioCapture
+            && Permission.needed(for: .input(uid: "a")) == .microphone,
+          "permissions: taps need audio capture, input devices the microphone")
+    check(PermissionAsks.usedBefore { $0 == AppSettings.Keys.enabledLocal }
+            && !PermissionAsks.usedBefore { _ in false },
+          "permissions: saved speakers mean AudioSync ran before")
+    check(Permission.allCases.allSatisfy {
+            $0.pane.url.absoluteString.hasPrefix("x-apple.systempreferences:com.apple.preference.security?Privacy_")
+          },
+          "permissions: every permission links to its Privacy & Security pane")
+    check(Permission.audioCapture.pane == .screenCapture && Permission.microphone.pane == .microphone
+            && Permission.localNetwork.pane == .localNetwork && Permission.automation.pane == .automation,
+          "permissions: each permission opens its own pane")
+    let words = UIStrings()
+    let texts = Permission.allCases.flatMap { [words.permissionTitle($0), words.permissionReason($0)] }
+    check(texts.allSatisfy { !$0.isEmpty && !$0.contains("\u{2014}") } && Set(texts).count == texts.count,
+          "permissions: every explanation has its own title and reason, without em dashes")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
