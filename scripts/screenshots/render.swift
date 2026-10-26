@@ -71,6 +71,10 @@ enum Mock {
                              volume: 50, offsetMs: 120,
                              cast: CastRow(status: .playing, muted: false, volumeFixed: false, group: nil)),
         ]
+        model.presets = [
+            PresetRow(id: "preset:1", name: "Evening", current: true),
+            PresetRow(id: "preset:2", name: "Kitchen Only"),
+        ]
         model.toggleDelayPanel("headphones")
         configure(model)
         return model
