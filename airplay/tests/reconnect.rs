@@ -278,6 +278,11 @@ fn an_unannounced_pair_member_is_retried_at_once_when_announced_again() {
     // Its RAOP record does: a session starts at once. Its first connection
     // is dropped, and the retry after that comes 1 s later.
     a.behavior().reject = 1;
+    let errors_before = events
+        .of(&ka)
+        .iter()
+        .filter(|event| matches!(event, SpeakerEvent::Error(_)))
+        .count();
     let announced = Instant::now();
     script.push(BrowseEvent::Resolved(raop_a.clone()));
     let connecting = events
@@ -288,22 +293,27 @@ fn an_unannounced_pair_member_is_retried_at_once_when_announced_again() {
         "{:?}",
         connecting - announced
     );
-    let failed = events.wait_for(&sender, LONG, |event| {
-        matches!(event, SenderEvent::Speaker { key, event: SpeakerEvent::Error(_) } if *key == ka)
-    });
-    assert!(failed.is_some(), "{:?}", events.of(&ka));
-    let (seen_at, retry_at) = events
-        .seen
-        .iter()
-        .rev()
-        .find_map(|(at, event)| match event {
-            SenderEvent::Speaker {
-                key,
-                event: SpeakerEvent::Error(error),
-            } if *key == ka => Some((*at, error.retry_at)),
-            _ => None,
-        })
-        .expect("the error");
+    let errors = |events: &Events| -> Vec<(Instant, Option<Instant>)> {
+        events
+            .seen
+            .iter()
+            .filter_map(|(at, event)| match event {
+                SenderEvent::Speaker {
+                    key,
+                    event: SpeakerEvent::Error(error),
+                } if *key == ka => Some((*at, error.retry_at)),
+                _ => None,
+            })
+            .collect()
+    };
+    let deadline = Instant::now() + LONG;
+    while errors(&events).len() < errors_before + 1 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+        events.drain(&sender);
+    }
+    let (seen_at, retry_at) = *errors(&events)
+        .get(errors_before)
+        .unwrap_or_else(|| panic!("{:?}", events.of(&ka)));
     let retry_at = retry_at.expect("retried");
     assert!(retry_at >= announced + SECOND, "{:?}", retry_at - announced);
     assert!(retry_at <= seen_at + SECOND);
