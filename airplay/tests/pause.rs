@@ -296,15 +296,24 @@ fn play(receiver: &NetReceiver, id: u8) -> (Sender, HostAudio, Events, DeviceKey
 
 /// The `seq` the `nth` (from 0) FLUSH request names.
 fn flush_seq(receiver: &NetReceiver, nth: usize) -> u16 {
+    rtp_info_seq(receiver, Method::Flush, nth)
+}
+
+/// The `seq` in the RTP-Info of the `nth` (from 0) `method` request.
+fn rtp_info_seq(receiver: &NetReceiver, method: Method, nth: usize) -> u16 {
     let log = receiver.log();
-    let flush = log
+    let request = log
         .requests
         .iter()
-        .filter(|(_, request)| request.method == Method::Flush)
+        .filter(|(_, request)| request.method == method)
         .nth(nth)
         .map(|(_, request)| request.clone())
-        .expect("FLUSH");
-    let info = flush.headers.get("RTP-Info").expect("RTP-Info").to_owned();
+        .expect("request");
+    let info = request
+        .headers
+        .get("RTP-Info")
+        .expect("RTP-Info")
+        .to_owned();
     info.split(';')
         .find_map(|part| part.strip_prefix("seq="))
         .and_then(|value| value.parse().ok())
@@ -425,7 +434,6 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
     let second = NetReceiver::start(Behavior::default());
     let (sender, _host, mut events, first_key) = play(&first, 1);
     sender.pause();
-    let paused = Instant::now();
     assert!(wait_until(LONG, || first.log().count("FLUSH") == 1));
 
     let device = second.device(2, PCM_TXT);
@@ -442,8 +450,28 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
         );
     }
     std::thread::sleep(Duration::from_millis(500));
-    let quiet = paused + Duration::from_millis(50);
-    assert!(first_audio_after(&first, quiet).is_none());
+    let held = flush_seq(&first, 0);
+    let reconnected = rtp_info_seq(&first, Method::Record, 1);
+    {
+        let log = first.log();
+        let source = log.audio.first().expect("audio").from;
+        // The pause FLUSH names the first packet held back, so the first
+        // session sent only the run before it, however late a busy runner
+        // stamps it; the reconnected one sent nothing.
+        let sent: Vec<u16> = log
+            .audio
+            .iter()
+            .filter(|packet| packet.from == source)
+            .map(|packet| packet.header.seq)
+            .collect();
+        assert!(
+            sent.windows(2)
+                .all(|pair| pair[1] == pair[0].wrapping_add(1)),
+            "{sent:?}"
+        );
+        assert_eq!(sent.last().map(|seq| seq.wrapping_add(1)), Some(held));
+        assert_eq!(sent.len(), log.audio.len());
+    }
     assert!(second.log().audio.is_empty());
 
     let resumed = Instant::now();
@@ -453,6 +481,8 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
         let (_, _, marker) = first_audio_after(receiver, resumed).expect("audio");
         assert!(marker, "the first packet of a session");
     }
+    let (_, seq, _) = first_audio_after(&first, resumed).expect("audio");
+    assert_eq!(seq, reconnected, "the reconnected session's first packet");
     sender.shutdown();
 }
 
