@@ -18,9 +18,3 @@ P209 SETPEERS updates while playing not built yet
 P210 setting up a receiver again after a refused update not built yet
 P211 one AirPlay 2 receiver failing among several not built yet
 P212 Hardware: two or more AirPlay 2 receivers on one PTP timeline (G20).
-
-# Connects of several speakers spaced in a queue, specified for a later stage.
-P222 connect spacing not built yet
-P223 starts that never hold up earlier sessions not built yet
-P224 waiting starts reported as Connecting not built yet
-P225 timed fake-receiver check of the spacing not built yet

@@ -268,6 +268,8 @@ pub struct FakeAp2 {
     /// Frame sizes of everything the sender wrote framed.
     pub frame_sizes: Vec<usize>,
     pub connections: usize,
+    /// When each RTSP connection was taken up.
+    pub connected_at: Vec<Instant>,
     /// The pair-setup on this connection is transient (P63).
     transient: bool,
     parser: Parser,
@@ -310,6 +312,7 @@ impl FakeAp2 {
             secret: None,
             frame_sizes: Vec::new(),
             connections: 0,
+            connected_at: Vec::new(),
             transient: false,
             parser: Parser::new(),
         }
@@ -380,6 +383,7 @@ impl FakeAp2 {
     /// A new RTSP connection: plain text again.
     pub fn connect(&mut self) {
         self.connections += 1;
+        self.connected_at.push(Instant::now());
         if self.connections > 1 {
             self.hap.new_connection();
         }
