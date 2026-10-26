@@ -9590,7 +9590,7 @@ pub mod tests {
 
     // covers: S284
     #[test]
-    fn an_airplay_2_receiver_leaving_while_others_sound_changes_no_delay() {
+    fn a_target_member_leaving_while_others_sound_changes_no_delay() {
         let fake = FakeAirPlay::new();
         let (mut airplay, pair, right, den) = pair_and_den(&fake);
         fake.take_calls();

@@ -1901,7 +1901,7 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | every_airplay2_speaker_switched_on_goes_to_the_sender_and_only_one_it_refuses_waits_switched_on_and_on_its_own_row | S285 |
 | one_airplay2_speaker_failing_leaves_the_others_playing (a password prompt, a PIN pairing and an unreachable speaker; the Windows test adds a wrong password) | S285 |
 
-The Mac logic suite has these four as "airplay latency: …" checks. The sender has no code yet for the two wait reasons of S285 (AirPlay spec P204 and P205), so the third test on both hosts refuses a 17th speaker with P169's reason, the only wait the sender reports today; the reasons themselves get their checks once the sender has them.
+The Mac logic suite has these four as "airplay latency: …" checks. The sender reports both wait reasons of S285 (AirPlay spec P204 and P205), and both hosts check them: a 17th speaker waits as too many AirPlay 2 speakers, and a receiver on another PTP network waits with that reason.
 
 ### Explicit pause: Windows and Mac (`cargo test` in `desktop/`, the logic suite)
 
