@@ -7989,6 +7989,55 @@ mod tests {
         );
     }
 
+    // covers: S222, S223
+    #[test]
+    fn a_speaker_saved_on_that_now_asks_for_a_pin_goes_off_with_a_notice_at_a_launch() {
+        let dir = test_dir("adapter-saved-on-asks-pin");
+        let path = dir.join(settings::FILE_NAME);
+        let launch_with = |tv: &Device| {
+            let fake = FakeAirPlay::new();
+            fake.set_airplay2(true);
+            let mut audio = launch_audio();
+            audio.set_airplay(fake.link(), None);
+            fake.appear(tv);
+            (audio, fake)
+        };
+        let (audio, _fake) = launch_with(&airplay2_device(9, "Loft", false));
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        let id = ap(&airplay2_tv(9, "Loft"));
+        adapter.set_speaker_enabled(&id, true);
+        adapter.set_auto_connect(&id, true);
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+        adapter.save_settings();
+        drop(adapter);
+
+        // The TV asks for a PIN now, and this app was never paired with it.
+        let (audio, fake) = launch_with(&airplay2_tv(9, "Loft"));
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None, "no prompt opens by itself");
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_))),
+            "auto-connect never pairs"
+        );
+        assert!(!state.speaker(&id).unwrap().enabled, "never on and silent");
+        assert!(!state.running, "nothing else is on");
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Loft".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn airplay_errors_become_notices() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
