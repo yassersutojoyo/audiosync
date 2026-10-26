@@ -597,17 +597,20 @@ do {
     check(store.load().presets == edited, "presets: presets round-trip through the user defaults, a fixed Cast volume included")
     let messy = [SpeakerPreset(id: "p1", name: "A",
                                members: [.init(key: "lc:a", volume: 140), .init(key: "lc:a", volume: 10), .init(key: "cc:x", volume: nil),
-                                         .init(key: "cc:y", volume: 20), .init(key: "zz:b", volume: 5)],
+                                         .init(key: "cc:y", volume: 20), .init(key: "zz:b", volume: 5),
+                                         .init(key: "ap:c", volume: 140)],
                                zones: [.init(id: "z1", volume: -3), .init(id: "z1", volume: 50)], master: 130,
                                gains: [0.3, 20, -20, 0, 0, 0, 0, 0, 0, 0]),
                  SpeakerPreset(id: "p1", name: "A again", members: [], zones: [], master: 50, gains: flat),
                  SpeakerPreset(id: "p2", name: "Short", members: [], zones: [], master: 50, gains: [0, 0])]
     store.save(presets: messy)
     check(store.load().presets == [SpeakerPreset(id: "p1", name: "A",
-                                                 members: [.init(key: "lc:a", volume: 100), .init(key: "cc:x", volume: nil)],
+                                                 members: [.init(key: "lc:a", volume: 100), .init(key: "cc:x", volume: nil),
+                                                           .init(key: "ap:c", volume: 140)],
                                                  zones: [.init(id: "z1", volume: 0)], master: 100,
                                                  gains: [0.5, 12, -12, 0, 0, 0, 0, 0, 0, 0])],
-          "presets: stored presets keep one Cast key, one preset per ID, levels within range", "\(store.load().presets)")
+          "presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay own volume may pass 100)",
+          "\(store.load().presets)")
 }
 
 // MARK: Output devices — virtual ones hidden unless asked for or chosen
