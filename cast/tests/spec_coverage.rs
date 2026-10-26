@@ -8,10 +8,11 @@
 //! marker. The pending list may only shrink: a clause that gains a marker
 //! must leave it.
 //!
-//! A clause inserted between two others takes the earlier one's number and a
-//! lowercase letter (`C77a`). Tests in `core/` name Cast clauses on a
-//! `// CAST_SPEC: C77a` line: they are checked to name spec clauses, but don't
-//! count as coverage, since this check reads only the cast crate.
+//! A clause inserted between two others takes the earlier one's number and the
+//! next unused lowercase letter (`C77a`, then `C77b`). Tests in `core/` name
+//! Cast clauses on a `// CAST_SPEC: C77a` line: they are checked to name spec
+//! clauses, but don't count as coverage, since this check reads only the cast
+//! crate.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -214,7 +215,7 @@ fn list(ids: impl IntoIterator<Item = Id>) -> String {
 
 /// Checks that the plain clause IDs are C1 to Cn with each number exactly
 /// once, and that a suffixed ID is defined once and follows a clause that
-/// exists.
+/// exists and every earlier letter (`C2b` needs `C2` and `C2a`).
 fn check_ids(ids: &[Id]) -> Result<(), String> {
     let mut sorted = ids.to_vec();
     sorted.sort_unstable();
@@ -228,13 +229,26 @@ fn check_ids(ids: &[Id]) -> Result<(), String> {
         return Err(format!("defined more than once: {}", list(duplicates)));
     }
     let highest = sorted.iter().map(|id| id.number).max().unwrap_or(0);
-    let missing: Vec<Id> = (1..=highest)
+    let mut missing: Vec<Id> = (1..=highest)
         .map(|number| Id {
             number,
             suffix: None,
         })
         .filter(|id| sorted.binary_search(id).is_err())
         .collect();
+    for id in &sorted {
+        let Some(last) = id.suffix else { continue };
+        missing.extend(
+            ('a'..last)
+                .map(|suffix| Id {
+                    number: id.number,
+                    suffix: Some(suffix),
+                })
+                .filter(|earlier| sorted.binary_search(earlier).is_err()),
+        );
+    }
+    missing.sort_unstable();
+    missing.dedup();
     if !missing.is_empty() {
         return Err(format!("missing: {}", list(missing)));
     }
