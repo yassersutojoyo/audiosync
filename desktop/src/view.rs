@@ -2926,7 +2926,7 @@ impl App {
                 id: UPDATER_NOTICE_ID,
                 subject: "update".to_owned(),
                 message: NoticeMessage::Update(notice.clone()),
-                time: crate::platform::notice_time(),
+                time: updater.notice_time().to_owned(),
             })
         });
         #[cfg(not(windows))]
@@ -3009,7 +3009,7 @@ impl App {
                 UpdateButton::Cancel => UpdaterButton::Cancel,
                 UpdateButton::TryAgain => UpdaterButton::TryAgain,
                 UpdateButton::OpenReleasePage => UpdaterButton::OpenReleasePage,
-                UpdateButton::RelaunchNow => UpdaterButton::RelaunchNow,
+                UpdateButton::RestartNow => UpdaterButton::RestartNow,
             };
             let action = match self.updater.borrow_mut().as_mut() {
                 Some(updater) => updater.press(button),
@@ -3028,7 +3028,7 @@ impl App {
                     match crate::updater::relaunch::start(&exe) {
                         Ok(()) => {
                             self.log
-                                .log(|| "updater: relaunch started, quitting".to_owned());
+                                .log(|| "updater: restart started, quitting".to_owned());
                             let _ = slint::quit_event_loop();
                         }
                         Err(error) => {
@@ -5097,7 +5097,17 @@ fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -
         N::ReadOnly => strings.get_notice_update_read_only(),
         N::InUse => strings.get_notice_update_in_use(),
         N::Failed => strings.get_notice_update_failed(),
-        N::RestoreFailed { bak } => strings.invoke_notice_update_restore_failed(bak.into()),
+        N::RestoreFailed { renames } => {
+            let renames: Vec<String> = renames
+                .iter()
+                .map(|(bak, live)| {
+                    strings
+                        .invoke_notice_update_rename(bak.into(), live.into())
+                        .to_string()
+                })
+                .collect();
+            strings.invoke_notice_update_restore_failed(joined(strings, &renames))
+        }
         N::RelaunchFailed => strings.get_notice_update_relaunch_failed(),
     }
 }
@@ -5117,7 +5127,7 @@ fn update_buttons(message: &NoticeMessage) -> ModelRc<UpdateButton> {
             B::Cancel => UpdateButton::Cancel,
             B::TryAgain => UpdateButton::TryAgain,
             B::OpenReleasePage => UpdateButton::OpenReleasePage,
-            B::RelaunchNow => UpdateButton::RelaunchNow,
+            B::RestartNow => UpdateButton::RestartNow,
         })
         .collect();
     ModelRc::new(VecModel::from(buttons))
@@ -7195,7 +7205,7 @@ mod tests {
             N::InUse,
             N::Failed,
             N::RestoreFailed {
-                bak: "audiosync.exe.bak".to_owned(),
+                renames: vec![("audiosync.exe.bak".to_owned(), "audiosync.exe".to_owned())],
             },
             N::RelaunchFailed,
         ];
@@ -7245,19 +7255,38 @@ mod tests {
             .as_str(),
             "Downloading the update: 42%"
         );
+        // Every pair the restore left, the exe first, each with its own name.
+        assert_eq!(
+            notice_text(
+                &strings,
+                &NoticeMessage::Update(N::RestoreFailed {
+                    renames: vec![
+                        ("audiosync.exe.bak".to_owned(), "audiosync.exe".to_owned()),
+                        (
+                            "THIRD-PARTY-NOTICES.txt.bak".to_owned(),
+                            "THIRD-PARTY-NOTICES.txt".to_owned()
+                        ),
+                    ]
+                })
+            )
+            .as_str(),
+            "The update failed and AudioSync couldn't put its old version back. In the \
+             AudioSync folder, rename audiosync.exe.bak to audiosync.exe and \
+             THIRD-PARTY-NOTICES.txt.bak to THIRD-PARTY-NOTICES.txt."
+        );
         let labels: HashSet<String> = [
             UpdateButton::Download,
             UpdateButton::NotNow,
             UpdateButton::Cancel,
             UpdateButton::TryAgain,
             UpdateButton::OpenReleasePage,
-            UpdateButton::RelaunchNow,
+            UpdateButton::RestartNow,
         ]
         .into_iter()
         .map(|button| strings.invoke_update_button(button).to_string())
         .collect();
         assert_eq!(labels.len(), 6);
-        assert!(labels.contains("Download and Install") && labels.contains("Relaunch Now"));
+        assert!(labels.contains("Download and Install") && labels.contains("Restart Now"));
         assert_eq!(
             strings.get_check_updates_automatically().as_str(),
             "Check for Updates Automatically"

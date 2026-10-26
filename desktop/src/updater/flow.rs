@@ -16,7 +16,7 @@ use super::archive::{self, ArchiveError};
 use super::fetch::{self, Fetch, FetchError, Kind};
 use super::files::{Files, is_disk_full};
 use super::signature;
-use super::swap::{self, StepLog, SwapError};
+use super::swap::{self, Rename, StepLog, SwapError, Swapped};
 use super::version::Version;
 use crate::debug_log::DebugLog;
 
@@ -106,7 +106,7 @@ pub fn check(env: &Env) -> Checked {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Installed {
-    Done,
+    Done(Swapped),
     Cancelled,
     DownloadFailed,
     BadSignature,
@@ -115,7 +115,7 @@ pub enum Installed {
     ReadOnly,
     InUse,
     Failed,
-    RestoreFailed { bak: String },
+    RestoreFailed { renames: Vec<Rename> },
 }
 
 fn host(url: &str) -> String {
@@ -162,8 +162,13 @@ pub fn install(
     let outcome = install_in(env, update, &dir, progress, cancel);
     let removed = fs::remove_dir_all(&dir);
     env.log.log(|| {
+        let said = match &outcome {
+            // The swap's own steps are logged already.
+            Installed::Done(_) => "Done".to_owned(),
+            other => format!("{other:?}"),
+        };
         format!(
-            "updater: {outcome:?}; temp folder {}",
+            "updater: {said}; temp folder {}",
             if removed.is_ok() {
                 "removed"
             } else {
@@ -257,6 +262,9 @@ fn install_in(
         return Installed::DownloadFailed;
     }
 
+    if cancel.load(Ordering::Relaxed) {
+        return Installed::Cancelled;
+    }
     let mut bytes = Vec::new();
     if fs::File::open(&zip)
         .and_then(|mut file| file.read_to_end(&mut bytes))
@@ -277,6 +285,9 @@ fn install_in(
     if !good {
         return Installed::BadSignature;
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Installed::Cancelled;
+    }
 
     let unpacked = archive::unpack(&zip, dir, env.arch, env.files.as_ref());
     env.log.log(|| match &unpacked {
@@ -296,6 +307,10 @@ fn install_in(
         Err(ArchiveError::DiskFull) => return Installed::DiskFull,
         Err(_) => return Installed::BrokenDownload,
     };
+    // The last point where a Cancel still leaves the install folder untouched.
+    if cancel.load(Ordering::Relaxed) {
+        return Installed::Cancelled;
+    }
 
     let mut steps = StepLog::new();
     let swapped = swap::swap(
@@ -310,12 +325,12 @@ fn install_in(
             .log(|| format!("updater: swap {step} (error {code})"));
     }
     match swapped {
-        Ok(()) => Installed::Done,
+        Ok(swapped) => Installed::Done(swapped),
         Err(SwapError::ReadOnly) => Installed::ReadOnly,
         Err(SwapError::InUse) => Installed::InUse,
         Err(SwapError::DiskFull) => Installed::DiskFull,
         Err(SwapError::Failed { .. }) => Installed::Failed,
-        Err(SwapError::RestoreFailed { bak }) => Installed::RestoreFailed { bak },
+        Err(SwapError::RestoreFailed { renames }) => Installed::RestoreFailed { renames },
     }
 }
 
@@ -483,7 +498,7 @@ pub mod tests {
             &|p| percents.lock().unwrap().push(p),
             &AtomicBool::new(false),
         );
-        assert_eq!(done, Installed::Done);
+        assert!(matches!(done, Installed::Done(_)), "{done:?}");
         let exe = fs::read(f.env.install_dir.join(archive::EXE_NAME)).unwrap();
         assert!(exe.ends_with(b"new exe"));
         assert_eq!(
@@ -601,7 +616,7 @@ pub mod tests {
 
         let happy = setup("loopback", "appcast.xml");
         let update = update_of(&happy.env);
-        assert_eq!(run(&happy.env, &update), Installed::Done);
+        assert!(matches!(run(&happy.env, &update), Installed::Done(_)));
         let exe = fs::read(happy.env.install_dir.join(archive::EXE_NAME)).unwrap();
         assert!(exe.ends_with(b"served exe"));
         assert_eq!(
@@ -808,7 +823,7 @@ pub mod tests {
         fs::write(f.env.install_dir.join("audiosync.exe.new"), b"x").unwrap();
         remove_leftovers(&f.env.install_dir, &f.env.temp_root, &log);
         let update = update_of(&f.env);
-        assert_eq!(run(&f.env, &update), Installed::Done);
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
         assert!(log.flush(crate::debug_log::TEST_FLUSH));
         let messages = crate::debug_log::read_messages(&path);
         crate::debug_log::assert_in_order(

@@ -488,7 +488,7 @@ export global Strings {
         if button == UpdateButton.open-release-page {
             return @tr("Open Release Page");
         }
-        return @tr("Relaunch Now");
+        return @tr("Restart Now");
     }
 
     // The updater's notices. `new` and `running` are version numbers such
@@ -501,7 +501,7 @@ export global Strings {
     }
     out property <string> notice-update-downloading-started: @tr("Downloading the update.");
     public pure function notice-update-installed(version: string) -> string {
-        return @tr("AudioSync {} is installed. It takes effect after a relaunch.", version);
+        return @tr("AudioSync {} is installed. It takes effect after AudioSync restarts.", version);
     }
     public pure function notice-update-up-to-date(running: string) -> string {
         return @tr("AudioSync {} is the latest version.", running);
@@ -514,8 +514,14 @@ export global Strings {
     out property <string> notice-update-read-only: @tr("AudioSync can't write to its own folder, so it can't install the update. The running version stays. You can download the new version from the release page.");
     out property <string> notice-update-in-use: @tr("Another copy of AudioSync is using its files, for example in another user's session. Close the other copies, then try again. The running version stays.");
     out property <string> notice-update-failed: @tr("The update couldn't be installed. The running version stays.");
-    public pure function notice-update-restore-failed(bak: string) -> string {
-        return @tr("The update failed and AudioSync couldn't put its old version back. In the AudioSync folder, rename {} to audiosync.exe.", bak);
+    // `renames` is one or more of notice-update-rename joined by list-and,
+    // the exe first.
+    public pure function notice-update-restore-failed(renames: string) -> string {
+        return @tr("The update failed and AudioSync couldn't put its old version back. In the AudioSync folder, rename {}.", renames);
+    }
+    // A file left under its .bak name and the name it goes back to.
+    public pure function notice-update-rename(bak: string, live: string) -> string {
+        return @tr("{} to {}", bak, live);
     }
     out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync put the old version back. The running version stays.");
 

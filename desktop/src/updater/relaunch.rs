@@ -1,4 +1,4 @@
-//! Relaunch Now (spec S303): the new exe starts with a marker naming the
+//! Restart Now (spec S303): the new exe starts with a marker naming the
 //! quitting process and waits for it before it claims the single instance.
 
 use std::ffi::OsString;
@@ -11,6 +11,69 @@ use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitFo
 
 pub const MARKER: &str = "--relaunched-from";
 pub const WAIT: Duration = Duration::from_secs(10);
+/// After [`WAIT`] runs out, the claim is tried this often, this far apart.
+const RETRIES: u32 = 10;
+const RETRY_STEP: Duration = Duration::from_millis(500);
+
+/// The single-instance claim of a launch, and after a restart whose old
+/// process outlived [`WAIT`], a line for the debug log on how it went.
+pub struct Claimed<T> {
+    pub instance: Option<T>,
+    pub note: Option<String>,
+}
+
+/// Runs `claim` once; after a restart it first waits for the old process,
+/// and if that one outlives the wait, retries the claim for a while: a claim
+/// that only handed this launch over to the quitting copy would leave no
+/// copy running once it is gone.
+pub fn claim_after<T>(
+    args: impl IntoIterator<Item = OsString>,
+    mut claim: impl FnMut() -> Option<T>,
+) -> Claimed<T> {
+    let Some(parent) = marked_parent(args) else {
+        return Claimed {
+            instance: claim(),
+            note: None,
+        };
+    };
+    let exited = wait_for_exit(parent, WAIT);
+    claim_retrying(parent, exited, claim, std::thread::sleep)
+}
+
+fn claim_retrying<T>(
+    parent: u32,
+    exited: bool,
+    mut claim: impl FnMut() -> Option<T>,
+    sleep: impl Fn(Duration),
+) -> Claimed<T> {
+    if exited {
+        return Claimed {
+            instance: claim(),
+            note: None,
+        };
+    }
+    for attempt in 1..=RETRIES {
+        if let Some(instance) = claim() {
+            return Claimed {
+                instance: Some(instance),
+                note: Some(format!(
+                    "updater: process {parent} still ran after {} s; claimed at try {attempt}",
+                    WAIT.as_secs()
+                )),
+            };
+        }
+        if attempt < RETRIES {
+            sleep(RETRY_STEP);
+        }
+    }
+    Claimed {
+        instance: None,
+        note: Some(format!(
+            "updater: process {parent} still ran after {} s and {RETRIES} claims; exiting",
+            WAIT.as_secs()
+        )),
+    }
+}
 
 /// The process id the marker in `args` names.
 pub fn marked_parent(args: impl IntoIterator<Item = OsString>) -> Option<u32> {
@@ -74,5 +137,57 @@ mod tests {
         let pid = child.id();
         assert!(wait_for_exit(pid, WAIT));
         let _ = child.wait();
+    }
+
+    #[test]
+    fn an_old_process_that_outlives_the_wait_gets_the_claim_retried_and_logged() {
+        let slept = std::cell::Cell::new(0);
+        let sleep = |_| slept.set(slept.get() + 1);
+
+        let mut tries = 0;
+        let claimed = claim_retrying(
+            7,
+            true,
+            || {
+                tries += 1;
+                None::<()>
+            },
+            sleep,
+        );
+        assert_eq!(
+            (tries, claimed.note),
+            (1, None),
+            "an ended process: one claim"
+        );
+
+        let mut tries = 0;
+        let claimed = claim_retrying(
+            7,
+            false,
+            || {
+                tries += 1;
+                (tries == 3).then_some(())
+            },
+            sleep,
+        );
+        assert_eq!(claimed.instance, Some(()));
+        assert_eq!(slept.get(), 2);
+        assert_eq!(
+            claimed.note.as_deref(),
+            Some("updater: process 7 still ran after 10 s; claimed at try 3")
+        );
+
+        let mut tries = 0;
+        let claimed = claim_retrying(
+            7,
+            false,
+            || {
+                tries += 1;
+                None::<()>
+            },
+            sleep,
+        );
+        assert_eq!((tries, claimed.instance), (RETRIES, None));
+        assert!(claimed.note.unwrap().ends_with("exiting"));
     }
 }

@@ -115,13 +115,19 @@ const PREVIEW_ZONES_VAR: &str = "AUDIOSYNC_PREVIEW_ZONES";
 const PREVIEW_PRESETS_VAR: &str = "AUDIOSYNC_PREVIEW_PRESETS";
 
 fn main() -> ExitCode {
-    // After Relaunch Now the quitting copy still holds the single instance;
+    // After Restart Now the quitting copy still holds the single instance;
     // claiming it first would hand this launch over to that copy.
     #[cfg(windows)]
-    if let Some(parent) = updater::relaunch::marked_parent(std::env::args_os()) {
-        updater::relaunch::wait_for_exit(parent, updater::relaunch::WAIT);
-    }
-    let Some(instance) = os::claim_instance() else {
+    let updater::relaunch::Claimed { instance, note } =
+        updater::relaunch::claim_after(std::env::args_os(), os::claim_instance);
+    #[cfg(not(windows))]
+    let (instance, note) = (os::claim_instance(), None::<String>);
+    let Some(instance) = instance else {
+        if let Some(note) = note {
+            let log = DebugLog::appending_from_env();
+            log.log(|| note);
+            log.flush(LOG_FLUSH_AT_EXIT);
+        }
         return ExitCode::SUCCESS;
     };
     let log = DebugLog::from_env();
@@ -142,6 +148,9 @@ fn main() -> ExitCode {
     }
 
     instance.log_state(&log);
+    if let Some(note) = note {
+        log.log(|| note);
+    }
 
     match run(&log, &instance) {
         Ok(()) => {

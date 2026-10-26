@@ -492,10 +492,19 @@ pub enum SwitchName {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(not(windows), allow(dead_code))]
 pub enum UpdaterNotice {
-    Available { new: String, running: String },
-    Downloading { percent: Option<u8> },
-    Installed { version: String },
-    UpToDate { running: String },
+    Available {
+        new: String,
+        running: String,
+    },
+    Downloading {
+        percent: Option<u8>,
+    },
+    Installed {
+        version: String,
+    },
+    UpToDate {
+        running: String,
+    },
     Unreachable,
     DownloadFailed,
     BadSignature,
@@ -504,7 +513,11 @@ pub enum UpdaterNotice {
     ReadOnly,
     InUse,
     Failed,
-    RestoreFailed { bak: String },
+    /// Each pair is a `.bak` file and the name it goes back to, the exe
+    /// first.
+    RestoreFailed {
+        renames: Vec<(String, String)>,
+    },
     RelaunchFailed,
 }
 
@@ -516,7 +529,7 @@ pub enum UpdaterButton {
     Cancel,
     TryAgain,
     OpenReleasePage,
-    RelaunchNow,
+    RestartNow,
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -526,9 +539,12 @@ impl UpdaterNotice {
         match self {
             UpdaterNotice::Available { .. } => &[Download, NotNow],
             UpdaterNotice::Downloading { .. } => &[Cancel],
-            UpdaterNotice::Installed { .. } => &[RelaunchNow],
+            UpdaterNotice::Installed { .. } => &[RestartNow],
             UpdaterNotice::ReadOnly => &[OpenReleasePage],
-            UpdaterNotice::InUse => &[TryAgain],
+            UpdaterNotice::Unreachable
+            | UpdaterNotice::DownloadFailed
+            | UpdaterNotice::DiskFull
+            | UpdaterNotice::InUse => &[TryAgain],
             _ => &[],
         }
     }

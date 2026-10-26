@@ -21,11 +21,18 @@ pub enum SwapError {
         step: &'static str,
         code: i32,
     },
-    /// The restore failed too: the folder has no `audiosync.exe` until the
-    /// user renames this `.bak` file back.
+    /// The restore failed too: each file stays under its `.bak` name until
+    /// the user renames it back, the exe first.
     RestoreFailed {
-        bak: String,
+        renames: Vec<Rename>,
     },
+}
+
+/// A rename the user has to make by hand: `bak` back to `live`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rename {
+    pub bak: String,
+    pub live: String,
 }
 
 /// One logged step: what it did and its OS error code, 0 for success.
@@ -52,11 +59,16 @@ impl Pair {
 }
 
 /// How far a pair got, for the restore.
-#[derive(Clone, Copy, Default)]
-struct Progress {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Progress {
+    name: &'static str,
     renamed_aside: bool,
     renamed_in: bool,
 }
+
+/// What a completed swap renamed, so a failed restart can undo exactly that.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Swapped(Vec<Progress>);
 
 /// Installs `exe` (and `notices`) into `dir` in place of the running files.
 pub fn swap(
@@ -65,21 +77,25 @@ pub fn swap(
     notices: Option<&Path>,
     files: &dyn Files,
     log: &mut StepLog,
-) -> Result<(), SwapError> {
-    let mut done: Vec<(Pair, Progress)> = Vec::new();
+) -> Result<Swapped, SwapError> {
+    let mut done: Vec<Progress> = Vec::new();
     let mut parts = vec![(EXE_NAME, exe)];
     parts.extend(notices.map(|path| (NOTICES_NAME, path)));
     for (name, source) in parts {
         let pair = Pair::new(dir, name);
-        let mut progress = Progress::default();
+        let mut progress = Progress {
+            name,
+            renamed_aside: false,
+            renamed_in: false,
+        };
         let result = swap_one(&pair, name, source, files, log, &mut progress);
-        done.push((pair, progress));
+        done.push(progress);
         if let Err(error) = result {
-            restore(&done, files, log)?;
+            restore(dir, &done, files, log)?;
             return Err(error);
         }
     }
-    Ok(())
+    Ok(Swapped(done))
 }
 
 fn logged<T>(log: &mut StepLog, what: String, result: io::Result<T>) -> io::Result<T> {
@@ -162,19 +178,22 @@ fn swap_one(
 }
 
 fn restore(
-    done: &[(Pair, Progress)],
+    dir: &Path,
+    done: &[Progress],
     files: &dyn Files,
     log: &mut StepLog,
 ) -> Result<(), SwapError> {
-    let mut failed = None;
-    for (pair, _) in done.iter().rev() {
+    for progress in done.iter().rev() {
+        let pair = Pair::new(dir, progress.name);
         let result = remove_if_there(files, &pair.new);
         log.push((
             restore_line("remove", &pair.new),
             result.as_ref().err().map_or(0, code),
         ));
     }
-    for (pair, progress) in done.iter().rev() {
+    let mut renames = Vec::new();
+    for progress in done.iter().rev() {
+        let pair = Pair::new(dir, progress.name);
         if progress.renamed_in {
             let result = files.remove(&pair.live);
             log.push((
@@ -188,15 +207,19 @@ fn restore(
                 restore_line("rename back", &pair.bak),
                 result.as_ref().err().map_or(0, code),
             ));
-            if result.is_err() && failed.is_none() {
-                failed = Some(file_name(&pair.bak));
+            if result.is_err() {
+                renames.push(Rename {
+                    bak: file_name(&pair.bak),
+                    live: file_name(&pair.live),
+                });
             }
         }
     }
-    match failed {
-        Some(bak) => Err(SwapError::RestoreFailed { bak }),
-        None => Ok(()),
+    if renames.is_empty() {
+        return Ok(());
     }
+    renames.sort_by_key(|rename| rename.live != EXE_NAME);
+    Err(SwapError::RestoreFailed { renames })
 }
 
 fn restore_line(what: &str, path: &Path) -> String {
@@ -208,15 +231,16 @@ pub fn file_name(path: &Path) -> String {
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }
 
-/// Undoes a completed swap whose relaunch failed (spec S303): the new exe
-/// goes, then the running `.bak` is renamed back.
-pub fn undo_completed(dir: &Path, files: &dyn Files, log: &mut StepLog) -> Result<(), SwapError> {
-    let pair = Pair::new(dir, EXE_NAME);
-    let progress = Progress {
-        renamed_aside: true,
-        renamed_in: true,
-    };
-    restore(&[(pair, progress)], files, log)
+/// Undoes a completed swap whose restart failed (spec S303): the new
+/// files go, then each `.bak` this swap made, the running one included, is
+/// renamed back.
+pub fn undo_completed(
+    dir: &Path,
+    swapped: &Swapped,
+    files: &dyn Files,
+    log: &mut StepLog,
+) -> Result<(), SwapError> {
+    restore(dir, &swapped.0, files, log)
 }
 
 #[cfg(test)]
@@ -347,7 +371,7 @@ mod tests {
         assert_eq!(
             result,
             Err(SwapError::RestoreFailed {
-                bak: "audiosync.exe.bak".to_owned()
+                renames: vec![rename_of(EXE_NAME)]
             })
         );
         assert_eq!(read(dir.join("audiosync.exe.bak")), "old exe");
@@ -460,13 +484,66 @@ mod tests {
         assert!(running.exists());
     }
 
+    fn rename_of(live: &str) -> Rename {
+        Rename {
+            bak: format!("{live}.bak"),
+            live: live.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_failed_restore_lists_every_bak_with_its_name_the_exe_first() {
+        // The double sees a rename's target. The exe's first rename into
+        // audiosync.exe (step 4) works and every later one (the rename back)
+        // is refused; every rename into the notices name is refused, so the
+        // notices step 4 fails and its restore fails too. The restore runs
+        // newest first, yet the exe leads the list: the user needs it back.
+        let (dir, exe, notices) = install("restore-lists-both");
+        let exe_renames = std::sync::atomic::AtomicUsize::new(0);
+        let files = failing(move |op, path| {
+            let refused = op == "rename"
+                && match file_name(path).as_str() {
+                    EXE_NAME => exe_renames.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0,
+                    NOTICES_NAME => true,
+                    _ => false,
+                };
+            refused.then(|| io::Error::from_raw_os_error(5))
+        });
+        let mut log = StepLog::new();
+        let result = swap(&dir, &exe, Some(&notices), &files, &mut log);
+        assert_eq!(
+            result,
+            Err(SwapError::RestoreFailed {
+                renames: vec![rename_of(EXE_NAME), rename_of(NOTICES_NAME)]
+            })
+        );
+        assert_eq!(read(dir.join("audiosync.exe.bak")), "old exe");
+        assert_eq!(read(dir.join("THIRD-PARTY-NOTICES.txt.bak")), "old notices");
+
+        // Only the notices pair failing names only that pair.
+        let (dir, exe, notices) = install("restore-lists-notices");
+        let files = failing(|op, path| {
+            (op == "rename" && file_name(path) == NOTICES_NAME)
+                .then(|| io::Error::from_raw_os_error(5))
+        });
+        let result = swap(&dir, &exe, Some(&notices), &files, &mut log);
+        assert_eq!(
+            result,
+            Err(SwapError::RestoreFailed {
+                renames: vec![rename_of(NOTICES_NAME)]
+            })
+        );
+        assert_eq!(read(dir.join(EXE_NAME)), "old exe");
+    }
+
     #[test]
     fn a_failed_relaunch_restores_the_bak() {
-        let (dir, exe, _) = install("relaunch-failed");
+        let (dir, exe, notices) = install("relaunch-failed");
         let mut log = StepLog::new();
-        swap(&dir, &exe, None, &RealFiles, &mut log).unwrap();
-        undo_completed(&dir, &RealFiles, &mut log).expect("the undo works");
+        let swapped = swap(&dir, &exe, Some(&notices), &RealFiles, &mut log).unwrap();
+        undo_completed(&dir, &swapped, &RealFiles, &mut log).expect("the undo works");
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
-        assert!(!dir.join("audiosync.exe.bak").exists());
+        assert_eq!(read(dir.join(NOTICES_NAME)), "old notices");
+        assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
     }
 }
