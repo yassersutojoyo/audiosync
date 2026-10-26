@@ -115,8 +115,11 @@ impl Updater {
         &self.notice_time
     }
 
+    /// Stamps the time only when the kind of notice changes, so a download's
+    /// percentage doesn't move it.
     fn set_notice(&mut self, notice: Option<UpdaterNotice>) {
-        if notice.is_some() && notice != self.notice {
+        let kind = |notice: &Option<UpdaterNotice>| notice.as_ref().map(std::mem::discriminant);
+        if notice.is_some() && kind(&notice) != kind(&self.notice) {
             self.notice_time = crate::platform::notice_time();
         }
         self.notice = notice;
@@ -141,6 +144,16 @@ impl Updater {
                     self.env
                         .log
                         .log(|| "updater: a check runs, it answers this one".to_owned());
+                    self.manual_waiting = true;
+                }
+                return;
+            }
+            Work::Installing if self.cancel.load(Ordering::Relaxed) => {
+                // The cancelled download's notice is gone; answer once it stops.
+                if trigger == Trigger::Manual {
+                    self.env.log.log(|| {
+                        "updater: a cancelled install stops, then this check runs".to_owned()
+                    });
                     self.manual_waiting = true;
                 }
                 return;
@@ -252,6 +265,9 @@ impl Updater {
                     }),
                 };
                 self.set_notice(notice);
+                if std::mem::take(&mut self.manual_waiting) {
+                    self.check(Trigger::Manual);
+                }
             }
         }
     }
@@ -553,6 +569,52 @@ pub mod tests {
         gate.send(()).unwrap();
         updater.wait();
         untouched(&updater);
+    }
+
+    #[test]
+    fn a_manual_check_right_after_cancel_is_answered_once_the_download_stops() {
+        let Gated {
+            mut updater,
+            fetch,
+            reached,
+            gate,
+        } = gated("check-after-cancel", Kind::Download);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        reached.recv_timeout(WAIT).expect("the download starts");
+        updater.press(UpdaterButton::Cancel);
+        updater.check(Trigger::Manual);
+        assert_eq!(updater.notice(), None);
+        gate.send(()).unwrap();
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Available { .. })
+        ));
+        let appcasts = fetch
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|url| url.ends_with(".xml"))
+            .count();
+        assert_eq!(appcasts, 2, "the check ran after the download stopped");
+        assert_eq!(
+            std::fs::read(updater.env.install_dir.join(archive::EXE_NAME)).unwrap(),
+            b"old exe"
+        );
+    }
+
+    #[test]
+    fn a_download_percentage_keeps_the_notice_time() {
+        let (mut updater, _) = updater("notice-time");
+        updater.set_notice(Some(UpdaterNotice::Downloading { percent: None }));
+        updater.notice_time = "earlier".to_owned();
+        updater.set_notice(Some(UpdaterNotice::Downloading { percent: Some(40) }));
+        assert_eq!(updater.notice_time(), "earlier");
+        updater.set_notice(Some(UpdaterNotice::DownloadFailed));
+        assert_ne!(updater.notice_time(), "earlier");
     }
 
     #[test]

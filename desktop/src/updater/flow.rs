@@ -262,9 +262,6 @@ fn install_in(
         return Installed::DownloadFailed;
     }
 
-    if cancel.load(Ordering::Relaxed) {
-        return Installed::Cancelled;
-    }
     let mut bytes = Vec::new();
     if fs::File::open(&zip)
         .and_then(|mut file| file.read_to_end(&mut bytes))
