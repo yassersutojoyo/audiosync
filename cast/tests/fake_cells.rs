@@ -1,5 +1,5 @@
 //! Cells of the Cast PC pass record that a fake device can reach: device
-//! behaviors the spec leaves open (CAST_SPEC G3, G8, G11, G12), each played
+//! behaviors the spec leaves open (CAST_SPEC G1 e, G3, G4, G8, G11, G12), each played
 //! by the fake in the forms a real device may take, plus the volume and mute
 //! changed on the device. Each passing cell prints `CELL <id> <measured>`
 //! under `--nocapture`.
@@ -15,6 +15,7 @@ use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::discovery::{
     BrowseEvent, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent, ServiceRecord,
 };
+use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{DEFAULT_MEDIA_RECEIVER, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{CastSession, SessionConfig, SessionEvent};
@@ -63,6 +64,15 @@ fn feed(writer: AudioWriter) -> Feed {
 }
 
 fn start(device: &FakeDevice) -> (CastSession, Feed) {
+    start_as(device, None)
+}
+
+/// A session to `device` as a group's leader.
+fn start_group(device: &FakeDevice) -> (CastSession, Feed) {
+    start_as(device, Some(GroupRecords::new(vec![device.address])))
+}
+
+fn start_as(device: &FakeDevice, group: Option<GroupRecords>) -> (CastSession, Feed) {
     let (writer, reader) = audio_ring(48_000);
     let feed = feed(writer);
     let config = SessionConfig {
@@ -70,7 +80,7 @@ fn start(device: &FakeDevice) -> (CastSession, Feed) {
         format: StreamFormat::wav(48_000).expect("rate"),
         metadata: Metadata::default(),
         artwork: None,
-        group: None,
+        group,
     };
     let selected = Arc::new(AtomicBool::new(true));
     let session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
@@ -159,7 +169,7 @@ fn device_volume(level: f64, muted: bool) -> Command {
 #[test]
 fn a_device_that_rounds_levels_to_its_step_moves_one_step_per_press_and_shows_its_own_level() {
     let device = FakeDevice::start(Behavior {
-        volume_grid: Some(0.05),
+        volume_answer: Some(|level| (level / 0.05).round() * 0.05),
         ..Behavior::default()
     });
     let (mut session, _feed) = start(&device);
@@ -519,5 +529,58 @@ fn a_tls_1_2_only_device_back_with_a_new_certificate_is_reconnected_and_plays_on
     cell(
         "C10",
         "TLS 1.2 only, 3 certificates over 3 connections: never refused, one LOAD",
+    );
+}
+
+/// Sends `level`, waits until the host shows `shown`, the group's answer,
+/// and returns the `SET_VOLUME` count once that answer settled for 500 ms.
+fn group_answers(session: &mut CastSession, device: &FakeDevice, level: f64, shown: f64) -> usize {
+    session.set_volume(level).expect("sent");
+    wait_level(session, shown);
+    let sent = levels_sent(device).len();
+    run(session, Duration::from_millis(500));
+    assert!(close(session.volume().expect("volume").level, shown));
+    sent
+}
+
+// covers: C70, C100
+#[test]
+fn a_group_that_answers_with_a_level_of_its_own_is_shown_as_it_says_and_never_chased() {
+    let members = json!([
+        {"deviceId": ID, "name": "Kitchen"},
+        {"deviceId": "0b1c2d3e4f5a46b7a8c9d0e1f2a3b4c5", "name": "Porch"},
+    ]);
+    type Answer = fn(f64) -> f64;
+    let variants: [(&str, Answer, [f64; 2]); 2] = [
+        ("scaled", |level| level * 0.9, [0.45, 0.63]),
+        ("unmoved", |_| 0.4, [0.4, 0.4]),
+    ];
+    for (name, answer, shown) in variants {
+        let leader = FakeDevice::start(Behavior {
+            members: Some(members.clone()),
+            volume_answer: Some(answer),
+            ..Behavior::default()
+        });
+        let (mut session, _feed) = start_group(&leader);
+        for (level, shown) in [0.5, 0.7].into_iter().zip(shown) {
+            let sent = group_answers(&mut session, &leader, level, shown);
+            assert_eq!(
+                sent,
+                levels_sent(&leader).len(),
+                "{name}: the answer is not chased"
+            );
+        }
+        assert_eq!(levels_sent(&leader), [0.5, 0.7], "{name}");
+        assert_eq!(
+            leader.connection_count(),
+            1,
+            "{name}: no channel to a member"
+        );
+        session.stop();
+        leader.join();
+    }
+    cell(
+        "C3.e",
+        "group answering 0.9 x level or holding 0.4: shown as answered, 2 SET_VOLUME for 2 moves",
     );
 }

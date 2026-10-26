@@ -90,7 +90,8 @@ cells_from_tests "--test fake_cells" \
     "a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on=C13" \
     "current_time_in_any_form_changes_nothing_but_the_diagnostics=C19" \
     "txt_keys_that_change_with_the_devices_state_keep_one_entry_of_the_same_kind=C16" \
-    "a_tls_1_2_only_device_back_with_a_new_certificate_is_reconnected_and_plays_on=C10"
+    "a_tls_1_2_only_device_back_with_a_new_certificate_is_reconnected_and_plays_on=C10" \
+    "a_group_that_answers_with_a_level_of_its_own_is_shown_as_it_says_and_never_chased=C3.e"
 
 cd "$root/airplay"
 cargo run --quiet --locked --example fake_tv_cells -- "$@" || failed=1

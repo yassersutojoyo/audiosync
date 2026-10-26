@@ -92,9 +92,10 @@ pub struct Behavior {
     /// A group's `status.devices`, sent as `MULTIZONE_STATUS` to a
     /// multizone `GET_STATUS`; `None` leaves it unanswered.
     pub members: Option<Value>,
-    /// The device stores a `SET_VOLUME` level rounded to the nearest
-    /// multiple of this grid (CAST_SPEC G11), and reports that.
-    pub volume_grid: Option<f64>,
+    /// The level the device keeps and reports for a `SET_VOLUME` level, for
+    /// a device that rounds (CAST_SPEC G11) or a group that answers with a
+    /// level of its own (G1 e); `None` keeps the level sent.
+    pub volume_answer: Option<fn(f64) -> f64>,
     /// The device sends `PING` every `.0` and drops the connection, without
     /// a TLS close, once `.1` passes without a `PONG` (C35, G12).
     pub device_ping: Option<(Duration, Duration)>,
@@ -120,7 +121,7 @@ impl Default for Behavior {
             tls12_only: false,
             names: vec!["not-this-device.example".to_owned()],
             members: None,
-            volume_grid: None,
+            volume_answer: None,
             device_ping: None,
             new_certificate_each_connection: false,
         }
@@ -496,11 +497,11 @@ impl Device {
                         self.behavior.volume[key] = value.clone();
                     }
                 }
-                if let (Some(grid), Some(level)) = (
-                    self.behavior.volume_grid,
+                if let (Some(answer), Some(level)) = (
+                    self.behavior.volume_answer,
                     payload["volume"]["level"].as_f64(),
                 ) {
-                    self.behavior.volume["level"] = json!((level / grid).round() * grid);
+                    self.behavior.volume["level"] = json!(answer(level));
                 }
                 vec![self.status(id)]
             }
