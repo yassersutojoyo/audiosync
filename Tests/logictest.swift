@@ -5613,11 +5613,12 @@ do {
     // ("waiting for one"), the app's quit came next, and Core Audio refused
     // the whole system's first tap ('what'). Each wait runs at once here.
     typealias Attempt = AppLifecycle.SystemSwitch.Attempt
-    func systemSwitch(_ answers: [Attempt], userActsAfter: Int? = nil)
-        -> (streaming: Bool?, lasts: [Bool], waits: [TimeInterval]) {
+    func systemSwitch(_ answers: [Attempt], userActsAfter: Int? = nil, firstWait: TimeInterval = 0)
+        -> (streaming: Bool?, lasts: [Bool], waits: [TimeInterval], early: Int) {
         var left = answers, lasts: [Bool] = [], waits: [TimeInterval] = [], pending: [() -> Void] = []
         var streaming: Bool?
         AppLifecycle.SystemSwitch.run(
+            firstWait: firstWait,
             start: { last in
                 lasts.append(last)
                 return left.isEmpty ? .failed : left.removeFirst()
@@ -5628,11 +5629,12 @@ do {
             },
             stillWanted: { userActsAfter != lasts.count },
             finish: { streaming = $0 })
+        let early = lasts.count
         while !pending.isEmpty { pending.removeFirst()() }
-        return (streaming, lasts, waits)
+        return (streaming, lasts, waits, early)
     }
     var quitSource = music
-    var afterQuit: (streaming: Bool?, lasts: [Bool], waits: [TimeInterval]) = (nil, [], [])
+    var afterQuit: (streaming: Bool?, lasts: [Bool], waits: [TimeInterval], early: Int) = (nil, [], [], 0)
     if quit(musicQuit, music, .system) == "switchToSystem com.apple.Music" {
         quitSource = .system
         afterQuit = systemSwitch([.captureFailed, .started])
@@ -5654,6 +5656,21 @@ do {
     check(userActed.streaming == nil && userActed.lasts == [false],
           "source quit: a stop, start or source change during the wait ends the retries, with no notice (S227 g)",
           "\(userActed)")
+    // The Mac sitting (2026-10-26, 5 of 5 runs): the app's tap was destroyed
+    // 1 ms before the quit, attempt 1 always lost, attempt 2 worked 1.9 s on.
+    typealias QuitSwitch = AppLifecycle.SystemSwitch
+    let settleWait = QuitSwitch.firstWait(sinceDestroy: 0.001)
+    check(abs(settleWait - (QuitSwitch.settle - 0.001)) < 1e-9 && QuitSwitch.firstWait(sinceDestroy: nil) == 0
+            && QuitSwitch.firstWait(sinceDestroy: QuitSwitch.settle) == 0 && QuitSwitch.firstWait(sinceDestroy: 30) == 0,
+          "source quit: the whole system waits until the app's tap has been gone a second, never when it went long ago (S227 g)",
+          "\(settleWait)")
+    let settled = systemSwitch([.started], firstWait: settleWait)
+    check(settled.streaming == true && settled.lasts == [false] && settled.waits == [settleWait] && settled.early == 0,
+          "source quit: the first attempt starts only once the app's tap settled, and then it works (S227 g)",
+          "\(settled)")
+    let actedFirst = systemSwitch([.started], userActsAfter: 0, firstWait: settleWait)
+    check(actedFirst.streaming == nil && actedFirst.lasts.isEmpty,
+          "source quit: a stop or source change before the first attempt makes none (S227 g)", "\(actedFirst)")
     // macOS's app list can miss the mix's other apps in the turn one of them quits.
     let mix3 = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.apple.Safari", "com.apple.TextEdit"])
     func mixQuit(_ report: Report, running: Set<String> = []) -> String {
