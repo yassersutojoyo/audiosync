@@ -1643,6 +1643,15 @@ impl Driver {
         if self.homekit_paired(key) {
             return self.open_paired(key, now);
         }
+        // The records kept from before its lapse are no path to play on: a
+        // pair member left RAOP-only and then gone would retry a dead
+        // address every 30 s (P215, P216).
+        if self.browser.is_some()
+            && self.directory.seen(key)
+            && self.directory.device(key).is_none()
+        {
+            return self.unannounce(key);
+        }
         if self.airplay2 {
             if let Some(device) = self.directory.device(key).cloned()
                 && let Some(speaker) = self.speakers.get_mut(key)
@@ -1792,18 +1801,12 @@ impl Driver {
     /// A session that can't start (P46, P74, P139): reported like a failed
     /// session, without connecting.
     fn refuse(&mut self, key: &DeviceKey, error: SessionError, now: Instant) {
-        let unannounced = self.unannounced(key, error.kind);
+        if self.unannounced(key, error.kind) {
+            return self.unannounce(key);
+        }
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
-        if unannounced {
-            let told = matches!(speaker.phase, Phase::Unannounced);
-            speaker.phase = Phase::Unannounced;
-            if !told {
-                self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Unannounced));
-            }
-            return;
-        }
         let retry_at = speaker.backoff.on_failure(error.kind, now);
         speaker.phase = retry_at.map_or(Phase::Failed, Phase::Waiting);
         let reason = error.kind.user_reason();
@@ -1817,6 +1820,19 @@ impl Driver {
         );
         let state = retry_at.map_or(SpeakerState::Failed, |at| SpeakerState::Retrying { at });
         self.emit_speaker(key, SpeakerEvent::State(state));
+    }
+
+    /// Pauses the retries of a speaker that stopped announcing itself,
+    /// telling the host once (P215).
+    fn unannounce(&mut self, key: &DeviceKey) {
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
+        let told = matches!(speaker.phase, Phase::Unannounced);
+        speaker.phase = Phase::Unannounced;
+        if !told {
+            self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Unannounced));
+        }
     }
 
     /// An Unsupported whose only cause is that the speaker stopped
