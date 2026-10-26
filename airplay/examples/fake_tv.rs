@@ -21,6 +21,8 @@
 mod common;
 #[path = "fake_tv/summary.rs"]
 mod summary;
+#[path = "fake_tv/television.rs"]
+mod television;
 
 use std::io::BufRead;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -31,32 +33,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::rtsp::Request;
-use common::ap2::{Ap2Server, FakeAp2, dict, int, plist, request_key};
+use common::ap2::{Ap2Server, FakeAp2, request_key};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use plist::Value;
 use summary::Summary;
+use television::{HOST_LABEL, Pin, television};
 
 const SERVICE_TYPE: &str = "_airplay._tcp.local.";
-/// The label of its own mDNS host name, in the `.local.` domain.
-const HOST_LABEL: &str = "audiosync-test-tv";
-/// A locally administered address in the documentation block of RFC 7042.
-const DEVICE_ID: &str = "02:00:5E:00:53:55";
-/// Bits 38 (CoreUtils pairing) and 48 (transient pairing): AirPlay 2 capable.
-const FEATURES_HIGH: u64 = 0x1_0040;
-const MODEL: &str = "Speaker1,1";
-/// Status flags as the television sends them without a PIN (bit 2).
-const FLAGS_PLAIN: u64 = 0x4;
-/// Bit 3: a PIN on every connection, and every pair-verify turned down.
-const FLAGS_PIN_EVERY_TIME: u64 = 0x4c;
-/// Bit 9: a PIN the first time only.
-const FLAGS_PIN_ONCE: u64 = 0x244;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Pin {
-    None,
-    EveryTime,
-    Once,
-}
 
 struct Options {
     name: String,
@@ -103,40 +85,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     Ok(options)
 }
 
-fn status_flags(pin: Pin) -> u64 {
-    match pin {
-        Pin::None => FLAGS_PLAIN,
-        Pin::EveryTime => FLAGS_PIN_EVERY_TIME,
-        Pin::Once => FLAGS_PIN_ONCE,
-    }
-}
-
-fn television(options: &Options) -> FakeAp2 {
-    let mut fake = FakeAp2::samsung();
-    let flags = status_flags(options.pin);
-    if options.pin != Pin::None {
-        fake.hap.code = options.code.clone();
-        fake.hap.pairing_per_connection = options.pin == Pin::EveryTime;
-    }
-    fake.info_body = plist(dict(&[
-        ("features", int((FEATURES_HIGH << 32) as i64)),
-        ("statusFlags", int(flags as i64)),
-        ("name", Value::String(options.name.clone())),
-        ("model", Value::String(MODEL.to_owned())),
-        ("deviceID", Value::String(DEVICE_ID.to_owned())),
-    ]));
-    fake
-}
-
 fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, String), String> {
-    let features = format!("0x0,{FEATURES_HIGH:#x}");
-    let flags = format!("{:#x}", status_flags(options.pin));
-    let txt = [
-        ("features", features.as_str()),
-        ("flags", flags.as_str()),
-        ("model", MODEL),
-        ("deviceid", DEVICE_ID),
-    ];
+    let entries = television::txt(options.pin);
+    let txt: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
     let failed = |error: mdns_sd::Error| format!("mDNS: {error}");
     let daemon = ServiceDaemon::new().map_err(failed)?;
     let host = format!("{HOST_LABEL}.local.");
@@ -286,7 +240,7 @@ fn main() -> ExitCode {
     };
     let server = Ap2Server::start_at(
         SocketAddr::new(IpAddr::V4(ip), options.port),
-        television(&options),
+        television(&options.name, options.pin, &options.code),
     );
     let port = server.address.port();
     let advertised = if options.on_network {
