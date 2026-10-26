@@ -375,6 +375,10 @@ struct Shared {
     floor_drop_ns: AtomicU64,
     /// The observer's steps in the device's output times (S229).
     time_steps: AtomicU64,
+    /// Start steps made, and the capture frames they moved the output
+    /// later by (S318).
+    start_steps: AtomicU64,
+    start_step_frames: AtomicU64,
     /// The host said the device is Bluetooth (S230).
     bluetooth: AtomicBool,
     /// The output latency the device reported and the one the host uses,
@@ -461,6 +465,8 @@ impl RendererControl {
                 least_slack_ns: AtomicI64::new(i64::MAX),
                 floor_drop_ns: AtomicU64::new(0),
                 time_steps: AtomicU64::new(0),
+                start_steps: AtomicU64::new(0),
+                start_step_frames: AtomicU64::new(0),
                 bluetooth: AtomicBool::new(false),
                 reported_latency_ns: AtomicU64::new(0),
                 output_latency_ns: AtomicU64::new(0),
@@ -611,6 +617,17 @@ impl RendererControl {
     /// (S229); 0 without output times.
     pub fn time_steps(&self) -> u64 {
         self.shared.time_steps.load(Ordering::Relaxed)
+    }
+
+    /// The start steps the renderer made inside its start window (S318).
+    pub fn start_steps(&self) -> u64 {
+        self.shared.start_steps.load(Ordering::Relaxed)
+    }
+
+    /// The capture frames its start steps moved the output later by
+    /// (S318), apart from the trim's and the slow-downs'.
+    pub fn start_step_frames(&self) -> u64 {
+        self.shared.start_step_frames.load(Ordering::Relaxed)
     }
 
     /// Tells the renderer whether its device is Bluetooth, which adds
@@ -2128,6 +2145,43 @@ mod tests {
                 "{early_ns} ns strays: {moved_ms:.2} ms"
             );
             assert_eq!(late_callbacks, 0, "{early_ns} ns strays");
+        }
+    }
+
+    /// An output on time whose callbacks 100 and 101, about 1 s in, are
+    /// stamped `early_ns` early: how far behind the capture it plays 20 s
+    /// later, and the start steps it made.
+    fn strays_in_window(early_ns: u64) -> (f64, u64) {
+        let late = 20_000_000;
+        let mut s = Stepped::new();
+        let mut written = 0;
+        for _ in 0..100 {
+            ramp_step(&mut s, &mut written, late);
+        }
+        for _ in 0..2 {
+            ramp_step(&mut s, &mut written, late - early_ns);
+        }
+        let mut behind = 0.0;
+        for _ in 0..2000 {
+            behind = ramp_step(&mut s, &mut written, late);
+        }
+        (behind, s.control.start_steps())
+    }
+
+    // covers: S209
+    #[test]
+    fn two_stray_early_stamps_inside_the_start_window_make_no_start_step() {
+        // Each callback's value is the higher of its own and the one
+        // before, so two strays leave one early value: never a run.
+        let (calm, _) = strays_in_window(0);
+        for early_ns in [5_000_000, 20_000_000] {
+            let (behind, steps) = strays_in_window(early_ns);
+            let moved_ms = (behind - calm) / 48.0;
+            assert_eq!(steps, 0, "{early_ns} ns strays");
+            assert!(
+                moved_ms.abs() < 2.0,
+                "{early_ns} ns strays: {moved_ms:.2} ms"
+            );
         }
     }
 

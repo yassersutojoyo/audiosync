@@ -87,6 +87,8 @@ const CAUGHT_UP: f64 = 1.0;
 /// has fallen (ten ANCHOR_FALL_MS) and a trim of about 3.9 ms a second has
 /// carried the output the 45 ms; see [`fallen_after`] for slower trims.
 const FALLEN_AFTER: f64 = 20.0;
+/// A renderer's start window, in s after its first callback (S317).
+const START_WINDOW_S: f64 = 3.0;
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;
@@ -600,6 +602,10 @@ struct Output {
     /// up by then.
     trim_judged_from: f64,
     trim_from: Option<(u64, u64)>,
+    /// When its first callback came, and the lowest and highest delay it
+    /// played from its start window's end on, in ms (S320).
+    first_at: Option<f64>,
+    after_window: Option<(f64, f64)>,
 }
 
 impl Output {
@@ -679,6 +685,10 @@ struct Outcome {
     /// the lowest Jf, Jf 2 s after the late callbacks came on time, its
     /// delay before then and its mean delay over the last quarter.
     falls: Vec<Option<Fall>>,
+    /// Per output: its delay's range from its start window's end on, in ms,
+    /// and the start steps it made (S320).
+    after_window: Vec<Option<(f64, f64)>>,
+    start_steps: Vec<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -799,6 +809,8 @@ fn simulate(case: &Case) -> Outcome {
                     .first_late
                     .map_or(SETTLED, |(ms, until)| until + fallen_after(d, ms)),
                 trim_from: None,
+                first_at: None,
+                after_window: None,
             };
             output.schedule();
             output
@@ -911,6 +923,20 @@ fn simulate(case: &Case) -> Outcome {
             if value != 0.0 {
                 let captured_at = value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin;
                 o.tail.add((played_at - captured_at) * 1000.0);
+            }
+        }
+        let first_at = *o.first_at.get_or_insert(pull_at);
+        if frames > 0
+            && pull_at >= first_at + START_WINDOW_S
+            && o.renderer.fade_state() == FadeState::Open
+        {
+            let value = f64::from(out[(frames - 1) * 2]);
+            if value != 0.0 {
+                let captured_at = value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin;
+                let ms = (played_at - captured_at) * 1000.0;
+                let (low, high) = o.after_window.get_or_insert((ms, ms));
+                *low = low.min(ms);
+                *high = high.max(ms);
             }
         }
         if let Some(until) = o.observed_until
@@ -1065,6 +1091,8 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         dry_from_start,
         norms,
         falls,
+        after_window: outputs.iter().map(|o| o.after_window).collect(),
+        start_steps: outputs.iter().map(|o| o.control.start_steps()).collect(),
     }
 }
 
@@ -1417,6 +1445,71 @@ fn every_windows_case_holds_every_invariant() {
     }
 }
 
+/// The nine late-first cases on the draws after the stall cases'.
+fn late_first_cases_on_own_draws() -> Vec<Case> {
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    let strategy = raw_case();
+    let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
+    for _ in 0..CASES + STALL_CASES {
+        draw();
+    }
+    (0..CASES)
+        .filter(|&k| late_first_strata(k))
+        .map(|k| build_late_first(&draw(), k))
+        .collect()
+}
+
+// covers: S209
+#[test]
+fn a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s() {
+    // The trim carries such an output one frame a callback, 2.1 ms a
+    // second, so it played up to 45 ms early against the others for 22 s.
+    let late = late_first_cases_on_own_draws().swap_remove(4);
+    let d = &late.devices[0];
+    assert_eq!(
+        (late.k, d.callback, d.rate, d.first_late.map(|(ms, _)| ms)),
+        (20, 480, CAPTURE_RATE, Some(FIRST_LATE_LARGE_MS))
+    );
+    let mut on_time = late.clone();
+    on_time.devices[0].first_late = d.first_late.map(|(_, until)| (0.0, until));
+    let outcomes = simulate_all(&[late.clone(), on_time]);
+    let (seen, twin) = (&outcomes[0], &outcomes[1]);
+    let (low, high) = seen.after_window[0].unwrap();
+    let (twin_low, twin_high) = twin.after_window[0].unwrap();
+    // An anchor lands on a capture block, so the twin, which primed on its
+    // first block, and the late output, which anchors later, may sit up to a
+    // block apart: 5 ms at its end without a start step.
+    let off = (high - twin_low).abs().max((twin_high - low).abs());
+    let block_ms = late.block as f64 * 1000.0 / f64::from(CAPTURE_RATE);
+    let report = format!(
+        "delay from 3 s {low:.2}..{high:.2} ms, twin {twin_low:.2}..{twin_high:.2} ms, start steps {:?}, twin {:?}\n{}\n{}",
+        seen.start_steps,
+        twin.start_steps,
+        seen.lines.join("\n"),
+        twin.lines.join("\n")
+    );
+    println!("{report}");
+    assert!(
+        high - low <= STEADY_MS,
+        "moved {:.2} ms from 3 s on: {report}",
+        high - low
+    );
+    assert!(
+        off <= block_ms + ALIGN_SLACK_MS,
+        "{off:.2} ms off its twin: {report}"
+    );
+    assert_eq!(seen.start_steps[0], 1, "{report}");
+    assert!(!seen.fails[1], "a drift correction: {report}");
+    assert!(
+        seen.start_steps[1..]
+            .iter()
+            .chain(&twin.start_steps)
+            .all(|&n| n == 0),
+        "{report}"
+    );
+}
+
 // covers: S207, S209
 #[test]
 fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
@@ -1426,17 +1519,7 @@ fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
     // floor moves 1.2 ms later toward its two stray stamps 54 ms early, and
     // f20's 480-frame output at 48 kHz, whose trim of one frame a callback
     // (S207) was still carrying it the 45 ms 20 s after its late start.
-    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
-    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
-    let strategy = raw_case();
-    let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
-    for _ in 0..CASES + STALL_CASES {
-        draw();
-    }
-    let cases: Vec<Case> = (0..CASES)
-        .filter(|&k| late_first_strata(k))
-        .map(|k| build_late_first(&draw(), k))
-        .collect();
+    let cases = late_first_cases_on_own_draws();
     let f2 = &cases[0].devices[1];
     assert_eq!(
         (cases[0].k, f2.callback, f2.strays.map(|(_, ms)| ms.round())),
