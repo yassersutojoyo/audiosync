@@ -150,6 +150,7 @@ fn play_dual(config: SenderConfig, id: u8) -> (Vec<String>, Vec<String>) {
 
 #[test]
 fn the_flag_turns_the_path_on_and_the_switch_into_a_preference() {
+    // The commit that flips AIRPLAY2_AUTO updates this line.
     assert!(!airplay2_auto(None), "off until the flag flips");
     assert_eq!(AIRPLAY2_AUTO_ENV, "AUDIOSYNC_AIRPLAY2_AUTO");
     assert!(airplay2_auto(Some("1")));
@@ -187,6 +188,31 @@ fn with_the_flag_on_a_dual_device_stays_on_airplay1_with_the_switch_off() {
     let (ap1, ap2) = play_dual(switch(true, false), 62);
     assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
     assert!(ap2.is_empty(), "nothing over AirPlay 2: {ap2:?}");
+}
+
+// covers: P214, P169
+#[test]
+fn a_second_dual_device_falls_back_to_airplay1_while_the_airplay2_place_is_taken() {
+    let _serial = serial();
+    let (sender, _host) = start(switch(true, true));
+    let first_ap1 = NetReceiver::start(Behavior::default());
+    let first_ap2 = Ap2Server::start(FakeAp2::new());
+    let (events, first) = play(&sender, dual(&first_ap1, &first_ap2, 68));
+    assert_eq!(errors(&events, &first), [], "{:?}", events.of(&first));
+    assert!(wait_until(LONG, || first_ap2
+        .fake()
+        .keys()
+        .contains(&"RECORD".to_owned())));
+
+    let second_ap1 = NetReceiver::start(Behavior::default());
+    let second_ap2 = Ap2Server::start(FakeAp2::new());
+    let (events, second) = play(&sender, dual(&second_ap1, &second_ap2, 69));
+    assert_eq!(errors(&events, &second), [], "{:?}", events.of(&second));
+    sender.shutdown();
+    let ap1 = airplay1_keys(&second_ap1);
+    assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
+    assert!(second_ap2.fake().keys().is_empty());
+    assert!(airplay1_keys(&first_ap1).is_empty());
 }
 
 // covers: P214
