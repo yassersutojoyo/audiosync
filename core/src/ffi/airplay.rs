@@ -1009,8 +1009,16 @@ impl AscAirPlay {
                 }
                 self.queue_receiver(event);
             }
-            SenderEvent::Speaker { key, event } => {
+            SenderEvent::Speaker { key, mut event } => {
                 let id = receiver_id(&key);
+                // Errors 1 and 3 to 6 to a verify with stored credentials
+                // describe the receiver, not them: a refusal (P154).
+                if let SpeakerEvent::Error(error) = &mut event
+                    && error.error.kind == ErrorKind::PairingFailed
+                    && self.identity.get(&id).is_some()
+                {
+                    error.reason = UserReason::Refused;
+                }
                 if let SpeakerEvent::Error(error) = &event {
                     self.note_path_switch(&id, error);
                     let turned_down = self.speaker_failed(&id, error);
