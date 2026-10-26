@@ -49,6 +49,31 @@ fn seq_of(bytes: &[u8]) -> u16 {
     u16::from_be_bytes([bytes[2], bytes[3]])
 }
 
+/// Whether RTP `seq` comes before `next` in sequence order.
+fn before(seq: u16, next: u16) -> bool {
+    (next.wrapping_sub(seq) as i16) > 0
+}
+
+/// The seqs of the datagrams that arrived after `at` and come before `held`,
+/// asserted to be the run that ends right before it, each packet once.
+fn tail_before(datagrams: &[Datagram], at: Instant, held: u16) -> Vec<u16> {
+    let tail: Vec<u16> = datagrams
+        .iter()
+        .filter(|(arrived, _, bytes)| *arrived > at && before(seq_of(bytes), held))
+        .map(|(_, _, bytes)| seq_of(bytes))
+        .collect();
+    assert!(
+        tail.windows(2)
+            .all(|pair| pair[1] == pair[0].wrapping_add(1)),
+        "{tail:?}"
+    );
+    assert!(
+        tail.last().is_none_or(|last| last.wrapping_add(1) == held),
+        "{tail:?} before {held}"
+    );
+    tail
+}
+
 fn u32_at(bytes: &[u8], at: usize) -> u32 {
     u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
 }
@@ -849,12 +874,19 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     sender.pause();
     let paused = Instant::now();
     assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
-    let quiet = paused + Duration::from_millis(50);
     std::thread::sleep(Duration::from_millis(4_500));
     assert!(count(&server, "POST /feedback") >= feedback + 2);
-    assert!(udp.data.take().iter().all(|(at, _, _)| *at <= quiet));
-    assert_eq!(count(&server, "FLUSHBUFFERED"), 0);
     let (seq, rtptime) = rtp_info(&server);
+    // The FLUSH names the first packet held back. Packets before it left
+    // before the sender took the pause, however late a busy runner stamps
+    // them; nothing else arrives.
+    let datagrams = udp.data.take();
+    let late = tail_before(&datagrams, paused, seq).len();
+    assert_eq!(
+        datagrams.iter().filter(|(at, _, _)| *at > paused).count(),
+        late
+    );
+    assert_eq!(count(&server, "FLUSHBUFFERED"), 0);
     sender.resume();
     let (_, _, bytes) = udp.data.wait_for(|_| true).expect("audio after the resume");
     assert_eq!(seq_of(&bytes), seq);
@@ -870,10 +902,11 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     sender.pause();
     let paused = Instant::now();
     sender.resume();
-    let quiet = paused + Duration::from_millis(50);
+    assert!(wait_until(LONG, || count(&server, "FLUSH") == 4));
+    let held = rtp_info(&server).0;
     let (at, _, bytes) = udp
         .data
-        .wait_for(|(at, _, _)| *at > quiet)
+        .wait_for(|(_, _, bytes)| !before(seq_of(bytes), held))
         .expect("audio after the resume");
     assert!(
         at >= paused + ANSWER + ANSWER / 2,
@@ -881,8 +914,9 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
         at - paused
     );
     assert_eq!(count(&server, "FLUSH"), 4);
-    assert_eq!(seq_of(&bytes), rtp_info(&server).0);
+    assert_eq!(seq_of(&bytes), held);
     assert_eq!(bytes[1], 0xE0);
+    tail_before(&udp.data.take(), paused, held);
     sender.shutdown();
 }
 

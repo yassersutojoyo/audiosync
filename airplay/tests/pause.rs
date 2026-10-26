@@ -339,9 +339,34 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
     let paused = Instant::now();
     sender.resume();
     assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 2));
-    let quiet = paused + Duration::from_millis(50);
-    assert!(wait_until(LONG, || first_audio_after(&receiver, quiet).is_some()));
-    let (at, seq, marker) = first_audio_after(&receiver, quiet).expect("audio");
+    // The pause FLUSH names the first packet held back. Packets before it
+    // left before the sender took the pause, however late a busy runner
+    // stamps them, so they must beat that FLUSH to the receiver.
+    let held = flush_seq(&receiver, 1);
+    let first_held = || {
+        receiver
+            .log()
+            .audio
+            .iter()
+            .find(|packet| !before(packet.header.seq, held))
+            .map(|packet| (packet.at, packet.header.seq, packet.header.marker))
+    };
+    assert!(wait_until(LONG, || first_held().is_some()));
+    let (at, seq, marker) = first_held().expect("audio");
+    let log = receiver.log();
+    let flushed = log
+        .requests
+        .iter()
+        .filter(|(_, request)| request.method == Method::Flush)
+        .nth(1)
+        .map(|(at, _)| *at)
+        .expect("FLUSH");
+    assert!(
+        log.audio
+            .iter()
+            .filter(|packet| before(packet.header.seq, held))
+            .all(|packet| packet.at < flushed)
+    );
     // The delay FLUSH is answered about ANSWER after the pause, the pause
     // FLUSH about ANSWER after that.
     assert!(
@@ -349,9 +374,14 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
         "audio {:?} after the pause",
         at - paused
     );
-    assert_eq!(seq, flush_seq(&receiver, 1));
+    assert_eq!(seq, held);
     assert!(marker);
     sender.shutdown();
+}
+
+/// Whether RTP `seq` comes before `next` in sequence order.
+fn before(seq: u16, next: u16) -> bool {
+    (next.wrapping_sub(seq) as i16) > 0
 }
 
 // Part of P213: a refused pause FLUSH still ends the wait, with a warning.
