@@ -362,3 +362,108 @@ fn an_unannounced_pair_member_is_retried_at_once_when_announced_again() {
     assert!(d.log().connections.is_empty());
     sender.shutdown();
 }
+
+// Both members of a pair lapse, each its AirPlay record before its RAOP
+// record: the RAOP-only device left from the first lapse is no path to
+// play on, so each member waits unannounced instead of retrying it.
+// covers: P216, P215, P181
+#[test]
+fn a_pair_whose_airplay_records_lapse_first_is_unannounced() {
+    let _serial = serial();
+    let a = NetReceiver::start(Behavior::default());
+    let b = NetReceiver::start(Behavior::default());
+    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let script = Script::default();
+    sender.start_discovery_with(Box::new(script.clone()));
+    let members = [
+        (
+            &a,
+            device_key(1),
+            a.record(1, PCM_TXT),
+            airplay_record(&a, 1, "0x2004", true),
+        ),
+        (
+            &b,
+            device_key(2),
+            b.record(2, PCM_TXT),
+            airplay_record(&b, 2, "0x4", true),
+        ),
+    ];
+    for (_, _, raop, airplay) in &members {
+        script.push(BrowseEvent::Resolved(raop.clone()));
+        script.push(BrowseEvent::Resolved(airplay.clone()));
+    }
+    let pair = events
+        .wait_for(&sender, LONG, |event| {
+            matches!(event, SenderEvent::Receiver(ReceiverEvent::Target(TargetChange::Updated(target)))
+                if target.id.kind == TargetKind::StereoPair && target.complete())
+        })
+        .expect("the pair is listed");
+    let SenderEvent::Receiver(ReceiverEvent::Target(TargetChange::Updated(pair))) = pair else {
+        unreachable!();
+    };
+    sender.add_target(*pair, options(), |_, _| {});
+    for (_, key, _, _) in &members {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, LONG, |s| *s == SpeakerState::Playing)
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+    }
+
+    for (_, key, raop, airplay) in &members {
+        script.push(removed(airplay));
+        assert!(
+            events
+                .wait_for(&sender, LONG, |event| {
+                    matches!(event, SenderEvent::Receiver(ReceiverEvent::Changed(info))
+                        if info.device.key == *key && info.device.airplay.is_none())
+                })
+                .is_some()
+        );
+        script.push(removed(raop));
+    }
+    assert!(
+        events
+            .wait_for(&sender, LONG, |event| {
+                matches!(event, SenderEvent::Receiver(ReceiverEvent::Gone(key)) if *key == device_key(2))
+            })
+            .is_some()
+    );
+    let connections: Vec<usize> = members
+        .iter()
+        .map(|(receiver, _, _, _)| {
+            receiver.kill();
+            receiver.log().connections.len()
+        })
+        .collect();
+    for (_, key, _, _) in &members {
+        assert!(
+            events
+                .wait_state(&sender, key, 1, Duration::from_secs(5), |s| {
+                    *s == SpeakerState::Unannounced
+                })
+                .is_some(),
+            "{:?}",
+            events.of(key)
+        );
+        assert_eq!(unsupported(&events, key), []);
+    }
+    thread::sleep(Duration::from_millis(2500));
+    events.drain(&sender);
+    for (n, (receiver, key, _, _)) in members.iter().enumerate() {
+        let after = events
+            .of(key)
+            .into_iter()
+            .skip_while(|event| *event != SpeakerEvent::State(SpeakerState::Unannounced))
+            .skip(1)
+            .collect::<Vec<_>>();
+        assert_eq!(after, [], "{:?}", events.of(key));
+        assert_eq!(receiver.log().connections.len(), connections[n]);
+    }
+    sender.shutdown();
+}
