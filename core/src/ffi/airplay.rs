@@ -4015,23 +4015,27 @@ mod tests {
         let mut seen = Vec::new();
         let until = Instant::now() + Duration::from_secs(10);
         while seen.len() < count && Instant::now() < until {
-            let mut receiver = empty();
-            // SAFETY: a live handle, used by this thread only; a local out struct.
-            if unsafe { asc_airplay_next_receiver(handle, &mut receiver) } {
-                seen.push(Seen {
-                    event: receiver.event,
-                    id: text(receiver.id),
-                    name: text(receiver.name),
-                    model: text(receiver.model),
-                    availability: receiver.availability,
-                    unsupported: receiver.unsupported,
-                    flags: receiver.flags,
-                });
-            } else {
-                std::thread::sleep(Duration::from_millis(10));
+            match next_now(handle) {
+                Some(event) => seen.push(event),
+                None => std::thread::sleep(Duration::from_millis(10)),
             }
         }
         seen
+    }
+
+    /// The receiver event waiting now, if any.
+    fn next_now(handle: *mut AscAirPlay) -> Option<Seen> {
+        let mut receiver = empty();
+        // SAFETY: a live handle, used by this thread only; a local out struct.
+        unsafe { asc_airplay_next_receiver(handle, &mut receiver) }.then(|| Seen {
+            event: receiver.event,
+            id: text(receiver.id),
+            name: text(receiver.name),
+            model: text(receiver.model),
+            availability: receiver.availability,
+            unsupported: receiver.unsupported,
+            flags: receiver.flags,
+        })
     }
 
     fn start_with(handle: *mut AscAirPlay, events: Vec<BrowseEvent>) {
@@ -9104,5 +9108,106 @@ mod tests {
         assert_eq!(text(report.id), pair_id);
         // SAFETY: the handle is live and used by no other call.
         unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    /// A browser that hands over what the test queues while it runs.
+    #[derive(Clone, Default)]
+    struct Announcements(Arc<Mutex<std::collections::VecDeque<BrowseEvent>>>);
+
+    impl Announcements {
+        fn push(&self, event: BrowseEvent) {
+            self.0.lock().unwrap().push_back(event);
+        }
+    }
+
+    impl Browser for Announcements {
+        fn poll_event(&mut self) -> Option<BrowseEvent> {
+            self.0.lock().unwrap().pop_front()
+        }
+    }
+
+    /// The receiver events that come within `quiet`.
+    fn more_within(handle: *mut AscAirPlay, quiet: Duration) -> Vec<Seen> {
+        let until = Instant::now() + quiet;
+        let mut seen = Vec::new();
+        while Instant::now() < until {
+            seen.extend(next_now(handle));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        seen
+    }
+
+    // The weekend sheet's stale row on loopback: discovery withdraws one of
+    // two announced receivers. Only its row goes (the one GONE the app logs
+    // as "removed <name>"), and its next announcement lists it again and
+    // it plays.
+    #[test]
+    fn a_withdrawn_receiver_loses_only_its_row_and_comes_back_when_announced() {
+        let kitchen_tv = Loopback::start();
+        let den_tv = Loopback::start();
+        let (kitchen, den) = ("02005E005331", "02005E005332");
+        let kitchen_record = loopback_record(kitchen, "Kitchen", kitchen_tv.port);
+        let mut handle = asc_airplay_create();
+        let browser = Announcements::default();
+        browser.push(BrowseEvent::Resolved(kitchen_record.clone()));
+        browser.push(BrowseEvent::Resolved(loopback_record(
+            den,
+            "Den",
+            den_tv.port,
+        )));
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { &*handle }
+            .sender
+            .start_discovery_with(Box::new(browser.clone()));
+        let listed = next(handle, 2);
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert!(
+            listed.iter().all(|seen| seen.event == AIRPLAY_APPEARED),
+            "{listed:?}"
+        );
+
+        browser.push(BrowseEvent::Removed {
+            kind: ServiceKind::Raop,
+            instance: kitchen_record.instance.clone(),
+        });
+        let gone = next(handle, 1);
+        assert_eq!(
+            gone.len(),
+            1,
+            "the withdrawn receiver was never reported gone"
+        );
+        assert_eq!(
+            (gone[0].event, gone[0].id.as_str()),
+            (AIRPLAY_GONE, kitchen)
+        );
+        let after = more_within(handle, Duration::from_millis(500));
+        assert!(after.is_empty(), "other rows changed: {after:?}");
+        let rows: Vec<String> = inside(handle).listed.keys().cloned().collect();
+        assert_eq!(rows, [den.to_owned()]);
+
+        browser.push(BrowseEvent::Resolved(kitchen_record));
+        let back = next(handle, 1);
+        assert_eq!(back.len(), 1, "the announcement listed nothing");
+        assert_eq!(
+            (back[0].event, back[0].id.as_str(), back[0].name.as_str()),
+            (AIRPLAY_APPEARED, kitchen, "Kitchen")
+        );
+        let c_id = c_string(kitchen);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        assert!(unsafe { asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0) });
+        let events = events_until(handle, |seen| {
+            has_state(seen, kitchen, AIRPLAY_STATE_PLAYING)
+        });
+        assert!(
+            has_state(&events, kitchen, AIRPLAY_STATE_PLAYING),
+            "{events:?}"
+        );
+        assert!(den_tv.methods().is_empty(), "the Den row was never touched");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        cell(
+            "Stale.row",
+            "Kitchen withdrawn: 1 GONE (Kitchen), 0 events for Den in 500 ms, Den still listed; Kitchen announced again: listed and playing",
+        );
     }
 }
