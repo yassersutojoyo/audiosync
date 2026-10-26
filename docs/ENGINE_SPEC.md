@@ -544,7 +544,7 @@ These run in the host application, not the audio engine core, but the logic suit
 - **S267** *Required* (`MainWindow.swift`, `PresetsCard`; `MenuBar.swift`, `PresetPicker`; `desktop/ui/main.slint`). *Keyboard reach and visible focus.* With Full Keyboard Access (Tab on Windows), Tab reaches each row, its options button and Save as Preset…, after Master Volume and before Equalizer; Space or Return recalls; Control-Command-1 to 9 (Ctrl+1 to 9) work in every AudioSync window; the system focus ring stays on. A row's label is the preset's name, its value "Current" for the current one, its hint "Recalls this preset"; the options button is "Options for <name>". On Windows, F2 renames, the Menu key and Shift+F10 open a row's menu, and after a delete the focus goes to the next row, else the previous one, else Save as Preset…. In the panel or flyout, Tab reaches the row and Space or Return opens its menu.
 - **S268** *Required* (`MainWindow.swift`, `MenuBar.swift`; `desktop/ui/`). *Both themes.* The preset controls take their colors from the existing brand tokens only, never a literal color, and their text reaches at least 4.5:1 in light and dark. The card with two presets (one current), the left-off notice and the empty state are shot in light and dark on both hosts.
 - **S269** *Required* (`Localization.swift`, `UIStrings`; `desktop/ui/strings.slint`; tests "presets: the preset texts"). *User text.* Every word the preset controls show or speak comes from the host's strings: "Presets", "Save as Preset…", "Save Preset", "The speakers that are on, their volumes, the zone volumes, the master volume and the curve are saved. Delays and the preamp are not.", "Turn on the speakers you want in the preset first, then save it.", "Preset name", "Evening, Party…", "Preset n", "Rename…", "Rename Preset", "Update to Current Settings", "Delete", "No Presets", the empty line of S263, "Choose a Preset", "Current", "Recalls this preset", "<name> saved", "<name> updated", "<name> deleted", the notice texts of S265, "Hidden", "In use by another app", "Couldn't start" (Windows) and "AudioSync keeps 256 presets at most. Delete one to save another." (Windows, S251). Not found, Needs AirPlay 2 (Experimental), Plays as part of <target>, Rename's message, Save and Cancel are reused as they are.
-- **S210** *Observed* (`WindowRules.swift`, `GroupSummary`; tests "groups: on when every present member is on; absent members don't count", "groups: off while a present member is off", "groups: a group with no member present is never on"). A group's switch counts only its present members, those listed now (local devices under S151, AirPlay receivers under S222): it shows on when every present member is on, off while any present member is off, and never on when no member is present. A member that isn't listed counts neither way.
+- **S210** *Superseded by S246*: groups became zones, which have no on/off switch; a zone click counts only present members (S246). Formerly *Observed* in `WindowRules.swift` (`GroupSummary`) and three "groups: …" checks, all removed with groups. A group's switch counted only its present members, those listed then (local devices under S151, AirPlay receivers under S222): it showed on when every present member was on, off while any present member was off, and never on when no member was present. A member that wasn't listed counted neither way.
 - **S204** *Required* (the maintainer's decision for the switch to AudioSync's own sender, the one change of saved IDs it may make; tests "speaker IDs: …"). *Saved speaker IDs after the switch to AudioSync's own sender.* An AirPlay speaker is saved by its ID alone (switched on: `enabledAirPlayIds`; its volume: `airPlayVolumeByID`; the `ap:` keys of groups and of auto-connect), never with its name or address. Both senders take their ID from the receiver's device ID, the MAC-style address in its announcement (docs/AIRPLAY_SPEC.md P8, P9): the bundled engine writes that 48-bit number in decimal, AudioSync's own sender writes 12 uppercase hex digits behind `native:` (P10). So when the native sender's discovery reports a receiver (found or changed) whose receiver ID is 12 hex digits, every saved ID that is the same number in the engine's form (decimal digits only, no sign, space or leading zero, 1 to 2^48 − 1) becomes `native:<receiver ID>`, as an ID and inside `ap:` keys, before the receiver's row appears, so auto-connect and a speaker that was on act on the new ID at once. A volume already saved under the new ID wins over the old one; a group that already lists the new key drops the old one and otherwise keeps its order; a set never holds an ID twice. Every other ID and key stays as it is: local keys, IDs of receivers discovery hasn't listed, receivers without a device ID, anything not in the engine's form. An ID therefore moves once, when its receiver is first seen, and a second run changes nothing. The old ID is gone afterwards: back on the bundled engine (the hidden option), a moved speaker is off and outside its groups, like any speaker that engine never saw. The debug log has one line per moved ID. *Unverified* (no receiver here): that the bundled engine's output ID is the device ID in decimal; if it isn't, nothing matches, nothing moves, and the saved speakers stay off under the native sender, as before this clause. To check on a Mac with a receiver: a group saved under the bundled engine keeps its AirPlay speaker after the switch.
 - **S151** *Observed* (tests "devices: …"). The local output list hides virtual, aggregate and auto-aggregate devices and macOS's own AirPlay output by default; a hidden device that is chosen (enabled, auto-connect, in a group, or already listed) stays listed in Core Audio order; "Show Virtual Devices" lists everything; hardware transports (built-in, USB, Bluetooth, HDMI, …) and unknown transports are never hidden.
 - **S152** *Observed* (tests "layout: …"). Transport types map to tags (built-in, Bluetooth and Bluetooth LE → Bluetooth, USB, HDMI, DisplayPort, Thunderbolt, macOS AirPlay, FireWire, virtual, aggregate and auto-aggregate → aggregate, PCI, AVB; unknown → other); only built-in outputs are "This Mac", in Core Audio order; every other local and every AirPlay speaker form one "connected" list sorted by name ignoring case, numbers in numeric order, ties stable. Each tag's icon is an existing SF Symbol, never a bolt (reserved for auto-connect), grey unless the speaker plays, then in its own color.
@@ -745,7 +745,13 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | eq curves: a saved curve keeps its trimmed name | S270 |
 | eq curves: the gains match the saved curve | S270 |
 | eq curves: picking a curve keeps the preamp and turns the equalizer on | S33, S270 |
-| eq curves: a preset matches before a saved curve with its gains | S270 |
+| eq curves: a saved curve with a preset's gains resolves to the saved curve | S270 |
+| eq curves: a saved curve with a preset's gains keeps Rename and Delete | S270 |
+| eq curves: a picked preset shows as the preset beside a saved curve with its gains | S270 |
+| eq curves: picking that saved curve shows it again | S270 |
+| eq curves: moving a band off the picked saved curve shows Custom | S270 |
+| eq curves: Reset shows Flat beside a saved curve with its gains | S33, S270 |
+| eq curves: deleting the shown saved curve falls back to the preset | S270 |
 | eq curves: saving under a taken name, ignoring case, replaces that curve | S270 |
 | eq curves: an empty name saves nothing | S270 |
 | eq curves: a rename to another curve's name is refused | S270 |
@@ -847,7 +853,7 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | native pairing: log lines name the receiver and never a PIN or password | S170, S223 |
 | native airplay: a retrying state's log line | S170, S222 |
 | native airplay: an error's log line | S170, S222 |
-| native airplay: latency and timeline log lines | S170, S222 |
+| native airplay: latency and timeline log lines | S170, S222, S282 |
 | reconcile: with no event, the host reconciles by itself only every 30 s, the safety net (S101) | S101 |
 | reconcile: with nothing due, no reconcile is scheduled beyond the safety net (S101) | S101 |
 | reconcile: the earliest due time is the one scheduled (S101) | S101 |
@@ -891,11 +897,23 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | own receiver: only an exact name is the Mac | S222 |
 | own receiver: an unknown computer name hides nothing | S222 |
 | own receiver: an empty computer name hides nothing | S222 |
-| capture: frames → flowing | S18 |
-| capture: no frames, unknown source → waiting | S17, S18 |
+| capture: sound this session → flowing | S18 |
+| capture: no sound, unknown source → waiting | S17, S18 |
 | capture: playing only briefly → still waiting | S18 |
-| capture: playing for the grace period with no frames → not working | S18 |
+| capture: playing for the grace period with no sound → not working | S18 |
 | capture: a paused or unknown source never blames the permission | S18, S19 |
+| capture: sound captured earlier in this run → waiting, not the permission | S18 |
+| capture: sound from a system or app tap proves the permission | S18 |
+| capture: a microphone or line-in heard never proves the tap permission | S18 |
+| capture: zeros are silent | S18 |
+| capture: one sample above zero is sound | S18 |
+| capture: only the given frames count | S18 |
+| capture: a track reported playing whose position stands still never blames the permission | S18, S19 |
+| capture: once this app run heard audio, later silence never blames the permission | S18 |
+| capture: a playing report with no position to watch never blames the permission | S18, S19 |
+| capture: a track that keeps advancing while a tap delivers only zeros blames the permission after the grace period | S18, S19 |
+| capture: real sound arriving clears the verdict | S18 |
+| capture: silent zeros with nothing live → waiting | S18 |
 | capture channels: the tap's interleaved stereo passes through unchanged | S2, S16 |
 | capture channels: a one-channel input plays on both sides | S14 |
 | capture channels: an input with four channels gives its first two as L and R | S14 |
@@ -1080,7 +1098,12 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | receiver info: a Music track without artwork gets AudioSync's icon | S218 |
 | receiver info: a track's own blank fields go out as its player gave them | S218 |
 | receiver info: whole system with nothing playing: the source picker's label as the artist | S218 |
-| receiver info: whole system as source: a paused player's track isn't what plays | S218 |
+| receiver info: whole system as source: a paused track whose player didn't play last doesn't show | S218 |
+| receiver info: system source, paused Spotify, no other player: its track and cover stay | S218 |
+| receiver info: system source, paused Spotify, then Music plays: Music wins | S218 |
+| receiver info: system source: a paused player that didn't play last doesn't show | S218 |
+| receiver info: the source changes: a paused track goes to the fallback | S218 |
+| receiver info: system source: the player that played last stops or quits: the fallback | S218 |
 | receiver info: a paused track still shows while its player is the source | S218 |
 | receiver info: another player's paused track doesn't show | S218 |
 | receiver info: an app without track info: the neutral title and the app's name | S218 |
@@ -1136,9 +1159,6 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | sources: a chosen app that isn't running stays listed, sorted among the apps | S12, S211 |
 | sources: a chosen input device that is unplugged is not listed | S12, S211 |
 | sources: a chosen app that is running is listed once | S12, S211 |
-| groups: on when every present member is on; absent members don't count | S210 |
-| groups: off while a present member is off | S210 |
-| groups: a group with no member present is never on | S210 |
 | equalizer storage: saved settings come back unchanged | S24, S212 |
 | equalizer storage: nothing saved, or unreadable data, gives the defaults | S24, S212 |
 | equalizer storage: settings with another band count give the defaults | S24, S212 |
@@ -1266,7 +1286,7 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | launch: the main window opens at launch, but not at login | S120, S215 |
 | quit: the first exit signal runs the quit steps (the fade-out), then exits with its status (S111) | S111 |
 | quit: an exit signal while the quit steps run exits at once with its own status (S111) | S111 |
-| quit: a signal waits at most 3 s for the quit steps, past the 500 ms fade cap and the sender's teardown (S111, S186) | S111, S186 |
+| quit: the Cast teardown's wait fits under a signal's limit and outlasts the fades (S111, S186) | S111, S186 |
 | quit: SIGTERM runs the quit steps first and exits with 143 only once they are done (S111) | S111 |
 | quit: Ctrl-C exits with 130 once the bound has passed when the quit steps don't end, and only once (S111) | S111 |
 | quit: a second Ctrl-C while the quit steps run exits at once with 130, and nothing exits again later (S111) | S111 |
@@ -1708,13 +1728,27 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | the_cast_level_is_master_times_zone_times_own | S249, C104 |
 | a_read_back_at_zone_50_restores_the_own_volume | S250 |
 | a_read_back_with_zone_0_leaves_the_own_volume | S250 |
-| a_read_back_near_the_sent_level_is_ignored_for_3_s_only | S271 |
+| a_device_volume_near_the_sent_level_is_ignored_for_3_s_only (core) | S276, S271 |
+| a_read_back_near_the_level_sent_or_at_master_0_keeps_the_own_volume (Windows) | S250, S290, S291 |
 | a_read_back_while_the_slider_is_dragged_is_ignored | S271 |
 | a_read_back_one_remote_step_away_moves_only_that_speakers_volume | S250, S271 |
 | a_speaker_whose_reads_stopped_is_not_asked_again | S271 |
-| the_airplay_row_shows_the_device_level_at_five_points | S289, S290 |
-| a_row_move_master_move_and_speaker_change_keep_row_and_stored_volume_consistent | S290 |
-| a_samsung_grid_echo_never_moves_the_row_and_a_remote_step_shows_within_1_s | S291, S290 |
+| a_reading_maps_linearly_onto_0_to_100 (core) | S289 |
+| the_row_shows_the_device_level_rounded_down | S289, S290 |
+| a_row_move_sends_the_row_and_stores_the_smallest_own_volume_reaching_it | S290 |
+| a_row_past_the_ceiling_stops_at_it (core) | S290 |
+| with_k_at_0_a_row_move_sends_nothing (core) | S290 |
+| a_master_move_keeps_the_own_volume (core) | S290 |
+| a_master_move_and_back_shows_own_times_k_not_the_level_read_before (Windows) | S290 |
+| a_level_set_on_the_speaker_sets_the_row_and_the_own_volume (core) | S290 |
+| an_airplay_row_shows_the_device_level_and_a_preset_keeps_the_own_volume (Windows) | S252, S290 |
+| the_first_reading_near_a_level_sent_is_its_echo_and_the_baseline (core) | S291 |
+| the_first_read_near_a_sent_level_is_its_echo_and_the_baseline | S291 |
+| only_a_playing_speaker_is_read (core) | S291 |
+| a_speaker_is_read_once_a_second_while_playing_and_never_while_stopped (Windows) | S291 |
+| a_reading_that_moves_only_the_row_still_reaches_the_host (core) | S290, S291 |
+| a_row_move_on_a_0_6_db_grid_keeps_the_row_until_the_speaker_moves (core) | S290, S291 |
+| an_echo_on_a_0_6_db_grid_never_moves_the_row (Windows) | S290, S291 |
 | a_cast_report_moves_own_to_level_over_master_times_zone | S250, C104 |
 | a_zone_volume_change_reaches_the_playing_members_as_a_master_change_does | S72, S249 |
 | a_v2_settings_file_is_read_as_v3_with_its_groups_as_zones | S245, S248 |
@@ -1834,11 +1868,70 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | airplay_latency_covers_every_member_of_a_target | S280 |
 | a_new_airplay_latency_retimes_the_local_outputs_and_keeps_the_adjustment | S281, S178, S177 |
 | a_reported_latency_is_the_speakers_starting_estimate (one speaker at 220 ms: d′ = d_s, L = L_s + 220 + A; two at 220 and 50 ms: the second gets d_s + 170) | S283 |
-| a_receiver_reporting_nothing_starts_at_zero_without_a_warning | S283 |
+| a_receiver_reporting_nothing_starts_at_zero_without_a_warning | S283, S282 |
 | the_estimate_waits_while_an_airplay_speaker_sounds (a joiner at 300 ms with E = 220 plays 80 ms late until the stream is empty) | S283 |
 | calibrate_all_measures_relative_to_the_reported_latency (the AirPlay delay moves only by the measured excess over L_s + E + d_s) | S283, S237 |
 | calibrate_all_window_grows_with_the_reported_latency (core, `airplay_wait_ms` with R_s 220: 220 ms longer) | S235 |
-| several_airplay_2_receivers_share_lf_and_e_and_a_target_uses_its_largest_member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s) | S284 |
-| an_airplay_2_receiver_leaving_while_others_sound_changes_no_delay (Lf, E and every d′_s held until the stream is empty) | S284 |
-| every_airplay_2_speaker_switched_on_plays_and_only_a_17th_or_one_needing_ptp_on_another_network_waits | S285 |
-| one_airplay_2_speaker_failing_leaves_the_others_playing | S285 |
+| planned: several AirPlay 2 receivers share Lf and E, and a target uses its largest member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s) | S284 |
+| planned: an AirPlay 2 receiver leaving while others sound changes no delay (Lf, E and every d′_s held until the stream is empty) | S284 |
+| planned: every AirPlay 2 speaker switched on plays, and only a 17th or one needing PTP on another network waits | S285 |
+| planned: one AirPlay 2 speaker failing leaves the others playing | S285 |
+
+The four planned rows have no test on either host yet; the follow-up writes them in `desktop/` and as "airplay latency: …" checks in the logic suite.
+
+### Explicit pause: Windows and Mac (`cargo test` in `desktop/`, the logic suite)
+
+Windows (`desktop/src/audio/explicit_pause.rs` unless named):
+
+| Test | Clauses |
+|---|---|
+| a_toggle_while_the_app_plays_pauses | S292 |
+| a_toggle_while_paused_resumes_whatever_the_reading_says | S292 |
+| a_toggle_with_the_app_paused_or_unknown_does_nothing | S292 |
+| the_app_going_from_playing_to_paused_pauses_once | S292 |
+| the_app_going_from_paused_to_playing_resumes_at_once | S292 |
+| a_first_reading_or_one_after_an_unknown_state_is_no_transition | S292 |
+| a_player_switch_follows_the_active_player | S292 |
+| a_transition_while_nothing_streams_never_pauses | S292 |
+| sound_still_resumes_a_pause_the_app_took | S292 |
+| the_app_shown_paused_keeps_the_pause | S292 |
+| a_stale_reading_right_after_the_pause_keeps_it | S292 |
+| the_app_playing_again_resumes | S292 |
+| another_app_or_no_reading_resumes | S292 |
+| only_samples_above_minus_60_dbfs_are_sound | S292 |
+| sound_resumes_once_200_ms_of_it_came_after_the_stale_reading_time | S292 |
+| sound_never_pauses | S292 |
+| clearing_resumes_only_a_paused_stream | S292 |
+| only_a_session_that_plays_or_pauses_has_a_player_state (`now_playing.rs`) | S292 |
+
+The Mac (logic suite):
+
+| Check | Clauses |
+|---|---|
+| explicit pause: a play-pause to a player read as playing pauses the speakers | S292 |
+| explicit pause: a play-pause while paused resumes | S292 |
+| explicit pause: a play-pause while paused resumes whatever the reading says | S292 |
+| explicit pause: a play-pause to a player read as paused, or not read, sends no flush | S292 |
+| explicit pause: the player going from playing to paused pauses the speakers | S292 |
+| explicit pause: the player read as paused again does nothing | S292 |
+| explicit pause: the player going from paused to playing resumes at once | S292 |
+| explicit pause: the first reading is no transition | S292 |
+| explicit pause: an unknown state or a player that quits never pauses | S292 |
+| explicit pause: a switch to another player that was paused is no transition | S292 |
+| explicit pause: the active player's own pause counts after a switch | S292 |
+| explicit pause: a player reads as playing or paused from its scripted state | S292 |
+| explicit pause: seeking or any other scripted state is no known state | S292 |
+| explicit pause: the first reading after the readings start again is no transition | S292 |
+| explicit pause: a player pausing while no speaker plays never pauses | S292 |
+| explicit pause: sound still resumes a pause the player took | S292 |
+| explicit pause: a reading that may predate the player's own pause keeps the pause | S292 |
+| explicit pause: the player read as paused keeps the pause | S292 |
+| explicit pause: the player read as playing again resumes | S292 |
+| explicit pause: another player counting resumes | S292 |
+| explicit pause: no reading of the player resumes | S292 |
+| explicit pause: a new capture or stopped readings resume a paused stream once | S292 |
+| explicit pause: digital silence and dither are no sound | S292 |
+| explicit pause: a frame with a sample above -60 dBFS is sound | S292 |
+| explicit pause: sound before the stale-reading time, or under 200 ms after it, keeps the pause | S292 |
+| explicit pause: 200 ms of sound after the stale-reading time resumes, whatever the reading says | S292 |
+| explicit pause: sound never pauses | S292 |
