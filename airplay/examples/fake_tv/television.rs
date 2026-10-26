@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+use audiosync_airplay::discovery::DeviceId;
 use plist::Value;
 
 use crate::common::ap2::{FakeAp2, dict, int, plist};
@@ -40,26 +41,47 @@ pub fn status_flags(pin: Pin) -> u64 {
     }
 }
 
-pub fn device_id_text() -> String {
-    DEVICE_ID
-        .iter()
+pub fn device_id_text(id: [u8; 6]) -> String {
+    id.iter()
         .map(|byte| format!("{byte:02X}"))
         .collect::<Vec<_>>()
         .join(":")
 }
 
+/// Its mDNS host label: the default identity keeps [`HOST_LABEL`] so the
+/// runbooks still match, another one gets its own so two copies never
+/// share a host record.
+pub fn host_label(id: [u8; 6]) -> String {
+    if id == DEVICE_ID {
+        return HOST_LABEL.to_owned();
+    }
+    let hex: String = id.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{HOST_LABEL}-{hex}")
+}
+
+/// Reads `--deviceid`: six colon-separated hex bytes, the form the
+/// `deviceid` TXT entry carries.
+pub fn parse_device_id(text: &str) -> Result<[u8; 6], String> {
+    DeviceId::from_colon_form(text)
+        .filter(|_| text.trim() == text)
+        .map(|id| id.0)
+        .ok_or_else(|| {
+            format!("--deviceid takes six colon-separated hex bytes such as 02:00:5E:00:53:56, not {text:?}")
+        })
+}
+
 /// The `_airplay._tcp` TXT entries it advertises, with `features_low` as
 /// the low word of its features.
-pub fn txt(pin: Pin, features_low: u64) -> Vec<(&'static str, String)> {
+pub fn txt(pin: Pin, features_low: u64, id: [u8; 6]) -> Vec<(&'static str, String)> {
     vec![
         ("features", format!("{features_low:#x},{FEATURES_HIGH:#x}")),
         ("flags", format!("{:#x}", status_flags(pin))),
         ("model", MODEL.to_owned()),
-        ("deviceid", device_id_text()),
+        ("deviceid", device_id_text(id)),
     ]
 }
 
-pub fn television(name: &str, pin: Pin, code: &str, features_low: u64) -> FakeAp2 {
+pub fn television(name: &str, pin: Pin, code: &str, features_low: u64, id: [u8; 6]) -> FakeAp2 {
     let mut fake = FakeAp2::samsung();
     if pin != Pin::None {
         fake.hap.code = code.to_owned();
@@ -73,7 +95,7 @@ pub fn television(name: &str, pin: Pin, code: &str, features_low: u64) -> FakeAp
         ("statusFlags", int(status_flags(pin) as i64)),
         ("name", Value::String(name.to_owned())),
         ("model", Value::String(MODEL.to_owned())),
-        ("deviceID", Value::String(device_id_text())),
+        ("deviceID", Value::String(device_id_text(id))),
     ]));
     fake
 }
