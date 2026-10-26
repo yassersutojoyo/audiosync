@@ -1562,6 +1562,15 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// Whether the speaker `id` in the sender has no row: discovery no
+    /// longer lists it and it doesn't play. It leaves the sender and stays
+    /// on, so its next announcement adds it again (S222).
+    fn gone_unplayed(&self, id: &str, added: &Added) -> bool {
+        added.key().is_some()
+            && !self.listed.contains_key(id)
+            && added.state != SpeakerState::Playing
+    }
+
     fn is_playing(&self, id: &str) -> bool {
         self.added
             .get(id)
@@ -2929,14 +2938,16 @@ impl AirPlaySpeakers {
 
     /// Adds the speakers that should play and removes the ones that
     /// shouldn't: while streaming, every speaker that is on and listed as
-    /// able to play joins; one already in the sender stays while it is on,
-    /// listed or not, as the sender keeps trying to reach it.
+    /// able to play joins; one already in the sender stays while it is on
+    /// and listed or playing, as the sender keeps trying to reach it.
     fn reconcile(&mut self) {
         let leaving: Vec<String> = self
             .added
-            .keys()
-            .filter(|id| !self.streaming || !self.settings(id).enabled)
-            .cloned()
+            .iter()
+            .filter(|(id, added)| {
+                !self.streaming || !self.settings(id).enabled || self.gone_unplayed(id, added)
+            })
+            .map(|(id, _)| id.clone())
             .collect();
         let left = !leaving.is_empty();
         for id in leaving {
@@ -3529,6 +3540,7 @@ impl AirPlaySpeakers {
                     self.log
                         .log(|| format!("AirPlay receiver gone: {}", self.label(&id)));
                 }
+                self.reconcile();
                 self.forget_name_unless_used(&id);
             }
             // Listed only while the AirPlay 2 switch is on, as on the Mac.
@@ -3674,6 +3686,16 @@ impl AirPlaySpeakers {
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
+        }
+        // A session the sender restarts by itself (an ALAC retry, a path
+        // switch) says so with a state alone, no error.
+        if self
+            .added
+            .get(id)
+            .is_some_and(|added| self.gone_unplayed(id, added))
+        {
+            self.reconcile();
+            return true;
         }
         relisted || was_playing != (state == SpeakerState::Playing)
     }
@@ -3939,6 +3961,12 @@ impl AirPlaySpeakers {
                     && problem.retried()
                 {
                     added.state = SpeakerState::Retrying { at };
+                    if !self.listed.contains_key(id) {
+                        // It played on after its announcement lapsed: lost
+                        // now, it has no row to retry for.
+                        self.reconcile();
+                        return true;
+                    }
                     events.push(BackendEvent::AirPlayTrouble {
                         id: id.to_owned(),
                         problem,
@@ -6555,6 +6583,115 @@ pub mod tests {
             Err(AirPlayProblem::NeedsPassword),
             "it asks for a password from then on"
         );
+    }
+
+    // A receiver powered off mid-stream: discovery withdraws it about 40 s
+    // later, its row goes, and the sender must stop retrying it then.
+    #[test]
+    fn a_retrying_speaker_whose_receiver_is_gone_leaves_the_sender_and_joins_again_when_announced()
+    {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        airplay.poll();
+        fake.take_calls();
+
+        fake.gone(&kitchen);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Remove(id.clone())],
+            "its retries go on"
+        );
+        assert!(airplay.speakers().is_empty(), "its row stays");
+        assert_eq!(
+            airplay.enabled_ids(),
+            std::slice::from_ref(&id),
+            "it stays on"
+        );
+        assert!(!airplay.chosen());
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        assert!(
+            !airplay
+                .poll()
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayTrouble { .. })),
+            "a late retry of the removed session still names it"
+        );
+
+        fake.appear(&kitchen);
+        airplay.poll();
+        assert!(
+            matches!(fake.take_calls().first(), Some(Call::Add { id: added, .. }) if *added == id),
+            "announced again, it didn't join"
+        );
+    }
+
+    #[test]
+    fn a_speaker_playing_on_after_its_announcement_lapsed_leaves_once_it_is_lost() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        fake.gone(&kitchen);
+        airplay.poll();
+        fake.take_calls();
+        assert_eq!(airplay.speakers().len(), 1, "playing, it keeps its row");
+
+        fake.fail(&kitchen, ErrorKind::Lost);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayTrouble { .. })),
+            "{events:?}"
+        );
+        assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
+        assert!(airplay.speakers().is_empty());
+        assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
+    }
+
+    // The sender restarts a session on its own (an ALAC retry, a path
+    // switch) with a state change and no error.
+    #[test]
+    fn a_speaker_playing_on_after_its_announcement_lapsed_leaves_once_its_session_restarts() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        fake.gone(&kitchen);
+        airplay.poll();
+        fake.take_calls();
+
+        fake.state(&kitchen, SpeakerState::Connecting);
+        airplay.poll();
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Remove(id.clone())],
+            "the sender stays on a speaker with no row"
+        );
+        assert!(airplay.speakers().is_empty());
+        assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
     }
 
     #[test]

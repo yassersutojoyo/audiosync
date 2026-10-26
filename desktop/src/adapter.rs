@@ -2720,6 +2720,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed.insert(speaker.id);
         }
         self.airplay_listed = listed;
+        // One whose row went has left the sender (S222): nothing retries it.
+        let gone: Vec<String> = self
+            .reconnecting
+            .keys()
+            .filter(|id| !self.airplay_listed.contains(*id))
+            .cloned()
+            .collect();
+        for id in gone {
+            self.reconnecting.remove(&id);
+            self.clear_if(airplay_subject(&id), |message| {
+                matches!(message, NoticeMessage::AirPlayRetrying { .. })
+            });
+        }
         let mut names = std::mem::take(&mut self.airplay_names);
         let enabled = self.audio.enabled_airplay();
         let pin = self.audio.airplay_pin_prompt().map(|prompt| prompt.id);
@@ -8008,6 +8021,32 @@ mod tests {
         );
         assert!(!adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
         assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
+    fn a_retrying_speaker_whose_receiver_is_gone_is_named_by_no_notice() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1);
+        fake.gone(&kitchen);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        let left = messages(&adapter);
+        assert!(
+            left.is_empty(),
+            "the gone speaker's notice stayed: {left:?}"
+        );
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        let raised = messages(&adapter);
+        assert!(
+            raised.is_empty(),
+            "a late retry raised a notice: {raised:?}"
+        );
     }
 
     #[test]
