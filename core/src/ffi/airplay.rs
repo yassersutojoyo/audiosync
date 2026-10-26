@@ -7628,10 +7628,14 @@ mod tests {
                     // Sent back as after a drag, which starts S271's window.
                     lands(&receiver, db);
                     assert_eq!(receiver.volume_sets().len(), sets + 1, "{name}");
-                    // The speaker echoes that set inside the window: nothing.
-                    remote(handle, &key, None, command);
-                    let echo = volume_events_of(handle, &id);
-                    assert!(echo.is_empty(), "{name}: the echo moved: {echo:?}");
+                    // The speaker echoes that set inside the window, as sent
+                    // and 0.2 dB off as it rounds: nothing.
+                    for echoed in [db, db - 0.2] {
+                        let near = RemoteCommand::DeviceVolume(Volume::Db(echoed));
+                        remote(handle, &key, None, near);
+                        let echo = volume_events_of(handle, &id);
+                        assert!(echo.is_empty(), "{name}: {echoed} moved: {echo:?}");
+                    }
                     std::thread::sleep(Duration::from_millis(200));
                     let after = receiver.volume_sets();
                     assert_eq!(after.len(), sets + 1, "{name}: echo sent: {after:?}");

@@ -7903,11 +7903,18 @@ pub mod tests {
         remote(&fake, &kitchen, device_volume);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         fake.take_calls();
-        // The speaker echoes the level sent back, inside the 3 s window.
-        remote(&fake, &kitchen, device_volume);
-        assert!(airplay.poll().is_empty());
-        assert!(sent_levels(&fake).is_empty());
-        assert_eq!(row_of(&airplay, &id), 40.0);
+        // The speaker echoes the level sent back inside the 3 s window, as
+        // sent and 0.2 dB off as it rounds.
+        for echoed in [-18.0, -18.2] {
+            remote(
+                &fake,
+                &kitchen,
+                RemoteCommand::DeviceVolume(Volume::Db(echoed)),
+            );
+            assert!(airplay.poll().is_empty(), "{echoed} moved the row");
+            assert!(sent_levels(&fake).is_empty(), "{echoed} went out again");
+            assert_eq!(row_of(&airplay, &id), 40.0);
+        }
     }
 
     #[test]
