@@ -1549,6 +1549,8 @@ impl App {
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_airplay_searching(state.airplay_searching);
         self.flyout.set_airplay_searching(state.airplay_searching);
+        self.main.set_no_speaker_on(state.no_speaker_on);
+        self.flyout.set_no_speaker_on(state.no_speaker_on);
         self.main.set_cast_list(cast_list(state.cast_list));
         self.main.set_cast_by_address(state.cast_by_address);
         self.main.set_this_pc_all_hidden(state.hidden_in(true));
@@ -6014,6 +6016,19 @@ mod tests {
 
         let app = app_over(MockBackend::new());
         assert!(!app.main.get_airplay_searching());
+    }
+
+    #[test]
+    fn streaming_with_every_speaker_off_says_the_first_one_on_plays() {
+        let mut backend = MockBackend::new();
+        backend.set_no_speaker_on(true);
+        let app = app_over(backend);
+        assert!(app.main.get_no_speaker_on());
+        assert!(app.flyout.get_no_speaker_on());
+
+        let app = app_over(MockBackend::new());
+        assert!(!app.main.get_no_speaker_on());
+        assert!(!app.flyout.get_no_speaker_on());
     }
 
     #[test]

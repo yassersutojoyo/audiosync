@@ -775,6 +775,9 @@ impl SpeakerState {
 pub struct AppState {
     /// Streaming is on.
     pub running: bool,
+    /// Streaming is on with every speaker off: the speaker list says the
+    /// first one turned on plays (spec S162).
+    pub no_speaker_on: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
     /// The channel pair saved for the chosen input device, as an index (1
@@ -1696,6 +1699,7 @@ impl MockBackend {
         speakers[0].device_volume = Some(Hint::Low { percent: 13 });
         let state = AppState {
             running: false,
+            no_speaker_on: false,
             sources: vec![
                 source("system", "All System Audio", SourceKind::System),
                 source("app:player", "Music Player", SourceKind::App),
@@ -1801,6 +1805,12 @@ impl MockBackend {
     #[cfg(test)]
     pub fn set_airplay_searching(&mut self, on: bool) {
         self.state.airplay_searching = on;
+    }
+
+    /// Streaming is on with every speaker off.
+    #[cfg(test)]
+    pub fn set_no_speaker_on(&mut self, on: bool) {
+        self.state.no_speaker_on = on;
     }
 
     /// Keeps only the example speakers `keep` accepts, and the zones.

@@ -193,6 +193,8 @@ export component TrayFlyout inherits Window {
     in property <bool> connected-all-hidden;
     // AirPlay discovery runs and has found no speaker yet, short of 20 s.
     in property <bool> airplay-searching;
+    // Streaming is on with every speaker off.
+    in property <bool> no-speaker-on;
     // The newest notice only (or none); `notice-count` counts them all.
     in property <[NoticeItem]> notices;
     in property <int> notice-count;
@@ -410,6 +412,10 @@ export component TrayFlyout inherits Window {
             }
 
             Divider { }
+
+            if root.no-speaker-on: SecondaryText {
+                text: Strings.no-speaker-on;
+            }
 
             // "No speakers found" waits for 20 seconds of AirPlay discovery;
             // until then it says it looks, as the main window's note does.
