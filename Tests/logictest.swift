@@ -2627,6 +2627,9 @@ do {
     episode.turnedOff("native:H1", timing: true)
     check(episode.shown && episode.raises == 2,
           "ptp notice: a PTP speaker refused while the ports are taken brings it back")
+    episode.playing("native:N2")
+    check(episode.shown && episode.raises == 2,
+          "ptp notice: a non-PTP speaker that starts playing while the ports stay taken leaves it shown")
     episode.turnedOff("native:H1", timing: true)
     check(episode.raises == 2, "ptp notice: the same speaker refused again in one episode raises nothing")
     episode.turnedOff("native:H2", timing: true)
