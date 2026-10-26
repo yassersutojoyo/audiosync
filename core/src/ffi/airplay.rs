@@ -105,7 +105,7 @@ use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
     NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, level_set_on_speaker,
-    own_position_for_level, stage_level,
+    own_position_for_level, sanitize_own,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -888,17 +888,12 @@ fn zone_in(zones: &HashMap<String, f64>, id: &str) -> f64 {
     zones.get(id).copied().unwrap_or(NO_ZONE_POSITION)
 }
 
-/// The volume an AirPlay speaker plays at for its slider position, its
-/// zone's and the master's, all 0 to 100 (P118 leaves the mapping to the
-/// host; S249): their product, 0 to 1, spread evenly over −30 to 0 dB, and
-/// muted at 0. The Windows app maps its sliders the same way.
+/// The volume an AirPlay speaker plays at for its own volume, its zone's
+/// and the master's (P118 leaves the mapping to the host; S249, S290): the
+/// device level min(100, s × k) on the default line. The Windows app maps
+/// its sliders the same way.
 fn speaker_volume(position: f64, zone: f64, master: f64) -> Volume {
-    let level = stage_level(position, zone, master);
-    if level > 0.0 {
-        Volume::Db(MIN_DB * (1.0 - level))
-    } else {
-        Volume::Muted
-    }
+    device_volume(device_level(position, zone, master))
 }
 
 /// The volume an AirPlay speaker gets for device level `level`, 0 to 100,
@@ -1055,6 +1050,15 @@ impl AscAirPlay {
                     && added.target.is_none()
                 {
                     added.playing = *state == SpeakerState::Playing;
+                }
+                // P184 stops reads for one session only: the next one is
+                // asked again.
+                if let SpeakerEvent::State(state) = &event
+                    && *state != SpeakerState::Playing
+                    && let Some(owner) = self.reporting_for(&id)
+                    && let Some(added) = self.added.get_mut(&owner)
+                {
+                    added.unreadable = false;
                 }
                 if let SpeakerEvent::VolumeReported(db) = event {
                     self.volume_reported(&id, db);
@@ -2595,8 +2599,9 @@ pub unsafe extern "C" fn asc_airplay_remove_speaker(
     }
 }
 
-/// Sets the slider position (0 to 100) of the speaker added under `id`; it
-/// plays at that position times the master, live (P118). False, changing
+/// Sets the own volume of the speaker added under `id`, 0 up, unrounded and
+/// above 100 when S290 stored it so; it plays at min(100, own × k), live
+/// (P118). False, changing
 /// nothing, when the handle or `id` is null, no speaker was added under
 /// `id`, or `volume` isn't finite.
 ///
@@ -2626,7 +2631,7 @@ pub unsafe extern "C" fn asc_airplay_set_volume(
             let Some(added) = airplay.added.get_mut(id) else {
                 return false;
             };
-            added.position = volume.clamp(0.0, 100.0);
+            added.position = sanitize_own(volume);
             added.volume_set();
             added.set_volume(
                 &airplay.sender,
@@ -2669,7 +2674,7 @@ pub unsafe extern "C" fn asc_airplay_set_device_level(
             let Some(added) = airplay.added.get_mut(id) else {
                 return false;
             };
-            added.position = own_position.clamp(0.0, 100.0);
+            added.position = sanitize_own(own_position);
             added.volume_set();
             added.set_volume(
                 &airplay.sender,
@@ -5602,13 +5607,13 @@ mod tests {
         assert!(volume_events(handle).is_empty());
         // One press down from the baseline: level 8, so own 8.
         read_back(handle, &key, -27.6);
-        assert_eq!(inside(handle).added[id].position, 8.0);
+        assert_eq!(own_of(handle, id), 8.0);
         assert_eq!(volume_events(handle), vec![(id.to_owned(), 8.0)]);
         // More than 0.5 dB from a level just sent is a change at once.
         // SAFETY: as above.
         unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 10.0)) };
         read_back(handle, &key, -26.4);
-        assert_eq!(inside(handle).added[id].position, 12.0);
+        assert_eq!(own_of(handle, id), 12.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -5638,7 +5643,7 @@ mod tests {
 
     // covers: S290, S291
     #[test]
-    fn a_reading_that_moves_only_the_row_still_reaches_the_host() {
+    fn each_new_reading_reaches_the_host_unrounded() {
         let mut handle = create_with(quiet);
         let id = "02005E005377";
         let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x77]));
@@ -5648,17 +5653,17 @@ mod tests {
                 .events
                 .drain(..)
                 .filter_map(|(_, pending)| match pending {
-                    Pending::Volume(_, position, level) => Some((position, row_level(level))),
+                    Pending::Volume(_, position, level) => Some((nine(position), row_level(level))),
                     _ => None,
                 })
                 .collect()
         };
-        // Level 20.6: own 21, row 20.
+        // Level 20.6: own 20.6 unrounded, row 20.
         read_back(handle, &key, -23.82);
-        assert_eq!(rows(handle), vec![(21.0, 20.0)]);
+        assert_eq!(rows(handle), vec![(20.6, 20.0)]);
         read_back(handle, &key, -23.82);
         assert!(rows(handle).is_empty());
-        // Level 21 keeps own 21 but moves the row to 21.
+        // Level 21: own 21, row 21.
         read_back(handle, &key, -23.7);
         assert_eq!(rows(handle), vec![(21.0, 21.0)]);
         // SAFETY: destroyed once, by this thread.
@@ -5675,7 +5680,7 @@ mod tests {
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_set_master(handle, 63.0) };
         add_for_volume(handle, id, key.clone(), 50.0);
-        // The row moved to 20 with the master at 63: own 32, level 20 sent.
+        // The row moved to 20 with the master at 63: own 20 ÷ 0.63, level 20 sent.
         let moved = crate::volume::row_move(20.0, 100.0, 63.0).expect("k above 0");
         // SAFETY: as above; a C string.
         unsafe {
@@ -5686,30 +5691,31 @@ mod tests {
                 moved.device_level
             ));
         }
-        assert_eq!(inside(handle).added[id].position, 32.0);
+        assert_eq!(own_of(handle, id), nine(20.0 / 0.63));
         assert_eq!(inside(handle).added[id].read_back.echo_of(), Some(-24.0));
         // The television reads −24 back on its 0.6 dB grid: no event.
         read_back(handle, &key, -24.200_001);
         read_back(handle, &key, -24.200_001);
         assert!(volume_events(handle).is_empty());
-        assert_eq!(inside(handle).added[id].position, 32.0);
-        // Its remote moves it to −23.6 dB: level 21.3, row 21, own 34.
+        assert_eq!(own_of(handle, id), nine(20.0 / 0.63));
+        // Its remote moves it to −23.6 dB: level 21.3, row 21, own 21.3 ÷ 0.63.
         read_back(handle, &key, -23.6);
         let levels: Vec<(f64, f64)> = inside(handle)
             .events
             .drain(..)
             .filter_map(|(_, pending)| match pending {
-                Pending::Volume(_, position, level) => Some((position, row_level(level))),
+                Pending::Volume(_, position, level) => Some((nine(position), row_level(level))),
                 _ => None,
             })
             .collect();
-        assert_eq!(levels, vec![(34.0, 21.0)]);
-        // A master move keeps own 34 and sends 34 × 0.5 = level 17.
+        let own = (-23.6 + 30.0) / 0.3 / 0.63;
+        assert_eq!(levels, vec![(nine(own), 21.0)]);
+        // A master move keeps the own volume and sends own × 0.5.
         // SAFETY: as above.
         unsafe { asc_airplay_set_master(handle, 50.0) };
-        assert_eq!(inside(handle).added[id].position, 34.0);
+        assert_eq!(own_of(handle, id), nine(own));
         let sent = inside(handle).added[id].read_back.echo_of().expect("sent");
-        assert!((sent - (-30.0 + 0.3 * 17.0)).abs() < 1e-9, "{sent}");
+        assert!((sent - (-30.0 + 0.3 * own * 0.5)).abs() < 1e-9, "{sent}");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -5780,8 +5786,8 @@ mod tests {
             .filter(|e| e.kind == AIRPLAY_EVENT_VOLUME)
             .collect();
         assert_eq!(volumes.len(), 1, "{events:?}");
-        assert_eq!((volumes[0].id.as_str(), volumes[0].volume), (a, 52.0));
-        assert_eq!(inside(handle).added[a].position, 52.0);
+        assert_eq!((volumes[0].id.as_str(), nine(volumes[0].volume)), (a, 52.0));
+        assert_eq!(own_of(handle, a), 52.0);
         assert_eq!(inside(handle).added[b].position, 50.0);
         assert_eq!(inside(handle).master, 50.0);
         // With the master at 0 every position sounds the same: the row stays.
@@ -5789,7 +5795,7 @@ mod tests {
         unsafe { asc_airplay_set_master(handle, 0.0) };
         set_ago(handle, a, Duration::from_secs(4));
         read_back(handle, &key, -144.0);
-        assert_eq!(inside(handle).added[a].position, 52.0);
+        assert_eq!(own_of(handle, a), 52.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -5943,6 +5949,46 @@ mod tests {
         assert_eq!(inside(handle).added[id].position, 50.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S271
+    #[test]
+    fn a_new_session_asks_a_speaker_whose_reads_stopped_again() {
+        let refused = Warning::RequestFailed {
+            method: Method::GetParameter,
+            status: 501,
+        };
+        let retrying = SpeakerState::Retrying { at: Instant::now() };
+        for (warning, states) in [
+            (
+                Warning::VolumeReadsStopped,
+                vec![retrying, SpeakerState::Connecting, SpeakerState::Playing],
+            ),
+            (
+                refused,
+                vec![SpeakerState::Connecting, SpeakerState::Playing],
+            ),
+        ] {
+            let mut handle = create_with(quiet);
+            let id = "02005E005379";
+            let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x79]));
+            add_for_volume(handle, id, key.clone(), 50.0);
+            inside(handle).take_in(SenderEvent::Speaker {
+                key: key.clone(),
+                event: SpeakerEvent::Warning(warning.clone()),
+            });
+            for state in states {
+                inside(handle).take_in(SenderEvent::Speaker {
+                    key: key.clone(),
+                    event: SpeakerEvent::State(state),
+                });
+            }
+            // SAFETY: a live handle, used by this thread only.
+            unsafe { asc_airplay_read_volumes(handle) };
+            assert!(inside(handle).added[id].reading, "{warning:?}");
+            // SAFETY: destroyed once, by this thread.
+            unsafe { asc_airplay_destroy(&mut handle) };
+        }
     }
 
     // covers: S249
@@ -6846,17 +6892,28 @@ mod tests {
         });
     }
 
-    /// The volume events waiting, as row and position; every waiting event
-    /// is taken.
+    /// The volume events waiting, as row and position to 1e-9; every
+    /// waiting event is taken.
     fn volume_events(handle: *mut AscAirPlay) -> Vec<(String, f64)> {
         inside(handle)
             .events
             .drain(..)
             .filter_map(|(_, pending)| match pending {
-                Pending::Volume(id, position, _) => Some((id, position)),
+                Pending::Volume(id, position, _) => Some((id, nine(position))),
                 _ => None,
             })
             .collect()
+    }
+
+    /// `value` to 9 decimals: the unrounded own volume of S290 without its
+    /// float error.
+    fn nine(value: f64) -> f64 {
+        (value * 1e9).round() / 1e9
+    }
+
+    /// The own volume of the speaker added under `id`, to 9 decimals.
+    fn own_of(handle: *mut AscAirPlay, id: &str) -> f64 {
+        nine(inside(handle).added[id].position)
     }
 
     /// Whether a remote control or volume event waits; other events, such

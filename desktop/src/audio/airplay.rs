@@ -3825,6 +3825,14 @@ impl AirPlaySpeakers {
         event: SpeakerEvent,
         events: &mut Vec<BackendEvent>,
     ) -> bool {
+        // P184 stops reads for one session only: the next one is asked again.
+        if let SpeakerEvent::State(state) = &event
+            && *state != SpeakerState::Playing
+            && let Some(row) = self.row_of(id)
+            && let Some(added) = self.added.get_mut(&row)
+        {
+            added.read.unreadable = false;
+        }
         if let Some(target) = self.added_target_of(id)
             && let Some(changed) = self.member_event(&target, id, &event, events)
         {
@@ -7445,6 +7453,42 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].volume, 50.0);
         read_now(&mut airplay);
         assert!(fake.take_reads().is_empty());
+    }
+
+    // covers: S271
+    #[test]
+    fn a_new_session_asks_a_speaker_whose_reads_stopped_again() {
+        let refused = Warning::RequestFailed {
+            method: Method::GetParameter,
+            status: 501,
+        };
+        for (warning, states) in [
+            (
+                Warning::VolumeReadsStopped,
+                vec![
+                    SpeakerState::Retrying { at: Instant::now() },
+                    SpeakerState::Connecting,
+                    SpeakerState::Playing,
+                ],
+            ),
+            (
+                refused,
+                vec![SpeakerState::Connecting, SpeakerState::Playing],
+            ),
+        ] {
+            let fake = FakeAirPlay::new();
+            let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+            read_now(&mut airplay);
+            fake.take_reads();
+            warn(&fake, &kitchen, warning.clone());
+            airplay.poll();
+            for state in states {
+                fake.state(&kitchen, state);
+            }
+            airplay.poll();
+            read_now(&mut airplay);
+            assert_eq!(fake.take_reads(), [id.as_str()], "{warning:?}");
+        }
     }
 
     /// The whole number speaker `id`'s row shows (S290).
