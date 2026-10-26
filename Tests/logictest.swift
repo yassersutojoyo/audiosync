@@ -8721,6 +8721,7 @@ do {
     _ = plainStart.begin(origin: .user)
     plainStart.supersedeSwitch()
     check(plainStart.answer() == .user, "microphone: a later pick leaves a plain start's answer alone")
+    // covers: S141 (a pick that goes back to the old source answers the switch waiting on the prompt)
     var repick = MicrophoneRequestGate()
     _ = repick.begin(origin: .user, switching: toInput)
     repick.repicked(source: .system, pair: 0)

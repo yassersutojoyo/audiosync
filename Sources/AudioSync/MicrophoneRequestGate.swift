@@ -29,7 +29,12 @@ struct MicrophoneRequestGate {
 
     /// The user picked the capture that plays (`source` with its channel
     /// `pair`) again while a switch away from it waited on the prompt.
+    /// That pick answers the switch as a new one would (S141), so the
+    /// answer runs nothing; a pick of any other capture keeps it.
     mutating func repicked(source: AudioSource, pair: Int) {
+        guard let old = switching?.oldCapture(pairOf: { _ in pair }),
+              old.source == source, old.pair == pair else { return }
+        supersedeSwitch()
     }
 
     /// The origin of the one start (or denied notice) the answer runs; nil
