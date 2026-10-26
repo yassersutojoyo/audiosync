@@ -8038,6 +8038,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S222
+    #[test]
+    fn a_speaker_saved_on_that_now_asks_for_a_password_goes_off_with_a_notice_at_a_launch() {
+        let dir = test_dir("adapter-saved-on-asks-password");
+        let path = dir.join(settings::FILE_NAME);
+        let launch_with = |study: &Device| {
+            let fake = FakeAirPlay::new();
+            let mut audio = launch_audio();
+            audio.set_airplay(fake.link(), None);
+            fake.appear(study);
+            (audio, fake)
+        };
+        let (audio, _fake) = launch_with(&device(2, "Study", OPEN_TXT));
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        let id = ap(&device(2, "Study", PASSWORD_TXT));
+        adapter.set_speaker_enabled(&id, true);
+        adapter.set_auto_connect(&id, true);
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+        adapter.save_settings();
+        drop(adapter);
+
+        // It asks for a password now, which this run was never given.
+        let (audio, _fake) = launch_with(&device(2, "Study", PASSWORD_TXT));
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.password_prompt, None, "no prompt opens by itself");
+        assert!(!state.speaker(&id).unwrap().enabled, "never on and silent");
+        assert!(!state.running, "nothing else is on");
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Study".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPassword,
+            }]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn airplay_errors_become_notices() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
