@@ -1872,12 +1872,12 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | the_estimate_waits_while_an_airplay_speaker_sounds (a joiner at 300 ms with E = 220 plays 80 ms late until the stream is empty) | S283 |
 | calibrate_all_measures_relative_to_the_reported_latency (the AirPlay delay moves only by the measured excess over L_s + E + d_s) | S283, S237 |
 | calibrate_all_window_grows_with_the_reported_latency (core, `airplay_wait_ms` with R_s 220: 220 ms longer) | S235 |
-| planned: several AirPlay 2 receivers share Lf and E, and a target uses its largest member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s) | S284 |
-| planned: an AirPlay 2 receiver leaving while others sound changes no delay (Lf, E and every d′_s held until the stream is empty) | S284 |
-| planned: every AirPlay 2 speaker switched on plays, and only a 17th or one needing PTP on another network waits | S285 |
-| planned: one AirPlay 2 speaker failing leaves the others playing | S285 |
+| several_airplay2_receivers_share_lf_and_e_and_a_target_uses_its_largest_member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s; Mac only, the Windows test is planned) | S284 |
+| an_airplay2_receiver_leaving_while_others_sound_changes_no_delay (E and every d′_s held until the stream is empty; the sender holds Lf; Mac only, the Windows test is planned) | S284 |
+| every_airplay2_speaker_switched_on_goes_to_the_sender_and_only_one_it_refuses_waits_switched_on_and_on_its_own_row (Mac only, the Windows test is planned) | S285 |
+| one_airplay2_speaker_failing_leaves_the_others_playing (a password prompt, a PIN pairing and an unreachable speaker; Mac only, the Windows test is planned) | S285 |
 
-The four planned rows have no test on either host yet; the follow-up writes them in `desktop/` and as "airplay latency: …" checks in the logic suite.
+The Mac logic suite has these four as "airplay latency: …" checks; their Windows tests in `desktop/` are still to be written. The sender has no code yet for the two wait reasons of S285 (AirPlay spec P204 and P205), so the third check refuses a 17th speaker with P169's reason, the only wait the sender reports today; the reasons themselves get their checks once the sender has them.
 
 ### Explicit pause: Windows and Mac (`cargo test` in `desktop/`, the logic suite)
 
