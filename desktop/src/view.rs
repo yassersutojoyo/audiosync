@@ -3841,7 +3841,9 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::WillPlay => RowState::WillPlay,
         SpeakerState::Playing => RowState::Playing,
         SpeakerState::Waiting(ui_model::Waiting::ForDevice) => RowState::WaitingForDevice,
-        SpeakerState::Waiting(ui_model::Waiting::Reconnecting) => RowState::Reconnecting,
+        SpeakerState::Waiting(ui_model::Waiting::Reconnecting | ui_model::Waiting::NotOnNetwork) => {
+            RowState::Reconnecting
+        }
         SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot) => RowState::WaitingForAirplay2,
     }
 }

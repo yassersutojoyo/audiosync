@@ -8103,6 +8103,38 @@ mod tests {
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 
+    // covers: P215, S222
+    #[test]
+    fn an_unannounced_airplay_speaker_stays_on_without_a_notice_until_it_plays() {
+        let off_network = SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        // The session drops and its retry finds the records lapsed.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        fake.state(&kitchen, AirPlayState::Unannounced);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), off_network);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert!(adapter.snapshot().running);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        // Announced again: it plays.
+        fake.state(&kitchen, AirPlayState::Connecting);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        assert!(messages(&adapter).is_empty());
+        // Unannounced before it ever played: the same row, still no notice.
+        adapter.set_running(false);
+        adapter.set_running(true);
+        fake.state(&kitchen, AirPlayState::Unannounced);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), off_network);
+        assert!(messages(&adapter).is_empty());
+    }
+
     #[test]
     fn a_sender_that_stops_running_leaves_a_notice() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
