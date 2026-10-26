@@ -7737,6 +7737,7 @@ mod tests {
         let own = move_row(handle, id, 40.0, master);
         lands(&receiver, forty);
         let mut rows = read_once(handle, id);
+        let mut reads = 1;
 
         // Paused and played again: the session stays.
         // SAFETY: a live handle, used by this thread only.
@@ -7747,6 +7748,7 @@ mod tests {
         // SAFETY: as above.
         unsafe { asc_airplay_resume(handle) };
         rows.extend(read_once(handle, id));
+        reads += 1;
 
         // The speaker turned off and on again, as the host stored it.
         let sets = receiver.volume_sets().len();
@@ -7771,6 +7773,7 @@ mod tests {
             "the first set after the add: {first}"
         );
         rows.extend(read_once(handle, id));
+        reads += 1;
 
         // The engine stopped and started: a new handle, as the host makes it.
         // SAFETY: destroyed once, by this thread.
@@ -7783,6 +7786,7 @@ mod tests {
             "the first set after a start: {first}"
         );
         rows.extend(read_once(handle, id));
+        reads += 1;
 
         let after_move = receiver.volume_sets();
         let index = after_move
@@ -7793,18 +7797,23 @@ mod tests {
             after_move[index..].iter().all(|&db| same_db(db, forty)),
             "{after_move:?}"
         );
+        // A read of the level the host sent is its echo and moves no row
+        // (S291), so no event is the expected answer; any event must say 40.
         assert!(
-            rows.iter().all(|e| row_level(e.device_level) == 40.0),
+            rows.is_empty() || rows.iter().all(|e| row_level(e.device_level) == 40.0),
             "the row reported another value: {rows:?}"
         );
+        let answered = if rows.is_empty() {
+            "no row move"
+        } else {
+            "all row 40"
+        };
         assert_eq!(shown_row(own, master), 40.0);
         assert_eq!(row_level(inside(handle).added[id].level), 40.0);
         cell(
             "K1.keep.m63",
             &format!(
-                "row 40 at master 63 starts the TV at {:.2} dB after pause, off/on and restart; {} reads, all row 40",
-                first,
-                rows.len()
+                "row 40 at master 63 starts the TV at {first:.2} dB after pause, off/on and restart; {reads} reads, {answered}"
             ),
         );
         // SAFETY: destroyed once, by this thread.
