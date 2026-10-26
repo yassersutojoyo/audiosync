@@ -3704,6 +3704,7 @@ impl AirPlaySpeakers {
             return false;
         };
         let was_playing = added.state == SpeakerState::Playing;
+        let was_unannounced = added.state == SpeakerState::Unannounced;
         added.state = state;
         let mut relisted = false;
         if state == SpeakerState::Playing {
@@ -3715,6 +3716,11 @@ impl AirPlaySpeakers {
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
+        } else if was_unannounced != (state == SpeakerState::Unannounced) {
+            events.push(BackendEvent::AirPlayUnannounced {
+                id: id.to_owned(),
+                unannounced: !was_unannounced,
+            });
         }
         relisted || was_playing != (state == SpeakerState::Playing)
     }

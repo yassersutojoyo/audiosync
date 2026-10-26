@@ -547,8 +547,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// ([`BackendEvent::OutputBusy`]), by endpoint ID: their rows say so
     /// rather than show them playing.
     busy: BTreeSet<String>,
-    /// The AirPlay speakers AudioSync keeps trying to reach, or that wait
-    /// for the one AirPlay 2 slot ([`BackendEvent::AirPlayTrouble`]), by ID:
+    /// The AirPlay speakers AudioSync keeps trying to reach, that wait for
+    /// the one AirPlay 2 slot ([`BackendEvent::AirPlayTrouble`]) or for their
+    /// announcement ([`BackendEvent::AirPlayUnannounced`]), by ID:
     /// their rows say so rather than show them playing.
     reconnecting: BTreeMap<String, Waiting>,
     /// While PTP port 319 or 320 is taken (from
@@ -3481,6 +3482,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.clear_if(airplay_subject(&id), |message| {
                     matches!(message, NoticeMessage::AirPlayRetrying { .. })
                 });
+            }
+            BackendEvent::AirPlayUnannounced { id, unannounced } => {
+                if unannounced {
+                    // Not a failure: the user has nothing to do (P215).
+                    self.reconnecting.insert(id.clone(), Waiting::NotOnNetwork);
+                    self.clear_if(airplay_subject(&id), |message| {
+                        matches!(message, NoticeMessage::AirPlayRetrying { .. })
+                    });
+                } else if self.reconnecting.get(&id) == Some(&Waiting::NotOnNetwork) {
+                    self.reconnecting.remove(&id);
+                }
             }
             BackendEvent::AirPlayTrouble { id, problem } => {
                 let waiting = if problem == AirPlayProblem::OneAirPlay2Speaker {
@@ -8120,8 +8132,10 @@ mod tests {
         assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
         assert!(adapter.snapshot().running);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
-        // Announced again: it plays.
+        // Announced again: the note goes as its session starts, and it plays.
         fake.state(&kitchen, AirPlayState::Connecting);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
         fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);

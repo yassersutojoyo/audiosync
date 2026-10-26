@@ -3841,10 +3841,9 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::WillPlay => RowState::WillPlay,
         SpeakerState::Playing => RowState::Playing,
         SpeakerState::Waiting(ui_model::Waiting::ForDevice) => RowState::WaitingForDevice,
-        SpeakerState::Waiting(ui_model::Waiting::Reconnecting | ui_model::Waiting::NotOnNetwork) => {
-            RowState::Reconnecting
-        }
+        SpeakerState::Waiting(ui_model::Waiting::Reconnecting) => RowState::Reconnecting,
         SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot) => RowState::WaitingForAirplay2,
+        SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork) => RowState::NotOnNetwork,
     }
 }
 
@@ -5298,6 +5297,7 @@ mod tests {
         );
     }
 
+    // covers: P215
     #[test]
     fn a_speaker_that_cant_play_right_now_shows_waiting_not_playing() {
         let mut backend = MockBackend::new();
@@ -5309,8 +5309,12 @@ mod tests {
         let mut retrying = state.speaker("airplay:kitchen").unwrap().clone();
         retrying.id = "airplay:retrying".into();
         retrying.waiting = Some(ui_model::Waiting::Reconnecting);
+        let mut gone = retrying.clone();
+        gone.id = "airplay:gone".into();
+        gone.waiting = Some(ui_model::Waiting::NotOnNetwork);
         backend.add_speaker(busy);
         backend.add_speaker(retrying);
+        backend.add_speaker(gone);
         let app = app_over(backend);
         let row = |id: &str| {
             app.models
@@ -5322,6 +5326,7 @@ mod tests {
         assert_eq!(row("local:speakers").state, RowState::Playing);
         assert_eq!(row("local:busy").state, RowState::WaitingForDevice);
         assert_eq!(row("airplay:retrying").state, RowState::Reconnecting);
+        assert_eq!(row("airplay:gone").state, RowState::NotOnNetwork);
 
         // Narrator hears the row's state and what a click does; the note
         // under the name says the same.
@@ -5348,6 +5353,12 @@ mod tests {
         assert_eq!(
             read(RowState::WaitingForAirplay2),
             (slot.clone(), turn_off.clone(), slot)
+        );
+        // The Mac row's words (P215).
+        let away = "Not on the network right now, plays once it's back".to_owned();
+        assert_eq!(
+            read(RowState::NotOnNetwork),
+            (away.clone(), turn_off.clone(), away)
         );
         assert_eq!(
             read(RowState::Playing),
