@@ -14,6 +14,7 @@ enum MainMenu {
         let app = submenu(of: main, title: t.appName)
         app.delegate = appMenuDelegate
         app.addItem(AboutPanel.menuItem(text: t))
+        if let update = AppUpdater.menuItem(text: t) { app.addItem(update) }
         app.addItem(.separator())
         let appearance = NSMenu(title: t.appearance)
         for choice in AppAppearance.allCases {
@@ -26,6 +27,8 @@ enum MainMenu {
         app.addItem(item(t.switchToSystemWhenSourceQuits, #selector(AppDelegate.toggleSwitchWhenSourceQuits(_:))))
         MenuNoteItem.airPlay2Items(text: t, on: airPlay2, onAtLaunch: airPlay2AtLaunch,
                                    action: #selector(AppDelegate.toggleAirPlay2(_:))).forEach(app.addItem)
+        app.addItem(.separator())
+        app.addItem(item(t.setupMenu, #selector(AppDelegate.showPermissionSetup(_:))))
         app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services

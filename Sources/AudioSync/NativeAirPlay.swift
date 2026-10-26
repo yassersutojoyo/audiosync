@@ -181,7 +181,7 @@ final class NativeAirPlay {
     /// A play-pause goes to `app`, read as playing, paused or (nil) not at
     /// all: the speakers pause or resume with it (P213). Main queue.
     func togglePause(app: String?, playing: Bool?) {
-        applyPause(explicitPause.toggled(app: app, playing: playing, at: Date()))
+        applyPause(explicitPause.toggled(app: app, playing: playing, at: Date()), cause: "play-pause")
     }
 
     /// A reading of the players that started at `startedAt`: the player seen
@@ -189,22 +189,25 @@ final class NativeAirPlay {
     /// stream resumes once the reading no longer shows the player paused
     /// (P213). Main queue.
     func readPause(app: String?, playing: Bool?, startedAt: Date, sending: Bool) {
-        applyPause(explicitPause.read(app: app, playing: playing, at: startedAt, sending: sending))
+        applyPause(explicitPause.read(app: app, playing: playing, at: startedAt, sending: sending),
+                   cause: "player reading")
     }
 
     /// The readings stopped: a paused stream resumes. Main queue.
     func clearPause() {
-        applyPause(explicitPause.readingsStopped())
+        applyPause(explicitPause.readingsStopped(), cause: "readings stopped")
     }
 
-    private func applyPause(_ step: ExplicitPause.Step) {
+    /// `cause` names what resumed the speakers in the debug log, so a resume
+    /// with nothing audible can be traced.
+    private func applyPause(_ step: ExplicitPause.Step, cause: String) {
         switch step {
         case .nothing:
             return
         case .pause:
             DebugTrace.log("[AudioSync] native AirPlay: paused on purpose, every speaker flushed")
         case .resume:
-            DebugTrace.log("[AudioSync] native AirPlay: resumed after a pause")
+            DebugTrace.log("[AudioSync] native AirPlay: resumed after a pause (\(cause))")
         }
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
@@ -217,7 +220,8 @@ final class NativeAirPlay {
             // Common modes, so an open menu doesn't hold the resume back.
             let watch = Timer(timeInterval: 0.25, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
-                self.applyPause(self.explicitPause.heard(sound: NativeAirPlayTap.soundSeconds, at: Date()))
+                self.applyPause(self.explicitPause.heard(sound: NativeAirPlayTap.soundSeconds, at: Date()),
+                                cause: "sound heard")
             }
             RunLoop.main.add(watch, forMode: .common)
             soundWatch = watch
@@ -372,17 +376,12 @@ final class NativeAirPlay {
         }
     }
 
-    /// A new capture session started (P143): the speakers are flushed and the
-    /// timeline starts over.
-    func restartTimeline() {
-        applyPause(explicitPause.clear())
-        queue.async { [weak self] in
-            guard let handle = self?.handle else { return }
-            asc_airplay_restart_timeline(handle)
-        }
-        // The restart silences every speaker, so a held E applies now.
-        syncLatency(canChange: true)
-        sendOffsets()
+    /// A new capture started (P143): a paused stream resumes. The timeline
+    /// goes on and the speakers get no FLUSH, so a held E stays held; the
+    /// native input places the new capture's first block after the silence
+    /// once its rate is set.
+    func captureStarted() {
+        applyPause(explicitPause.clear(), cause: "new capture")
     }
 
     /// The core's Lf rule over reported latencies in microseconds (P200).
@@ -394,8 +393,7 @@ final class NativeAirPlay {
     /// reported (S280, S283); E changes only when `canChange` or no speaker
     /// sounds (P201). Main queue.
     private func syncLatency(canChange: Bool) {
-        let rows = model.states.keys.sorted()
-        let members = rows.map { model.sessions(of: $0) }
+        let (rows, members) = model.latencyRows
         for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > 1_500_000 {
             guard latencyWarned.insert(id).inserted else { continue }
             DebugTrace.log("[AudioSync] native AirPlay: \(model.names[id] ?? id) (\(id)) warning: reports "
@@ -418,7 +416,7 @@ final class NativeAirPlay {
         case .held:
             let latency = model.receiverLatency
             var line = String(format: "[AudioSync] native AirPlay: E %.0f ms held while a speaker sounds; it stays "
-                              + "%.0f ms until the stream is empty or restarts", latency.heldMs ?? 0, latency.estimateMs)
+                              + "%.0f ms until the stream is empty", latency.heldMs ?? 0, latency.estimateMs)
             for row in rows where latency.lateMs(of: model.sessions(of: row)) > 0 {
                 let late = Int(latency.lateMs(of: model.sessions(of: row)).rounded())
                 line += "; \(model.names[row] ?? row) plays \(late) ms late until then"

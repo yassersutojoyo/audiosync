@@ -61,11 +61,25 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// With every speaker switched off there is nothing to stream to.
+    /// With every speaker switched off there is nothing to stream to, unless
+    /// the session started that way and waits for its first speaker.
     func stopIfIdle() {
-        if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn),
-                                  enabledLocal: enabledLocal) {
+        noteSessionSpeaker()
+        if StreamingPolicy.isIdle(streaming: engine.isRunning, hadSpeaker: sessionHadSpeaker,
+                                  enabledAirPlay: playableAirPlay.union(castSwitchedOn), enabledLocal: enabledLocal) {
             stopEngine(.noSpeakerOn)
+        }
+    }
+
+    /// A session that started with every speaker off has one now that one
+    /// plays: a local output that started, an AirPlay speaker the sender
+    /// plays to, or the Cast speaker in Playing.
+    func noteSessionSpeaker() {
+        guard engine.isRunning, !sessionHadSpeaker else { return }
+        let switchedOn = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
+                                                    enabledLocal: enabledLocal)
+        if StreamingPolicy.countsForSession(switchedOn: switchedOn, playing: !calibratePlayingIDs().isEmpty) {
+            sessionHadSpeaker = true
         }
     }
 
@@ -276,6 +290,7 @@ extension AppDelegate {
             !$0.uid.isEmpty && $0.name != SourceCapture.aggregateName   // hide our private aggregate
         }
         migrateLocalDelays(listed: outputs)   // once, before auto-connect below (S179)
+        if let uid = store.speakerOnAtInstall(listed: outputs, firstInstall: freshInstall) { enabledLocal.insert(uid) }
         // Virtual devices are hidden unless asked for, or the user chose them:
         // on, auto-connect, or in a zone.
         var chosen = enabledLocal

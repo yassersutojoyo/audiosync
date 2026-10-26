@@ -193,6 +193,7 @@ fn a_driver_stall_longer_than_the_latency_restarts_the_timeline() {
         event,
         StreamEvent::Flush { speaker, .. } if *speaker == id
     )));
+    rig.answer_flushes();
     let restart_at = rig.t();
     rig.run_for(Duration::from_secs(3));
     let audio = rig.audio(id);

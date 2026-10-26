@@ -73,6 +73,72 @@ fn ratio(foreground: &str, background: &str, appearance: Appearance) -> f64 {
     contrast(composite(foreground, background, appearance), background)
 }
 
+/// The alpha of a `Fluent` fill (`hover`, `pressed`), read from the line in
+/// widgets.slint that defines it as the text color at that alpha.
+fn fluent_fill_alpha(name: &str) -> f64 {
+    let prefix = format!("out property <brush> {name}: Tokens.text.with-alpha(");
+    include_str!("../ui/widgets.slint")
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .and_then(|rest| rest.strip_suffix(");"))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("widgets.slint defines Fluent.{name} as text with an alpha"))
+}
+
+/// The fills the UI stacks on each background under the pointer. Speaker
+/// rows on a card take the hover fill, and a hovered button inside a hovered
+/// row adds its own; a playing row keeps its color, so only the button's
+/// fill lands on it.
+const HOVER_STACKS: &[(&str, &[&[&str]])] = &[
+    ("background", &[&["hover"], &["pressed"]]),
+    (
+        "surface",
+        &[
+            &["hover"],
+            &["pressed"],
+            &["hover", "hover"],
+            &["hover", "pressed"],
+        ],
+    ),
+    ("playingRow", &[&["hover"], &["pressed"]]),
+    ("notice", &[&["hover"], &["pressed"]]),
+];
+
+/// Every text pair keeps 4.5:1 under the hover and pressed fills the UI
+/// stacks on its background, in light and dark.
+#[test]
+fn every_text_pair_reaches_4_5_to_1_under_hover_fills() {
+    let mut failures = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let text = srgb("text", appearance);
+        for (foreground, background) in CONTRAST_PAIRS {
+            let Some((_, stacks)) = HOVER_STACKS.iter().find(|(name, _)| name == background) else {
+                continue;
+            };
+            for stack in *stacks {
+                let filled = stack
+                    .iter()
+                    .fold(srgb(background, appearance), |under, fill| {
+                        let alpha = fluent_fill_alpha(fill);
+                        [0, 1, 2].map(|i| text[i] * alpha + under[i] * (1.0 - alpha))
+                    });
+                let value = contrast(composite(foreground, filled, appearance), filled);
+                if value < MIN_TEXT_CONTRAST {
+                    failures.push(format!(
+                        "{foreground} on {background}+{} ({appearance:?}): {value:.2}:1",
+                        stack.join("+")
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "below {MIN_TEXT_CONTRAST}:1: {failures:?}"
+    );
+}
+
 #[test]
 fn the_contrast_formula_matches_wcag() {
     assert!((contrast([0.0; 3], [1.0; 3]) - 21.0).abs() < 1e-9);
@@ -149,6 +215,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("about.slint", include_str!("../ui/about.slint")),
     ("guide.slint", include_str!("../ui/guide.slint")),
     ("help.slint", include_str!("../ui/help.slint")),
+    ("remote.slint", include_str!("../ui/remote.slint")),
 ];
 
 /// Token colors that are not text on a token background: the wordmark's
@@ -648,8 +715,14 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
-        "the empty Connected Speakers list uses the plain note"
+            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+        "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
+    );
+    assert!(
+        include_str!("../ui/main.slint").contains(
+            "property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? \"\" : Strings.cast-list(root.cast-list);"
+        ),
+        "while the list says it looks, no Google Cast note follows it"
     );
     assert!(
         include_str!("../ui/main.slint").contains("note: root.airplay-none-found ? ("),
@@ -1254,4 +1327,26 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
         assert!(picker.contains(needle), "PresetPicker has {needle}");
     }
     assert!(flyout.contains("if root.presets.length > 0: PresetPicker {"));
+}
+
+/// A zone header works like a speaker row's box: only its badge switches the
+/// zone, and a click anywhere else on the header shows or hides the speakers.
+#[test]
+fn only_a_zone_headers_badge_switches_the_zone() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let hover = header
+        .find("hover := TouchArea {")
+        .expect("the header has its box's click");
+    let click = &header[hover..hover + 120];
+    assert!(click.contains("root.expanded-changed(!root.item.expanded);"));
+    assert_eq!(header.matches("root.toggled();").count(), 1);
+    let badge = header
+        .find("badge := SpeakerBadge {")
+        .expect("the header has its badge");
+    assert!(header[badge..].find("root.toggled();").unwrap() < 800);
+    assert_eq!(
+        header.matches("TouchArea {").count(),
+        2,
+        "the box and the arrow"
+    );
 }

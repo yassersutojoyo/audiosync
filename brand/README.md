@@ -76,7 +76,14 @@ scripts/brand/build-brand.sh   # icons, wordmarks, SwiftUI mark, AppIcon.icns, s
 scripts/brand/trace-mark.sh    # re-trace the mark from source/ (needs: brew install potrace)
 scripts/brand/windows-icons.sh # the Windows app and tray icons in desktop/res/
 python3 -I scripts/brand/guide_art.py # the Guide's illustrations in guide/, light and dark, and GuideArtwork.swift
+python3 -I scripts/brand/dmg_background.py # the disk image window's background in dmg/ (needs Pillow)
 ```
+
+`dmg_background.py` draws the Finder window that `make-dmg.sh` lays out: the
+arrow from the app to Applications and the three Open Anyway steps, in the light
+token colors with Poppins Medium rendered into the pixels, at 1x and 2x. It also
+writes `dmg/layout.json`, the window size and icon positions that `make-dmg.sh`
+reads, and fails on text below 4.5:1 or text that runs into an icon.
 
 `build-brand.sh` writes `audiosync-icon*.svg`, `audiosync-wordmark*.svg`,
 `Sources/AudioSync/BrandMark.swift`, `icon-source.png`, `AppIcon.icns`, the icons in

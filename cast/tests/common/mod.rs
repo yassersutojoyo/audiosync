@@ -115,6 +115,13 @@ impl Default for Behavior {
     }
 }
 
+/// An address every connect to fails. A freed ephemeral port would not do:
+/// a test running alongside may bind it again, and the connect then reaches
+/// that test's fake device (a Windows runner did, 2026-10-25).
+pub fn refused_address() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 0))
+}
+
 pub fn app(app_id: &str, session_id: &str, transport_id: &str) -> Value {
     json!({
         "appId": app_id,
@@ -182,6 +189,8 @@ pub struct FakeDevice {
     pub log: Arc<Mutex<Vec<CastMessage>>>,
     pub fetches: Arc<Mutex<Vec<Fetch>>>,
     pub connections: Arc<Mutex<u32>>,
+    /// Accepted connections whose serving ended.
+    hangups: Arc<Mutex<u32>>,
     pub certificate_der: Vec<u8>,
     commands: mpsc::Sender<Command>,
     stop_fetching: Arc<AtomicBool>,
@@ -212,6 +221,7 @@ impl FakeDevice {
         let log = Arc::new(Mutex::new(Vec::new()));
         let fetches = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(Mutex::new(0));
+        let hangups = Arc::new(Mutex::new(0));
         let stop_fetching = Arc::new(AtomicBool::new(false));
         let (commands, receiver) = mpsc::channel();
         let mut device = Device {
@@ -225,6 +235,7 @@ impl FakeDevice {
         };
         let thread_log = Arc::clone(&log);
         let thread_connections = Arc::clone(&connections);
+        let thread_hangups = Arc::clone(&hangups);
         let config = Arc::new(config);
         let thread = thread::spawn(move || {
             loop {
@@ -236,7 +247,9 @@ impl FakeDevice {
                     Ok((tcp, _)) => {
                         *thread_connections.lock().expect("count") += 1;
                         let _ = tcp.set_nonblocking(false);
-                        if serve(tcp, &config, &mut device, &thread_log, &receiver) {
+                        let shut_down = serve(tcp, &config, &mut device, &thread_log, &receiver);
+                        *thread_hangups.lock().expect("hangups") += 1;
+                        if shut_down {
                             return;
                         }
                     }
@@ -249,6 +262,7 @@ impl FakeDevice {
             log,
             fetches,
             connections,
+            hangups,
             certificate_der: certificate.to_vec(),
             commands,
             stop_fetching,
@@ -312,6 +326,21 @@ impl FakeDevice {
         let until = Instant::now() + limit;
         while Instant::now() < until {
             if self.types().iter().filter(|t| *t == kind).count() >= count {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// Waits until every accepted connection has ended, up to `limit`. The
+    /// log then holds all the sender wrote before closing, however late the
+    /// device's thread got to read it.
+    pub fn wait_for_hangup(&self, limit: Duration) -> bool {
+        let until = Instant::now() + limit;
+        while Instant::now() < until {
+            let accepted = self.connection_count();
+            if accepted > 0 && *self.hangups.lock().expect("hangups") >= accepted {
                 return true;
             }
             thread::sleep(Duration::from_millis(10));
@@ -551,7 +580,7 @@ fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_aud
     let mut notify = Some(on_first_audio);
     let mut buffer = [0u8; 8192];
     while !stop.load(Ordering::SeqCst) {
-        let count = match stream.read(&mut buffer) {
+        let count = match http::read_timed(&mut stream, &mut buffer) {
             Ok(0) => break,
             Ok(count) => count,
             Err(error)
@@ -589,6 +618,26 @@ fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_aud
     fetches.lock().expect("fetches")[index].ended = true;
 }
 
+/// The fake's TCP side under TLS, reading through [`http::read_timed`]: a
+/// lost byte would break the TLS stream and drop the connection.
+struct PeekedTcp(TcpStream);
+
+impl Read for PeekedTcp {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        http::read_timed(&mut self.0, buffer)
+    }
+}
+
+impl Write for PeekedTcp {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
 /// Serves one connection; true when the device should shut down.
 fn serve(
     tcp: TcpStream,
@@ -601,7 +650,7 @@ fn serve(
     let Ok(connection) = ServerConnection::new(Arc::clone(config)) else {
         return false;
     };
-    let mut stream = StreamOwned::new(connection, tcp);
+    let mut stream = StreamOwned::new(connection, PeekedTcp(tcp));
     let mut reader = FrameReader::new();
     let mut buffer = vec![0u8; 16 * 1024];
     let mut stalled = false;
@@ -621,7 +670,7 @@ fn serve(
                 Ok(Command::ClearApps) => device.apps.clear(),
                 Ok(Command::Stall) => stalled = true,
                 Ok(Command::DropConnection) => {
-                    let _ = stream.sock.shutdown(std::net::Shutdown::Both);
+                    let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
                     return false;
                 }
                 Ok(Command::Disconnect) | Err(mpsc::TryRecvError::Disconnected) => {
@@ -659,7 +708,7 @@ fn serve(
     }
 }
 
-fn write(stream: &mut StreamOwned<ServerConnection, TcpStream>, message: &CastMessage) {
+fn write(stream: &mut StreamOwned<ServerConnection, PeekedTcp>, message: &CastMessage) {
     let frame = encode_frame(message).expect("frame");
     let _ = stream.write_all(&frame);
     let _ = stream.flush();

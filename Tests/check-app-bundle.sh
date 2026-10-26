@@ -2,7 +2,8 @@
 # Checks an AudioSync.app that ./build.sh made: the bundle layout, Info.plist,
 # the license files, the Rust core in the binary, every signature,
 # and that nothing else is bundled: AirPlay runs in the app itself, so there
-# are no helper programs and no loose libraries. CI runs it on the app
+# are no helper programs and no loose libraries, and the only framework is
+# Sparkle, the updater. CI runs it on the app
 # `./build.sh --no-install` leaves in .build/app; it works on an installed copy
 # too.
 #
@@ -128,12 +129,17 @@ case "$app_signer" in
     expect "Hardened Runtime (Developer ID)" runtime ;;
 esac
 
-echo "▶ Nothing besides the app"
+echo "▶ Nothing besides the app and the updater"
 # AirPlay goes through the sender inside the app binary (the Rust core), so a
 # helper program, a loose library or an engine's version list would be a
-# leftover of an older build.
+# leftover of an older build. The one framework is Sparkle, the updater.
 expect "no Contents/Helpers" test ! -e "$contents/Helpers"
-expect "no Contents/Frameworks" test ! -e "$contents/Frameworks"
+frameworks_only_sparkle() { [ "$(ls "$contents/Frameworks")" = Sparkle.framework ]; }
+expect "Contents/Frameworks holds Sparkle.framework and nothing else" frameworks_only_sparkle
+links_sparkle() { otool -L "$bin" | grep '@rpath/Sparkle.framework/' >/dev/null; }
+expect "the binary links Sparkle.framework" links_sparkle
+frameworks_rpath() { otool -l "$bin" | grep '@executable_path/../Frameworks' >/dev/null; }
+expect "the binary finds Contents/Frameworks (rpath)" frameworks_rpath
 expect "no ThirdParty/versions.txt" test ! -e "$third_party/versions.txt"
 
 if [ "$launch" = 1 ]; then

@@ -1,0 +1,22 @@
+{
+  "window": {
+    "width": 660,
+    "height": 460
+  },
+  "iconSize": 96,
+  "labelSize": 13,
+  "icons": {
+    "app": {
+      "x": 170,
+      "y": 150
+    },
+    "applications": {
+      "x": 490,
+      "y": 150
+    },
+    "readme": {
+      "x": 568,
+      "y": 346
+    }
+  }
+}

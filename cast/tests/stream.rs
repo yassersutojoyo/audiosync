@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::io::{self, Read};
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -310,19 +310,27 @@ fn a_device_that_stops_reading_fills_a_2_s_queue_and_drops_the_oldest() {
     let mut stream = get(&server, "GET", "");
     let (head, _) = http::read_response(&mut stream, Duration::ZERO);
     assert_eq!(http::status(&head), 200);
-    // The socket buffers fill first; then the queue, then drops.
+    // The socket buffers fill first; then the queue, then drops. A feeder
+    // that runs late also drops its backlog in the pump (C79), counted apart.
     let until = Instant::now() + Duration::from_secs(30);
     let mut most_queued = 0;
     let mut stats = server.stats();
-    while Instant::now() < until && stats.frames_dropped == 0 {
+    while Instant::now() < until {
         thread::sleep(Duration::from_millis(50));
         stats = server.stats();
         assert!(stats.frames_queued <= 96_000, "{stats:?}");
         most_queued = most_queued.max(stats.frames_queued);
+        if stats.queue_frames_dropped > 0 {
+            break;
+        }
     }
-    assert!(stats.frames_dropped > 0, "{stats:?}");
+    assert!(most_queued >= 96_000 - 2 * 960, "{most_queued} {stats:?}");
+    assert!(stats.queue_frames_dropped > 0, "{stats:?}");
+    assert!(
+        stats.frames_dropped >= stats.queue_frames_dropped,
+        "{stats:?}"
+    );
     assert!(stats.streaming, "a slow reader is not a closed one");
-    assert!(most_queued >= 96_000 - 2 * 960, "{most_queued}");
     stop.store(true, Ordering::SeqCst);
     feeder.join().expect("feeder");
     let started = Instant::now();
@@ -336,12 +344,11 @@ fn a_device_that_stops_reading_fills_a_2_s_queue_and_drops_the_oldest() {
 
 /// Whether the server closed `stream` within `limit`.
 fn closed_within(stream: &mut TcpStream, limit: Duration) -> bool {
-    use std::io::Read;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
     let until = Instant::now() + limit;
     let mut buffer = [0u8; 64];
     while Instant::now() < until {
-        match stream.read(&mut buffer) {
+        match http::read_timed(stream, &mut buffer) {
             Ok(0) => return true,
             Ok(_) => {}
             Err(error)
@@ -501,7 +508,7 @@ fn a_silent_input_keeps_the_response_open_with_silence() {
                 return;
             }
             assert!(Instant::now() < until, "{what} within 15 s");
-            match stream.read(&mut buffer) {
+            match http::read_timed(&mut stream, &mut buffer) {
                 Ok(0) => panic!("the response ended"),
                 Ok(count) => body.extend_from_slice(&buffer[..count]),
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
@@ -543,6 +550,7 @@ fn a_backlog_in_the_ring_past_100_ms_is_dropped_and_counted() {
     let _stream = streaming(&server);
     writer.write_i16(&vec![3i16; 2 * 24_000]);
     assert!(dropped_reaches(&server, 1) > 0, "{:?}", server.stats());
+    assert_eq!(server.stats().queue_frames_dropped, 0);
     server.stop();
 }
 
@@ -558,6 +566,7 @@ fn frames_the_full_ring_refused_count_as_dropped() {
         dropped >= 60_000,
         "{dropped}: the ring's overflow is missing"
     );
+    assert_eq!(server.stats().queue_frames_dropped, 0);
     server.stop();
 }
 

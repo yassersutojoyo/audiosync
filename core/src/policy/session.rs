@@ -31,11 +31,21 @@ impl StartOrigin {
     }
 }
 
-/// Whether a session may start: only with at least one speaker, local or
-/// AirPlay, enabled (S116). Otherwise the host posts an informational "start"
+/// Whether a start of this origin goes ahead with every speaker off (S162):
+/// the user's does, and the first speaker turned on joins; AudioSync on its
+/// own waits for a speaker.
+pub fn starts_without_speaker(origin: StartOrigin) -> bool {
+    !origin.is_automatic()
+}
+
+/// Whether a start goes ahead (S116, S162). `continuing`: a rebuild or a
+/// source switch of a running session; `had_speaker`: a speaker was on in
+/// that session. Only a session that began with every speaker off carries on
+/// without one: once its last speaker went off, an automatic rebuild would
+/// capture for nobody. A start refused here posts an informational "start"
 /// notice ([`Incident::NoSpeakerEnabled`]).
-pub fn may_start(enabled_speakers: usize) -> bool {
-    enabled_speakers > 0
+pub fn starts(has_speaker: bool, continuing: bool, had_speaker: bool, origin: StartOrigin) -> bool {
+    has_speaker || (continuing && !had_speaker) || starts_without_speaker(origin)
 }
 
 /// One step the host takes after a successful start (S116).
@@ -189,33 +199,32 @@ pub enum StreamingAction {
     Start,
     /// Stop the session and deselect every AirPlay speaker (S118).
     Stop,
-    /// Start nothing; ask the user to choose a speaker first with an
-    /// informational "start" notice (S116, S136).
-    AskForSpeaker,
     /// Nothing changes.
     Nothing,
 }
 
 /// The streaming policy (S162), decided from the enabled sets alone:
 /// `enabled_local` and `enabled_airplay` count the speakers enabled after
-/// the event, whether their devices are listed or not.
+/// the event, whether their devices are listed or not; `had_speaker`: a
+/// speaker was on at some point in the running session.
 ///
 /// A session runs while anything at all is enabled, so a speaker that is on
 /// but unplugged or out of reach keeps it running, and one AirPlay speaker is
-/// enough; it stops once nothing is enabled. Only switching a speaker on, or
-/// asking to start, while nothing streams starts a session; a start with
-/// nothing enabled asks for a speaker instead.
+/// enough. It stops once nothing is enabled, unless no speaker has been on
+/// in it yet: the user started it with every speaker off, and it waits for
+/// the first. Switching a speaker on while nothing streams starts a session,
+/// and so does the user's start, with or without a speaker on.
 pub fn streaming_after(
     event: SpeakerEvent,
     streaming: bool,
+    had_speaker: bool,
     enabled_local: usize,
     enabled_airplay: usize,
 ) -> StreamingAction {
     let any_enabled = enabled_local > 0 || enabled_airplay > 0;
     match (event, streaming, any_enabled) {
-        (_, true, false) => StreamingAction::Stop,
-        (SpeakerEvent::StartRequested, false, false) => StreamingAction::AskForSpeaker,
-        (SpeakerEvent::SwitchedOn | SpeakerEvent::StartRequested, false, true) => {
+        (_, true, false) if had_speaker => StreamingAction::Stop,
+        (SpeakerEvent::StartRequested, false, _) | (SpeakerEvent::SwitchedOn, false, true) => {
             StreamingAction::Start
         }
         _ => StreamingAction::Nothing,

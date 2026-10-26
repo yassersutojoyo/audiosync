@@ -49,6 +49,26 @@ jobs:
       - name: Tests (including the spec coverage check against docs/AIRPLAY_SPEC.md)
         run: cargo test
 
+  fake-tv-cells:
+    # The weekend sheet's dry-run cells against the fake television, on
+    # loopback, with the paused-cover cell cut to one minute.
+    name: Fake TV cells (loopback)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain (stable)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Cells
+        run: bash scripts/fake_tv_cells.sh --pause-minutes 1
+
   licenses:
     name: Licenses
     runs-on: ubuntu-latest

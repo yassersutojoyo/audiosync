@@ -395,15 +395,17 @@ double asc_output_gain(double local_position, double master_position);
  * at zone 100 bit-identical to asc_output_gain. */
 double asc_zone_output_gain(double local_position, double zone_position, double master_position);
 
-/* An AirPlay speaker's device level D, 0 to 100: own x zone x master as
- * fractions, times 100 (zone 100 outside a zone). */
+/* An AirPlay speaker's device level D, 0 to 100: min(100, own x k), with
+ * k = zone x master as fractions (zone 100 outside a zone). The own volume
+ * is stored unrounded and may pass 100 (S290). */
 double asc_airplay_device_level(double own_position, double zone_position, double master_position);
 
 /* The whole number an AirPlay row shows for device level D: D rounded down. */
 double asc_airplay_row_level(double device_level);
 
-/* An AirPlay row moved to `row`: writes the own volume to store and the
- * device level to send. False, writing nothing, when zone x master is 0,
+/* An AirPlay row moved to `row`: writes the own volume to store, row / k
+ * unrounded and possibly above 100, and the device level to send, the row
+ * itself. False, writing nothing, when zone x master is 0,
  * row isn't finite or a pointer is NULL. */
 bool asc_airplay_row_move(double row, double zone_position, double master_position,
                           double *own_position, double *device_level);
@@ -1613,10 +1615,10 @@ bool asc_airplay_add_speaker(AscAirPlay *airplay, const char *id, double volume)
 bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
 
 /*
- * Sets the slider position (0 to 100) of the speaker added under `id`; it
- * plays at that position times the master, live. Returns false, changing
- * nothing, when the handle or id is NULL, no speaker was added under id, or
- * volume isn't finite.
+ * Sets the own volume of the speaker added under `id` (0 up, unrounded, and
+ * above 100 when S290 stored it so); it plays at min(100, own x k), live.
+ * Returns false, changing nothing, when the handle or id is NULL, no speaker
+ * was added under id, or volume isn't finite.
  */
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
 
@@ -1685,12 +1687,6 @@ double asc_airplay_set_hold_back(AscAirPlay *airplay, double hold_back_ms);
 double asc_airplay_latency_ms(const AscAirPlay *airplay);
 
 /*
- * The host restarted its capture: every speaker is flushed and the timeline
- * starts over; a timeline event follows.
- */
-void asc_airplay_restart_timeline(AscAirPlay *airplay);
-
-/*
  * The user paused playback on purpose (a remote's Pause, a media key or the
  * app's pause button, never silence): every speaker gets a FLUSH so its
  * buffer drops at once, and no audio goes out until asc_airplay_resume. The
@@ -1709,7 +1705,7 @@ void asc_airplay_resume(AscAirPlay *airplay);
  * Sets the stream's base latency Lf in frames, clamped to 11025 to 88200.
  * While no speaker sounds it applies at once and a timeline event reports
  * the new L; later it is held (ASC_AIRPLAY_EVENT_LATENCY_HELD) until the
- * stream has no speaker or the capture restarts. NULL does nothing.
+ * stream has no speaker or the timeline restarts. NULL does nothing.
  */
 void asc_airplay_set_latency(AscAirPlay *airplay, uint32_t frames);
 

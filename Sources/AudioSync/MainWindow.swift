@@ -132,6 +132,13 @@ struct MainView: View {
                     let all = model.layout
                     let layout = model.zonelessLayout
                     VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
+                        if model.noSpeakerOn {
+                            Text(t.noSpeakerOn)
+                                .font(.callout)
+                                .foregroundStyle(Brand.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, 4)
+                        }
                         // This Mac first: few, stable rows that don't shift as
                         // other speakers come and go. Then the zones, then every
                         // connected speaker (AirPlay and local) by name; a
@@ -624,11 +631,17 @@ private struct ZoneCard: View {
         .accessibilityLabel(zone.name)
     }
 
+    private func hit(_ area: ZoneHeaderHit.Area) {
+        switch ZoneHeaderHit.action(for: area) {
+        case .fold: withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
+        case .toggleZone: model.actions.toggleZone(zone.id)
+        case .none: break
+        }
+    }
+
     private func header(_ t: UIStrings) -> some View {
         HStack(spacing: 8) {
-            Button {
-                withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
-            } label: {
+            Button { hit(.chevron) } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -640,18 +653,8 @@ private struct ZoneCard: View {
             .accessibilityLabel(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
             .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
 
-            Button { model.actions.toggleZone(zone.id) } label: {
-                HStack(spacing: 12) {
-                    SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(zone.name)
-                            .font(.body.weight(state == .playing ? .semibold : .regular))
-                            .lineLimit(1)
-                        countLine(t)
-                    }
-                    Spacer(minLength: 8)
-                }
-                .contentShape(Rectangle())
+            Button { hit(.zoneIcon) } label: {
+                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
             }
             .buttonStyle(.plain)
             .disabled(zone.present == 0)   // none of its speakers is here
@@ -661,6 +664,22 @@ private struct ZoneCard: View {
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: nil))
             .help(t.help(state))
+            // The badge's gap to the name, as in a speaker row.
+            .padding(.trailing, 4)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(zone.name)
+                    .font(.body.weight(state == .playing ? .semibold : .regular))
+                    .lineLimit(1)
+                    // Read through the switch's label.
+                    .accessibilityHidden(true)
+                    .onTapGesture { hit(.name) }
+                countLine(t)
+                    .onTapGesture { hit(.count) }
+            }
+            .opacity(zone.present == 0 ? 0.45 : 1)
+
+            Spacer(minLength: 8)
 
             Slider(value: Binding(get: { zone.volume }, set: { model.actions.setZoneVolume(zone.id, $0) }),
                    in: 0...100)
@@ -687,6 +706,11 @@ private struct ZoneCard: View {
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.leading, 2)
         .padding(.trailing, BrandTokens.Spacing.rowPaddingX)
+        // Like a speaker row's box opening its delay panel: everything but
+        // the badge, the slider and the menu shows or hides the speakers.
+        // The chevron stays the keyboard's way in.
+        .contentShape(Rectangle())
+        .onTapGesture { hit(.blank) }
         .contextMenu { menuItems(t) }
     }
 

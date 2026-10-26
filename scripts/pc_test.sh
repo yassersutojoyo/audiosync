@@ -10,7 +10,7 @@
 # windows/target (or CARGO_TARGET_DIR when set), without incremental caches,
 # so worktrees don't each fill the disk. Sources are touched first, since a
 # fresh worktree's files can be older than that folder's builds of another
-# checkout. The airplay example fake_tv is built but never run here.
+# checkout. The airplay examples (fake_tv, fake_tv_cells) are built but never run here.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)

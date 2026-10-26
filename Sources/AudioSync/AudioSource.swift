@@ -227,7 +227,7 @@ enum CaptureSwitch {
     enum Start: Equatable {
         /// Only the capture is rebuilt, under the speakers.
         case rebuildCapture
-        /// No speaker is on, so nothing can play: the session stops.
+        /// The session may not go on without a speaker (`StreamingPolicy.starts`): it stops.
         case stopSession
         /// macOS asks for the microphone first. The old source is stored
         /// again and plays on, so the picker and the level meter show it,
@@ -237,8 +237,8 @@ enum CaptureSwitch {
         case keepOld
     }
 
-    static func start(hasSpeaker: Bool, microphone: Microphone) -> Start {
-        guard hasSpeaker else { return .stopSession }
+    static func start(starts: Bool, microphone: Microphone) -> Start {
+        guard starts else { return .stopSession }
         switch microphone {
         case .notNeeded, .allowed: return .rebuildCapture
         case .undetermined: return .askMicrophone
@@ -278,7 +278,7 @@ enum CaptureSwitch {
 
     enum Outcome: Equatable {
         /// The new capture runs, at whatever rate it has; the AirPlay
-        /// timeline starts over with it.
+        /// timeline goes on, with silence for the rebuild (P143).
         case switched
         /// The new capture didn't start and the old one plays (again).
         case keptOld(Failure)
@@ -432,9 +432,13 @@ enum SourceApps {
 
     /// The running apps the picker offers, sorted by name.
     static func running() -> [Entry] {
+        // macOS can still list an app whose process is gone (S227), so the
+        // process is checked too, as the capture's own look does.
         let apps = NSWorkspace.shared.runningApplications.map { app in
             RunningApp(pid: app.processIdentifier, bundleID: app.bundleIdentifier, name: app.localizedName,
-                       isRegular: app.activationPolicy == .regular && !app.isTerminated, icon: app.icon)
+                       isRegular: app.activationPolicy == .regular && !app.isTerminated
+                           && AppTapFollow.processExists(app.processIdentifier),
+                       icon: app.icon)
         }
         return offered(apps, ownPID: ProcessInfo.processInfo.processIdentifier,
                        ownBundleID: Bundle.main.bundleIdentifier)

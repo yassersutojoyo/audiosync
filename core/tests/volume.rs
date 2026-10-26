@@ -12,8 +12,8 @@ use proptest::prelude::*;
 
 mod airplay_device_level {
     use audiosync_core::volume::{
-        ReadBack, RowMove, device_level, device_level_for_db, level_set_on_speaker,
-        own_for_device_level, row_level, row_move,
+        ReadBack, device_level, device_level_for_db, level_set_on_speaker, own_for_device_level,
+        row_level, row_move,
     };
 
     /// The row a speaker at own volume `own` shows through `zone` and `master`.
@@ -45,48 +45,43 @@ mod airplay_device_level {
         assert_eq!(row_level(f64::NAN), 0.0);
     }
 
+    /// Whether `a` and `b` agree within float error.
+    fn near(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
     // covers: S290
     #[test]
-    fn a_row_move_sends_the_row_and_stores_the_smallest_own_volume_reaching_it() {
+    fn a_row_move_sends_the_row_and_stores_the_row_over_k() {
         let moved = row_move(20.0, 100.0, 63.0).expect("k above 0");
-        assert_eq!(
-            moved,
-            RowMove {
-                own_position: 32.0,
-                device_level: 20.0
-            }
-        );
+        assert_eq!(moved.device_level, 20.0);
+        assert!(near(moved.own_position, 20.0 / 0.63), "{moved:?}");
         assert_eq!(row_level(moved.device_level), 20.0);
         // The row never jumps on release, at any row and master.
         for master in [1.0, 7.0, 33.0, 63.0, 99.0, 100.0] {
             for target in 0..=100 {
                 let r = f64::from(target);
                 let moved = row_move(r, 100.0, master).expect("k above 0");
+                assert_eq!(moved.device_level, r);
                 let shown = row(moved.own_position, 100.0, master);
-                assert!(shown <= r, "master {master} row {r} shows {shown}");
-                if moved.own_position < 100.0 {
-                    assert_eq!(shown, r, "master {master} row {r}");
-                    assert_eq!(moved.device_level, r);
-                }
+                assert_eq!(shown, r, "master {master} row {r}");
             }
         }
     }
 
     // covers: S290
     #[test]
-    fn a_row_past_the_ceiling_stops_at_it() {
+    fn the_master_and_the_zone_are_no_ceiling_for_a_row_move() {
         let moved = row_move(80.0, 100.0, 63.0).expect("k above 0");
-        assert_eq!(moved.own_position, 100.0);
-        assert!((moved.device_level - 63.0).abs() < 1e-9);
-        assert_eq!(row_level(moved.device_level), 63.0);
-        assert_eq!(
-            row_move(63.0, 100.0, 63.0).map(|m| m.own_position),
-            Some(100.0)
-        );
-        // Through a zone at 50 and the master at 63 the ceiling is 31.
+        assert!(near(moved.own_position, 80.0 / 0.63), "{moved:?}");
+        assert_eq!(moved.device_level, 80.0);
+        let moved = row_move(100.0, 100.0, 63.0).expect("k above 0");
+        assert_eq!(moved.device_level, 100.0);
+        assert_eq!(row(moved.own_position, 100.0, 63.0), 100.0);
+        // Through a zone at 50 and the master at 63, row 40 still sends 40.
         let moved = row_move(40.0, 50.0, 63.0).expect("k above 0");
-        assert_eq!(moved.own_position, 100.0);
-        assert_eq!(row_level(moved.device_level), 31.0);
+        assert_eq!(moved.device_level, 40.0);
+        assert_eq!(row(moved.own_position, 50.0, 63.0), 40.0);
     }
 
     // covers: S290
@@ -100,11 +95,17 @@ mod airplay_device_level {
 
     // covers: S290
     #[test]
-    fn a_master_move_keeps_the_own_volume() {
+    fn a_master_move_keeps_the_own_volume_and_caps_the_level_at_100() {
         let moved = row_move(20.0, 100.0, 63.0).expect("k above 0");
         assert_eq!(row(moved.own_position, 100.0, 63.0), 20.0);
-        assert_eq!(row(moved.own_position, 100.0, 100.0), 32.0);
-        assert_eq!(row(moved.own_position, 100.0, 50.0), 16.0);
+        assert_eq!(row(moved.own_position, 100.0, 100.0), 31.0);
+        assert_eq!(row(moved.own_position, 100.0, 50.0), 15.0);
+        // Past the cap and back loses nothing.
+        let own = own_for_device_level(80.0, 100.0, 63.0).expect("k above 0");
+        assert_eq!(device_level(own, 100.0, 100.0), 100.0);
+        assert!(near(device_level(own, 100.0, 63.0), 80.0));
+        assert_eq!(device_level(f64::NAN, 100.0, 63.0), 0.0);
+        assert_eq!(device_level(-5.0, 100.0, 63.0), 0.0);
     }
 
     // covers: S290
@@ -112,31 +113,162 @@ mod airplay_device_level {
     fn a_level_set_on_the_speaker_sets_the_row_and_the_own_volume() {
         let level = device_level_for_db(-24.0).expect("finite");
         assert_eq!(row_level(level), 20.0);
-        assert_eq!(own_for_device_level(level, 100.0, 63.0), Some(32.0));
-        assert_eq!(own_for_device_level(80.0, 100.0, 63.0), Some(100.0));
-        assert_eq!(
-            level_set_on_speaker(-24.0, 50.0, 31.5, 100.0, 63.0),
-            Some(RowMove {
-                own_position: 32.0,
-                device_level: 20.0
-            })
-        );
+        let own = own_for_device_level(level, 100.0, 63.0).expect("k above 0");
+        assert!(near(own, 20.0 / 0.63));
+        let own = own_for_device_level(80.0, 100.0, 63.0).expect("k above 0");
+        assert!(near(own, 80.0 / 0.63), "no clamp at 100: {own}");
+        let moved = level_set_on_speaker(-24.0, 50.0, 31.5, 100.0, 63.0).expect("changed");
+        assert!(near(moved.device_level, 20.0));
+        assert!(near(moved.own_position, 20.0 / 0.63));
         // Zone × master at 0 keeps the own volume and still shows the level.
         assert_eq!(
             level_set_on_speaker(-24.0, 50.0, 0.0, 100.0, 0.0).map(|moved| moved.own_position),
             Some(50.0)
         );
-        // Own 32 at master 63 already shows row 20.
-        assert_eq!(level_set_on_speaker(-23.9, 32.0, 20.0, 100.0, 63.0), None);
+        // The same reading again changes nothing.
+        assert_eq!(
+            level_set_on_speaker(-24.0, moved.own_position, moved.device_level, 100.0, 63.0),
+            None
+        );
         assert_eq!(
             level_set_on_speaker(f64::NAN, 32.0, 20.0, 100.0, 63.0),
             None
         );
-        // Own 21 stays, but a row showing 20.6 moves to 21.
-        assert_eq!(
-            level_set_on_speaker(-23.7, 21.0, 20.6, 100.0, 100.0).map(|moved| moved.own_position),
-            Some(21.0)
-        );
+        // A row showing 20.6 moves to 21.
+        let moved = level_set_on_speaker(-23.7, 20.6, 20.6, 100.0, 100.0).expect("changed");
+        assert!(near(moved.own_position, 21.0), "{moved:?}");
+        assert_eq!(row_level(moved.device_level), 21.0);
+    }
+
+    // covers: S290, S275, S276
+    #[test]
+    fn the_shared_s290_vectors_hold_through_the_c_interface() {
+        use audiosync_core::ffi::{
+            asc_airplay_device_level, asc_airplay_row_level, asc_airplay_row_move,
+        };
+        use audiosync_core::policy::presets::{Preset, PresetMember};
+        use audiosync_core::policy::remote::{Action, Command, Event, OwnVolume, Remote};
+        use audiosync_core::volume::{level_on_speaker, sanitize_own};
+        use serde_json::Value;
+
+        let text = include_str!("vectors/s290_volume.json");
+        let doc: Value = serde_json::from_str(text).expect("valid JSON");
+        let number = |value: &Value, key: &str| value.get(key).and_then(Value::as_f64);
+        let cases = doc["cases"].as_array().expect("cases");
+        assert!(cases.len() >= 30, "the cases and the sweep");
+        let row_move = |row: f64, zone: f64, master: f64| {
+            let (mut stored, mut sent) = (f64::NAN, f64::NAN);
+            // SAFETY: both point to live doubles.
+            unsafe { asc_airplay_row_move(row, zone, master, &mut stored, &mut sent) }
+                .then_some((stored, sent))
+        };
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let zone = number(case, "zone").expect("zone");
+            let mut master = number(case, "master").expect("master");
+            let mut own = 0.0;
+            let mut level = 0.0;
+            let mut remote = Remote::default();
+            let mut at = 0.0;
+            // A remote command as both hosts hand it to the core (S273).
+            let mut decide = |command: Command, level: f64, reported: Option<f64>| {
+                at += 1.0;
+                let event = Event {
+                    speaker: "Kitchen",
+                    row: Some("kitchen"),
+                    member: false,
+                    command,
+                    app: None,
+                    volume: OwnVolume {
+                        level,
+                        dragging: false,
+                        echo: false,
+                        reported,
+                    },
+                    at,
+                };
+                match remote.decide(&event).action {
+                    Action::Move { to, .. } => Some(to),
+                    _ => None,
+                }
+            };
+            for step in case["steps"].as_array().expect("steps") {
+                let sent_expected = step.get("sent").and_then(Value::as_bool).unwrap_or(true);
+                let mut sent = true;
+                if let Some(value) = number(step, "own") {
+                    own = value;
+                    level = asc_airplay_device_level(own, zone, master);
+                } else if let Some(value) = number(step, "stored_own") {
+                    // As a preset keeps an AirPlay member's own volume (S251).
+                    let preset = Preset {
+                        id: "p".to_owned(),
+                        name: "p".to_owned(),
+                        members: vec![PresetMember {
+                            key: "ap:kitchen".to_owned(),
+                            volume: Some(value),
+                        }],
+                        zones: Vec::new(),
+                        master,
+                        gains_db: [0.0; 10],
+                    }
+                    .sanitized();
+                    own = sanitize_own(value);
+                    assert_eq!(preset.members[0].volume, Some(own), "{name}: preset");
+                    level = asc_airplay_device_level(own, zone, master);
+                } else if let Some(value) = number(step, "master") {
+                    master = value;
+                    level = asc_airplay_device_level(own, zone, master);
+                } else if let Some(row) = number(step, "row_move") {
+                    match row_move(row, zone, master) {
+                        Some((stored, to)) => (own, level) = (stored, to),
+                        None => sent = false,
+                    }
+                } else if let Some(by) = number(step, "step") {
+                    let command = if by > 0.0 {
+                        Command::VolumeUp
+                    } else {
+                        Command::VolumeDown
+                    };
+                    match decide(command, level, None).and_then(|to| row_move(to, zone, master)) {
+                        Some((stored, to)) => (own, level) = (stored, to),
+                        None => sent = false,
+                    }
+                } else if let Some(value) = number(step, "device_volume") {
+                    let db = -30.0 + 0.3 * value;
+                    match decide(Command::DeviceVolume(db), level, Some(value)) {
+                        Some(to) => {
+                            let moved = level_on_speaker(to, own, zone, master);
+                            (own, level) = (moved.own_position, moved.device_level);
+                        }
+                        None => sent = false,
+                    }
+                } else if let Some(value) = number(step, "tv_level") {
+                    let db = -30.0 + 0.3 * value;
+                    if let Some(moved) = level_set_on_speaker(db, own, level, zone, master) {
+                        own = moved.own_position;
+                        level = moved.device_level;
+                    }
+                } else {
+                    panic!("{name}: unknown step {step}");
+                }
+                assert_eq!(sent, sent_expected, "{name}: {step} sent");
+                if let Some(expected) = number(step, "level") {
+                    assert!(
+                        (level - expected).abs() < 1e-6,
+                        "{name}: {step} gave level {level}"
+                    );
+                }
+                if let Some(expected) = number(step, "own_after") {
+                    assert!(
+                        (own - expected).abs() < 1e-6,
+                        "{name}: {step} gave own {own}"
+                    );
+                }
+                if let Some(expected) = number(step, "row") {
+                    assert_eq!(asc_airplay_row_level(level), expected, "{name}: {step}");
+                }
+            }
+        }
     }
 
     // covers: S291

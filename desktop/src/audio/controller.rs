@@ -45,9 +45,9 @@
 //! With an AirPlay sender ([`Controller::set_airplay`]), the capture also
 //! feeds the sender and AirPlay speakers that are on join the stream while a
 //! session runs ([`airplay`](super::airplay)). L is the sender's base
-//! latency L_s plus the user's adjustment (S178). A new capture restarts the
-//! sender's timeline (P143); a new L_s from the sender re-times every
-//! playing output.
+//! latency L_s plus the user's adjustment (S178). A new capture carries on
+//! the sender's timeline after a silent gap (P143); a new L_s from the
+//! sender re-times every playing output.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -1875,7 +1875,7 @@ impl<D: Driver> Controller<D> {
             }
         }
         if let Some(airplay) = self.airplay.as_mut() {
-            airplay.restart_timeline();
+            airplay.capture_started();
         }
         self.sessions_started += 1;
         self.log.log(|| self.policy.describe_lead());
@@ -4991,6 +4991,42 @@ mod tests {
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
 
+    // covers: P143, S141
+    #[test]
+    fn a_source_switch_under_a_sounding_airplay_speaker_sends_the_sender_nothing() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.set_sounding(true);
+        fake.report_latency(
+            &kitchen,
+            300_000,
+            audiosync_airplay::latency::LatencySources::AUDIO_LATENCY,
+        );
+        poll_quietly(&mut backend, 2);
+        fake.take_calls();
+
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        poll_quietly(&mut backend, 2);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(
+                call,
+                Call::Pause
+                    | Call::Latency(_)
+                    | Call::Delay(..)
+                    | Call::Remove(_)
+                    | Call::Add { .. }
+            )),
+            "no restart, flush, re-timing or rejoin at a switch: {calls:?}"
+        );
+    }
+
     #[test]
     fn an_app_that_quit_while_its_capture_waits_to_start_again_gives_way_when_set() {
         let mut backend = backend();
@@ -6170,14 +6206,11 @@ mod tests {
         assert!(!feed.is_free(), "the capture holds the feed");
         assert_eq!(
             fake.take_calls(),
-            [
-                Call::RestartTimeline,
-                Call::Add {
-                    id: id.clone(),
-                    volume: Volume::Db(-12.0),
-                    delay: Duration::ZERO,
-                }
-            ]
+            [Call::Add {
+                id: id.clone(),
+                volume: Volume::Db(-12.0),
+                delay: Duration::ZERO,
+            }]
         );
         assert_eq!(delay_frames(&backend, SPEAKERS), 84_000);
 
