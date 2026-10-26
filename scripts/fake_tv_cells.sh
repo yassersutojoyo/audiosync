@@ -1,8 +1,9 @@
 #!/bin/bash
 # Runs every weekend cell a loopback fake television can prove, and prints
-# one line per cell: <cell> PASS|FAIL|MANUAL <measured value>. The volume
-# cells come from the core and AirPlay 2 tests that hold them (each prints a
-# CELL line once it passed); the rest from the airplay example fake_tv_cells.
+# one line per cell: <cell> PASS|FAIL|MANUAL <measured value>. The volume,
+# stale row and fake Samsung cells come from the core and AirPlay 2 tests
+# that hold them (each prints a CELL line once it passed); the rest from the
+# airplay example fake_tv_cells.
 # A cell that needs the real television prints MANUAL with what to measure.
 # Exits 1 when a cell fails.
 #
@@ -66,12 +67,20 @@ cd "$root/core"
 cells_from_tests --lib \
     "$core::k1_at_master_63_the_row_and_the_television_agree_both_ways=K1.m63.echo,K1.m63.tv20,K1.m63.row20" \
     "$core::k1_keep_a_row_at_40_comes_back_at_40_after_a_restart=K1.keep.m63" \
-    "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.m64,S290.row100.m50,S290.tv80.cap,DV.100.m63,DV.80-99.m63,DV.40.m0"
+    "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.m64,S290.row100.m50,S290.tv80.cap,DV.100.m63,DV.80-99.m63,DV.40.m0" \
+    "$core::a_withdrawn_receiver_loses_only_its_row_and_comes_back_when_announced=Stale.row"
 
 cd "$root/airplay"
 cells_from_tests "--test ap2_volume" \
     "k1_row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer=AP2.K1" \
     "k1_keep_a_new_session_starts_the_samsung_at_the_level_it_holds=AP2.K1.keep"
+cells_from_tests "--test ap2_samsung" \
+    "capture_switch_without_flush=W6.switch" \
+    "w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second=W2.flush" \
+    "lo4_the_samsung_remote_play_pause_and_next_reach_the_host_once_each=LO4.dacp" \
+    "progress_stays_on_the_track_time_across_a_pause_and_a_seek=Progress" \
+    "l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off=L341" \
+    "g9_the_latency_the_samsung_reports_reaches_the_host_as_r_s=G9"
 
 cargo run --quiet --locked --example fake_tv_cells -- "$@" || failed=1
 exit "$failed"

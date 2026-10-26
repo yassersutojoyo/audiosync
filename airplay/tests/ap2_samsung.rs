@@ -6,24 +6,30 @@
 
 mod common;
 
-use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use audiosync_airplay::dacp::RemoteCommand;
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
-use audiosync_airplay::error::Warning;
+use audiosync_airplay::error::{UserReason, Warning};
+use audiosync_airplay::latency::LatencySources;
+use audiosync_airplay::pairing::PairingEvent;
 use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::sender::{
-    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
+    NowPlaying, Progress, Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions,
+    SpeakerState,
 };
 use audiosync_airplay::volume::Volume;
+use plist::Value;
 
-use common::ap2::{Ap2Server, FakeAp2, open_packet, stream_key};
+use common::ap2::{Ap2Server, FakeAp2, dict, int, open_packet, plist, stream_key};
 use common::net::{Events, HostAudio, host_frame_of, recv_queued, serial, wait_until};
 use common::rig::decode;
 
@@ -37,6 +43,12 @@ const BASELINE_DB: f64 = 0.05;
 const FRAMES_PER_PACKET: u32 = 352;
 
 fn samsung_tv(server: &Ap2Server) -> Device {
+    samsung_tv_showing(server, 0)
+}
+
+/// The television listing the low features bits `low`, such as the
+/// metadata bits (P14, P123).
+fn samsung_tv_showing(server: &Ap2Server, low: u32) -> Device {
     let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 0x55]);
     let record = ServiceRecord {
         kind: ServiceKind::AirPlay,
@@ -44,7 +56,7 @@ fn samsung_tv(server: &Ap2Server) -> Device {
         host: "living.local".to_owned(),
         port: server.address.port(),
         txt: [
-            "features=0x0,0x10040".to_owned(),
+            format!("features={low:#x},0x10040"),
             "flags=0x4".to_owned(),
             "model=Speaker1,1".to_owned(),
             format!("deviceid={device_id}"),
@@ -70,15 +82,12 @@ struct Playing {
 /// A sender playing to `server` at -20 dB, once the check read of the
 /// initial volume (P183) has gone out.
 fn play(server: &Ap2Server) -> Playing {
-    let (sender, writer) = Sender::start(SenderConfig {
-        airplay2: true,
-        airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
-        ..SenderConfig::default()
-    })
-    .expect("the sender starts");
-    let host = HostAudio::start(writer);
+    play_listed(server, samsung_tv(server))
+}
+
+fn play_listed(server: &Ap2Server, device: Device) -> Playing {
+    let (sender, host) = start_sender();
     let mut events = Events::default();
-    let device = samsung_tv(server);
     let key = device.key.clone();
     sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
     assert!(
@@ -105,6 +114,16 @@ fn play(server: &Ap2Server) -> Playing {
         asks: Vec::new(),
         next_ask: Instant::now(),
     }
+}
+
+fn start_sender() -> (Sender, HostAudio) {
+    let (sender, writer) = Sender::start(SenderConfig {
+        airplay2: true,
+        airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        ..SenderConfig::default()
+    })
+    .expect("the sender starts");
+    (sender, HostAudio::start(writer))
 }
 
 impl Playing {
@@ -646,12 +665,28 @@ fn capture_switch_without_flush() {
             "TEARDOWN",
             "SETUP session",
             "SETUP stream",
+            "POST /pair-setup",
             "POST /pair-verify",
             "GET /info",
         ]
         .map(|key| (key, count(server, key)))
     };
     let before = requests(&server);
+    let prompts = |tv: &Playing| {
+        tv.events
+            .seen
+            .iter()
+            .filter(|(_, event)| {
+                matches!(
+                    event,
+                    SenderEvent::Pairing {
+                        event: PairingEvent::PinRequested,
+                        ..
+                    }
+                )
+            })
+            .count()
+    };
 
     let switched = Instant::now();
     switch_capture(&mut tv);
@@ -673,9 +708,17 @@ fn capture_switch_without_flush() {
         gap.as_millis()
     );
     assert_eq!(requests(&server), before, "requests on the switch");
+    assert_eq!(prompts(&tv), 0, "PIN prompts");
     tv.assert_no_error();
     tv.sender.shutdown();
-    assert!(gap <= SWITCH_GAP, "{gap:?} of silence at the switch");
+    assert!(gap < SWITCH_GAP, "{gap:?} of silence at the switch");
+    cell(
+        "W6.switch",
+        &format!(
+            "source switch on the fake Samsung: 0 PIN prompts; 0 FLUSH, TEARDOWN, SETUP, pair-setup, pair-verify, GET /info; last old to first new frame {} ms (limit 1000)",
+            gap.as_millis()
+        ),
+    );
 }
 
 /// How long the television holds the answer to a volume read.
@@ -721,4 +764,458 @@ fn timeline_restart_waits_for_flush() {
     assert!(first.marker);
     tv.assert_no_error();
     tv.sender.shutdown();
+}
+
+/// A passed dry-run cell for `scripts/fake_tv_cells.sh`, which runs these
+/// tests with `--nocapture`; a plain `cargo test` swallows it.
+fn cell(id: &str, measured: &str) {
+    eprintln!("CELL {id} {measured}");
+}
+
+/// The longest a pause may take to quiet the television (weekend sheet W2).
+const QUIET_WITHIN: Duration = Duration::from_secs(1);
+/// How long each pause is watched for audio, past [`QUIET_WITHIN`] so a
+/// sender that keeps streaming shows.
+const PAUSE_WATCH: Duration = Duration::from_secs(2);
+/// Audio sent just before the FLUSH may still be on its way.
+const IN_FLIGHT: Duration = Duration::from_millis(50);
+
+// The weekend sheet's W2 on the fake Samsung: each pause reaches the
+// television as its FLUSH within a second, and no audio arrives after it.
+#[test]
+fn w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second() {
+    let _serial = serial();
+    let (socket, audio) = data_port();
+    let mut fake = FakeAp2::samsung();
+    fake.data_port = socket.local_addr().expect("address").port();
+    let server = Ap2Server::start(fake);
+    let mut tv = play(&server);
+    assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
+    let mut to_flush = Vec::new();
+    let mut to_quiet = Vec::new();
+    for cycle in 1..=3 {
+        let flushes = count(&server, "FLUSH");
+        let paused = Instant::now();
+        tv.sender.pause();
+        let mut flushed = None;
+        while flushed.is_none() && paused.elapsed() < LONG {
+            if count(&server, "FLUSH") > flushes {
+                flushed = Some(paused.elapsed());
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        let flushed = flushed.unwrap_or_else(|| panic!("no FLUSH for pause {cycle}"));
+        tv.run(PAUSE_WATCH, false);
+        let (seq, _) = flush_point(&server, flushes);
+        let flush_seen = paused + flushed + IN_FLIGHT;
+        let (late, past_flush, last) = {
+            let audio = audio.lock().expect("audio");
+            let since_pause = audio.iter().filter(|datagram| datagram.at >= paused);
+            let late = since_pause.clone().filter(|d| d.at > flush_seen).count();
+            let past_flush = since_pause
+                .filter(|datagram| datagram.seq.wrapping_sub(seq) < 0x8000)
+                .count();
+            (late, past_flush, audio.last().expect("audio").at)
+        };
+        assert_eq!(late, 0, "audio after the FLUSH of pause {cycle}");
+        assert_eq!(
+            past_flush, 0,
+            "packets at or past the FLUSH point in pause {cycle}"
+        );
+        to_flush.push(flushed);
+        to_quiet.push(last.saturating_duration_since(paused));
+        let held = audio.lock().expect("audio").len();
+        tv.sender.resume();
+        assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) > held + 50));
+    }
+    tv.assert_no_error();
+    tv.sender.shutdown();
+    let slowest = |times: &[Duration]| times.iter().max().copied().unwrap_or_default();
+    let (flush, quiet) = (slowest(&to_flush), slowest(&to_quiet));
+    assert!(flush < QUIET_WITHIN, "pause to FLUSH {to_flush:?}");
+    assert!(quiet < QUIET_WITHIN, "pause to the last audio {to_quiet:?}");
+    cell(
+        "W2.flush",
+        &format!(
+            "3 pauses on the fake Samsung: pause to FLUSH at most {} ms, last audio at most {} ms after the pause (limit 1000); 0 packets after the FLUSH or past its seq in 2 s",
+            flush.as_millis(),
+            quiet.as_millis()
+        ),
+    );
+}
+
+/// The command server's answer status to a remote control `command` sent
+/// as the television sends it.
+fn dacp_get(port: u16, command: &str, remote: &str) -> u16 {
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .expect("the command server takes the connection");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout");
+    write!(
+        stream,
+        "GET /ctrl-int/1/{command} HTTP/1.1\r\nHost: sender\r\nActive-Remote: {remote}\r\n\r\n"
+    )
+    .expect("send");
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") && matches!(stream.read(&mut byte), Ok(1)) {
+        head.push(byte[0]);
+    }
+    String::from_utf8_lossy(&head)
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0)
+}
+
+// The weekend sheet's LO4 on the fake Samsung: its remote's play, pause and
+// next reach the command server and the host as one command each, and the
+// session goes on untouched.
+#[test]
+fn lo4_the_samsung_remote_play_pause_and_next_reach_the_host_once_each() {
+    let _serial = serial();
+    let server = Ap2Server::start(FakeAp2::samsung());
+    let mut tv = play(&server);
+    let remote = server
+        .fake()
+        .requests
+        .iter()
+        .rev()
+        .find_map(|(request, _)| request.headers.get("Active-Remote").map(str::to_owned))
+        .expect("Active-Remote");
+    let port = tv.sender.dacp_counters().port();
+    let before = (count(&server, "FLUSH"), count(&server, "TEARDOWN"));
+    let answers: Vec<u16> = ["play", "pause", "nextitem"]
+        .into_iter()
+        .map(|command| dacp_get(port, command, &remote))
+        .collect();
+    assert_eq!(answers, [204, 204, 204]);
+    let commands = |tv: &Playing| -> Vec<RemoteCommand> {
+        tv.events
+            .seen
+            .iter()
+            .filter_map(|(_, event)| match event {
+                SenderEvent::Remote {
+                    key,
+                    target: None,
+                    command,
+                } if *key == tv.key => Some(*command),
+                _ => None,
+            })
+            .collect()
+    };
+    let deadline = Instant::now() + LONG;
+    while commands(&tv).len() < 3 && Instant::now() < deadline {
+        tv.run(Duration::from_millis(50), false);
+    }
+    tv.run(Duration::from_millis(500), false);
+    assert_eq!(
+        commands(&tv),
+        [
+            RemoteCommand::Play,
+            RemoteCommand::Pause,
+            RemoteCommand::Next
+        ]
+    );
+    assert_eq!(
+        (count(&server, "FLUSH"), count(&server, "TEARDOWN")),
+        before,
+        "the sender acts on no command itself"
+    );
+    tv.assert_no_error();
+    tv.sender.shutdown();
+    cell(
+        "LO4.dacp",
+        "fake Samsung remote play, pause, next: 3 answered 204, 3 host commands (Play, Pause, Next), 0 FLUSH or TEARDOWN from them",
+    );
+}
+
+const SAMPLE_RATE: f64 = 44_100.0;
+/// Features bit 16: the receiver shows progress (P14, P123).
+const PROGRESS_BIT: u32 = 1 << 16;
+/// How far a progress value may be off the track time it stands for.
+const PROGRESS_SLACK: f64 = 0.25;
+
+fn track_at(elapsed: Duration) -> NowPlaying {
+    NowPlaying {
+        track: None,
+        artwork: None,
+        progress: Some(Progress {
+            elapsed,
+            length: Duration::from_secs(240),
+        }),
+    }
+}
+
+/// Every `progress: start/current/end` the television was sent, in order.
+fn progress_sets(server: &Ap2Server) -> Vec<[u32; 3]> {
+    server
+        .fake()
+        .requests
+        .iter()
+        .filter_map(|(request, _)| {
+            let text = std::str::from_utf8(&request.body).ok()?;
+            let values = text.strip_prefix("progress:")?.trim();
+            let parsed: Vec<u32> = values.split('/').filter_map(|v| v.parse().ok()).collect();
+            <[u32; 3]>::try_from(parsed).ok()
+        })
+        .collect()
+}
+
+/// Seconds from RTP time `from` to `to`.
+fn rtp_seconds(from: u32, to: u32) -> f64 {
+    f64::from(to.wrapping_sub(from) as i32) / SAMPLE_RATE
+}
+
+/// How long after `set` the television got the audio at RTP time
+/// `current`: the progress names the audio arriving as it is set.
+fn current_heard_after(audio: &Mutex<Vec<Datagram>>, current: u32, set: Instant) -> f64 {
+    let at = audio
+        .lock()
+        .expect("audio")
+        .iter()
+        .find(|datagram| {
+            datagram.at + Duration::from_secs(1) >= set
+                && datagram.rtptime.wrapping_sub(current) < 0x8000_0000
+        })
+        .map(|datagram| datagram.at);
+    match at {
+        Some(at) if at >= set => at.duration_since(set).as_secs_f64(),
+        Some(at) => -set.duration_since(at).as_secs_f64(),
+        None => f64::INFINITY,
+    }
+}
+
+// The weekend sheet's Progress row on the fake Samsung: each progress the
+// host sets reaches the television naming the audio arriving then, and
+// the television's own mapping from the first one still reads the track
+// time after a pause; a seek starts a new mapping.
+#[test]
+fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
+    let _serial = serial();
+    let (socket, audio) = data_port();
+    let mut fake = FakeAp2::samsung();
+    fake.data_port = socket.local_addr().expect("address").port();
+    fake.info_body = samsung_info(PROGRESS_BIT, None);
+    let server = Ap2Server::start(fake);
+    let mut tv = play_listed(&server, samsung_tv_showing(&server, PROGRESS_BIT));
+    assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
+    let set = |tv: &mut Playing, elapsed: Duration| -> ([u32; 3], Instant) {
+        let sent = progress_sets(&server).len();
+        let at = Instant::now();
+        tv.sender
+            .set_now_playing(track_at(elapsed))
+            .expect("progress");
+        assert!(
+            wait_until(LONG, || progress_sets(&server).len() > sent),
+            "no progress reached the television"
+        );
+        tv.run(Duration::from_millis(500), false);
+        (progress_sets(&server)[sent], at)
+    };
+
+    let (first, first_at) = set(&mut tv, Duration::from_secs(10));
+    tv.run(Duration::from_secs(1), false);
+    let paused = Instant::now();
+    tv.sender.pause();
+    tv.run(Duration::from_secs(2), false);
+    let played = paused.duration_since(first_at);
+    tv.sender.resume();
+    let after_pause = Duration::from_secs(10) + played;
+    let (resumed, resumed_at) = set(&mut tv, after_pause);
+    tv.run(Duration::from_secs(1), false);
+    let (seek, seek_at) = set(&mut tv, Duration::from_secs(120));
+    tv.assert_no_error();
+    tv.sender.shutdown();
+    // A progress the sender sent on its own, such as at the resume, would
+    // carry the paused time into the track.
+    assert_eq!(
+        progress_sets(&server).len(),
+        3,
+        "{:?}",
+        progress_sets(&server)
+    );
+
+    let [start, current, end] = first;
+    let readings = [
+        ("first", rtp_seconds(start, current), 10.0),
+        ("length", rtp_seconds(start, end), 240.0),
+        (
+            "after the pause, by the first mapping",
+            rtp_seconds(start, resumed[1]),
+            after_pause.as_secs_f64(),
+        ),
+        (
+            "after the pause",
+            rtp_seconds(resumed[0], resumed[1]),
+            after_pause.as_secs_f64(),
+        ),
+        ("seek", rtp_seconds(seek[0], seek[1]), 120.0),
+        ("seek length", rtp_seconds(seek[0], seek[2]), 240.0),
+    ];
+    for (what, read, wanted) in readings {
+        assert!(
+            (read - wanted).abs() <= PROGRESS_SLACK,
+            "{what}: the television reads {read:.3} s, the track is at {wanted:.3} s"
+        );
+    }
+    let heard = [
+        current_heard_after(&audio, current, first_at),
+        current_heard_after(&audio, resumed[1], resumed_at),
+        current_heard_after(&audio, seek[1], seek_at),
+    ];
+    assert!(
+        heard.iter().all(|after| after.abs() <= 0.5),
+        "the audio each progress names arrived {heard:?} s after it was set"
+    );
+    let drift = (rtp_seconds(start, resumed[1]) - after_pause.as_secs_f64()).abs();
+    cell(
+        "Progress",
+        &format!(
+            "fake Samsung: progress at 10 s, a 2 s pause, a seek to 120 s; each names the audio arriving then (within {:.0} ms); after the pause the first mapping is {:.0} ms off the track (limit {:.0})",
+            heard
+                .iter()
+                .fold(0.0_f64, |most, after| most.max(after.abs()))
+                * 1000.0,
+            drift * 1000.0,
+            PROGRESS_SLACK * 1000.0
+        ),
+    );
+}
+
+/// The window the retry count is taken in, and the most sessions a
+/// speaker may start in it: at 0, 1, 3 and 7 s (P142).
+const RETRY_WINDOW: Duration = Duration::from_secs(8);
+const MOST_SESSIONS: usize = 4;
+
+/// Adds the television answering `refusals` and watches it for
+/// [`RETRY_WINDOW`]: the reasons reported and how many sessions started.
+fn refused_for_a_while(refusals: &[(&str, u16)]) -> (Vec<UserReason>, usize) {
+    let mut fake = FakeAp2::samsung();
+    for (key, status) in refusals {
+        fake.status.insert((*key).to_owned(), *status);
+    }
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start_sender();
+    let mut events = Events::default();
+    let device = samsung_tv(&server);
+    let key = device.key.clone();
+    sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    let end = Instant::now() + RETRY_WINDOW;
+    while Instant::now() < end {
+        events.drain(&sender);
+        thread::sleep(Duration::from_millis(10));
+    }
+    sender.shutdown();
+    let reasons = events
+        .of(&key)
+        .into_iter()
+        .filter_map(|event| match event {
+            SpeakerEvent::Error(error) => Some(error.reason),
+            _ => None,
+        })
+        .collect();
+    (reasons, count(&server, "GET /info"))
+}
+
+// The weekend sheet's L341 on the fake Samsung: a television another
+// sender holds (453 to SETUP) and one that turns the User-Agent down (403
+// to everything) each give the host an error, and the sender retries on
+// its back-off, never in a storm.
+#[test]
+fn l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off() {
+    let _serial = serial();
+    let (busy, busy_sessions) = refused_for_a_while(&[("SETUP session", 453)]);
+    assert!(!busy.is_empty(), "no error reported");
+    assert!(
+        busy.iter().all(|reason| *reason == UserReason::Busy),
+        "{busy:?}"
+    );
+    assert!(
+        (2..=MOST_SESSIONS).contains(&busy_sessions),
+        "{busy_sessions} sessions in {RETRY_WINDOW:?}"
+    );
+
+    let (refused, refused_sessions) = refused_for_a_while(&[
+        ("GET /info", 403),
+        ("POST /pair-setup", 403),
+        ("POST /pair-verify", 403),
+        ("SETUP session", 403),
+    ]);
+    // A 403 at pair-setup reads as a PIN the television wants; the user
+    // then acts, so the retries stop.
+    assert_eq!(refused, [UserReason::PairingRequired]);
+    assert_eq!(refused_sessions, 1, "sessions in {RETRY_WINDOW:?}");
+    cell(
+        "L341",
+        &format!(
+            "fake Samsung busy (453): Busy, {busy_sessions} sessions in 8 s (limit {MOST_SESSIONS}); refusing (403): PairingRequired, 1 session in 8 s",
+        ),
+    );
+}
+
+/// The first `/info` answer: the features with the low bits `low`, and
+/// `audioLatencies` giving an output latency of `micros` when there is one
+/// (P197).
+fn samsung_info(low: u32, micros: Option<i64>) -> Vec<u8> {
+    let mut entries = vec![
+        (
+            "features",
+            int(0x4_0000_0000 | 0x1_0000_0000_0000 | i64::from(low)),
+        ),
+        ("statusFlags", int(0x4)),
+        ("name", Value::String("Samsung".to_owned())),
+        ("model", Value::String("Speaker1,1".to_owned())),
+    ];
+    if let Some(micros) = micros {
+        entries.push((
+            "audioLatencies",
+            Value::Array(vec![dict(&[
+                ("type", int(100)),
+                ("audioType", Value::String("default".to_owned())),
+                ("inputLatencyMicros", int(0)),
+                ("outputLatencyMicros", int(micros)),
+            ])]),
+        ));
+    }
+    plist(dict(&entries))
+}
+
+// The weekend sheet's G9 on the fake Samsung: the latency the television
+// reports in /info comes to the host as R_s in the speaker's latency
+// event, which the app's debug log prints.
+#[test]
+fn g9_the_latency_the_samsung_reports_reaches_the_host_as_r_s() {
+    const REPORTED_US: i64 = 250_000;
+    let _serial = serial();
+    let mut fake = FakeAp2::samsung();
+    fake.info_body = samsung_info(0, Some(REPORTED_US));
+    let server = Ap2Server::start(fake);
+    let mut tv = play(&server);
+    tv.run(Duration::from_millis(200), false);
+    let latency = tv
+        .events
+        .of(&tv.key)
+        .into_iter()
+        .find_map(|event| match event {
+            SpeakerEvent::Latency(latency) => Some(latency),
+            _ => None,
+        })
+        .expect("a latency event");
+    tv.assert_no_error();
+    tv.sender.shutdown();
+    assert_eq!(latency.receiver_latency_us, REPORTED_US as u64);
+    assert_eq!(
+        latency.receiver_latency_sources,
+        LatencySources::AUDIO_LATENCIES
+    );
+    cell(
+        "G9",
+        &format!(
+            "fake Samsung /info outputLatencyMicros {REPORTED_US}: TV reported R_s = {} ms (audioLatencies), in the first latency event",
+            latency.receiver_latency_us / 1000
+        ),
+    );
 }
