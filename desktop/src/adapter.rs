@@ -10758,6 +10758,31 @@ mod tests {
         assert_eq!(state.zones[0].members.len(), 3, "nobody leaves the zone");
     }
 
+    // covers: S162, S246
+    #[test]
+    fn only_this_speaker_between_cast_members_never_stops_streaming() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN), cc(CAST_LIVING)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert!(adapter.snapshot().running);
+        let captures = adapter.audio.driver().captures_started().len();
+
+        adapter.only_this_speaker(&cc(CAST_LIVING));
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert!(state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert_eq!(
+            adapter.audio.driver().captures_started().len(),
+            captures,
+            "streaming never stopped in between"
+        );
+    }
+
     // covers: S246
     #[test]
     fn a_zone_click_turns_on_its_present_members_and_one_cast_speaker() {
