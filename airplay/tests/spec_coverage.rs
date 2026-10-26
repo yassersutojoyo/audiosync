@@ -89,8 +89,16 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// The line index where a source file's test code starts: its top-level
+/// `#[cfg(test)]` module, which ends the file by convention. A `// covers:`
+/// line above it would claim coverage for code no test runs.
+fn test_code_start(text: &str) -> usize {
+    let _ = text;
+    0
+}
+
 /// Clause numbers named by `// covers:` lines, with where each was named; and
-/// every malformed marker line.
+/// every malformed marker line, a marker outside test code included.
 fn covers() -> (BTreeMap<u32, Vec<String>>, Vec<String>) {
     let mut files = Vec::new();
     rust_files(&crate_dir().join("src"), &mut files);
@@ -104,11 +112,20 @@ fn covers() -> (BTreeMap<u32, Vec<String>>, Vec<String>) {
             .unwrap_or(&file)
             .display()
             .to_string();
+        let tests_from = if file.starts_with(crate_dir().join("src")) {
+            test_code_start(&text)
+        } else {
+            0
+        };
         for (index, line) in text.lines().enumerate() {
             let Some(list) = line.trim_start().strip_prefix(MARKER) else {
                 continue;
             };
             let place = format!("{name}:{}", index + 1);
+            if index < tests_from {
+                malformed.push(format!("{place}: outside test code: {}", line.trim()));
+                continue;
+            }
             let ids: Vec<Option<u32>> = match list.strip_prefix(' ') {
                 Some(list) => list.split(", ").map(clause_number).collect(),
                 None => vec![None],
@@ -228,6 +245,17 @@ fn every_clause_names_a_source_and_the_ids_are_p1_to_pn_once_each() {
         unsourced.is_empty(),
         "clauses without a *Source:* line: {}",
         list(unsourced)
+    );
+}
+
+#[test]
+fn only_markers_in_a_source_files_test_module_count() {
+    let text = "fn sender() {}\n// covers: P1\n#[cfg(test)]\nmod tests {\n    // covers: P2\n}\n";
+    assert_eq!(test_code_start(text), 2);
+    assert_eq!(
+        test_code_start("fn a() {\n    #[cfg(test)]\n    b();\n}\n"),
+        4,
+        "an indented cfg(test) is not the test module; with none, nothing counts"
     );
 }
 
