@@ -27,6 +27,11 @@ struct MicrophoneRequestGate {
         superseded = true
     }
 
+    /// The user picked the capture that plays (`source` with its channel
+    /// `pair`) again while a switch away from it waited on the prompt.
+    mutating func repicked(source: AudioSource, pair: Int) {
+    }
+
     /// The origin of the one start (or denied notice) the answer runs; nil
     /// when no request was out. Read `switching` first: this clears it.
     mutating func answer() -> StartOrigin? {
