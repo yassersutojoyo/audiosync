@@ -1053,7 +1053,7 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | EC5 source: the failed switch notice names both sources plainly | S141 |
 | EC5 source: the log names a source change and a pair change apart | S141 |
 | EC5 source: a switch rebuilds only the capture and keeps the session | S141 |
-| EC5 source: a switch with no speaker on stops the session | S141 |
+| EC5 source: a switch the start rule refuses (no speaker on any more) stops the session | S141 |
 | EC5 source: a switch to an input macOS still has to allow keeps the old source until the answer | S141 |
 | EC5 source: a switch to an input the microphone permission denies keeps the old capture | S141 |
 | EC5 source: a failed switch starts the old source on its own stored pair, or the old pair | S141 |
@@ -1098,7 +1098,7 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | EC8 all off: nothing to stop while stopped | S162 |
 | EC8 all off: turning a speaker on again starts streaming | S119, S144, S162 |
 | EC8 all off: only a switch-on while stopped starts streaming | S119, S162 |
-| EC8 all off: Start with no speaker on asks for one first | S116, S136, S162 |
+| EC8 all off: an automatic start with no speaker on asks for one first | S116, S136, S162 |
 | EC10 many speakers: sixteen speakers all listed, in name order | S146, S152, S165 |
 | EC10 many speakers: eight local speakers are attached together | S146, S161, S165 |
 | EC11 long names: names that differ only at the end still sort and stay whole | S147, S152, S166 |

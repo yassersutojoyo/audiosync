@@ -205,7 +205,7 @@ What a sender needs that no source used here settles. Each gap names the clauses
 
 The sender's tests run against a fake receiver in the same process: a TLS server on an ephemeral port with a self-signed certificate that speaks the framing of section 3, answers on the connection, heartbeat, receiver and media namespaces as this document describes, and acts as the device for the HTTP fetch, with switches for each case below (slow or missing replies, error replies, `CLOSE`, an app taken over, a fetch that never comes, a slow reader). A switch makes it a group: it listens on a port other than 8009, answers on the multizone namespace and can fetch the stream from several local addresses. A fake multicast DNS responder serves the discovery cases. Names are suggestions; what matters is what each test checks. Gaps marked *hardware* in section 9 can't be settled in CI.
 
-| Test | Clauses | Checks |
+| Test (suggested name) | Clauses | Checks |
 |---|---|---|
 | scope_limits | C1, C2, C4 to C7, C9 | a second Cast target in one stream, a member of the playing group included, is refused with a reason; no message carries a host name, user name or hardware address |
 | audio_handoff_realtime | C8 | the host's write call does not allocate or block, checked with an allocation counter and a stalled network thread |

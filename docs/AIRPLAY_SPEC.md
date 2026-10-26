@@ -379,7 +379,7 @@ The two open-source receivers studied for the revision settled points inside cla
 
 The crate's tests run against a fake receiver in the same process: an RTSP server plus UDP control and timing sockets that behave as this document describes, with switches for each case below (password, legacy pairing, status codes, `timing_port` 0, packet loss, clock offset and drift, a slow or silent receiver). Crypto tests use the published vectors of the RFCs and of the Apple TV pairing write-up (P145). Names are suggestions; what matters is what each test checks. Tests marked *hardware* need a real speaker and can't run in CI.
 
-| Test | Clauses | Checks |
+| Test (suggested name) | Clauses | Checks |
 |---|---|---|
 | scope_and_protocol_choice | P1, P2, P45 | receivers offering only encryption types 1, 3, 4 or 5 are Unsupported; a device with both services is driven over AirPlay 1; the AirPlay 2 path is off by default, and an AirPlay 2-only device is then Unsupported ("AirPlay 2 only"); only Unsupported or Refused switches a speaker to the AirPlay 2 path when it is on; the mode table for a set of TXT records |
 | ap2_switch_off_silent | P2, P170 | logic test with the switch off, against a fake receiver that advertises both services and one that is AirPlay 2 only: no `/info`, HomeKit pairing, plist SETUP, `/feedback`, event connection, framed RTSP or PTP datagram is sent and the sender creates no PTP service; the AirPlay 1 exchange has the same request sequence, methods and header names as the run with the switch on, with random and clock-derived fields masked; a dual-service device whose AirPlay 1 attempt is Refused stays Refused; the AirPlay 2-only device is Unsupported ("AirPlay 2 only") |
