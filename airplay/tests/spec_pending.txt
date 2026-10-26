@@ -23,4 +23,4 @@ P212 Hardware: two or more AirPlay 2 receivers on one PTP timeline (G20).
 P218 Partly done: the outcome lives on the speaker the host holds and goes with it; per device, the goodbye rule and the log line are missing.
 P219 a pairing for a remembered outcome still takes the legacy path once the host let the speaker go
 P220 a legacy pairing ending in Unsupported or Refused doesn't go on to the AirPlay 2 pairing
-P221 the dual-service fake and cases (a) to (e) aren't written
+P221 the dual-service fake and cases (a) to (f) aren't written
