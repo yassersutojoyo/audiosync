@@ -12,9 +12,10 @@
 //!     [--code <digits>] [--summary]
 //! ```
 //!
-//! Two copies run side by side when each has its own `--deviceid` and
-//! `--name`: a sender keys a speaker by its deviceid, and the port is free
-//! (0, printed at start) unless `--port` names one.
+//! Two copies run side by side when each has its own `--deviceid`, since a
+//! sender keys a speaker by it; a copy with another id also gets its own
+//! default name and mDNS host, and the port is free (0, printed at start)
+//! unless `--port` names one.
 //!
 //! Every request line and its answer status goes to stdout; with `--summary`
 //! only one plain line per event a dry-run sheet judges, with its running
@@ -56,8 +57,9 @@ struct Options {
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
+    let mut name = None;
     let mut options = Options {
-        name: "AudioSync Test TV".to_owned(),
+        name: String::new(),
         device_id: DEVICE_ID,
         port: 0,
         pin: Pin::None,
@@ -70,7 +72,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         match arg.as_str() {
             "--lan" => options.on_network = true,
             "--summary" => options.summary = true,
-            "--name" => options.name = value()?,
+            "--name" => name = Some(value()?),
             "--deviceid" => options.device_id = television::parse_device_id(&value()?)?,
             "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
             "--pin" => {
@@ -90,6 +92,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             other => return Err(format!("unknown argument {other}")),
         }
     }
+    options.name = name.unwrap_or_else(|| television::default_name(options.device_id));
     Ok(options)
 }
 

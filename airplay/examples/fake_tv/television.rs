@@ -16,6 +16,7 @@ pub const FEATURES_HIGH: u64 = 0x1_0040;
 pub const FEATURES_METADATA: u64 = 0x3_8000;
 /// The label of its own mDNS host name, in the `.local.` domain.
 pub const HOST_LABEL: &str = "audiosync-test-tv";
+pub const NAME: &str = "AudioSync Test TV";
 pub const MODEL: &str = "Speaker1,1";
 /// A locally administered address in the documentation block of RFC 7042.
 pub const DEVICE_ID: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x55];
@@ -48,15 +49,24 @@ pub fn device_id_text(id: [u8; 6]) -> String {
         .join(":")
 }
 
-/// Its mDNS host label: the default identity keeps [`HOST_LABEL`] so the
-/// runbooks still match, another one gets its own so two copies never
-/// share a host record.
-pub fn host_label(id: [u8; 6]) -> String {
+/// `base` for the default identity, so the runbooks still match; another
+/// one gets its id as a suffix, so two copies never share a record.
+fn with_id(base: &str, id: [u8; 6]) -> String {
     if id == DEVICE_ID {
-        return HOST_LABEL.to_owned();
+        return base.to_owned();
     }
     let hex: String = id.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("{HOST_LABEL}-{hex}")
+    format!("{base}-{hex}")
+}
+
+/// Its mDNS host label.
+pub fn host_label(id: [u8; 6]) -> String {
+    with_id(HOST_LABEL, id)
+}
+
+/// The name it serves and advertises when `--name` gives none.
+pub fn default_name(id: [u8; 6]) -> String {
+    with_id(NAME, id)
 }
 
 /// Reads `--deviceid`: six colon-separated hex bytes, the form the

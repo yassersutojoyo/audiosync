@@ -40,6 +40,19 @@ fn a_malformed_id_names_the_expected_form() {
 fn the_default_identity_keeps_its_host_and_id() {
     assert_eq!(television::device_id_text(DEVICE_ID), "02:00:5E:00:53:55");
     assert_eq!(television::host_label(DEVICE_ID), HOST_LABEL);
+    assert_eq!(television::default_name(DEVICE_ID), "AudioSync Test TV");
+}
+
+#[test]
+fn another_id_gets_its_own_default_name_with_the_host_suffix() {
+    assert_eq!(
+        television::default_name(OTHER),
+        "AudioSync Test TV-02005e005356"
+    );
+    assert_eq!(
+        television::host_label(OTHER),
+        "audiosync-test-tv-02005e005356"
+    );
 }
 
 #[test]
