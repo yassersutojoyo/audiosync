@@ -314,7 +314,7 @@ extension AppDelegate {
         let wasRunning = engine.isRunning
         engine.stop()   // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
         syncNativeSpeakers()   // nothing streams: AudioSync's own sender's speakers leave
-        if wasRunning && reason != .quitting { endNativePinSessions() }
+        endNativePinSessions(.stopped(reason), streaming: wasRunning)
         syncCast()   // and the Cast session ends
         // About this session's audio, which just ended; a notice about why it
         // ended is posted after this.

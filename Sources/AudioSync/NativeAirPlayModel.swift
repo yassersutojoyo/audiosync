@@ -71,12 +71,31 @@ struct EveryTimeGuard: Equatable {
         return asking.filter { enabled.contains($0) && !byHand.contains($0) }
     }
 
-    /// The stream ended, and with it the PIN session each click bought, so
-    /// every mark goes (a retry inside the stream keeps them). Of `asking`,
-    /// the speakers still on go off with the notice that they need a PIN.
-    mutating func streamEnded(_ asking: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
+    /// When `cause` ends a stream that ran, it ends the PIN session each
+    /// click bought, so every mark goes (a retry or a source change inside
+    /// the stream keeps them, S223). Of `asking`, the speakers still on go
+    /// off with the notice that they need a PIN.
+    mutating func streamEnded(_ cause: StreamEnd, streaming: Bool,
+                              asking: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
+        guard cause.endsStream(streaming: streaming) else { return [] }
         byHand.removeAll()
         return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+    }
+}
+
+/// What may end the stream for `EveryTimeGuard`.
+enum StreamEnd: Equatable {
+    case stopped(SessionStop)
+    /// The sender stopped after an internal error; Retry starts a new stream.
+    case senderFailed
+    /// The Mac goes to sleep, which counts as streaming stopping.
+    case sleep
+
+    func endsStream(streaming: Bool) -> Bool {
+        guard streaming else { return false }
+        guard case .stopped(let reason) = self else { return true }
+        // A quit leaves the switches for the next launch, which turns such a speaker off anyway.
+        return !reason.restarts && reason != .quitting
     }
 }
 

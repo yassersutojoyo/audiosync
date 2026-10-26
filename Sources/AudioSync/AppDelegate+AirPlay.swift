@@ -160,7 +160,9 @@ extension AppDelegate {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             DebugTrace.log("[AudioSync] going to sleep")
-            self?.macAsleep = true
+            guard let self else { return }
+            self.macAsleep = true
+            self.endNativePinSessions(.sleep, streaming: self.engine.isRunning)
         }
         center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             self?.wokeFromSleep()
