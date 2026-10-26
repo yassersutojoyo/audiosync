@@ -2190,6 +2190,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 {
                     Ok(())
                 } else {
+                    // A failed switch leaves no session: the network
+                    // speakers leave the stream as at a stop (S114).
+                    self.airplay_streaming(false);
+                    self.release_busy();
                     Err(error)
                 }
             }
