@@ -9,8 +9,8 @@
 # Steps:
 #   1) the Rust audio core (scripts/build_core.sh)
 #   2) the app binary (swift build -c release), linked with the core
-#   3) a fresh AudioSync.app: Info.plist, the binary, the icon, the font, the
-#      notices and license files
+#   3) a fresh AudioSync.app: Info.plist, the binary, Sparkle.framework (the
+#      updater), the icon, the font, the notices and license files
 #   4) signing
 #   5) quitting the running AudioSync and installing to /Applications, or
 #      ~/Applications when /Applications isn't writable
@@ -90,6 +90,12 @@ swift build "${swift_args[@]}"
 [ -f "$binary" ] || die "swift build left no $binary"
 nm -gU "$binary" | grep ' T _asc_version$' >/dev/null \
   || die "$binary doesn't contain the audio core (no _asc_version): run scripts/build_core.sh and build again"
+# SwiftPM copies the Sparkle package's framework next to the binary.
+sparkle_built="$bin_dir/Sparkle.framework"
+[ -d "$sparkle_built" ] || die "swift build left no $sparkle_built"
+otool -L "$binary" | grep '@rpath/Sparkle.framework/' >/dev/null || die "$binary doesn't link Sparkle.framework"
+otool -l "$binary" | grep '@executable_path/../Frameworks' >/dev/null \
+  || die "$binary has no @executable_path/../Frameworks rpath (Package.swift's linker settings)"
 
 # ---------------------------------------------------------------------------
 say "3/5  Assembling AudioSync.app"
@@ -102,6 +108,9 @@ cp Info.plist "$contents/Info.plist"
 printf 'APPL????' > "$contents/PkgInfo"
 cp "$binary" "$contents/MacOS/$EXECUTABLE"
 chmod 755 "$contents/MacOS/$EXECUTABLE"
+mkdir -p "$contents/Frameworks"
+# ditto keeps the framework's Versions/Current symlinks.
+ditto "$sparkle_built" "$contents/Frameworks/Sparkle.framework"
 
 icon=$(plist_value CFBundleIconFile) || icon=AppIcon
 cp AppIcon.icns "$resources/${icon%.icns}.icns"
@@ -208,8 +217,19 @@ sign() {
 }
 
 sign_all() {
-  local app_args=()
+  local app_args=() sparkle version nested
   if [ -n "$entitlements" ]; then app_args=(--entitlements "$entitlements"); fi
+  # Inside out: each signature seals the ones nested in it. Sparkle's
+  # Downloader service keeps its own entitlements.
+  sparkle="$APP/Contents/Frameworks/Sparkle.framework"
+  version="$sparkle/Versions/$(readlink "$sparkle/Versions/Current")"
+  for nested in "$version/XPCServices/Installer.xpc" "$version/Autoupdate" "$version/Updater.app"; do
+    if [ -e "$nested" ]; then sign "$nested" || return 1; fi
+  done
+  if [ -e "$version/XPCServices/Downloader.xpc" ]; then
+    sign --preserve-metadata=entitlements "$version/XPCServices/Downloader.xpc" || return 1
+  fi
+  sign "$sparkle" || return 1
   sign ${app_args[@]+"${app_args[@]}"} "$APP" || return 1
 }
 

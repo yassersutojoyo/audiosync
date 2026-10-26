@@ -8106,6 +8106,19 @@ do {
           "late callbacks: suppressed-count line")
 }
 
+// MARK: Updates run only in builds that carry the EdDSA public key (UpdateGate.swift)
+do {
+    check(!UpdateGate.isEnabled(publicEDKey: nil), "updates: no SUPublicEDKey keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: ""), "updates: the empty key a dev build ships keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: " \n\t"), "updates: a whitespace-only key keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: 42), "updates: a key that isn't a string keeps the updater off")
+    check(UpdateGate.isEnabled(publicEDKey: "a-test-key-not-a-real-one"),
+          "updates: a non-empty key turns the updater on")
+    let plist = (try? String(contentsOfFile: "Info.plist", encoding: .utf8)) ?? ""
+    check(plist.contains("<key>SUFeedURL</key>\n\t<string>https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml</string>"),
+          "updates: Info.plist points SUFeedURL at the latest release's appcast.xml")
+}
+
 // MARK: Every session stop names its reason in the debug log (SessionStop in AppLifecycle.swift)
 do {
     let all = SessionStop.allCases

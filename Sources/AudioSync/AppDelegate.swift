@@ -348,6 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         handleEngineEvents()
         setUpMenuBar()
+        AppUpdater.start()
         NSApp.mainMenu = MainMenu.make(text: text, airPlay2: airPlay2, airPlay2AtLaunch: airPlay2AtLaunch,
                                        appMenuDelegate: self)
         mainWindow = MainWindowController(model: appModel)

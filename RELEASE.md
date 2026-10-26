@@ -21,12 +21,15 @@ VERSION=x.y.z
 NOTES=path/to/release-notes.md          # your local notes file, not committed
 ./make-dmg.sh                               # → AudioSync.dmg
 ditto -c -k --keepParent /Applications/AudioSync.app "AudioSync-$VERSION.zip"
+scripts/sign_appcast.sh "$VERSION"          # → appcast.xml, for the app's updater
 shasum -a 256 AudioSync.dmg "AudioSync-$VERSION.zip" THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
 
 git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION"
 gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
-  AudioSync.dmg "AudioSync-$VERSION.zip" SHA256SUMS.txt THIRD_PARTY_NOTICES.md
+  AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml SHA256SUMS.txt THIRD_PARTY_NOTICES.md
 ```
+
+The app updates itself with Sparkle from `releases/latest/download/appcast.xml`, so every release needs its own `appcast.xml` next to the zip. Sparkle checks each download against the EdDSA public key in `Info.plist` (`SUPublicEDKey`). The key pair comes from Sparkle's `generate_keys` (in `.build/artifacts` after `swift build`, under `Sparkle/bin`), run once on the release Mac: it keeps the private key in the login keychain and prints the public key for `Info.plist`. The key in the repository stays empty, so local and CI builds never check for updates; put the public key in before `./build.sh` for a release and leave that change out of the commit. `scripts/sign_appcast.sh` refuses a zip whose app has no key. Back the private key up the same way as the signing keychain (`generate_keys -x` exports it): without it, released builds can't take another update.
 
 Run `Tests/soak.sh` for the full 60 minutes before every release and only go on when it ends with `VERDICT: PASS`. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
 

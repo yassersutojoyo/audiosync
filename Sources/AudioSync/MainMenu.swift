@@ -14,6 +14,7 @@ enum MainMenu {
         let app = submenu(of: main, title: t.appName)
         app.delegate = appMenuDelegate
         app.addItem(AboutPanel.menuItem(text: t))
+        if let update = AppUpdater.menuItem(text: t) { app.addItem(update) }
         app.addItem(.separator())
         let appearance = NSMenu(title: t.appearance)
         for choice in AppAppearance.allCases {
