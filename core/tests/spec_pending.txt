@@ -3,7 +3,7 @@
 # space, what is missing. tests/spec_coverage.rs fails once a clause listed here
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
-S317 The renderer's start window: opened by its first timed callback, once per renderer, closed after 3 s of device frames or at a stop's fade-out (team B T17).
-S318 The start step: a confirmed run of earlier callbacks inside the window moves the anchor floor and re-anchors once, faded while audible, counted apart (team B T17).
-S319 No start step after the window: a later fall stays S209's fall and S207's trim (team B T17).
-S320 The timing matrix's start-step checks: one step per late-first output, its delay within 2 ms of its on-time twin's from the window's end, f20 included, and no step elsewhere (team B T17).
+S317 the start window: the core has no start window yet
+S318 the start step: the core makes no start step yet
+S319 no start step after the window: the core has no start window yet
+S320 the timing matrix's and the render test's start-step checks: not written yet
