@@ -1318,6 +1318,7 @@ impl AirPlaySpeakers {
         self.pairings.clear();
         self.ending.clear();
         self.airplay1_outcome.clear();
+        self.session_paths.clear();
         // A password prompt still waiting (discovery stopped, the sessions
         // didn't) stays, as the speaker joins with it once listed again;
         // one for a pairing goes with the pairing, and the speaker stays off.
@@ -1373,6 +1374,7 @@ impl AirPlaySpeakers {
         self.ending.clear();
         self.password_attempts.clear();
         self.airplay1_outcome.clear();
+        self.session_paths.clear();
         // Its prompts go with it, as on the Mac. A speaker left on without
         // its password would stay silent, so it goes off with a notice.
         for (id, ask) in std::mem::take(&mut self.password_asks) {
