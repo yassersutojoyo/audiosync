@@ -7802,7 +7802,7 @@ mod tests {
         cell(
             "K1.keep.m63",
             &format!(
-                "row 40 at master 63 starts the TV at {:.2} dB after pause, off/on and restart; reads moved the row {} times",
+                "row 40 at master 63 starts the TV at {:.2} dB after pause, off/on and restart; {} reads, all row 40",
                 first,
                 rows.len()
             ),

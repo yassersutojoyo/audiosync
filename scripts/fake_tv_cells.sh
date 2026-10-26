@@ -33,7 +33,7 @@ failed=0
 # shown, then prints every expected cell in order: PASS with what its test
 # measured, or FAIL with the first panic message when it never printed.
 cells_from_tests() {
-    local target=$1 spec id cells names=() ids=() out why line
+    local target=$1 spec id cells names=() ids=() out why line status=0
     shift
     for spec in "$@"; do
         names+=("${spec%%=*}")
@@ -43,17 +43,22 @@ cells_from_tests() {
     # The CELL lines and panics go to stderr; libtest's own lines are dropped.
     # shellcheck disable=SC2086 # $target is one or two cargo arguments.
     out=$(cargo test --quiet --locked $target -- --exact --nocapture --test-threads=1 \
-        "${names[@]}" 2>&1 >/dev/null) || true
+        "${names[@]}" 2>&1 >/dev/null) || status=$?
     why=$(grep -A1 -m1 "panicked at" <<<"$out" | tail -n 1 || true)
     for id in "${ids[@]}"; do
         line=$(grep -m1 "^CELL $id " <<<"$out" || true)
         if [ -n "$line" ]; then
-            printf '%-9s %-7s %s\n' "$id" PASS "${line#"CELL $id "}"
+            printf '%-16s %-7s %s\n' "$id" PASS "${line#"CELL $id "}"
         else
-            printf '%-9s %-7s %s\n' "$id" FAIL "${why:-its test did not pass: cargo test $target}"
+            printf '%-16s %-7s %s\n' "$id" FAIL "${why:-its test did not pass: cargo test $target}"
             failed=1
         fi
     done
+    # A panic after the last CELL line still fails the run.
+    if [ "$status" -ne 0 ]; then
+        echo "fake_tv_cells: cargo test $target exited $status" >&2
+        failed=1
+    fi
 }
 
 core=ffi::airplay::tests
