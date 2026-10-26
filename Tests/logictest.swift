@@ -30,6 +30,33 @@ var mono = true
 for p in stride(from: 0.0, to: 100, by: 1) where VolumeCurve.gain(position: p + 1) <= VolumeCurve.gain(position: p) { mono = false }
 check(mono, "volume: strictly increasing")
 
+// covers: S290, S291 (a level set on the speaker is kept for its next session)
+do {
+    // The TV's remote set −18.0 dB at master 63: D = 100 × (−18 + 30) / 30 = 40, and the core stored own 63.
+    let remote = AirPlayDeviceLevel(level: 40, zone: 100, master: 63)
+    let rejoin = AirPlayDeviceLevel.sent(own: 63, zone: 100, master: 63, remembered: remote)
+    check(approx(rejoin, 40, 1e-9) && approx(-30 + 0.3 * rejoin, -18, 1e-9),
+          "airplay level: a speaker removed and added again gets the level its remote set (−18.0 dB at master 63)",
+          "\(rejoin)")
+    // Past the ceiling: TV at 80 by its remote at master 63 stores own 100, whose product is only 63.
+    let loud = AirPlayDeviceLevel(level: 80, zone: 100, master: 63)
+    let loudRejoin = AirPlayDeviceLevel.sent(own: 100, zone: 100, master: 63, remembered: loud)
+    check(approx(loudRejoin, 80, 1e-9),
+          "airplay level: a level past own × zone × master is kept on a new session too (80 at master 63)",
+          "\(loudRejoin)")
+    for (own, kept) in [(63.0, remote), (100.0, loud)] {
+        let restored = AirPlayDeviceLevel.sent(own: own, zone: 100, master: 63, remembered: kept)
+        let row = AirPlayDeviceLevel.row(own: own, zone: 100, master: 63, remembered: kept)
+        check(asc_airplay_row_level(restored) == row && approx(restored, kept.level, 1e-9),
+              "airplay level: Calibrate All Speakers gives back the level the row shows (\(Int(kept.level)) at master 63)",
+              "sent \(restored), row \(row)")
+    }
+    let moved = AirPlayDeviceLevel.sent(own: 63, zone: 100, master: 63,
+                                        remembered: AirPlayDeviceLevel(level: 40, zone: 100, master: 50))
+    check(approx(moved, asc_airplay_device_level(63, 100, 63), 1e-9),
+          "airplay level: a level from before a master move is not kept, own × zone × master is", "\(moved)")
+}
+
 // MARK: Audio source persistence
 for src in [AudioSource.system, .app(bundleID: "com.spotify.client"), .input(uid: "BuiltInMicrophoneDevice")] {
     check(AudioSource(defaultsValue: src.defaultsValue) == src, "source: round-trip \(src)")

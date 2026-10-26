@@ -33,6 +33,12 @@ struct AirPlayDeviceLevel: Equatable {
         return asc_airplay_row_level(asc_airplay_device_level(own, zone, master))
     }
 
+    /// The device level an AirPlay speaker gets when it joins, or when
+    /// Calibrate All Speakers gives its volume back (S290, S291).
+    static func sent(own: Double, zone: Double, master: Double, remembered: AirPlayDeviceLevel?) -> Double {
+        asc_airplay_device_level(own, zone, master)
+    }
+
     /// A row moved to `row`: the own volume to store and the device level to
     /// send; nil when zone × master is 0, where the move sends nothing (S290).
     static func move(row: Double, zone: Double, master: Double) -> (own: Double, level: Double)? {

@@ -390,7 +390,8 @@ extension AppDelegate {
             // It starts at own × zone × master, so its row shows that again.
             airplayDeviceLevel[NativeAirPlayID.app(id)] = nil
             native.add(id, volume: volume)
-            DebugTrace.log("[AudioSync] native AirPlay: added \(nativeLabel(id)) at volume \(Int(volume.rounded())), master \(Int(masterVolume.rounded()))")
+            let level = sendNativeRowLevel(NativeAirPlayID.app(id))
+            DebugTrace.log("[AudioSync] native AirPlay: added \(nativeLabel(id)) at level \(Int(level.rounded(.down))), volume \(Int(volume.rounded())), master \(Int(masterVolume.rounded()))")
         }
         retimeLocalOutputs()
         for off in plan.turnOff {
@@ -484,6 +485,19 @@ extension AppDelegate {
         for id in ids where before[id] != after[id] {
             airplayDeviceLevel[id] = nil
         }
+    }
+
+    /// Sends AirPlay speaker `id` (app ID) the device level its row shows, as
+    /// it joins or gets its volume back after Calibrate All Speakers; returns it.
+    @discardableResult
+    func sendNativeRowLevel(_ id: String) -> Double {
+        let own = airplayVolume[id] ?? defaultVolume
+        let level = AirPlayDeviceLevel.sent(own: own, zone: airPlayZoneVolume(id), master: masterVolume,
+                                            remembered: airplayDeviceLevel[id])
+        if let receiver = NativeAirPlayID.receiver(id) {
+            nativeAirPlay?.setDeviceLevel(receiver, own: own, level: level)
+        }
+        return level
     }
 
     /// The zone volume of AirPlay speaker `id` (app ID), 100 in no zone (S249).
