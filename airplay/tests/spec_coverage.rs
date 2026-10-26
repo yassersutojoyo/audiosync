@@ -3,11 +3,10 @@
 //! `#[cfg(test)]` module of a file in `airplay/src`, or is listed in
 //! `airplay/tests/spec_pending.txt` with a one-line reason because a later
 //! stage implements it (audio and RTP, timing, pairing crypto, real
-//! transport, AirPlay 2). A clause is covered
-//! only when everything it asks of the sender is implemented and tested; a
-//! test for part of a pending clause says so in a plain comment instead of a
-//! marker. The pending list may only shrink: a clause that gains a marker
-//! must leave it.
+//! transport, AirPlay 2). A clause is covered only when everything it asks
+//! of the sender is implemented and tested; a test for part of a pending
+//! clause says so in a plain comment instead of a marker. The pending list
+//! may only shrink: a clause that gains a marker must leave it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
