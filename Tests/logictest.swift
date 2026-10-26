@@ -8389,5 +8389,68 @@ do {
           "local network: once refused, the advice names it, unless the hint on screen already does")
 }
 
+// MARK: Permission setup window (PermissionFlow.swift, PermissionSetup)
+do {
+    let fresh = PermissionAsks(explained: [], usedBefore: false)
+    check(PermissionSetup.showsAtLaunch(fresh, seen: false),
+          "setup: a first install opens the permission setup by itself")
+    check(!PermissionSetup.showsAtLaunch(fresh, seen: true),
+          "setup: it opens by itself only once, skipped or done")
+    check(!PermissionSetup.showsAtLaunch(PermissionAsks(explained: [], usedBefore: true), seen: false),
+          "setup: an update from a version without explanations doesn't open it")
+    check(!PermissionSetup.showsAtLaunch(PermissionAsks(explained: ["localNetwork", "audioCapture"], usedBefore: false),
+                                         seen: false),
+          "setup: a user who already went through both explanations doesn't get it")
+    check(PermissionSetup.required == [.localNetwork, .audioCapture]
+            && PermissionSetup.optional == [.microphone, .automation],
+          "setup: Local Network and audio capture are asked together; microphone and Automation wait for their feature")
+
+    check(PermissionSetup.localNetwork(.unknown, asked: false) == .notAsked
+            && PermissionSetup.localNetwork(.unknown, asked: true) == .waiting
+            && PermissionSetup.localNetwork(.allowed, asked: false) == .allowed
+            && PermissionSetup.localNetwork(.denied, asked: true) == .denied,
+          "setup: the Local Network row follows the probe's answer")
+    check(PermissionSetup.audioCapture(heard: false, asked: false) == .notAsked
+            && PermissionSetup.audioCapture(heard: false, asked: true) == .askedUnknown
+            && PermissionSetup.audioCapture(heard: true, asked: false) == .allowed,
+          "setup: audio capture shows allowed only once a tap heard sound; asked otherwise, since macOS doesn't say")
+    check(PermissionSetup.microphone(.notAsked, asking: false) == .notAsked
+            && PermissionSetup.microphone(.notAsked, asking: true) == .waiting
+            && PermissionSetup.microphone(.allowed, asking: false) == .allowed
+            && PermissionSetup.microphone(.denied, asking: false) == .denied,
+          "setup: the microphone row follows what macOS reports")
+
+    var rows: [Permission: SetupRowState] = [.localNetwork: .notAsked, .audioCapture: .notAsked]
+    check(PermissionSetup.next(rows) == .localNetwork, "setup: Allow asks for Local Network first")
+    rows[.localNetwork] = .waiting
+    check(PermissionSetup.next(rows) == .audioCapture, "setup: then audio capture")
+    rows[.audioCapture] = .askedUnknown
+    check(PermissionSetup.next(rows) == nil, "setup: nothing left to ask once both were asked")
+    check(PermissionSetup.next([.localNetwork: .allowed, .audioCapture: .notAsked]) == .audioCapture,
+          "setup: a permission already allowed is skipped")
+
+    check(PermissionSetup.offersSettings(.denied) && PermissionSetup.offersSettings(.askedUnknown)
+            && !PermissionSetup.offersSettings(.allowed) && !PermissionSetup.offersSettings(.notAsked)
+            && !PermissionSetup.offersSettings(.waiting),
+          "setup: a refused row, or one macOS can't report after asking, offers its Settings link")
+
+    var asks = PermissionAsks(explained: [], usedBefore: false)
+    PermissionSetup.required.forEach { asks.accept($0) }
+    check(asks.step(.localNetwork, state: .unknown, userAction: false) == .go
+            && asks.step(.audioCapture, state: .unknown, userAction: true) == .go
+            && asks.step(.microphone, state: .notAsked, userAction: true) == .explain,
+          "setup: after Allow, nothing it asked for is explained again; the microphone still is")
+
+    let t = UIStrings()
+    let states: [SetupRowState] = [.notAsked, .waiting, .allowed, .denied, .askedUnknown]
+    let words = states.map(t.setupState) + Permission.allCases.map(t.setupDetail)
+        + [t.setupTitle, t.setupHeading, t.setupIntro, t.setupLater, t.setupAllow, t.setupAsking, t.setupDone,
+           t.setupSkip, t.setupAllowOne, t.setupMenu]
+    check(words.allSatisfy { !$0.isEmpty && !$0.contains("\u{2014}") }
+            && Set(states.map(t.setupState)).count == states.count,
+          "setup: every line is plain text without em dashes, and each state reads differently")
+    check(t.setupMenu.hasSuffix("…"), "setup: the menu item that opens the window ends in an ellipsis")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
