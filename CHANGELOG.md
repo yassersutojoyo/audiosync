@@ -80,6 +80,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, with `AUDIOSYNC_DEBUG=1`, the debug log notes each time a local output's audio arrives late, with the output's name.
 - With `AUDIOSYNC_DEBUG=1`, the debug log says why a speaker asks for its PIN again, on the Mac and on Windows.
 - On the Mac, VoiceOver reads the source menu as Audio Source and the equalizer's menu as Curve, each with what's chosen as its value.
+- On the Mac, the notice for AirPlay stopping after an internal error now also says to restart AudioSync if it keeps happening, as on Windows.
 - For testing, with `AUDIOSYNC_DEBUG=1`: `AUDIOSYNC_NO_AUTO_CONNECT=1` keeps every speaker off for that launch and saves nothing, `AUDIOSYNC_WEB_REMOTE=1` turns the Web Remote on for one run, the debug log shows each Web Remote pairing code, and on the Mac it says why each session stopped. On the Mac and on Windows.
 
 ### Fixed
@@ -123,12 +124,16 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, picking the source or input channels that are already playing clears the "Couldn't start" notice and changes nothing else.
 - In the dark theme the teal text, such as a link or a delay value, is lighter, so it stays readable on a hovered or playing row, and so do the speaker icons in the Mac menu bar panel over a light window. On the Mac and on Windows.
 - On Windows, Narrator reads a name for the port box and each button in the Web Remote window.
+- After streaming starts with every speaker off, a speaker that goes off before it ever plays, such as one that asks for a code every time, no longer stops streaming: AudioSync waits for the next one. Once a speaker has played, turning the last one off still stops streaming. On the Mac and on Windows.
+- An AirPlay speaker that turns the connection down before any pairing starts goes off with a notice that says it didn't accept the connection, instead of one that asks for a PIN or code. On the Mac and on Windows.
+- An AirPlay speaker that's retrying when its receiver leaves the network stops retrying along with its row, and its retrying notice goes away. It stays on and joins again once the receiver is back. On the Mac and on Windows.
 - On the Mac and on Windows, a zone's header works like a speaker row: only its round icon switches the zone on or off, and a click anywhere else on the header, its name, count, arrow and the space around its volume and ⋯ button included, shows or hides the zone's speakers. Before, a click on the name switched the whole zone, and parts of the header did nothing.
 
 ### Windows and Linux (preview, not released yet)
 
 - The first release with the Windows 11 version, for x64 and ARM64 PCs, is still to come. It isn't code-signed, so SmartScreen may warn the first time you open it. It has the changes above and in 0.6.0 too, except where an entry says "On the Mac". Google Cast speakers play on Windows as well, "Switch to All System Audio When the Source App Quits" is in the File menu, the Guide's diagrams have descriptions for Narrator, and a click on the empty space of an open delay panel closes it.
 - You can rename a speaker: double-click its name, or right-click it or use its … button and choose Rename. Press Enter to keep the new name or Escape to cancel; a click outside the field keeps it too. The name stays after a restart and shows in the notification area flyout, in notices and in the AirPlay code and password dialogs. Leave it empty to go back to the device's own name, which the name's tooltip keeps showing while it's renamed.
+- A renamed speaker shows its device's own name under the new one, in the main window and the notification area flyout, and a double-click on the name goes by the double-click speed set in Windows.
 - A Now Playing card in the main window follows what Windows reports as playing, with the track, artist and artwork, and Previous Track, play or pause and Next Track buttons.
 - View > Appearance shows AudioSync's windows in Light or Dark, or follows Windows with Match System. Ctrl+W closes the window you're in, and Ctrl+Q exits AudioSync from any of its windows.
 - The Guide now covers input devices, track info on AirPlay receivers, Launch at Sign-In, AirPlay passwords, and what happens when the source app quits.
