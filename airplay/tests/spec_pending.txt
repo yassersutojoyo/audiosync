@@ -18,4 +18,3 @@ P209 SETPEERS updates while playing not built yet
 P210 setting up a receiver again after a refused update not built yet
 P211 one AirPlay 2 receiver failing among several not built yet
 P212 Hardware: two or more AirPlay 2 receivers on one PTP timeline (G20).
-P214 preferring AirPlay 2 for every capable device: the sender has no preference setting yet
