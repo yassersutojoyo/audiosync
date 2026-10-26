@@ -178,7 +178,7 @@ struct AppSettings: Equatable {
         s.airPlayDelay.adjustmentMs = read(Keys.nativeAirPlayAdjustment).flatMap(number)
             .flatMap(LocalDelay.sanitizedAdjustment) ?? 0
         s.localDelaysMigrated = read(Keys.localDelaysMigrated) as? Bool ?? false
-        s.airplayVolumes = levels(read(Keys.airplayVolumes), volume)
+        s.airplayVolumes = levels(read(Keys.airplayVolumes), airPlayOwn)
         s.groups = decodeGroups(read(Keys.groups) as? Data)
         s.zones = decodeZones(read(Keys.zones) as? Data)
         s.zonesNoticeDue = read(Keys.zonesNoticeDue) as? Bool ?? false
@@ -208,6 +208,10 @@ struct AppSettings: Equatable {
 
     /// A slider position, clamped to 0…100.
     static func volume(_ value: Double) -> Double { min(100, max(0, value)) }
+
+    /// An AirPlay speaker's own volume, at least 0 and unbounded above: it may
+    /// pass 100 by up to 100 / (zone × master) (S290).
+    static func airPlayOwn(_ value: Double) -> Double { max(0, value) }
 
     /// A delay in ms, clamped to 0…`maxDelayMs`.
     static func delay(_ value: Double) -> Double { min(maxDelayMs, max(0, value)) }
@@ -314,7 +318,7 @@ struct SettingsStore {
     func migratePresets() {
         guard read(Keys.presetsMigrated) as? Bool != true else { return }
         let local = AppSettings.levels(read(Keys.localVolumes), AppSettings.volume)
-        let airplay = AppSettings.levels(read(Keys.airplayVolumes), AppSettings.volume)
+        let airplay = AppSettings.levels(read(Keys.airplayVolumes), AppSettings.airPlayOwn)
         let volume: (String) -> Double? = { key in
             guard let (id, kind) = SpeakerKey.parseAny(key) else { return nil }
             switch kind {

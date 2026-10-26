@@ -30,6 +30,143 @@ var mono = true
 for p in stride(from: 0.0, to: 100, by: 1) where VolumeCurve.gain(position: p + 1) <= VolumeCurve.gain(position: p) { mono = false }
 check(mono, "volume: strictly increasing")
 
+// covers: S290, S291 (a level set on the speaker is kept for its next session)
+do {
+    // A TV remote's level D reaches the Mac as the core's own volume D / k, which row_move gives for a whole D.
+    for (level, db) in [(40.0, -18.0), (80.0, -6.0)] {
+        let own = AirPlayDeviceLevel.move(row: level, zone: 100, master: 63)?.own ?? .nan
+        let rejoin = AirPlayDeviceLevel.sent(own: own, zone: 100, master: 63)
+        let row = AirPlayDeviceLevel.row(own: own, zone: 100, master: 63, held: nil)
+        check(approx(rejoin, level, 1e-9) && approx(-30 + 0.3 * rejoin, db, 1e-9) && row == level,
+              "airplay level: added again or after Calibrate All Speakers, it gets its remote's \(Int(level)) at master 63",
+              "sent \(rejoin), row \(row), own \(own)")
+    }
+}
+
+// covers: S290 (k at 0: a level set on the speaker is held for the row)
+do {
+    let atZero = AirPlayDeviceLevel.held(level: 40, zone: 100, master: 0)
+    let zoneZero = AirPlayDeviceLevel.held(level: 40, zone: 0, master: 63)
+    let row = AirPlayDeviceLevel.row(own: 50, zone: 100, master: 0, held: atZero)
+    check(atZero == 40 && zoneZero == 40 && row == 40,
+          "airplay level: at master 0 a TV set to 40 holds the row at 40",
+          "\(String(describing: atZero)) \(String(describing: zoneZero)) row \(row)")
+    let moved = AirPlayDeviceLevel.row(own: 50, zone: 100, master: 50, held: nil)
+    check(AirPlayDeviceLevel.held(level: 40, zone: 100, master: 63) == nil && moved == 25
+            && AirPlayDeviceLevel.sent(own: 50, zone: 100, master: 0) == 0,
+          "airplay level: with k above 0 nothing is held, and a held level is never sent", "row \(moved)")
+
+    // covers: S276 (a DACP DeviceVolume of −18 dB at master 0: the core reports own 50, level 40)
+    let dacpHeld = AirPlayDeviceLevel.held(level: 40, zone: 100, master: 0)
+    let dacpRow = AirPlayDeviceLevel.row(own: 50, zone: 100, master: 0, held: dacpHeld)
+    check(dacpHeld == 40 && dacpRow == 40 && AirPlayDeviceLevel.sent(own: 50, zone: 100, master: 0) == 0,
+          "airplay level: a DeviceVolume at master 0 keeps own 50, the row shows the TV's 40 and 0 is what a send gives",
+          "\(String(describing: dacpHeld)) row \(dacpRow)")
+}
+
+// covers: S290 (core/tests/vectors/s290_volume.json, the vectors the core and Windows run, through the calls the Mac makes)
+do {
+    let file = URL(fileURLWithPath: "core/tests/vectors/s290_volume.json")
+    let root = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    let vectors = root?["cases"] as? [[String: Any]] ?? []
+    check(!vectors.isEmpty, "airplay level vectors: the shared file is read", file.path)
+    let known: Set<String> = ["own", "stored_own", "row_move", "step", "tv_level", "device_volume", "master",
+                              "sent", "level", "own_after", "row"]
+    for vector in vectors {
+        let name = vector["name"] as? String ?? "?"
+        let zone = vector["zone"] as? Double ?? .nan
+        var master = vector["master"] as? Double ?? .nan
+        var own = 0.0
+        var held: Double?
+        let steps = vector["steps"] as? [[String: Any]] ?? []
+        check(zone.isFinite && master.isFinite && !steps.isEmpty,
+              "airplay level vectors: \(name) has a zone, a master and steps", "\(zone) \(master) \(steps.count)")
+        for (index, step) in steps.enumerated() {
+            let label = "airplay level vectors: \(name), step \(index + 1)"
+            let unknown = Set(step.keys).subtracting(known)
+            check(unknown.isEmpty, "\(label): every key is one the Mac runs", "\(unknown.sorted())")
+            let ops = Set(step.keys).intersection(["own", "stored_own", "row_move", "step", "tv_level", "device_volume",
+                                                   "master"])
+            check(ops.count == 1, "\(label): one op, as the core runner applies only one", "\(ops.sorted())")
+            var sent = true
+            if let value = step["own"] as? Double {
+                // A preset's own volume (setNativeAirPlayOwnVolume).
+                own = value
+                held = nil
+            }
+            if let value = step["stored_own"] as? Double {
+                // Loaded from the settings (AppSettings.airPlayOwn) or a preset (asc_preset_levels); both must agree.
+                var preset = [value]
+                preset.withUnsafeMutableBufferPointer { asc_preset_levels($0.baseAddress, $0.count, nil, 0, nil, nil) }
+                own = AppSettings.airPlayOwn(value)
+                check(preset[0] == own, "\(label): a preset keeps the own volume the settings load", "\(preset[0]) \(own)")
+                held = nil
+            }
+            if let row = step["row_move"] as? Double {
+                // setNativeAirPlayVolume.
+                if let moved = AirPlayDeviceLevel.move(row: row, zone: zone, master: master) {
+                    own = moved.own
+                    held = nil
+                    check(approx(moved.level, AirPlayDeviceLevel.sent(own: own, zone: zone, master: master), 1e-6),
+                          "\(label): the level a row move sends is the level the own volume gives", "\(moved)")
+                } else {
+                    sent = false
+                }
+            }
+            if let by = step["step"] as? Double {
+                // The core turns a remote step into a row move from the row shown (policy/remote.rs); the Mac stores its own volume.
+                let shown = AirPlayDeviceLevel.row(own: own, zone: zone, master: master, held: held)
+                let target = min(100, max(0, shown + by))
+                if target != shown, let moved = AirPlayDeviceLevel.move(row: target, zone: zone, master: master) {
+                    own = moved.own
+                    held = nil
+                } else {
+                    sent = false
+                }
+            }
+            for key in ["tv_level", "device_volume"] {
+                guard let level = step[key] as? Double else { continue }
+                // A change on the speaker reaches the Mac as the core's own volume D / k, which row_move gives for a whole D.
+                check(level == level.rounded(), "\(label): the level set on the speaker is whole", "\(level)")
+                if let moved = AirPlayDeviceLevel.move(row: level, zone: zone, master: master) { own = moved.own }
+                held = AirPlayDeviceLevel.held(level: level, zone: zone, master: master)
+            }
+            if let value = step["master"] as? Double {
+                if value != master { held = nil }
+                master = value
+            }
+            if let expected = step["sent"] as? Bool {
+                check(sent == expected, "\(label): a level is sent or not", "\(sent)")
+            }
+            if let level = step["level"] as? Double {
+                let got = AirPlayDeviceLevel.level(own: own, zone: zone, master: master, held: held)
+                check(approx(got, level, 1e-6), "\(label): the level the speaker has", "\(got), own \(own)")
+            }
+            if let expected = step["own_after"] as? Double {
+                check(approx(own, expected, 1e-6), "\(label): the own volume stored", "\(own)")
+            }
+            if let row = step["row"] as? Double {
+                let got = AirPlayDeviceLevel.row(own: own, zone: zone, master: master, held: held)
+                check(got == row, "\(label): the row", "\(got)")
+            }
+        }
+    }
+    check(AppSettings.airPlayOwn(126.98) == 126.98 && AppSettings.airPlayOwn(-1) == 0,
+          "airplay level: a stored own volume above 100 loads as it is")
+
+    // A DeviceVolume 100 at master 63 stores s = 158.7; after a relaunch the row and the TV still say 100.
+    final class Stored { var values: [String: Any] = [:] }
+    let stored = Stored()
+    let store = SettingsStore(read: { stored.values[$0] }, write: { value, key in stored.values[key] = value })
+    let own = AirPlayDeviceLevel.move(row: 100, zone: 100, master: 63)?.own ?? .nan
+    store.save(levels: ["A1": own, "B2": -4], forKey: AppSettings.Keys.airplayVolumes)
+    let loaded = store.load().airplayVolumes
+    let row = AirPlayDeviceLevel.row(own: loaded["A1"] ?? .nan, zone: 100, master: 63, held: nil)
+    check(own > 158 && loaded["A1"] == own && loaded["B2"] == 0 && row == 100,
+          "airplay level: an own volume above 100 survives a relaunch, so the row stays at the TV's 100",
+          "\(loaded), row \(row)")
+}
+
 // MARK: Audio source persistence
 for src in [AudioSource.system, .app(bundleID: "com.spotify.client"), .input(uid: "BuiltInMicrophoneDevice")] {
     check(AudioSource(defaultsValue: src.defaultsValue) == src, "source: round-trip \(src)")
