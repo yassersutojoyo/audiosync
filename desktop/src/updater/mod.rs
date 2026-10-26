@@ -19,10 +19,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use appcast::{Arch, Update};
 use flow::{Checked, Env, Installed};
+use relaunch::Start;
 use version::Version;
 
 use crate::debug_log::DebugLog;
-pub use crate::ui_model::{UpdaterButton, UpdaterNotice};
+pub use crate::ui_model::{UpdateRecord, UpdateRecordReason, UpdaterButton, UpdaterNotice};
 
 /// `SUFeedURL` in `Info.plist`.
 pub const FEED_URL: &str =
@@ -50,14 +51,13 @@ pub enum Trigger {
 pub enum Action {
     Nothing,
     OpenReleasePage,
-    /// Stop streaming, save the settings, start this exe and quit.
-    Relaunch(PathBuf),
 }
 
 enum Event {
     Checked(Trigger, Checked),
     Progress(Option<u8>),
     Installed(String, Installed),
+    Started(Start),
 }
 
 /// What [`Updater::poll`] saw.
@@ -66,6 +66,11 @@ pub struct Polled {
     pub changed: bool,
     /// A check fetched and read the appcast, so its time is stored.
     pub checked: bool,
+    /// The new version signalled its start: stop streaming, save the
+    /// settings and quit (spec S303, S314).
+    pub quit: bool,
+    /// [`Updater::record`] changed, so the settings keep the new one.
+    pub record_changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +78,8 @@ enum Work {
     Idle,
     Checking,
     Installing,
+    /// Restart Now waits for the new version's start signal.
+    Restarting,
 }
 
 pub struct Updater {
@@ -88,6 +95,8 @@ pub struct Updater {
     manual_waiting: bool,
     cancel: Arc<AtomicBool>,
     swapped: Option<(String, swap::Swapped)>,
+    /// The version that failed its first start or was blocked (spec S316).
+    record: Option<UpdateRecord>,
 }
 
 impl Updater {
@@ -104,7 +113,17 @@ impl Updater {
             manual_waiting: false,
             cancel: Arc::new(AtomicBool::new(false)),
             swapped: None,
+            record: None,
         }
+    }
+
+    /// The record the settings kept, before the launch check.
+    pub fn set_record(&mut self, record: Option<UpdateRecord>) {
+        self.record = record;
+    }
+
+    pub fn record(&self) -> Option<&UpdateRecord> {
+        self.record.as_ref()
     }
 
     pub fn notice(&self) -> Option<&UpdaterNotice> {
@@ -156,6 +175,12 @@ impl Updater {
                     });
                     self.manual_waiting = true;
                 }
+                return;
+            }
+            Work::Restarting => {
+                self.env
+                    .log
+                    .log(|| "updater: a restart runs, check skipped".to_owned());
                 return;
             }
             Work::Installing => {
@@ -223,6 +248,7 @@ impl Updater {
                         self.set_notice(Some(UpdaterNotice::Available {
                             new: update.version_text.clone(),
                             running: self.env.running.to_string(),
+                            last: None,
                         }));
                         self.offered = Some(update);
                     }
@@ -263,10 +289,23 @@ impl Updater {
                     Installed::RestoreFailed { renames } => Some(UpdaterNotice::RestoreFailed {
                         renames: notice_renames(renames),
                     }),
+                    Installed::Blocked => Some(UpdaterNotice::Failed),
                 };
                 self.set_notice(notice);
                 if std::mem::take(&mut self.manual_waiting) {
                     self.check(Trigger::Manual);
+                }
+            }
+            Event::Started(start) => {
+                self.work = Work::Idle;
+                match start {
+                    Start::Signalled { pid } => {
+                        self.env.log.log(|| {
+                            format!("updater: process {pid} signalled its start, quitting")
+                        });
+                        polled.quit = true;
+                    }
+                    other => self.start_failed(&format!("{other:?}")),
                 }
             }
         }
@@ -293,10 +332,10 @@ impl Updater {
                 Action::Nothing
             }
             UpdaterButton::OpenReleasePage => Action::OpenReleasePage,
-            UpdaterButton::RestartNow => match &self.swapped {
-                Some(_) => Action::Relaunch(self.env.install_dir.join(archive::EXE_NAME)),
-                None => Action::Nothing,
-            },
+            UpdaterButton::RestartNow => {
+                self.restart();
+                Action::Nothing
+            }
         }
     }
 
@@ -336,12 +375,28 @@ impl Updater {
         });
     }
 
-    /// The new exe couldn't be started: the new files go and each `.bak`
-    /// the swap made is renamed back (spec S303).
-    pub fn relaunch_failed(&mut self, error: &std::io::Error) {
+    /// Starts the installed exe on the worker thread, which waits for its
+    /// start signal while streaming goes on (spec S303, S314).
+    fn restart(&mut self) {
+        if self.swapped.is_none() || self.work != Work::Idle {
+            return;
+        }
+        let exe = self.env.install_dir.join(archive::EXE_NAME);
+        self.work = Work::Restarting;
+        let env = self.env.clone();
+        let sender = self.sender.clone();
+        self.spawn(move || {
+            let start = env.launch.start(&exe, env.start_wait);
+            let _ = sender.send(Event::Started(start));
+        });
+    }
+
+    /// The new exe couldn't be started or gave no start signal: the new
+    /// files go and each `.bak` the swap made is renamed back (spec S303).
+    fn start_failed(&mut self, why: &str) {
         self.env
             .log
-            .log(|| format!("updater: restart failed ({error})"));
+            .log(|| format!("updater: restart failed ({why})"));
         let Some((_, swapped)) = self.swapped.take() else {
             return;
         };
@@ -363,6 +418,13 @@ impl Updater {
             },
             _ => UpdaterNotice::RelaunchFailed,
         }));
+    }
+
+    /// At quit, after a swap: an exe Windows security removed gets the
+    /// `.bak` back, so the next start finds one (spec S315). True when the
+    /// record changed.
+    pub fn at_quit(&mut self) -> bool {
+        false
     }
 
     /// Closing the notice of a running download (its X or Dismiss All)
@@ -431,6 +493,8 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         system,
         max_download: flow::MAX_DOWNLOAD,
         log,
+        launch: Arc::new(relaunch::ProcessLaunch),
+        start_wait: relaunch::START_WAIT,
     }))
 }
 
@@ -669,7 +733,8 @@ pub mod tests {
             updater.wait(),
             Polled {
                 changed: true,
-                checked: false
+                checked: false,
+                ..Polled::default()
             }
         );
         assert_eq!(updater.notice(), None);
@@ -696,7 +761,8 @@ pub mod tests {
             updater.wait(),
             Polled {
                 changed: true,
-                checked: true
+                checked: true,
+                ..Polled::default()
             }
         );
         assert_eq!(updater.notice(), None);
@@ -719,7 +785,8 @@ pub mod tests {
             updater.notice(),
             Some(&UpdaterNotice::Available {
                 new: "0.9.0".to_owned(),
-                running: "0.8.0".to_owned()
+                running: "0.8.0".to_owned(),
+                last: None,
             })
         );
         assert_eq!(
@@ -746,10 +813,13 @@ pub mod tests {
             std::fs::metadata(&exe).unwrap().modified().unwrap(),
             modified
         );
-        assert_eq!(
-            updater.press(UpdaterButton::RestartNow),
-            Action::Relaunch(exe)
+        Arc::get_mut(&mut updater.env).unwrap().launch = Arc::new(Signals);
+        assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
+        assert!(
+            updater.wait().quit,
+            "the new version signalled, so this one quits"
         );
+        assert!(std::fs::read(&exe).unwrap().ends_with(b"new exe"));
     }
 
     #[test]
@@ -796,5 +866,251 @@ pub mod tests {
             Some(UpdaterNotice::Installed { .. })
         ));
         assert!(std::fs::read(exe).unwrap().ends_with(b"new exe"));
+    }
+
+    /// A new version that signals its start at once.
+    struct Signals;
+
+    impl relaunch::Launch for Signals {
+        fn start(&self, _: &Path, _: std::time::Duration) -> Start {
+            Start::Signalled { pid: 1 }
+        }
+    }
+
+    /// Runs a stand-in for the new exe through the real wait for its signal.
+    struct StandIn {
+        command: fn() -> std::process::Command,
+        old: u32,
+    }
+
+    impl relaunch::Launch for StandIn {
+        fn start(&self, _: &Path, wait: std::time::Duration) -> Start {
+            relaunch::start_and_wait(&mut (self.command)(), self.old, wait)
+        }
+    }
+
+    /// A launch the test expects never to run.
+    struct Never;
+
+    impl relaunch::Launch for Never {
+        fn start(&self, _: &Path, _: std::time::Duration) -> Start {
+            panic!("nothing starts");
+        }
+    }
+
+    /// An updater that has swapped 0.9.0 in and offers Restart Now.
+    fn swapped(name: &str, launch: Arc<dyn relaunch::Launch>) -> Updater {
+        let (mut updater, _) = updater(name);
+        Arc::get_mut(&mut updater.env).unwrap().launch = launch;
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Installed { .. })
+        ));
+        updater
+    }
+
+    fn folder(updater: &Updater) -> Vec<(String, Vec<u8>)> {
+        let mut names: Vec<(String, Vec<u8>)> = std::fs::read_dir(&updater.env.install_dir)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    std::fs::read(entry.path()).unwrap(),
+                )
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn old_folder() -> Vec<(String, Vec<u8>)> {
+        vec![(archive::EXE_NAME.to_owned(), b"old exe".to_vec())]
+    }
+
+    fn record(version: &str, reason: UpdateRecordReason) -> Option<UpdateRecord> {
+        Some(UpdateRecord {
+            version: version.to_owned(),
+            reason,
+        })
+    }
+
+    // covers: S303, S314, S316
+    #[test]
+    fn a_new_exe_that_exits_or_never_signals_is_ended_and_the_bak_restored() {
+        let exits = || {
+            let mut command = std::process::Command::new("cmd.exe");
+            command.args(["/c", "exit", "1"]);
+            command
+        };
+        let silent = || relaunch::tests::sleeper(30);
+        for (case, command, n) in [
+            ("exits", exits as fn() -> std::process::Command, 4),
+            ("silent", silent as fn() -> std::process::Command, 5),
+        ] {
+            let old = relaunch::tests::made_up_old(n);
+            let mut updater = swapped(
+                &format!("no-start-{case}"),
+                Arc::new(StandIn { command, old }),
+            );
+            let pressed = std::time::Instant::now();
+            assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
+            assert!(
+                pressed.elapsed() < std::time::Duration::from_millis(200),
+                "{case}: the wait runs on the worker, so streaming goes on"
+            );
+            let polled = updater.wait();
+            assert!(!polled.quit, "{case}");
+            assert!(polled.record_changed, "{case}");
+            assert_eq!(
+                updater.notice(),
+                Some(&UpdaterNotice::RelaunchFailed),
+                "{case}"
+            );
+            assert_eq!(folder(&updater), old_folder(), "{case}");
+            assert_eq!(
+                updater.record(),
+                record("0.9.0", UpdateRecordReason::FailedStart).as_ref(),
+                "{case}"
+            );
+        }
+    }
+
+    // covers: S303, S315
+    #[test]
+    fn a_new_exe_gone_before_the_restart_restores_the_bak() {
+        let mut updater = swapped("gone-before-restart", Arc::new(Never));
+        std::fs::remove_file(updater.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
+        let polled = updater.wait();
+        assert!(!polled.quit);
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::Blocked));
+        assert_eq!(folder(&updater), old_folder());
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
+    }
+
+    // covers: S315
+    #[test]
+    fn quitting_after_a_swap_whose_exe_is_gone_renames_the_bak_back() {
+        let mut kept = swapped("quit-exe-kept", Arc::new(Never));
+        let before = folder(&kept);
+        assert!(!kept.at_quit(), "an exe still there changes nothing");
+        assert_eq!(folder(&kept), before);
+
+        let mut updater = swapped("quit-exe-gone", Arc::new(Never));
+        std::fs::remove_file(updater.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        assert!(updater.at_quit());
+        assert_eq!(folder(&updater), old_folder());
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
+    }
+
+    // covers: S316
+    #[test]
+    fn a_failed_or_blocked_version_is_skipped_at_launch_offered_on_a_manual_check_and_cleared_by_a_newer_one()
+     {
+        for reason in [UpdateRecordReason::Blocked, UpdateRecordReason::FailedStart] {
+            let (mut updater, _) = updater(&format!("record-{reason:?}"));
+            updater.set_record(record("0.9.0", reason));
+            updater.check(Trigger::Launch);
+            let polled = updater.wait();
+            assert!(polled.checked, "the appcast was read");
+            assert_eq!(updater.notice(), None, "the launch check offers nothing");
+            updater.check(Trigger::Manual);
+            updater.wait();
+            assert_eq!(
+                updater.notice(),
+                Some(&UpdaterNotice::Available {
+                    new: "0.9.0".to_owned(),
+                    running: "0.8.0".to_owned(),
+                    last: Some(reason),
+                })
+            );
+            assert_eq!(updater.record(), record("0.9.0", reason).as_ref());
+            updater.press(UpdaterButton::Download);
+            let polled = updater.wait();
+            assert!(polled.record_changed);
+            assert_eq!(updater.record(), None, "a completed install clears it");
+        }
+
+        let (mut updater, _) = updater("record-older");
+        updater.set_record(record("0.8.5", UpdateRecordReason::Blocked));
+        updater.check(Trigger::Launch);
+        let polled = updater.wait();
+        assert!(polled.record_changed);
+        assert_eq!(updater.record(), None, "a higher version clears it");
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Available { last: None, .. })
+        ));
+
+        // A bad signature stores nothing, so the next due check offers it.
+        let f = fixture(
+            "record-bad-signature",
+            true,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Launch);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        let polled = updater.wait();
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::BadSignature));
+        assert!(!polled.record_changed);
+        assert_eq!(updater.record(), None);
+    }
+
+    // covers: S315, S316
+    #[test]
+    fn a_download_that_vanishes_before_its_check_is_reported_as_blocked() {
+        /// Real files, except that the finished download is gone before
+        /// its check reads it.
+        struct Vanishing;
+        impl crate::updater::files::Files for Vanishing {
+            fn create(
+                &self,
+                path: &Path,
+                exclusive: bool,
+            ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+                RealFiles.create(path, exclusive)
+            }
+            fn remove(&self, path: &Path) -> std::io::Result<()> {
+                RealFiles.remove(path)
+            }
+            fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+                RealFiles.rename(from, to)
+            }
+            fn open(&self, path: &Path) -> std::io::Result<std::fs::File> {
+                if path.file_name().is_some_and(|name| name == "update.zip") {
+                    let _ = std::fs::remove_file(path);
+                }
+                std::fs::File::open(path)
+            }
+        }
+        let f = fixture("vanishing", false, Arc::new(Vanishing), DebugLog::default());
+        let temp_root = f.env.temp_root.clone();
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        let polled = updater.wait();
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::Blocked));
+        assert!(polled.record_changed);
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
+        assert_eq!(std::fs::read_dir(temp_root).unwrap().count(), 0);
     }
 }

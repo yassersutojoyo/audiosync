@@ -72,7 +72,7 @@ pub fn unpack(
     arch: Arch,
     files: &dyn Files,
 ) -> Result<Unpacked, ArchiveError> {
-    let mut archive = zip::ZipArchive::new(File::open(zip)?)
+    let mut archive = zip::ZipArchive::new(files.open(zip)?)
         .map_err(|error| ArchiveError::NotAZip(error.to_string()))?;
     let mut exe = None;
     let mut notices = None;
@@ -96,7 +96,7 @@ pub fn unpack(
     let mut budget = MAX_UNPACKED;
     let exe_path = dir.join(EXE_NAME);
     write_entry(&mut archive, exe, &exe_path, &mut budget, files)?;
-    if pe_machine(&exe_path)? != Some(arch.pe_machine()) {
+    if pe_machine(files, &exe_path)? != Some(arch.pe_machine()) {
         return Err(ArchiveError::WrongMachine);
     }
     let notices = match notices {
@@ -135,9 +135,9 @@ fn write_entry(
 }
 
 /// The machine field of the PE image at `path`, or `None` when it isn't one.
-pub fn pe_machine(path: &Path) -> io::Result<Option<u16>> {
+pub fn pe_machine(files: &dyn Files, path: &Path) -> io::Result<Option<u16>> {
     let mut head = Vec::new();
-    File::open(path)?.take(4096).read_to_end(&mut head)?;
+    files.open(path)?.take(4096).read_to_end(&mut head)?;
     if head.get(..2) != Some(b"MZ") {
         return Ok(None);
     }

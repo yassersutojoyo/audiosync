@@ -495,6 +495,8 @@ pub enum UpdaterNotice {
     Available {
         new: String,
         running: String,
+        /// Why this version didn't install last time (spec S316).
+        last: Option<UpdateRecordReason>,
     },
     Downloading {
         percent: Option<u8>,
@@ -519,6 +521,25 @@ pub enum UpdaterNotice {
         renames: Vec<(String, String)>,
     },
     RelaunchFailed,
+    /// Windows security removed or blocked an update file (spec S315).
+    Blocked,
+}
+
+/// A version the updater stopped offering at launch (spec S316), saved in
+/// the settings.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UpdateRecord {
+    pub version: String,
+    pub reason: UpdateRecordReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateRecordReason {
+    /// The new version gave no start signal (spec S314).
+    FailedStart,
+    /// Windows security blocked an update file (spec S315).
+    Blocked,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1552,7 +1573,7 @@ pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Opti
 }
 
 /// What the windows themselves keep across restarts.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewSettings {
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
@@ -1569,6 +1590,7 @@ pub struct ViewSettings {
     pub check_updates_automatically: bool,
     /// The last update check that read the appcast, Unix seconds.
     pub last_update_check: Option<u64>,
+    pub update_record: Option<UpdateRecord>,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in
@@ -2126,7 +2148,7 @@ impl Backend for MockBackend {
     }
 
     fn view_settings(&self) -> ViewSettings {
-        self.view
+        self.view.clone()
     }
 
     fn set_view_settings(&mut self, settings: ViewSettings) {

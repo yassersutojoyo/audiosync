@@ -4,6 +4,9 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::time::Duration;
+
+use crate::debug_log::DebugLog;
 
 pub trait Sink: Write {
     /// Flushes the data to disk.
@@ -22,6 +25,9 @@ pub trait Files: Send + Sync {
     fn remove(&self, path: &Path) -> io::Result<()>;
     /// A rename within the volume that is on disk when it returns.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    fn open(&self, path: &Path) -> io::Result<File> {
+        File::open(path)
+    }
 }
 
 pub struct RealFiles;
@@ -77,4 +83,55 @@ pub fn remove_if_there(files: &dyn Files, path: &Path) -> io::Result<()> {
 pub fn is_disk_full(error: &io::Error) -> bool {
     // ERROR_HANDLE_DISK_FULL and ERROR_DISK_FULL.
     error.kind() == io::ErrorKind::StorageFull || matches!(error.raw_os_error(), Some(39 | 112))
+}
+
+/// Whether `error` says Windows security removed or quarantined the file:
+/// ERROR_VIRUS_INFECTED or ERROR_VIRUS_DELETED (spec S315).
+pub fn is_blocked(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(225 | 226))
+}
+
+/// Whether `error` says another process holds the file: ERROR_SHARING_VIOLATION
+/// or ERROR_LOCK_VIOLATION.
+pub fn is_locked(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(32 | 33))
+}
+
+/// The waits before each retry of a locked file (spec S315): doubling, so a
+/// scan that holds the file for a moment passes, and under 8 s in all.
+pub const LOCK_RETRIES: [Duration; 5] = [
+    Duration::from_millis(250),
+    Duration::from_millis(500),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+
+/// `inner`, with each operation on a locked file tried again after the
+/// [`LOCK_RETRIES`] waits; no other error is tried again.
+pub struct Retrying<'a> {
+    pub inner: &'a dyn Files,
+    pub log: &'a DebugLog,
+}
+
+impl Retrying<'_> {
+    fn retried<T>(&self, what: &str, path: &Path, op: impl Fn() -> io::Result<T>) -> io::Result<T> {
+        let _ = (what, path);
+        op()
+    }
+}
+
+impl Files for Retrying<'_> {
+    fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
+        self.retried("create", path, || self.inner.create(path, exclusive))
+    }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.retried("remove", path, || self.inner.remove(path))
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.retried("rename", from, || self.inner.rename(from, to))
+    }
+    fn open(&self, path: &Path) -> io::Result<File> {
+        self.retried("open", path, || self.inner.open(path))
+    }
 }

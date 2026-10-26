@@ -320,6 +320,7 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     }
     slint::run_event_loop_until_quit()?;
     log.log(|| "the event loop ended".to_owned());
+    app.updater_at_exit();
     // Changes since the last poll, and where the main window is.
     app.save_settings();
     app.stop_remote_at_exit();

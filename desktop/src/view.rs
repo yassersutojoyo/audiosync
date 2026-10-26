@@ -110,6 +110,8 @@ struct UiState {
     check_updates_automatically: bool,
     /// The last update check that read the appcast, Unix seconds.
     last_update_check: Option<u64>,
+    /// The version the updater stopped offering at launch (spec S316).
+    update_record: Option<ui_model::UpdateRecord>,
     /// Says the item applies at the next launch, while it differs from
     /// `airplay2_at_launch`.
     airplay2_notice: Option<ui_model::Notice>,
@@ -2949,12 +2951,44 @@ impl App {
     fn launch_update_check(&self) {
         #[cfg(windows)]
         {
-            let (automatic, last) = {
+            let (automatic, last, record) = {
                 let ui = self.ui.borrow();
-                (ui.check_updates_automatically, ui.last_update_check)
+                (
+                    ui.check_updates_automatically,
+                    ui.last_update_check,
+                    ui.update_record.clone(),
+                )
             };
             if let Some(updater) = self.updater.borrow_mut().as_mut() {
+                updater.set_record(record);
                 updater.launch_check(automatic, last, unix_now());
+            }
+        }
+    }
+
+    /// The updater's record of a version that didn't install (spec S316),
+    /// into the settings.
+    #[cfg(windows)]
+    fn keep_update_record(&self) {
+        let record = match self.updater.borrow().as_ref() {
+            Some(updater) => updater.record().cloned(),
+            None => return,
+        };
+        self.ui.borrow_mut().update_record = record;
+        self.remember_view();
+    }
+
+    /// At quit, before the settings are saved: after a swap whose exe
+    /// Windows security removed, the old one comes back (spec S315).
+    pub fn updater_at_exit(&self) {
+        #[cfg(windows)]
+        {
+            let changed = match self.updater.borrow_mut().as_mut() {
+                Some(updater) => updater.at_quit(),
+                None => return,
+            };
+            if changed {
+                self.keep_update_record();
             }
         }
     }
@@ -2971,6 +3005,13 @@ impl App {
             if polled.checked {
                 self.ui.borrow_mut().last_update_check = Some(unix_now());
                 self.remember_view();
+            }
+            if polled.record_changed {
+                self.keep_update_record();
+            }
+            if polled.quit {
+                // The quit path stops streaming and saves the settings.
+                let _ = slint::quit_event_loop();
             }
             if polled.changed {
                 self.refresh();
@@ -3021,21 +3062,6 @@ impl App {
                     if !crate::platform::open_settings(crate::updater::RELEASE_PAGE) {
                         self.log
                             .log(|| "updater: the release page didn't open".to_owned());
-                    }
-                }
-                Action::Relaunch(exe) => {
-                    self.remember_view();
-                    match crate::updater::relaunch::start(&exe) {
-                        Ok(()) => {
-                            self.log
-                                .log(|| "updater: restart started, quitting".to_owned());
-                            let _ = slint::quit_event_loop();
-                        }
-                        Err(error) => {
-                            if let Some(updater) = self.updater.borrow_mut().as_mut() {
-                                updater.relaunch_failed(&error);
-                            }
-                        }
                     }
                 }
             }
@@ -3122,6 +3148,7 @@ impl App {
             airplay2_experimental: self.ui.borrow().airplay2_experimental,
             check_updates_automatically: self.ui.borrow().check_updates_automatically,
             last_update_check: self.ui.borrow().last_update_check,
+            update_record: self.ui.borrow().update_record.clone(),
         };
         if settings != saved {
             backend.set_view_settings(settings);
@@ -3144,6 +3171,7 @@ impl App {
         self.ui.borrow_mut().airplay2_at_launch = saved.airplay2_experimental;
         self.ui.borrow_mut().check_updates_automatically = saved.check_updates_automatically;
         self.ui.borrow_mut().last_update_check = saved.last_update_check;
+        self.ui.borrow_mut().update_record = saved.update_record.clone();
         self.apply_appearance(saved.appearance);
         let Some(saved_frame) = saved.window else {
             return;
@@ -5089,7 +5117,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
 fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -> SharedString {
     use ui_model::UpdaterNotice as N;
     match notice {
-        N::Available { new, running } => {
+        N::Available { new, running, .. } => {
             strings.invoke_notice_update_available(new.into(), running.into())
         }
         N::Downloading {
@@ -5118,6 +5146,7 @@ fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -
             strings.invoke_notice_update_restore_failed(joined(strings, &renames))
         }
         N::RelaunchFailed => strings.get_notice_update_relaunch_failed(),
+        N::Blocked => strings.get_notice_update_failed(),
     }
 }
 
@@ -7209,6 +7238,17 @@ mod tests {
             N::Available {
                 new: "0.9.0".to_owned(),
                 running: "0.8.0".to_owned(),
+                last: None,
+            },
+            N::Available {
+                new: "0.9.0".to_owned(),
+                running: "0.8.0".to_owned(),
+                last: Some(ui_model::UpdateRecordReason::Blocked),
+            },
+            N::Available {
+                new: "0.9.0".to_owned(),
+                running: "0.8.0".to_owned(),
+                last: Some(ui_model::UpdateRecordReason::FailedStart),
             },
             N::Downloading { percent: Some(42) },
             N::Downloading { percent: None },
@@ -7230,6 +7270,7 @@ mod tests {
                 renames: vec![("audiosync.exe.bak".to_owned(), "audiosync.exe".to_owned())],
             },
             N::RelaunchFailed,
+            N::Blocked,
         ];
         let mut texts = HashSet::new();
         for notice in notices {
@@ -7263,12 +7304,23 @@ mod tests {
                 &strings,
                 &NoticeMessage::Update(N::Available {
                     new: "0.9.0".to_owned(),
-                    running: "0.8.0".to_owned()
+                    running: "0.8.0".to_owned(),
+                    last: None,
                 })
             )
             .as_str(),
             "AudioSync 0.9.0 is available. You have 0.8.0."
         );
+        // covers: S314, S315, S316
+        for (notice, buttons) in [
+            (N::Blocked, [ui_model::UpdaterButton::OpenReleasePage]),
+            (
+                N::RelaunchFailed,
+                [ui_model::UpdaterButton::OpenReleasePage],
+            ),
+        ] {
+            assert_eq!(notice.buttons(), buttons, "{notice:?}");
+        }
         assert_eq!(
             notice_text(
                 &strings,

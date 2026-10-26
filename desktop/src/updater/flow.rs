@@ -7,14 +7,15 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ed25519_dalek::VerifyingKey;
 
 use super::appcast::{self, Arch, Update};
 use super::archive::{self, ArchiveError};
 use super::fetch::{self, Fetch, FetchError, Kind};
-use super::files::{Files, is_disk_full};
+use super::files::{Files, Retrying, is_disk_full};
+use super::relaunch::Launch;
 use super::signature;
 use super::swap::{self, Rename, StepLog, SwapError, Swapped};
 use super::version::Version;
@@ -38,6 +39,9 @@ pub struct Env {
     pub system: Version,
     pub max_download: u64,
     pub log: DebugLog,
+    pub launch: Arc<dyn Launch>,
+    /// How long Restart Now waits for the new version's start signal.
+    pub start_wait: Duration,
 }
 
 #[derive(Debug, PartialEq)]
@@ -115,7 +119,11 @@ pub enum Installed {
     ReadOnly,
     InUse,
     Failed,
-    RestoreFailed { renames: Vec<Rename> },
+    RestoreFailed {
+        renames: Vec<Rename>,
+    },
+    /// Windows security removed or blocked an update file (spec S315).
+    Blocked,
 }
 
 fn host(url: &str) -> String {
@@ -186,6 +194,10 @@ fn install_in(
     progress: &dyn Fn(Option<u8>),
     cancel: &AtomicBool,
 ) -> Installed {
+    let files = Retrying {
+        inner: env.files.as_ref(),
+        log: &env.log,
+    };
     let enclosure = &update.enclosure;
     let zip = dir.join("update.zip");
     let limit = enclosure
@@ -195,7 +207,7 @@ fn install_in(
     let started = Instant::now();
     let mut received: u64 = 0;
     let mut write_error: Option<io::Error> = None;
-    let mut out = match env.files.create(&zip, true) {
+    let mut out = match files.create(&zip, true) {
         Ok(out) => out,
         Err(error) => {
             return if is_disk_full(&error) {
@@ -263,7 +275,8 @@ fn install_in(
     }
 
     let mut bytes = Vec::new();
-    if fs::File::open(&zip)
+    if files
+        .open(&zip)
         .and_then(|mut file| file.read_to_end(&mut bytes))
         .is_err()
     {
@@ -286,7 +299,7 @@ fn install_in(
         return Installed::Cancelled;
     }
 
-    let unpacked = archive::unpack(&zip, dir, env.arch, env.files.as_ref());
+    let unpacked = archive::unpack(&zip, dir, env.arch, &files);
     env.log.log(|| match &unpacked {
         Ok(unpacked) => format!(
             "updater: unpacked {}{}",
@@ -314,7 +327,7 @@ fn install_in(
         &env.install_dir,
         &unpacked.exe,
         unpacked.notices.as_deref(),
-        env.files.as_ref(),
+        &files,
         &mut steps,
     );
     for (step, code) in &steps {
@@ -328,6 +341,7 @@ fn install_in(
         Err(SwapError::DiskFull) => Installed::DiskFull,
         Err(SwapError::Failed { .. }) => Installed::Failed,
         Err(SwapError::RestoreFailed { renames }) => Installed::RestoreFailed { renames },
+        Err(SwapError::Blocked) => Installed::Blocked,
     }
 }
 
@@ -455,8 +469,19 @@ pub mod tests {
                 system: Version::parse("10.0.26100").unwrap(),
                 max_download: MAX_DOWNLOAD,
                 log,
+                launch: Arc::new(NoLaunch),
+                start_wait: Duration::from_millis(300),
             },
             fetch,
+        }
+    }
+
+    /// A launch that never starts anything; a test that restarts sets its own.
+    pub struct NoLaunch;
+
+    impl Launch for NoLaunch {
+        fn start(&self, _: &Path, _: Duration) -> crate::updater::relaunch::Start {
+            crate::updater::relaunch::Start::Failed(io::Error::other("no launch in this test"))
         }
     }
 
@@ -842,6 +867,204 @@ pub mod tests {
         assert!(
             profile.is_empty() || messages.iter().all(|line| !line.contains(&profile)),
             "no line holds a profile path"
+        );
+    }
+
+    /// Real files that fail one operation with `code`: `op` on the file
+    /// named `to` (a rename by its source and target), counting the tries.
+    struct Infected {
+        op: &'static str,
+        from: &'static str,
+        to: &'static str,
+        code: i32,
+        tries: std::sync::Mutex<u32>,
+    }
+
+    impl Infected {
+        fn hit(&self, op: &str, from: Option<&Path>, to: &Path) -> Option<io::Error> {
+            let named = |path: &Path, name: &str| path.file_name().is_some_and(|n| n == name);
+            let at = op == self.op
+                && named(to, self.to)
+                && from.is_none_or(|from| named(from, self.from));
+            if !at {
+                return None;
+            }
+            *self.tries.lock().unwrap() += 1;
+            Some(io::Error::from_raw_os_error(self.code))
+        }
+    }
+
+    impl Files for Infected {
+        fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
+            match self.hit("create", None, path) {
+                Some(error) => Err(error),
+                None => RealFiles.create(path, exclusive),
+            }
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            match self.hit("rename", Some(from), to) {
+                Some(error) => Err(error),
+                None => RealFiles.rename(from, to),
+            }
+        }
+    }
+
+    // covers: S302, S315, S316
+    #[test]
+    fn an_infected_error_at_any_swap_step_undoes_the_swap_and_offers_the_release_page() {
+        for code in [225, 226] {
+            for (case, op, from, to) in [
+                ("copy", "create", "", "audiosync.exe.new"),
+                ("step3", "rename", "audiosync.exe", "audiosync.exe.bak"),
+                ("step4", "rename", "audiosync.exe.new", "audiosync.exe"),
+            ] {
+                let files = Arc::new(Infected {
+                    op,
+                    from,
+                    to,
+                    code,
+                    tries: std::sync::Mutex::new(0),
+                });
+                let f = fixture(
+                    &format!("infected-{case}-{code}"),
+                    false,
+                    files.clone(),
+                    DebugLog::default(),
+                );
+                let update = update_of(&f.env);
+                assert_eq!(run(&f.env, &update), Installed::Blocked, "{case} {code}");
+                assert_eq!(*files.tries.lock().unwrap(), 1, "{case} {code}: no retry");
+                assert!(temp_folders(&f.env).is_empty(), "{case} {code}");
+                let mut left: Vec<_> = fs::read_dir(&f.env.install_dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect();
+                left.sort();
+                assert_eq!(left, [archive::EXE_NAME], "{case} {code}");
+                assert_eq!(
+                    fs::read(f.env.install_dir.join(archive::EXE_NAME)).unwrap(),
+                    b"old exe",
+                    "{case} {code}"
+                );
+            }
+        }
+    }
+
+    /// Real files, except that the swap's open of the unpacked exe finds it
+    /// held without sharing by another handle until `release` is sent.
+    struct Held {
+        release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        held: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    }
+
+    impl Files for Held {
+        fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFiles.rename(from, to)
+        }
+        fn open(&self, path: &Path) -> io::Result<fs::File> {
+            let in_temp = path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|dir| dir.to_string_lossy().starts_with(TEMP_PREFIX));
+            let swapping = path
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+                .is_some_and(|root| root.join("install").join("audiosync.exe.new").exists());
+            if in_temp
+                && swapping
+                && path
+                    .file_name()
+                    .is_some_and(|name| name == archive::EXE_NAME)
+                && let Some(release) = self.release.lock().unwrap().take()
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                let holder = fs::OpenOptions::new()
+                    .read(true)
+                    .share_mode(0)
+                    .open(path)
+                    .expect("the test holds the unpacked exe");
+                *self.held.lock().unwrap() = Some(std::thread::spawn(move || {
+                    let _ = release.recv();
+                    drop(holder);
+                }));
+            }
+            fs::File::open(path)
+        }
+    }
+
+    // covers: S315
+    #[test]
+    fn a_sharing_violation_is_retried_five_times_then_fails() {
+        let held = |name: &str| {
+            let (release, receiver) = std::sync::mpsc::channel();
+            let files = Arc::new(Held {
+                release: std::sync::Mutex::new(Some(receiver)),
+                held: std::sync::Mutex::new(None),
+            });
+            let f = fixture(name, false, files.clone(), DebugLog::default());
+            (f, files, release)
+        };
+
+        let (f, files, release) = held("held-1s");
+        let update = update_of(&f.env);
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(1));
+            let _ = release.send(());
+        });
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
+        releaser.join().unwrap();
+        assert!(files.held.lock().unwrap().is_some(), "the exe was held");
+        assert!(
+            fs::read(f.env.install_dir.join(archive::EXE_NAME))
+                .unwrap()
+                .ends_with(b"new exe")
+        );
+
+        let (f, files, release) = held("held-throughout");
+        let update = update_of(&f.env);
+        let started = Instant::now();
+        let outcome = run(&f.env, &update);
+        let took = started.elapsed();
+        let _ = release.send(());
+        if let Some(holder) = files.held.lock().unwrap().take() {
+            holder.join().unwrap();
+        }
+        assert_eq!(outcome, Installed::Failed);
+        assert!(
+            took >= Duration::from_millis(7750) && took < Duration::from_secs(10),
+            "five retries, {took:?}"
+        );
+        assert_eq!(
+            fs::read(f.env.install_dir.join(archive::EXE_NAME)).unwrap(),
+            b"old exe"
+        );
+        assert!(!f.env.install_dir.join("audiosync.exe.new").exists());
+    }
+
+    // covers: S315
+    #[test]
+    fn the_updater_writes_no_zone_identifier_stream() {
+        let f = fixture("zone", false, Arc::new(RealFiles), DebugLog::default());
+        let update = update_of(&f.env);
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
+        let exe = f.env.install_dir.join(archive::EXE_NAME);
+        assert!(exe.exists());
+        let mut stream = exe.into_os_string();
+        stream.push(":Zone.Identifier");
+        let opened = fs::File::open(PathBuf::from(stream));
+        assert_eq!(
+            opened.map(drop).map_err(|e| e.kind()),
+            Err(io::ErrorKind::NotFound)
         );
     }
 }

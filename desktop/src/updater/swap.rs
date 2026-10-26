@@ -1,7 +1,6 @@
 //! Swapping the running exe by renames inside the install folder (spec
 //! S301), undone in reverse on a failure (S302).
 
-use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -26,6 +25,8 @@ pub enum SwapError {
     RestoreFailed {
         renames: Vec<Rename>,
     },
+    /// Windows security removed or blocked a file (spec S315).
+    Blocked,
 }
 
 /// A rename the user has to make by hand: `bak` back to `live`.
@@ -134,7 +135,8 @@ fn swap_one(
             });
         }
     };
-    let copied = File::open(source)
+    let copied = files
+        .open(source)
         .and_then(|mut file| io::copy(&mut file, &mut out))
         .and_then(|_| out.flush())
         .and_then(|()| out.sync());
