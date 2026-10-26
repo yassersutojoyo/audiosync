@@ -1356,4 +1356,11 @@ fn only_a_zone_headers_badge_switches_the_zone() {
         2,
         "the box and the arrow"
     );
+    // A FocusScope that takes the focus on click accepts the press (Slint
+    // 1.18), so the box's TouchArea would never see a click on the name.
+    assert_eq!(
+        header.matches("FocusScope {").count(),
+        header.matches("focus-on-click: false;").count(),
+        "every FocusScope in the header lets a click through to the box"
+    );
 }
