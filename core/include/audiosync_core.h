@@ -1553,6 +1553,14 @@ AscAirPlay *asc_airplay_create(void);
 AscAirPlay *asc_airplay_create_with_airplay2(bool airplay2);
 
 /*
+ * Whether AirPlay 2 is automatic per receiver: the build's flag, or
+ * AUDIOSYNC_AIRPLAY2_AUTO=1 (on) or 0 (off) for this launch. While it is on,
+ * AirPlay 2 only receivers play with the setting off, and the setting means
+ * "Prefer AirPlay 2" for receivers that speak both.
+ */
+bool asc_airplay2_auto(void);
+
+/*
  * Stops the sender and frees it: every speaker is torn down and its threads
  * end within about 2 s, which this call waits for, so call it off the main
  * thread. Takes the address of the host's pointer and sets that pointer to

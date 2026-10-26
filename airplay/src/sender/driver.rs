@@ -309,6 +309,8 @@ pub(crate) struct Driver {
     stopping: Option<Instant>,
     /// The AirPlay 2 switch (P2, P170).
     airplay2: bool,
+    /// The AirPlay 2 preference (P214).
+    airplay2_preferred: bool,
     /// Devices whose session SETUP took PTP timing (P157).
     ptp_timing: BTreeSet<DeviceKey>,
     /// HomeKit credentials a password pairing gave during this run (P152).
@@ -384,6 +386,7 @@ impl Driver {
             ptp_closing: Vec::new(),
             stopping: None,
             airplay2: false,
+            airplay2_preferred: false,
             ptp_timing: BTreeSet::new(),
             homekit: BTreeMap::new(),
             homekit_turned_down: BTreeSet::new(),
@@ -428,8 +431,14 @@ impl Driver {
         self
     }
 
-    pub(crate) fn with_airplay2(mut self, on: bool, device_id: Option<[u8; 6]>) -> Driver {
+    pub(crate) fn with_airplay2(
+        mut self,
+        on: bool,
+        preferred: bool,
+        device_id: Option<[u8; 6]>,
+    ) -> Driver {
         self.airplay2 = on;
+        self.airplay2_preferred = preferred;
         if let Some(id) = device_id {
             self.device_id = id;
         }
@@ -869,8 +878,12 @@ impl Driver {
             .get(&key)
             .and_then(|speaker| speaker.airplay1_outcome);
         let ap2 = self.airplay2
-            && device.choose_path_paired(true, airplay1_outcome, homekit_paired)
-                == Ok(ProtocolPath::AirPlay2);
+            && device.choose_path_preferring(
+                true,
+                self.airplay2_preferred,
+                airplay1_outcome,
+                homekit_paired,
+            ) == Ok(ProtocolPath::AirPlay2);
         let pairing = if ap2 {
             Job::HomeKit(Box::new(self.pin_pairing(&device, password, ids, now)))
         } else {
@@ -1635,9 +1648,17 @@ impl Driver {
                 speaker.device = device;
             }
             let ap2 = self.speakers.get(key).is_some_and(|speaker| {
-                speaker.device.choose_path(true, speaker.airplay1_outcome)
-                    == Ok(ProtocolPath::AirPlay2)
-                    || (speaker.device.verdict.airplay2 && self.target_on_airplay2(speaker))
+                let device = &speaker.device;
+                let outcome = speaker.airplay1_outcome;
+                let preferred =
+                    device.choose_path_preferring(true, self.airplay2_preferred, outcome, false)
+                        == Ok(ProtocolPath::AirPlay2);
+                // Only the preference sends it there: AirPlay 1 plays it
+                // rather than waiting for a taken AirPlay 2 place (P214).
+                let fallback = device.choose_path(true, outcome) == Ok(ProtocolPath::AirPlay1)
+                    && self.ap2_place_taken(key);
+                (preferred && !fallback)
+                    || (device.verdict.airplay2 && self.target_on_airplay2(speaker))
             });
             if ap2 {
                 return self.start_ap2(key, now);
@@ -1729,6 +1750,7 @@ impl Driver {
         }));
         self.sessions.insert(session_key, key.clone());
         self.remote_open(key, remote, now);
+        self.emit_speaker(key, SpeakerEvent::Path(ProtocolPath::AirPlay1));
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
     }
 
@@ -2188,7 +2210,7 @@ mod tests {
         };
         let (local, remote) = (free(), free());
         let mut driver = Driver::new(stream, receiver, inputs, events, latency)
-            .with_airplay2(true, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+            .with_airplay2(true, false, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
             .with_ptp_ports(local, remote);
 
         // Receivers that take the connection and never answer.
