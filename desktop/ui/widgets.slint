@@ -2144,8 +2144,9 @@ export component SpeakerRow inherits Rectangle {
 
 // A zone's header, lined up with the speaker rows: its toggle, name and
 // count, then its volume, its options and the arrow that shows or hides its
-// speakers. A click on the header toggles the zone; the arrow is left out of
-// the Tab order, as Left and Right on the toggle do its work.
+// speakers. A click on the header toggles the zone, except on the empty
+// stretch after the name, which works like the arrow; the arrow is left out
+// of the Tab order, as Left and Right on the toggle do its work.
 export component ZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
@@ -2272,26 +2273,40 @@ export component ZoneHeader inherits Rectangle {
                         }
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 1px;
+                    HorizontalLayout {
                         horizontal-stretch: 1;
 
-                        Text {
-                            text: root.item.name;
-                            font-size: Tokens.font-size-body;
-                            font-weight: root.item.state == RowState.playing ? 600 : 400;
-                            color: Tokens.text;
-                            overflow: elide;
-                            accessible-role: none;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            horizontal-stretch: 1;
+                            max-width: max(name-text.preferred-width, count-text.preferred-width);
+
+                            name-text := Text {
+                                text: root.item.name;
+                                font-size: Tokens.font-size-body;
+                                font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                color: Tokens.text;
+                                overflow: elide;
+                                accessible-role: none;
+                            }
+
+                            // The count, and the note of a zone whose members all
+                            // wait ("Waiting for device", "Reconnecting…").
+                            count-text := QuietText {
+                                text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
+                                wrap: no-wrap;
+                                overflow: elide;
+                            }
                         }
 
-                        // The count, and the note of a zone whose members all
-                        // wait ("Waiting for device", "Reconnecting…").
-                        QuietText {
-                            text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
-                            wrap: no-wrap;
-                            overflow: elide;
+                        // A click past the name shows or hides the speakers
+                        // instead of switching the zone, like the arrow.
+                        TouchArea {
+                            horizontal-stretch: 1;
+                            clicked => {
+                                root.expanded-changed(!root.item.expanded);
+                            }
                         }
                     }
 
