@@ -182,6 +182,25 @@ else
   echo "PASSED"
 fi
 
+echo "▶ zone header clicks go through its routing table"
+# The logic suite proves ZoneHeaderHit; this proves the view reaches it from
+# each area, with the box's tap last so the slider and the menu keep theirs.
+zone_card=$(awk '/^private struct ZoneCard/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/MainWindow.swift")
+if [ "$(grep -c 'hit(\.' <<< "$zone_card")" -ne 5 ] \
+    || ! grep -q 'Button { hit(\.chevron) }' <<< "$zone_card" \
+    || ! grep -q 'Button { hit(\.zoneIcon) }' <<< "$zone_card" \
+    || ! grep -q '\.onTapGesture { hit(\.name) }' <<< "$zone_card" \
+    || ! grep -q '\.onTapGesture { hit(\.count) }' <<< "$zone_card" \
+    || ! grep -A1 -E '^        \.contentShape\(Rectangle\(\)\)$' <<< "$zone_card" \
+         | grep -qE '^        \.onTapGesture \{ hit\(\.blank\) \}$' \
+    || [ "$(grep -c 'toggleZone(' <<< "$zone_card")" -ne 1 ] \
+    || ! grep -q 'case \.toggleZone: model\.actions\.toggleZone(zone\.id)' <<< "$zone_card"; then
+  echo "FAIL: a zone header area no longer goes through ZoneHeaderHit, or something else switches the zone"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ cargo lookup (Tests/cargolookuptest.sh)"
 Tests/cargolookuptest.sh || status=1
 
