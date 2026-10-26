@@ -245,6 +245,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The user switched streaming off: auto-connect doesn't start it again
     /// until they switch it on (S120).
     var userStopped = false
+    /// Counts the user's starts, failed ones included, so a switch waiting to
+    /// start the whole system sees one happened meanwhile (S227 g).
+    var userStarts = 0
     /// True while a capture interruption is handled: the engine stopped the
     /// session before reporting it, and the stop still names its reason.
     var captureInterrupted = false
