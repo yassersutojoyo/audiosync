@@ -2175,10 +2175,12 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Forgets the speaker's AirPlay 2 credentials, if AudioSync keeps any.
-    /// Returns whether it did.
+    /// Forgets the speaker's AirPlay 2 credentials and timing entry (P217),
+    /// here and in the sender, if AudioSync keeps any. Returns whether it
+    /// had credentials.
     fn forget_homekit(&mut self, id: &str) -> bool {
-        if self.store.homekit(id).is_none() {
+        let homekit = self.store.homekit(id).is_some();
+        if !homekit && self.store.timing(id).is_none() {
             return false;
         }
         let key = self
@@ -2190,6 +2192,12 @@ impl AirPlaySpeakers {
         self.homekit_keys.remove(id);
         if let Some(key) = key {
             self.link.forget_homekit(&key);
+        }
+        if !homekit {
+            let _ = self.store.forget_timing(id);
+            self.log
+                .log(|| format!("AirPlay speaker {}: timing entry forgotten", self.label(id)));
+            return false;
         }
         let saved = self.store.remove_homekit(id);
         self.store_written(saved.is_ok());

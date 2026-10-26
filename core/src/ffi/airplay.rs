@@ -1637,21 +1637,25 @@ impl AscAirPlay {
             && !self.credentials_turned_down.contains(id)
     }
 
-    /// Forgets the receiver's AirPlay 2 credentials, here and in the
-    /// sender, so its next session pairs again. Returns whether it had any.
+    /// Forgets the receiver's AirPlay 2 credentials and timing entry
+    /// (P217), here and in the sender, so its next session pairs again.
+    /// Returns whether it had credentials.
     fn forget_homekit(&mut self, id: &str) -> bool {
-        if self.identity.get(id).is_none() {
+        let homekit = self.identity.get(id).is_some();
+        if !homekit && self.timing.get(id).is_none() {
             return false;
         }
         // Forgotten for this handle even when the file can't be written.
-        let _ = self.identity.remove(id);
+        if homekit {
+            let _ = self.identity.remove(id);
+        }
         let _ = self.timing.forget(id);
         let key = self.homekit_key(id);
         self.homekit_keys.remove(id);
         if let Some(key) = key {
             self.sender.forget_homekit(&key);
         }
-        true
+        homekit
     }
 
     /// The key the sender knows the receiver `id` by, for dropping its copy
@@ -6768,7 +6772,6 @@ mod tests {
         assert_eq!(reopened.get("02005E005351"), None);
     }
 
-    // covers: P217
     #[test]
     fn a_timing_entry_goes_with_a_forgotten_pairing_without_airplay2_credentials() {
         use audiosync_airplay::ap2::Timing;
