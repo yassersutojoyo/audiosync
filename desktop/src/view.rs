@@ -1543,37 +1543,14 @@ impl App {
         };
         let (this_pc, connected) = state.layout();
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
-        self.main
-            .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
-        self.main.set_airplay_none_found(state.airplay_none_found);
-        self.flyout.set_airplay_none_found(state.airplay_none_found);
-        self.main.set_airplay_searching(state.airplay_searching);
-        self.flyout.set_airplay_searching(state.airplay_searching);
-        self.main.set_no_speaker_on(state.no_speaker_on);
-        self.flyout.set_no_speaker_on(state.no_speaker_on);
-        self.main.set_cast_list(cast_list(state.cast_list));
-        self.main.set_cast_by_address(state.cast_by_address);
-        self.main.set_this_pc_all_hidden(state.hidden_in(true));
-        self.main.set_connected_all_hidden(state.hidden_in(false));
-        self.flyout.set_all_hidden(state.all_hidden());
-        self.flyout
-            .set_connected_all_hidden(state.connected_all_hidden());
-        self.main
-            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
-        sync_model(&self.models.speaker_presets, preset_items(&state));
-        self.main
-            .set_can_save_preset(state.presets.len() < MAX_PRESETS);
-        self.flyout
-            .set_current_preset(current_preset_name(&state).into());
+        let connected_virtual_hidden = only_virtual_outputs_hidden(&connected, lists);
         let listed = |s: &&ui_model::Speaker| lists(s);
         // A speaker in a zone is listed under it instead (spec S245).
         let zoned = |s: &&ui_model::Speaker| state.zone_of(&s.id).is_some();
         let this_pc: Vec<&ui_model::Speaker> = this_pc.into_iter().filter(listed).collect();
         let connected: Vec<&ui_model::Speaker> = connected.into_iter().filter(listed).collect();
-        self.main
-            .set_this_pc_all_in_zones(!this_pc.is_empty() && this_pc.iter().all(zoned));
-        self.main
-            .set_connected_all_in_zones(!connected.is_empty() && connected.iter().all(zoned));
+        let this_pc_all_in_zones = !this_pc.is_empty() && this_pc.iter().all(zoned);
+        let connected_all_in_zones = !connected.is_empty() && connected.iter().all(zoned);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
             .filter(|s| !zoned(s))
@@ -1643,10 +1620,34 @@ impl App {
             .airplay_delay_draft
             .text(state.airplay_delay_ms)
             .map(str::to_owned);
-        // Showing a dialog below runs Slint's pending change handlers, and the
-        // focus ones borrow `ui` mutably (UI Automation focuses and toggles in
-        // one turn).
+        // No window call while `ui` is borrowed: showing a dialog runs Slint's
+        // pending change handlers, and the focus ones borrow `ui` mutably (UI
+        // Automation focuses and toggles in one turn).
         drop(ui);
+        self.main
+            .set_connected_virtual_hidden(connected_virtual_hidden);
+        self.main.set_this_pc_all_in_zones(this_pc_all_in_zones);
+        self.main.set_connected_all_in_zones(connected_all_in_zones);
+        self.main.set_airplay_none_found(state.airplay_none_found);
+        self.flyout.set_airplay_none_found(state.airplay_none_found);
+        self.main.set_airplay_searching(state.airplay_searching);
+        self.flyout.set_airplay_searching(state.airplay_searching);
+        self.main.set_no_speaker_on(state.no_speaker_on);
+        self.flyout.set_no_speaker_on(state.no_speaker_on);
+        self.main.set_cast_list(cast_list(state.cast_list));
+        self.main.set_cast_by_address(state.cast_by_address);
+        self.main.set_this_pc_all_hidden(state.hidden_in(true));
+        self.main.set_connected_all_hidden(state.hidden_in(false));
+        self.flyout.set_all_hidden(state.all_hidden());
+        self.flyout
+            .set_connected_all_hidden(state.connected_all_hidden());
+        self.main
+            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
+        sync_model(&self.models.speaker_presets, preset_items(&state));
+        self.main
+            .set_can_save_preset(state.presets.len() < MAX_PRESETS);
+        self.flyout
+            .set_current_preset(current_preset_name(&state).into());
         let flyout_speakers: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
         let all: Vec<SpeakerItem> = flyout_speakers
             .iter()
