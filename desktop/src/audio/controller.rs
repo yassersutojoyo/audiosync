@@ -3663,19 +3663,22 @@ mod tests {
     // covers: S114
     #[test]
     fn a_failed_start_leaves_nothing_running_and_every_feed_free() {
-        use crate::audio::cast::tests::FakeCast;
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
         let mut backend = backend();
         let fake = FakeAirPlay::new();
         let clock = SenderClock::new(Instant::now());
         let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
         let feed = FeedSlot::new(input);
         backend.set_airplay(fake.link(), Some(feed.clone()));
-        backend.set_cast(FakeCast::default().link());
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
         let kitchen = device(1, "Kitchen", OPEN_TXT);
         let id = id_of(&kitchen);
         fake.appear(&kitchen);
         backend.poll();
         backend.set_airplay_enabled(&id, true).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
         let cast_free =
             |backend: &MockBackend| backend.cast.as_ref().is_some_and(CastSpeakers::is_free);
 
@@ -3690,12 +3693,15 @@ mod tests {
         assert!(feed.is_free(), "the AirPlay feed is back in its slot");
         assert!(cast_free(&backend), "the Cast tap is back in its slot");
         assert!(fake.take_calls().is_empty(), "no AirPlay speaker joined");
+        assert!(cast.state().started.is_empty(), "no Cast session started");
 
         // A source change where neither the new source nor the old one can
-        // start leaves the same state behind, AirPlay speakers included.
+        // start leaves the same state behind, network speakers included.
         backend.refuse_captures(None);
         backend.start(&SourceId::WholeSystem).unwrap();
         assert!(backend.driver().capture_feeds_airplay());
+        assert_eq!(cast.state().started.len(), 1, "the Cast speaker joined");
+        assert_eq!(cast.state().stops, 0);
         fake.take_calls();
         backend.refuse_captures(Some(BackendError::DeviceGone));
         assert!(
@@ -3715,6 +3721,7 @@ mod tests {
             [Call::Remove(id.clone())],
             "the AirPlay speaker left the stream"
         );
+        assert_eq!(cast.state().stops, 1, "the Cast speaker left the stream");
 
         backend.refuse_captures(None);
         backend.start(&SourceId::WholeSystem).unwrap();
