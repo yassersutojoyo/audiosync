@@ -5596,6 +5596,33 @@ mod tests {
     }
 
     #[test]
+    fn a_speaker_that_fails_to_start_leaves_a_session_with_no_speaker_waiting() {
+        let mut adapter = adapter();
+        adapter.set_running(true);
+        adapter
+            .audio_mut()
+            .fail_output(SPEAKERS, Some(BackendError::UnsupportedFormat));
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.poll();
+        let snapshot = adapter.snapshot();
+        assert!(snapshot.running, "no speaker has played yet: it waits");
+        assert!(snapshot.no_speaker_on);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SpeakerFailed {
+                speaker: "Speakers".to_owned()
+            }]
+        );
+
+        // One that played, then went off, ends the session.
+        adapter.audio_mut().fail_output(SPEAKERS, None);
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        assert!(!adapter.snapshot().running);
+    }
+
+    #[test]
     fn a_session_with_no_speaker_yet_waits_through_a_source_switch() {
         let mut adapter = adapter();
         adapter.set_running(true);
