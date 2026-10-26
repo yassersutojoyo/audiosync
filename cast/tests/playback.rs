@@ -217,7 +217,7 @@ fn a_load_error_ends_the_start_with_its_reason() {
     device.join();
 }
 
-// covers: C86
+// Part of C86 (pending): one reload after FINISHED, the next FINISHED ends the session.
 #[test]
 fn playback_ends_are_handled_by_their_reason() {
     // FINISHED while the sender kept the stream open: one reload.
@@ -625,7 +625,7 @@ fn a_failed_resync_reloads_once_then_ends_with_its_reason() {
     device.join();
 }
 
-// covers: C86
+// Part of C86 (pending): a stop during the reload after FINISHED.
 #[test]
 fn a_stop_during_the_reload_after_finished_ends_as_deselected() {
     let device = FakeDevice::start(Behavior {

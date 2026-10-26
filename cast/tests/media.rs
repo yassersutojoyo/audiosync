@@ -583,7 +583,8 @@ fn a_silent_media_stop_moves_on_to_the_receiver_stop_after_two_seconds() {
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::Stopped)));
 }
 
-// covers: C49, C86
+// covers: C49
+// Part of C86 (pending): an earlier media session's status is not a FINISHED of this one.
 #[test]
 fn before_playing_a_status_of_an_earlier_media_session_changes_nothing() {
     let start = Instant::now();
