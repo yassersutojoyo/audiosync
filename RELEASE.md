@@ -13,7 +13,7 @@ Build every release on the same Mac with the same identity, so updates keep the 
 First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`, set the same version in `desktop/Cargo.toml` and in the `audiosync-desktop` entry of `desktop/Cargo.lock`, and in `CHANGELOG.md` put the release date on the version's heading (it waits there as `## [x.y.z] - unreleased`; if the entries sit under `## [Unreleased]` instead, move them under a new heading). Point that version's link at the bottom to `releases/tag/vx.y.z`, like the older versions, since the tag exists once you push it below, and commit. Once the release is out, open the next version's heading as `## [x.y.z] - unreleased` with a `compare/vx.y.z...HEAD` link, so later changes have a place to go. Then:
 
 ```bash
-./build.sh
+./build.sh --release                        # the release flag turns the updater on
 Tests/run-tests.sh --hardware
 Tests/soak.sh                               # 60 min, silent; must end with VERDICT: PASS
 
@@ -29,7 +29,7 @@ gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES"
   AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml SHA256SUMS.txt THIRD_PARTY_NOTICES.md
 ```
 
-The app updates itself with Sparkle from `releases/latest/download/appcast.xml`, so every release needs its own `appcast.xml` next to the zip. Sparkle checks each download against the EdDSA public key in `Info.plist` (`SUPublicEDKey`). The key pair comes from Sparkle's `generate_keys` (in `.build/artifacts` after `swift build`, under `Sparkle/bin`), run once on the release Mac: it keeps the private key in the login keychain and prints the public key for `Info.plist`. The key in the repository stays empty, so local and CI builds never check for updates; put the public key in before `./build.sh` for a release and leave that change out of the commit. `scripts/sign_appcast.sh` refuses a zip whose app has no key. Back the private key up the same way as the signing keychain (`generate_keys -x` exports it): without it, released builds can't take another update.
+The app updates itself with Sparkle from `releases/latest/download/appcast.xml`, so every release needs its own `appcast.xml` next to the zip. Sparkle checks each download against the EdDSA public key in `Info.plist` (`SUPublicEDKey`). The key pair comes from Sparkle's `generate_keys` (in `.build/artifacts` after `swift build`, under `Sparkle/bin`), run once on the release Mac: it keeps the private key in the login keychain and prints the public key. Paste that public key into `Info.plist` once and commit it; it isn't a secret. The key alone doesn't turn updates on: only `./build.sh --release` adds `AudioSyncReleaseBuild` to the built app's `Info.plist`, and the app checks for updates only with both, so a plain `./build.sh` and CI builds never check. `--release` stops when the key is missing, and `scripts/sign_appcast.sh` refuses a zip whose app lacks the key or the flag. Back the private key up the same way as the signing keychain (`generate_keys -x` exports it): without it, released builds can't take another update.
 
 Run `Tests/soak.sh` for the full 60 minutes before every release and only go on when it ends with `VERDICT: PASS`. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
 

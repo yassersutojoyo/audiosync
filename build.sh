@@ -5,6 +5,9 @@
 #   ./build.sh               build, sign, quit the running AudioSync, install
 #   ./build.sh --no-install  build and sign only: nothing is quit or installed,
 #                            and the app stays in .build/app/AudioSync.app
+#   ./build.sh --release     a release build (RELEASE.md): the bundle's
+#                            Info.plist gets AudioSyncReleaseBuild, which turns
+#                            on the updater; combines with --no-install
 #
 # Steps:
 #   1) the Rust audio core (scripts/build_core.sh)
@@ -54,9 +57,11 @@ absolute() {
 plist_value() { plutil -extract "$1" raw -o - "$ROOT/Info.plist" 2>/dev/null; }
 
 install=1
+release=0
 for arg in "$@"; do
   case "$arg" in
     --no-install) install=0 ;;
+    --release) release=1 ;;
     -h|--help) awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"; exit 0 ;;
     *) die "unknown option $arg (./build.sh --help lists the options)" ;;
   esac
@@ -69,6 +74,11 @@ EXECUTABLE=$(plist_value CFBundleExecutable) || die "Info.plist has no CFBundleE
 BUNDLE_ID=$(plist_value CFBundleIdentifier) || die "Info.plist has no CFBundleIdentifier"
 MIN_MACOS=$(plist_value LSMinimumSystemVersion) || die "Info.plist has no LSMinimumSystemVersion"
 VERSION=$(plist_value CFBundleShortVersionString) || VERSION="?"
+if [ "$release" = 1 ]; then
+  update_key=$(plist_value SUPublicEDKey) || update_key=""
+  [ -n "${update_key//[[:space:]]/}" ] \
+    || die "--release needs Sparkle's EdDSA public key in Info.plist (SUPublicEDKey, see RELEASE.md)"
+fi
 # The app's macOS floor, for anything built here that honors it.
 export MACOSX_DEPLOYMENT_TARGET=$MIN_MACOS
 
@@ -105,6 +115,11 @@ third_party="$resources/ThirdParty"
 rm -rf -- "$APP"
 mkdir -p "$contents/MacOS" "$third_party/licenses"
 cp Info.plist "$contents/Info.plist"
+if [ "$release" = 1 ]; then
+  # Only the built copy: the source Info.plist stays without the flag, so dev
+  # and CI builds never check for updates.
+  /usr/libexec/PlistBuddy -c "Add :AudioSyncReleaseBuild bool true" "$contents/Info.plist"
+fi
 printf 'APPL????' > "$contents/PkgInfo"
 cp "$binary" "$contents/MacOS/$EXECUTABLE"
 chmod 755 "$contents/MacOS/$EXECUTABLE"

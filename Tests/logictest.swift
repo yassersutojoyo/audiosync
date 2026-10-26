@@ -8106,17 +8106,28 @@ do {
           "late callbacks: suppressed-count line")
 }
 
-// MARK: Updates run only in builds that carry the EdDSA public key (UpdateGate.swift)
+// MARK: Updates run only in release builds that carry the EdDSA public key (UpdateGate.swift)
 do {
-    check(!UpdateGate.isEnabled(publicEDKey: nil), "updates: no SUPublicEDKey keeps the updater off")
-    check(!UpdateGate.isEnabled(publicEDKey: ""), "updates: the empty key a dev build ships keeps the updater off")
-    check(!UpdateGate.isEnabled(publicEDKey: " \n\t"), "updates: a whitespace-only key keeps the updater off")
-    check(!UpdateGate.isEnabled(publicEDKey: 42), "updates: a key that isn't a string keeps the updater off")
-    check(UpdateGate.isEnabled(publicEDKey: "a-test-key-not-a-real-one"),
-          "updates: a non-empty key turns the updater on")
+    let key = "a-test-key-not-a-real-one"
+    check(UpdateGate.isEnabled(publicEDKey: key, releaseBuild: true),
+          "updates: a key in a release build turns the updater on")
+    check(!UpdateGate.isEnabled(publicEDKey: key, releaseBuild: nil),
+          "updates: a key without the release flag (a plain ./build.sh or CI) keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: key, releaseBuild: false), "updates: a false release flag keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: key, releaseBuild: "true"),
+          "updates: a release flag that isn't a boolean keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: nil, releaseBuild: true), "updates: the release flag without a key keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: "", releaseBuild: true), "updates: the release flag with an empty key keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: " \n\t", releaseBuild: true),
+          "updates: the release flag with a whitespace-only key keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: 42, releaseBuild: true),
+          "updates: a key that isn't a string keeps the updater off")
+    check(!UpdateGate.isEnabled(publicEDKey: nil, releaseBuild: nil), "updates: neither key nor flag keeps the updater off")
     let plist = (try? String(contentsOfFile: "Info.plist", encoding: .utf8)) ?? ""
     check(plist.contains("<key>SUFeedURL</key>\n\t<string>https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml</string>"),
           "updates: Info.plist points SUFeedURL at the latest release's appcast.xml")
+    check(!plist.isEmpty && !plist.contains(UpdateGate.releaseBuildInfoKey),
+          "updates: the source Info.plist never carries the release flag (only ./build.sh --release adds it to the bundle)")
 }
 
 // MARK: Every session stop names its reason in the debug log (SessionStop in AppLifecycle.swift)

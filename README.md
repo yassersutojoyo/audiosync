@@ -88,7 +88,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 
 - Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag it to Applications. Needs macOS 15 or later.
 - It's not notarized, so macOS blocks the first launch. Open it once, close the warning, then click Open Anyway in System Settings → Privacy & Security. Or run `xattr -dr com.apple.quarantine /Applications/AudioSync.app`.
-- Each release lists SHA-256 checksums. No auto-update: replace the app to update.
+- Each release lists SHA-256 checksums. Up to 0.7 you update by replacing the app; from 0.8 on, the app finds new versions itself (Check for Updates… in the AudioSync menu).
 - macOS asks for Screen & System Audio Recording (choose System Audio Recording Only) and Local Network. Microphone only for an input source or Calibrate with Microphone, Automation only for Now Playing.
 - HomePods: in the Home app, set Allow Speaker & TV Access to "Anyone on the Same Network", on a network you trust. Not "Everyone".
 - Build it yourself: Xcode 16 command line tools, [rustup](https://rustup.rs), then `./setup.sh`. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).

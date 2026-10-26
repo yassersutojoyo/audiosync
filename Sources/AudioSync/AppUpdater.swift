@@ -14,7 +14,8 @@ enum AppUpdater {
     #endif
 
     static var isEnabled: Bool {
-        UpdateGate.isEnabled(publicEDKey: Bundle.main.object(forInfoDictionaryKey: UpdateGate.publicKeyInfoKey))
+        UpdateGate.isEnabled(publicEDKey: Bundle.main.object(forInfoDictionaryKey: UpdateGate.publicKeyInfoKey),
+                             releaseBuild: Bundle.main.object(forInfoDictionaryKey: UpdateGate.releaseBuildInfoKey))
     }
 
     static func start() {

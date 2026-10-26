@@ -45,8 +45,8 @@ mkdir -p "$ROOT/.build"
 work=$(mktemp -d "$ROOT/.build/appcast.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT
 
-# A build without the public key has updates off, and an update signed for it
-# could never be checked: refuse it here instead of shipping it.
+# A build without the public key or the release flag has updates off, and
+# users who install it would never get the next update: refuse it here.
 ditto -x -k "$zip" "$work/app"
 plist=$(find "$work/app" -maxdepth 3 -path '*.app/Contents/Info.plist' | head -n 1)
 [ -n "$plist" ] || die "$zip holds no app bundle"
@@ -55,6 +55,9 @@ zip_version=$(plutil -extract CFBundleShortVersionString raw -o - "$plist")
 key=$(plutil -extract SUPublicEDKey raw -o - "$plist" 2>/dev/null) || key=""
 [ -n "${key//[[:space:]]/}" ] \
   || die "the app in $zip has no SUPublicEDKey, so it would never check for updates: put the public key from generate_keys in Info.plist and build again"
+flag=$(plutil -extract AudioSyncReleaseBuild raw -o - "$plist" 2>/dev/null) || flag=""
+[ "$flag" = true ] \
+  || die "the app in $zip isn't a release build, so it would never check for updates: build it with ./build.sh --release"
 
 mkdir "$work/archives"
 cp "$zip" "$work/archives/"
