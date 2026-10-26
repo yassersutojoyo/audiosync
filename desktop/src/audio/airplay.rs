@@ -1044,14 +1044,15 @@ impl Added {
 }
 
 /// How a member's state ranks for its target's: playing first, then
-/// connecting, retrying, failed, stopped.
+/// connecting, retrying, unannounced, failed, stopped.
 fn state_rank(state: &SpeakerState) -> u8 {
     match state {
         SpeakerState::Playing => 0,
         SpeakerState::Connecting => 1,
         SpeakerState::Retrying { .. } => 2,
-        SpeakerState::Failed => 3,
-        SpeakerState::Stopped => 4,
+        SpeakerState::Unannounced => 3,
+        SpeakerState::Failed => 4,
+        SpeakerState::Stopped => 5,
     }
 }
 
@@ -3758,6 +3759,7 @@ impl AirPlaySpeakers {
                     "trying again in {:.1} s",
                     at.saturating_duration_since(Instant::now()).as_secs_f64()
                 ),
+                SpeakerState::Unannounced => "waiting until it is announced again".to_owned(),
                 SpeakerState::Failed => "failed".to_owned(),
                 SpeakerState::Stopped => "stopped".to_owned(),
             };
@@ -3777,6 +3779,7 @@ impl AirPlaySpeakers {
             return false;
         };
         let was_playing = added.state == SpeakerState::Playing;
+        let was_unannounced = added.state == SpeakerState::Unannounced;
         added.state = state;
         let mut relisted = false;
         if state == SpeakerState::Playing {
@@ -3788,6 +3791,11 @@ impl AirPlaySpeakers {
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
+        } else if was_unannounced != (state == SpeakerState::Unannounced) {
+            events.push(BackendEvent::AirPlayUnannounced {
+                id: id.to_owned(),
+                unannounced: !was_unannounced,
+            });
         }
         // A session the sender restarts by itself (an ALAC retry, a path
         // switch) says so with a state alone, no error.

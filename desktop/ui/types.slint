@@ -2,10 +2,10 @@
 
 // How a speaker row or zone header shows: playing only while streaming is
 // on. A speaker that is on while streaming is on but can't play right now
-// waits for its device (another app holds it), is reconnecting (AirPlay) or
-// waits for the one AirPlay 2 slot; a zone waits when every member it
-// switches on does.
-export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2 }
+// waits for its device (another app holds it), is reconnecting (AirPlay),
+// waits for the one AirPlay 2 slot or isn't announced on the network; a zone
+// waits when every member it switches on does.
+export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2, not-on-network }
 
 // The part of a speaker row or zone header that has, or is to take, the keyboard
 // focus: its toggle, delay button, volume, sync controls, options or name

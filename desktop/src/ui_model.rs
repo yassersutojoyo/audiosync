@@ -393,6 +393,9 @@ pub enum Waiting {
     /// An AirPlay speaker that waits for the one AirPlay 2 slot; it starts
     /// once the other AirPlay 2 speaker stops.
     ForAirPlay2Slot,
+    /// An AirPlay speaker that stopped announcing itself on the network; it
+    /// plays once it is announced again (P215).
+    NotOnNetwork,
 }
 
 /// Where a pairing's PIN prompt is.

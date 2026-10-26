@@ -444,9 +444,12 @@ impl Driver {
             return;
         }
         let missing = |speakers: &BTreeMap<DeviceKey, Speaker>, key: &DeviceKey| {
-            speakers
-                .get(key)
-                .is_none_or(|speaker| matches!(speaker.phase, Phase::Waiting(_) | Phase::Failed))
+            speakers.get(key).is_none_or(|speaker| {
+                matches!(
+                    speaker.phase,
+                    Phase::Waiting(_) | Phase::Unannounced | Phase::Failed
+                )
+            })
         };
         let mut changed = Vec::new();
         for (id, run) in &self.driven {

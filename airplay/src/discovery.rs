@@ -759,6 +759,10 @@ pub struct Directory {
     services: BTreeMap<(ServiceKind, String), (DeviceKey, ServiceRecord)>,
     devices: BTreeMap<DeviceKey, Device>,
     pcm_refused: BTreeSet<DeviceKey>,
+    /// Every device a record was resolved for in this run, and those with a
+    /// RAOP record among them (P215).
+    seen: BTreeSet<DeviceKey>,
+    raop_seen: BTreeSet<DeviceKey>,
 }
 
 impl Directory {
@@ -774,6 +778,10 @@ impl Directory {
         match event {
             BrowseEvent::Resolved(record) => {
                 let key = record.device_key();
+                if record.kind == ServiceKind::Raop {
+                    self.raop_seen.insert(key.clone());
+                }
+                self.seen.insert(key.clone());
                 let id = (record.kind, record.instance.clone());
                 let mut affected = vec![key.clone()];
                 if let Some((old_key, _)) = self.services.remove(&id)
@@ -826,6 +834,17 @@ impl Directory {
 
     pub fn devices(&self) -> impl Iterator<Item = &Device> {
         self.devices.values()
+    }
+
+    /// Whether a record of the device was resolved in this run (P215).
+    pub fn seen(&self, key: &DeviceKey) -> bool {
+        self.seen.contains(key)
+    }
+
+    /// Whether a RAOP record of the device was resolved in this run, so a
+    /// missing one has lapsed rather than never existed (P215).
+    pub fn raop_seen(&self, key: &DeviceKey) -> bool {
+        self.raop_seen.contains(key)
     }
 
     /// Remembers that the device refused a PCM ANNOUNCE, so later sessions

@@ -20,11 +20,13 @@ export global Strings {
     out property <string> will-play: @tr("Will play");
     out property <string> will-play-help: @tr("Plays when streaming starts. Select to start streaming.");
     // A speaker that is on while streaming is on, but can't play right now:
-    // another app holds its device, or AudioSync keeps trying to reach an
-    // AirPlay speaker. Its row says so instead of showing it as playing.
+    // another app holds its device, AudioSync keeps trying to reach an
+    // AirPlay speaker, or the speaker isn't announced on the network. Its
+    // row says so instead of showing it as playing.
     out property <string> waiting-for-device: @tr("Waiting for device");
     out property <string> reconnecting: @tr("Reconnecting…");
     out property <string> waiting-for-airplay2: @tr("Waiting for the other AirPlay 2 speaker");
+    out property <string> not-on-network: @tr("Not on the network right now, plays once it's back");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no zone.
@@ -1068,7 +1070,7 @@ export global Strings {
             return root.will-play;
         }
         if state == RowState.waiting-for-device || state == RowState.reconnecting
-                || state == RowState.waiting-for-airplay2 {
+                || state == RowState.waiting-for-airplay2 || state == RowState.not-on-network {
             return root.row-note(state);
         }
         return root.on;
@@ -1085,6 +1087,9 @@ export global Strings {
         }
         if state == RowState.waiting-for-airplay2 {
             return root.waiting-for-airplay2;
+        }
+        if state == RowState.not-on-network {
+            return root.not-on-network;
         }
         return "";
     }

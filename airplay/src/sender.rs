@@ -398,6 +398,11 @@ pub enum SpeakerState {
     Playing,
     /// The last session failed; the next starts at `at` (P142).
     Retrying { at: Instant },
+    /// It stopped announcing itself: its RAOP record lapsed, or all of its
+    /// records did. Nothing is tried and nothing more is reported until
+    /// discovery lists it able to play, when a session starts at once
+    /// (P215). Not a failure: the user has nothing to do.
+    Unannounced,
     /// The last session failed with an error that needs the user; no retry
     /// until the host adds the speaker again (P142).
     Failed,
