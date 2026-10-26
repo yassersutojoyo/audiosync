@@ -1187,9 +1187,9 @@ fn a_refused_verify_ends_the_attempt_once() {
     sender.shutdown();
 }
 
-// covers: P61, P182
+// covers: P61, P154, P182
 #[test]
-fn stored_credentials_stay_but_never_verify_once_a_receiver_asks_every_time() {
+fn stored_credentials_stay_and_verify_once_after_a_receiver_asks_every_time() {
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.hap.code = "4821".to_owned();
@@ -1204,12 +1204,14 @@ fn stored_credentials_stay_but_never_verify_once_a_receiver_asks_every_time() {
     let key = device.key.clone();
     let credentials = pair_first_time(&server, &sender, &mut events, &device);
 
-    // The user sets the TV to ask for a code every time.
-    server.fake().info_body = common::ap2::plist(common::ap2::dict(&[(
-        "statusFlags",
-        common::ap2::int(0x4c),
-    )]));
-    server.fake().requests.clear();
+    // The user sets the TV to ask for a code every time: it refuses the
+    // one pair-verify the sender tries first.
+    {
+        let mut fake = server.fake();
+        fake.info_body = status_flags_body(0x4c);
+        fake.hap.pairing_per_connection = true;
+        fake.requests.clear();
+    }
     let mut paired_options = options();
     paired_options.homekit_credentials = Some(credentials);
     sender.add_speaker(device, paired_options);
@@ -1220,7 +1222,8 @@ fn stored_credentials_stay_but_never_verify_once_a_receiver_asks_every_time() {
     assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
     assert!(credential_events(&events, &key).is_empty());
     let keys = server.fake().keys();
-    assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
     sender.shutdown();
 }
 
@@ -1256,7 +1259,7 @@ fn credential_events(events: &Events, key: &DeviceKey) -> Vec<SpeakerEvent> {
 enum Impostor {
     RefusesVerify(u16),
     SignsWithItsOwnKey,
-    AsksCodeEveryTime,
+    AsksCodeWithItsOwnKey,
 }
 
 // An unauthenticated rejection keeps the stored credentials: once the
@@ -1269,7 +1272,7 @@ fn an_unauthenticated_rejection_keeps_the_stored_credentials() {
         (58, Impostor::RefusesVerify(403)),
         (61, Impostor::RefusesVerify(470)),
         (59, Impostor::SignsWithItsOwnKey),
-        (60, Impostor::AsksCodeEveryTime),
+        (60, Impostor::AsksCodeWithItsOwnKey),
     ] {
         let mut fake = FakeAp2::new();
         fake.hap.code = "4821".to_owned();
@@ -1294,11 +1297,9 @@ fn an_unauthenticated_rejection_keeps_the_stored_credentials() {
                     .answers
                     .push((("/pair-verify", 1), Answer::Status(status))),
                 Impostor::SignsWithItsOwnKey => fake.hap.seed = [0x77; 32],
-                Impostor::AsksCodeEveryTime => {
-                    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
-                        "statusFlags",
-                        common::ap2::int(0x8),
-                    )]))
+                Impostor::AsksCodeWithItsOwnKey => {
+                    fake.info_body = status_flags_body(0x8);
+                    fake.hap.seed = [0x77; 32];
                 }
             }
         }
@@ -1739,8 +1740,8 @@ fn a_target_with_a_paired_member_plays_over_airplay2_from_its_first_start() {
 }
 
 // An impostor can answer /info with any statusFlags without the receiver's
-// keys, so none may cost the stored credentials; bit 3 still ends every
-// session before pair-verify, as a TV set to ask every time needs.
+// keys, so none may cost the stored credentials: a receiver that holds them
+// verifies and plays under every combination, bit 3 included.
 // covers: P61, P154, P182
 #[test]
 fn no_status_flags_in_an_info_answer_make_the_sender_drop_stored_credentials() {
@@ -1759,7 +1760,6 @@ fn no_status_flags_in_an_info_answer_make_the_sender_drop_stored_credentials() {
         (72, 0x80 | 0x200),
     ];
     for (id, flags) in cases {
-        let every_time = flags & 0x8 != 0;
         let mut fake = FakeAp2::new();
         fake.hap.code = "4821".to_owned();
         fake.info_body = common::ap2::plist(common::ap2::dict(&[(
@@ -1783,48 +1783,32 @@ fn no_status_flags_in_an_info_answer_make_the_sender_drop_stored_credentials() {
             fake.requests.clear();
         }
 
-        // A receiver that asks every time keeps asking at the next session.
-        let sessions = if every_time { 2 } else { 1 };
-        let end = if every_time {
-            SpeakerState::Failed
-        } else {
-            SpeakerState::Playing
-        };
-        for session in 1..=sessions {
-            sender.add_speaker(device.clone(), paired_options.clone());
-            assert!(
-                events
-                    .wait_state(&sender, &key, session, LONG, |s| *s == end)
-                    .is_some(),
-                "{flags:#x} session {session}: {:?} {:?}",
-                events.of(&key),
-                server.fake().keys()
-            );
-            sender.remove_speaker(&key);
-            assert!(
-                events
-                    .wait_state(&sender, &key, session, LONG, |s| *s
-                        == SpeakerState::Stopped)
-                    .is_some(),
-                "{flags:#x} session {session}"
-            );
-        }
+        sender.add_speaker(device.clone(), paired_options.clone());
+        assert!(
+            events
+                .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+                .is_some(),
+            "{flags:#x}: {:?} {:?}",
+            events.of(&key),
+            server.fake().keys()
+        );
+        sender.remove_speaker(&key);
+        assert!(
+            events
+                .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+                .is_some(),
+            "{flags:#x}"
+        );
         let keys = server.fake().keys();
-        assert_eq!(
+        assert!(
             keys.contains(&"POST /pair-verify".to_owned()),
-            !every_time,
             "{flags:#x}: {keys:?}"
         );
         assert!(
             !keys.contains(&"POST /pair-setup".to_owned()),
             "{flags:#x}: {keys:?}"
         );
-        let expected: &[ErrorKind] = if every_time {
-            &[ErrorKind::PairingRequired, ErrorKind::PairingRequired]
-        } else {
-            &[]
-        };
-        assert_eq!(errors(&events, &key), expected, "{flags:#x}");
+        assert_eq!(errors(&events, &key), [], "{flags:#x}");
         let about_credentials = credential_events(&events, &key);
         assert!(
             about_credentials.is_empty(),
@@ -1841,11 +1825,9 @@ fn no_status_flags_in_an_info_answer_make_the_sender_drop_stored_credentials() {
             fake.requests.clear();
         }
         sender.add_speaker(device, paired_options);
-        let played_before = if every_time { 0 } else { 1 };
         assert!(
             events
-                .wait_state(&sender, &key, played_before + 1, LONG, |s| *s
-                    == SpeakerState::Playing)
+                .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Playing)
                 .is_some(),
             "{flags:#x}: {:?} {:?}",
             events.of(&key),
