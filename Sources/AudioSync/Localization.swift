@@ -485,6 +485,7 @@ struct UIStrings {
     // MARK: Main menu
 
     let menuAbout = "About AudioSync"
+    let menuCheckForUpdates = "Check for Updates…"
     let aboutCopyright = "Copyright © 2026 Yasser Sutojoyo Kusumo"
     let aboutLicense = "Licensed under GPL-3.0-or-later. Comes with no warranty."
     let menuServices = "Services"

@@ -13,7 +13,7 @@ Build every release on the same Mac with the same identity, so updates keep the 
 First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`, set the same version in `desktop/Cargo.toml` and in the `audiosync-desktop` entry of `desktop/Cargo.lock`, and in `CHANGELOG.md` put the release date on the version's heading (it waits there as `## [x.y.z] - unreleased`; if the entries sit under `## [Unreleased]` instead, move them under a new heading). Point that version's link at the bottom to `releases/tag/vx.y.z`, like the older versions, since the tag exists once you push it below, and commit. Once the release is out, open the next version's heading as `## [x.y.z] - unreleased` with a `compare/vx.y.z...HEAD` link, so later changes have a place to go. Then:
 
 ```bash
-./build.sh
+./build.sh --release                        # the release flag turns the updater on
 Tests/run-tests.sh --hardware
 Tests/soak.sh                               # 60 min, silent; must end with VERDICT: PASS
 
@@ -21,15 +21,18 @@ VERSION=x.y.z
 NOTES=path/to/release-notes.md          # your local notes file, not committed
 ./make-dmg.sh                               # → AudioSync.dmg
 ditto -c -k --keepParent /Applications/AudioSync.app "AudioSync-$VERSION.zip"
+scripts/sign_appcast.sh "$VERSION"          # → appcast.xml, for the app's updater
 cp scripts/install.sh install.sh
 shasum -a 256 AudioSync.dmg "AudioSync-$VERSION.zip" install.sh THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
 
 git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION"
 gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
-  AudioSync.dmg "AudioSync-$VERSION.zip" install.sh SHA256SUMS.txt THIRD_PARTY_NOTICES.md
+  AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh SHA256SUMS.txt THIRD_PARTY_NOTICES.md
 ```
 
 `scripts/install.sh` (the Terminal install in the README) depends on two of these: it downloads `AudioSync-$VERSION.zip`, expects `AudioSync.app` at the top of it, and checks it against that file's line in `SHA256SUMS.txt`. Keep both names and the `--keepParent` zip as they are. The copy attached to the release lets someone install that exact version with the script that shipped with it.
+
+The app updates itself with Sparkle from `releases/latest/download/appcast.xml`, so every release needs its own `appcast.xml` next to the zip. Sparkle checks each download against the EdDSA public key in `Info.plist` (`SUPublicEDKey`). The key pair comes from Sparkle's `generate_keys` (in `.build/artifacts` after `swift build`, under `Sparkle/bin`), run once on the release Mac: it keeps the private key in the login keychain and prints the public key. Paste that public key into `Info.plist` once and commit it; it isn't a secret. The key alone doesn't turn updates on: only `./build.sh --release` adds `AudioSyncReleaseBuild` to the built app's `Info.plist`, and the app checks for updates only with both, so a plain `./build.sh` and CI builds never check. `--release` stops when the key is missing, and `scripts/sign_appcast.sh` refuses a zip whose app lacks the key or the flag. Back the private key up the same way as the signing keychain (`generate_keys -x` exports it): without it, released builds can't take another update.
 
 Run `Tests/soak.sh` for the full 60 minutes before every release and only go on when it ends with `VERDICT: PASS`. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
 

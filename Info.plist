@@ -36,5 +36,9 @@
 	<string>AudioSync finds and streams to the AirPlay speakers (HomePod, Apple TV, AirPlay receivers) and Google Cast speakers on your network, and lets phones on your network use the web remote when you turn it on.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>AudioSync reads the input device you choose (microphone, line-in or audio interface) to play it on your speakers, and the microphone when you calibrate a speaker's delay. Calibration recordings stay in memory and are never saved or sent.</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string></string>
 </dict>
 </plist>
