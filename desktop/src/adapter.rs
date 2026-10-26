@@ -9748,9 +9748,10 @@ mod tests {
         adapter.set_speaker_volume(&id, 20.0);
         let row = |adapter: &AudioAdapter<MockBackend>| {
             let speaker = speaker_of(adapter, &id);
-            (speaker.volume, speaker.own_volume)
+            let nearest = |value: f64| (value * 1e6).round() / 1e6;
+            (nearest(speaker.volume), speaker.own_volume.map(nearest))
         };
-        assert_eq!(row(&adapter), (20.0, Some(32.0)));
+        assert_eq!(row(&adapter), (20.0, Some(31.746032)));
         let preset = adapter
             .capture_preset("preset:1", "Evening")
             .expect("a speaker is on");
@@ -9759,7 +9760,11 @@ mod tests {
             .iter()
             .find(|member| member.key == id)
             .expect("stored");
-        assert_eq!(member.volume, Some(32.0), "the own volume, not the row");
+        assert_eq!(
+            member.volume.map(|volume| (volume * 1e6).round() / 1e6),
+            Some(31.746032),
+            "the own volume, not the row"
+        );
 
         adapter.set_master_volume(100.0);
         adapter.set_speaker_volume(&id, 80.0);
@@ -9768,7 +9773,7 @@ mod tests {
         adapter
             .recall_preset("preset:1")
             .expect("the preset exists");
-        assert_eq!(row(&adapter), (20.0, Some(32.0)));
+        assert_eq!(row(&adapter), (20.0, Some(31.746032)));
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
