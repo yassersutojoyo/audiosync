@@ -4,8 +4,9 @@
 #   --hardware  also runs the engine test, which opens real output devices at
 #               zero volume (silent) to check render flow and delay end to end.
 # Also runs shellcheck on the scripts in scripts/shellcheck-files.txt (it fails
-# if shellcheck isn't installed: brew install shellcheck) and the private-reference
-# check, scripts/privacy_check.py. The logic and core suites, the soak harness
+# if shellcheck isn't installed: brew install shellcheck), the private-reference
+# check, scripts/privacy_check.py, and the host spec-marker check,
+# scripts/spec_markers.py. The logic and core suites, the soak harness
 # and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
 # Off macOS (the Windows PC's Git Bash) the Swift suites can't build, so it runs
@@ -89,6 +90,14 @@ if [ -z "$python" ]; then
   status=1
 else
   { "$python" -I scripts/text_check.py --self-test && "$python" -I scripts/text_check.py; } || status=1
+fi
+
+echo "▶ host spec markers name real clauses (scripts/spec_markers.py)"
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  { "$python" -I scripts/spec_markers.py --self-test && "$python" -I scripts/spec_markers.py; } || status=1
 fi
 
 if [ "$only" = python ]; then
