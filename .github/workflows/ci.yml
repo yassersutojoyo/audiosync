@@ -79,6 +79,8 @@ jobs:
           fi
 
       - name: make-dmg.sh packages a signed bundle into an image that mounts with the app, an Applications link and the README
+        # The Finder window layout scripts Finder; a stuck Apple event must not hold the runner.
+        timeout-minutes: 10
         run: |
           # A stand-in bundle around the release binary, signed ad hoc: the
           # real bundle is build.sh's, which the app-bundle job checks.
