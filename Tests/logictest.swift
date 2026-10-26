@@ -2591,15 +2591,14 @@ do {
         group.receiverLatency.report("L1", us: 220_000)
         group.receiverLatency.report("R1", us: 50_000)
         group.receiverLatency.report("B2", us: 1_400_000)
-        // The rows as `NativeAirPlay.syncLatency` walks them: a target is one row.
-        let rows = group.states.keys.sorted().map { group.sessions(of: $0) }
+        let (rowIDs, rows) = group.latencyRows
         let lf = group.receiverLatency.newFrames(over: Array(rows.joined())) { reported in
             reported.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
         }
         let estimate = group.receiverLatency.updateEstimate(rows: rows, canChange: true)
         let latency = group.receiverLatency
         let pair = group.sessions(of: "pair:5f0c")
-        let oneRowPerTarget = rows == [["B2"], ["L1", "R1"]] && group.states["L1"] == nil && group.states["R1"] == nil
+        let oneRowPerTarget = rowIDs == ["B2", "pair:5f0c"] && rows == [["B2"], ["L1", "R1"]]
         let shared = lf == 83_790 && estimate == .applied && latency.estimateMs == 1400
         let perRow = latency.estimateMs(of: pair) == 220 && latency.offsetMs(of: pair) == 1180
             && latency.offsetMs(of: ["B2"]) == 0
@@ -2655,12 +2654,14 @@ do {
         let password = failing.apply(.error(id: "B2", .passwordRequired, retryMs: nil, detail: ""))
         let pin = failing.apply(.error(id: "C3", .pairingRequired, retryMs: nil, detail: ""))
         let gone = failing.apply(.error(id: "D4", .notResponding, retryMs: nil, detail: ""))
-        let all = Set(["A1", "B2", "C3", "D4"].map(NativeAirPlayID.app))
-        let replan = failing.plan(streaming: true, enabled: all)
+        // D4 went off, so its switch is off when the host plans again.
+        let stillOn = Set(["A1", "B2", "C3"].map(NativeAirPlayID.app))
+        let replan = failing.plan(streaming: true, enabled: stillOn)
         let prompt = failing.nextPrompt()
         let ownRows = password == .prompt && pin == .startPairing("C3")
             && gone == .turnOff("native:D4", NativeSpeakerEvent.Problem.notResponding.turnOff) && prompt?.id == "B2"
-        check(ownRows && failing.isPlaying("A1") && replan.remove.isEmpty && replan.turnOff.isEmpty,
+        check(ownRows && failing.isPlaying("A1") && replan.remove == ["D4"] && replan.add.isEmpty
+                && replan.turnOff.isEmpty,
               "airplay latency: one AirPlay 2 speaker failing leaves the others playing",
               "\(String(describing: password)) \(String(describing: pin)) \(String(describing: gone)) \(replan)")
     }

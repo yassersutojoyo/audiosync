@@ -392,6 +392,14 @@ struct NativeAirPlayModel {
         let members = memberOf.filter { $0.value == row }.map(\.key).sorted()
         return members.isEmpty ? [row] : members
     }
+
+    /// The rows in the sender by ID and the sessions each plays, which Lf and
+    /// E are taken over: a target is one row (S280, S283, S284).
+    var latencyRows: (ids: [String], members: [[String]]) {
+        let ids = states.keys.sorted()
+        return (ids, ids.map { sessions(of: $0) })
+    }
+
     /// The last name of every receiver seen, for rows and notices.
     private(set) var names: [String: String] = [:]
     /// This Mac's computer name: a receiver announced under it is this Mac's
