@@ -21,12 +21,15 @@ VERSION=x.y.z
 NOTES=path/to/release-notes.md          # your local notes file, not committed
 ./make-dmg.sh                               # → AudioSync.dmg
 ditto -c -k --keepParent /Applications/AudioSync.app "AudioSync-$VERSION.zip"
-shasum -a 256 AudioSync.dmg "AudioSync-$VERSION.zip" THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
+cp scripts/install.sh install.sh
+shasum -a 256 AudioSync.dmg "AudioSync-$VERSION.zip" install.sh THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
 
 git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION"
 gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
-  AudioSync.dmg "AudioSync-$VERSION.zip" SHA256SUMS.txt THIRD_PARTY_NOTICES.md
+  AudioSync.dmg "AudioSync-$VERSION.zip" install.sh SHA256SUMS.txt THIRD_PARTY_NOTICES.md
 ```
+
+`scripts/install.sh` (the Terminal install in the README) depends on two of these: it downloads `AudioSync-$VERSION.zip`, expects `AudioSync.app` at the top of it, and checks it against that file's line in `SHA256SUMS.txt`. Keep both names and the `--keepParent` zip as they are. The copy attached to the release lets someone install that exact version with the script that shipped with it.
 
 Run `Tests/soak.sh` for the full 60 minutes before every release and only go on when it ends with `VERDICT: PASS`. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
 
