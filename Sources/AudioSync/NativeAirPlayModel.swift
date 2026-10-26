@@ -112,6 +112,22 @@ struct AirPlayTargetRow: Equatable {
 enum NativeSpeakerEvent: Equatable {
     enum State: String {
         case connecting, playing, retrying, failed, stopped
+        /// Out of view on the network; the sender starts it as soon as it
+        /// is announced again, with no retry schedule meanwhile (P215).
+        case unannounced
+
+        /// An `ASC_AIRPLAY_STATE_*` code; nil for one this side doesn't know.
+        init?(code: Int32) {
+            switch code {
+            case ASC_AIRPLAY_STATE_CONNECTING: self = .connecting
+            case ASC_AIRPLAY_STATE_PLAYING: self = .playing
+            case ASC_AIRPLAY_STATE_RETRYING: self = .retrying
+            case ASC_AIRPLAY_STATE_FAILED: self = .failed
+            case ASC_AIRPLAY_STATE_STOPPED: self = .stopped
+            case ASC_AIRPLAY_STATE_UNANNOUNCED: self = .unannounced
+            default: return nil
+            }
+        }
     }
 
     /// What ended a session (the sender's user reasons).
@@ -219,6 +235,7 @@ enum NativeSpeakerEvent: Equatable {
         switch self {
         case .state(let id, let state, let retryMs):
             line = "\(label(id)): \(state.rawValue)" + (state == .retrying ? ", " + retry(retryMs) : "")
+                + (state == .unannounced ? ", waiting until it is announced again" : "")
         case .error(let id, let problem, let retryMs, let detail):
             line = "\(label(id)) error: \(problem.rawValue) (\(detail)); \(retry(retryMs))"
         case .latency(let id, let ms, let frames, let reportedUs, let sources):
@@ -389,6 +406,9 @@ enum NativeAirPlayOutcome: Equatable {
     case ptpPortsTaken
     /// A session bound the PTP ports: they are free again.
     case ptpPortsFree
+    /// The speaker (app ID) went out of view on the network or came back
+    /// without its playing changing: its row's note follows (P215).
+    case unannouncedChanged(String)
 }
 
 /// The native sender's receivers and speakers as the app sees them (main
@@ -891,6 +911,9 @@ struct NativeAirPlayModel {
 
     func isWaiting(_ id: String) -> Bool { waiting.contains(id) }
 
+    /// The speaker in the sender is out of view on the network (P215).
+    func isUnannounced(_ id: String) -> Bool { states[id] == .unannounced }
+
     /// Takes a sender event in, and says what the app does about it.
     mutating func apply(_ event: NativeSpeakerEvent) -> NativeAirPlayOutcome? {
         switch event {
@@ -903,7 +926,8 @@ struct NativeAirPlayModel {
             let waited = state != .failed && waiting.remove(id) != nil
             let (was, now) = (before == .playing, state == .playing)
             if was != now { return .playingChanged(NativeAirPlayID.app(id), playing: now) }
-            return waited ? .waiting(NativeAirPlayID.app(id), false) : nil
+            if waited { return .waiting(NativeAirPlayID.app(id), false) }
+            return (before == .unannounced) != (state == .unannounced) ? .unannouncedChanged(NativeAirPlayID.app(id)) : nil
         case .error(let id, let problem, let retryMs, _):
             guard states[id] != nil else { return memberError(id, problem) }
             // The member's own error follows and names it (`memberError`).

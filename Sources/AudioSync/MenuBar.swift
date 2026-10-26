@@ -33,6 +33,9 @@ final class AppModel: ObservableObject {
         var airPlay2 = false
         /// An AirPlay 2 speaker waiting for the slot another one holds (P169).
         var waitingForAirPlay2 = false
+        /// An AirPlay speaker in the sender that is out of view on the
+        /// network, waiting to be announced again (P215).
+        var unannounced = false
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
         /// An AirPlay speaker with stored credentials, also ones it turned
@@ -1010,7 +1013,7 @@ struct MenuBarView: View {
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                           text: t, height: rowHeight,
                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
-                                          target: speaker.airPlayTarget) ?? note,
+                                          unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note,
                           renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
                           availability: speaker.availability,
                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
