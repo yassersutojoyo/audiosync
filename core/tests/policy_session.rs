@@ -105,7 +105,10 @@ fn a_session_starts_only_with_a_speaker_enabled_then_runs_its_steps_in_order() {
     // turned on joins.
     assert!(starts_without_speaker(User));
     assert!(starts(false, false, false, User));
-    assert!(starts(false, true, true, User), "a source switch by the user");
+    assert!(
+        starts(false, true, true, User),
+        "a source switch by the user"
+    );
     // AudioSync on its own still waits for a speaker ...
     assert!(!starts_without_speaker(AutoConnect));
     assert!(!starts_without_speaker(FormatChange));

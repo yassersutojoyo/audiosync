@@ -70,8 +70,8 @@ use audiosync_core::policy::presets::{
     self, LeftOff, Preset, RecallAction, RecallMember, RecallOther, RecallStep,
 };
 use audiosync_core::policy::session::{
-    AutoStartGate, DropReason, Incident, SpeakerEvent, StartOrigin, StreamingAction, may_start,
-    reaction, source_switch, streaming_after,
+    AutoStartGate, DropReason, Incident, SpeakerEvent, StartOrigin, StreamingAction, reaction,
+    source_switch, starts, streaming_after,
 };
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey};
@@ -567,6 +567,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// What the rows show of the last calibration.
     calibration: calibration::Status,
     calibrate_all: CalibrateAll,
+    /// A speaker was on at some point in the running session (S162).
+    had_speaker: bool,
+    /// Nothing was saved before this launch: the first listing with a
+    /// built-in output switches it on, once (S162).
+    first_install: bool,
 }
 
 impl<A: AudioBackend> AudioAdapter<A> {
@@ -602,7 +607,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         skip_auto_connect: bool,
     ) -> AudioAdapter<A> {
         let (saved, loaded) = settings_file.load();
-        if settings_file.path().is_some() {
+        let settings_file_has_path = settings_file.path().is_some();
+        if settings_file_has_path {
             log.log(|| format!("settings: {loaded}"));
         } else {
             log.log(|| "settings: no app data folder; kept until AudioSync quits".to_owned());
@@ -672,6 +678,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             calibration_run: None,
             calibration: calibration::Status::default(),
             calibrate_all: CalibrateAll::default(),
+            had_speaker: false,
+            first_install: loaded == settings::Loaded::NoFile
+                && settings_file_has_path
+                && !skip_auto_connect,
         };
         let had_groups = matches!(
             loaded,
@@ -1515,6 +1525,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         streaming_after(
             event,
             self.running(),
+            self.had_speaker,
             self.enabled_local(),
             self.enabled_network(),
         )
@@ -2545,7 +2556,34 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.left_behind.remove(id);
         }
         self.follow_moved_outputs(&outputs, &appeared, &fresh);
+        self.turn_on_first_built_in(&outputs);
         self.auto_connect(&appeared);
+    }
+
+    /// On a first install, switches on a built-in output of the first
+    /// listing that has any output, and never again (S162): the Windows
+    /// default when it is built in, else the first listed.
+    fn turn_on_first_built_in(&mut self, outputs: &[OutputInfo]) {
+        if !self.first_install || outputs.is_empty() {
+            return;
+        }
+        self.first_install = false;
+        let built_in = || {
+            outputs
+                .iter()
+                .filter(|output| output.kind == OutputKind::BuiltIn)
+        };
+        let Some(output) = built_in()
+            .find(|output| output.is_default)
+            .or_else(|| built_in().next())
+        else {
+            return;
+        };
+        self.log
+            .log(|| format!("first install: switching on {}", output.name));
+        if self.audio.set_output_enabled(&output.id, true).is_err() {
+            self.output_failed(&output.id, false);
+        }
     }
 
     /// Whether the user set anything for output `endpoint_id`: settings, an
@@ -2737,6 +2775,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.airplay_cant_play(id, problem);
             }
         }
+        self.note_speakers();
         if !self.running() && self.enabled_count() > 0 {
             self.start_session(StartOrigin::AutoConnect);
         }
@@ -2866,6 +2905,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.output_failed(id, false);
             }
         }
+        self.note_speakers();
         if !self.running() && self.enabled_count() > 0 {
             self.start_session(StartOrigin::AutoConnect);
         }
@@ -3025,12 +3065,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             });
             return false;
         }
-        if !may_start(self.enabled_count()) {
+        let continuing = self.running();
+        let has_speaker = self.enabled_count() > 0;
+        if !starts(has_speaker, continuing, self.had_speaker, origin) {
             self.log
                 .log(|| format!("start ({origin:?}) refused: no speaker is on"));
             self.post(NoticeSubject::Start, NoticeMessage::NoSpeaker);
             return false;
         }
+        self.had_speaker = has_speaker || (continuing && self.had_speaker);
         self.log.log(|| {
             format!(
                 "start ({origin:?}): {}, {} speaker(s) on",
@@ -3270,6 +3313,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let action = self.streaming_after(SpeakerEvent::SwitchedOn);
         if action == StreamingAction::Start {
             self.start_session(StartOrigin::User);
+        }
+        self.note_speakers();
+    }
+
+    /// Marks the running session as having had a speaker once one is on in
+    /// it, so it stops when the last one goes (S162).
+    fn note_speakers(&mut self) {
+        if self.running() && self.enabled_count() > 0 {
+            self.had_speaker = true;
         }
     }
 
@@ -3835,6 +3887,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             airplay_none_found: self.airplay_none_found(),
             airplay_searching: self.airplay_searching(),
             running: self.running(),
+            no_speaker_on: self.running() && self.enabled_count() == 0,
             sources: self.source_rows(),
             source_id: self.chosen.key(),
             input_pair: self.chosen_input_pair(),
@@ -3898,8 +3951,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
         let action = self.streaming_after(SpeakerEvent::StartRequested);
         match action {
-            // Without a speaker on, the start asks for one.
-            StreamingAction::Start | StreamingAction::AskForSpeaker => {
+            // With no speaker on too: the first one switched on joins.
+            StreamingAction::Start => {
                 self.start_session(StartOrigin::User);
             }
             StreamingAction::Stop => self.audio.stop(),
@@ -4545,6 +4598,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// Also writes the settings file when anything changed since the last
     /// poll, so a slider drag is saved about twice a second at most.
     fn poll(&mut self) -> bool {
+        self.note_speakers();
         let mut changed = self.take_events();
         changed |= self.check_sound_output();
         changed |= self.check_airplay_ahead();
@@ -5572,11 +5626,12 @@ mod tests {
             audio.connect_output_as("hdmi", "TV", OutputKind::Hdmi);
             audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
             audio.connect_output_as(HEADPHONES, "Headphones", OutputKind::BuiltIn);
+            audio.set_default_output(SPEAKERS);
             audio
         };
         let mut adapter = launch(first(), &path);
         adapter.poll();
-        assert!(enabled(&adapter, SPEAKERS), "the first built-in output");
+        assert!(enabled(&adapter, SPEAKERS), "the default, built in");
         assert!(!enabled(&adapter, HEADPHONES));
         assert!(!enabled(&adapter, "hdmi"));
         assert!(!adapter.snapshot().running, "on, not streaming");
@@ -5587,6 +5642,15 @@ mod tests {
         let mut adapter = launch(first(), &path);
         adapter.poll();
         assert!(!enabled(&adapter, SPEAKERS));
+
+        // The TV is the default: the first built-in output listed instead.
+        let other = dir.join("tv-default.json");
+        let mut audio = first();
+        audio.set_default_output("hdmi");
+        let mut adapter = launch(audio, &other);
+        adapter.poll();
+        assert!(enabled(&adapter, HEADPHONES));
+        assert!(!enabled(&adapter, "hdmi"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -6132,7 +6196,10 @@ mod tests {
         audio.set_output_enabled(DAC_PORT_1, true).unwrap();
         let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
         adapter.set_running(true);
-        assert!(adapter.snapshot().no_speaker_on, "it isn't listed, so it isn't on");
+        assert!(
+            adapter.snapshot().no_speaker_on,
+            "it isn't listed, so it isn't on"
+        );
 
         turn_on(&mut adapter, SPEAKERS);
         assert!(adapter.snapshot().running);
