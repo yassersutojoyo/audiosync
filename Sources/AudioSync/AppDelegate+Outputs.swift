@@ -71,10 +71,14 @@ extension AppDelegate {
         }
     }
 
-    /// A session that started with every speaker off has one now.
+    /// A session that started with every speaker off has one now that one
+    /// plays: a local output that started, an AirPlay speaker the sender
+    /// plays to, or the Cast speaker in Playing.
     func noteSessionSpeaker() {
-        if engine.isRunning, !sessionHadSpeaker,
-           StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn), enabledLocal: enabledLocal) {
+        guard engine.isRunning, !sessionHadSpeaker else { return }
+        let switchedOn = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
+                                                    enabledLocal: enabledLocal)
+        if StreamingPolicy.countsForSession(switchedOn: switchedOn, playing: !calibratePlayingIDs().isEmpty) {
             sessionHadSpeaker = true
         }
     }
