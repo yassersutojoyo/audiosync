@@ -846,7 +846,13 @@ fn linux_texts_name_no_windows_places() {
     }
     assert!(linux.len() >= 15, "{} Linux texts", linux.len());
     for text in linux {
-        for windows_only in ["Windows", "Volume mixer", "Start menu", "notification area"] {
+        for windows_only in [
+            "Windows",
+            "Volume mixer",
+            "Start menu",
+            "notification area",
+            "quick settings",
+        ] {
             assert!(!text.contains(windows_only), "{windows_only} in: {text}");
         }
     }
