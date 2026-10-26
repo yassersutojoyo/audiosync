@@ -1807,6 +1807,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// Whether a setting or zone names the speaker `key`, so the name it was
+    /// last listed under stays after it leaves discovery; other names go,
+    /// or every record a LAN host announces would stay until quit.
+    fn key_kept(&self, key: &str) -> bool {
+        self.custom_names.contains(key)
+            || self.auto_connect.contains(key)
+            || self.hidden.iter().any(|hidden| hidden.key == key)
+            || self
+                .groups
+                .iter()
+                .any(|group| group.members.iter().any(|member| member == key))
+            || self
+                .presets
+                .iter()
+                .any(|preset| preset.members.iter().any(|member| member.key == key))
+            || self
+                .zones
+                .list()
+                .iter()
+                .any(|zone| zone.members.iter().any(|member| member == key))
+    }
+
     /// The name a Cast speaker shows: the user's, else the one last listed.
     fn cast_name(&self, id: &str) -> String {
         let system = self.cast_names.get(id).map_or(id, String::as_str);
@@ -2659,6 +2681,22 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed.insert(speaker.id);
         }
         self.airplay_listed = listed;
+        let mut names = std::mem::take(&mut self.airplay_names);
+        let enabled = self.audio.enabled_airplay();
+        let pin = self.audio.airplay_pin_prompt().map(|prompt| prompt.id);
+        let password = self.audio.airplay_password_prompt().map(|prompt| prompt.id);
+        names.retain(|id, _| {
+            self.airplay_listed.contains(id)
+                || self.saved.airplay.contains_key(id)
+                || self.reconnecting.contains_key(id)
+                || self.airplay_unrestored.contains(id)
+                || enabled.contains(id)
+                || pin.as_ref() == Some(id)
+                || password.as_ref() == Some(id)
+                || self.notices.get(&airplay_subject(id)).is_some()
+                || self.key_kept(&airplay_key(id))
+        });
+        self.airplay_names = names;
         let mut switched_off = false;
         for (id, enabled, new) in asking {
             if !enabled && !(new && self.auto_connect.contains(&airplay_key(&id))) {
@@ -3341,9 +3379,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
             BackendEvent::AirPlayChanged => self.airplay_listed(),
             BackendEvent::CastChanged => {
-                for speaker in self.audio.cast_speakers() {
-                    self.cast_names.insert(speaker.id, speaker.name);
-                }
+                let mut names = std::mem::take(&mut self.cast_names);
+                let listed: BTreeMap<String, String> = self
+                    .audio
+                    .cast_speakers()
+                    .into_iter()
+                    .map(|speaker| (speaker.id, speaker.name))
+                    .collect();
+                names.retain(|id, _| self.key_kept(&cast_key(id)));
+                names.extend(listed);
+                self.cast_names = names;
             }
             BackendEvent::CastPlaying { id } => {
                 self.notices.clear(&[NoticeSubject::Cast(id)]);
@@ -6873,6 +6918,49 @@ mod tests {
     }
 
     #[test]
+    fn a_gone_airplay_speaker_keeps_its_name_while_it_asks_for_a_pin() {
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        adapter.set_speaker_enabled(&ap(&loft), true);
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        assert!(adapter.snapshot().pin_prompt.is_some());
+        fake.gone(&loft);
+        adapter.poll();
+        let names = &adapter.airplay_names;
+        assert_eq!(
+            names.get(&id_of(&loft)).map(String::as_str),
+            Some(loft.name.as_str()),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn a_gone_airplay_speaker_keeps_its_name_only_while_settings_or_a_zone_name_it() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let bedroom = device(3, "Bedroom", OPEN_TXT);
+        let den = device(4, "Den", OPEN_TXT);
+        fake.appear(&bedroom);
+        fake.appear(&den);
+        adapter.poll();
+        adapter.set_speaker_volume(&ap(&kitchen), 30.0);
+        adapter.set_speaker_enabled(&ap(&den), true);
+        adapter.new_zone("Downstairs").unwrap();
+        adapter.set_speaker_enabled(&ap(&den), false);
+        adapter.poll();
+        for gone in [&kitchen, &bedroom, &den] {
+            fake.gone(gone);
+        }
+        adapter.poll();
+        let names = &adapter.airplay_names;
+        assert!(!names.contains_key(&id_of(&bedroom)), "{names:?}");
+        assert_eq!(
+            names.get(&id_of(&kitchen)).map(String::as_str),
+            Some("Kitchen")
+        );
+        assert_eq!(names.get(&id_of(&den)).map(String::as_str), Some("Den"));
+    }
+
+    #[test]
     fn turning_an_airplay_speaker_on_and_off_lines_local_outputs_up_and_back() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         turn_on(&mut adapter, SPEAKERS);
@@ -10131,6 +10219,19 @@ mod tests {
         let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
         adapter.poll();
         (adapter, fake)
+    }
+
+    #[test]
+    fn a_gone_cast_speaker_keeps_its_name_only_while_settings_name_it() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.rename_speaker(&cc(CAST_KITCHEN), "Pantry");
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        fake.withdraw(CAST_LIVING, "Living Room");
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&cc(CAST_LIVING)).is_none());
+        let names = &adapter.cast_names;
+        assert!(!names.contains_key(CAST_LIVING), "{names:?}");
+        assert_eq!(names.get(CAST_KITCHEN).map(String::as_str), Some("Kitchen"));
     }
 
     /// The UI's ID of a Google Cast speaker.
