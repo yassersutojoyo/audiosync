@@ -8559,6 +8559,14 @@ do {
     check(StreamingPolicy.startsWithoutSpeaker(origin: .user) && StreamingPolicy.startsWithoutSpeaker(origin: .remote)
             && !StreamingPolicy.startsWithoutSpeaker(origin: .automatic),
           "no speaker on: the power switch starts streaming anyway, with no alert; an automatic start still waits")
+    check(StreamingPolicy.starts(hasSpeaker: false, continuing: true, hadSpeaker: false, origin: .automatic),
+          "no speaker on: a rebuild or switch of a session started with every speaker off carries on")
+    check(!StreamingPolicy.starts(hasSpeaker: false, continuing: true, hadSpeaker: true, origin: .automatic),
+          "no speaker on: an automatic rebuild or switch after the last speaker went off doesn't start")
+    check(StreamingPolicy.starts(hasSpeaker: true, continuing: true, hadSpeaker: true, origin: .automatic)
+            && !StreamingPolicy.starts(hasSpeaker: false, continuing: false, hadSpeaker: true, origin: .automatic)
+            && StreamingPolicy.starts(hasSpeaker: false, continuing: false, hadSpeaker: true, origin: .user),
+          "no speaker on: a speaker that is on always starts; a new automatic start waits; the user's starts")
     check(!StreamingPolicy.isIdle(streaming: true, hadSpeaker: false, enabledAirPlay: [], enabledLocal: []),
           "no speaker on: a session started with every speaker off keeps running")
     check(StreamingPolicy.isIdle(streaming: true, hadSpeaker: true, enabledAirPlay: [], enabledLocal: []),

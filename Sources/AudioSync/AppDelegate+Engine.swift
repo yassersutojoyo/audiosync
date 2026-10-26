@@ -24,9 +24,9 @@ extension AppDelegate {
         defer { refreshStreamingViews() }   // every path, including failures, refreshes the switch
         let hasSpeaker = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                                     enabledLocal: enabledLocal)
-        // A rebuild or a switch carries on a session, which may have started with every speaker off.
         let continuing = rebuild || switching != nil
-        let starts = hasSpeaker || continuing || StreamingPolicy.startsWithoutSpeaker(origin: origin)
+        let starts = StreamingPolicy.starts(hasSpeaker: hasSpeaker, continuing: continuing,
+                                            hadSpeaker: sessionHadSpeaker, origin: origin)
         // A tap's first capture raises the audio capture prompt; Not Now keeps what plays.
         if starts, CaptureCheck.provesPermission(audioSource),
            !permissionAllows(.audioCapture, state: .unknown, origin: origin) {
