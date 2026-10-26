@@ -368,6 +368,9 @@ extension AppDelegate {
     /// and when the next reconcile falls due (`scheduleDueReconcile`).
     func pushModel() {
         publish(\.running, engine.isRunning)
+        noteSessionSpeaker()
+        publish(\.noSpeakerOn, StreamingPolicy.showsNoSpeakerOn(
+            streaming: engine.isRunning, enabledAirPlay: enabledAirPlay.union(castSwitchedOn), enabledLocal: enabledLocal))
         publish(\.sourceID, audioSource.defaultsValue)
         publish(\.inputPair, currentInputPair)
         publish(\.master, masterVolume)

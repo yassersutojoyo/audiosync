@@ -3230,7 +3230,7 @@ do {
           "EC8 all off: only a switch-on while stopped starts streaming")
     check(!StreamingPolicy.hasSpeaker(enabledAirPlay: [], enabledLocal: [])
           && StreamingPolicy.hasSpeaker(enabledAirPlay: [], enabledLocal: ["usb"]),
-          "EC8 all off: Start with no speaker on asks for one first")
+          "EC8 all off: an automatic start with no speaker on asks for one first")
 
     // EC10: many speakers.
     typealias S = (name: String, tag: SpeakerTag)

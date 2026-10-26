@@ -62,9 +62,22 @@ enum StreamingPolicy {
         !enabledAirPlay.isEmpty || !enabledLocal.isEmpty
     }
 
+    /// A start the user asked for (the power switch, a phone, a preset)
+    /// streams with every speaker off, and the first speaker turned on
+    /// joins. AudioSync on its own still waits for a speaker.
+    static func startsWithoutSpeaker(origin: StartOrigin) -> Bool { origin != .automatic }
+
     /// Streaming with every speaker switched off: nothing to stream to, so it
     /// stops. A speaker that is on but unplugged or out of reach still counts.
-    static func isIdle(streaming: Bool, enabledAirPlay: Set<String>, enabledLocal: Set<String>) -> Bool {
+    /// `hadSpeaker`: a speaker was on at some point in this session; one
+    /// started with every speaker off waits for the first.
+    static func isIdle(streaming: Bool, hadSpeaker: Bool = true,
+                       enabledAirPlay: Set<String>, enabledLocal: Set<String>) -> Bool {
+        streaming && hadSpeaker && !hasSpeaker(enabledAirPlay: enabledAirPlay, enabledLocal: enabledLocal)
+    }
+
+    /// The speaker list's "No speaker is on" line.
+    static func showsNoSpeakerOn(streaming: Bool, enabledAirPlay: Set<String>, enabledLocal: Set<String>) -> Bool {
         streaming && !hasSpeaker(enabledAirPlay: enabledAirPlay, enabledLocal: enabledLocal)
     }
 }

@@ -227,8 +227,6 @@ enum CaptureSwitch {
     enum Start: Equatable {
         /// Only the capture is rebuilt, under the speakers.
         case rebuildCapture
-        /// No speaker is on, so nothing can play: the session stops.
-        case stopSession
         /// macOS asks for the microphone first. The old source is stored
         /// again and plays on, so the picker and the level meter show it,
         /// until the answer.
@@ -237,8 +235,7 @@ enum CaptureSwitch {
         case keepOld
     }
 
-    static func start(hasSpeaker: Bool, microphone: Microphone) -> Start {
-        guard hasSpeaker else { return .stopSession }
+    static func start(microphone: Microphone) -> Start {
         switch microphone {
         case .notNeeded, .allowed: return .rebuildCapture
         case .undetermined: return .askMicrophone

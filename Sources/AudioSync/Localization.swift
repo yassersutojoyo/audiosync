@@ -727,7 +727,10 @@ struct UIStrings {
 
     // MARK: Alerts
 
+    /// A start AudioSync made on its own, with every speaker off.
     let chooseSpeakerBeforeStart = "Turn on at least one speaker first (under This Mac or Connected Speakers)."
+    /// The speaker list while streaming with every speaker off (`StreamingPolicy.showsNoSpeakerOn`).
+    let noSpeakerOn = "No speaker is on. The first one you turn on starts playing."
 
     /// Streaming is on but the source hasn't played anything yet.
     func waitingForAudio(_ app: String?) -> String {
@@ -813,13 +816,18 @@ struct UIStrings {
     let thisMacSection = "This Mac"
     let connectedSection = "Connected Speakers"
     /// `hint`: the Local Network hint on screen, which carries the network
-    /// advice in its place.
-    func airPlayNoneFound(hint: LocalNetworkHint = .none) -> String {
-        UIStrings.withNetworkAdvice("No AirPlay speakers found yet.", hint: hint)
+    /// advice in its place. `localNetworkRefused`: Local Network access was
+    /// asked for and refused, or may have been (`LocalNetworkHint` other than
+    /// `.none`, before an AirPlay problem hides it); until then the advice
+    /// leaves it out.
+    func airPlayNoneFound(hint: LocalNetworkHint = .none, localNetworkRefused: Bool = false) -> String {
+        UIStrings.withNetworkAdvice("No AirPlay speakers found yet.", hint: hint, refused: localNetworkRefused)
     }
-    private static func withNetworkAdvice(_ text: String, hint: LocalNetworkHint) -> String {
-        hint == .none ? text + " " + networkAdvice : text
+    private static func withNetworkAdvice(_ text: String, hint: LocalNetworkHint, refused: Bool) -> String {
+        guard hint == .none else { return text }
+        return text + " " + (refused ? networkAdvice : sameNetworkAdvice)
     }
+    private static let sameNetworkAdvice = "Make sure this Mac is on the same network as your speakers."
     private static let networkAdvice = "Make sure this Mac is on the same network as your speakers, "
         + "and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
     let thisMacNone = "No built-in output"
@@ -1196,27 +1204,31 @@ struct UIStrings {
     /// still within its first look (`AirPlaySearch`), so the note says it is
     /// looking instead of giving network advice.
     func networkSpeakersNote(airPlayNone: Bool, cast: CastListState, hint: LocalNetworkHint = .none,
-                             airPlaySearching: Bool = false) -> String? {
+                             localNetworkRefused: Bool = false, airPlaySearching: Bool = false) -> String? {
+        let refused = localNetworkRefused
         if airPlayNone && airPlaySearching {
             if case .searching = cast { return lookingForSpeakers }
-            guard let castNote = castList(cast, hint: hint) else { return lookingForSpeakers }
+            guard let castNote = castList(cast, hint: hint, localNetworkRefused: refused) else { return lookingForSpeakers }
             return lookingForAirPlaySpeakers + " " + castNote
         }
         switch (airPlayNone, cast) {
         case (true, .noneFound):
-            return UIStrings.withNetworkAdvice("No AirPlay or Google Cast speakers found yet.", hint: hint)
-        case (true, .quiet): return airPlayNoneFound(hint: hint)
-        case (true, _): return airPlayNoneFound(hint: hint) + " " + (castList(cast, hint: hint) ?? "")
-        case (false, _): return castList(cast, hint: hint)
+            return UIStrings.withNetworkAdvice("No AirPlay or Google Cast speakers found yet.", hint: hint, refused: refused)
+        case (true, .quiet): return airPlayNoneFound(hint: hint, localNetworkRefused: refused)
+        case (true, _):
+            return airPlayNoneFound(hint: hint, localNetworkRefused: refused) + " "
+                + (castList(cast, hint: hint, localNetworkRefused: refused) ?? "")
+        case (false, _): return castList(cast, hint: hint, localNetworkRefused: refused)
         }
     }
     /// The Google Cast search while it lists no speaker; nil when quiet.
-    func castList(_ state: CastListState, hint: LocalNetworkHint = .none) -> String? {
+    func castList(_ state: CastListState, hint: LocalNetworkHint = .none, localNetworkRefused: Bool = false) -> String? {
         switch state {
         case .quiet: return nil
         case .searching: return "Looking for Google Cast speakers…"
         case .noneFound:
-            return UIStrings.withNetworkAdvice("No Google Cast speakers found yet.", hint: hint)
+            return UIStrings.withNetworkAdvice("No Google Cast speakers found yet.", hint: hint,
+                                               refused: localNetworkRefused)
         case .failed: return "AudioSync can't look for Google Cast speakers right now. Restart AudioSync to try again."
         }
     }

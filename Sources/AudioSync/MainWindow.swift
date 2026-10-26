@@ -132,6 +132,13 @@ struct MainView: View {
                     let all = model.layout
                     let layout = model.zonelessLayout
                     VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
+                        if model.noSpeakerOn {
+                            Text(t.noSpeakerOn)
+                                .font(.callout)
+                                .foregroundStyle(Brand.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, 4)
+                        }
                         // This Mac first: few, stable rows that don't shift as
                         // other speakers come and go. Then the zones, then every
                         // connected speaker (AirPlay and local) by name; a

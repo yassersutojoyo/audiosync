@@ -82,6 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     typealias Keys = AppSettings.Keys
     let store: SettingsStore
+    /// Nothing was saved before this launch: This Mac starts on
+    /// (`SettingsStore.speakerOnAtInstall`).
+    let freshInstall: Bool
 
     /// The mode the several-apps menu shows while no mix is the source.
     var rememberedMixMode: AppMixMode = .only
@@ -245,6 +248,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The user switched streaming off: auto-connect doesn't start it again
     /// until they switch it on (S120).
     var userStopped = false
+    /// A speaker was on at some point in this session (`StreamingPolicy.isIdle`).
+    var sessionHadSpeaker = false
     /// True while a capture interruption is handled: the engine stopped the
     /// session before reporting it, and the stop still names its reason.
     var captureInterrupted = false
@@ -281,6 +286,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     override init() {
         store = LaunchAutoConnect.skipped ? SettingsStore.standard.memoryOnly() : .standard
+        let readStore = store.read
+        freshInstall = !LaunchAutoConnect.skipped && !PermissionAsks.usedBefore { readStore($0) != nil }
         let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
         // A hidden speaker is never switched on, not even by the saved on-state.

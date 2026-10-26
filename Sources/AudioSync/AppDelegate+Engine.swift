@@ -20,14 +20,17 @@ extension AppDelegate {
         defer { refreshStreamingViews() }   // every path, including failures, refreshes the switch
         let hasSpeaker = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                                     enabledLocal: enabledLocal)
+        // A rebuild or a switch carries on a session, which may have started with every speaker off.
+        let continuing = rebuild || switching != nil
+        let starts = hasSpeaker || continuing || StreamingPolicy.startsWithoutSpeaker(origin: origin)
         // A tap's first capture raises the audio capture prompt; Not Now keeps what plays.
-        if hasSpeaker, CaptureCheck.provesPermission(audioSource),
+        if starts, CaptureCheck.provesPermission(audioSource),
            !permissionAllows(.audioCapture, state: .unknown, origin: origin) {
             if let switching { storeSwitch(switching, new: false) }
             return
         }
-        if let switching, !beginSwitch(switching, hasSpeaker: hasSpeaker, origin: origin) { return }
-        guard hasSpeaker else {
+        if let switching, !beginSwitch(switching, origin: origin) { return }
+        guard starts else {
             notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
             return
         }
@@ -76,6 +79,7 @@ extension AppDelegate {
             }
         }
         clearNotices([Notice.start, Notice.source])   // streaming did start, from a working source
+        sessionHadSpeaker = hasSpeaker || (continuing && sessionHadSpeaker)
         session += 1
         restartNativeTimeline()   // a new capture: AudioSync's own sender starts a new timeline (P143)
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
@@ -90,13 +94,10 @@ extension AppDelegate {
 
     /// Acts on how a switch begins (`CaptureSwitch.start`); true when its
     /// capture is rebuilt now.
-    private func beginSwitch(_ change: CaptureSwitch.Change, hasSpeaker: Bool, origin: StartOrigin) -> Bool {
-        switch CaptureSwitch.start(hasSpeaker: hasSpeaker, microphone: microphone(for: audioSource)) {
+    private func beginSwitch(_ change: CaptureSwitch.Change, origin: StartOrigin) -> Bool {
+        switch CaptureSwitch.start(microphone: microphone(for: audioSource)) {
         case .rebuildCapture:
             return true
-        case .stopSession:
-            stopEngine(.noSpeakerOn)
-            notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
         case .askMicrophone:
             storeSwitch(change, new: false)   // the picker and the level meter show what still plays
             askMicrophone(origin: origin, switching: change)

@@ -99,6 +99,9 @@ struct AppSettings: Equatable {
         /// True once the delays of `localDelays` and `legacyDelayMs` were
         /// migrated to offsets and the AirPlay delays (S179); written last.
         static let localDelaysMigrated = "localDelayModelMigrated"
+        /// True once a first install's device list was seen, whether or not
+        /// it switched This Mac on (`SettingsStore.speakerOnAtInstall`).
+        static let speakerOnAtInstall = "thisMacOnAtInstall"
     }
 
     /// Where a speaker without a volume of its own starts (S71, S105).
@@ -410,6 +413,16 @@ struct SettingsStore {
     func save(webRemotePort: Int) { write(webRemotePort, Keys.webRemotePort) }
 
     func save(airPlay2: Bool) { write(airPlay2, Keys.airPlay2) }
+
+    /// On a first install the Mac's own output starts on, once: the UID to
+    /// switch on, or nil. An empty list (Core Audio not answering yet) waits
+    /// for the next; after a list without a built-in output the chance passes,
+    /// so a speaker the user switched off is never switched on again.
+    func speakerOnAtInstall(listed: [AudioDevices.Device], firstInstall: Bool) -> String? {
+        guard firstInstall, read(Keys.speakerOnAtInstall) == nil, !listed.isEmpty else { return nil }
+        write(true, Keys.speakerOnAtInstall)
+        return listed.first { SpeakerTag(transport: $0.transport).isThisMac }?.uid
+    }
 
     /// The AirPlay delay (S178).
     func save(airPlayDelay: AirPlayDelay) {
