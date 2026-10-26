@@ -40,6 +40,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AirPlay speakers start from the latency they report, on the Mac and on Windows, so they line up with each other before you calibrate, and Calibrate All counts it when it listens for an AirPlay speaker. While a speaker is playing, AudioSync doesn't move the shared AirPlay delay under it.
 - A zone remembers the name of each of its speakers, so one that isn't around shows under its last name, also after a restart, on the Mac and on Windows.
 - Forget Password in a speaker's menu, when AudioSync holds a password for it, on the Mac and on Windows. The speaker asks for the password the next time you turn it on.
+- On the Mac, the first time a feature needs a macOS permission (Local Network, audio capture, the microphone or Automation), AudioSync says why before macOS asks, and you can choose Not Now. If you said no, the notice has a button that opens the right pane in System Settings, and the rest of the app keeps working.
 
 ### Changed
 
