@@ -23,7 +23,7 @@ NOTES=path/to/release-notes.md          # your local notes file, not committed
 ditto -c -k --keepParent /Applications/AudioSync.app "AudioSync-$VERSION.zip"
 scripts/sign_appcast.sh "$VERSION"          # → appcast.xml, for the app's updater
 cp scripts/install.sh install.sh
-shasum -a 256 AudioSync.dmg "AudioSync-$VERSION.zip" install.sh THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
+shasum -a 256 AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
 
 git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION"
 gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \

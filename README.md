@@ -31,7 +31,7 @@
 
 AirPlay speakers play about two seconds late. Local speakers don't. Play the same song on both and you get an echo.
 
-AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, early alpha.
+AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, alpha.
 
 ## Coming in 0.8
 
