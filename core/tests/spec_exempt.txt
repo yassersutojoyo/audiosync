@@ -129,6 +129,8 @@ S306 Hosts only: the Windows updater of section 19, which has no code yet; the W
 S307 Hosts only: the Windows updater of section 19, which has no code yet; the Windows tests will check it.
 S308 Hosts only: the Windows updater of section 19, which has no code yet; the Windows tests will check it.
 S309 Hosts only: the Windows updater of section 19, which has no code yet; the Windows tests will check it.
-S310 Hosts only: the Windows updater of section 19, which has no code yet; the Windows tests will check it.
-S311 Hosts only: the Windows updater of section 19, which has no code yet; the Windows tests will check it.
-S313 Hosts only: the switch's label under the AirPlay 2 flag; the Windows tests check it, the Mac logic suite once its UI follows.
+S310 Hosts only: the Mac's Sparkle reading the shared appcast with Windows items; a Mac check on the first such release appcast will check it.
+S311 Hosts only: the release appcast's Windows items; a check in the release script will check it.
+S314 Hosts only: the Windows updater of section 19, which has no code yet; the Windows tests will check it.
+S315 Hosts only: the Windows updater of section 19, which has no code yet; the Windows tests will check it.
+S316 Hosts only: the Windows updater of section 19, which has no code yet; the Windows tests will check it.
