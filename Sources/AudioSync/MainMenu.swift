@@ -28,6 +28,8 @@ enum MainMenu {
         MenuNoteItem.airPlay2Items(text: t, on: airPlay2, onAtLaunch: airPlay2AtLaunch,
                                    action: #selector(AppDelegate.toggleAirPlay2(_:))).forEach(app.addItem)
         app.addItem(.separator())
+        app.addItem(item(t.setupMenu, #selector(AppDelegate.showPermissionSetup(_:))))
+        app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services
         NSApp.servicesMenu = services

@@ -56,6 +56,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var helpWindow: NSWindow?
     var webRemote: WebRemote?
     var webRemoteWindow: WebRemoteWindowController?
+    /// The permission setup window, made the first time it opens and kept.
+    var setupWindow: SetupWindowController?
+    /// The setup's Allow asked for Local Network and waits for the answer.
+    var setupAsking = false
+    /// The setup asked macOS for the microphone and waits for the answer.
+    var setupMicrophoneAsking = false
+    /// The short capture that raises the audio capture prompt (`probeAudioCapture`).
+    var setupCaptureProbe: SourceCapture?
 
     // MARK: - AudioSync's own AirPlay sender (`+NativeAirPlay`)
 
@@ -371,6 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         reconcileLocal()   // lists the local speakers; auto-connect may start streaming
         startSafetyNet()
         if AppLifecycle.opensMainWindow(loginItemLaunch: loginItem) { showMainWindow() }
+        openPermissionSetupIfFirstRun()   // before the sender, whose discovery would offer Local Network alone
         // AudioSync's own sender and its discovery start, after the window,
         // so a Local Network prompt they raise comes up in front of it.
         reconcileAirPlaySpeakers()

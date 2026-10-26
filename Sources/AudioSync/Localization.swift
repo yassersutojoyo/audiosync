@@ -1081,6 +1081,43 @@ struct UIStrings {
     }
     let permissionContinue = "Continue"
     let permissionNotNow = "Not Now"
+
+    // MARK: Permission setup window
+
+    let setupTitle = "Permissions"
+    let setupHeading = "Before you start"
+    let setupIntro = "macOS asks before AudioSync can find speakers or capture sound. Allow both now, and streaming won't stop later to ask."
+    /// Over the microphone and Automation rows.
+    let setupLater = "Only when you use them"
+    func setupDetail(_ permission: Permission) -> String {
+        switch permission {
+        case .localNetwork:
+            return "Finds AirPlay and Google Cast speakers. In System Settings: Local Network."
+        case .audioCapture:
+            return "Plays what your Mac plays on your speakers. In System Settings: Screen & System Audio Recording."
+        case .microphone:
+            return "For an input device as the source, or to calibrate a speaker with the microphone."
+        case .automation:
+            return "Shows the track playing in Spotify or Music. macOS asks the first time Now Playing reads one."
+        }
+    }
+    func setupState(_ state: SetupRowState) -> String {
+        switch state {
+        case .notAsked: return "Not asked yet"
+        case .waiting: return "Waiting for your answer"
+        case .allowed: return "Allowed"
+        case .denied: return "Not allowed"
+        case .askedUnknown: return "Asked. If you didn't allow it, turn it on in System Settings."
+        }
+    }
+    let setupAllow = "Allow Access"
+    let setupAsking = "Asking…"
+    let setupDone = "Done"
+    let setupSkip = "Skip for Now"
+    /// The microphone row's own button.
+    let setupAllowOne = "Allow"
+    /// The app menu item that opens the window again.
+    let setupMenu = "Set Up Permissions…"
     /// AirPlay has found nothing for a while and AudioSync can't tell whether
     /// Local Network access is the reason.
     let localNetworkHint = "If you expect AirPlay speakers, make sure this Mac is on the same network as them, and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."
