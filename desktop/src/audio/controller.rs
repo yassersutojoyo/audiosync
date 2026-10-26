@@ -4991,6 +4991,43 @@ mod tests {
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
 
+    // covers: P143, S141
+    #[test]
+    fn a_source_switch_under_a_sounding_airplay_speaker_sends_the_sender_nothing() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.set_sounding(true);
+        fake.report_latency(
+            &kitchen,
+            300_000,
+            audiosync_airplay::latency::LatencySources::AUDIO_LATENCY,
+        );
+        poll_quietly(&mut backend, 2);
+        fake.take_calls();
+
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        poll_quietly(&mut backend, 2);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(
+                call,
+                Call::RestartTimeline
+                    | Call::Pause
+                    | Call::Latency(_)
+                    | Call::Delay(..)
+                    | Call::Remove(_)
+                    | Call::Add { .. }
+            )),
+            "no restart, flush, re-timing or rejoin at a switch: {calls:?}"
+        );
+    }
+
     #[test]
     fn an_app_that_quit_while_its_capture_waits_to_start_again_gives_way_when_set() {
         let mut backend = backend();
