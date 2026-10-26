@@ -119,6 +119,30 @@ A Windows 11 version (x64 and ARM64) is on the way, with the same Rust engine an
 
 There's a Linux preview too, built from the same code as the Windows app. Not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details. It captures the whole system or one app through PipeWire and plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on Windows) and to your local PipeWire outputs. Like the Windows build, it hasn't been tried on a real speaker yet. It sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't. Its data lives in `$XDG_DATA_HOME/audiosync`, launch at login is an XDG autostart entry, and now playing comes from MPRIS players.
 
+If you hear the source twice and have no output to spare, a PipeWire null sink gives you one that plays nothing out loud. For this session only (it's gone after a restart, or with `pactl unload-module` and the number it printed):
+
+```sh
+pactl load-module module-null-sink sink_name=audiosync-silent sink_properties=device.description=Silent
+```
+
+To keep it, put this in `~/.config/pipewire/pipewire.conf.d/silent.conf` and restart PipeWire:
+
+```
+context.objects = [
+    { factory = adapter
+        args = {
+            factory.name     = support.null-audio-sink
+            node.name        = "audiosync-silent"
+            node.description = "Silent"
+            media.class      = "Audio/Sink"
+            audio.position   = "FL,FR"
+        }
+    }
+]
+```
+
+Then send the app to Silent in pavucontrol (or make Silent the default for All System Audio). AudioSync sees it as a virtual output and keeps it out of the list until you pick View > Show Virtual Devices; you don't need to turn it on there. The commands come from PipeWire's docs for [module-null-sink](https://docs.pipewire.org/page_pulse_module_null_sink.html) and [pipewire.conf](https://docs.pipewire.org/page_man_pipewire_conf_5.html) and its stock config's null-audio-sink example. I haven't tried this on real hardware yet.
+
 ## License and credits
 
 Copyright (c) 2026 Yasser Sutojoyo Kusumo. GPL-3.0-or-later, no warranty. See [`LICENSE`](LICENSE). Stuff it bundles from others, like the Poppins font, is listed with its license in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
