@@ -131,22 +131,26 @@ struct MainView: View {
                 FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
                     let all = model.layout
                     let layout = model.zonelessLayout
-                    VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
-                        // This Mac first: few, stable rows that don't shift as
-                        // other speakers come and go. Then the zones, then every
-                        // connected speaker (AirPlay and local) by name; a
-                        // speaker in a zone shows only under its zone.
-                        speakerSection(t.thisMacSection, speakers: layout.thisMac,
-                                       empty: model.hidden.inThisMac ? t.allSpeakersHidden
-                                           : model.allInZones(all.thisMac) ? t.thisMacAllInZones : t.thisMacNone)
-                        if !model.zones.isEmpty { zonesSection(t) }
-                        speakerSection(t.connectedSection, speakers: layout.connected,
-                                       empty: model.hidden.inConnected ? t.allSpeakersHidden
-                                           : model.allInZones(all.connected) ? t.connectedAllInZones
-                                           : model.networkEmptyText,
-                                       connected: true, airPlayListed: all.connected.contains { $0.isAirPlay },
-                                       problem: model.airPlayProblem,
-                                       localNetworkHint: model.localNetworkHint)
+                    let zoned = model.zonedLayout
+                    ScrollViewReader { proxy in
+                        VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
+                            // This Mac first: few, stable rows that don't shift as
+                            // other speakers come and go. Then the zones, then every
+                            // connected speaker (AirPlay and local) by name; a
+                            // speaker in a zone has its full row under its zone and
+                            // a compact one in its section.
+                            speakerSection(t.thisMacSection, speakers: layout.thisMac, zoned: zoned.thisMac,
+                                           empty: model.hidden.inThisMac ? t.allSpeakersHidden : t.thisMacNone,
+                                           scroll: proxy)
+                            if !model.zones.isEmpty { zonesSection(t) }
+                            speakerSection(t.connectedSection, speakers: layout.connected, zoned: zoned.connected,
+                                           empty: model.hidden.inConnected ? t.allSpeakersHidden
+                                               : model.networkEmptyText,
+                                           scroll: proxy,
+                                           connected: true, airPlayListed: all.connected.contains { $0.isAirPlay },
+                                           problem: model.airPlayProblem,
+                                           localNetworkHint: model.localNetworkHint)
+                        }
                     }
                     .padding(.bottom, 4)
                 }
@@ -344,6 +348,7 @@ struct MainView: View {
             VStack(spacing: BrandTokens.Spacing.cardGap) {
                 ForEach(model.zones) { zone in
                     ZoneCard(model: model, disclosure: zoneDisclosure, zone: zone)
+                        .id(ZoneAnchor(id: zone.id))
                 }
             }
         }
@@ -356,11 +361,15 @@ struct MainView: View {
     /// Network hint. Denied Local Network access shows even over a stale list.
     /// `airPlayListed`: an AirPlay speaker is listed, in a zone or not, so
     /// the AirPlay delay stays here.
-    private func speakerSection(_ title: String, speakers: [AppModel.Speaker], empty: String,
+    /// `zoned`: its speakers that are in a zone, as compact rows after the
+    /// others; `scroll` brings a zone into view for their links.
+    private func speakerSection(_ title: String, speakers: [AppModel.Speaker], zoned: [AppModel.Speaker],
+                                empty: String, scroll: ScrollViewProxy,
                                 connected: Bool = false, airPlayListed: Bool = false, problem: String? = nil,
                                 localNetworkHint: LocalNetworkHint = .none) -> some View {
         let hint = model.text.localNetworkHint(localNetworkHint, short: false)
         let hasAirPlay = airPlayListed || speakers.contains { $0.isAirPlay }
+        let listsNone = speakers.isEmpty && zoned.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
             SectionTitle(title).padding(.leading, 4)
             Card(padding: 4) {
@@ -369,8 +378,8 @@ struct MainView: View {
                         AirPlayProblemView(message: problem, canRetry: true,
                                            text: model.text) { model.actions.retryAirPlay() }
                             .padding(10)
-                        if !speakers.isEmpty { Divider() }
-                    } else if speakers.isEmpty {
+                        if !listsNone { Divider() }
+                    } else if listsNone {
                         emptyNote(empty, hint: hint, under: [])
                     } else if hasAirPlay && localNetworkHint == .denied, let hint {
                         LocalNetworkHintView(message: hint, text: model.text).padding(10)
@@ -382,15 +391,16 @@ struct MainView: View {
                     }
                     if connected && problem == nil && hasAirPlay {
                         // One AirPlay delay for every local speaker, not on any row (S181).
-                        Divider().padding(.leading, 52)
+                        if !speakers.isEmpty { Divider().padding(.leading, 52) }
                         AirPlayDelayRow(model: model)
                     }
-                    if connected && problem == nil && !speakers.isEmpty, let note = model.networkNote {
+                    if !zoned.isEmpty { zonedRows(zoned, divided: !speakers.isEmpty || (connected && hasAirPlay), scroll: scroll) }
+                    if connected && problem == nil && !listsNone, let note = model.networkNote {
                         // Say where AirPlay or the Google Cast search stands, under the rows.
                         Divider()
                         // The note leaves the network advice to the hint, so show it unless it is above.
                         emptyNote(note, hint: hasAirPlay && localNetworkHint == .denied ? nil : hint,
-                                  under: speakers)
+                                  under: zoned.isEmpty ? speakers : [])
                     }
                     if connected && model.castCanAdd {
                         Divider()
@@ -400,6 +410,32 @@ struct MainView: View {
                             .accessibilityHint(model.text.castAddBody)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(10)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The compact rows of a section's speakers that are in a zone, under a
+    /// thin label. Their link scrolls to the zone and focuses its switch.
+    private func zonedRows(_ speakers: [AppModel.Speaker], divided: Bool, scroll: ScrollViewProxy) -> some View {
+        VStack(spacing: 0) {
+            if divided { Divider() }
+            Text(model.text.inZones)
+                .font(.caption)
+                .foregroundStyle(Brand.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 52)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
+                .accessibilityAddTraits(.isHeader)
+            ForEach(speakers) { speaker in
+                if let zone = model.zone(holding: speaker.key) {
+                    ZoneMemberCompactRow(model: model, speaker: speaker, zone: zone) {
+                        withAnimation(AppModel.delayPanelAnimation) {
+                            scroll.scrollTo(ZoneAnchor(id: zone.id), anchor: .top)
+                        }
+                        model.focusZone = zone.id
                     }
                 }
             }
@@ -602,12 +638,20 @@ private struct ZoneCard: View {
 
     private var state: SpeakerState { model.state(of: zone) }
     private var expanded: Bool { disclosure.isExpanded(zone.id) }
+    /// The zone's switch, which takes the focus from a member's Go to Zone.
+    @FocusState private var switchFocused: Bool
 
     var body: some View {
         let t = model.text
         Card(padding: 4) {
             VStack(spacing: 0) {
                 header(t)
+                    .onChange(of: model.focusZone, initial: true) { _, id in
+                        if id == zone.id {
+                            switchFocused = true
+                            model.focusZone = nil
+                        }
+                    }
                 if expanded {
                     ForEach(zone.members) { member in
                         Divider().padding(.leading, 52)
@@ -662,6 +706,7 @@ private struct ZoneCard: View {
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: nil))
             .help(t.help(state))
+            .focused($switchFocused)
 
             // A click past the name shows or hides the speakers instead of
             // switching the zone; the chevron stays the keyboard's way in.
@@ -738,6 +783,96 @@ private struct ZoneCard: View {
                                                       present: zone.present))
         Divider()
         Button(t.deleteZone, role: .destructive) { model.delete(zone) }
+    }
+}
+
+/// Where Go to Zone scrolls: a zone's card, apart from every row's ID.
+private struct ZoneAnchor: Hashable {
+    let id: String
+}
+
+/// A zone member's compact row in its own section: the switch, which works
+/// as the one on its row under the zone, its name and a link to the zone.
+/// No volume, delay or equalizer; its menu holds Go to Zone and Remove from
+/// Zone.
+private struct ZoneMemberCompactRow: View {
+    @ObservedObject var model: AppModel
+    let speaker: AppModel.Speaker
+    let zone: AppModel.Zone
+    let goToZone: () -> Void
+
+    private var state: SpeakerState { model.state(of: speaker) }
+
+    /// What its row under the zone says: a Cast speaker's state, the wait
+    /// for AirPlay 2, or the zone's note on it.
+    private var note: String? {
+        model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                           target: speaker.airPlayTarget)
+            ?? zone.members.first { $0.key == speaker.key }?.note
+    }
+
+    var body: some View {
+        let t = model.text
+        HStack(spacing: 12) {
+            Button { model.setEnabled(speaker, state.clickTurnsOn) } label: {
+                // As wide as a full row's switch, so the names line up.
+                SpeakerBadge(symbol: speaker.symbol, state: state, size: 24)
+                    .frame(width: 32)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(t.inZoneLabel(speaker.name, zone: zone.name))
+            .accessibilityValue(t.value(state))
+            .accessibilityHint(t.rowHint(state, note: note))
+            .help(t.help(state))
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(speaker.name)
+                        .font(.body.weight(state == .playing ? .semibold : .regular))
+                        .lineLimit(1)
+                        .accessibilityHidden(true)
+                    Button(action: goToZone) {
+                        Text(t.inZone(zone.name))
+                            .font(.caption.weight(.semibold))
+                            // The readable teal: the brand teal falls under 4.5:1 for small text.
+                            .foregroundStyle(Brand.tealText)
+                    }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .accessibilityLabel(t.goToZoneLabel(zone.name))
+                    .help(t.goToZoneLabel(zone.name))
+                }
+                if let note {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(Brand.secondaryText)
+                        .lineLimit(2)
+                        .accessibilityHidden(true)
+                }
+            }
+            Spacer(minLength: 0)
+            Menu { menuItems(t) } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .tint(Brand.tealText)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel(t.speakerOptions(name: speaker.name))
+            .help(t.speakerOptions(name: speaker.name))
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
+        .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
+            .fill(state == .playing ? accent.opacity(0.08) : Color.clear))
+        .contentShape(Rectangle())
+        .contextMenu { menuItems(t) }
+    }
+
+    @ViewBuilder
+    private func menuItems(_ t: UIStrings) -> some View {
+        Button(t.goToZone, action: goToZone)
+        Button(t.removeFromZone) { model.actions.removeFromZone(speaker.key) }
     }
 }
 
@@ -997,11 +1132,14 @@ struct SpeakerRow: View {
         }
     }
 
-    /// Move to Zone (the other zones, then New Zone…), and Remove from Zone
-    /// while the speaker is in one.
+    /// Move to Zone (the other zones, then New Zone…), and Only This Speaker
+    /// and Remove from Zone while the speaker is in one.
     @ViewBuilder
     private func zoneItems(_ t: UIStrings) -> some View {
         let current = model.zone(holding: speaker.key)
+        if current != nil {
+            Button(t.onlyThisSpeaker) { model.actions.onlyThisSpeaker(speaker.key) }
+        }
         Menu(t.moveToZone) {
             let others = model.zones.filter { $0.id != current?.id }
             ForEach(others) { zone in

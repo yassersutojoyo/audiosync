@@ -4001,6 +4001,26 @@ do {
           "zones: the speaker lists keep only the speakers in no zone, in their order")
     check(ZoneLayout.zoneless(["lc:usb"], key: { $0 }, zoned: zoned).isEmpty,
           "zones: a list whose speakers are all in zones is empty")
+    check(ZoneLayout.zoned(["lc:built-in", "lc:usb", "ap:native:den", "cc:kitchen"], key: { $0 }, zoned: zoned)
+            == ["lc:usb", "ap:native:den"],
+          "zones: a zone member keeps a compact row in its own section, in the section's order")
+
+    func onlyThis(_ key: String, _ members: [ZoneLayout.Member]) -> [String] {
+        ZoneLayout.onlyThis(key, members: members).map { "\($0.key) \($0.on ? "on" : "off")" }
+    }
+    let memberUSB = ZoneLayout.Member(key: "lc:usb", listed: true, on: false, cast: false)
+    let memberDen = ZoneLayout.Member(key: "ap:native:den", listed: true, on: true, cast: false)
+    let memberGone = ZoneLayout.Member(key: "ap:native:gone", listed: false, on: true, cast: false)
+    let memberAttic = ZoneLayout.Member(key: "cc:attic", listed: true, on: true, cast: true)
+    let memberHall = ZoneLayout.Member(key: "cc:hall", listed: true, on: false, cast: true)
+    check(onlyThis("lc:usb", [memberUSB, memberDen, memberGone]) == ["lc:usb on", "ap:native:den off"],
+          "zones: Only This Speaker turns it on first, then the other present members off")
+    check(onlyThis("ap:native:den", [memberUSB, memberDen, memberAttic]) == ["cc:attic off"],
+          "zones: Only This Speaker on a member that plays only turns the others off")
+    check(onlyThis("cc:hall", [memberHall, memberDen, memberAttic]) == ["cc:attic off", "cc:hall on", "ap:native:den off"],
+          "zones: Only This Speaker frees the Cast place before a Cast member comes on")
+    check(onlyThis("ap:native:gone", [memberGone, memberDen]).isEmpty,
+          "zones: Only This Speaker does nothing for a member that isn't listed")
 
     let living = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb", "ap:native:den"], volume: 80)
     let kitchen = SpeakerZone(id: "z2", name: "Kitchen", members: ["cc:kitchen"], volume: 100)

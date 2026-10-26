@@ -173,6 +173,8 @@ final class AppModel: ObservableObject {
         /// Speaker key, zone ID.
         var moveToZone: (String, String) -> Void = { _, _ in }
         var removeFromZone: (String) -> Void = { _ in }
+        /// Only This Speaker, by the member's key.
+        var onlyThisSpeaker: (String) -> Void = { _ in }
         /// Preset ID (S265).
         var recallPreset: (String) -> Void = { _ in }
         var savePreset: () -> Void = {}
@@ -274,6 +276,8 @@ final class AppModel: ObservableObject {
     @Published var hidden = HiddenState()
     /// The row whose switch takes the keyboard focus once it is built (H11).
     @Published var focusSwitch: String?
+    /// The zone whose switch takes the keyboard focus (Go to Zone).
+    @Published var focusZone: String?
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
     @Published var switchWhenSourceQuits = false
@@ -477,9 +481,13 @@ final class AppModel: ObservableObject {
                 ZoneLayout.zoneless(all.connected, key: \.key, zoned: zoned))
     }
 
-    /// A section left with no row only because each of its speakers is in a zone.
-    func allInZones(_ section: [Speaker]) -> Bool {
-        !section.isEmpty && ZoneLayout.zoneless(section, key: \.key, zoned: zonedKeys).isEmpty
+    /// The speakers of This Mac and Connected Speakers that are in a zone,
+    /// whose compact rows follow each section's full rows.
+    var zonedLayout: (thisMac: [Speaker], connected: [Speaker]) {
+        let all = layout
+        let zoned = zonedKeys
+        return (ZoneLayout.zoned(all.thisMac, key: \.key, zoned: zoned),
+                ZoneLayout.zoned(all.connected, key: \.key, zoned: zoned))
     }
 
     /// Speakers switched on right now, AirPlay and local.
