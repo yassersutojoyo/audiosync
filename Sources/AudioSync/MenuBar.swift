@@ -1187,7 +1187,7 @@ struct SpeakerBadge: View {
 /// - AirPlay and Bluetooth (`Brand.activeBlue`): light 3.79, dark 3.98; on
 ///   the main window's card, window and playing row 4.91–6.47. The system
 ///   blue fell to 2.3 on the panel.
-/// - others (`Brand.tealText`): light 3.82, dark 3.68. The brand teal itself
+/// - others (`Brand.tealText`): light 3.82, dark 4.63. The brand teal itself
 ///   reaches only 3.00 on a light playing row, so it isn't used.
 struct SpeakerTypeIcon: View {
     let kind: SpeakerTag
