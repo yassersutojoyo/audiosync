@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 use crate::error::{ErrorKind, SessionError, UnsupportedReason};
 use crate::ids::{Entropy, EntropyUnavailable};
 use crate::pairing::keys::{self as legacy_keys, KEY_BYTES, SIGNATURE_BYTES};
-use crate::pairing::srp::{self, SrpError, SrpGroup};
+use crate::pairing::srp::{self, ClientValues, SrpError, SrpGroup};
 use crate::rtsp::{Method, Request, Response};
 use crate::secret::Secret;
 use tlv8::Tlv8;
@@ -342,7 +342,99 @@ pub enum SetupStep {
     /// The receiver asked for a wait before the next try (P150, error 3,
     /// item 8): as [`SetupStep::WrongPin`], with M1 held back that long.
     BackOff(Duration),
+    /// M2 was read: run [`SrpWork::run`], here or on another thread, and
+    /// hand the result to [`PairSetup::computed`] (P223). Only after
+    /// [`PairSetup::set_offload`].
+    Compute(SrpWork),
     Failed(PairingFailure),
+}
+
+/// The SRP arithmetic that answers a pair-setup M2 (P151), the slow step of
+/// a pairing, with everything it needs: it runs without the session.
+#[derive(Clone)]
+pub struct SrpWork {
+    code: Secret,
+    salt: Vec<u8>,
+    b_pub: Vec<u8>,
+    /// Values of a, in the order they are tried (P151: drawn again until A
+    /// is a full 384 bytes).
+    draws: Vec<Zeroizing<[u8; PRIVATE_BYTES]>>,
+}
+
+impl fmt::Debug for SrpWork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SrpWork").finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SrpWork {
+    fn eq(&self, other: &SrpWork) -> bool {
+        self.salt == other.salt && self.b_pub == other.b_pub
+    }
+}
+
+impl Eq for SrpWork {}
+
+impl SrpWork {
+    pub fn run(self) -> SrpDone {
+        let mut outcome = Err(SrpFailure::Exhausted);
+        for a in &self.draws {
+            match client_values_for(&self.code, &self.salt, &self.b_pub, &a[..]) {
+                Ok(Some(values)) => {
+                    outcome = Ok(values);
+                    break;
+                }
+                Ok(None) => {}
+                Err(failure) => {
+                    outcome = Err(failure);
+                    break;
+                }
+            }
+        }
+        SrpDone {
+            salt: self.salt,
+            b_pub: self.b_pub,
+            outcome,
+        }
+    }
+}
+
+/// What [`SrpWork::run`] computed.
+pub struct SrpDone {
+    salt: Vec<u8>,
+    b_pub: Vec<u8>,
+    outcome: Result<ClientValues, SrpFailure>,
+}
+
+impl fmt::Debug for SrpDone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SrpDone")
+            .field("ok", &self.outcome.is_ok())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SrpFailure {
+    UnusableServerValue,
+    Exhausted,
+}
+
+/// The client's values for one a: `Ok(None)` when that a gives a short A
+/// or a zero u, so another is tried (P151).
+fn client_values_for(
+    code: &Secret,
+    salt: &[u8],
+    b_pub: &[u8],
+    a: &[u8],
+) -> Result<Option<ClientValues>, SrpFailure> {
+    match srp::client_values(&GROUP, USER_NAME, code.expose().as_bytes(), salt, b_pub, a) {
+        Ok(values) if values.public[0] != 0 => Ok(Some(values)),
+        Ok(_) | Err(SrpError::ZeroScrambler) => Ok(None),
+        Err(SrpError::InvalidServerValue | SrpError::InvalidPrivateValue) => {
+            Err(SrpFailure::UnusableServerValue)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,6 +476,10 @@ pub struct PairSetup {
     key: Zeroizing<Vec<u8>>,
     server_proof: Vec<u8>,
     last: Option<Request>,
+    /// M2's arithmetic is handed out as [`SetupStep::Compute`].
+    offload: bool,
+    /// A [`SetupStep::Compute`] is out and its result not yet back.
+    computing: bool,
 }
 
 impl fmt::Debug for PairSetup {
@@ -432,7 +528,24 @@ impl PairSetup {
             key: Zeroizing::new(Vec::new()),
             server_proof: Vec::new(),
             last: None,
+            offload: false,
+            computing: false,
         }
+    }
+
+    /// Hands M2's arithmetic out as [`SetupStep::Compute`] instead of
+    /// running it in [`PairSetup::handle_response`].
+    pub fn set_offload(&mut self, on: bool) {
+        self.offload = on;
+    }
+
+    /// The result of the [`SetupStep::Compute`] this setup handed out: M3,
+    /// or the failure. `None` when no computation is awaited.
+    pub fn computed(&mut self, done: SrpDone) -> Option<SetupStep> {
+        if !std::mem::take(&mut self.computing) || self.stage != SetupStage::M1 {
+            return None;
+        }
+        Some(self.finish_m2(done))
     }
 
     /// A transient pairing (P64).
@@ -519,6 +632,7 @@ impl PairSetup {
     fn m1(&mut self) -> Request {
         self.stage = SetupStage::M1;
         self.short_values = false;
+        self.computing = false;
         let mut body = Tlv8::new().with(tlv8::METHOD, &[0]).with(tlv8::STATE, &[1]);
         if self.kind == SetupKind::Transient {
             body.push(tlv8::FLAGS, &[TRANSIENT_FLAG]);
@@ -685,42 +799,79 @@ impl PairSetup {
         let Some(code) = self.code.clone() else {
             return self.fail(PairingFailure::new(ErrorKind::PairingFailed, "no code"));
         };
-        let mut found = None;
+        let (salt, b_pub) = (salt.to_vec(), b_pub.to_vec());
+        let mut work = SrpWork {
+            code,
+            salt,
+            b_pub,
+            draws: Vec::new(),
+        };
+        if self.offload {
+            for _ in 0..MAX_DRAWS {
+                let mut a = Zeroizing::new([0u8; PRIVATE_BYTES]);
+                if entropy.fill(&mut a[..]).is_err() {
+                    return self.no_entropy();
+                }
+                work.draws.push(a);
+            }
+            self.computing = true;
+            return SetupStep::Compute(work);
+        }
+        let mut outcome = Err(SrpFailure::Exhausted);
         for _ in 0..MAX_DRAWS {
             let mut a = Zeroizing::new([0u8; PRIVATE_BYTES]);
             if entropy.fill(&mut a[..]).is_err() {
-                return self.fail(PairingFailure::new(
-                    ErrorKind::PairingFailed,
-                    "the random number source is unavailable",
-                ));
+                return self.no_entropy();
             }
-            match srp::client_values(
-                &GROUP,
-                USER_NAME,
-                code.expose().as_bytes(),
-                salt,
-                b_pub,
-                &a[..],
-            ) {
-                Ok(values) if values.public[0] != 0 => {
-                    found = Some(values);
+            match client_values_for(&work.code, &work.salt, &work.b_pub, &a[..]) {
+                Ok(Some(values)) => {
+                    outcome = Ok(values);
                     break;
                 }
-                Ok(_) | Err(SrpError::ZeroScrambler) => {}
-                Err(SrpError::InvalidServerValue | SrpError::InvalidPrivateValue) => {
-                    return self.fail(PairingFailure::new(
-                        ErrorKind::ProtocolError,
-                        "unusable SRP value B",
-                    ));
+                Ok(None) => {}
+                Err(failure) => {
+                    outcome = Err(failure);
+                    break;
                 }
             }
         }
-        let Some(values) = found else {
-            return self.fail(PairingFailure::new(
-                ErrorKind::PairingFailed,
-                "no usable SRP secret was drawn",
-            ));
+        self.finish_m2(SrpDone {
+            salt: work.salt,
+            b_pub: work.b_pub,
+            outcome,
+        })
+    }
+
+    fn no_entropy(&mut self) -> SetupStep {
+        self.fail(PairingFailure::new(
+            ErrorKind::PairingFailed,
+            "the random number source is unavailable",
+        ))
+    }
+
+    /// M3 from the client's values (P151).
+    fn finish_m2(&mut self, done: SrpDone) -> SetupStep {
+        let SrpDone {
+            salt,
+            b_pub,
+            outcome,
+        } = done;
+        let values = match outcome {
+            Ok(values) => values,
+            Err(SrpFailure::UnusableServerValue) => {
+                return self.fail(PairingFailure::new(
+                    ErrorKind::ProtocolError,
+                    "unusable SRP value B",
+                ));
+            }
+            Err(SrpFailure::Exhausted) => {
+                return self.fail(PairingFailure::new(
+                    ErrorKind::PairingFailed,
+                    "no usable SRP secret was drawn",
+                ));
+            }
         };
+        let (salt, b_pub) = (&salt[..], &b_pub[..]);
         let full = GROUP.len();
         self.short_values = b_pub[0] == 0
             || srp::significant_len(b_pub) < full

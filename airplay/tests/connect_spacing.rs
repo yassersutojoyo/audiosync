@@ -230,6 +230,7 @@ fn a_start_pushed_twice_waits_once_and_a_host_ask_lifts_a_retry() {
     let origin = Instant::now();
     let mut queue = ConnectQueue::new();
     queue.push("a", Host, origin);
+    assert_eq!(queue.pop(origin), Some(("a", Host)));
     queue.connected(origin);
     queue.push("r", Retry, at(origin, 0.1));
     queue.push("h", Host, at(origin, 0.2));

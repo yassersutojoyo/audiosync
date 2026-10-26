@@ -179,6 +179,7 @@ impl Driver {
         let mut config = Ap2Config::new(addresses, speaker.options.volume);
         config.trace = speaker.options.trace;
         config.read_volume = speaker.reads_volume;
+        config.offload_srp = true;
         config.txt_flags = device
             .airplay_txt
             .as_ref()
@@ -243,7 +244,7 @@ impl Driver {
         if let (Some(Connection { local, .. }), Some(peer)) = (pairing_connection, held_remote) {
             self.remote_attach(key, remote, SocketAddr::new(local, 0), peer.ip());
         }
-        self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
+        self.report_connecting(key);
     }
 
     /// Takes the connection a PIN pairing with the device left open and
@@ -303,6 +304,7 @@ impl Driver {
         config.features = device.features();
         config.password = password;
         config.device_id = self.device_id;
+        config.offload_srp = true;
         PinPairing::new(config, ids, Box::new(OsEntropy), now)
     }
 
@@ -560,7 +562,7 @@ impl Driver {
         }
         if let Some(speaker) = self.speakers.get_mut(key) {
             speaker.ap2_retry = true;
-            speaker.phase = Phase::Waiting(now + PTP_PORTS_POLL);
+            speaker.wait_until(now + PTP_PORTS_POLL, StartKind::Host);
         }
     }
 
@@ -584,7 +586,7 @@ impl Driver {
         }
         self.ptp_restart.insert(key.clone(), family);
         self.end_session(key, Phase::Idle);
-        self.start_session(key, now);
+        self.start_session(key, StartKind::Host, now);
     }
 
     /// Sends what the PTP service queued; a Sync's Follow_Up carries the

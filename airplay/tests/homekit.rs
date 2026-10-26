@@ -970,3 +970,54 @@ fn no_pairing_answer_makes_the_pairing_panic() {
         let _ = HomeKitCredentials::from_bytes(&rng.bytes(len * 2));
     }
 }
+
+/// Like `run_setup`, with M2's arithmetic handed out and run apart, as the
+/// sender does on another thread; counts the handed-out steps.
+fn run_offloaded(
+    setup: &mut PairSetup,
+    fake: &mut FakeHomeKit,
+    entropy: &mut TestEntropy,
+    pin: Option<&str>,
+) -> (SetupStep, usize) {
+    setup.set_offload(true);
+    let mut request = setup.start();
+    let mut computed = 0;
+    loop {
+        let response = fake.answer(&request);
+        let mut step = setup.handle_response(&response, entropy);
+        if let SetupStep::Compute(work) = step {
+            computed += 1;
+            step = setup.computed(work.clone().run()).expect("M3 or a failure");
+            assert_eq!(setup.computed(work.run()), None);
+        }
+        match step {
+            SetupStep::Send(next) => request = next,
+            SetupStep::PinRequested => {
+                request = setup.submit_pin(pin.expect("a PIN")).expect("M1");
+            }
+            end => return (end, computed),
+        }
+    }
+}
+
+// covers: P223
+#[test]
+fn the_srp_step_can_run_apart_from_the_session() {
+    let mut entropy = TestEntropy::new();
+    let mut fake = FakeHomeKit::new(homekit::TRANSIENT_CODE);
+    let (end, computed) = run_offloaded(&mut PairSetup::transient(), &mut fake, &mut entropy, None);
+    assert!(matches!(end, SetupStep::Transient(_)), "{end:?}");
+    assert_eq!(computed, 1);
+
+    let mut fake = FakeHomeKit::new(PIN);
+    let mut setup = PairSetup::pin(identity(&mut entropy));
+    let (end, computed) = run_offloaded(&mut setup, &mut fake, &mut entropy, Some(PIN));
+    assert!(matches!(end, SetupStep::Paired(_)), "{end:?}");
+    assert_eq!(computed, 1);
+
+    // A wrong PIN is still turned down at M4, after the step ran apart.
+    let mut fake = FakeHomeKit::new(PIN);
+    let mut setup = PairSetup::pin(identity(&mut entropy));
+    let (end, _) = run_offloaded(&mut setup, &mut fake, &mut entropy, Some("1111"));
+    assert!(matches!(end, SetupStep::WrongPin), "{end:?}");
+}

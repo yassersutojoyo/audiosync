@@ -229,8 +229,10 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
         for pair in burst.windows(2) {
             assert!(
                 pair[1].duration_since(pair[0]) <= MAX_GAP,
-                "a gap of {:?}",
-                pair[1].duration_since(pair[0])
+                "a gap of {:?} from {} ms after the call; accepts at {:?} ms",
+                pair[1].duration_since(pair[0]),
+                ms(asked, pair[0]),
+                accepts.iter().map(|at| ms(asked, *at)).collect::<Vec<_>>()
             );
         }
     }
@@ -413,6 +415,7 @@ fn a_click_while_retries_wait_connects_first() {
 
     // The two retries left connect after it, 0.5 s apart, in the order
     // they fell due.
+    events.drain(&sender);
     let mut retries: Vec<(Instant, Instant)> = keys
         .iter()
         .zip(&lost)

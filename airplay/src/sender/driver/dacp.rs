@@ -17,7 +17,7 @@ fn active_remote(phase: &Phase) -> Option<u32> {
     match phase {
         Phase::Active(active) => Some(active.session.ids().active_remote),
         Phase::Ap2(active) => Some(active.session.ids().active_remote),
-        Phase::Waiting(_) | Phase::Failed | Phase::Idle => None,
+        Phase::Waiting(_) | Phase::Queued { .. } | Phase::Failed | Phase::Idle => None,
     }
 }
 
