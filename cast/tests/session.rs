@@ -111,10 +111,7 @@ fn a_device_that_never_reports_its_status_is_a_connect_failure() {
 
 #[test]
 fn connect_failures_say_their_cause_and_retries_back_off() {
-    // A port nobody listens on.
-    let closed = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let address = closed.local_addr().expect("address");
-    drop(closed);
+    let address = common::refused_address();
     let error = CastClient::connect(&[address], RequestIds::starting_at(1)).expect_err("refused");
     assert!(matches!(error, ConnectError::Tcp { .. }), "{error}");
     assert!(error.to_string().contains(&address.to_string()));
@@ -213,11 +210,8 @@ fn a_deselect_ends_a_connect_while_it_waits() {
 
 #[test]
 fn ipv4_is_tried_before_ipv6() {
-    let closed = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = closed.local_addr().expect("address").port();
-    drop(closed);
-    let v4 = SocketAddr::new(IpAddr::from([127, 0, 0, 1]), port);
-    let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port);
+    let v4 = common::refused_address();
+    let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), v4.port());
     let error = CastClient::connect(&[v6, v4], RequestIds::starting_at(1)).expect_err("closed");
     let ConnectError::Tcp { address, .. } = error else {
         panic!("{error}");

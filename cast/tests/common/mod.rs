@@ -115,6 +115,13 @@ impl Default for Behavior {
     }
 }
 
+/// An address every connect to fails. A freed ephemeral port would not do:
+/// a test running alongside may bind it again, and the connect then reaches
+/// that test's fake device (a Windows runner did, 2026-10-25).
+pub fn refused_address() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 0))
+}
+
 pub fn app(app_id: &str, session_id: &str, transport_id: &str) -> Value {
     json!({
         "appId": app_id,

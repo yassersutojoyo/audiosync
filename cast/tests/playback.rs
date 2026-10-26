@@ -4,7 +4,6 @@
 
 mod common;
 
-use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -386,10 +385,7 @@ fn a_dead_channel_reconnects_and_reuses_or_relaunches_the_app() {
 // covers: C80
 #[test]
 fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
-    let closed: SocketAddr = {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        listener.local_addr().expect("address")
-    };
+    let closed = common::refused_address();
     let selected = AtomicBool::new(true);
     let mut waits = Vec::new();
     let started = Instant::now();

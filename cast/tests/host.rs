@@ -678,10 +678,7 @@ fn connect_retries_follow_events_held_when_the_start_began() {
     // The outbox is full, so this session's end is held.
     host.stop();
     thread::sleep(Duration::from_millis(500));
-    let closed = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        listener.local_addr().expect("address")
-    };
+    let closed = common::refused_address();
     let (_feed, reader) = ring();
     let unreachable = CastTarget {
         id: B,
