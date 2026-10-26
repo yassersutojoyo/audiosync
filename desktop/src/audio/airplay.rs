@@ -9147,10 +9147,16 @@ pub mod tests {
         airplay.set_enabled(&id_of(c3), false).unwrap();
         airplay.poll();
         let calls = fake.take_calls();
-        assert_eq!(delays(&calls), [], "every d′_s held: {calls:?}");
         assert!(
-            latencies(&calls).iter().all(|&frames| frames == 77_175),
-            "the sender holds a new Lf while a speaker sounds (P201): {calls:?}"
+            !calls
+                .iter()
+                .any(|call| matches!(call, Call::RestartTimeline | Call::Pause | Call::Delay(..))),
+            "nothing flushed or re-timed, every d′_s held: {calls:?}"
+        );
+        assert_eq!(
+            latencies(&calls),
+            [77_175],
+            "the host sends the new Lf (S280); the sender holds it while a speaker sounds (P201)"
         );
         assert_eq!(ms(airplay.latency()), 3150, "E held at 1400 ms");
         airplay.poll();

@@ -2578,7 +2578,7 @@ do {
                 + "plays 80 ms late until the stream is empty)")
     }
 
-    // covers: S284, S285 (the Mac host; the Windows tests are still to come)
+    // covers: S284, S285
     do {
         var group = NativeAirPlayModel()
         for (id, name) in [("L1", "Left"), ("R1", "Right")] {
