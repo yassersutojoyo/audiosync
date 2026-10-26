@@ -19,7 +19,7 @@
   <a href="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml"><img alt="Windows CI" src="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml/badge.svg?branch=main"></a>
   <img alt="macOS 15+" src="https://img.shields.io/badge/macOS-15%2B-black?logo=apple">
   <img alt="GPL-3.0-or-later license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue">
-  <img alt="Early alpha" src="https://img.shields.io/badge/status-early%20alpha-E3A21A">
+  <img alt="Alpha" src="https://img.shields.io/badge/status-alpha-E3A21A">
 </p>
 
 <p align="center">
