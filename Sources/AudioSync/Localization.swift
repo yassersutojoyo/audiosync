@@ -1433,7 +1433,8 @@ struct UIStrings {
         - Zones: turn on the speakers you want, then choose 'New Zone from Active
           Speakers' in the gear menu. A speaker is in one zone at a time, and it
           shows under its zone instead of under This Mac or Connected Speakers.
-          Click the zone's name to switch its speakers at once. To move a
+          Click the zone's round icon to switch its speakers at once; a
+          click elsewhere on its header shows or hides them. To move a
           speaker, choose Move to Zone from its ⋯ button. To rename or delete
           a zone, right-click it or use its ⋯ button.
         - Presets: turn on the speakers you want and set their volumes, the
