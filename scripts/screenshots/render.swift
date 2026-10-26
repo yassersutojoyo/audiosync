@@ -47,6 +47,11 @@ enum Mock {
             bundleID: "com.example.player", appName: "Player", title: "Midnight Drive",
             artist: "Example Artist", album: "Example Album", isPlaying: true, artwork: artwork())
         model.equalizerOn = true
+        let curve = Mock.equalizer()
+        model.equalizerCurve = text.equalizerCurveName(curve.shownCurve, saved: curve.curves)
+        // On and in effect, as after a relaunch with the switch on: no restart note.
+        model.airPlay2 = true
+        model.airPlay2AtLaunch = true
         model.zones = [AppModel.Zone(id: "zone:1", name: "Downstairs", volume: 60, members: [
             AppModel.ZoneMember(key: SpeakerKey.make(id: "living", kind: .airplay), name: "Living Room", symbol: "hifispeaker", speakerID: "living"),
             AppModel.ZoneMember(key: SpeakerKey.make(id: "kitchen", kind: .airplay), name: "Kitchen", symbol: "hifispeaker", speakerID: "kitchen"),
@@ -57,13 +62,16 @@ enum Mock {
                              autoConnect: true),
             AppModel.Speaker(id: "bedroom", name: "Bedroom", tag: .airplay, enabled: false, volume: 35, offsetMs: nil,
                              availability: .needsCode),
+            // The sender plays one AirPlay 2 speaker at a time, so only this one is on.
+            AppModel.Speaker(id: "study", name: "Study", tag: .airplay, enabled: true, volume: 52, offsetMs: nil,
+                             airPlay2: true),
         ]
         // Offsets are relative to the built-in speakers, the reference, which has none.
         model.local = [
             AppModel.Speaker(id: "built-in", name: "MacBook Pro Speakers", tag: .builtIn, enabled: true, volume: 60,
-                             offsetMs: nil),
+                             offsetMs: nil, isReference: true),
             AppModel.Speaker(id: "headphones", name: "Studio Headphones", tag: .bluetooth, enabled: true, volume: 40,
-                             offsetMs: -170),
+                             offsetMs: -170, calibrationLeftOut: .headphones),
             AppModel.Speaker(id: "desk", name: "Desk Speakers", tag: .usb, enabled: false, volume: 55, offsetMs: 50),
         ]
         model.cast = [
