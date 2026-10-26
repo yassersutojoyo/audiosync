@@ -140,6 +140,18 @@ do {
     }
     check(AppSettings.airPlayOwn(126.98) == 126.98 && AppSettings.airPlayOwn(-1) == 0,
           "airplay level: a stored own volume above 100 loads as it is")
+
+    // A DeviceVolume 100 at master 63 stores s = 158.7; after a relaunch the row and the TV still say 100.
+    final class Stored { var values: [String: Any] = [:] }
+    let stored = Stored()
+    let store = SettingsStore(read: { stored.values[$0] }, write: { value, key in stored.values[key] = value })
+    let own = AirPlayDeviceLevel.move(row: 100, zone: 100, master: 63)?.own ?? .nan
+    store.save(levels: ["A1": own, "B2": -4], forKey: AppSettings.Keys.airplayVolumes)
+    let loaded = store.load().airplayVolumes
+    let row = AirPlayDeviceLevel.row(own: loaded["A1"] ?? .nan, zone: 100, master: 63, held: nil)
+    check(own > 158 && loaded["A1"] == own && loaded["B2"] == 0 && row == 100,
+          "airplay level: an own volume above 100 survives a relaunch, so the row stays at the TV's 100",
+          "\(loaded), row \(row)")
 }
 
 // MARK: Audio source persistence

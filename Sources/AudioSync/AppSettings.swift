@@ -318,7 +318,7 @@ struct SettingsStore {
     func migratePresets() {
         guard read(Keys.presetsMigrated) as? Bool != true else { return }
         let local = AppSettings.levels(read(Keys.localVolumes), AppSettings.volume)
-        let airplay = AppSettings.levels(read(Keys.airplayVolumes), AppSettings.volume)
+        let airplay = AppSettings.levels(read(Keys.airplayVolumes), AppSettings.airPlayOwn)
         let volume: (String) -> Double? = { key in
             guard let (id, kind) = SpeakerKey.parseAny(key) else { return nil }
             switch kind {

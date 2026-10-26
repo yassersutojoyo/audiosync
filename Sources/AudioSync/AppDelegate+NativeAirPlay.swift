@@ -465,7 +465,7 @@ extension AppDelegate {
     }
 
     /// A preset gave AirPlay speaker `id` its own volume back: it plays at
-    /// own × zone × master and its row shows that (S290).
+    /// min(100, s × k) and its row shows that (S290).
     func setNativeAirPlayOwnVolume(_ id: String, _ own: Double) {
         airplayVolume[id] = own
         airplayHeldLevel[id] = nil
