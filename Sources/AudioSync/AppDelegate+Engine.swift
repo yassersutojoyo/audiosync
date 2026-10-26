@@ -257,7 +257,7 @@ extension AppDelegate {
     func notify(_ message: String, origin: StartOrigin, subject: String,
                 style: NSAlert.Style = .warning, settings: PrivacyPane? = nil) {
         postNotice(message, subject: subject, settings: settings)
-        if origin == .user { showAlert(message, style: style, settings: settings) }
+        if origin.raisesAlert { showAlert(message, style: style, settings: settings) }
     }
 
     func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil,
