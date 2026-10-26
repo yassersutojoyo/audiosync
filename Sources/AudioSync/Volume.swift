@@ -27,16 +27,17 @@ struct AirPlayDeviceLevel: Equatable {
     /// The whole number an AirPlay row shows: `remembered`'s level while its
     /// zone and master hold, else own × zone × master; rounded down (S290).
     static func row(own: Double, zone: Double, master: Double, remembered: AirPlayDeviceLevel?) -> Double {
-        if let remembered = remembered, remembered.zone == zone, remembered.master == master {
-            return asc_airplay_row_level(remembered.level)
-        }
-        return asc_airplay_row_level(asc_airplay_device_level(own, zone, master))
+        asc_airplay_row_level(sent(own: own, zone: zone, master: master, remembered: remembered))
     }
 
     /// The device level an AirPlay speaker gets when it joins, or when
-    /// Calibrate All Speakers gives its volume back (S290, S291).
+    /// Calibrate All Speakers gives its volume back, the one its row shows:
+    /// `remembered`'s level while its zone and master hold, else own × zone × master (S290, S291).
     static func sent(own: Double, zone: Double, master: Double, remembered: AirPlayDeviceLevel?) -> Double {
-        asc_airplay_device_level(own, zone, master)
+        if let remembered = remembered, remembered.zone == zone, remembered.master == master {
+            return remembered.level
+        }
+        return asc_airplay_device_level(own, zone, master)
     }
 
     /// A row moved to `row`: the own volume to store and the device level to

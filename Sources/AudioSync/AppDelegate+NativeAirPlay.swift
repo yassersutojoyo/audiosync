@@ -387,8 +387,7 @@ extension AppDelegate {
         let appeared = plan.changesRows ? adoptNativeRows(native.model, stopped: !engine.isRunning) : []
         for id in plan.add {
             let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume
-            // It starts at own × zone × master, so its row shows that again.
-            airplayDeviceLevel[NativeAirPlayID.app(id)] = nil
+            // It starts at the level its row shows, one its remote set included, as on Windows.
             native.add(id, volume: volume)
             let level = sendNativeRowLevel(NativeAirPlayID.app(id))
             DebugTrace.log("[AudioSync] native AirPlay: added \(nativeLabel(id)) at level \(Int(level.rounded(.down))), volume \(Int(volume.rounded())), master \(Int(masterVolume.rounded()))")
