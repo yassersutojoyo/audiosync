@@ -86,7 +86,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
 }
 
 fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, String), String> {
-    let entries = television::txt(options.pin);
+    let entries = television::txt(options.pin, 0);
     let txt: Vec<(&str, &str)> = entries
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
@@ -240,7 +240,7 @@ fn main() -> ExitCode {
     };
     let server = Ap2Server::start_at(
         SocketAddr::new(IpAddr::V4(ip), options.port),
-        television(&options.name, options.pin, &options.code),
+        television(&options.name, options.pin, &options.code, 0),
     );
     let port = server.address.port();
     let advertised = if options.on_network {

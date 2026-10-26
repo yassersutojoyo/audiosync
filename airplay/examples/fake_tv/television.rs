@@ -10,6 +10,9 @@ use crate::common::ap2::{FakeAp2, dict, int, plist};
 
 /// Bits 38 (CoreUtils pairing) and 48 (transient pairing): AirPlay 2 capable.
 pub const FEATURES_HIGH: u64 = 0x1_0040;
+/// Bits 15 to 17 (artwork, progress, text): track info reaches it. The
+/// traced television sets none, so only the cells profile has them.
+pub const FEATURES_METADATA: u64 = 0x3_8000;
 /// The label of its own mDNS host name, in the `.local.` domain.
 pub const HOST_LABEL: &str = "audiosync-test-tv";
 pub const MODEL: &str = "Speaker1,1";
@@ -45,24 +48,28 @@ pub fn device_id_text() -> String {
         .join(":")
 }
 
-/// The `_airplay._tcp` TXT entries it advertises.
-pub fn txt(pin: Pin) -> Vec<(&'static str, String)> {
+/// The `_airplay._tcp` TXT entries it advertises, with `features_low` as
+/// the low word of its features.
+pub fn txt(pin: Pin, features_low: u64) -> Vec<(&'static str, String)> {
     vec![
-        ("features", format!("0x0,{FEATURES_HIGH:#x}")),
+        ("features", format!("{features_low:#x},{FEATURES_HIGH:#x}")),
         ("flags", format!("{:#x}", status_flags(pin))),
         ("model", MODEL.to_owned()),
         ("deviceid", device_id_text()),
     ]
 }
 
-pub fn television(name: &str, pin: Pin, code: &str) -> FakeAp2 {
+pub fn television(name: &str, pin: Pin, code: &str, features_low: u64) -> FakeAp2 {
     let mut fake = FakeAp2::samsung();
     if pin != Pin::None {
         fake.hap.code = code.to_owned();
         fake.hap.pairing_per_connection = pin == Pin::EveryTime;
     }
     fake.info_body = plist(dict(&[
-        ("features", int((FEATURES_HIGH << 32) as i64)),
+        (
+            "features",
+            int(((FEATURES_HIGH << 32) | features_low) as i64),
+        ),
         ("statusFlags", int(status_flags(pin) as i64)),
         ("name", Value::String(name.to_owned())),
         ("model", Value::String(MODEL.to_owned())),

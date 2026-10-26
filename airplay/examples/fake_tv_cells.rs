@@ -82,7 +82,7 @@ impl Tv {
         socket
             .set_read_timeout(Some(Duration::from_millis(200)))
             .expect("a read timeout");
-        let mut fake = television(NAME, pin, CODE);
+        let mut fake = television(NAME, pin, CODE, television::FEATURES_METADATA);
         fake.data_port = socket.local_addr().expect("its address").port();
         let audio = Arc::new(AtomicUsize::new(0));
         let counted = audio.clone();
@@ -111,7 +111,7 @@ impl Tv {
             instance: NAME.to_owned(),
             host: format!("{}.local", television::HOST_LABEL),
             port: self.server.address.port(),
-            txt: television::txt(self.pin)
+            txt: television::txt(self.pin, television::FEATURES_METADATA)
                 .into_iter()
                 .map(|(key, value)| format!("{key}={value}").into_bytes())
                 .collect(),
@@ -172,6 +172,23 @@ impl Tv {
             }
         }
         counts
+    }
+
+    /// Track info, artwork and progress sets the television received.
+    fn metadata_sets(&self) -> usize {
+        self.server
+            .fake()
+            .requests
+            .iter()
+            .filter(|(request, _)| {
+                request.method == Method::SetParameter
+                    && request.headers.get("Content-Type").is_some_and(|kind| {
+                        kind == "application/x-dmap-tagged"
+                            || kind == "image/jpeg"
+                            || (kind == "text/parameters" && request.body.starts_with(b"progress:"))
+                    })
+            })
+            .count()
     }
 
     fn audio(&self) -> usize {
@@ -439,6 +456,7 @@ fn now_playing(title: &str, elapsed: u64) -> NowPlaying {
 
 fn d3_track(tv: &Tv, host: &mut Host, key: &DeviceKey) -> Cell {
     let before = tv.count("FLUSH");
+    let sets_before = tv.metadata_sets();
     let changes = [
         now_playing("Track One", 10),
         now_playing("Track Two", 0),
@@ -450,7 +468,11 @@ fn d3_track(tv: &Tv, host: &mut Host, key: &DeviceKey) -> Cell {
         host.run(Some(key), Duration::from_secs(1));
     }
     host.run(Some(key), Duration::from_secs(1));
-    cells::d3_track(count, tv.count("FLUSH") - before)
+    cells::d3_track(
+        count,
+        tv.metadata_sets() - sets_before,
+        tv.count("FLUSH") - before,
+    )
 }
 
 struct Report {

@@ -243,13 +243,21 @@ pub fn d2(pause: Pause) -> Cell {
     Cell::new("D2", status, value)
 }
 
-/// D3, the sender's part: new track info, one of them a seek, sends no
-/// FLUSH.
-pub fn d3_track(changes: usize, flushes: usize) -> Cell {
+/// D3, the sender's part: new track info, one of them a seek, reaches the
+/// television (`seen` metadata SET_PARAMETERs, at least one per change)
+/// and sends no FLUSH.
+pub fn d3_track(changes: usize, seen: usize, flushes: usize) -> Cell {
     let value = format!(
-        "{changes} track info changes ({} tracks, 1 seek): {flushes} FLUSH",
+        "{changes} track info changes ({} tracks, 1 seek): {seen} metadata sets, {flushes} FLUSH",
         changes.saturating_sub(1)
     );
+    if seen < changes {
+        return Cell::new(
+            "D3.track",
+            Status::Fail,
+            format!("{value}; fewer sets than changes"),
+        );
+    }
     let status = if flushes == 0 {
         Status::Pass
     } else {
