@@ -595,7 +595,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
         popover.behavior = .transient
-        popover.animates = true
         popover.delegate = self
         if let button = statusItem.button {
             button.target = self
@@ -692,6 +691,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         host.view.layoutSubtreeIfNeeded()
         popover.contentSize = host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
         presented = true
+        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         takeKey()
         DispatchQueue.main.async { button.highlight(true) }
