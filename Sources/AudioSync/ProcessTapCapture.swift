@@ -347,8 +347,17 @@ final class SourceCapture {
         CaptureClose.run(closeIO: {}, objects: objects, destroy: Self.destroy, later: Self.nextTurn)
     }
 
+    /// System uptime when a tap was last destroyed; main queue only.
+    private static var lastDestroy: TimeInterval?
+
+    /// Seconds since a tap was last destroyed, nil when none was (S227 g).
+    static var sinceLastDestroy: TimeInterval? {
+        lastDestroy.map { ProcessInfo.processInfo.systemUptime - $0 }
+    }
+
     private static func destroy(_ objects: TapObjects) {
         objects.destroy()
+        lastDestroy = ProcessInfo.processInfo.systemUptime
         DebugTrace.log("[AudioSync] capture: an earlier tap and its aggregate device destroyed")
     }
 

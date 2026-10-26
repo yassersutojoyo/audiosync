@@ -150,17 +150,36 @@ enum AppLifecycle {
 
         static let attempts = 3
         static let spacing: TimeInterval = 0.5
+        /// How long after a tap was destroyed the first attempt waits. On the
+        /// Mac sitting (2026-10-26) a tap made 1 ms after one always failed,
+        /// and one made 1.9 s after worked in 5 of 5 runs.
+        static let settle: TimeInterval = 1
+
+        /// The wait before the first attempt, given how long ago the capture
+        /// last destroyed a tap; none when it never did or long enough ago.
+        static func firstWait(sinceDestroy elapsed: TimeInterval?) -> TimeInterval {
+            guard let elapsed, elapsed >= 0, elapsed < settle else { return 0 }
+            return settle - elapsed
+        }
 
         /// - Parameters:
+        ///   - firstWait: `firstWait(sinceDestroy:)`, waited before the first attempt.
         ///   - start: one attempt; `last` says a failure is final and handled as one.
         ///   - later: runs a block the given time later.
         ///   - stillWanted: false once the user stopped, started or changed the source meanwhile.
         ///   - finish: the outcome, whether streaming runs; not called when the user took over.
-        static func run(attempt: Int = 1,
+        static func run(attempt: Int = 1, firstWait: TimeInterval = 0,
                         start: @escaping (_ last: Bool) -> Attempt,
                         later: @escaping (TimeInterval, @escaping () -> Void) -> Void,
                         stillWanted: @escaping () -> Bool,
                         finish: @escaping (Bool) -> Void) {
+            if firstWait > 0 {
+                later(firstWait) {
+                    guard stillWanted() else { return }
+                    run(attempt: attempt, start: start, later: later, stillWanted: stillWanted, finish: finish)
+                }
+                return
+            }
             let answer = start(attempt >= attempts)
             guard answer == .captureFailed, attempt < attempts else {
                 finish(answer == .started)

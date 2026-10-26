@@ -290,7 +290,17 @@ extension AppDelegate {
     /// refused capture again (`AppLifecycle.SystemSwitch`).
     private func switchToSystem(after bundleID: String, name: String) {
         var attempt = 0
+        let firstWait = AppLifecycle.SystemSwitch.firstWait(sinceDestroy: SourceCapture.sinceLastDestroy)
+        if firstWait > 0, engine.isRunning {
+            // Ends the capture still waiting for the app, whose own looks would report the quit again.
+            DebugTrace.log(SessionStop.sourceSwitchedToSystem.logLine(detail: bundleID))
+            engine.stop()
+        }
+        if firstWait > 0 {
+            DebugTrace.log("[AudioSync] the whole system starts in \(Int(firstWait * 1000)) ms, once the app's tap settled")
+        }
         AppLifecycle.SystemSwitch.run(
+            firstWait: firstWait,
             start: { [weak self] last in
                 guard let self else { return .failed }
                 attempt += 1
