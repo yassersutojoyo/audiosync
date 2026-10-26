@@ -2682,11 +2682,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.airplay_listed = listed;
         let mut names = std::mem::take(&mut self.airplay_names);
+        let enabled = self.audio.enabled_airplay();
+        let pin = self.audio.airplay_pin_prompt().map(|prompt| prompt.id);
+        let password = self.audio.airplay_password_prompt().map(|prompt| prompt.id);
         names.retain(|id, _| {
             self.airplay_listed.contains(id)
                 || self.saved.airplay.contains_key(id)
                 || self.reconnecting.contains_key(id)
                 || self.airplay_unrestored.contains(id)
+                || enabled.contains(id)
+                || pin.as_ref() == Some(id)
+                || password.as_ref() == Some(id)
+                || self.notices.get(&airplay_subject(id)).is_some()
                 || self.key_kept(&airplay_key(id))
         });
         self.airplay_names = names;
