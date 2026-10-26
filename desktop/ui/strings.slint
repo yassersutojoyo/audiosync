@@ -669,7 +669,7 @@ export global Strings {
             return @tr("AudioSync plays up to 16 AirPlay 2 speakers at once, so {} waits. It starts once one of them stops.", speaker);
         }
         if problem == AirPlayProblem.ptp-other-network {
-            return @tr("{} waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off to play it here.", speaker);
+            return @tr("{0} waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and {0} starts.", speaker);
         }
         // An Apple TV and its home theater group never play at once.
         if problem == AirPlayProblem.plays-through-speakers {

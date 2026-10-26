@@ -640,7 +640,7 @@ struct UIStrings {
     /// A speaker that takes only PTP while AudioSync runs PTP for speakers
     /// on another network: it stays on and starts once those stop (S285).
     func nativeAirPlayPtpOtherNetwork(name: String) -> String {
-        "\(name) waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off to play it here."
+        "\(name) waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and \(name) starts."
     }
     /// That notice's title.
     func nativeAirPlayWaitingTitle(name: String) -> String { "\(name) waiting" }

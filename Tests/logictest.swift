@@ -2293,7 +2293,7 @@ do {
     check(UIStrings().nativeAirPlayTooManyAirPlay2(name: "Loft")
             == "AudioSync plays up to \(ASC_AIRPLAY2_SESSIONS) AirPlay 2 speakers at once, so Loft waits. It starts once one of them stops."
             && UIStrings().nativeAirPlayPtpOtherNetwork(name: "Loft")
-            == "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off to play it here.",
+            == "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and Loft starts.",
           "S285 native airplay: both waiting notices read as on Windows")
     let lets = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
     let stops = "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."

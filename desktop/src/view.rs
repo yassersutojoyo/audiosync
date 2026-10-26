@@ -6382,7 +6382,7 @@ mod tests {
         assert_eq!(
             strings.invoke_notice_airplay(AirPlayProblem::PtpOtherNetwork, "Loft".into()),
             "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. \
-             Turn those speakers off to play it here."
+             Turn those speakers off and Loft starts."
         );
     }
 
