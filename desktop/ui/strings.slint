@@ -1233,6 +1233,11 @@ export global Strings {
     // What the name field says about its keys.
     out property <string> speaker-name-field-hint: @tr("Press Enter to apply or Escape to cancel. Leave it empty for the device's own name.");
 
+    // The line under a renamed speaker's name: the name its device reports.
+    public pure function speaker-device-caption(system: string) -> string {
+        return @tr("Device name: {}", system);
+    }
+
     // The tooltip on a speaker's name: the full name, which the row may
     // elide, then how to rename it. `system` is empty unless renamed.
     public pure function speaker-name-tooltip(name: string, system: string) -> string {

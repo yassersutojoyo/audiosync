@@ -36,7 +36,7 @@ struct UIStrings {
     let retryAirPlayHelp = "Start AirPlay again"
     /// AudioSync's own AirPlay sender stopped after an internal error; shown
     /// in place of the AirPlay speakers, with Retry.
-    let nativeAirPlayFailed = "AirPlay stopped after an internal error. Click Retry to start it again."
+    let nativeAirPlayFailed = "AirPlay stopped after an internal error. Click Retry to start it again. If it keeps happening, restart AudioSync."
     let alertOK = "OK"
     let guideTitle = "AudioSync Guide"
     let refreshDevices = "Refresh Devices"
