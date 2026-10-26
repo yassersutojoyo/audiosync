@@ -250,7 +250,7 @@ pub const AIRPLAY_EVENT_TRACE: i32 = 12;
 pub const AIRPLAY_EVENT_REMOTE: i32 = 13;
 /// The host set an Lf while a speaker sounds: the sender holds it
 /// ([`AscAirPlayEvent::latency_ms`] is the held L) until the stream has no
-/// speaker or the capture restarts, when a timeline event reports it
+/// speaker or the timeline restarts, when a timeline event reports it
 /// (P201).
 pub const AIRPLAY_EVENT_LATENCY_HELD: i32 = 14;
 
@@ -2113,6 +2113,9 @@ impl Feed {
             self.ready = self.resampler.set_input_rate(requested as u32).is_ok();
             if self.ready {
                 self.fade.restart(requested as u32);
+                // A capture build: its first block follows the silence the
+                // stream sent meanwhile, on the same timeline (P143).
+                self.writer.new_capture();
             }
         }
         if !self.ready {
@@ -2895,7 +2898,7 @@ pub unsafe extern "C" fn asc_airplay_set_speaker_offset(
 /// Sets the stream's base latency Lf, clamped to 11 025 to 88 200 frames
 /// (P98, P202). While no speaker sounds it applies at once and a timeline
 /// event reports the new L; later it is held ([`AIRPLAY_EVENT_LATENCY_HELD`])
-/// until the stream has no speaker or the capture restarts (P201). A null
+/// until the stream has no speaker or the timeline restarts (P201). A null
 /// or dead handle does nothing.
 ///
 /// # Safety
@@ -2962,19 +2965,6 @@ pub unsafe extern "C" fn asc_airplay_latency_ms(airplay: *const AscAirPlay) -> f
             millis(airplay.sender.latency())
         })
     }
-}
-
-/// The host restarted its capture (P143): every speaker is flushed and the
-/// timeline starts over; a timeline event follows.
-///
-/// # Safety
-///
-/// `airplay` is null or a live handle, called under the threading contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn asc_airplay_restart_timeline(airplay: *mut AscAirPlay) {
-    // SAFETY: by the caller's contract null or a live handle that no other
-    // call uses now.
-    unsafe { live(airplay, (), |airplay| airplay.sender.restart_timeline()) }
 }
 
 /// The user paused playback on purpose (P213): a remote's Pause, a media
@@ -4579,7 +4569,6 @@ mod tests {
             assert!(!asc_airplay_remove_speaker(ptr::null_mut(), id.as_ptr()));
             assert!(!asc_airplay_set_volume(ptr::null_mut(), id.as_ptr(), 50.0));
             asc_airplay_set_master(ptr::null_mut(), 50.0);
-            asc_airplay_restart_timeline(ptr::null_mut());
             asc_airplay_pause(ptr::null_mut());
             asc_airplay_resume(ptr::null_mut());
             assert_eq!(asc_airplay_latency_ms(ptr::null()), 0.0);
@@ -4651,18 +4640,6 @@ mod tests {
                 device_level: 0.0,
             }
         );
-        // SAFETY: a live handle, used by this thread only.
-        unsafe { asc_airplay_restart_timeline(handle) };
-        let restarted = events_until(handle, |seen| !seen.is_empty());
-        assert_eq!(
-            restarted
-                .iter()
-                .map(|e| (e.kind, e.restarted))
-                .collect::<Vec<_>>(),
-            [(AIRPLAY_EVENT_TIMELINE, true)],
-            "P143"
-        );
-        assert!((restarted[0].latency_ms - 1750.0).abs() < 0.01);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -6094,7 +6071,6 @@ mod tests {
             ));
             assert!(asc_airplay_take_input(handle).is_null());
             asc_airplay_set_master(handle, 50.0);
-            asc_airplay_restart_timeline(handle);
             asc_airplay_pause(handle);
             asc_airplay_resume(handle);
             let mut receiver = empty();

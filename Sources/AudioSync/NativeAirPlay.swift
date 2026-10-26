@@ -376,17 +376,12 @@ final class NativeAirPlay {
         }
     }
 
-    /// A new capture session started (P143): the speakers are flushed and the
-    /// timeline starts over.
-    func restartTimeline() {
+    /// A new capture started (P143): a paused stream resumes. The timeline
+    /// goes on and the speakers get no FLUSH, so a held E stays held; the
+    /// native input places the new capture's first block after the silence
+    /// once its rate is set.
+    func captureStarted() {
         applyPause(explicitPause.clear(), cause: "new capture")
-        queue.async { [weak self] in
-            guard let handle = self?.handle else { return }
-            asc_airplay_restart_timeline(handle)
-        }
-        // The restart silences every speaker, so a held E applies now.
-        syncLatency(canChange: true)
-        sendOffsets()
     }
 
     /// The core's Lf rule over reported latencies in microseconds (P200).
@@ -421,7 +416,7 @@ final class NativeAirPlay {
         case .held:
             let latency = model.receiverLatency
             var line = String(format: "[AudioSync] native AirPlay: E %.0f ms held while a speaker sounds; it stays "
-                              + "%.0f ms until the stream is empty or restarts", latency.heldMs ?? 0, latency.estimateMs)
+                              + "%.0f ms until the stream is empty", latency.heldMs ?? 0, latency.estimateMs)
             for row in rows where latency.lateMs(of: model.sessions(of: row)) > 0 {
                 let late = Int(latency.lateMs(of: model.sessions(of: row)).rounded())
                 line += "; \(model.names[row] ?? row) plays \(late) ms late until then"

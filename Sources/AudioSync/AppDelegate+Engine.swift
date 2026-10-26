@@ -77,7 +77,7 @@ extension AppDelegate {
         }
         clearNotices([Notice.start, Notice.source])   // streaming did start, from a working source
         session += 1
-        restartNativeTimeline()   // a new capture: AudioSync's own sender starts a new timeline (P143)
+        nativeCaptureStarted()   // a new capture is an underrun to AudioSync's own sender, never a FLUSH (P143)
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
         syncCast()   // the Cast speaker that is on connects
         syncLocalOutputs(origin: origin)

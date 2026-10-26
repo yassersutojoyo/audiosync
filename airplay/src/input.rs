@@ -14,13 +14,15 @@
 //! the rest (P112).
 //!
 //! A host that is far behind, or that stays behind while it delivers at
-//! real-time pace, or whose very first write is behind, didn't fall behind:
-//! its capture paused and resumed (a loopback delivers nothing while the
-//! source is silent) or started after the stream did. Its frames are
-//! then no longer late copies of the cut positions but new audio, so the
-//! write moves up to the first position not yet cut, the skipped positions
-//! stay the silence the stream inserted (P96), and the stream places the
-//! resumed frames on the timeline as if they had just arrived on schedule.
+//! real-time pace, or whose very first write is behind, or the first write
+//! of a capture it marked as new ([`InputWriter::new_capture`]), didn't fall
+//! behind: its capture paused and resumed (a loopback delivers nothing
+//! while the source is silent), started after the stream did, or replaced
+//! the one before it (P143). Its frames are then no longer late copies of
+//! the cut positions but new audio, so the write moves up to the first
+//! position not yet cut, the skipped positions stay the silence the stream
+//! inserted (P96), and the stream places the resumed frames on the
+//! timeline as if they had just arrived on schedule.
 //!
 //! Each write records when its frames arrived. Writes that land in time
 //! feed the rate model and the send margin (P84, P101); a late write is
@@ -107,6 +109,7 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
         InputWriter {
             shared: shared.clone(),
             late: None,
+            fresh: true,
         },
         InputReader {
             shared,
@@ -130,6 +133,8 @@ pub struct InputWriter {
     shared: Arc<Shared>,
     /// The arrival time and size of the last write, when it was late.
     late: Option<(Instant, u64)>,
+    /// No frame of the current capture was handed over yet.
+    fresh: bool,
 }
 
 impl InputWriter {
@@ -154,6 +159,15 @@ impl InputWriter {
         })
     }
 
+    /// The host started a new capture (a source switch, P143): its first
+    /// write, when the stream already sent silence for those positions,
+    /// starts the audio as just arrived instead of being dropped as late.
+    /// The timeline goes on. Never allocates, locks or blocks (P6).
+    pub fn new_capture(&mut self) {
+        self.fresh = true;
+        self.late = None;
+    }
+
     /// The ring position the next frame handed over will take. With the
     /// stream's timeline origin it names the frame's timeline index (P113).
     pub fn position(&self) -> u64 {
@@ -173,9 +187,10 @@ impl InputWriter {
             at.saturating_duration_since(previous).as_secs_f64() * f64::from(SAMPLE_RATE)
                 >= size as f64 / 2.0
         });
-        // A first write that is behind is a capture that started after the
-        // stream did: its frames were never late, so it starts the audio.
-        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced || start == 0);
+        // A capture's first write that is behind started after the stream
+        // did, or after the stream filled the switch to it with silence
+        // (P143): its frames were never late, so it starts the audio.
+        let resync = behind > 0 && (behind >= RESYNC_FRAMES || paced || self.fresh);
         // Otherwise frames whose positions were already cut are late:
         // dropped, their positions kept, so later frames stay where they
         // belong (P112).
@@ -194,6 +209,9 @@ impl InputWriter {
         let end = first + keep;
         shared.write.store(end.max(start), Ordering::Release);
         shared.received.fetch_add(count, Ordering::Release);
+        if count > 0 {
+            self.fresh = false;
+        }
         if late > 0 {
             self.late = Some((at, count));
             self.record_arrival(start, end, at, LATE_BIT);

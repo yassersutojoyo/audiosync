@@ -556,12 +556,13 @@ const REBUILD: Duration = Duration::from_millis(300);
 const SWITCH_GAP: Duration = Duration::from_secs(1);
 
 /// A source switch as both hosts make it: the old capture stops, and the
-/// new one writes its own audio, numbered from 0 again, to the same input.
+/// new one, marked as new on the input, writes its own audio, numbered from
+/// 0 again, to the same input (P143).
 fn switch_capture(tv: &mut Playing) {
-    let writer = tv.host.take().expect("a capture").stop();
+    let mut writer = tv.host.take().expect("a capture").stop();
     tv.run(REBUILD, false);
+    writer.new_capture();
     tv.host = Some(HostAudio::start(writer));
-    tv.sender.restart_timeline();
 }
 
 /// The first-sound times the sender stated for the speaker (P115), with

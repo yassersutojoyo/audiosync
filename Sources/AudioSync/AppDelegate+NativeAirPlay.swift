@@ -504,9 +504,9 @@ extension AppDelegate {
         }
     }
 
-    /// A new session started (P143): the speakers start over on a new timeline.
-    func restartNativeTimeline() {
-        nativeAirPlay?.restartTimeline()
+    /// A new capture started (P143): the speakers play on, on the same timeline.
+    func nativeCaptureStarted() {
+        nativeAirPlay?.captureStarted()
     }
 
     /// Switches a native speaker off and says why. Its attempt ends first,

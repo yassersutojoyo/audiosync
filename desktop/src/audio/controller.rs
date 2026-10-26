@@ -1875,7 +1875,7 @@ impl<D: Driver> Controller<D> {
             }
         }
         if let Some(airplay) = self.airplay.as_mut() {
-            airplay.restart_timeline();
+            airplay.capture_started();
         }
         self.sessions_started += 1;
         self.log.log(|| self.policy.describe_lead());
@@ -5017,8 +5017,7 @@ mod tests {
         assert!(
             !calls.iter().any(|call| matches!(
                 call,
-                Call::RestartTimeline
-                    | Call::Pause
+                Call::Pause
                     | Call::Latency(_)
                     | Call::Delay(..)
                     | Call::Remove(_)
@@ -6207,14 +6206,11 @@ mod tests {
         assert!(!feed.is_free(), "the capture holds the feed");
         assert_eq!(
             fake.take_calls(),
-            [
-                Call::RestartTimeline,
-                Call::Add {
-                    id: id.clone(),
-                    volume: Volume::Db(-12.0),
-                    delay: Duration::ZERO,
-                }
-            ]
+            [Call::Add {
+                id: id.clone(),
+                volume: Volume::Db(-12.0),
+                delay: Duration::ZERO,
+            }]
         );
         assert_eq!(delay_frames(&backend, SPEAKERS), 84_000);
 
