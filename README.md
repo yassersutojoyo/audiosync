@@ -25,7 +25,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
-    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window: audio source, now playing, master volume and equalizer on the left; on the right, the MacBook Pro speakers under This Mac, a zone with its speakers, then Connected Speakers listed by name, each with a small AirPlay, USB or wireless icon for its kind, with volume and, for local outputs, a sync delay">
+    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window: audio source, now playing, master volume and equalizer on the left; on the right, the MacBook Pro speakers under This Mac, a group of two speakers, then Connected Speakers listed by name, each with a small AirPlay, USB or Bluetooth icon for its kind, with volume and, for local outputs, a sync delay">
   </picture>
 </p>
 
@@ -72,7 +72,7 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 - Source: all system audio, one app, or an input device (mic, audio interface).
 - Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything macOS can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
 - A delay per local speaker (−2 to +20 s), plus one AirPlay delay.
-- Volume per speaker and master, a 10-band EQ, zones (speakers that switch on and off together, with a volume of their own), auto-connect, launch at login, Now Playing for Spotify and Music.
+- Volume per speaker and master, a 10-band EQ, speaker groups that switch on and off together (zones with a volume of their own from 0.8), auto-connect, launch at login, Now Playing for Spotify and Music.
 
 Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
 
@@ -100,10 +100,10 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 ## What doesn't work (yet)
 
 - Everything is about two seconds late. Fine for music, bad for video and games.
-- AirPlay 1 only by default. AirPlay 2 is experimental and off: to try it, turn on AirPlay 2 (Experimental) in the app menu or the gear menu, then quit and reopen AudioSync. It plays one AirPlay 2 speaker at a time and hasn't been tried on a real AirPlay 2 receiver yet. From 0.8, with the switch on, a stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
+- AirPlay 1 only by default. AirPlay 2 is experimental and off: in 0.6, start AudioSync with `AUDIOSYNC_AIRPLAY2=1` to try it. From 0.8 there's a switch instead: turn on AirPlay 2 (Experimental) in the app menu or the gear menu, then quit and reopen AudioSync. It plays one AirPlay 2 speaker at a time, and so far I've only tried it on one AirPlay 2 TV. From 0.8, with the switch on, a stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
 - Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
-- Now Playing only works with Spotify and Music.
+- On the Mac, Now Playing only works with Spotify and Music.
 
 ## Windows
 
