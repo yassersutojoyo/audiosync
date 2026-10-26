@@ -150,7 +150,7 @@ fn play_dual(config: SenderConfig, id: u8) -> (Vec<String>, Vec<String>) {
 
 #[test]
 fn the_flag_turns_the_path_on_and_the_switch_into_a_preference() {
-    assert!(!AIRPLAY2_AUTO, "off until the flag flips");
+    assert!(!airplay2_auto(None), "off until the flag flips");
     assert_eq!(AIRPLAY2_AUTO_ENV, "AUDIOSYNC_AIRPLAY2_AUTO");
     assert!(airplay2_auto(Some("1")));
     assert!(!airplay2_auto(Some("0")));
