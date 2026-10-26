@@ -2458,6 +2458,42 @@ mod tests {
         assert_eq!(late_start(45_000_000, 100, Some(110)).steps, 0);
     }
 
+    /// The delay, in ms, of an output held back 100 ms whose callbacks come
+    /// `phase_ns` after each 480-frame block, measured 2 s in.
+    fn delay_at_phase(phase_ns: u64) -> f64 {
+        let mut s = Stepped::new();
+        s.control.set_delay_frames(4800);
+        let mut written = 0u64;
+        let mut delay_ms = f64::NAN;
+        for call in 0..200u64 {
+            let block_ns = 10_000_000 + call * 10_000_000;
+            let block: Vec<f32> = (written..written + 480)
+                .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+                .collect();
+            s.writer.write_at(&block, 480, block_ns);
+            written += 480;
+            let now = block_ns + phase_ns;
+            s.renderer.render_timed_at(&mut s.out, now + 20_000_000, now);
+            if s.renderer.fade_state() == FadeState::Open {
+                let captured_ms = f64::from(s.out[0]) * 4_000_000.0 / 48.0;
+                delay_ms = (now + 20_000_000) as f64 / 1e6 - captured_ms;
+            }
+        }
+        delay_ms
+    }
+
+    // covers: S322
+    #[test]
+    fn an_anchor_between_blocks_lands_where_the_capture_is() {
+        let delays: Vec<f64> = [500_000u64, 3_000_000, 6_000_000, 9_500_000]
+            .into_iter()
+            .map(delay_at_phase)
+            .collect();
+        let low = delays.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = delays.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(high - low < 2.0, "delays {delays:.2?} ms");
+    }
+
     /// An output whose first 350 callbacks, past its start window, come
     /// `late_ns` late and the rest on time, whose delay is set to 100 ms
     /// half a second after they came on time: how far behind the capture

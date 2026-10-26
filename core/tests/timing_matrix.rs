@@ -1491,11 +1491,7 @@ fn a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s()
     let (seen, twin) = (&outcomes[0], &outcomes[1]);
     let (low, high) = seen.after_window[0].unwrap();
     let (twin_low, twin_high) = twin.after_window[0].unwrap();
-    // An anchor lands on a capture block, so the twin, which primed on its
-    // first block, and the late output, which anchors later, may sit up to a
-    // block apart: 5 ms at its end without a start step.
     let off = (high - twin_low).abs().max((twin_high - low).abs());
-    let block_ms = late.block as f64 * 1000.0 / f64::from(CAPTURE_RATE);
     let report = format!(
         "delay from 3 s {low:.2}..{high:.2} ms, twin {twin_low:.2}..{twin_high:.2} ms, start steps {:?}, twin {:?}\n{}\n{}",
         seen.start_steps,
@@ -1510,7 +1506,7 @@ fn a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s()
         high - low
     );
     assert!(
-        off <= block_ms + ALIGN_SLACK_MS,
+        off <= ALIGN_SLACK_MS,
         "{off:.2} ms off its twin: {report}"
     );
     assert_eq!(seen.start_steps[0], 1, "{report}");
