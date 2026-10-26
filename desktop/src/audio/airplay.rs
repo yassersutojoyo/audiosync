@@ -1044,14 +1044,15 @@ impl Added {
 }
 
 /// How a member's state ranks for its target's: playing first, then
-/// connecting, retrying, failed, stopped.
+/// connecting, retrying, unannounced, failed, stopped.
 fn state_rank(state: &SpeakerState) -> u8 {
     match state {
         SpeakerState::Playing => 0,
         SpeakerState::Connecting => 1,
         SpeakerState::Retrying { .. } => 2,
-        SpeakerState::Failed => 3,
-        SpeakerState::Stopped => 4,
+        SpeakerState::Unannounced => 3,
+        SpeakerState::Failed => 4,
+        SpeakerState::Stopped => 5,
     }
 }
 
@@ -3683,6 +3684,7 @@ impl AirPlaySpeakers {
                     "trying again in {:.1} s",
                     at.saturating_duration_since(Instant::now()).as_secs_f64()
                 ),
+                SpeakerState::Unannounced => "waiting until it is announced again".to_owned(),
                 SpeakerState::Failed => "failed".to_owned(),
                 SpeakerState::Stopped => "stopped".to_owned(),
             };

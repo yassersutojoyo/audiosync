@@ -332,6 +332,9 @@ pub const AIRPLAY_STATE_RETRYING: i32 = 3;
 pub const AIRPLAY_STATE_FAILED: i32 = 4;
 /// It was removed, or the sender shut down, and its session is closed.
 pub const AIRPLAY_STATE_STOPPED: i32 = 5;
+/// It stopped announcing itself: nothing is tried until discovery lists it
+/// able to play, then a session starts at once. Not a failure (P215).
+pub const AIRPLAY_STATE_UNANNOUNCED: i32 = 6;
 
 /// What to tell the user about an error that ended a session
 /// ([`AscAirPlayEvent::error`], P133): the speaker didn't answer.
@@ -1140,8 +1143,9 @@ impl AscAirPlay {
             SpeakerState::Playing => (0, None),
             SpeakerState::Connecting => (1, None),
             SpeakerState::Retrying { at } => (2, Some(*at)),
-            SpeakerState::Failed => (3, None),
-            SpeakerState::Stopped => (4, None),
+            SpeakerState::Unannounced => (3, None),
+            SpeakerState::Failed => (4, None),
+            SpeakerState::Stopped => (5, None),
         };
         let derived = self.added[&target]
             .members
@@ -1813,6 +1817,7 @@ impl AscAirPlay {
                         event.retry_ms = millis_until(at);
                         AIRPLAY_STATE_RETRYING
                     }
+                    SpeakerState::Unannounced => AIRPLAY_STATE_UNANNOUNCED,
                     SpeakerState::Failed => AIRPLAY_STATE_FAILED,
                     SpeakerState::Stopped => AIRPLAY_STATE_STOPPED,
                 };

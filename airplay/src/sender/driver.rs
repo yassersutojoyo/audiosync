@@ -140,6 +140,8 @@ enum Phase {
     Ap2(Box<ap2::Ap2Active>),
     /// A new session starts at this time (P142).
     Waiting(Instant),
+    /// Waits for discovery to list it able to play again (P215).
+    Unannounced,
     /// Waits for the user (P142).
     Failed,
     /// Nothing runs: after a teardown during shutdown.
@@ -562,7 +564,7 @@ impl Driver {
                     }
                 }
                 Phase::Waiting(at) => next = next.min(*at),
-                Phase::Failed | Phase::Idle => {}
+                Phase::Unannounced | Phase::Failed | Phase::Idle => {}
             }
         }
         for run in self.pairings.values() {
@@ -1007,7 +1009,7 @@ impl Driver {
                     self.close_ptp();
                 }
             }
-            Phase::Waiting(_) | Phase::Failed | Phase::Idle => {}
+            Phase::Waiting(_) | Phase::Unannounced | Phase::Failed | Phase::Idle => {}
         }
     }
 
@@ -1549,7 +1551,7 @@ impl Driver {
                 self.command(Command::SetDelay(key.clone(), delay), now);
                 self.set_volume(&key, volume, now);
             }
-            Phase::Waiting(_) | Phase::Failed | Phase::Idle => {
+            Phase::Waiting(_) | Phase::Unannounced | Phase::Failed | Phase::Idle => {
                 speaker.backoff = Backoff::new();
                 speaker.airplay1_outcome = None;
                 self.start_session(&key, now);
@@ -1576,7 +1578,7 @@ impl Driver {
         match &mut speaker.phase {
             Phase::Active(active) => active.session.teardown(now),
             Phase::Ap2(active) => active.session.teardown(now),
-            Phase::Waiting(_) | Phase::Failed | Phase::Idle => {
+            Phase::Waiting(_) | Phase::Unannounced | Phase::Failed | Phase::Idle => {
                 self.stopped(key);
                 if held {
                     self.wake_ap2_waiter(now);
@@ -1790,9 +1792,18 @@ impl Driver {
     /// A session that can't start (P46, P74, P139): reported like a failed
     /// session, without connecting.
     fn refuse(&mut self, key: &DeviceKey, error: SessionError, now: Instant) {
+        let unannounced = self.unannounced(key, error.kind);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
+        if unannounced {
+            let told = matches!(speaker.phase, Phase::Unannounced);
+            speaker.phase = Phase::Unannounced;
+            if !told {
+                self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Unannounced));
+            }
+            return;
+        }
         let retry_at = speaker.backoff.on_failure(error.kind, now);
         speaker.phase = retry_at.map_or(Phase::Failed, Phase::Waiting);
         let reason = error.kind.user_reason();
@@ -1806,6 +1817,31 @@ impl Driver {
         );
         let state = retry_at.map_or(SpeakerState::Failed, |at| SpeakerState::Retrying { at });
         self.emit_speaker(key, SpeakerEvent::State(state));
+    }
+
+    /// An Unsupported whose only cause is that the speaker stopped
+    /// announcing itself: its RAOP record lapsed, or discovery saw it and
+    /// lists none of its records now (P215). With HomeKit credentials,
+    /// "AirPlay 2 only" comes from the switch instead.
+    fn unannounced(&self, key: &DeviceKey, kind: ErrorKind) -> bool {
+        kind == ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only)
+            && !self.homekit_paired(key)
+            && (self.directory.raop_seen(key)
+                || (self.directory.seen(key) && self.directory.device(key).is_none()))
+    }
+
+    /// Discovery listed an unannounced speaker again: a session starts now,
+    /// the first of a fresh schedule, unless the records still leave it
+    /// unannounced (P215).
+    fn announced(&mut self, key: &DeviceKey, now: Instant) {
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return;
+        };
+        if !matches!(speaker.phase, Phase::Unannounced) || self.stopping.is_some() {
+            return;
+        }
+        speaker.backoff = Backoff::new();
+        self.start_session(key, now);
     }
 
     /// Sends what is playing to one playing speaker, on either path, as far
@@ -1932,12 +1968,13 @@ impl Driver {
                     let mut info = Box::new(ReceiverInfo::new(*device));
                     info.target = after.get(&key).cloned();
                     self.rejoin_member(&key, Instant::now());
-                    let event = if self.reported.insert(key) {
+                    let event = if self.reported.insert(key.clone()) {
                         ReceiverEvent::Appeared(info)
                     } else {
                         ReceiverEvent::Changed(info)
                     };
                     self.emit(SenderEvent::Receiver(event));
+                    self.announced(&key, Instant::now());
                 }
                 DirectoryEvent::Removed(key) => {
                     if self.reported.remove(&key) {
@@ -1992,7 +2029,7 @@ impl Driver {
         for key in std::mem::take(&mut self.reported) {
             self.emit(SenderEvent::Receiver(ReceiverEvent::Gone(key)));
         }
-        for change in self.targets.update(std::iter::empty()) {
+        for change in self.targets.clear() {
             self.emit(SenderEvent::Receiver(ReceiverEvent::Target(change)));
         }
     }

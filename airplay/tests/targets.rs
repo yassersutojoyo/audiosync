@@ -181,7 +181,7 @@ fn the_pair_leader_falls_back_to_the_gid_middle_field_then_the_lowest_identifier
     assert_eq!(find_targets([&a, &b])[0].leader, Some(key(5)));
 }
 
-// covers: P173
+// covers: P173, P216
 #[test]
 fn a_lone_member_is_an_incomplete_pair_only_with_bit_14() {
     let lone = pair_member(1, "0x4", TSID);
@@ -231,6 +231,7 @@ fn raop_only(n: u8) -> Device {
     Device::from_records(key(n), Some(&record), None).expect("device")
 }
 
+// covers: P216, P181, P173
 #[test]
 fn a_pair_member_whose_partner_lapsed_is_named_missing() {
     let left = pair_member(1, "0x2004", TSID);

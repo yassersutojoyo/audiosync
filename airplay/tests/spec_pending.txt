@@ -18,7 +18,3 @@ P209 SETPEERS updates while playing not built yet
 P210 setting up a receiver again after a refused update not built yet
 P211 one AirPlay 2 receiver failing among several not built yet
 P212 Hardware: two or more AirPlay 2 receivers on one PTP timeline (G20).
-
-# Unannounced speakers and lapsed pair members (corrections to P142, P173, P181).
-P215 unannounced speakers pausing the retry schedule and retried at once not built yet
-P216 a pair member whose partner lapsed named missing not built yet

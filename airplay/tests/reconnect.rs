@@ -197,6 +197,7 @@ fn unsupported(events: &Events, key: &DeviceKey) -> Vec<UnsupportedReason> {
 
 // A pair member whose records lapse waits, without attempts or reports,
 // for the announcement that makes it playable, and starts then.
+// covers: P215, P142, P181
 #[test]
 fn an_unannounced_pair_member_is_retried_at_once_when_announced_again() {
     let _serial = serial();
