@@ -8,8 +8,9 @@
 //! NTP first, as P157 does without an entry; it never keeps a pairing from
 //! working. The byte form holds a magic line, a format version byte, then
 //! per receiver its ID and its entry ([`TimingMemory::to_bytes`]), each with
-//! a 16-bit little-endian length. Both hosts write it owner-only through
-//! [`write_atomically`], unsealed on Windows.
+//! a 16-bit little-endian length. Both hosts write it through
+//! [`write_atomically`]: owner-only on the Mac, unsealed with the folder's
+//! permissions on Windows.
 
 use std::collections::BTreeMap;
 use std::io;
