@@ -34,6 +34,32 @@ pub fn windows_version() -> Option<OsVersion> {
     None
 }
 
+/// The double-click time the user set in Windows, in milliseconds.
+#[cfg(windows)]
+pub fn double_click_ms() -> i64 {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+
+    // SAFETY: GetDoubleClickTime takes no arguments and only reads a setting.
+    double_click_or_default(unsafe { GetDoubleClickTime() })
+}
+
+#[cfg(not(windows))]
+pub fn double_click_ms() -> i64 {
+    DEFAULT_DOUBLE_CLICK_MS
+}
+
+/// Windows' own default double-click time.
+pub const DEFAULT_DOUBLE_CLICK_MS: i64 = 500;
+
+/// Windows caps the setting at 5000 ms; 0 would make every click a single one.
+pub fn double_click_or_default(ms: u32) -> i64 {
+    if ms == 0 {
+        DEFAULT_DOUBLE_CLICK_MS
+    } else {
+        i64::from(ms.min(5000))
+    }
+}
+
 /// The system the app runs on, for the debug log: the Windows version with
 /// its update revision and release name, the app's architecture and, when
 /// it differs, the PC's, and the local time, which tells how the log's UTC
@@ -777,6 +803,16 @@ pub fn is_on_a_monitor(_x: i32, _y: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_double_click_time_follows_windows_within_its_range() {
+        assert_eq!(double_click_or_default(500), 500);
+        assert_eq!(double_click_or_default(200), 200);
+        assert_eq!(double_click_or_default(900), 900);
+        assert_eq!(double_click_or_default(0), DEFAULT_DOUBLE_CLICK_MS);
+        assert_eq!(double_click_or_default(60_000), 5000);
+        assert!((1..=5000).contains(&double_click_ms()));
+    }
 
     #[test]
     fn the_smallest_outer_size_scales_the_inner_minimum_and_adds_the_frame() {
