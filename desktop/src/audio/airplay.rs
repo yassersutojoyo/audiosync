@@ -6468,6 +6468,86 @@ pub mod tests {
         );
     }
 
+    // A receiver powered off mid-stream: discovery withdraws it about 40 s
+    // later, its row goes, and the sender must stop retrying it then.
+    #[test]
+    fn a_retrying_speaker_whose_receiver_is_gone_leaves_the_sender_and_joins_again_when_announced()
+    {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        airplay.poll();
+        fake.take_calls();
+
+        fake.gone(&kitchen);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Remove(id.clone())],
+            "its retries go on"
+        );
+        assert!(airplay.speakers().is_empty(), "its row stays");
+        assert_eq!(
+            airplay.enabled_ids(),
+            std::slice::from_ref(&id),
+            "it stays on"
+        );
+        assert!(!airplay.chosen());
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        assert!(
+            !airplay
+                .poll()
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayTrouble { .. })),
+            "a late retry of the removed session still names it"
+        );
+
+        fake.appear(&kitchen);
+        airplay.poll();
+        assert!(
+            matches!(fake.take_calls().first(), Some(Call::Add { id: added, .. }) if *added == id),
+            "announced again, it didn't join"
+        );
+    }
+
+    #[test]
+    fn a_speaker_playing_on_after_its_announcement_lapsed_leaves_once_it_is_lost() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        fake.gone(&kitchen);
+        airplay.poll();
+        fake.take_calls();
+        assert_eq!(airplay.speakers().len(), 1, "playing, it keeps its row");
+
+        fake.fail(&kitchen, ErrorKind::Lost);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayTrouble { .. })),
+            "{events:?}"
+        );
+        assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
+        assert!(airplay.speakers().is_empty());
+        assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
+    }
+
     #[test]
     fn a_speaker_waiting_for_the_airplay2_slot_stays_on_and_one_without_ptp_is_off() {
         let fake = FakeAirPlay::new();
