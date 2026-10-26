@@ -6687,6 +6687,16 @@ mod tests {
             strings.invoke_speaker_device_caption(row.system_name.clone()),
             "Device name: Desk Speaker"
         );
+        let flyout_row = app
+            .flyout
+            .get_speakers()
+            .iter()
+            .find(|s| s.id == "local:desk")
+            .unwrap();
+        assert_eq!(
+            flyout_row.system_name, "Desk Speaker",
+            "the tray flyout shows it too"
+        );
         let label = strings.invoke_speaker_label(
             row.name.clone(),
             row.kind,

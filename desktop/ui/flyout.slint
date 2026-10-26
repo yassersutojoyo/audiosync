@@ -119,6 +119,8 @@ component FlyoutRow inherits HorizontalLayout {
     // toggle's value instead of its state.
     in property <string> caption;
     in property <string> value-text;
+    // A renamed speaker's own name, shown under the new one; else empty.
+    in property <string> system-name;
     callback toggled();
     // The toggle gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
@@ -154,6 +156,12 @@ component FlyoutRow inherits HorizontalLayout {
             font-weight: root.state == RowState.playing ? 600 : 400;
             overflow: elide;
             accessible-role: none;
+        }
+
+        if root.system-name != "": QuietText {
+            text: Strings.speaker-device-caption(root.system-name);
+            wrap: no-wrap;
+            overflow: elide;
         }
 
         if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != "": QuietText {
@@ -457,6 +465,7 @@ export component TrayFlyout inherits Window {
                             label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                             description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                             caption: speaker.zone-note;
+                            system-name: speaker.system-name;
                             state: speaker.state;
                             enabled: !speaker.missing;
                             device-volume: speaker.device-volume;
@@ -474,6 +483,7 @@ export component TrayFlyout inherits Window {
                         name: speaker.name;
                         label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                         description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                        system-name: speaker.system-name;
                         state: speaker.state;
                         device-volume: speaker.device-volume;
 
