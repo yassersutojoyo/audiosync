@@ -478,8 +478,9 @@ pub struct PairSetup {
     last: Option<Request>,
     /// M2's arithmetic is handed out as [`SetupStep::Compute`].
     offload: bool,
-    /// A [`SetupStep::Compute`] is out and its result not yet back.
-    computing: bool,
+    /// The salt and B of the M2 whose [`SetupStep::Compute`] is out, so a
+    /// result for an M2 from before a reconnect is told apart.
+    computing: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 impl fmt::Debug for PairSetup {
@@ -529,7 +530,7 @@ impl PairSetup {
             server_proof: Vec::new(),
             last: None,
             offload: false,
-            computing: false,
+            computing: None,
         }
     }
 
@@ -540,12 +541,23 @@ impl PairSetup {
     }
 
     /// The result of the [`SetupStep::Compute`] this setup handed out: M3,
-    /// or the failure. `None` when no computation is awaited.
+    /// or the failure. `None` when no computation is awaited or `done`
+    /// answers another M2.
     pub fn computed(&mut self, done: SrpDone) -> Option<SetupStep> {
-        if !std::mem::take(&mut self.computing) || self.stage != SetupStage::M1 {
+        let awaited = self
+            .computing
+            .as_ref()
+            .is_some_and(|(salt, b_pub)| *salt == done.salt && *b_pub == done.b_pub);
+        if !awaited || self.stage != SetupStage::M1 {
             return None;
         }
+        self.computing = None;
         Some(self.finish_m2(done))
+    }
+
+    /// A [`SetupStep::Compute`] is out and its result not yet back.
+    pub fn computing(&self) -> bool {
+        self.computing.is_some()
     }
 
     /// A transient pairing (P64).
@@ -632,7 +644,7 @@ impl PairSetup {
     fn m1(&mut self) -> Request {
         self.stage = SetupStage::M1;
         self.short_values = false;
-        self.computing = false;
+        self.computing = None;
         let mut body = Tlv8::new().with(tlv8::METHOD, &[0]).with(tlv8::STATE, &[1]);
         if self.kind == SetupKind::Transient {
             body.push(tlv8::FLAGS, &[TRANSIENT_FLAG]);
@@ -814,7 +826,7 @@ impl PairSetup {
                 }
                 work.draws.push(a);
             }
-            self.computing = true;
+            self.computing = Some((work.salt.clone(), work.b_pub.clone()));
             return SetupStep::Compute(work);
         }
         let mut outcome = Err(SrpFailure::Exhausted);

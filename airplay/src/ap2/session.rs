@@ -354,6 +354,9 @@ pub struct Ap2Session {
     stream_key: zeroize::Zeroizing<[u8; STREAM_KEY_BYTES]>,
     outputs: VecDeque<Output>,
     work: Option<SrpWork>,
+    /// When the SRP step handed out counts as lost, as an unanswered
+    /// request would.
+    work_due: Option<Instant>,
     /// The session SETUP was answered 200.
     set_up: bool,
     /// The session SETUP answer's `Session` ID, without its timeout (P25).
@@ -478,6 +481,7 @@ impl Ap2Session {
             stream_key,
             outputs: VecDeque::new(),
             work: None,
+            work_due: None,
             set_up: false,
             session_header: None,
             recorded: false,
@@ -665,6 +669,7 @@ impl Ap2Session {
         if let Some(in_flight) = &self.in_flight {
             times.push(in_flight.sent_at + RESPONSE_TIMEOUT);
         }
+        times.extend(self.srp_due());
         times.extend(self.teardown_deadline);
         times.extend(self.last_timing_request.map(|at| at + TIMING_SILENCE));
         times.extend(self.events_retry_at);
@@ -892,6 +897,10 @@ impl Ap2Session {
         }
         if self.teardown_deadline.is_some_and(|at| now >= at) {
             return self.finish();
+        }
+        if self.srp_due().is_some_and(|at| now >= at) {
+            self.work_due = None;
+            return self.fail(ErrorKind::Timeout, Some(Method::Post), None, None);
         }
         if self.pin_held && self.pin_not_before.is_none_or(|at| now >= at) {
             self.pin_held = false;
@@ -1952,7 +1961,16 @@ impl Ap2Session {
             return;
         };
         if let Some(step) = setup.computed(done) {
+            self.work_due = None;
             self.on_setup_step(step, 200, now);
+        }
+    }
+
+    /// The deadline of the SRP step handed out, while one is out.
+    fn srp_due(&self) -> Option<Instant> {
+        match &self.pairing {
+            Some(Pairing::Setup(setup)) if setup.computing() => self.work_due,
+            _ => None,
         }
     }
 
@@ -2004,7 +2022,10 @@ impl Ap2Session {
                     refusal.unwrap_or_default()
                 )));
             }
-            SetupStep::Compute(work) => self.work = Some(work),
+            SetupStep::Compute(work) => {
+                self.work = Some(work);
+                self.work_due = Some(now + RESPONSE_TIMEOUT);
+            }
             SetupStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,
                 Some(Method::Post),
