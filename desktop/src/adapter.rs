@@ -3146,7 +3146,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             let speaker = self.output_name(endpoint_id);
             self.post(subject, NoticeMessage::SpeakerFailed { speaker });
         }
-        if reaction.stop_session {
+        if reaction.stop_session && self.is_idle() {
             self.log.log(|| {
                 format!(
                     "streaming stops: {} couldn't start and no other speaker is on",
@@ -3184,7 +3184,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if let Some(subject) = reaction.notice {
             self.post(subject, message);
         }
-        if reaction.stop_session && self.running() {
+        if reaction.stop_session && self.is_idle() {
             self.log.log(|| {
                 format!(
                     "streaming stops: {} can't play and no other speaker is on",
@@ -3290,8 +3290,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Stops streaming when a speaker was switched off and none is left on
     /// (S118, S162).
     fn stop_if_idle(&mut self) {
-        let action = self.streaming_after(SpeakerEvent::SwitchedOff);
-        if action == StreamingAction::Stop {
+        if self.is_idle() {
             self.log
                 .log(|| "streaming stops: no speaker is on anymore".to_owned());
             self.audio.stop();
@@ -3317,12 +3316,34 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.note_speakers();
     }
 
-    /// Marks the running session as having had a speaker once one is on in
-    /// it, so it stops when the last one goes (S162).
+    /// Marks the running session as having had a speaker once one plays in
+    /// it, so it stops when the last one goes (S162). One switched on that
+    /// fails to start doesn't count.
     fn note_speakers(&mut self) {
-        if self.running() && self.enabled_count() > 0 {
-            self.had_speaker = true;
+        if self.had_speaker || !self.running() {
+            return;
         }
+        self.had_speaker = self
+            .audio
+            .outputs()
+            .iter()
+            .any(|output| output.enabled && output.playing)
+            || self
+                .audio
+                .airplay_speakers()
+                .iter()
+                .any(|speaker| speaker.enabled && speaker.playing)
+            || self
+                .audio
+                .cast_speakers()
+                .iter()
+                .any(|speaker| speaker.enabled && speaker.status == CastStatus::Playing);
+    }
+
+    /// Streaming runs, a speaker has played in it, and none is on now (S118,
+    /// S162).
+    fn is_idle(&self) -> bool {
+        self.streaming_after(SpeakerEvent::SwitchedOff) == StreamingAction::Stop
     }
 
     /// Takes in what the audio backend reports. Returns whether it reported
@@ -3444,10 +3465,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::CastPlaying { id } => {
                 self.notices.clear(&[NoticeSubject::Cast(id)]);
+                self.note_speakers();
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
             BackendEvent::CastMemoryChanged => self.save_cast_memory(),
             BackendEvent::AirPlayPlaying { id } => {
+                self.note_speakers();
                 self.reconnecting.remove(&id);
                 self.clear_if(airplay_subject(&id), |message| {
                     matches!(message, NoticeMessage::AirPlayRetrying { .. })

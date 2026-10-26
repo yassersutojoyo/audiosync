@@ -445,7 +445,8 @@ fn streaming_follows_the_enabled_sets_alone() {
     assert_eq!(streaming_after(StartRequested, false, false, 0, 1), Start);
     assert_eq!(streaming_after(StartRequested, true, true, 1, 0), Nothing);
     assert_eq!(streaming_after(StartRequested, true, false, 0, 0), Nothing);
-    // An automatic start with no speaker on still asks for one first.
+    // An automatic start refused for want of a speaker posts an
+    // informational notice and stops nothing (S116, S136).
     let notice = reaction(&Incident::NoSpeakerEnabled);
     assert!(notice.informational && !notice.stop_session);
 }
