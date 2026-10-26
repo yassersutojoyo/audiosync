@@ -105,7 +105,7 @@ use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
     NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, level_on_speaker,
-    level_set_on_speaker, own_for_device_level, row_move, sanitize_own,
+    level_set_on_speaker, row_move, sanitize_own,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -906,14 +906,6 @@ fn device_volume(level: f64) -> Volume {
     }
 }
 
-/// The device level a DeviceVolume of `db` asks for (S289): 0 at −30 dB
-/// and below, muted included. None when zone × master is 0, where every own
-/// volume sounds the same, or `db` isn't finite.
-fn reported_level(db: f64, zone: f64, master: f64) -> Option<f64> {
-    let level = device_level_for_db(db)?;
-    own_for_device_level(level, zone, master).map(|_| level)
-}
-
 /// A reported level this close to the one sent is the speaker rounding it,
 /// not a person's change: the first such read (S291), or a DACP volume
 /// within [`VOLUME_SETTLE`] of the set (S271).
@@ -1289,7 +1281,7 @@ impl AscAirPlay {
                 .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
             let sent = speaker_volume(added.position, zone, self.master).wire_db();
             own.echo = recent && (db - sent).abs() < VOLUME_TOLERANCE_DB;
-            own.reported = reported_level(db, zone, self.master);
+            own.reported = device_level_for_db(db);
         }
         own
     }
@@ -7184,6 +7176,36 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S276, S290
+    #[test]
+    fn a_device_volume_at_k_0_reports_its_level_and_keeps_the_own_volume() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005410";
+        let key = speaker_key(0x10);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { asc_airplay_set_master(handle, 0.0) };
+        inside(handle).events.clear();
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-18.0)),
+        );
+        let moved: Vec<(String, f64, f64)> = inside(handle)
+            .events
+            .drain(..)
+            .filter_map(|(_, pending)| match pending {
+                Pending::Volume(id, position, level) => Some((id, nine(position), nine(level))),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(moved, [(id.to_owned(), 50.0, 40.0)]);
+        assert!(just_sent(handle, id), "sent back as after a drag");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S276
     #[test]
     fn a_muted_device_volume_sets_the_own_volume_to_0() {
@@ -7261,29 +7283,22 @@ mod tests {
 
     // covers: S276, S290
     #[test]
-    fn a_device_volume_reports_its_level_unless_k_is_0() {
+    fn a_device_volume_reports_the_level_it_was_sent() {
         let no_zone = NO_ZONE_POSITION;
         for master in [100.0, 50.0, 25.0] {
             for position in (1..=100).map(f64::from) {
                 let db = speaker_volume(position, no_zone, master).wire_db();
-                let level = reported_level(db, no_zone, master).expect("a master above 0");
+                let level = device_level_for_db(db).expect("a finite reading");
                 assert!(
                     (level - device_level(position, no_zone, master)).abs() < 1e-9,
                     "{position} at {master}: {level}"
                 );
             }
         }
-        assert_eq!(reported_level(-144.0, no_zone, 100.0), Some(0.0), "muted");
-        assert_eq!(reported_level(-40.0, no_zone, 100.0), Some(0.0));
-        assert_eq!(reported_level(3.0, no_zone, 100.0), Some(100.0));
-        assert_eq!(reported_level(-15.0, no_zone, 50.0), Some(50.0));
-        assert_eq!(
-            reported_level(-6.0, no_zone, 0.0),
-            None,
-            "every own volume sounds the same"
-        );
-        assert_eq!(reported_level(-6.0, 0.0, 100.0), None, "zone 0");
-        assert_eq!(reported_level(f64::NAN, no_zone, 100.0), None);
+        assert_eq!(device_level_for_db(-144.0), Some(0.0), "muted");
+        assert_eq!(device_level_for_db(-40.0), Some(0.0));
+        assert_eq!(device_level_for_db(3.0), Some(100.0));
+        assert_eq!(device_level_for_db(f64::NAN), None);
     }
 
     #[test]

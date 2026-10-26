@@ -143,6 +143,31 @@
       ]
     },
     {
+      "name": "DeviceVolume 40 at master 0 keeps own and shows 40 until the master moves",
+      "zone": 100,
+      "master": 0,
+      "steps": [
+        {
+          "own": 50,
+          "level": 0.0,
+          "row": 0.0,
+          "own_after": 50
+        },
+        {
+          "device_volume": 40,
+          "level": 40.0,
+          "row": 40.0,
+          "own_after": 50
+        },
+        {
+          "master": 100,
+          "level": 50.0,
+          "row": 50.0,
+          "own_after": 50
+        }
+      ]
+    },
+    {
       "name": "remote up from 95 at master 63 gives 100, down gives 95",
       "zone": 100,
       "master": 63,
