@@ -643,16 +643,7 @@ private struct ZoneCard: View {
             .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
 
             Button { model.actions.toggleZone(zone.id) } label: {
-                HStack(spacing: 12) {
-                    SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(zone.name)
-                            .font(.body.weight(state == .playing ? .semibold : .regular))
-                            .lineLimit(1)
-                        countLine(t)
-                    }
-                }
-                .contentShape(Rectangle())
+                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
             }
             .buttonStyle(.plain)
             .disabled(zone.present == 0)   // none of its speakers is here
@@ -662,14 +653,20 @@ private struct ZoneCard: View {
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: nil))
             .help(t.help(state))
+            // The badge's gap to the name, as in a speaker row.
+            .padding(.trailing, 4)
 
-            // A click past the name shows or hides the speakers instead of
-            // switching the zone; the chevron stays the keyboard's way in.
-            Color.clear
-                .frame(minWidth: 8, maxWidth: .infinity, minHeight: 32, maxHeight: 32)
-                .contentShape(Rectangle())
-                .onTapGesture { toggleDisclosure() }
-                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(zone.name)
+                    .font(.body.weight(state == .playing ? .semibold : .regular))
+                    .lineLimit(1)
+                    // Read through the switch's label.
+                    .accessibilityHidden(true)
+                countLine(t)
+            }
+            .opacity(zone.present == 0 ? 0.45 : 1)
+
+            Spacer(minLength: 8)
 
             Slider(value: Binding(get: { zone.volume }, set: { model.actions.setZoneVolume(zone.id, $0) }),
                    in: 0...100)
@@ -696,6 +693,11 @@ private struct ZoneCard: View {
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.leading, 2)
         .padding(.trailing, BrandTokens.Spacing.rowPaddingX)
+        // Like a speaker row's box opening its delay panel: everything but
+        // the badge, the slider and the menu shows or hides the speakers.
+        // The chevron stays the keyboard's way in.
+        .contentShape(Rectangle())
+        .onTapGesture { toggleDisclosure() }
         .contextMenu { menuItems(t) }
     }
 
