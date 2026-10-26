@@ -48,7 +48,9 @@ use audiosync_core::policy::presets::{self, Preset, PresetMember, PresetZone};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::SpeakerKey;
 use audiosync_core::policy::zones::{self, DEFAULT_ZONE_VOLUME, Zone, Zones};
-use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_position};
+use audiosync_core::volume::{
+    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_own, sanitize_position,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::audio::cast_address;
@@ -226,10 +228,19 @@ impl SavedSpeaker {
         *self == SavedSpeaker::default()
     }
 
-    fn clamped(self, (min_delay_ms, max_delay_ms): (f64, f64)) -> SavedSpeaker {
+    /// Delays clamped to `delays`; the volume to 0 to 100, or with `airplay`
+    /// to 0 up, since an AirPlay speaker's own volume may pass 100 (S290).
+    fn clamped(self, (min_delay_ms, max_delay_ms): (f64, f64), airplay: bool) -> SavedSpeaker {
+        let volume = if airplay {
+            Some(self.volume)
+                .filter(|volume| volume.is_finite())
+                .map(sanitize_own)
+        } else {
+            sanitize_position(self.volume)
+        };
         SavedSpeaker {
             enabled: self.enabled,
-            volume: sanitize_position(self.volume).unwrap_or(DEFAULT_LOCAL_POSITION),
+            volume: volume.unwrap_or(DEFAULT_LOCAL_POSITION),
             delay_ms: if self.delay_ms.is_finite() {
                 self.delay_ms.clamp(min_delay_ms, max_delay_ms)
             } else {
@@ -730,16 +741,18 @@ impl Default for Settings {
 }
 
 /// Keeps the first [`MAX_ENTRIES`] speakers whose ID is usable, with their
-/// delays clamped to `delays` (smallest, largest).
+/// delays clamped to `delays` (smallest, largest) and their volumes as
+/// [`SavedSpeaker::clamped`] keeps them.
 fn clamp_speakers(
     speakers: BTreeMap<String, SavedSpeaker>,
     delays: (f64, f64),
+    airplay: bool,
 ) -> BTreeMap<String, SavedSpeaker> {
     speakers
         .into_iter()
         .filter(|(id, _)| usable_id(id))
         .take(MAX_ENTRIES)
-        .map(|(id, speaker)| (id, speaker.clamped(delays)))
+        .map(|(id, speaker)| (id, speaker.clamped(delays, airplay)))
         .collect()
 }
 
@@ -947,8 +960,8 @@ impl Settings {
                 .collect(),
             source_mix,
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
-            outputs: clamp_speakers(self.outputs, output_delays),
-            airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS)),
+            outputs: clamp_speakers(self.outputs, output_delays, false),
+            airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS), true),
             auto_connect: self
                 .auto_connect
                 .into_iter()
@@ -2088,7 +2101,11 @@ mod tests {
                 "": {"enabled": true},
                 "quiet": {"volume": -5, "delay_ms": -20}
             },
-            "airplay": {"far": {"delay_ms": 25000, "volume": 101}, "near": {"delay_ms": 13000}},
+            "airplay": {
+                "far": {"delay_ms": 25000, "volume": 158.73},
+                "near": {"delay_ms": 13000},
+                "low": {"volume": -5}
+            },
             "auto_connect": ["lc:loud", "nonsense", "ap:", "zz:loud"],
             "groups": [
                 {"id": "group:1", "name": "Empty", "members": ["bad"]},
@@ -2130,7 +2147,9 @@ mod tests {
             settings.airplay["near"].delay_ms, 13_000.0,
             "a calibrated delay stays"
         );
-        assert_eq!(settings.airplay["far"].volume, 100.0);
+        // An AirPlay own volume may pass 100 (S290).
+        assert_eq!(settings.airplay["far"].volume, 158.73);
+        assert_eq!(settings.airplay["low"].volume, 0.0);
         assert_eq!(
             settings.auto_connect,
             BTreeSet::from(["lc:loud".to_owned()])

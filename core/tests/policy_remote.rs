@@ -9,9 +9,9 @@ use audiosync_core::policy::remote::{
 const KITCHEN: &str = "02005E005301";
 const PAIR: &str = "pair:6A2C";
 
-fn own(position: f64) -> OwnVolume {
+fn own(level: f64) -> OwnVolume {
     OwnVolume {
-        position,
+        level,
         dragging: false,
         echo: false,
         reported: None,
@@ -162,7 +162,7 @@ fn remote_volume_steps_clamp_at_0_and_100() {
     };
     let decision = remote.decide(&top);
     assert_eq!(decision.action, Action::Nothing);
-    assert!(decision.line.ends_with("own volume stays at 100"));
+    assert!(decision.line.ends_with("level stays at 100"));
     let near_bottom = Event {
         volume: own(3.0),
         ..kitchen(Command::VolumeDown, 4.0)
@@ -173,12 +173,12 @@ fn remote_volume_steps_clamp_at_0_and_100() {
         ..kitchen(Command::VolumeDown, 5.0)
     };
     assert_eq!(remote.decide(&bottom).action, Action::Nothing);
-    // Counted from the latest position, one not sent yet included.
+    // Counted from the row the latest level shows, one not sent yet included.
     let fraction = Event {
         volume: own(42.5),
         ..kitchen(Command::VolumeUp, 6.0)
     };
-    assert_eq!(moved(&remote.decide(&fraction)), Some((42.5, 47.5)));
+    assert_eq!(moved(&remote.decide(&fraction)), Some((42.5, 47.0)));
 }
 
 // covers: S277
@@ -193,11 +193,7 @@ fn mute_toggle_twice_restores_the_position_before() {
     };
     let restore = remote.decide(&muted);
     assert_eq!(moved(&restore), Some((0.0, 40.0)));
-    assert!(
-        restore.line.ends_with("own volume 0 -> 40"),
-        "{}",
-        restore.line
-    );
+    assert!(restore.line.ends_with("level 0 -> 40"), "{}", restore.line);
     // Restored once: at 0 again with nothing remembered, nothing happens.
     let again = Event {
         volume: own(0.0),
@@ -342,7 +338,7 @@ fn every_remote_command_gives_one_log_line() {
         ),
         (
             kitchen(Command::VolumeUp, 2.0),
-            "AirPlay remote Kitchen: VolumeUp -> own volume 40 -> 45",
+            "AirPlay remote Kitchen: VolumeUp -> level 40 -> 45",
         ),
         (
             Event {
@@ -372,7 +368,7 @@ fn every_remote_command_gives_one_log_line() {
                 },
                 ..kitchen(Command::DeviceVolume(-12.0), 5.0)
             },
-            "AirPlay remote Kitchen: DeviceVolume -12.00 dB -> own volume 40 -> 60",
+            "AirPlay remote Kitchen: DeviceVolume -12.00 dB -> level 40 -> 60",
         ),
         (
             Event {
@@ -382,17 +378,17 @@ fn every_remote_command_gives_one_log_line() {
                 },
                 ..kitchen(Command::DeviceVolume(-144.0), 6.0)
             },
-            "AirPlay remote Kitchen: DeviceVolume muted -> own volume 40 -> 0",
+            "AirPlay remote Kitchen: DeviceVolume muted -> level 40 -> 0",
         ),
         (
             Event {
                 volume: OwnVolume {
-                    reported: Some(40.0),
+                    reported: Some(40.2),
                     ..own(40.2)
                 },
-                ..kitchen(Command::DeviceVolume(-18.0), 7.0)
+                ..kitchen(Command::DeviceVolume(-17.94), 7.0)
             },
-            "AirPlay remote Kitchen: DeviceVolume -18.00 dB -> own volume stays at 40.2",
+            "AirPlay remote Kitchen: DeviceVolume -17.94 dB -> level stays at 40.2",
         ),
         (
             Event {
