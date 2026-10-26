@@ -143,6 +143,25 @@
       ]
     },
     {
+      "name": "DeviceVolume 80 then 99 at master 63 stores own 126.98 then 157.14",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "device_volume": 80,
+          "level": 80.0,
+          "row": 80.0,
+          "own_after": 126.984126984
+        },
+        {
+          "device_volume": 99,
+          "level": 99.0,
+          "row": 99.0,
+          "own_after": 157.142857143
+        }
+      ]
+    },
+    {
       "name": "DeviceVolume 40 at master 0 keeps own and shows 40 until the master moves",
       "zone": 100,
       "master": 0,
