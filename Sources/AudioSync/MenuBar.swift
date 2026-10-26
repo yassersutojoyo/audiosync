@@ -575,9 +575,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// begins, while the popover still animates out: the click that follows
     /// the press that closed it must leave it closed.
     private var presented = false
-    /// When the panel last closed during a press on the icon (system uptime):
-    /// that press closes it before its click arrives.
-    private var closedUnderItemAt: TimeInterval?
+    /// When the press on the icon that last closed the panel came (system
+    /// uptime): that press closes it before its click arrives.
+    private var closingPress: TimeInterval?
     private var running = false
     private var noticeCount = 0
     private var noticeWatch: AnyCancellable?
@@ -596,8 +596,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         popover.contentViewController = host
         popover.behavior = .transient
         popover.animates = true
-        // The content's backing reaches into the arrow, so the arrow matches the body.
-        popover.hasFullSizeContent = true
         popover.delegate = self
         if let button = statusItem.button {
             button.target = self
@@ -656,14 +654,23 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func togglePanel(_ sender: Any?) {
-        let action = StatusItemClick.action(panelVisible: presented, closedUnderItemAt: closedUnderItemAt,
-                                            now: ProcessInfo.processInfo.systemUptime)
-        closedUnderItemAt = nil
+        // VoiceOver or the keyboard can press the button too, with no mouse press of its own.
+        let byMouse = NSApp.currentEvent.map { $0.type == .leftMouseUp || $0.type == .leftMouseDown } ?? false
+        let action = StatusItemClick.action(panelVisible: presented, closingPress: byMouse ? closingPress : nil,
+                                            latestPress: Self.latestPress)
+        closingPress = nil
         switch action {
         case .open: show()
-        case .close: close(); closedUnderItemAt = nil   // this click closed it; the next one opens it
+        case .close: close(); closingPress = nil   // this click closed it; the next one opens it
         case .stayClosed: DebugTrace.log("[AudioSync] status item click: the press already closed the panel")
         }
+    }
+
+    /// When the latest mouse press came, in system uptime. The time since it,
+    /// not the button state: a trackpad tap may already be up.
+    private static var latestPress: TimeInterval {
+        ProcessInfo.processInfo.systemUptime
+            - CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
     }
 
     func show() {
@@ -679,9 +686,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // refresh can bring in the Cast "Add by Address…" row) on its next
         // pass, which would come after the popover is shown: it would open at
         // last time's size and then grow. A layout pass now applies that state
-        // and updates the preferred size the popover opens at.
+        // and the size is set before showing, so even the first open after
+        // launch, before the view has been in a window, opens at it.
         host.view.needsLayout = true
         host.view.layoutSubtreeIfNeeded()
+        popover.contentSize = host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
         presented = true
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         takeKey()
@@ -704,13 +713,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func finishClose() {
         guard presented else { return }
         presented = false
-        // The time since the last press, not the button state: a trackpad tap
-        // may already be up by now.
+        let press = Self.latestPress
         if let item = statusItem.button?.window,
            StatusItemClick.pressClosed(pointer: NSEvent.mouseLocation, itemFrame: item.frame,
-                                       secondsSincePress: CGEventSource.secondsSinceLastEventType(
-                                           .combinedSessionState, eventType: .leftMouseDown)) {
-            closedUnderItemAt = ProcessInfo.processInfo.systemUptime
+                                       secondsSincePress: ProcessInfo.processInfo.systemUptime - press) {
+            closingPress = press
         }
         monitors.forEach(NSEvent.removeMonitor)
         monitors.removeAll()
@@ -842,8 +849,7 @@ struct MenuBarView: View {
         }
         .padding(BrandTokens.Spacing.panelPadding)
         .frame(width: 280)
-        // Over the popover's material, out into its arrow; the popover rounds
-        // it and draws the edge.
+        // Over the popover's material; the popover rounds it and draws the edge.
         .background(Brand.panelBacking.ignoresSafeArea())
         .tint(accent)
     }

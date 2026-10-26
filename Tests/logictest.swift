@@ -4206,12 +4206,12 @@ do {
     let tap = StatusItemClick.action
     check(tap(true, nil, 100) == .close, "menu bar icon: a click while the panel is open closes it")
     check(tap(false, nil, 100) == .open, "menu bar icon: a click while the panel is closed opens it")
-    // On macOS 26 and later the press on the icon takes key from the panel,
-    // which closes it about 80 ms before the click arrives.
-    check(tap(false, 99.92, 100) == .stayClosed,
-          "menu bar icon: the click whose press just closed the panel leaves it closed")
-    check(tap(false, 98.8, 100) == .stayClosed,
-          "menu bar icon: a press held for over a second still counts as that click")
+    // The press on the icon closes the popover before its click arrives; the
+    // closing press and the latest press are the same press, read twice.
+    check(tap(false, 98.8, 98.805) == .stayClosed,
+          "menu bar icon: the click whose press closed the panel leaves it closed, however long it was held")
+    check(tap(false, 100, 100.12) == .open,
+          "menu bar icon: a quick second click after a press closed the panel opens it")
     check(tap(false, 98, 100) == .open,
           "menu bar icon: a click long after the panel closed under the icon opens it")
     // Clicks 1 to 5 on the icon, 400 ms apart, open and close the panel in

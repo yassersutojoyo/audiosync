@@ -23,17 +23,18 @@ enum WindowPlacement {
 }
 
 /// What a click on the menu bar icon does to its panel. The press on the icon
-/// can take key from the panel and close it before the click itself arrives,
-/// so a click right after the panel closed during a press on the icon is the
-/// click that closed it, and opening the panel again would undo it.
+/// closes the popover before the click itself arrives, and AppKit may drop
+/// that click's action or still deliver it. A click whose press is the one
+/// that closed the panel leaves it closed; any later press opens it.
 enum StatusItemClick: Equatable {
     case open
     case close
     /// The click that already closed the panel: leave it closed.
     case stayClosed
 
-    /// How long a press on the icon may last and still be the one that closed the panel.
-    static let pressWindow: TimeInterval = 1.5
+    /// Two press times this close are the same press, read twice; two real
+    /// clicks are far further apart.
+    static let samePress: TimeInterval = 0.02
 
     /// How recent a mouse press must be for the panel closing now to be its doing.
     static let pressRecency: TimeInterval = 0.5
@@ -48,11 +49,12 @@ enum StatusItemClick: Equatable {
             && pointer.y > itemFrame.minY && pointer.y <= itemFrame.maxY
     }
 
-    /// `closedUnderItemAt` is when the panel last closed during a press on
-    /// the icon, if it did; `now` uses the same clock (system uptime).
-    static func action(panelVisible: Bool, closedUnderItemAt: TimeInterval?, now: TimeInterval) -> StatusItemClick {
+    /// `closingPress` is when the press on the icon that last closed the
+    /// panel came, if one did; `latestPress` is when the latest press came,
+    /// on the same clock (system uptime).
+    static func action(panelVisible: Bool, closingPress: TimeInterval?, latestPress: TimeInterval) -> StatusItemClick {
         if panelVisible { return .close }
-        if let closed = closedUnderItemAt, now - closed >= 0, now - closed < pressWindow { return .stayClosed }
+        if let closingPress, abs(latestPress - closingPress) < samePress { return .stayClosed }
         return .open
     }
 }
