@@ -360,7 +360,7 @@ extension AppDelegate {
                     postNotice(text.waitingForAudio(sourceDisplayName()), subject: Notice.capture)
                 default:
                     notify(text.captureNotWorking(sourceDisplayName()), origin: .automatic, subject: Notice.capture,
-                           settings: .screenCapture)
+                           settings: Permission.needed(for: audioSource).pane)
                 }
             }
             // Keep watching until audio flows or the session ends, so the

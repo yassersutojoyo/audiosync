@@ -1055,7 +1055,7 @@ struct UIStrings {
         case .localNetwork: return "Find speakers on your network"
         case .audioCapture: return "Capture your Mac's audio"
         case .microphone: return "Use the microphone or an input"
-        case .automation: return "Show what Spotify and Music play"
+        case .automation: return "Show Now Playing for Spotify and Music"
         }
     }
     func permissionReason(_ permission: Permission) -> String {

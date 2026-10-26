@@ -1603,8 +1603,10 @@ struct PermissionCard: View {
                 HStack(spacing: 8) {
                     Button(text.permissionContinue, action: proceed)
                         .buttonStyle(.borderedProminent)
+                        .accessibilityHint(text.permissionTitle(permission))
                     Button(text.permissionNotNow, action: later)
                         .buttonStyle(.bordered)
+                        .accessibilityHint(text.permissionTitle(permission))
                 }
                 .controlSize(.small)
             }

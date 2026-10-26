@@ -53,6 +53,9 @@ enum PermissionStep: Equatable {
 /// Which permissions were explained, and which wait for an explanation now.
 struct PermissionAsks: Equatable {
     static let defaultsKey = "permissionsExplained"
+    /// `usedBefore`, decided on the first launch with explanations and kept:
+    /// that launch saves speakers itself, so the settings can't tell later.
+    static let usedBeforeKey = "permissionsUsedBefore"
 
     /// Continue was chosen once; stored across launches.
     private(set) var explained: Set<Permission>
@@ -75,8 +78,14 @@ struct PermissionAsks: Equatable {
     }
 
     static func load(_ defaults: UserDefaults) -> PermissionAsks {
-        PermissionAsks(explained: defaults.stringArray(forKey: defaultsKey) ?? [],
-                       usedBefore: usedBefore { defaults.object(forKey: $0) != nil })
+        let used: Bool
+        if defaults.object(forKey: usedBeforeKey) != nil {
+            used = defaults.bool(forKey: usedBeforeKey)
+        } else {
+            used = usedBefore { defaults.object(forKey: $0) != nil }
+            defaults.set(used, forKey: usedBeforeKey)
+        }
+        return PermissionAsks(explained: defaults.stringArray(forKey: defaultsKey) ?? [], usedBefore: used)
     }
 
     func step(_ permission: Permission, state: PermissionState, userAction: Bool) -> PermissionStep {
