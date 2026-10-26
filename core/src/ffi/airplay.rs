@@ -3873,6 +3873,7 @@ mod tests {
     use audiosync_airplay::homekit::HomeKitCredentials;
     use audiosync_airplay::latency::LatencySources;
     use audiosync_airplay::rtsp::{Message, Method, Parser, Response};
+    use audiosync_airplay::volume::parse_reported;
 
     /// A browser that hands over a fixed list of events, one per poll.
     struct Script(Vec<BrowseEvent>);
@@ -4326,32 +4327,36 @@ mod tests {
         let mut seen = Vec::new();
         let until = Instant::now() + Duration::from_secs(10);
         while !done(&seen) && Instant::now() < until {
-            let mut raw = blank_event();
-            // SAFETY: a live handle, used by this thread only; a local out struct.
-            if unsafe { asc_airplay_next_event(handle, &mut raw) } {
-                seen.push(Event {
-                    kind: raw.kind,
-                    id: text(raw.id),
-                    state: raw.state,
-                    error: raw.error,
-                    unsupported: raw.unsupported,
-                    retry_ms: raw.retry_ms,
-                    latency_ms: raw.latency_ms,
-                    receiver_latency_frames: raw.receiver_latency_frames,
-                    restarted: raw.restarted,
-                    detail: text(raw.detail),
-                    volume: raw.volume,
-                    warning: raw.warning,
-                    remote: raw.remote,
-                    receiver_latency_us: raw.receiver_latency_us,
-                    receiver_latency_sources: raw.receiver_latency_sources,
-                    device_level: raw.device_level,
-                });
-            } else {
-                std::thread::sleep(Duration::from_millis(10));
+            match take_event(handle) {
+                Some(event) => seen.push(event),
+                None => std::thread::sleep(Duration::from_millis(10)),
             }
         }
         seen
+    }
+
+    /// The next sender event, if one waits.
+    fn take_event(handle: *mut AscAirPlay) -> Option<Event> {
+        let mut raw = blank_event();
+        // SAFETY: a live handle, used by this thread only; a local out struct.
+        unsafe { asc_airplay_next_event(handle, &mut raw) }.then(|| Event {
+            kind: raw.kind,
+            id: text(raw.id),
+            state: raw.state,
+            error: raw.error,
+            unsupported: raw.unsupported,
+            retry_ms: raw.retry_ms,
+            latency_ms: raw.latency_ms,
+            receiver_latency_frames: raw.receiver_latency_frames,
+            restarted: raw.restarted,
+            detail: text(raw.detail),
+            volume: raw.volume,
+            warning: raw.warning,
+            remote: raw.remote,
+            receiver_latency_us: raw.receiver_latency_us,
+            receiver_latency_sources: raw.receiver_latency_sources,
+            device_level: raw.device_level,
+        })
     }
 
     fn has_state(events: &[Event], id: &str, state: i32) -> bool {
@@ -4384,6 +4389,9 @@ mod tests {
     /// Requests a [`Loopback`] received: method and body.
     type Requests = Arc<Mutex<Vec<(Method, String)>>>;
 
+    /// The level a television [`Loopback`] holds, in dB, once it has one.
+    type Level = Arc<Mutex<Option<f64>>>;
+
     /// A receiver on 127.0.0.1 that answers every RTSP request with 200 and
     /// the headers its method calls for, and keeps each request's method and
     /// body. Its UDP ports take the audio and are never read.
@@ -4392,6 +4400,7 @@ mod tests {
         requests: Requests,
         stop: Arc<AtomicBool>,
         hang_up: Arc<AtomicBool>,
+        level: Level,
         thread: Option<JoinHandle<()>>,
     }
 
@@ -4403,6 +4412,17 @@ mod tests {
         /// A loopback that answers every request with 401 and a digest
         /// challenge, as a receiver whose password never matches.
         fn start_with(unauthorized: bool) -> Loopback {
+            Loopback::serving(unauthorized, false)
+        }
+
+        /// A loopback that acts as the measured television (S289, S291): a
+        /// volume SET_PARAMETER sets the level it holds, across sessions,
+        /// and a volume GET_PARAMETER is answered with that level.
+        fn television() -> Loopback {
+            Loopback::serving(false, true)
+        }
+
+        fn serving(unauthorized: bool, television: bool) -> Loopback {
             let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a TCP port");
             listener.set_nonblocking(true).expect("non-blocking");
             let port = listener.local_addr().expect("its address").port();
@@ -4420,8 +4440,10 @@ mod tests {
             let requests = Requests::default();
             let stop = Arc::new(AtomicBool::new(false));
             let hang_up = Arc::new(AtomicBool::new(false));
+            let level = Level::default();
             let thread = {
                 let (requests, stop, hang_up) = (requests.clone(), stop.clone(), hang_up.clone());
+                let held = television.then(|| level.clone());
                 std::thread::spawn(move || {
                     let _udp = udp;
                     serve(
@@ -4430,6 +4452,7 @@ mod tests {
                         &requests,
                         (&stop, &hang_up),
                         unauthorized,
+                        held.as_ref(),
                     );
                 })
             };
@@ -4438,8 +4461,27 @@ mod tests {
                 requests,
                 stop,
                 hang_up,
+                level,
                 thread: Some(thread),
             }
+        }
+
+        /// A television's own remote sets its level to `db`.
+        fn press(&self, db: f64) {
+            *self.level.lock().unwrap() = Some(db);
+        }
+
+        /// The level a television holds now, in dB.
+        fn level(&self) -> Option<f64> {
+            *self.level.lock().unwrap()
+        }
+
+        /// The volume SET_PARAMETERs received, in order, as their dB.
+        fn volume_sets(&self) -> Vec<f64> {
+            self.bodies(Method::SetParameter)
+                .iter()
+                .filter_map(|body| parse_reported(body.as_bytes()))
+                .collect()
         }
 
         /// Closes every open connection once, as a receiver that dropped
@@ -4478,6 +4520,7 @@ mod tests {
         requests: &Requests,
         (stop, hang_up): (&AtomicBool, &AtomicBool),
         unauthorized: bool,
+        level: Option<&Level>,
     ) {
         let mut connections: Vec<(TcpStream, Parser, bool)> = Vec::new();
         while !stop.load(Ordering::Relaxed) {
@@ -4523,6 +4566,18 @@ mod tests {
                             response.headers.push("Session", "1");
                         }
                         Method::Record => response.headers.push("Audio-Latency", "2205"),
+                        Method::SetParameter => {
+                            if let (Some(level), Some(db)) = (level, parse_reported(&request.body))
+                            {
+                                *level.lock().unwrap() = Some(db);
+                            }
+                        }
+                        Method::GetParameter => {
+                            if let Some(db) = level.and_then(|level| *level.lock().unwrap()) {
+                                response.headers.push("Content-Type", "text/parameters");
+                                response.body = format!("volume: {db:.6}\r\n").into_bytes();
+                            }
+                        }
                         _ => {}
                     }
                     let _ = stream.write_all(&response.encode());
@@ -7365,6 +7420,294 @@ mod tests {
             volumes()
         );
         assert_eq!(volumes()[before], reported, "{:?}", volumes());
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    /// The dB the television gets for device level `level` (S289).
+    fn db_for_level(level: f64) -> f64 {
+        device_volume(level).wire_db()
+    }
+
+    /// What the host's row shows for an own volume at `master`, outside a
+    /// zone (S290).
+    fn shown_row(own: f64, master: f64) -> f64 {
+        row_level(device_level(own, NO_ZONE_POSITION, master))
+    }
+
+    /// Whether the television got `db` on the wire, to its six decimals.
+    fn same_db(got: f64, db: f64) -> bool {
+        (got - db).abs() < 5e-6
+    }
+
+    /// The speaker `id` on a television [`Loopback`], with the master at
+    /// `master`, added at own volume `own` and playing with its first level
+    /// on the television.
+    fn on_television(receiver: &Loopback, id: &str, master: f64, own: f64) -> *mut AscAirPlay {
+        let handle = listing(vec![loopback_record(id, "Television", receiver.port)]);
+        let c_id = c_string(id);
+        let sets = receiver.volume_sets().len();
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            asc_airplay_set_master(handle, master);
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), own));
+        }
+        let events = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        assert!(has_state(&events, id, AIRPLAY_STATE_PLAYING), "{events:?}");
+        assert!(
+            wait_for(|| receiver.volume_sets().len() > sets),
+            "no volume set: {:?}",
+            receiver.volume_sets()
+        );
+        handle
+    }
+
+    /// One read of the speaker `id` (S291): the host asks, the television
+    /// answers with the level it holds, and the volume events that answer
+    /// led to come back.
+    fn read_once(handle: *mut AscAirPlay, id: &str) -> Vec<Event> {
+        // SAFETY: a live handle, used by this thread only.
+        unsafe { asc_airplay_read_volumes(handle) };
+        assert!(inside(handle).added[id].reading, "not asked");
+        let mut events = events_until(handle, |_| !inside(handle).added[id].reading);
+        assert!(!inside(handle).added[id].reading, "no answer");
+        events.extend(std::iter::from_fn(|| take_event(handle)));
+        events
+            .into_iter()
+            .filter(|event| event.kind == AIRPLAY_EVENT_VOLUME && event.id == id)
+            .collect()
+    }
+
+    /// A row move to `row` as the Mac host makes it (S290): the core's
+    /// result goes to the speaker. Returns the own volume to store.
+    fn move_row(handle: *mut AscAirPlay, id: &str, row: f64, master: f64) -> f64 {
+        let (mut own, mut level) = (f64::NAN, f64::NAN);
+        // SAFETY: both point to live doubles.
+        let moved = unsafe {
+            crate::ffi::asc_airplay_row_move(row, NO_ZONE_POSITION, master, &mut own, &mut level)
+        };
+        assert!(moved, "row {row} at master {master} sends nothing");
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        assert!(unsafe { asc_airplay_set_device_level(handle, c_id.as_ptr(), own, level) });
+        own
+    }
+
+    /// Waits for the television to get `db` as its latest volume set.
+    fn lands(receiver: &Loopback, db: f64) {
+        let landed = || {
+            receiver
+                .volume_sets()
+                .last()
+                .is_some_and(|&got| same_db(got, db))
+        };
+        assert!(
+            wait_for(landed),
+            "{db} dB never landed: {:?}",
+            receiver.volume_sets()
+        );
+        assert!(receiver.level().is_some_and(|got| same_db(got, db)));
+    }
+
+    // covers: S290, S291
+    #[test]
+    fn k1_at_master_63_the_row_and_the_television_agree_both_ways() {
+        let receiver = Loopback::television();
+        let id = "02005E005391";
+        let master = 63.0;
+        let mut handle = on_television(&receiver, id, master, 50.0);
+        // Own 50 at master 63 is device level 31.5, the row 31.
+        let sets = receiver.volume_sets();
+        assert!(
+            sets.iter().all(|&db| same_db(db, db_for_level(31.5))),
+            "{sets:?}"
+        );
+        assert!(read_once(handle, id).is_empty(), "the echo moved the row");
+
+        // The television's remote to 20 (−24 dB): the row shows 20.
+        receiver.press(-24.0);
+        let events = read_once(handle, id);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(row_level(events[0].device_level), 20.0, "{events:?}");
+        assert!((events[0].volume - 20.0 / 0.63).abs() < 1e-6, "{events:?}");
+        assert_eq!(shown_row(events[0].volume, master), 20.0);
+        assert_eq!(row_level(inside(handle).added[id].level), 20.0);
+
+        // Its remote to 50, then the row moved to 20: 20 lands on it.
+        receiver.press(-15.0);
+        let events = read_once(handle, id);
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(row_level(events[0].device_level), 50.0, "{events:?}");
+        let own = move_row(handle, id, 20.0, master);
+        lands(&receiver, -24.0);
+        assert!(
+            receiver
+                .bodies(Method::SetParameter)
+                .contains(&"volume: -24.000000\r\n".to_owned())
+        );
+        assert_eq!(shown_row(own, master), 20.0);
+        assert_eq!(row_level(inside(handle).added[id].level), 20.0);
+        let tv_row = row_level(device_level_for_db(receiver.level().unwrap()).unwrap());
+        assert_eq!(tv_row, 20.0, "the television shows another number");
+        assert!(read_once(handle, id).is_empty(), "the echo moved the row");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S290, S291
+    #[test]
+    fn the_s290_vector_cases_land_on_the_television() {
+        use serde_json::Value;
+        let doc: Value = serde_json::from_str(include_str!("../../tests/vectors/s290_volume.json"))
+            .expect("valid JSON");
+        let number = |value: &Value, key: &str| value.get(key).and_then(Value::as_f64);
+        // The cases a television alone plays out: its remote, the master
+        // and the row, outside a zone, each step sending.
+        let on_wire = |step: &Value| {
+            ["tv_level", "master", "row_move"]
+                .iter()
+                .any(|key| step.get(key).is_some())
+                && step.get("sent").is_none()
+        };
+        let cases: Vec<&Value> = doc["cases"]
+            .as_array()
+            .expect("cases")
+            .iter()
+            .filter(|case| {
+                number(case, "zone") == Some(NO_ZONE_POSITION)
+                    && case["steps"]
+                        .as_array()
+                        .is_some_and(|s| s.iter().all(on_wire))
+            })
+            .collect();
+        let names: Vec<&str> = cases.iter().filter_map(|c| c["name"].as_str()).collect();
+        for wanted in [
+            "TV at 80 at master 63, master to 64 gives 81",
+            "TV at 80 at master 63, master to 100 caps at 100, back to 63 gives 80",
+        ] {
+            assert!(names.contains(&wanted), "{wanted} missing from {names:?}");
+        }
+
+        let receiver = Loopback::television();
+        for (index, case) in cases.into_iter().enumerate() {
+            let name = case["name"].as_str().expect("name");
+            let id = format!("02005E0054{index:02X}");
+            let mut master = number(case, "master").expect("master");
+            let mut own = 0.0;
+            let mut handle = on_television(&receiver, &id, master, own);
+            lands(&receiver, db_for_level(0.0));
+            for step in case["steps"].as_array().expect("steps") {
+                let level = number(step, "level").expect("level");
+                let sets = receiver.volume_sets().len();
+                if let Some(value) = number(step, "tv_level") {
+                    receiver.press(db_for_level(value));
+                    let events = read_once(handle, &id);
+                    assert_eq!(events.len(), 1, "{name}: {step}: {events:?}");
+                    assert!(
+                        (events[0].device_level - level).abs() < 1e-6,
+                        "{name}: {step}"
+                    );
+                    own = events[0].volume;
+                    assert_eq!(receiver.volume_sets().len(), sets, "{name}: sent back");
+                } else if let Some(value) = number(step, "master") {
+                    master = value;
+                    // SAFETY: a live handle, used by this thread only.
+                    unsafe { asc_airplay_set_master(handle, master) };
+                    lands(&receiver, db_for_level(level));
+                } else if let Some(row) = number(step, "row_move") {
+                    own = move_row(handle, &id, row, master);
+                    lands(&receiver, db_for_level(level));
+                }
+                let row = number(step, "row").expect("row");
+                let held = receiver.level().expect("a level on the television");
+                assert!(same_db(held, db_for_level(level)), "{name}: {step}: {held}");
+                let tv_level = device_level_for_db(held).expect("finite");
+                assert_eq!(row_level(tv_level), row, "{name}: {step}: television");
+                assert_eq!(shown_row(own, master), row, "{name}: {step}: row");
+                assert_eq!(row_level(inside(handle).added[&id].level), row, "{name}");
+                let own_after = number(step, "own_after").expect("own_after");
+                assert!((own - own_after).abs() < 1e-6, "{name}: {step}: own {own}");
+            }
+            assert!(read_once(handle, &id).is_empty(), "{name}: the echo moved");
+            // SAFETY: destroyed once, by this thread.
+            unsafe { asc_airplay_destroy(&mut handle) };
+        }
+    }
+
+    // covers: S290, S291
+    #[test]
+    fn k1_keep_a_row_at_40_comes_back_at_40_after_a_restart() {
+        let receiver = Loopback::television();
+        let id = "02005E005392";
+        let c_id = c_string(id);
+        let master = 63.0;
+        let forty = db_for_level(40.0);
+        let mut handle = on_television(&receiver, id, master, 50.0);
+        let own = move_row(handle, id, 40.0, master);
+        lands(&receiver, forty);
+        let mut rows = read_once(handle, id);
+
+        // Paused and played again: the session stays.
+        // SAFETY: a live handle, used by this thread only.
+        unsafe {
+            asc_airplay_pause(handle);
+        }
+        assert!(wait_for(|| receiver.methods().contains(&Method::Flush)));
+        // SAFETY: as above.
+        unsafe { asc_airplay_resume(handle) };
+        rows.extend(read_once(handle, id));
+
+        // The speaker turned off and on again, as the host stored it.
+        let sets = receiver.volume_sets().len();
+        // SAFETY: a live handle, used by this thread only; a C string.
+        assert!(unsafe { asc_airplay_remove_speaker(handle, c_id.as_ptr()) });
+        let stopped = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_STOPPED));
+        assert!(
+            has_state(&stopped, id, AIRPLAY_STATE_STOPPED),
+            "{stopped:?}"
+        );
+        // SAFETY: as above.
+        assert!(unsafe { asc_airplay_add_speaker(handle, c_id.as_ptr(), own) });
+        let playing = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        assert!(
+            has_state(&playing, id, AIRPLAY_STATE_PLAYING),
+            "{playing:?}"
+        );
+        assert!(wait_for(|| receiver.volume_sets().len() > sets));
+        let first = receiver.volume_sets()[sets];
+        assert!(
+            same_db(first, forty),
+            "the first set after the add: {first}"
+        );
+        rows.extend(read_once(handle, id));
+
+        // The engine stopped and started: a new handle, as the host makes it.
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        let sets = receiver.volume_sets().len();
+        let mut handle = on_television(&receiver, id, master, own);
+        let first = receiver.volume_sets()[sets];
+        assert!(
+            same_db(first, forty),
+            "the first set after a start: {first}"
+        );
+        rows.extend(read_once(handle, id));
+
+        let after_move = receiver.volume_sets();
+        let index = after_move
+            .iter()
+            .position(|&db| same_db(db, forty))
+            .unwrap();
+        assert!(
+            after_move[index..].iter().all(|&db| same_db(db, forty)),
+            "{after_move:?}"
+        );
+        assert!(
+            rows.iter().all(|e| row_level(e.device_level) == 40.0),
+            "the row reported another value: {rows:?}"
+        );
+        assert_eq!(shown_row(own, master), 40.0);
+        assert_eq!(row_level(inside(handle).added[id].level), 40.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
