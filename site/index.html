@@ -269,7 +269,8 @@
   .get .appicon { width: 72px; height: 72px; margin-bottom: 14px; }
   .get p { color: var(--text-2); }
   .get .btn { align-self: flex-start; margin-top: auto; }
-  .get ul { color: var(--text-2); padding-left: 1.2em; margin: 0 0 1em; }
+  .get ul, .get ol { color: var(--text-2); padding-left: 1.2em; margin: 0 0 1em; }
+  .get ol li + li { margin-top: 4px; }
   pre {
     margin: 0 0 1em; padding: 14px 16px; border-radius: 12px; overflow-x: auto;
     background: var(--code-bg); border: 1px solid var(--line); font-size: .9rem; line-height: 1.6;
@@ -503,7 +504,12 @@
           <img class="appicon" src="/icon-192.png" width="72" height="72" alt="">
           <h3>Download</h3>
           <p>For macOS 15 (Sequoia) or later. Open the disk image and drag AudioSync to Applications.</p>
-          <p>The builds aren't notarized yet, so macOS blocks the first launch. Open the app once, then click Open Anyway in System Settings &rarr; Privacy &amp; Security.</p>
+          <p>The builds aren't notarized yet, so macOS blocks the first launch. To get past it:</p>
+          <ol>
+            <li>If macOS says it can't verify AudioSync, click Done.</li>
+            <li>Open Privacy &amp; Security in System Settings.</li>
+            <li>Scroll down, click Open Anyway and confirm with your password. You only do this once.</li>
+          </ol>
           <a class="btn btn-main" href="https://github.com/yassersutojoyo/audiosync/releases/latest">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
             Latest release
