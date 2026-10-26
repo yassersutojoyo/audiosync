@@ -1637,6 +1637,16 @@ impl App {
                 }
             })
             .collect();
+        let show_virtual = ui.show_virtual;
+        let airplay2_experimental = ui.airplay2_experimental;
+        let airplay_typed = ui
+            .airplay_delay_draft
+            .text(state.airplay_delay_ms)
+            .map(str::to_owned);
+        // Showing a dialog below runs Slint's pending change handlers, and the
+        // focus ones borrow `ui` mutably (UI Automation focuses and toggles in
+        // one turn).
+        drop(ui);
         let flyout_speakers: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
         let all: Vec<SpeakerItem> = flyout_speakers
             .iter()
@@ -1815,14 +1825,13 @@ impl App {
             window.show_live_input_hint(&live_hint);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
-        self.main.set_show_virtual_devices(ui.show_virtual);
-        self.main
-            .set_airplay2_experimental(ui.airplay2_experimental);
+        self.main.set_show_virtual_devices(show_virtual);
+        self.main.set_airplay2_experimental(airplay2_experimental);
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
-        let typed = ui.airplay_delay_draft.text(state.airplay_delay_ms);
+        let typed = airplay_typed.as_deref();
         let airplay_typed = is_draft(typed, &airplay_delay);
         self.main.set_airplay_delay_pending(airplay_typed);
         self.main.set_delay_typing(rows_typed || airplay_typed);
@@ -1847,7 +1856,6 @@ impl App {
 
         self.show_calibrate_all(card);
         self.show_equalizer_state(&state);
-        drop(ui);
         *self.now_playing_source.borrow_mut() = CardSource::of(&state);
         let _ = self.sync_now_playing();
         self.publish_remote(&state);
