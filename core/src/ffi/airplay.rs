@@ -1056,6 +1056,15 @@ impl AscAirPlay {
                 {
                     added.playing = *state == SpeakerState::Playing;
                 }
+                // P184 stops reads for one session only: the next one is
+                // asked again.
+                if let SpeakerEvent::State(state) = &event
+                    && *state != SpeakerState::Playing
+                    && let Some(owner) = self.reporting_for(&id)
+                    && let Some(added) = self.added.get_mut(&owner)
+                {
+                    added.unreadable = false;
+                }
                 if let SpeakerEvent::VolumeReported(db) = event {
                     self.volume_reported(&id, db);
                     return;
@@ -5943,6 +5952,46 @@ mod tests {
         assert_eq!(inside(handle).added[id].position, 50.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S271, P184
+    #[test]
+    fn a_new_session_asks_a_speaker_whose_reads_stopped_again() {
+        let refused = Warning::RequestFailed {
+            method: Method::GetParameter,
+            status: 501,
+        };
+        let retrying = SpeakerState::Retrying { at: Instant::now() };
+        for (warning, states) in [
+            (
+                Warning::VolumeReadsStopped,
+                vec![retrying, SpeakerState::Connecting, SpeakerState::Playing],
+            ),
+            (
+                refused,
+                vec![SpeakerState::Connecting, SpeakerState::Playing],
+            ),
+        ] {
+            let mut handle = create_with(quiet);
+            let id = "02005E005379";
+            let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x79]));
+            add_for_volume(handle, id, key.clone(), 50.0);
+            inside(handle).take_in(SenderEvent::Speaker {
+                key: key.clone(),
+                event: SpeakerEvent::Warning(warning.clone()),
+            });
+            for state in states {
+                inside(handle).take_in(SenderEvent::Speaker {
+                    key: key.clone(),
+                    event: SpeakerEvent::State(state),
+                });
+            }
+            // SAFETY: a live handle, used by this thread only.
+            unsafe { asc_airplay_read_volumes(handle) };
+            assert!(inside(handle).added[id].reading, "{warning:?}");
+            // SAFETY: destroyed once, by this thread.
+            unsafe { asc_airplay_destroy(&mut handle) };
+        }
     }
 
     // covers: S249
