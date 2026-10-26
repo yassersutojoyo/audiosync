@@ -7814,7 +7814,11 @@ mod tests {
         speaker_event(SpeakerEvent::Path(ProtocolPath::AirPlay1));
         speaker_event(SpeakerEvent::State(SpeakerState::Connecting));
         adapter.poll();
-        assert_eq!(kind(&adapter), SpeakerKind::AirPlay, "it plays over AirPlay 1");
+        assert_eq!(
+            kind(&adapter),
+            SpeakerKind::AirPlay,
+            "it plays over AirPlay 1"
+        );
         speaker_event(SpeakerEvent::State(SpeakerState::Stopped));
         adapter.poll();
         assert_eq!(
@@ -7825,7 +7829,11 @@ mod tests {
         speaker_event(SpeakerEvent::Path(ProtocolPath::AirPlay1));
         speaker_event(SpeakerEvent::Path(ProtocolPath::AirPlay2));
         adapter.poll();
-        assert_eq!(kind(&adapter), SpeakerKind::AirPlay2, "a later session got the place");
+        assert_eq!(
+            kind(&adapter),
+            SpeakerKind::AirPlay2,
+            "a later session got the place"
+        );
     }
 
     /// After `speaker` turned its stored key down: the row asks for a code

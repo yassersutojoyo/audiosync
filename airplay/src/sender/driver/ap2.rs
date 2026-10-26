@@ -248,6 +248,7 @@ impl Driver {
         if let (Some(Connection { local, .. }), Some(peer)) = (pairing_connection, held_remote) {
             self.remote_attach(key, remote, SocketAddr::new(local, 0), peer.ip());
         }
+        self.emit_speaker(key, SpeakerEvent::Path(ProtocolPath::AirPlay2));
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
     }
 

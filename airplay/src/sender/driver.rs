@@ -1750,6 +1750,7 @@ impl Driver {
         }));
         self.sessions.insert(session_key, key.clone());
         self.remote_open(key, remote, now);
+        self.emit_speaker(key, SpeakerEvent::Path(ProtocolPath::AirPlay1));
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
     }
 

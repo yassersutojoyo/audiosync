@@ -635,6 +635,9 @@ pub struct AscAirPlay {
     /// How the AirPlay 1 attempt ended of each added speaker the sender
     /// then moved to AirPlay 2 (P2), by ID: its listing follows the path.
     airplay1_outcome: HashMap<String, ErrorKind>,
+    /// The path each running session takes, as the sender reported it: the
+    /// listing names that path until the session ends (P214, S313).
+    session_paths: HashMap<String, ProtocolPath>,
     /// The keys of receivers the sender got AirPlay 2 credentials for this
     /// run, by ID: it keeps them after the receiver is gone, so forgetting
     /// must still reach it.
@@ -1014,6 +1017,17 @@ impl AscAirPlay {
             }
             SenderEvent::Speaker { key, event } => {
                 let id = receiver_id(&key);
+                if let SpeakerEvent::Path(path) = event {
+                    self.note_session_path(&id, Some(path));
+                    return;
+                }
+                if matches!(
+                    event,
+                    SpeakerEvent::Error(_)
+                        | SpeakerEvent::State(SpeakerState::Stopped | SpeakerState::Failed)
+                ) {
+                    self.note_session_path(&id, None);
+                }
                 if let SpeakerEvent::Error(error) = &event {
                     self.note_path_switch(&id, error);
                     let turned_down = self.speaker_failed(&id, error.reason);
@@ -1577,7 +1591,11 @@ impl AscAirPlay {
     /// with the switch on, and then always with HomeKit credentials stored,
     /// otherwise on the path its records and its last AirPlay 1 attempt
     /// choose (P2) or the AirPlay 2 preference (P214), as the sender decides.
+    /// A running session's own path comes first (S313).
     fn over_airplay2(&self, id: &str, info: &ReceiverInfo) -> bool {
+        if let Some(path) = self.session_paths.get(id) {
+            return *path == ProtocolPath::AirPlay2;
+        }
         self.airplay2
             && info.device.choose_path_preferring(
                 true,
@@ -1585,6 +1603,21 @@ impl AscAirPlay {
                 self.airplay1_outcome.get(id).copied(),
                 self.identity.get(id).is_some(),
             ) == Ok(ProtocolPath::AirPlay2)
+    }
+
+    /// Keeps the path a session of `id` takes, or forgets it once the
+    /// session ends (`None`), and lists the receiver again when that changes
+    /// its path (S313).
+    fn note_session_path(&mut self, id: &str, path: Option<ProtocolPath>) {
+        let over = |this: &Self| this.listed.get(id).map(|info| this.over_airplay2(id, info));
+        let before = over(self);
+        match path {
+            Some(path) => self.session_paths.insert(id.to_owned(), path),
+            None => self.session_paths.remove(id),
+        };
+        if before != over(self) {
+            self.relist(id);
+        }
     }
 
     /// Keeps how an AirPlay 1 attempt ended when, with the switch on, the
@@ -2253,6 +2286,7 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 targets: HashMap::new(),
                 targets_reported: HashSet::new(),
                 airplay1_outcome: HashMap::new(),
+                session_paths: HashMap::new(),
                 homekit_keys: HashMap::new(),
                 paired_for_session: HashSet::new(),
                 credentials_turned_down: HashSet::new(),
@@ -4326,13 +4360,19 @@ mod tests {
             let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
             report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2 != 0
         };
-        assert!(over_airplay2(handle), "the preference sends it to AirPlay 2");
+        assert!(
+            over_airplay2(handle),
+            "the preference sends it to AirPlay 2"
+        );
 
         // The AirPlay 2 place is taken: it plays over AirPlay 1 (P214).
         inside(handle).take_in(speaker(SpeakerEvent::Path(ProtocolPath::AirPlay1)));
         assert!(!over_airplay2(handle), "its row says AirPlay");
         inside(handle).take_in(speaker(SpeakerEvent::State(SpeakerState::Stopped)));
-        assert!(over_airplay2(handle), "stopped: the path a new session takes");
+        assert!(
+            over_airplay2(handle),
+            "stopped: the path a new session takes"
+        );
         inside(handle).take_in(speaker(SpeakerEvent::Path(ProtocolPath::AirPlay1)));
         inside(handle).take_in(speaker(SpeakerEvent::Path(ProtocolPath::AirPlay2)));
         assert!(over_airplay2(handle), "a later session got the place");

@@ -1132,6 +1132,9 @@ pub struct AirPlaySpeakers {
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
     /// to AirPlay 2, as the sender keeps it while the speaker stays added.
     airplay1_outcome: BTreeMap<String, ErrorKind>,
+    /// The path each running session takes, as the sender reported it: the
+    /// row names that path until the session ends (P214, spec S313).
+    session_paths: BTreeMap<String, ProtocolPath>,
     streaming: bool,
     master: f64,
     /// The zone volume of each speaker ID in a zone (S249); one not here is
@@ -1229,6 +1232,7 @@ impl AirPlaySpeakers {
             paired_in_attempt: BTreeSet::new(),
             paired_for_session: BTreeSet::new(),
             airplay1_outcome: BTreeMap::new(),
+            session_paths: BTreeMap::new(),
             streaming: false,
             master,
             zones: BTreeMap::new(),
@@ -1698,7 +1702,11 @@ impl AirPlaySpeakers {
             .is_some_and(|listed| self.reached_over_airplay2(id, &listed.info))
     }
 
+    /// A running session's own path comes first (spec S313).
     fn reached_over_airplay2(&self, id: &str, info: &ReceiverInfo) -> bool {
+        if let Some(path) = self.session_paths.get(id) {
+            return *path == ProtocolPath::AirPlay2;
+        }
         let outcome = self.airplay1_outcome.get(id).copied();
         let homekit_stored = self.store.homekit(id).is_some();
         reached_over_airplay2(
@@ -3869,6 +3877,36 @@ impl AirPlaySpeakers {
         event: SpeakerEvent,
         events: &mut Vec<BackendEvent>,
     ) -> bool {
+        let path_changed = match &event {
+            SpeakerEvent::Path(path) => return self.note_session_path(id, Some(*path)),
+            SpeakerEvent::Error(_)
+            | SpeakerEvent::State(SpeakerState::Stopped | SpeakerState::Failed) => {
+                self.note_session_path(id, None)
+            }
+            _ => false,
+        };
+        self.session_event(id, event, events) || path_changed
+    }
+
+    /// Keeps the path a session of `id` takes, or forgets it once the
+    /// session ends (`None`). Returns whether its row's path changed.
+    fn note_session_path(&mut self, id: &str, path: Option<ProtocolPath>) -> bool {
+        let before = self.over_airplay2(id);
+        match path {
+            Some(path) => self.session_paths.insert(id.to_owned(), path),
+            None => self.session_paths.remove(id),
+        };
+        before != self.over_airplay2(id)
+    }
+
+    /// Takes in any other event of a session. Returns whether the speaker
+    /// list changed.
+    fn session_event(
+        &mut self,
+        id: &str,
+        event: SpeakerEvent,
+        events: &mut Vec<BackendEvent>,
+    ) -> bool {
         // P184 stops reads for one session only: the next one is asked again.
         if let SpeakerEvent::State(state) = &event
             && *state != SpeakerState::Playing
@@ -4036,9 +4074,7 @@ impl AirPlaySpeakers {
                     .log(|| format!("AirPlay speaker {} trace: {line}", self.label(id)));
                 false
             }
-            SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) | SpeakerEvent::Path(_) => {
-                false
-            }
+            SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) | SpeakerEvent::Path(_) => false,
         }
     }
 
