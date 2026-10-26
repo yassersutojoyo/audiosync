@@ -119,3 +119,65 @@ struct PermissionAsks: Equatable {
 
     var stored: [String] { Permission.allCases.filter(explained.contains).map(\.rawValue) }
 }
+
+/// A row of the permission setup window, as macOS and this run left it.
+enum SetupRowState: Equatable {
+    case notAsked
+    /// macOS's prompt is up, or its answer hasn't come back yet.
+    case waiting
+    case allowed
+    case denied
+    /// Asked, but macOS doesn't report the answer (audio capture).
+    case askedUnknown
+}
+
+/// The permission setup window (SetupWindow.swift): what AudioSync needs from
+/// macOS, asked for with one button on a first install, so the features
+/// don't stop one by one to explain a permission later.
+enum PermissionSetup {
+    /// True once the window was shown by itself, whether skipped or done.
+    static let seenKey = "permissionSetupSeen"
+    /// What the Allow button asks for, in this order.
+    static let required: [Permission] = [.localNetwork, .audioCapture]
+    /// Asked when their feature is first used.
+    static let optional: [Permission] = [.microphone, .automation]
+
+    /// A first install that hasn't been through the explanations of what
+    /// streaming needs.
+    static func showsAtLaunch(_ asks: PermissionAsks, seen: Bool) -> Bool {
+        !seen && !asks.usedBefore && !required.allSatisfy(asks.explained.contains)
+    }
+
+    /// `asked`: the explanation was accepted, so AudioSync's discovery may
+    /// have raised the prompt.
+    static func localNetwork(_ access: LocalNetworkAccess, asked: Bool) -> SetupRowState {
+        switch access {
+        case .allowed: return .allowed
+        case .denied: return .denied
+        case .unknown: return asked ? .waiting : .notAsked
+        }
+    }
+
+    /// `heard`: a tap captured sound in this run (`SourceCapture.runHeard`),
+    /// the only proof that capture is allowed.
+    static func audioCapture(heard: Bool, asked: Bool) -> SetupRowState {
+        heard ? .allowed : asked ? .askedUnknown : .notAsked
+    }
+
+    static func microphone(_ state: PermissionState, asking: Bool) -> SetupRowState {
+        switch state {
+        case .allowed: return .allowed
+        case .denied: return .denied
+        case .notAsked, .unknown: return asking ? .waiting : .notAsked
+        }
+    }
+
+    /// The next permission the Allow button asks for; nil once each was asked.
+    static func next(_ rows: [Permission: SetupRowState]) -> Permission? {
+        required.first { rows[$0, default: .notAsked] == .notAsked }
+    }
+
+    static func offersSettings(_ state: SetupRowState) -> Bool {
+        state == .denied || state == .askedUnknown
+    }
+}

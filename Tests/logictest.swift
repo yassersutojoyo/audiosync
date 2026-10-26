@@ -3411,14 +3411,15 @@ do {
     check(UIStrings().sourceSwitchFailed(new: "Music", old: "All System Audio")
             == "Couldn't start Music, still on All System Audio.",
           "EC5 source: the failed switch notice names both sources plainly")
-    check(CaptureSwitch.start(hasSpeaker: true, microphone: .notNeeded) == .rebuildCapture
-            && CaptureSwitch.start(hasSpeaker: true, microphone: .allowed) == .rebuildCapture,
+    check(CaptureSwitch.start(starts: true, microphone: .notNeeded) == .rebuildCapture
+            && CaptureSwitch.start(starts: true, microphone: .allowed) == .rebuildCapture,
           "EC5 source: a switch rebuilds only the capture and keeps the session")
-    check(CaptureSwitch.start(hasSpeaker: false, microphone: .allowed) == .stopSession,
-          "EC5 source: a switch with no speaker on stops the session")
-    check(CaptureSwitch.start(hasSpeaker: true, microphone: .undetermined) == .askMicrophone,
+    check(CaptureSwitch.start(starts: false, microphone: .notNeeded) == .stopSession
+            && CaptureSwitch.start(starts: false, microphone: .undetermined) == .stopSession,
+          "EC5 source: a switch the start rule refuses (no speaker on any more) stops the session")
+    check(CaptureSwitch.start(starts: true, microphone: .undetermined) == .askMicrophone,
           "EC5 source: a switch to an input macOS still has to allow keeps the old source until the answer")
-    check(CaptureSwitch.start(hasSpeaker: true, microphone: .denied) == .keepOld,
+    check(CaptureSwitch.start(starts: true, microphone: .denied) == .keepOld,
           "EC5 source: a switch to an input the microphone permission denies keeps the old capture")
     let mic = AudioSource.input(uid: "mic")
     let toMic = CaptureSwitch.Change.source(from: music, to: mic)
@@ -3480,7 +3481,7 @@ do {
           "EC8 all off: only a switch-on while stopped starts streaming")
     check(!StreamingPolicy.hasSpeaker(enabledAirPlay: [], enabledLocal: [])
           && StreamingPolicy.hasSpeaker(enabledAirPlay: [], enabledLocal: ["usb"]),
-          "EC8 all off: Start with no speaker on asks for one first")
+          "EC8 all off: an automatic start with no speaker on asks for one first")
 
     // EC10: many speakers.
     typealias S = (name: String, tag: SpeakerTag)
@@ -7276,13 +7277,16 @@ do {
     check(t.castSenderStopped(speaker: "Kitchen").contains("Kitchen"), "cast: the sender's notice names the speaker that went off")
     var idleFailure = CastModel()
     check(idleFailure.apply(.failed(detail: "")) == .senderFailed(wasOn: nil), "cast: no speaker named when none was on")
-    check(t.castList(.noneFound)?.contains("Local Network") == true, "cast: none found points to Local Network access")
+    check(t.castList(.noneFound, localNetworkRefused: true)?.contains("Local Network") == true
+            && t.castList(.noneFound)?.contains("Local Network") == false,
+          "cast: none found points to Local Network access only once it was refused")
     let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
-    check(bothNone.hasPrefix("No AirPlay or Google Cast speakers found yet.") && bothNone.contains("Local Network")
-            && t.airPlayNoneFound().contains("Local Network")
+    check(bothNone.hasPrefix("No AirPlay or Google Cast speakers found yet.") && bothNone.contains("same network")
+            && !bothNone.contains("Local Network") && !t.airPlayNoneFound().contains("Local Network")
+            && t.airPlayNoneFound(localNetworkRefused: true).contains("Local Network")
             && t.networkSpeakersNote(airPlayNone: true, cast: .quiet) == t.airPlayNoneFound()
             && t.networkSpeakersNote(airPlayNone: false, cast: .searching) == t.castList(.searching)
             && t.networkSpeakersNote(airPlayNone: false, cast: .quiet) == nil
@@ -7304,7 +7308,8 @@ do {
             && LocalNetworkHint.possible.shown(airPlayProblem: true) == .none
             && LocalNetworkHint.denied.shown(airPlayProblem: false) == .denied
             && t.networkSpeakersNote(airPlayNone: false, cast: .noneFound,
-                                     hint: LocalNetworkHint.denied.shown(airPlayProblem: true))?.contains("Local Network") == true
+                                     hint: LocalNetworkHint.denied.shown(airPlayProblem: true),
+                                     localNetworkRefused: true)?.contains("Local Network") == true
             && t.localNetworkHint.contains("same network"),
           "an AirPlay problem hides the Local Network hint, so the notes keep the advice")
     check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil
@@ -8709,6 +8714,139 @@ do {
     let texts = Permission.allCases.flatMap { [words.permissionTitle($0), words.permissionReason($0)] }
     check(texts.allSatisfy { !$0.isEmpty && !$0.contains("\u{2014}") } && Set(texts).count == texts.count,
           "permissions: every explanation has its own title and reason, without em dashes")
+}
+
+// MARK: Streaming with no speaker on, This Mac on at first install
+do {
+    check(StreamingPolicy.startsWithoutSpeaker(origin: .user) && StreamingPolicy.startsWithoutSpeaker(origin: .remote)
+            && !StreamingPolicy.startsWithoutSpeaker(origin: .automatic),
+          "no speaker on: the power switch starts streaming anyway, with no alert; an automatic start still waits")
+    check(StreamingPolicy.starts(hasSpeaker: false, continuing: true, hadSpeaker: false, origin: .automatic),
+          "no speaker on: a rebuild or switch of a session started with every speaker off carries on")
+    check(!StreamingPolicy.starts(hasSpeaker: false, continuing: true, hadSpeaker: true, origin: .automatic),
+          "no speaker on: an automatic rebuild or switch after the last speaker went off doesn't start")
+    check(StreamingPolicy.starts(hasSpeaker: true, continuing: true, hadSpeaker: true, origin: .automatic)
+            && !StreamingPolicy.starts(hasSpeaker: false, continuing: false, hadSpeaker: true, origin: .automatic)
+            && StreamingPolicy.starts(hasSpeaker: false, continuing: false, hadSpeaker: true, origin: .user),
+          "no speaker on: a speaker that is on always starts; a new automatic start waits; the user's starts")
+    check(!StreamingPolicy.isIdle(streaming: true, hadSpeaker: false, enabledAirPlay: [], enabledLocal: []),
+          "no speaker on: a session started with every speaker off keeps running")
+    check(StreamingPolicy.isIdle(streaming: true, hadSpeaker: true, enabledAirPlay: [], enabledLocal: []),
+          "no speaker on: once a speaker played, switching the last one off still stops streaming")
+    check(StreamingPolicy.showsNoSpeakerOn(streaming: true, enabledAirPlay: [], enabledLocal: [])
+            && !StreamingPolicy.showsNoSpeakerOn(streaming: true, enabledAirPlay: ["a"], enabledLocal: [])
+            && !StreamingPolicy.showsNoSpeakerOn(streaming: true, enabledAirPlay: [], enabledLocal: ["usb"])
+            && !StreamingPolicy.showsNoSpeakerOn(streaming: false, enabledAirPlay: [], enabledLocal: []),
+          "no speaker on: the speaker list says so only while streaming with every speaker off")
+    let line = UIStrings().noSpeakerOn
+    check(line.hasPrefix("No speaker is on") && !line.contains("\u{2014}") && !line.contains("\n"),
+          "no speaker on: one plain line", line)
+
+    final class Saved { var values: [String: Any] = [:] }
+    let saved = Saved()
+    let disk = SettingsStore(read: { saved.values[$0] }, write: { value, key in saved.values[key] = value })
+    func device(_ uid: String, _ transport: UInt32) -> AudioDevices.Device {
+        AudioDevices.Device(id: 0, name: uid, uid: uid, transport: transport)
+    }
+    let usb = device("usb", kAudioDeviceTransportTypeUSB)
+    let mac = device("builtin", kAudioDeviceTransportTypeBuiltIn)
+    check(disk.speakerOnAtInstall(listed: [], firstInstall: true) == nil
+            && saved.values[AppSettings.Keys.speakerOnAtInstall] == nil,
+          "first install: an empty device list waits for the next one")
+    check(disk.speakerOnAtInstall(listed: [usb, mac], firstInstall: true) == "builtin",
+          "first install: This Mac starts on")
+    check(disk.speakerOnAtInstall(listed: [usb, mac], firstInstall: true) == nil,
+          "first install: This Mac is switched on once, so a later off stays off")
+    let updated = SettingsStore(read: { _ in nil }, write: { _, _ in })
+    check(updated.speakerOnAtInstall(listed: [mac], firstInstall: false) == nil,
+          "first install: an update never switches a speaker on")
+    let other = Saved()
+    let noMac = SettingsStore(read: { other.values[$0] }, write: { value, key in other.values[key] = value })
+    check(noMac.speakerOnAtInstall(listed: [usb], firstInstall: true) == nil
+            && noMac.speakerOnAtInstall(listed: [usb, mac], firstInstall: true) == nil,
+          "first install: without a built-in output nothing is switched on, and the chance passes")
+}
+
+// MARK: Local Network advice only after it was asked and refused
+do {
+    let t = UIStrings()
+    let notes: [String?] = [t.airPlayNoneFound(), t.castList(.noneFound),
+                            t.networkSpeakersNote(airPlayNone: true, cast: .noneFound),
+                            t.networkSpeakersNote(airPlayNone: true, cast: .quiet)]
+    check(notes.allSatisfy { $0?.contains("Local Network") == false && $0?.contains("same network") == true },
+          "local network: before it was asked, the notes give only the same-network advice")
+    check(t.airPlayNoneFound(localNetworkRefused: true).contains("Local Network")
+            && t.airPlayNoneFound(hint: .denied, localNetworkRefused: true) == "No AirPlay speakers found yet.",
+          "local network: once refused, the advice names it, unless the hint on screen already does")
+}
+
+// MARK: Permission setup window (PermissionFlow.swift, PermissionSetup)
+do {
+    let fresh = PermissionAsks(explained: [], usedBefore: false)
+    check(PermissionSetup.showsAtLaunch(fresh, seen: false),
+          "setup: a first install opens the permission setup by itself")
+    check(!PermissionSetup.showsAtLaunch(fresh, seen: true),
+          "setup: it opens by itself only once, skipped or done")
+    check(!PermissionSetup.showsAtLaunch(PermissionAsks(explained: [], usedBefore: true), seen: false),
+          "setup: an update from a version without explanations doesn't open it")
+    check(!PermissionSetup.showsAtLaunch(PermissionAsks(explained: ["localNetwork", "audioCapture"], usedBefore: false),
+                                         seen: false),
+          "setup: a user who already went through both explanations doesn't get it")
+    check(PermissionSetup.required == [.localNetwork, .audioCapture]
+            && PermissionSetup.optional == [.microphone, .automation],
+          "setup: Local Network and audio capture are asked together; microphone and Automation wait for their feature")
+
+    check(PermissionSetup.localNetwork(.unknown, asked: false) == .notAsked
+            && PermissionSetup.localNetwork(.unknown, asked: true) == .waiting
+            && PermissionSetup.localNetwork(.allowed, asked: false) == .allowed
+            && PermissionSetup.localNetwork(.denied, asked: true) == .denied,
+          "setup: the Local Network row follows the probe's answer")
+    check(PermissionSetup.audioCapture(heard: false, asked: false) == .notAsked
+            && PermissionSetup.audioCapture(heard: false, asked: true) == .askedUnknown
+            && PermissionSetup.audioCapture(heard: true, asked: false) == .allowed,
+          "setup: audio capture shows allowed only once a tap heard sound; asked otherwise, since macOS doesn't say")
+    check(PermissionSetup.microphone(.notAsked, asking: false) == .notAsked
+            && PermissionSetup.microphone(.notAsked, asking: true) == .waiting
+            && PermissionSetup.microphone(.allowed, asking: false) == .allowed
+            && PermissionSetup.microphone(.denied, asking: false) == .denied,
+          "setup: the microphone row follows what macOS reports")
+
+    var rows: [Permission: SetupRowState] = [.localNetwork: .notAsked, .audioCapture: .notAsked]
+    check(PermissionSetup.next(rows) == .localNetwork, "setup: Allow asks for Local Network first")
+    rows[.localNetwork] = .waiting
+    check(PermissionSetup.next(rows) == .audioCapture, "setup: then audio capture")
+    rows[.audioCapture] = .askedUnknown
+    check(PermissionSetup.next(rows) == nil, "setup: nothing left to ask once both were asked")
+    check(PermissionSetup.next([.localNetwork: .allowed, .audioCapture: .notAsked]) == .audioCapture,
+          "setup: a permission already allowed is skipped")
+
+    check(PermissionSetup.offersSettings(.denied) && PermissionSetup.offersSettings(.askedUnknown)
+            && !PermissionSetup.offersSettings(.allowed) && !PermissionSetup.offersSettings(.notAsked)
+            && !PermissionSetup.offersSettings(.waiting),
+          "setup: a refused row, or one macOS can't report after asking, offers its Settings link")
+
+    var asks = PermissionAsks(explained: [], usedBefore: false)
+    PermissionSetup.required.forEach { asks.accept($0) }
+    check(asks.step(.localNetwork, state: .unknown, userAction: false) == .go
+            && asks.step(.audioCapture, state: .unknown, userAction: true) == .go
+            && asks.step(.microphone, state: .notAsked, userAction: true) == .explain,
+          "setup: after Allow, nothing it asked for is explained again; the microphone still is")
+
+    let t = UIStrings()
+    let states: [SetupRowState] = [.notAsked, .waiting, .allowed, .denied, .askedUnknown]
+    var words: [String] = states.map(t.setupState)
+    words += Permission.allCases.map(t.setupDetail)
+    words += Permission.allCases.map(t.setupOpenSettings)
+    words += [t.setupTitle, t.setupHeading, t.setupIntro, t.setupLater, t.setupAllow, t.setupAsking, t.setupDone,
+              t.setupSkip, t.setupAllowOne, t.setupMenu, t.setupAllowMicrophone]
+    check(words.allSatisfy { !$0.isEmpty && !$0.contains("\u{2014}") }
+            && Set(states.map(t.setupState)).count == states.count,
+          "setup: every line is plain text without em dashes, and each state reads differently")
+    check(t.setupMenu.hasSuffix("…"), "setup: the menu item that opens the window ends in an ellipsis")
+    check(Set(Permission.allCases.map(t.setupOpenSettings)).count == Permission.allCases.count,
+          "setup: each Open Settings button names its permission for VoiceOver")
+    check(t.setupDetail(.localNetwork).contains("Privacy & Security → Local Network"),
+          "setup: the Local Network row gives the full System Settings path")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

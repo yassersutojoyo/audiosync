@@ -251,6 +251,8 @@ final class AppModel: ObservableObject {
     @Published var localNetworkHint: LocalNetworkHint = .none
     /// AirPlay discovery takes its first look (`AirPlaySearch`).
     @Published var airplaySearching = false
+    /// Streaming with every speaker off (`StreamingPolicy.showsNoSpeakerOn`).
+    @Published var noSpeakerOn = false
     @Published var nowPlaying: NowPlayingMonitor.Track?
     @Published var equalizerOn = false
     /// The curve the equalizer picker shows, or "Custom".
@@ -503,10 +505,13 @@ final class AppModel: ObservableObject {
     /// shows, gives the network advice once for both.
     var networkNote: String? {
         text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList,
-                                 hint: shownLocalNetworkHint, airPlaySearching: airplaySearching)
+                                 hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint != .none,
+                                 airPlaySearching: airplaySearching)
     }
     /// Connected Speakers with no speaker at all.
-    var networkEmptyText: String { networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint) }
+    var networkEmptyText: String {
+        networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint != .none)
+    }
     private var shownLocalNetworkHint: LocalNetworkHint { localNetworkHint.shown(airPlayProblem: airPlayProblem != nil) }
 
     /// Why AirPlay can't work right now, shown in place of its speakers; nil
@@ -795,6 +800,7 @@ struct MenuBarView: View {
         if offersCastAdd { height += 20 }
         if PresetPanel.showsRow(model.presets) { height += 38 }
         if model.liveInputAirPlayHint != nil { height += 48 }
+        if model.noSpeakerOn { height += 32 }
         return height
     }
 
@@ -825,6 +831,7 @@ struct MenuBarView: View {
                 thisMacRows(t)
             }
             Divider().padding(.vertical, -4)   // 6 pt on both sides
+            if model.noSpeakerOn { noSpeakerOnLine(t) }
             speakerList(t)
                 .id(model.panelSession)
             if offersCastAdd {
@@ -927,6 +934,13 @@ struct MenuBarView: View {
         } else {
             speakerRows.padding(.horizontal, -6)
         }
+    }
+
+    private func noSpeakerOnLine(_ t: UIStrings) -> some View {
+        Text(t.noSpeakerOn)
+            .font(.caption)
+            .foregroundStyle(Brand.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The main window's Local Network hint, cut to a caption and a link:

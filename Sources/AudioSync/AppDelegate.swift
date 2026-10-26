@@ -56,6 +56,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var helpWindow: NSWindow?
     var webRemote: WebRemote?
     var webRemoteWindow: WebRemoteWindowController?
+    /// The permission setup window, made the first time it opens and kept.
+    var setupWindow: SetupWindowController?
+    /// The setup's Allow asked for Local Network and waits for the answer.
+    var setupAsking = false
+    /// The setup asked macOS for the microphone and waits for the answer.
+    var setupMicrophoneAsking = false
+    /// The short capture that raises the audio capture prompt (`probeAudioCapture`).
+    var setupCaptureProbe: SourceCapture?
 
     // MARK: - AudioSync's own AirPlay sender (`+NativeAirPlay`)
 
@@ -82,6 +90,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     typealias Keys = AppSettings.Keys
     let store: SettingsStore
+    /// Nothing was saved before this launch: This Mac starts on
+    /// (`SettingsStore.speakerOnAtInstall`).
+    let freshInstall: Bool
 
     /// The mode the several-apps menu shows while no mix is the source.
     var rememberedMixMode: AppMixMode = .only
@@ -245,6 +256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The user switched streaming off: auto-connect doesn't start it again
     /// until they switch it on (S120).
     var userStopped = false
+    /// A speaker was on at some point in this session (`StreamingPolicy.isIdle`).
+    var sessionHadSpeaker = false
     /// Counts the user's starts, failed ones included, so a switch waiting to
     /// start the whole system sees one happened meanwhile (S227 g).
     var userStarts = 0
@@ -284,6 +297,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     override init() {
         store = LaunchAutoConnect.skipped ? SettingsStore.standard.memoryOnly() : .standard
+        let readStore = store.read
+        freshInstall = !LaunchAutoConnect.skipped && !PermissionAsks.usedBefore { readStore($0) != nil }
         let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
         // A hidden speaker is never switched on, not even by the saved on-state.
@@ -367,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         reconcileLocal()   // lists the local speakers; auto-connect may start streaming
         startSafetyNet()
         if AppLifecycle.opensMainWindow(loginItemLaunch: loginItem) { showMainWindow() }
+        openPermissionSetupIfFirstRun()   // before the sender, whose discovery would offer Local Network alone
         // AudioSync's own sender and its discovery start, after the window,
         // so a Local Network prompt they raise comes up in front of it.
         reconcileAirPlaySpeakers()
