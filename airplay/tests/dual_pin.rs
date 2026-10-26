@@ -16,6 +16,7 @@ use audiosync_airplay::discovery::{
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::pairing::PairingEvent;
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     ReceiverEvent, Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
@@ -253,6 +254,18 @@ impl Rig {
             .collect()
     }
 
+    /// The debug-log lines on the remembered outcome (P218).
+    fn path_logs(&self) -> Vec<String> {
+        self.events
+            .seen
+            .iter()
+            .filter_map(|(_, event)| match event {
+                SenderEvent::PathLog { key, line } if *key == self.key => Some(line.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// (a): one AirPlay 1 attempt, then the AirPlay 2 session asks for
     /// pairing, with no `/pair-pin-start` sent.
     fn first_start(&mut self, variant: Variant) {
@@ -277,9 +290,11 @@ impl Rig {
     }
 
     /// The PIN pairing on the AirPlay 2 port, asked for once, whose
-    /// connection the speaker's start goes on over (P153, P219).
-    fn pair_and_play(&mut self, pairings: usize, stored: bool) {
-        let raop_before = self.raop_keys();
+    /// connection the speaker's start goes on over (P153, P219). The RAOP
+    /// port gets `raop_options` OPTIONS from the pairing and nothing else.
+    fn pair_and_play(&mut self, pairings: usize, stored: bool, raop_options: usize) {
+        let mut raop_before = self.raop_keys();
+        raop_before.extend(std::iter::repeat_n("OPTIONS".to_owned(), raop_options));
         self.sender.start_pairing(self.device.clone());
         assert!(
             self.wait_pairing(pairings, |event| *event == PairingEvent::PinRequested),
@@ -340,7 +355,7 @@ fn after_a_refusal_the_pairing_takes_the_airplay2_path(variant: Variant, id: u8)
     rig.first_start(variant);
     // (b): the host lets the speaker go before it starts the pairing.
     rig.remove(1);
-    rig.pair_and_play(1, true);
+    rig.pair_and_play(1, true, 0);
     rig.sender.shutdown();
 }
 
@@ -363,11 +378,11 @@ fn an_every_time_speaker_pairs_on_airplay2_again_after_its_session_ended() {
     let mut rig = Rig::new(Variant::Unsupported, EVERY_TIME, 83, true);
     rig.first_start(Variant::Unsupported);
     rig.remove(1);
-    rig.pair_and_play(1, false);
+    rig.pair_and_play(1, false, 0);
     rig.remove(2);
     // (c): nothing was stored, so the next pairing asks for a code again,
     // on the AirPlay 2 port.
-    rig.pair_and_play(2, false);
+    rig.pair_and_play(2, false, 0);
     rig.sender.shutdown();
 }
 
@@ -378,9 +393,15 @@ fn a_pairing_from_the_hint_switches_to_airplay2_after_an_unsupported_options() {
     let mut rig = Rig::new(Variant::Unsupported, ONE_TIME, 84, true);
     // (d): no session before; the pairing asks OPTIONS once on the RAOP
     // port and goes on to the AirPlay 2 PIN pairing with no outcome shown.
-    rig.pair_and_play(1, true);
+    rig.pair_and_play(1, true, 1);
     assert_eq!(rig.raop_keys(), ["OPTIONS"]);
     assert!(rig.errors().is_empty(), "{:?}", rig.events.of(&rig.key));
+    let logs = rig.path_logs();
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    assert!(
+        logs[0].contains("Unsupported(Methods) remembered"),
+        "{logs:?}"
+    );
     rig.sender.shutdown();
 }
 
@@ -411,6 +432,19 @@ fn a_remembered_outcome_asks_for_the_password_of_a_password_speaker() {
         rig.pairing_events()
     );
     assert_eq!(rig.failures(), [ErrorKind::PasswordRequired]);
+    assert_eq!(rig.pin_requests(), 0);
+    assert_eq!(rig.ap2_count("POST /pair-pin-start"), 0);
+    assert_eq!(rig.raop_keys(), raop_before);
+
+    // With the password the receiver uses for its pairing code, it pairs.
+    rig.sender
+        .start_pairing_with_password(rig.device.clone(), Some(Secret::new(PIN.to_owned())));
+    assert!(
+        rig.wait_pairing(1, |event| matches!(event, PairingEvent::HomeKitPaired(_))),
+        "{:?} {:?}",
+        rig.pairing_events(),
+        rig.ap2.fake().keys()
+    );
     assert_eq!(rig.pin_requests(), 0);
     assert_eq!(rig.ap2_count("POST /pair-pin-start"), 0);
     assert_eq!(rig.raop_keys(), raop_before);
@@ -513,6 +547,14 @@ fn a_goodbye_for_the_raop_record_forgets_the_outcome() {
             ErrorKind::PairingRequired,
         ]
     );
+    let logs = rig.path_logs();
+    assert_eq!(logs.len(), 3, "{logs:?}");
+    assert!(logs[0].contains("remembered"), "{logs:?}");
+    assert!(
+        logs[1].contains("forgotten") && logs[1].contains("_raop._tcp"),
+        "{logs:?}"
+    );
+    assert!(logs[2].contains("remembered"), "{logs:?}");
     rig.sender.shutdown();
 }
 

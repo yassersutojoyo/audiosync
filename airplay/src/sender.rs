@@ -470,6 +470,14 @@ pub enum SenderEvent {
     /// sender didn't hand on (P195). It never holds the DACP ID or an
     /// Active-Remote value.
     RemoteLog(String),
+    /// A line for the host's debug log: the sender remembered or forgot
+    /// the AirPlay 1 outcome that moves a device to the AirPlay 2 path,
+    /// with the outcome and the reason (P218). Sent whether or not the
+    /// host holds the speaker.
+    PathLog {
+        key: DeviceKey,
+        line: String,
+    },
 }
 
 /// The sender: one stream, any number of speakers, optional discovery.

@@ -1095,6 +1095,12 @@ impl AscAirPlay {
                     self.queue_event(Pending::Speaker(String::new(), event));
                 }
             }
+            SenderEvent::PathLog { key, line } => {
+                if debug_trace_on() {
+                    let event = SpeakerEvent::Trace(line);
+                    self.queue_event(Pending::Speaker(receiver_id(&key), event));
+                }
+            }
             // The listing turns incomplete; the members' own events say
             // which ones play.
             SenderEvent::TargetMissing { id, missing } => {

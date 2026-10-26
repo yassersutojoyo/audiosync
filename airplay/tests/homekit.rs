@@ -152,7 +152,7 @@ fn tlv8_encoding() {
     assert_eq!(verify.get(tlv8::ENCRYPTED_DATA).map(<[u8]>::len), Some(120));
 }
 
-// covers: P61, P154
+// covers: P61, P154, P219
 #[test]
 fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     use homekit::{Stored, check_mode, choose_mode, status_flags};
@@ -193,6 +193,13 @@ fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     assert_eq!(check_mode(Mode::Password, false, true), Ok(()));
     assert_eq!(check_mode(Mode::Transient, false, false), Ok(()));
     assert_eq!(check_mode(Mode::Verify, false, false), Ok(()));
+    // The pairing the host asks for: a password pairing for bit 7 alone,
+    // a PIN pairing otherwise, also with no PIN flag (P219).
+    assert_eq!(homekit::requested_mode(0x84), Mode::Password);
+    assert_eq!(homekit::requested_mode(0x80 | 0x200), Mode::Pin);
+    assert_eq!(homekit::requested_mode(0x80 | 0x8), Mode::Pin);
+    assert_eq!(homekit::requested_mode(0x244), Mode::Pin);
+    assert_eq!(homekit::requested_mode(0x4), Mode::Pin);
 
     // A 470 to a transient pair-setup means the receiver wants a PIN
     // pairing: PairingRequired.
