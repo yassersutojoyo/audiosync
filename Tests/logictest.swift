@@ -2505,8 +2505,8 @@ do {
               "native pairing: switched off, the speaker leaves the sender")
     }
     do {
-        // A receiver that asks for nothing and answers 403 to everything (L341):
-        // its refusal comes before any pairing step, so no code is named or asked for.
+        // A receiver that asks for nothing and answers 403 to everything: its
+        // refusal comes before any pairing step, so no code is named or asked for.
         var m = NativeAirPlayModel()
         m.apply(.appeared(receiver("S1", "Samsung", .available)))
         m.added("S1")
@@ -2522,6 +2522,13 @@ do {
         asking.apply(.appeared(stored))
         check(!asking.refusedUnasked("T1") && !asking.refusedUnasked("P1") && !asking.refusedUnasked("gone"),
               "native pairing: a receiver that asks for a PIN, or holds a pairing, keeps its code text")
+        var user = NativeAirPlayModel()
+        user.apply(.appeared(receiver("S2", "Samsung", .available)))
+        check(user.turnedOnByUser("S2") == nil, "native pairing: a click on a receiver that asks for nothing just joins")
+        user.added("S2")
+        check(user.apply(.error(id: "S2", .pairingRequired, retryMs: nil, detail: "")) == .startPairing("S2")
+                && user.stages["S2"] == .pairing(afterWrongPin: false),
+              "native pairing: within the user's attempt, the same refusal from a receiver that asks for nothing pairs with a PIN")
     }
     do {
         // Auto-connect and restored switches never pair or prompt.

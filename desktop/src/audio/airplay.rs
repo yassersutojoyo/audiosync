@@ -3867,8 +3867,11 @@ impl AirPlaySpeakers {
                 let mut problem = problem(reason);
                 self.paired_for_session.remove(id);
                 self.note_path_switch(id, error.kind, retry_at.is_some());
+                // Outside the user's attempt its row keeps no code request:
+                // switching it on starts one, which pairs it.
                 let unasked = problem == AirPlayProblem::PairingNotYet
                     && self.over_airplay2(id)
+                    && !self.password_attempts.contains(id)
                     && self.refused_unasked(id);
                 // A speaker reached over AirPlay 2 that wants a pairing:
                 // switching it on pairs it with a PIN, or with its password
@@ -3881,7 +3884,9 @@ impl AirPlaySpeakers {
                         problem = AirPlayProblem::NeedsPassword;
                     } else {
                         problem = AirPlayProblem::NeedsPin;
-                        self.pin_seen.insert(id.to_owned());
+                        if !unasked {
+                            self.pin_seen.insert(id.to_owned());
+                        }
                     }
                 } else if problem == AirPlayProblem::PairingNotYet && self.store.contains(id) {
                     // Switching it on pairs it again (P154).
@@ -3945,7 +3950,6 @@ impl AirPlaySpeakers {
                         problem,
                     });
                 } else if unasked {
-                    // Switching it on still pairs it, as for any PairingRequired.
                     self.turn_off(id, AirPlayProblem::NotAccepted, events);
                 } else {
                     self.turn_off(id, problem, events);
@@ -5400,6 +5404,7 @@ pub mod tests {
             AirPlayAvailability::Open
         );
         assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.begin_attempt(&id);
         fake.fail(&tv, ErrorKind::PairingRequired);
         airplay.poll();
         assert_eq!(
@@ -5417,7 +5422,7 @@ pub mod tests {
         let mut airplay = speakers(&fake);
         airplay.set_streaming(true);
         // No PIN or password in its flags and no stored credentials: a TV
-        // that answers 403 to everything (L341).
+        // that answers 403 to everything.
         let tv = airplay2_device(9, "Samsung", false);
         let id = id_of(&tv);
         fake.appear(&tv);
@@ -5434,12 +5439,46 @@ pub mod tests {
             })
             .collect();
         assert_eq!(problems, [AirPlayProblem::NotAccepted], "{events:?}");
+        assert_ne!(
+            airplay.speakers()[0].availability,
+            AirPlayAvailability::NeedsPin,
+            "its row asks for no code"
+        );
         assert!(airplay.pin_prompt().is_none());
         assert!(
             !fake
                 .take_calls()
                 .iter()
                 .any(|call| matches!(call, Call::StartPairing(_)))
+        );
+    }
+
+    #[test]
+    fn the_same_refusal_in_the_users_attempt_pairs_with_a_pin() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        let tv = airplay2_device(9, "Samsung", false);
+        let id = id_of(&tv);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.begin_attempt(&id);
+        fake.take_calls();
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayFailed { .. })),
+            "{events:?}"
+        );
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::StartPairing(id)), "{calls:?}");
+        assert_eq!(
+            airplay.speakers()[0].availability,
+            AirPlayAvailability::NeedsPin
         );
     }
 
