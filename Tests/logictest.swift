@@ -8733,6 +8733,15 @@ do {
           "no speaker on: a session started with every speaker off keeps running")
     check(StreamingPolicy.isIdle(streaming: true, hadSpeaker: true, enabledAirPlay: [], enabledLocal: []),
           "no speaker on: once a speaker played, switching the last one off still stops streaming")
+    // Started with every speaker off; an AirPlay speaker switched on asks for
+    // a code every time and goes off before it plays.
+    var hadSpeaker = StreamingPolicy.countsForSession(switchedOn: true, playing: false)
+    check(!StreamingPolicy.isIdle(streaming: true, hadSpeaker: hadSpeaker, enabledAirPlay: [], enabledLocal: [])
+            && StreamingPolicy.showsNoSpeakerOn(streaming: true, enabledAirPlay: [], enabledLocal: []),
+          "no speaker on: one switched on that fails before it plays keeps the session waiting, and says no speaker is on")
+    hadSpeaker = hadSpeaker || StreamingPolicy.countsForSession(switchedOn: true, playing: true)
+    check(StreamingPolicy.isIdle(streaming: true, hadSpeaker: hadSpeaker, enabledAirPlay: [], enabledLocal: []),
+          "no speaker on: one that played and went off stops streaming")
     check(StreamingPolicy.showsNoSpeakerOn(streaming: true, enabledAirPlay: [], enabledLocal: [])
             && !StreamingPolicy.showsNoSpeakerOn(streaming: true, enabledAirPlay: ["a"], enabledLocal: [])
             && !StreamingPolicy.showsNoSpeakerOn(streaming: true, enabledAirPlay: [], enabledLocal: ["usb"])

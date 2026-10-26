@@ -85,6 +85,11 @@ enum StreamingPolicy {
         streaming && hadSpeaker && !hasSpeaker(enabledAirPlay: enabledAirPlay, enabledLocal: enabledLocal)
     }
 
+    /// Whether a session started with every speaker off now counts as having
+    /// had one (`isIdle`'s `hadSpeaker`): `switchedOn`, a speaker is on;
+    /// `playing`, one of them plays.
+    static func countsForSession(switchedOn: Bool, playing: Bool) -> Bool { switchedOn }
+
     /// The speaker list's "No speaker is on" line.
     static func showsNoSpeakerOn(streaming: Bool, enabledAirPlay: Set<String>, enabledLocal: Set<String>) -> Bool {
         streaming && !hasSpeaker(enabledAirPlay: enabledAirPlay, enabledLocal: enabledLocal)
