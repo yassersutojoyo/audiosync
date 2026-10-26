@@ -1,8 +1,7 @@
 //! The AirPlay 2 identity a host keeps across launches: the random device
-//! ID of the session SETUP (P5, P43), the HomeKit credentials of each
-//! receiver paired on the AirPlay 2 path (P152) and the timing entry of
-//! each receiver (P217), by receiver ID, so a relaunch verifies instead of
-//! pairing again and asks for the timing the receiver took last time.
+//! ID of the session SETUP (P5, P43) and the HomeKit credentials of each
+//! receiver paired on the AirPlay 2 path (P152), by receiver ID, so a
+//! relaunch verifies instead of pairing again.
 //!
 //! [`Airplay2Identity`] is the contents and their byte form, which the
 //! Windows app seals with DPAPI next to its pairings file. [`IdentityStore`]
@@ -15,11 +14,7 @@
 //! The byte form holds a magic line, a format version byte, the 6-byte
 //! device ID, then per receiver its ID and the credential blob the sender
 //! defines ([`HomeKitCredentials::to_bytes`]), each with a 16-bit
-//! little-endian length. Version 2 puts the number of credential records,
-//! 16-bit little-endian, before them, and after them per receiver its ID
-//! and its timing entry ([`TimingMemory::to_bytes`]), with the same
-//! lengths. An identity without timing entries is written as version 1, so
-//! an older AudioSync still reads it. The plaintext lives only in buffers wiped when
+//! little-endian length. The plaintext lives only in buffers wiped when
 //! dropped, and neither `Debug` nor [`Loaded`] shows a secret.
 
 use std::collections::BTreeMap;
@@ -28,7 +23,7 @@ use std::io;
 use std::path::PathBuf;
 
 use audiosync_airplay::homekit::HomeKitCredentials;
-use audiosync_airplay::sender::{TimingMemory, random_airplay2_device_id};
+use audiosync_airplay::sender::random_airplay2_device_id;
 use zeroize::Zeroizing;
 
 use crate::airplay_pairings::{
@@ -38,11 +33,8 @@ use crate::airplay_pairings::{
 /// The byte form's first bytes.
 pub const MAGIC: &[u8] = b"AudioSync AirPlay 2 identity\n";
 
-/// The newest format version this build writes and reads.
-pub const VERSION: u8 = 2;
-
-/// The version written when no receiver has a timing entry.
-const VERSION_WITHOUT_TIMING: u8 = 1;
+/// The format version this build writes and reads.
+pub const VERSION: u8 = 1;
 
 /// Why bytes aren't an identity this build can use. Never holds a secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,13 +45,11 @@ pub enum Unreadable {
     Format,
 }
 
-/// The device ID, and the HomeKit credentials and timing entries by
-/// receiver ID.
+/// The device ID and the HomeKit credentials by receiver ID.
 #[derive(Clone)]
 pub struct Airplay2Identity {
     device_id: [u8; 6],
     homekit: BTreeMap<String, HomeKitCredentials>,
-    timing: BTreeMap<String, TimingMemory>,
 }
 
 impl fmt::Debug for Airplay2Identity {
@@ -76,7 +66,6 @@ impl Airplay2Identity {
         Airplay2Identity {
             device_id,
             homekit: BTreeMap::new(),
-            timing: BTreeMap::new(),
         }
     }
 
@@ -103,76 +92,40 @@ impl Airplay2Identity {
         self.homekit.insert(id.to_owned(), credentials.clone()) != Some(credentials)
     }
 
-    /// Forgets the receiver's credentials and its timing entry, as a
-    /// forgotten pairing does (P217); false when it held neither.
+    /// Forgets the receiver's credentials; false when it held none.
     pub fn remove(&mut self, id: &str) -> bool {
-        let homekit = self.homekit.remove(id).is_some();
-        let timing = self.timing.remove(id).is_some();
-        homekit || timing
-    }
-
-    /// The receiver's timing entry (P217), if one is kept.
-    pub fn timing(&self, id: &str) -> Option<&TimingMemory> {
-        self.timing.get(id)
-    }
-
-    /// Keeps the receiver's timing entry; false when it held this one
-    /// already.
-    pub fn keep_timing(&mut self, id: &str, memory: TimingMemory) -> bool {
-        self.timing.insert(id.to_owned(), memory.clone()) != Some(memory)
-    }
-
-    /// Drops the receiver's timing entry; false when it held none.
-    pub fn forget_timing(&mut self, id: &str) -> bool {
-        self.timing.remove(id).is_some()
+        self.homekit.remove(id).is_some()
     }
 
     /// The byte form. It holds the credentials' seeds, so a host keeps it
     /// where secrets go.
     pub fn to_bytes(&self) -> io::Result<Zeroizing<Vec<u8>>> {
+        let too_long = || io::Error::new(io::ErrorKind::InvalidInput, "a receiver ID is too long");
         let blobs: Vec<(&String, Zeroizing<Vec<u8>>)> = self
             .homekit
             .iter()
             .map(|(id, credentials)| (id, credentials.to_bytes()))
             .collect();
-        let entries: Vec<(&String, Vec<u8>)> = self
-            .timing
-            .iter()
-            .map(|(id, memory)| (id, memory.to_bytes()))
-            .collect();
-        let with_timing = !entries.is_empty();
         // Allocated once at its full size, so growing never leaves a copy of
         // a secret behind in freed memory.
         let size = MAGIC.len()
             + 1
             + self.device_id.len()
-            + if with_timing { 2 } else { 0 }
             + blobs
                 .iter()
                 .map(|(id, blob)| 4 + id.len() + blob.len())
-                .sum::<usize>()
-            + entries
-                .iter()
-                .map(|(id, entry)| 4 + id.len() + entry.len())
                 .sum::<usize>();
         let mut bytes = Zeroizing::new(Vec::with_capacity(size));
         bytes.extend_from_slice(MAGIC);
-        if with_timing {
-            bytes.push(VERSION);
-            bytes.extend_from_slice(&self.device_id);
-            let count = u16::try_from(blobs.len()).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "too many paired receivers")
-            })?;
-            bytes.extend_from_slice(&count.to_le_bytes());
-        } else {
-            bytes.push(VERSION_WITHOUT_TIMING);
-            bytes.extend_from_slice(&self.device_id);
-        }
+        bytes.push(VERSION);
+        bytes.extend_from_slice(&self.device_id);
         for (id, blob) in &blobs {
-            push_record(&mut bytes, id, blob)?;
-        }
-        for (id, entry) in &entries {
-            push_record(&mut bytes, id, entry)?;
+            let id_len = u16::try_from(id.len()).map_err(|_| too_long())?;
+            let blob_len = u16::try_from(blob.len()).map_err(|_| too_long())?;
+            bytes.extend_from_slice(&id_len.to_le_bytes());
+            bytes.extend_from_slice(id.as_bytes());
+            bytes.extend_from_slice(&blob_len.to_le_bytes());
+            bytes.extend_from_slice(blob);
         }
         Ok(bytes)
     }
@@ -184,59 +137,29 @@ impl Airplay2Identity {
         if *version > VERSION {
             return Err(Unreadable::Newer(*version));
         }
-        if *version < VERSION_WITHOUT_TIMING {
+        if *version != VERSION {
             return Err(Unreadable::Format);
         }
         let (device_id, mut rest) = rest.split_first_chunk::<6>().ok_or(Unreadable::Format)?;
         let mut identity = Airplay2Identity::new(*device_id);
-        // Version 1 holds credential records only.
-        let mut credential_records = None;
-        if *version > VERSION_WITHOUT_TIMING {
-            let (count, after) = rest.split_first_chunk::<2>().ok_or(Unreadable::Format)?;
-            credential_records = Some(usize::from(u16::from_le_bytes(*count)));
-            rest = after;
-        }
         while !rest.is_empty() {
-            let id = take_field(&mut rest)
-                .and_then(|id| std::str::from_utf8(id).ok())
-                .filter(|id| !id.is_empty())
-                .ok_or(Unreadable::Format)?;
-            let field = take_field(&mut rest).ok_or(Unreadable::Format)?;
-            let timing_record =
-                credential_records.is_some_and(|count| identity.homekit.len() == count);
-            let fresh = if timing_record {
-                let memory = TimingMemory::from_bytes(field).ok_or(Unreadable::Format)?;
-                identity.timing.insert(id.to_owned(), memory).is_none()
-            } else {
-                let credentials =
-                    HomeKitCredentials::from_bytes(field).map_err(|_| Unreadable::Format)?;
-                identity
+            let id = take_field(&mut rest).and_then(|id| std::str::from_utf8(id).ok());
+            let credentials =
+                take_field(&mut rest).and_then(|blob| HomeKitCredentials::from_bytes(blob).ok());
+            let (Some(id), Some(credentials)) = (id, credentials) else {
+                return Err(Unreadable::Format);
+            };
+            if id.is_empty()
+                || identity
                     .homekit
                     .insert(id.to_owned(), credentials)
-                    .is_none()
-            };
-            if !fresh {
+                    .is_some()
+            {
                 return Err(Unreadable::Format);
             }
         }
-        if credential_records.is_some_and(|count| identity.homekit.len() != count) {
-            return Err(Unreadable::Format);
-        }
         Ok(identity)
     }
-}
-
-/// Appends a receiver ID and its field, each after its 16-bit
-/// little-endian length.
-fn push_record(bytes: &mut Vec<u8>, id: &str, field: &[u8]) -> io::Result<()> {
-    let too_long = || io::Error::new(io::ErrorKind::InvalidInput, "a receiver ID is too long");
-    let id_len = u16::try_from(id.len()).map_err(|_| too_long())?;
-    let field_len = u16::try_from(field.len()).map_err(|_| too_long())?;
-    bytes.extend_from_slice(&id_len.to_le_bytes());
-    bytes.extend_from_slice(id.as_bytes());
-    bytes.extend_from_slice(&field_len.to_le_bytes());
-    bytes.extend_from_slice(field);
-    Ok(())
 }
 
 /// The identity and the file it lives in, for the macOS app.
@@ -382,30 +305,6 @@ impl IdentityStore {
         }
     }
 
-    pub fn timing(&self, id: &str) -> Option<&TimingMemory> {
-        self.identity.timing(id)
-    }
-
-    /// Keeps the receiver's timing entry (P217) and writes the file when it
-    /// changed; when it can't be written the entry lasts until the store is
-    /// dropped.
-    pub fn keep_timing(&mut self, id: &str, memory: TimingMemory) -> io::Result<()> {
-        if self.identity.keep_timing(id, memory) {
-            self.save()
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Drops the receiver's timing entry and writes the file.
-    pub fn forget_timing(&mut self, id: &str) -> io::Result<()> {
-        if self.identity.forget_timing(id) {
-            self.save()
-        } else {
-            Ok(())
-        }
-    }
-
     fn save(&self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
@@ -458,71 +357,6 @@ mod tests {
         let text = format!("{again:?}");
         assert!(text.contains("A1") && !text.contains(&format!("{:?}", [7u8; 32])));
         let _ = fs::remove_file(&path);
-    }
-
-    fn ptp_entry(srcvers: &str) -> TimingMemory {
-        TimingMemory {
-            timing: audiosync_airplay::ap2::Timing::Ptp,
-            features: 0x1_0240_0000_0000,
-            srcvers: Some(srcvers.to_owned()),
-        }
-    }
-
-    #[test]
-    fn timing_entries_survive_a_relaunch_and_go_with_a_forgotten_pairing() {
-        let path = scratch("timing.dat");
-        let (mut store, _) = IdentityStore::open(path.clone());
-        store.insert("A1", credentials(7)).expect("written");
-        let version_at = MAGIC.len();
-        let written = fs::read(&path).expect("the file");
-        assert_eq!(written[version_at], VERSION_WITHOUT_TIMING);
-        store
-            .keep_timing("A1", ptp_entry("366.0"))
-            .expect("written");
-        store
-            .keep_timing("B2", ptp_entry("377.1"))
-            .expect("written");
-        let written = fs::read(&path).expect("the file");
-        assert_eq!(written[version_at], VERSION);
-
-        let (mut again, loaded) = IdentityStore::open(path.clone());
-        assert_eq!(loaded, Loaded::Receivers(1));
-        assert_eq!(again.get("A1"), Some(&credentials(7)));
-        assert_eq!(again.timing("A1"), Some(&ptp_entry("366.0")));
-        assert_eq!(again.timing("B2"), Some(&ptp_entry("377.1")));
-        assert_eq!(again.get("B2"), None);
-
-        again.remove("A1").expect("written");
-        again.forget_timing("B2").expect("written");
-        let (last, _) = IdentityStore::open(path.clone());
-        assert_eq!(last.timing("A1"), None);
-        assert_eq!(last.timing("B2"), None);
-        let written = fs::read(&path).expect("the file");
-        assert_eq!(written[version_at], VERSION_WITHOUT_TIMING);
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn a_timing_record_is_checked_like_a_credential_record() {
-        let mut identity = Airplay2Identity::new([1, 2, 3, 4, 5, 6]);
-        identity.insert("A1", credentials(3));
-        identity.keep_timing("A1", ptp_entry("366.0"));
-        let bytes = identity.to_bytes().expect("bytes");
-        assert!(Airplay2Identity::from_bytes(&bytes).is_ok());
-        for cut in [MAGIC.len() + 8, bytes.len() - 1] {
-            assert_eq!(
-                Airplay2Identity::from_bytes(&bytes[..cut]).err(),
-                Some(Unreadable::Format),
-                "{cut}"
-            );
-        }
-        // A count naming more credential records than the bytes hold.
-        let mut miscounted = bytes.to_vec();
-        miscounted[MAGIC.len() + 7] = 2;
-        assert_eq!(
-            Airplay2Identity::from_bytes(&miscounted).err(),
-            Some(Unreadable::Format)
-        );
     }
 
     #[test]

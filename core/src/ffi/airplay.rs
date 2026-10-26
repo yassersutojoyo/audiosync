@@ -98,6 +98,7 @@ use audiosync_airplay::volume::{MIN_DB, Volume};
 use super::{host_slice, stereo_samples};
 use crate::airplay_pairings::{Access, Loaded, PairingStore};
 use crate::airplay2_identity::IdentityStore;
+use crate::airplay2_timing::{self, TimingStore};
 use crate::fade::InputFade;
 use crate::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, MUTED_DB, OwnVolume, Playback, Remote,
@@ -657,6 +658,9 @@ pub struct AscAirPlay {
     /// The AirPlay 2 device ID and HomeKit credentials; in memory until the
     /// host opens their file ([`asc_airplay_open_airplay2_identity`]).
     identity: IdentityStore,
+    /// The AirPlay 2 timing entries (P217), in their own file next to the
+    /// identity's, so that file stays at the format older builds read.
+    timing: TimingStore,
     /// The passwords the host handed over, by receiver ID, for this
     /// handle's life only; wiped from memory when dropped.
     passwords: HashMap<String, Secret>,
@@ -777,7 +781,7 @@ fn member_credentials(airplay: &AscAirPlay) -> impl FnMut(&DeviceKey, &mut Speak
         own.password = airplay.passwords.get(&member).cloned();
         own.credentials = airplay.store.get(&member).cloned();
         own.homekit_credentials = airplay.identity.get(&member).cloned();
-        own.timing = airplay.identity.timing(&member).cloned();
+        own.timing = airplay.timing.get(&member).cloned();
     }
 }
 
@@ -1041,11 +1045,11 @@ impl AscAirPlay {
                 // Kept for this handle even when the file can't be written,
                 // and the sender holds its own copy (P217).
                 if let SpeakerEvent::TimingRemembered(memory) = event {
-                    let _ = self.identity.keep_timing(&id, memory);
+                    let _ = self.timing.keep(&id, memory);
                     return;
                 }
                 if matches!(event, SpeakerEvent::TimingForgotten) {
-                    let _ = self.identity.forget_timing(&id);
+                    let _ = self.timing.forget(&id);
                     return;
                 }
                 if let SpeakerEvent::State(state) = &event
@@ -1641,6 +1645,7 @@ impl AscAirPlay {
         }
         // Forgotten for this handle even when the file can't be written.
         let _ = self.identity.remove(id);
+        let _ = self.timing.forget(id);
         let key = self.homekit_key(id);
         self.homekit_keys.remove(id);
         if let Some(key) = key {
@@ -2275,6 +2280,7 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 airplay2,
                 airplay2_preferred,
                 identity: IdentityStore::in_memory(),
+                timing: TimingStore::in_memory(),
                 passwords: HashMap::new(),
                 pairing: HashMap::new(),
                 ending: HashMap::new(),
@@ -2555,7 +2561,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
             options.homekit_credentials = airplay.identity.get(id).cloned();
-            options.timing = airplay.identity.timing(id).cloned();
+            options.timing = airplay.timing.get(id).cloned();
             options.trace = debug_trace_on();
             options.pcm = pcm_debug_allows(
                 id,
@@ -3441,7 +3447,9 @@ pub unsafe extern "C" fn asc_airplay_open_airplay2_identity(
                 return 0;
             }
             airplay.pump();
-            let (identity, loaded) = IdentityStore::open(PathBuf::from(path));
+            let path = PathBuf::from(path);
+            airplay.timing = TimingStore::open(path.with_file_name(airplay2_timing::FILE_NAME));
+            let (identity, loaded) = IdentityStore::open(path);
             airplay.sender.set_airplay2_device_id(identity.device_id());
             airplay.identity = identity;
             match loaded {
@@ -6698,7 +6706,6 @@ mod tests {
         assert_eq!(again.get("02005E005350"), Some(&credentials));
     }
 
-    // covers: P217
     #[test]
     fn a_timing_entry_leaves_the_airplay2_identity_file_at_format_1() {
         use audiosync_airplay::ap2::Timing;
@@ -6717,6 +6724,17 @@ mod tests {
                 0
             );
         }
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
+        blob.extend_from_slice(&[5; 64]);
+        blob.extend_from_slice(b"receiver");
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x51]));
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::HomeKitPaired(
+                HomeKitCredentials::from_bytes(&blob).expect("a credential blob"),
+            ),
+        });
         let before = std::fs::read(&path).expect("the identity file");
         let memory = TimingMemory {
             timing: Timing::Ptp,
@@ -6724,8 +6742,8 @@ mod tests {
             srcvers: Some("366.0".to_owned()),
         };
         inside(handle).take_in(SenderEvent::Speaker {
-            key: DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x51])),
-            event: SpeakerEvent::TimingRemembered(memory),
+            key,
+            event: SpeakerEvent::TimingRemembered(memory.clone()),
         });
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
@@ -6734,6 +6752,20 @@ mod tests {
         let after = std::fs::read(&path).expect("the identity file");
         assert_eq!(after, before, "the identity file is left as it was");
         assert_eq!(after[crate::airplay2_identity::MAGIC.len()], 1);
+
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: as above.
+        unsafe {
+            asc_airplay_open_airplay2_identity(handle, c_path.as_ptr());
+        }
+        assert_eq!(inside(handle).timing.get("02005E005351"), Some(&memory));
+        // A forgotten pairing takes the entry with it.
+        assert!(inside(handle).forget_homekit("02005E005351"));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        let reopened = TimingStore::open(folder.join(airplay2_timing::FILE_NAME));
+        assert_eq!(reopened.get("02005E005351"), None);
     }
 
     // covers: S224

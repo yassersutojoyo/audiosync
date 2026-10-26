@@ -22,6 +22,8 @@
 //! once the hidden AirPlay 2 switch is on ([`PairingStore::open_airplay2`]);
 //! one that can't be decrypted or parsed is kept aside and replaced, one
 //! that can't be read is never written over.
+//! The AirPlay 2 timing entries (P217) sit unsealed beside it in
+//! [`airplay2_timing::FILE_NAME`], a cache holding no secret.
 //!
 //! Before encryption the file holds a magic tag, then per speaker its ID and
 //! the credential blob the sender defines ([`Credentials::to_bytes`]), each
@@ -39,6 +41,7 @@ use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::pairing::Credentials;
 use audiosync_airplay::sender::{TimingMemory, random_airplay2_device_id};
 use audiosync_core::airplay2_identity::{Airplay2Identity, Unreadable};
+use audiosync_core::airplay2_timing::{self, TimingStore};
 use zeroize::Zeroizing;
 
 use crate::data_folder;
@@ -146,6 +149,11 @@ pub struct PairingStore {
     keep_aside_wait: u32,
     /// `None` until [`PairingStore::open_airplay2`].
     airplay2: Option<Airplay2File>,
+    /// The AirPlay 2 timing entries (P217), in memory until
+    /// [`PairingStore::open_airplay2`] opens their file: unsealed, since
+    /// they hold no secret, and apart from the identity file, which stays
+    /// at the format older builds read.
+    timing: TimingStore,
     /// The file or its folder was open to other accounts at launch and was
     /// made owner-only ([`make_private`]).
     tightened: bool,
@@ -178,6 +186,7 @@ impl PairingStore {
             kept_aside: None,
             keep_aside_wait: 0,
             airplay2: None,
+            timing: TimingStore::in_memory(),
             tightened: false,
         }
     }
@@ -217,6 +226,7 @@ impl PairingStore {
             kept_aside: None,
             keep_aside_wait: 0,
             airplay2: None,
+            timing: TimingStore::in_memory(),
             tightened,
         };
         // While it can't be read, the next try is due a few seconds later.
@@ -360,6 +370,9 @@ impl PairingStore {
         };
         let device_id = identity.device_id();
         self.airplay2 = Some(Airplay2File { identity, writable });
+        if let Some(path) = &self.path {
+            self.timing = TimingStore::open(path.with_file_name(airplay2_timing::FILE_NAME));
+        }
         if fresh_file && let Err(error) = self.save_airplay2() {
             return (
                 device_id,
@@ -388,10 +401,11 @@ impl PairingStore {
         self.save_airplay2()
     }
 
-    /// Forgets HomeKit credentials the speaker turned down (P154) and
-    /// writes the AirPlay 2 identity file; they are gone for this run even
-    /// when it can't be written.
+    /// Forgets HomeKit credentials the speaker turned down (P154), and its
+    /// timing entry with them (P217), and writes the AirPlay 2 identity
+    /// file; they are gone for this run even when it can't be written.
     pub fn remove_homekit(&mut self, id: &str) -> io::Result<()> {
+        let _ = self.timing.forget(id);
         let Some(file) = &mut self.airplay2 else {
             return Ok(());
         };
@@ -404,32 +418,19 @@ impl PairingStore {
     /// The speaker's AirPlay 2 timing entry (P217), once
     /// [`PairingStore::open_airplay2`] read it.
     pub fn timing(&self, id: &str) -> Option<&TimingMemory> {
-        self.airplay2.as_ref()?.identity.timing(id)
+        self.timing.get(id)
     }
 
-    /// Keeps the speaker's timing entry (P217) and writes the AirPlay 2
-    /// identity file when it changed; when it can't be written the entry
-    /// lasts for this run.
+    /// Keeps the speaker's timing entry (P217) and writes the timing file
+    /// when it changed; when it can't be written the entry lasts for this
+    /// run.
     pub fn keep_timing(&mut self, id: &str, memory: TimingMemory) -> io::Result<()> {
-        let Some(file) = &mut self.airplay2 else {
-            return Err(io::Error::other("the AirPlay 2 identity isn't open"));
-        };
-        if !file.identity.keep_timing(id, memory) {
-            return Ok(());
-        }
-        self.save_airplay2()
+        self.timing.keep(id, memory)
     }
 
-    /// Drops the speaker's timing entry (P217) and writes the AirPlay 2
-    /// identity file.
+    /// Drops the speaker's timing entry (P217) and writes the timing file.
     pub fn forget_timing(&mut self, id: &str) -> io::Result<()> {
-        let Some(file) = &mut self.airplay2 else {
-            return Ok(());
-        };
-        if !file.identity.forget_timing(id) {
-            return Ok(());
-        }
-        self.save_airplay2()
+        self.timing.forget(id)
     }
 
     fn airplay2_path(&self) -> Option<PathBuf> {
