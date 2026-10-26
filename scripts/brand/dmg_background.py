@@ -9,6 +9,7 @@ Writes:
 The art: "Drag AudioSync to Applications" above an arrow that runs between where
 Finder puts the app and the Applications link, and below, in a tinted panel, the
 three steps past Gatekeeper's first-launch block. README.md sits at the panel's right.
+Each icon label gets a gray plate, so it stays readable in Dark Mode too.
 
 Colors come from brand/tokens.json (light values: the window is always drawn light)
 and the text is Poppins Medium from brand/fonts, rendered into the pixels, so the
@@ -35,15 +36,21 @@ ICON_SIZE, LABEL_SIZE = 96, 13
 ICONS = {
     'app': (170, 150),
     'applications': (490, 150),
-    'readme': (568, 358),
+    'readme': (568, 346),
 }
 TITLE = 'Drag AudioSync to Applications'
 HEADING = 'The first time you open it'
 STEPS = [
     "If macOS says it can't verify AudioSync, click Done.",
-    'Open System Settings > Privacy & Security.',
-    'Scroll down, click Open Anyway. You only do this once.',
+    'Open Privacy & Security in System Settings.',
+    'Scroll down, click Open Anyway and confirm with your password. You only do this once.',
 ]
+# In Dark Mode Finder draws the icon labels white, also over a light background, so
+# each label sits on a mid-gray plate that keeps 4.5:1 with white and with black text.
+PLATE = '#767676'
+PLATE_SIZE = (112, 24)       # width, height in points
+PLATE_TOP = ICON_SIZE / 2 + 4  # from the icon's center to the plate's top
+STEP_GAP, LINE_GAP = 30, 20     # first lines of two steps; wrapped lines of one step
 # Rendered at this many times the target size, then scaled down, so the arrow and
 # the step badges get smooth edges (Pillow draws shapes without anti-aliasing).
 SUPERSAMPLE = 4
@@ -75,12 +82,15 @@ def colors():
         'text': light['text'],
         'accent': light['tealText'],
         'badgeText': light['surface'],
+        'plate': PLATE,
+        'white': '#FFFFFF',
+        'black': '#000000',
     }
 
 
 def check_contrast(c):
     pairs = [('text', 'page'), ('text', 'panel'), ('accent', 'page'), ('accent', 'panel'),
-             ('badgeText', 'accent')]
+             ('badgeText', 'accent'), ('white', 'plate'), ('black', 'plate')]
     ok = True
     for fg, bg in pairs:
         r = ratio(c[fg], c[bg])
@@ -123,31 +133,62 @@ def layout():
     half = ICON_SIZE / 2
     readme_x, _ = ICONS['readme']
     panel = (24, 262, WIDTH - 24, HEIGHT - 24)
-    steps_x, first_y, gap = 76, 334, 30
+    steps_x, first_y = 76, 324
+    readme_left = min(readme_x - half, readme_x - PLATE_SIZE[0] / 2) - 12
+    steps, y = [], first_y
+    for step in STEPS:
+        lines = wrap(step, 14, readme_left - steps_x)
+        steps.append((y, lines))
+        y += STEP_GAP + LINE_GAP * (len(lines) - 1)
     return {
         'title': (WIDTH / 2, 62),
         'arrow': (app_x + half + 22, apps_x - half - 22, row_y),
         'panel': panel,
-        'heading': (panel[0] + 24, 292),
+        'heading': (panel[0] + 24, 286),
         'badge_x': panel[0] + 34,
         'steps_x': steps_x,
-        'step_y': [first_y + i * gap for i in range(len(STEPS))],
-        'readme_left': readme_x - half - 12,
+        'steps': steps,
+        'readme_left': readme_left,
     }
+
+
+def wrap(text, size, width):
+    lines, line = [], ''
+    for word in text.split():
+        candidate = f'{line} {word}'.strip()
+        if line and text_width(candidate, size) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = candidate
+    return lines + [line]
+
+
+def plates():
+    w, h = PLATE_SIZE
+    return [(x - w / 2, y + PLATE_TOP, x + w / 2, y + PLATE_TOP + h) for x, y in ICONS.values()]
 
 
 def check_fit(spots):
     ok = True
-    for line in [HEADING] + STEPS:
-        size = 15 if line == HEADING else 14
-        x = spots['heading'][0] if line == HEADING else spots['steps_x']
-        right = x + text_width(line, size)
-        if right > spots['readme_left']:
-            print(f'  "{line}" ends at {right:.0f} pt, past README.md at {spots["readme_left"]:.0f} pt')
-            ok = False
+    for y, lines in spots['steps']:
+        for line in lines:
+            right = spots['steps_x'] + text_width(line, 14)
+            if right > spots['readme_left']:
+                print(f'  "{line}" ends at {right:.0f} pt, past README.md at {spots["readme_left"]:.0f} pt')
+                ok = False
+    last_y, last_lines = spots['steps'][-1]
+    bottom = last_y + LINE_GAP * (len(last_lines) - 1) + 10
+    if bottom > spots['panel'][3] - 10:
+        print(f'  the steps end at {bottom:.0f} pt, past the panel at {spots["panel"][3]:.0f} pt')
+        ok = False
     if text_width(TITLE, 20) > WIDTH - 48:
         print(f'  "{TITLE}" is wider than the window')
         ok = False
+    for x0, y0, x1, y1 in plates():
+        if x0 < 0 or x1 > WIDTH or y1 > HEIGHT:
+            print(f'  a label plate at {x0:.0f},{y0:.0f} runs off the window')
+            ok = False
     return ok
 
 
@@ -171,11 +212,15 @@ def render(scale, c, spots):
                         outline=c['edge'], width=max(1, round(1 * cv.k)))
     cv.text(*spots['heading'], HEADING, 15, 'text', anchor='lt')
 
-    for number, (line, sy) in enumerate(zip(STEPS, spots['step_y']), start=1):
+    for number, (sy, lines) in enumerate(spots['steps'], start=1):
         bx, r = spots['badge_x'], 11
         d.ellipse(cv.p(bx - r, sy - r, bx + r, sy + r), fill=c['accent'])
         cv.text(bx, sy + 0.5, str(number), 12, 'badgeText', anchor='mm')
-        cv.text(spots['steps_x'], sy, line, 14, 'text', anchor='lm')
+        for i, line in enumerate(lines):
+            cv.text(spots['steps_x'], sy + i * LINE_GAP, line, 14, 'text', anchor='lm')
+
+    for box in plates():
+        d.rounded_rectangle(cv.p(*box), radius=round(6 * cv.k), fill=c['plate'])
 
     return cv.finish(scale)
 

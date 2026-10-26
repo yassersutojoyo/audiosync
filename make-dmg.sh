@@ -223,8 +223,14 @@ lay_out_image() {
     return 1
   fi
   LAYOUT_MOUNT="$(printf '%s\n' "$attached" | awk -F '\t' '$NF ~ /^\/Volumes\// { sub(/ +$/, "", $NF); print $NF }')"
+  if [ -z "$LAYOUT_MOUNT" ]; then
+    # No volume path to detach by, so detach the whole disk from the first line.
+    hdiutil detach -quiet "$(printf '%s\n' "$attached" | awk 'NR == 1 { print $1 }')" || true
+    LAYOUT_NOTE="the read-write image mounted at an unknown place"
+    return 1
+  fi
   if [ "$LAYOUT_MOUNT" != "/Volumes/$VOLUME_NAME" ]; then
-    LAYOUT_NOTE="the read-write image mounted at ${LAYOUT_MOUNT:-an unknown place}"
+    LAYOUT_NOTE="the read-write image mounted at $LAYOUT_MOUNT"
     return 1
   fi
   if ! finder_layout "$bundle" >/dev/null; then

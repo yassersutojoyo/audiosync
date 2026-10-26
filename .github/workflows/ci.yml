@@ -113,7 +113,13 @@ jobs:
           # A lone path is the app; the default output is AudioSync.dmg in the
           # repository root (RELEASE.md).
           rm -f AudioSync.dmg
-          ./make-dmg.sh "$app"
+          # The runner may not allow Finder scripting; the plain image passes too,
+          # and the log shows which one was made.
+          if ! said=$(./make-dmg.sh "$app" 2>&1); then
+            echo "$said"; exit 1
+          fi
+          echo "$said"
+          grep "Finder window:" <<< "$said"
           test -f AudioSync.dmg
           hdiutil imageinfo AudioSync.dmg | grep -E '^ *Format: UDZO$'
 
