@@ -1648,13 +1648,17 @@ impl Driver {
                 speaker.device = device;
             }
             let ap2 = self.speakers.get(key).is_some_and(|speaker| {
-                speaker.device.choose_path_preferring(
-                    true,
-                    self.airplay2_preferred,
-                    speaker.airplay1_outcome,
-                    false,
-                ) == Ok(ProtocolPath::AirPlay2)
-                    || (speaker.device.verdict.airplay2 && self.target_on_airplay2(speaker))
+                let device = &speaker.device;
+                let outcome = speaker.airplay1_outcome;
+                let preferred =
+                    device.choose_path_preferring(true, self.airplay2_preferred, outcome, false)
+                        == Ok(ProtocolPath::AirPlay2);
+                // Only the preference sends it there: AirPlay 1 plays it
+                // rather than waiting for a taken AirPlay 2 place (P214).
+                let fallback = device.choose_path(true, outcome) == Ok(ProtocolPath::AirPlay1)
+                    && self.ap2_place_taken(key);
+                (preferred && !fallback)
+                    || (device.verdict.airplay2 && self.target_on_airplay2(speaker))
             });
             if ap2 {
                 return self.start_ap2(key, now);
