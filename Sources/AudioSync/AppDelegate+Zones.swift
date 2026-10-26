@@ -354,6 +354,13 @@ extension AppDelegate {
             ZoneLayout.Member(key: $0.key, listed: $0.facts.listed, on: $0.facts.on, cast: $0.kind == .cast)
         })
         guard !steps.isEmpty else { return }
+        // An offline Cast speaker can't come on: the others would go off for
+        // nothing, and its row already says why.
+        if let this = members.first(where: { $0.key == key }), this.kind == .cast, this.facts.busy,
+           steps.contains(where: { $0.key == key && $0.on }) {
+            DebugTrace.log("[AudioSync] only \(key): the Cast speaker is offline, nothing switches")
+            return
+        }
         DebugTrace.log("[AudioSync] only \(key) plays in zone \"\(zone.name)\"")
         var attempts: [String] = []
         for step in steps {

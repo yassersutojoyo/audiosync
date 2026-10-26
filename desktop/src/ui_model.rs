@@ -1175,14 +1175,19 @@ impl AppState {
     /// it comes on unless it is, and every other present member of its zone
     /// that is on goes off. Another Cast member goes off before it comes on,
     /// since one Cast speaker plays at a time; the rest after, so streaming
-    /// never stops in between. Nobody leaves the zone.
+    /// never stops in between. A hidden member is left alone, and nobody
+    /// leaves the zone.
     pub fn only_this_steps(&self, id: &str) -> Vec<(String, bool)> {
         let (Some(zone), Some(this)) = (self.zone_of(id), self.speaker(id)) else {
             return Vec::new();
         };
+        let hidden = |key: &str| self.hidden.iter().any(|hidden| hidden.id == key);
+        if hidden(id) {
+            return Vec::new();
+        }
         let (cast, rest): (Vec<&Speaker>, Vec<&Speaker>) = self
             .zone_members(zone)
-            .filter(|s| s.id != id && s.enabled)
+            .filter(|s| s.id != id && s.enabled && !hidden(&s.id))
             .partition(|s| s.kind == SpeakerKind::Cast);
         let off = |s: &&Speaker| (s.id.clone(), false);
         let mut steps = Vec::new();
@@ -2990,6 +2995,25 @@ mod tests {
             backend.snapshot().speaker("local:bt").unwrap().enabled,
             "no zone: nothing"
         );
+    }
+
+    #[test]
+    fn only_this_speaker_leaves_hidden_members_alone() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:a", "Living", &["local:speakers", "local:desk"]);
+        backend.set_speaker_enabled("local:speakers", true);
+        let mut state = backend.snapshot();
+        state.hidden.push(HiddenSpeaker {
+            id: "local:speakers".into(),
+            name: "Speakers".into(),
+            kind_text: String::new(),
+            present: Some(SpeakerKind::BuiltIn),
+        });
+        assert_eq!(
+            state.only_this_steps("local:desk"),
+            [("local:desk".to_owned(), true)]
+        );
+        assert!(state.only_this_steps("local:speakers").is_empty());
     }
 
     #[test]

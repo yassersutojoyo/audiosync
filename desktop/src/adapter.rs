@@ -4034,6 +4034,46 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
+    /// Each switch as the member's own would make it, streaming started or
+    /// stopped once at the end (S162): a Cast member going off for another
+    /// would otherwise end the session the next one starts again.
+    fn only_this_speaker(&mut self, id: &str) {
+        let state = self.snapshot();
+        let steps = state.only_this_steps(id);
+        let turns_on = steps.iter().any(|(step, on)| step == id && *on);
+        // Another app took it: the others would go off for nothing, and its
+        // notice already says why.
+        if turns_on
+            && matches!(SpeakerKey::parse(id), Some(SpeakerKey::Cast(cast_id))
+                if self.cast_taken_over(&cast_id))
+        {
+            self.log
+                .log(|| format!("only {id}: another app has it, nothing switches"));
+            return;
+        }
+        if steps.is_empty() {
+            return;
+        }
+        self.log.log(|| {
+            let name = state
+                .speaker(id)
+                .map_or(id, |speaker| speaker.name.as_str());
+            format!("the user chose only {name} in its zone")
+        });
+        for (step, on) in &steps {
+            let Some(key) = SpeakerKey::parse(step) else {
+                continue;
+            };
+            self.unwatch(step);
+            self.switch_zone_member(&key, *on);
+        }
+        if turns_on {
+            self.start_if_switched_on();
+        }
+        self.stop_if_idle();
+        self.take_events();
+    }
+
     fn set_speaker_volume(&mut self, id: &str, position: f64) {
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {

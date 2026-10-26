@@ -2151,11 +2151,6 @@ export component SpeakerRow inherits Rectangle {
     }
 }
 
-// A zone's header, lined up with the speaker rows: its toggle, name and
-// count, then its volume, its options and the arrow that shows or hides its
-// speakers. A click on the header toggles the zone, except on the empty
-// stretch after the name, which works like the arrow; the arrow is left out
-// of the Tab order, as Left and Right on the toggle do its work.
 // A zone member's compact row under its own section: its switch, which runs
 // the same as the one on its row under the zone, its name and a link to the
 // zone. No volume, delay or equalizer; its menu holds Go to Zone and Remove
@@ -2272,6 +2267,11 @@ export component ZoneMemberRow inherits Rectangle {
     }
 }
 
+// A zone's header, lined up with the speaker rows: its toggle, name and
+// count, then its volume, its options and the arrow that shows or hides its
+// speakers. A click on the header toggles the zone, except on the empty
+// stretch after the name, which works like the arrow; the arrow is left out
+// of the Tab order, as Left and Right on the toggle do its work.
 export component ZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();

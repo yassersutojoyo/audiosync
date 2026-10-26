@@ -1137,7 +1137,7 @@ struct SpeakerRow: View {
     @ViewBuilder
     private func zoneItems(_ t: UIStrings) -> some View {
         let current = model.zone(holding: speaker.key)
-        if current != nil {
+        if current?.members.contains(where: { $0.key == speaker.key && $0.speakerID != nil }) == true {
             Button(t.onlyThisSpeaker) { model.actions.onlyThisSpeaker(speaker.key) }
         }
         Menu(t.moveToZone) {
