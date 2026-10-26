@@ -72,7 +72,7 @@ S200 VoiceOver and Narrator labels of the hint and its fix button.
 S202 Host re-reads when a device goes away, comes back or its row is switched on again.
 S203 Retired with the FIFO feed: the live edge after a stall of the pipe.
 S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.
-S210 Mac host only: a speaker group's switch state in the window; its logic suite checks it.
+S210 Superseded by S246: groups became zones; GroupSummary and its logic-suite checks went with them.
 S211 Mac host only: the source picker's entries; its logic suite checks it.
 S212 Mac host only: settings kept in the user defaults; its logic suite checks it.
 S213 Mac host only: notes on choices older builds read; its logic suite checks it.
@@ -108,7 +108,7 @@ S280 Hosts only: keeping each speaker's reported latency and setting the session
 S281 Hosts only: re-timing on a new L reported by the AirPlay sender, through S177 and S178, which the core covers.
 S282 Hosts only: the debug log lines for reported latencies and L.
 S283 Hosts only: each AirPlay speaker's reported latency as its starting estimate, the per-speaker delay and L the host derives from it; S235's window part is the core's `airplay_wait_ms`, covered there.
-S284 Hosts only: Lf, E and each row's delay with several AirPlay 2 receivers, a target at its largest member's R_s; the Windows tests and the Mac logic suite check it.
-S285 Hosts only: every AirPlay 2 speaker playing, the two wait reasons and one speaker's failure on its own row; the Windows tests and the Mac logic suite check it.
+S284 Hosts only: Lf, E and each row's delay with several AirPlay 2 receivers, a target at its largest member's R_s; the Mac logic suite checks it, the Windows tests are planned.
+S285 Hosts only: every AirPlay 2 speaker playing, the two wait reasons and one speaker's failure on its own row; the Mac logic suite checks all but the two reasons, which the sender doesn't report yet; the Windows tests are planned.
 S288 Hosts only: the web remote's debug switch at launch; the Windows host's tests and the Mac logic suite check it.
 S292 Hosts only: an explicit pause from a play-pause or the player's own pause seen in the host's now-playing readings, resumed by the mirror or by sound the host counts in its own capture; the Windows tests and the Mac logic suite check it.

@@ -2578,6 +2578,94 @@ do {
                 + "plays 80 ms late until the stream is empty)")
     }
 
+    // covers: S284, S285 (the Mac host; the Windows tests are still to come)
+    do {
+        var group = NativeAirPlayModel()
+        for (id, name) in [("L1", "Left"), ("R1", "Right")] {
+            group.apply(.appeared(NativeReceiver(id: id, name: name, model: "", availability: .available, reason: nil,
+                                                 hints: [], target: "pair:5f0c")))
+        }
+        group.apply(.appeared(receiver("B2", "Den", .available)))
+        group.added("pair:5f0c")
+        group.added("B2")
+        group.receiverLatency.report("L1", us: 220_000)
+        group.receiverLatency.report("R1", us: 50_000)
+        group.receiverLatency.report("B2", us: 1_400_000)
+        let (rowIDs, rows) = group.latencyRows
+        let lf = group.receiverLatency.newFrames(over: Array(rows.joined())) { reported in
+            reported.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
+        }
+        let estimate = group.receiverLatency.updateEstimate(rows: rows, canChange: true)
+        let latency = group.receiverLatency
+        let pair = group.sessions(of: "pair:5f0c")
+        let oneRowPerTarget = rowIDs == ["B2", "pair:5f0c"] && rows == [["B2"], ["L1", "R1"]]
+        let shared = lf == 83_790 && estimate == .applied && latency.estimateMs == 1400
+        let perRow = latency.estimateMs(of: pair) == 220 && latency.offsetMs(of: pair) == 1180
+            && latency.offsetMs(of: ["B2"]) == 0
+        check(oneRowPerTarget && shared && perRow,
+              "airplay latency: several AirPlay 2 receivers share Lf and E, and a target uses its largest member "
+                + "(members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s)",
+              "\(rows) \(String(describing: lf)) \(latency.estimateMs)")
+
+        var leaving = NativeReceiverLatency()
+        leaving.report("A1", us: 220_000)
+        leaving.report("B2", us: 50_000)
+        leaving.report("C3", us: 300_000)
+        _ = leaving.updateEstimate(rows: [["A1"], ["B2"], ["C3"]], canChange: true)
+        let before = [leaving.offsetMs(of: ["A1"]), leaving.offsetMs(of: ["B2"])]
+        // C3 leaves while the others sound, so `NativeAirPlay.remove` passes canChange false.
+        let left = leaving.updateEstimate(rows: [["A1"], ["B2"]], canChange: false)
+        let during = [leaving.offsetMs(of: ["A1"]), leaving.offsetMs(of: ["B2"])]
+        let estimateDuring = leaving.estimateMs
+        let restarted = leaving.updateEstimate(rows: [["A1"], ["B2"]], canChange: true)
+        check(before == [80, 250] && left == .held && during == before && estimateDuring == 300
+                && restarted == .applied && leaving.estimateMs == 220 && leaving.offsetMs(of: ["B2"]) == 170,
+              "airplay latency: an AirPlay 2 receiver leaving while others sound changes no delay "
+                + "(E and every d′_s held until the stream is empty; the sender holds Lf)",
+              "\(before) \(during) \(estimateDuring)")
+
+        // The host holds no AirPlay 2 speaker back itself. The sender's only wait reason so far is
+        // P169's; the two of P204 and P205 have no code in the header yet, so a 17th stands in for them.
+        var many = NativeAirPlayModel()
+        let ids = (1...17).map { "M\($0)" }
+        for id in ids { many.apply(.appeared(receiver(id, id, .available))) }
+        let added = many.plan(streaming: true, enabled: Set(ids.map(NativeAirPlayID.app))).add
+        var started: [NativeAirPlayOutcome?] = []
+        for id in ids {
+            many.added(id)
+            if id != "M17" { started.append(many.apply(.state(id: id, .playing, retryMs: nil))) }
+        }
+        let refused = many.apply(.error(id: "M17", .oneAirPlay2, retryMs: nil, detail: ""))
+        let allPlay = added.count == 17 && started.count == 16 && started.allSatisfy { $0 != nil }
+            && ids.dropLast().allSatisfy { many.isPlaying($0) && !many.isWaiting($0) }
+        let oneWaits = refused == .waiting("native:M17", true) && many.isWaiting("M17") && many.states["M17"] != nil
+            && many.plan(streaming: true, enabled: Set(ids.map(NativeAirPlayID.app))).isEmpty
+        check(allPlay && oneWaits,
+              "airplay latency: every AirPlay 2 speaker switched on goes to the sender, and only one it refuses "
+                + "waits, switched on and on its own row", "\(added.count) \(String(describing: refused))")
+
+        var failing = NativeAirPlayModel()
+        for (id, name) in [("A1", "Kitchen"), ("B2", "Den"), ("C3", "Porch"), ("D4", "Loft")] {
+            failing.apply(.appeared(receiver(id, name, .available)))
+            _ = failing.turnedOnByUser(id)
+            failing.added(id)
+        }
+        _ = failing.apply(.state(id: "A1", .playing, retryMs: nil))
+        let password = failing.apply(.error(id: "B2", .passwordRequired, retryMs: nil, detail: ""))
+        let pin = failing.apply(.error(id: "C3", .pairingRequired, retryMs: nil, detail: ""))
+        let gone = failing.apply(.error(id: "D4", .notResponding, retryMs: nil, detail: ""))
+        // D4 went off, so its switch is off when the host plans again.
+        let stillOn = Set(["A1", "B2", "C3"].map(NativeAirPlayID.app))
+        let replan = failing.plan(streaming: true, enabled: stillOn)
+        let prompt = failing.nextPrompt()
+        let ownRows = password == .prompt && pin == .startPairing("C3")
+            && gone == .turnOff("native:D4", NativeSpeakerEvent.Problem.notResponding.turnOff) && prompt?.id == "B2"
+        check(ownRows && failing.isPlaying("A1") && replan.remove == ["D4"] && replan.add.isEmpty
+                && replan.turnOff.isEmpty,
+              "airplay latency: one AirPlay 2 speaker failing leaves the others playing",
+              "\(String(describing: password)) \(String(describing: pin)) \(String(describing: gone)) \(replan)")
+    }
+
     var volumes = NativeAirPlayModel()
     volumes.apply(.appeared(receiver("A1", "Kitchen", .available)))
     check(volumes.apply(.volume(id: "A1", position: 80, level: 50.4)) == nil,
