@@ -681,8 +681,9 @@ fn no_text_promises_airplay() {
                 || line.contains("plays up to 16 AirPlay 2 speakers at once, so {} waits.")
                 || line.contains("@tr(\"Waiting: too many AirPlay 2 speakers\")")
                 || line.contains(
-                    "which AudioSync already runs for AirPlay 2 speakers on another network"
+                    "waits while AudioSync plays to AirPlay 2 speakers on another network."
                 )
+                || line.contains("@tr(\"Waiting: AirPlay 2 speakers on another network\")")
                 || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
                 || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")

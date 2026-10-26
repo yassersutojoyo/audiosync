@@ -5359,7 +5359,7 @@ mod tests {
             read(RowState::WaitingForAirplay2),
             (slot.clone(), turn_off.clone(), slot)
         );
-        let ptp = "Waiting: PTP in use on another network".to_owned();
+        let ptp = "Waiting: AirPlay 2 speakers on another network".to_owned();
         assert_eq!(
             read(RowState::WaitingForPtp),
             (ptp.clone(), turn_off.clone(), ptp)
@@ -6365,6 +6365,25 @@ mod tests {
 
     fn name_of(app: &App, id: &str) -> String {
         app.snapshot().speaker(id).unwrap().name.clone()
+    }
+
+    #[test]
+    fn the_waiting_notices_name_the_sender_limit_and_what_to_do() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        assert_eq!(
+            strings.invoke_notice_airplay(AirPlayProblem::TooManyAirplay2Speakers, "Loft".into()),
+            format!(
+                "AudioSync plays up to {} AirPlay 2 speakers at once, so Loft waits. \
+                 It starts once one of them stops.",
+                audiosync_airplay::sender::AIRPLAY2_SESSIONS
+            )
+        );
+        assert_eq!(
+            strings.invoke_notice_airplay(AirPlayProblem::PtpOtherNetwork, "Loft".into()),
+            "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. \
+             Turn those speakers off to play it here."
+        );
     }
 
     #[test]

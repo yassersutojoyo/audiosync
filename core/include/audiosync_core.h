@@ -60,6 +60,9 @@ extern "C" {
 /* Number of equalizer presets. */
 #define ASC_EQ_PRESETS 12
 
+/* Most AirPlay 2 speakers that play at once. */
+#define ASC_AIRPLAY2_SESSIONS 16
+
 /* The ring's safety margin M in frames: no ring holds fewer than twice this. */
 #define ASC_RING_MARGIN_FRAMES 8192
 
@@ -99,7 +102,7 @@ extern "C" {
 #define ASC_AIRPLAY_REASON_FORMAT 5        /* not 44 100 Hz, 16-bit stereo */
 #define ASC_AIRPLAY_REASON_AIRPLAY2_ONLY 6 /* only AirPlay 2 could serve it */
 #define ASC_AIRPLAY_REASON_TIMING 7        /* it refused NTP timing, and PTP can't take its place */
-#define ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2 8  /* 16 AirPlay 2 sessions run; it waits and starts when one ends for good */
+#define ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2 8  /* ASC_AIRPLAY2_SESSIONS AirPlay 2 sessions run; it waits and starts when one ends for good */
 #define ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS 9 /* an Apple TV whose home theater group plays, or the group of one that plays alone */
 #define ASC_AIRPLAY_REASON_PTP_OTHER_NETWORK 10 /* it takes only PTP, which runs for another network; it waits until PTP is free */
 

@@ -953,6 +953,10 @@ mod tests {
             ("ASC_EQ_BANDS", BAND_COUNT.to_string()),
             ("ASC_EQ_PRESETS", PRESET_COUNT.to_string()),
             (
+                "ASC_AIRPLAY2_SESSIONS",
+                audiosync_airplay::sender::AIRPLAY2_SESSIONS.to_string(),
+            ),
+            (
                 "ASC_RING_MARGIN_FRAMES",
                 crate::ring::MIN_MARGIN_FRAMES.to_string(),
             ),

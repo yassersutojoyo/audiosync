@@ -25,7 +25,7 @@ export global Strings {
     out property <string> waiting-for-device: @tr("Waiting for device");
     out property <string> reconnecting: @tr("Reconnecting…");
     out property <string> waiting-for-airplay2: @tr("Waiting: too many AirPlay 2 speakers");
-    out property <string> waiting-for-ptp: @tr("Waiting: PTP in use on another network");
+    out property <string> waiting-for-ptp: @tr("Waiting: AirPlay 2 speakers on another network");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no zone.
@@ -669,7 +669,7 @@ export global Strings {
             return @tr("AudioSync plays up to 16 AirPlay 2 speakers at once, so {} waits. It starts once one of them stops.", speaker);
         }
         if problem == AirPlayProblem.ptp-other-network {
-            return @tr("{} needs PTP timing, which AudioSync already runs for AirPlay 2 speakers on another network, so it waits. It starts once those stop.", speaker);
+            return @tr("{} waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off to play it here.", speaker);
         }
         // An Apple TV and its home theater group never play at once.
         if problem == AirPlayProblem.plays-through-speakers {

@@ -1,4 +1,5 @@
 import Foundation
+import CAudioSyncCore
 
 /// Every user-facing string in one place, so a translation can be added later
 /// without hunting through view code.
@@ -631,22 +632,22 @@ struct UIStrings {
     let nativeAirPlayPtpPortsTaken = "Another app is using port 319 or 320, so AirPlay speakers that need "
         + "PTP timing can't play. Close that app, then turn the speaker on again."
 
-    /// Sixteen AirPlay 2 speakers play: this one stays on and starts once
+    /// Every AirPlay 2 place is taken: this one stays on and starts once
     /// one of them stops (P169, S285).
     func nativeAirPlayTooManyAirPlay2(name: String) -> String {
-        "AudioSync plays up to 16 AirPlay 2 speakers at once, so \(name) waits. It starts once one of them stops."
+        "AudioSync plays up to \(ASC_AIRPLAY2_SESSIONS) AirPlay 2 speakers at once, so \(name) waits. It starts once one of them stops."
     }
     /// A speaker that takes only PTP while AudioSync runs PTP for speakers
     /// on another network: it stays on and starts once those stop (S285).
     func nativeAirPlayPtpOtherNetwork(name: String) -> String {
-        "\(name) needs PTP timing, which AudioSync already runs for AirPlay 2 speakers on another network, so it waits. It starts once those stop."
+        "\(name) waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off to play it here."
     }
     /// That notice's title.
     func nativeAirPlayWaitingTitle(name: String) -> String { "\(name) waiting" }
     /// Under the name of a speaker waiting for an AirPlay 2 place.
     let waitingForAirPlay2 = "Waiting: too many AirPlay 2 speakers"
     /// Under the name of a speaker waiting for PTP (S285).
-    let waitingForPtp = "Waiting: PTP in use on another network"
+    let waitingForPtp = "Waiting: AirPlay 2 speakers on another network"
     /// An Apple TV whose home theater group AudioSync plays to (P177).
     func nativeAirPlayPlaysThroughSpeakers(name: String) -> String {
         "\(name) plays through its home theater speakers, and AudioSync already plays to them, so it's off. "

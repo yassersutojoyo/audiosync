@@ -2291,9 +2291,9 @@ do {
     model.removed("G7")
     check(!model.isWaiting("G7"), "P169 native airplay: switched off or streaming stopped, it no longer waits")
     check(UIStrings().nativeAirPlayTooManyAirPlay2(name: "Loft")
-            == "AudioSync plays up to 16 AirPlay 2 speakers at once, so Loft waits. It starts once one of them stops."
+            == "AudioSync plays up to \(ASC_AIRPLAY2_SESSIONS) AirPlay 2 speakers at once, so Loft waits. It starts once one of them stops."
             && UIStrings().nativeAirPlayPtpOtherNetwork(name: "Loft")
-            == "Loft needs PTP timing, which AudioSync already runs for AirPlay 2 speakers on another network, so it waits. It starts once those stop.",
+            == "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off to play it here.",
           "S285 native airplay: both waiting notices read as on Windows")
     let lets = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
     let stops = "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
@@ -2350,7 +2350,7 @@ do {
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting: too many AirPlay 2 speakers"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, waitingForPtp: true, target: nil)
-            == "Waiting: PTP in use on another network"
+            == "Waiting: AirPlay 2 speakers on another network"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,
           "S285 native airplay: the notice's title and the row's note for each reason, as on Windows")
     var impostor = NativeAirPlayModel()
