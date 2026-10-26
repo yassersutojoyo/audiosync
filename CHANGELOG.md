@@ -92,7 +92,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A delay set on a Google Cast speaker added by address stays once a search finds that speaker under its own name, on the Mac and on Windows.
 - Quitting no longer waits on a Cast device that stopped reading.
 - On the Mac, the menu bar panel keeps its text readable over any window behind it, light or dark.
-- On the Mac, a second click on the menu bar icon closes the panel again, like other menu bar items. On recent macOS it opened the panel right back up. The panel also fades in now instead of popping up.
+- On the Mac, the menu bar panel now opens as a popover from the icon, with a little arrow pointing at it. It grows out of the icon and shrinks back into it, and a second click on the icon closes it again, like other menu bar items. On recent macOS that second click opened the panel right back up.
 - On the Mac, the Calibrate All list scrolls when you have many speakers, so Apply and Close stay on screen.
 - On the Mac, a local speaker that can't start because the source's sample rate is higher than AudioSync can hold now says so, instead of blaming another app or the format.
 - On the Mac, a Google Cast offset you set by hand, or with Apply or Undo in Calibrate All, stays put. Before, a late update from the speaker could put the old offset back.
