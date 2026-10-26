@@ -1616,9 +1616,9 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
 
 /*
  * Sets the own volume of the speaker added under `id` (0 up, unrounded, and
- * above 100 when S290 stored it so); it plays at min(100, own x k), live. Returns false, changing
- * nothing, when the handle or id is NULL, no speaker was added under id, or
- * volume isn't finite.
+ * above 100 when S290 stored it so); it plays at min(100, own x k), live.
+ * Returns false, changing nothing, when the handle or id is NULL, no speaker
+ * was added under id, or volume isn't finite.
  */
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
 

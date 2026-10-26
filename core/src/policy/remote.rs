@@ -118,8 +118,8 @@ pub struct OwnVolume {
     /// For a DeviceVolume: its level lies within 0.5 dB of the one the host
     /// sent the speaker in the last 3 s (S271).
     pub echo: bool,
-    /// For a DeviceVolume: the device level it asks for (S289); `None` when
-    /// zone × master is 0, where every own volume sounds the same.
+    /// For a DeviceVolume: the device level it asks for (S289), at any k;
+    /// `None` when the reading has no level.
     pub reported: Option<f64>,
 }
 
@@ -246,8 +246,7 @@ impl Remote {
                 let Some(to) = own.reported else {
                     return (
                         Action::Nothing,
-                        "ignored, every position sounds the same at this zone and master volume"
-                            .to_owned(),
+                        "ignored, the reading has no level".to_owned(),
                     );
                 };
                 if (to - own.level).abs() < LEVEL_SLACK {

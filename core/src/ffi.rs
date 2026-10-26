@@ -227,8 +227,9 @@ pub extern "C" fn asc_airplay_row_level(device_level: f64) -> f64 {
 
 /// [`volume::row_move`]: an AirPlay row moved to `row` writes the own
 /// volume to store, row ÷ k unrounded and possibly above 100, and the device
-/// level to send, the row, through `own_position` and `device_level` (S290). False, writing nothing, when zone × master is 0,
-/// `row` isn't finite or a pointer is null.
+/// level to send, the row, through `own_position` and `device_level` (S290).
+/// False, writing nothing, when zone × master is 0, `row` isn't finite or a
+/// pointer is null.
 ///
 /// # Safety
 ///
