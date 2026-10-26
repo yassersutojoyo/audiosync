@@ -1013,7 +1013,7 @@ impl AscAirPlay {
                 let id = receiver_id(&key);
                 if let SpeakerEvent::Error(error) = &event {
                     self.note_path_switch(&id, error);
-                    let turned_down = self.speaker_failed(&id, error.reason);
+                    let turned_down = self.speaker_failed(&id, error);
                     if self.paired_for_session.remove(&id) || turned_down {
                         self.relist(&id);
                     }
@@ -1365,13 +1365,18 @@ impl AscAirPlay {
         }
     }
 
-    /// A speaker's session ended with `reason`: a password it turned down
+    /// A speaker's session ended with `error`: a password it turned down
     /// is forgotten. Stored credentials it turned down stay, since a reset
     /// receiver and an impostor at its address answer alike; it is listed
     /// as needing a PIN, and a new pairing replaces them (P154). Returns
     /// whether its listing changed.
-    fn speaker_failed(&mut self, id: &str, reason: UserReason) -> bool {
-        match reason {
+    fn speaker_failed(&mut self, id: &str, error: &SpeakerError) -> bool {
+        // Errors 1 and 3 to 6 to a verify describe the receiver, not the
+        // credentials (P154).
+        if error.error.kind == ErrorKind::PairingFailed {
+            return false;
+        }
+        match error.reason {
             UserReason::WrongPassword => {
                 self.passwords.remove(id);
                 false
@@ -1652,13 +1657,15 @@ impl AscAirPlay {
                 let id = receiver_id(&info.device.key);
                 let mut paired = self.paired(&id);
                 let (availability, mut flags) = if self.over_airplay2(&id, info) {
-                    // Stored credentials never verify with a receiver that
-                    // asks for a code every time (P61).
-                    let every_time = info.device.verdict.code_every_time;
-                    paired &= !every_time;
+                    // A flag asking for a code every time arrives
+                    // unauthenticated: stored credentials no answer turned
+                    // down still pair it, and only legacy ones never do (P182).
                     let homekit = self.identity.get(&id).is_some()
-                        && !every_time
                         && !self.credentials_turned_down.contains(&id);
+                    let every_time = info.device.verdict.code_every_time && !homekit;
+                    if info.device.verdict.code_every_time {
+                        paired = homekit;
+                    }
                     let session = self.paired_for_session.contains(&id);
                     let every_time_flag = if every_time {
                         AIRPLAY_FLAG_CODE_EVERY_TIME
@@ -8067,7 +8074,7 @@ mod tests {
     }
 
     #[test]
-    fn a_receiver_that_asks_every_time_never_reads_as_paired() {
+    fn a_receiver_that_asks_every_time_with_credentials_turned_down_never_reads_as_paired() {
         let mut handle = create_with(quiet);
         inside(handle).airplay2 = true;
         let mut record = airplay2_only();
@@ -8079,13 +8086,15 @@ mod tests {
         let mut info = ReceiverInfo::new(device);
         info.plan = Ok(());
         inside(handle).listed.insert(id.clone(), info.clone());
-        // Credentials kept from before the TV was set to ask every time.
+        // Credentials kept from before the TV was set to ask every time,
+        // which then rejected the verify with them.
         let mut blob = vec![1u8];
         blob.extend_from_slice(b"01234567-89AB-CDEF-0123-456789ABCDEF");
         blob.extend_from_slice(&[7; 64]);
         blob.extend_from_slice(b"receiver");
         let credentials = HomeKitCredentials::from_bytes(&blob).expect("a credential blob");
         let _ = inside(handle).identity.insert(&id, credentials.clone());
+        inside(handle).credentials_turned_down.insert(id.clone());
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
         assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
         assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);

@@ -7570,7 +7570,10 @@ mod tests {
         adapter.poll();
         let state = adapter.snapshot();
         let row = state.speaker(&id).unwrap();
-        assert!(row.code_every_time);
+        assert!(
+            row.paired && !row.code_every_time,
+            "its stored credentials outweigh the flag"
+        );
         assert!(
             !fake
                 .take_calls()
@@ -7834,9 +7837,14 @@ mod tests {
         );
         fake.pairing(&den, PairingEvent::PinRequested);
         adapter.poll();
-        let state = adapter.snapshot();
-        assert!(state.speaker(&id).unwrap().enabled, "it waits for the PIN");
-        assert_eq!(state.pin_prompt.map(|prompt| prompt.speaker_id), Some(id));
+        assert_eq!(
+            adapter
+                .snapshot()
+                .pin_prompt
+                .map(|prompt| prompt.speaker_id),
+            Some(id)
+        );
+        assert!(messages(&adapter).is_empty(), "the prompt says it all");
     }
 
     /// [`airplay2_adapter`] with Study, which plays over AirPlay 2 with no

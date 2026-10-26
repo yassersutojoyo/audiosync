@@ -1615,7 +1615,7 @@ impl AirPlaySpeakers {
         if !self.reached_over_airplay2(id, info) {
             return availability(info, self.legacy_paired(id));
         }
-        let paired = self.homekit_paired(id, info) || self.paired_for_session.contains(id);
+        let paired = self.homekit_paired(id) || self.paired_for_session.contains(id);
         match airplay2_availability(info, paired) {
             AirPlayAvailability::Open if !paired && self.pin_seen.contains(id) => {
                 AirPlayAvailability::NeedsPin
@@ -1624,12 +1624,12 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Whether stored AirPlay 2 credentials pair the speaker: never with
-    /// one that asks for a code every time, which refuses them (P61).
-    fn homekit_paired(&self, id: &str, info: &ReceiverInfo) -> bool {
-        self.store.homekit(id).is_some()
-            && !info.device.verdict.code_every_time
-            && !self.credentials_turned_down.contains(id)
+    /// Whether stored AirPlay 2 credentials pair the speaker. A flag asking
+    /// for a code every time doesn't count against them: it arrives
+    /// unauthenticated, and only a rejected verify turns them down (P154,
+    /// P182).
+    fn homekit_paired(&self, id: &str) -> bool {
+        self.store.homekit(id).is_some() && !self.credentials_turned_down.contains(id)
     }
 
     /// Whether stored legacy credentials pair the speaker.
@@ -1638,22 +1638,15 @@ impl AirPlaySpeakers {
     }
 
     /// Whether the listed speaker `id`, reached over AirPlay 2, asks for a
-    /// code every time it connects. Over AirPlay 1 the same flag marks the
-    /// legacy pairing, which asks once.
+    /// code every time it connects: by its flags, unless it holds stored
+    /// credentials no answer turned down (P182). Over AirPlay 1 the same
+    /// flag marks the legacy pairing, which asks once.
     fn asks_every_time(&self, id: &str) -> bool {
         self.listed.get(id).is_some_and(|listed| {
             listed.info.device.verdict.code_every_time
                 && self.reached_over_airplay2(id, &listed.info)
+                && !self.homekit_paired(id)
         })
-    }
-
-    /// Whether the row of `id` shows its AirPlay 2 credentials as a
-    /// pairing; one not listed now keeps showing them.
-    fn shows_homekit_paired(&self, id: &str) -> bool {
-        match self.listed.get(id) {
-            Some(listed) => self.homekit_paired(id, &listed.info),
-            None => self.store.homekit(id).is_some() && !self.credentials_turned_down.contains(id),
-        }
     }
 
     /// Whether a session of `id` that plays proved the receiver holds the
@@ -1892,7 +1885,7 @@ impl AirPlaySpeakers {
                     delay_ms: settings.delay_ms,
                     reported_latency_ms: self.estimate_of(id),
                     playing: self.is_playing(id),
-                    paired: self.legacy_paired(id) || self.shows_homekit_paired(id),
+                    paired: self.legacy_paired(id) || self.homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
                     holds_credentials: self.store.contains(id) || self.store.homekit(id).is_some(),
                     pairing: self.pairings.contains_key(id),
@@ -3940,6 +3933,11 @@ impl AirPlaySpeakers {
                 retry_at,
             }) => {
                 let mut problem = problem(reason);
+                // Errors 1 and 3 to 6 to a verify with stored credentials
+                // describe the receiver, not them: a refusal (P154).
+                if error.kind == ErrorKind::PairingFailed && self.store.homekit(id).is_some() {
+                    problem = AirPlayProblem::Refused;
+                }
                 self.paired_for_session.remove(id);
                 self.note_path_switch(id, error.kind, retry_at.is_some());
                 // Outside the user's attempt its row keeps no code request:
@@ -5039,8 +5037,8 @@ pub mod tests {
     }
 
     /// Asking for a code every time, by its own flags or by a forged RAOP
-    /// `sf`, hides the pairing but never Forget Pairing, the one way out of
-    /// the AirPlay 2 pin (P2).
+    /// `sf`, hides neither the pairing (P182) nor Forget Pairing, the one
+    /// way out of the AirPlay 2 pin (P2).
     #[test]
     fn a_pinned_speaker_asking_for_a_code_every_time_keeps_forget_pairing() {
         use crate::audio::pairings::tests::homekit;
@@ -5058,7 +5056,7 @@ pub mod tests {
             fake.appear(&den);
             airplay.poll();
             let row = &airplay.speakers()[0];
-            assert!(!row.paired, "{flags}: it asks for a code every time");
+            assert!(row.paired, "{flags}: the flag alone turns nothing down");
             assert!(row.holds_credentials, "{flags}: Forget Pairing is on offer");
             assert!(!row.airplay2, "{flags}: the switch is off");
             assert_eq!(row.availability, AirPlayAvailability::AirPlay2NotYet);
@@ -5183,12 +5181,13 @@ pub mod tests {
         fake.set_airplay2(true);
         let mut airplay = speakers(&fake);
         airplay.set_streaming(true);
-        // Keys kept from before the TV was set to ask every time pair
-        // nothing: it refuses them.
+        // Keys kept from before the TV was set to ask every time, which a
+        // verify with them already had refused.
         airplay
             .store
             .insert_homekit(&id, homekit(0x5A))
             .expect("saved");
+        airplay.credentials_turned_down.insert(id.clone());
         pin_shown(&fake, &mut airplay, &tv);
         let row = &airplay.speakers()[0];
         assert!(!row.paired);
