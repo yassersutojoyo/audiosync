@@ -271,6 +271,22 @@ impl Rig {
         }
     }
 
+    /// Every FLUSH the stream asked for so far is answered, as a session
+    /// does once the receiver replies (P143, P213).
+    pub fn answer_flushes(&mut self) {
+        let flushed: Vec<SpeakerId> = self
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::Flush { speaker, .. } => Some(*speaker),
+                _ => None,
+            })
+            .collect();
+        for speaker in flushed {
+            self.stream.flush_answered(speaker);
+        }
+    }
+
     /// One step at `now`: the host's due blocks, then the stream's timers.
     fn step(&mut self) {
         let t = self.t();

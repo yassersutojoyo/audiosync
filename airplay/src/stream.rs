@@ -464,8 +464,8 @@ struct Speaker {
     first_pending: bool,
     /// Anything sent since RECORD.
     started: bool,
-    /// The FLUSH of an explicit pause is not answered yet; a resume waits
-    /// for it (P213).
+    /// The FLUSH of an explicit pause or a timeline restart is not answered
+    /// yet; a resume or the new timeline waits for it (P143, P213).
     awaiting_flush: bool,
     sync_seq: u16,
     history: Box<[Sent]>,
@@ -1012,7 +1012,7 @@ impl Stream {
         self.margin.advance(t);
         // Packets more than L past their time would be heard after their
         // own play time: rather than send them all, the timeline starts
-        // over, as a capture restart would (P143).
+        // over (P143).
         self.model.ensure(last_frame(self.next_cut));
         let overdue = t - (self.model.time(last_frame(self.next_cut)) + self.margin.value());
         if overdue > f64::from(self.latency_frames) / NOMINAL_RATE {
@@ -1268,10 +1268,12 @@ impl Stream {
         });
     }
 
-    /// The host restarted its capture (P143): every speaker is flushed, the
-    /// frame count starts again at 0 at `now`, the rate model starts over,
-    /// and frames still in the input ring are dropped. The speakers fall
-    /// silent for about L and come back in step.
+    /// Starts the timeline over at `now`, as a hole longer than L does
+    /// (P143): every speaker that has sent audio is flushed and waits for
+    /// the FLUSH answer, the frame count starts again at 0, the rate model
+    /// starts over, and frames still in the input ring are dropped. The
+    /// speakers fall silent for about L and come back in step. A capture
+    /// switch never needs it ([`crate::input::InputWriter::new_capture`]).
     pub fn restart(&mut self, now: Instant) {
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
@@ -1302,6 +1304,9 @@ impl Stream {
                 continue;
             }
             if speaker.started {
+                // The new timeline's packets wait for the FLUSH answer, which
+                // may queue behind another request (P143, P213).
+                speaker.awaiting_flush = true;
                 flush(speaker, &context, t, &mut self.events);
             } else {
                 let first = context.first_due(speaker.delay, t);
@@ -1399,7 +1404,8 @@ impl Stream {
         }
     }
 
-    /// The speaker's pause FLUSH is not answered yet (P213).
+    /// The speaker's pause or restart FLUSH is not answered yet (P143,
+    /// P213).
     pub fn waits_for_flush(&self, id: SpeakerId) -> bool {
         self.speakers
             .iter()

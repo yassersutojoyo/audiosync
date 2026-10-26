@@ -8,7 +8,7 @@
 use super::speakers::{SpeakerKey, new_group_name, renamed_group};
 use super::zones::{self, MemberKind, SavedGroup, Zones, zone_volume};
 use crate::eq::{BAND_COUNT, quantize_gain_db};
-use crate::volume::{DEFAULT_MASTER_POSITION, sanitize_position};
+use crate::volume::{DEFAULT_MASTER_POSITION, sanitize_own, sanitize_position};
 
 /// One stored member: its speaker key and its own volume slider position,
 /// 0 to 100. A fixed-volume Cast speaker (C68) has none.
@@ -70,9 +70,20 @@ pub fn member_keeps<'a>(keys: impl IntoIterator<Item = Option<&'a str>>) -> Vec<
         .collect()
 }
 
-/// A stored own volume: clamped to 0 to 100, none when it isn't a number.
+/// A stored own volume whose member isn't known: at least 0 and not capped,
+/// since an AirPlay member's may pass 100 (S290); none when it isn't a
+/// number. A local or Cast member is clamped where its volume is applied.
 pub fn member_volume(stored: Option<f64>) -> Option<f64> {
-    stored.and_then(sanitize_position)
+    stored.filter(|volume| volume.is_finite()).map(sanitize_own)
+}
+
+/// Member `key`'s stored own volume: an AirPlay member's as
+/// [`member_volume`] keeps it, any other clamped to 0 to 100.
+fn member_volume_of(key: &str, stored: Option<f64>) -> Option<f64> {
+    match usable(key) {
+        Some(SpeakerKey::AirPlay(_)) => member_volume(stored),
+        _ => stored.and_then(sanitize_position),
+    }
 }
 
 /// A stored master position: clamped to 0 to 100, the default when it isn't
@@ -83,8 +94,9 @@ pub fn master_volume(stored: f64) -> f64 {
 
 impl Preset {
     /// The preset as S251 keeps it on load: bad, repeated and second Cast
-    /// member keys dropped, a repeated zone ID dropped, volumes clamped to 0
-    /// to 100 and the gains on the controls' steps (S23).
+    /// member keys dropped, a repeated zone ID dropped, a local or Cast
+    /// member's volume clamped to 0 to 100 (an AirPlay member's may pass
+    /// 100, S290) and the gains on the controls' steps (S23).
     pub fn sanitized(self) -> Preset {
         let keeps = member_keeps(self.members.iter().map(|member| Some(member.key.as_str())));
         let members = self
@@ -93,7 +105,7 @@ impl Preset {
             .zip(keeps)
             .filter(|(_, keep)| *keep)
             .map(|(member, _)| PresetMember {
-                volume: member_volume(member.volume),
+                volume: member_volume_of(&member.key, member.volume),
                 ..member
             })
             .collect();

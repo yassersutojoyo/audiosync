@@ -557,7 +557,9 @@ mod tests {
                 gains.as_mut_ptr(),
             );
         }
-        assert_eq!(volumes[0], 100.0);
+        // Without keys an own volume may pass 100, as an AirPlay member's
+        // does (S290); a local or Cast member is clamped where it is applied.
+        assert_eq!(volumes[0], 140.0);
         assert!(volumes[1].is_nan() && volumes[3].is_nan());
         assert_eq!((volumes[2], volumes[4]), (0.0, 42.5));
         assert_eq!(zones, [100.0, 100.0, 30.0]);

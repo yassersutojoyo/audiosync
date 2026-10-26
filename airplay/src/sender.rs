@@ -822,9 +822,12 @@ impl Sender {
         self.command(Command::SetLatency(frames));
     }
 
-    /// The host restarted its capture (P143): every speaker is flushed and
-    /// the timeline starts over; the new mapping comes as a
-    /// [`SenderEvent::Timeline`].
+    /// Starts the timeline over now, as a hole longer than L does (P143):
+    /// every speaker is flushed and the new mapping comes as a
+    /// [`SenderEvent::Timeline`]. Hosts never call it: a capture switch is an
+    /// underrun ([`InputWriter::new_capture`]). Tests use it to reach the
+    /// restart without stalling the sender for L.
+    #[doc(hidden)]
     pub fn restart_timeline(&self) {
         self.command(Command::RestartTimeline);
     }

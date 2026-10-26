@@ -236,6 +236,7 @@ fn host_contract_local_alignment() {
     assert_eq!(rig.stream.pending_latency_frames(), Some(44_100));
     rig.stream.restart(rig.now);
     rig.drain();
+    rig.answer_flushes();
     let changed = rig.t();
     assert!(rig.events.iter().any(|event| matches!(
         event,
@@ -252,6 +253,7 @@ fn host_contract_local_alignment() {
     let position = rig.writer.position();
     rig.stream.restart(rig.now);
     rig.drain();
+    rig.answer_flushes();
     let restarted = rig.t();
     let origin = rig
         .events

@@ -8,50 +8,37 @@
 //!
 //! ```text
 //! cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--name <text>]
-//!     [--port <n>] [--pin every|once] [--code <digits>]
+//!     [--port <n>] [--pin every|once] [--code <digits>] [--summary]
 //! ```
 //!
-//! Every request line and its answer status goes to stdout. On stdin,
+//! Every request line and its answer status goes to stdout; with `--summary`
+//! only one plain line per event a dry-run sheet judges, with its running
+//! count (the `summary` module). On stdin,
 //! `vol <dB>` moves the level as the television's remote does and `quit`
 //! stops it.
 
 #[path = "../tests/common/mod.rs"]
 mod common;
+#[path = "fake_tv/summary.rs"]
+mod summary;
+#[path = "fake_tv/television.rs"]
+mod television;
 
 use std::io::BufRead;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::rtsp::Request;
-use common::ap2::{Ap2Server, FakeAp2, dict, int, plist, request_key};
+use common::ap2::{Ap2Server, FakeAp2, request_key};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
-use plist::Value;
+use summary::Summary;
+use television::{HOST_LABEL, Pin, television};
 
 const SERVICE_TYPE: &str = "_airplay._tcp.local.";
-/// The label of its own mDNS host name, in the `.local.` domain.
-const HOST_LABEL: &str = "audiosync-test-tv";
-/// A locally administered address in the documentation block of RFC 7042.
-const DEVICE_ID: &str = "02:00:5E:00:53:55";
-/// Bits 38 (CoreUtils pairing) and 48 (transient pairing): AirPlay 2 capable.
-const FEATURES_HIGH: u64 = 0x1_0040;
-const MODEL: &str = "Speaker1,1";
-/// Status flags as the television sends them without a PIN (bit 2).
-const FLAGS_PLAIN: u64 = 0x4;
-/// Bit 3: a PIN on every connection, and every pair-verify turned down.
-const FLAGS_PIN_EVERY_TIME: u64 = 0x4c;
-/// Bit 9: a PIN the first time only.
-const FLAGS_PIN_ONCE: u64 = 0x244;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Pin {
-    None,
-    EveryTime,
-    Once,
-}
 
 struct Options {
     name: String,
@@ -59,6 +46,7 @@ struct Options {
     pin: Pin,
     code: String,
     on_network: bool,
+    summary: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -68,11 +56,13 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         pin: Pin::None,
         code: "4821".to_owned(),
         on_network: false,
+        summary: false,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
             "--lan" => options.on_network = true,
+            "--summary" => options.summary = true,
             "--name" => options.name = value()?,
             "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
             "--pin" => {
@@ -95,40 +85,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     Ok(options)
 }
 
-fn status_flags(pin: Pin) -> u64 {
-    match pin {
-        Pin::None => FLAGS_PLAIN,
-        Pin::EveryTime => FLAGS_PIN_EVERY_TIME,
-        Pin::Once => FLAGS_PIN_ONCE,
-    }
-}
-
-fn television(options: &Options) -> FakeAp2 {
-    let mut fake = FakeAp2::samsung();
-    let flags = status_flags(options.pin);
-    if options.pin != Pin::None {
-        fake.hap.code = options.code.clone();
-        fake.hap.pairing_per_connection = options.pin == Pin::EveryTime;
-    }
-    fake.info_body = plist(dict(&[
-        ("features", int((FEATURES_HIGH << 32) as i64)),
-        ("statusFlags", int(flags as i64)),
-        ("name", Value::String(options.name.clone())),
-        ("model", Value::String(MODEL.to_owned())),
-        ("deviceID", Value::String(DEVICE_ID.to_owned())),
-    ]));
-    fake
-}
-
 fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, String), String> {
-    let features = format!("0x0,{FEATURES_HIGH:#x}");
-    let flags = format!("{:#x}", status_flags(options.pin));
-    let txt = [
-        ("features", features.as_str()),
-        ("flags", flags.as_str()),
-        ("model", MODEL),
-        ("deviceid", DEVICE_ID),
-    ];
+    let entries = television::txt(options.pin, 0);
+    let txt: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
     let failed = |error: mdns_sd::Error| format!("mDNS: {error}");
     let daemon = ServiceDaemon::new().map_err(failed)?;
     let host = format!("{HOST_LABEL}.local.");
@@ -167,7 +129,7 @@ fn watch_advertisement(daemon: &ServiceDaemon, fullname: String, start: Instant)
 }
 
 fn stamp(start: Instant) -> String {
-    format!("[{:9.3}]", start.elapsed().as_secs_f64())
+    summary::stamp(start.elapsed().as_secs_f64())
 }
 
 /// The request line and what identifies it: the session or stream SETUP,
@@ -194,19 +156,39 @@ fn describe(request: &Request) -> String {
     line
 }
 
-/// Logs requests in order as their answers go out, and new connections.
-fn log_requests(server: &Ap2Server, start: Instant, stop: &AtomicBool) {
+/// Logs requests in order as their answers go out, and new connections:
+/// in full, or as the summary's lines when there is one.
+fn log_requests(
+    server: &Ap2Server,
+    start: Instant,
+    stop: &AtomicBool,
+    summary: Option<&Mutex<Summary>>,
+) {
     let (mut logged, mut connections) = (0, 0);
     while !stop.load(Ordering::SeqCst) {
         {
             let fake = server.fake();
-            if fake.connections != connections {
-                connections = fake.connections;
-                println!("{} connection {connections} opened", stamp(start));
+            // Two connections can open within one poll.
+            while connections < fake.connections {
+                connections += 1;
+                match summary {
+                    Some(summary) => println!("{}", lock(summary).connection(seconds(start))),
+                    None => println!("{} connection {connections} opened", stamp(start)),
+                }
             }
             while let (Some((request, framed)), Some(Some(answered))) =
                 (fake.requests.get(logged), fake.answered.get(logged))
             {
+                if let Some(summary) = summary {
+                    let level = answered.level.as_deref();
+                    let line =
+                        lock(summary).request(seconds(start), request, answered.status, level);
+                    if let Some(line) = line {
+                        println!("{line}");
+                    }
+                    logged += 1;
+                    continue;
+                }
                 let sealed = if *framed { " (encrypted)" } else { "" };
                 let level = answered
                     .level
@@ -226,6 +208,22 @@ fn log_requests(server: &Ap2Server, start: Instant, stop: &AtomicBool) {
     }
 }
 
+/// The level a volume read answers now, after the remote's grid.
+fn level_read(fake: &FakeAp2) -> Option<f64> {
+    let body = fake.bodies.get("GET_PARAMETER")?;
+    summary::parse_level(std::str::from_utf8(body).ok()?)
+}
+
+fn seconds(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64()
+}
+
+fn lock(summary: &Mutex<Summary>) -> std::sync::MutexGuard<'_, Summary> {
+    summary
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn main() -> ExitCode {
     let options = match parse(std::env::args().skip(1)) {
         Ok(options) => options,
@@ -242,7 +240,7 @@ fn main() -> ExitCode {
     };
     let server = Ap2Server::start_at(
         SocketAddr::new(IpAddr::V4(ip), options.port),
-        television(&options),
+        television(&options.name, options.pin, &options.code, 0),
     );
     let port = server.address.port();
     let advertised = if options.on_network {
@@ -287,9 +285,12 @@ fn main() -> ExitCode {
 
     let server = Arc::new(server);
     let stop = Arc::new(AtomicBool::new(false));
+    let summary = options
+        .summary
+        .then(|| Arc::new(Mutex::new(Summary::default())));
     let logger = {
-        let (server, stop) = (server.clone(), stop.clone());
-        thread::spawn(move || log_requests(&server, start, &stop))
+        let (server, stop, summary) = (server.clone(), stop.clone(), summary.clone());
+        thread::spawn(move || log_requests(&server, start, &stop, summary.as_deref()))
     };
     let mut quit = false;
     for line in std::io::stdin().lock().lines() {
@@ -302,11 +303,20 @@ fn main() -> ExitCode {
             }
             (Some("vol"), Some(db)) => match db.parse::<f64>() {
                 Ok(db) => {
-                    server.fake().set_on_tv(db);
-                    println!(
-                        "{} remote: level set to {db} dB (0.3 dB grid)",
-                        stamp(start)
-                    );
+                    let level = {
+                        let mut fake = server.fake();
+                        fake.set_on_tv(db);
+                        level_read(&fake).unwrap_or(db)
+                    };
+                    match &summary {
+                        Some(summary) => {
+                            println!("{}", lock(summary).pushed(seconds(start), level))
+                        }
+                        None => println!(
+                            "{} remote: level set to {db} dB (0.3 dB grid)",
+                            stamp(start)
+                        ),
+                    }
                 }
                 Err(_) => println!("{} vol takes a number in dB", stamp(start)),
             },

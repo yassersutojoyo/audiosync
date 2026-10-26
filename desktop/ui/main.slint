@@ -1170,6 +1170,10 @@ export component MainWindow inherits Window {
     in property <[HiddenItem]> hidden-speakers;
     // AirPlay discovery runs but has found no speaker for 20 seconds.
     in property <bool> airplay-none-found;
+    // AirPlay discovery runs and has listed no speaker yet, short of those 20 seconds.
+    in property <bool> airplay-searching;
+    // Streaming is on with every speaker off.
+    in property <bool> no-speaker-on;
     // What the Google Cast search says while it lists no speaker.
     in property <CastList> cast-list;
     // A Google Cast sender runs, so Add by Address… can list a speaker.
@@ -1933,6 +1937,14 @@ export component MainWindow inherits Window {
                     // Rows keep their height when the list is shorter than the view.
                     alignment: start;
 
+                    if root.no-speaker-on: HorizontalLayout {
+                        padding-left: 4px;
+                        SecondaryText {
+                            text: Strings.no-speaker-on;
+                            font-size: Tokens.font-size-callout;
+                        }
+                    }
+
                     SpeakerSection {
                         title: Strings.this-pc-section;
                         zones: root.zones;
@@ -2158,13 +2170,14 @@ export component MainWindow inherits Window {
                             root.cast-add-address-requested();
                         }
                         // While AirPlay finds nothing, the note says what to
-                        // check, after the hidden virtual outputs' note; the
-                        // Google Cast search's note comes last, or one sentence
-                        // when neither finds a speaker.
+                        // check, after the hidden virtual outputs' note; until
+                        // then an empty list says it looks, as the tray flyout
+                        // does. The Google Cast search's note comes last, or one
+                        // sentence when neither finds a speaker.
                         property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                         property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
-                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
-                        property <string> cast-note: self.both-none ? "" : Strings.cast-list(root.cast-list);
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                         note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
                             root.speaker-toggled(id);

@@ -72,6 +72,10 @@ impl SpeakerNames {
             .unwrap_or_else(|| system.to_owned())
     }
 
+    pub fn contains(&self, key: &str) -> bool {
+        self.by_key.contains_key(key)
+    }
+
     /// Renames speaker `key`. An empty name, or the system name typed again,
     /// brings back the system name and forgets the entry. Returns whether
     /// anything changed.

@@ -19,8 +19,9 @@ export global Tokens {
     // The mark and "sync" in the wordmark: teal on light, mint on dark.
     out property <color> logo: root.dark ? #63dac2 : #1c9f91;
 
-    // Teal for small text and text-sized glyphs (WCAG AA): 5.85:1 on white, 5.07:1 on #323232.
-    out property <color> teal-text: root.dark ? #20b6a6 : #147167;
+    // Teal for small text and text-sized glyphs (WCAG AA): 5.85:1 on white, 6.37:1 on #323232, and
+    // 4.94:1 dark under a hovered button in a hovered Windows row.
+    out property <color> teal-text: root.dark ? #3ccbb9 : #147167;
 
     // Deep teal (website).
     out property <color> teal-deep: #0f574f;

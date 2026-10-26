@@ -273,6 +273,64 @@ fn airplay1_refusal_moves_to_airplay2() {
     sender.shutdown();
 }
 
+// covers: P2, P61
+#[test]
+fn an_airplay1_refusal_moves_an_every_time_receiver_to_airplay2_without_pairing() {
+    let _serial = serial();
+    let mut behavior = Behavior::default();
+    behavior.status.insert("ANNOUNCE".to_owned(), 403);
+    let airplay1 = NetReceiver::start(behavior);
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x4c),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+
+    // A television set to ask for a code every time, listed on both paths.
+    let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 55]);
+    let raop = airplay1.record(55, PCM_TXT);
+    let mut airplay = airplay_record(server.address.port(), 55);
+    for entry in &mut airplay.txt {
+        if entry.starts_with(b"flags=") {
+            *entry = b"flags=0x4c".to_vec();
+        }
+    }
+    let device = Device::from_records(DeviceKey::Id(device_id), Some(&raop), Some(&airplay))
+        .expect("device");
+    let key = device.key.clone();
+    sender.add_speaker(device, options());
+    let asked = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(e) }
+            if *k == key && e.error.kind == ErrorKind::PairingRequired)
+    });
+    assert!(
+        asked.is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    events.drain(&sender);
+    // AirPlay 1 refuses, the AirPlay 2 attempt asks for pairing once, and
+    // nothing starts a PIN pairing or a retry by itself.
+    assert_eq!(
+        errors(&events, &key),
+        [ErrorKind::Refused, ErrorKind::PairingRequired]
+    );
+    assert!(retrying(&events, &key).is_empty(), "{:?}", events.of(&key));
+    let keys = server.fake().keys();
+    assert!(
+        !keys.contains(&"POST /pair-pin-start".to_owned()),
+        "{keys:?}"
+    );
+    assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    sender.shutdown();
+}
+
 // covers: P169
 #[test]
 fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
@@ -1222,11 +1280,27 @@ fn stored_credentials_stay_but_never_verify_once_a_receiver_asks_every_time() {
         matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
     });
     assert!(refused.is_some(), "{:?}", events.of(&key));
+    std::thread::sleep(Duration::from_secs(2));
+    events.drain(&sender);
     assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
     assert!(credential_events(&events, &key).is_empty());
+    assert!(retrying(&events, &key).is_empty(), "{:?}", events.of(&key));
     let keys = server.fake().keys();
     assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(
+        !keys.contains(&"POST /pair-pin-start".to_owned()),
+        "{keys:?}"
+    );
     sender.shutdown();
+}
+
+/// The Retrying states the speaker reported.
+fn retrying(events: &Events, key: &DeviceKey) -> Vec<SpeakerEvent> {
+    events
+        .of(key)
+        .into_iter()
+        .filter(|event| matches!(event, SpeakerEvent::State(SpeakerState::Retrying { .. })))
+        .collect()
 }
 
 /// Whether a speaker event reports on the session, not on its credentials.
@@ -1742,4 +1816,130 @@ fn a_target_with_a_paired_member_plays_over_airplay2_from_its_first_start() {
     assert_untouched(&forger);
     assert_untouched(&partner_raop);
     sender.shutdown();
+}
+
+// An impostor can answer /info with any statusFlags without the receiver's
+// keys, so none may cost the stored credentials; bit 3 still ends every
+// session before pair-verify, as a TV set to ask every time needs.
+// covers: P61, P154, P182
+#[test]
+fn no_status_flags_in_an_info_answer_make_the_sender_drop_stored_credentials() {
+    let _serial = serial();
+    let genuine = 0x244;
+    let cases: [(u8, i64); 10] = [
+        (63, 0x8),
+        (64, 0x4c),
+        (65, 0x8 | 0x80),
+        (66, 0x8 | 0x200),
+        (67, 0x8 | 0x80 | 0x200),
+        (68, 0x0),
+        (69, 0x4),
+        (70, 0x80),
+        (71, 0x200),
+        (72, 0x80 | 0x200),
+    ];
+    for (id, flags) in cases {
+        let every_time = flags & 0x8 != 0;
+        let mut fake = FakeAp2::new();
+        fake.hap.code = "4821".to_owned();
+        fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+            "statusFlags",
+            common::ap2::int(genuine),
+        )]));
+        let server = Ap2Server::start(fake);
+        let (sender, _host) = start();
+        let mut events = Events::default();
+        let device = airplay2_only(&server, id);
+        let key = device.key.clone();
+        let credentials = pair_first_time(&server, &sender, &mut events, &device);
+        let mut paired_options = options();
+        paired_options.homekit_credentials = Some(credentials);
+        {
+            let mut fake = server.fake();
+            fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+                "statusFlags",
+                common::ap2::int(flags),
+            )]));
+            fake.requests.clear();
+        }
+
+        // A receiver that asks every time keeps asking at the next session.
+        let sessions = if every_time { 2 } else { 1 };
+        let end = if every_time {
+            SpeakerState::Failed
+        } else {
+            SpeakerState::Playing
+        };
+        for session in 1..=sessions {
+            sender.add_speaker(device.clone(), paired_options.clone());
+            assert!(
+                events
+                    .wait_state(&sender, &key, session, LONG, |s| *s == end)
+                    .is_some(),
+                "{flags:#x} session {session}: {:?} {:?}",
+                events.of(&key),
+                server.fake().keys()
+            );
+            sender.remove_speaker(&key);
+            assert!(
+                events
+                    .wait_state(&sender, &key, session, LONG, |s| *s
+                        == SpeakerState::Stopped)
+                    .is_some(),
+                "{flags:#x} session {session}"
+            );
+        }
+        let keys = server.fake().keys();
+        assert_eq!(
+            keys.contains(&"POST /pair-verify".to_owned()),
+            !every_time,
+            "{flags:#x}: {keys:?}"
+        );
+        assert!(
+            !keys.contains(&"POST /pair-setup".to_owned()),
+            "{flags:#x}: {keys:?}"
+        );
+        let expected: &[ErrorKind] = if every_time {
+            &[ErrorKind::PairingRequired, ErrorKind::PairingRequired]
+        } else {
+            &[]
+        };
+        assert_eq!(errors(&events, &key), expected, "{flags:#x}");
+        let about_credentials = credential_events(&events, &key);
+        assert!(
+            about_credentials.is_empty(),
+            "{flags:#x}: nothing tells the host to delete its copy: {about_credentials:?}"
+        );
+
+        // The genuine answer is back: the same credentials verify, no PIN.
+        {
+            let mut fake = server.fake();
+            fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+                "statusFlags",
+                common::ap2::int(genuine),
+            )]));
+            fake.requests.clear();
+        }
+        sender.add_speaker(device, paired_options);
+        let played_before = if every_time { 0 } else { 1 };
+        assert!(
+            events
+                .wait_state(&sender, &key, played_before + 1, LONG, |s| *s
+                    == SpeakerState::Playing)
+                .is_some(),
+            "{flags:#x}: {:?} {:?}",
+            events.of(&key),
+            server.fake().keys()
+        );
+        let keys = server.fake().keys();
+        assert!(
+            keys.contains(&"POST /pair-verify".to_owned()),
+            "{flags:#x}: {keys:?}"
+        );
+        assert!(
+            !keys.contains(&"POST /pair-setup".to_owned()),
+            "{flags:#x}: {keys:?}"
+        );
+        sender.shutdown();
+    }
 }

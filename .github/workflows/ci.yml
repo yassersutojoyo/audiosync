@@ -79,6 +79,8 @@ jobs:
           fi
 
       - name: make-dmg.sh packages a signed bundle into an image that mounts with the app, an Applications link and the README
+        # The Finder window layout scripts Finder; a stuck Apple event must not hold the runner.
+        timeout-minutes: 10
         run: |
           # A stand-in bundle around the release binary, signed ad hoc: the
           # real bundle is build.sh's, which the app-bundle job checks.
@@ -111,7 +113,13 @@ jobs:
           # A lone path is the app; the default output is AudioSync.dmg in the
           # repository root (RELEASE.md).
           rm -f AudioSync.dmg
-          ./make-dmg.sh "$app"
+          # The runner may not allow Finder scripting; the plain image passes too,
+          # and the log shows which one was made.
+          if ! said=$(./make-dmg.sh "$app" 2>&1); then
+            echo "$said"; exit 1
+          fi
+          echo "$said"
+          grep "Finder window:" <<< "$said"
           test -f AudioSync.dmg
           hdiutil imageinfo AudioSync.dmg | grep -E '^ *Format: UDZO$'
 

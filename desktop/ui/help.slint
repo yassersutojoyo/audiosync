@@ -224,7 +224,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-notices-title;
-                            body: Strings.help-notices;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-notices-linux : Strings.help-notices;
                         }
 
                         HelpSection {

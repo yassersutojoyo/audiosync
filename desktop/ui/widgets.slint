@@ -49,6 +49,8 @@ export global Fluent {
 // The app cuts a speaker name to its limit while it is typed.
 export global NameField {
     pure callback fit(string) -> string;
+    // The system's double-click time; the app sets it at startup.
+    in property <duration> double-click: 500ms;
 }
 
 // Segoe Fluent Icons code points (the icon font Windows 11 ships). Other
@@ -1053,7 +1055,7 @@ component DraftOutline inherits Rectangle {
 
 // Under a delay field that holds typing not yet applied, or, in red, the
 // range when that typing is out of it (`range-hint`, empty otherwise).
-// Narrator hears it as the field's description instead. Teal text: 5.07:1
+// Narrator hears it as the field's description instead. Teal text: 6.37:1
 // or more on a dark playing row, 5.35:1 or more on a light one; red text
 // passes 4.5:1 on the same backgrounds (the contrast test). A wrapper, like
 // QuietText, so Narrator skips it. Hidden, it keeps its line, so the text
@@ -1535,10 +1537,11 @@ export component SpeakerRow inherits Rectangle {
     // A press on the name hides its tooltip until the pointer leaves the name.
     property <bool> tip-allowed: true;
 
-    // A click on the name waits for a second one: two make a double-click,
-    // which renames, and one alone is a click on the row's box.
+    // A click on the name waits for a second one: two within the system's
+    // double-click time rename, and one alone is a click on the row's box.
+    // Slint's own double-click time is a fixed 500 ms, so the timer decides.
     click-wait := Timer {
-        interval: 500ms;
+        interval: NameField.double-click;
         running: false;
         triggered => {
             self.running = false;
@@ -1772,11 +1775,12 @@ export component SpeakerRow inherits Rectangle {
                                                 }
                                             }
                                             clicked => {
-                                                click-wait.running = true;
-                                            }
-                                            double-clicked => {
-                                                click-wait.running = false;
-                                                root.rename-requested();
+                                                if click-wait.running {
+                                                    click-wait.running = false;
+                                                    root.rename-requested();
+                                                } else {
+                                                    click-wait.running = true;
+                                                }
                                             }
                                         }
                                     }
@@ -1839,6 +1843,14 @@ export component SpeakerRow inherits Rectangle {
                                         font-size: Tokens.font-size-caption;
                                         color: Tokens.teal-text;
                                     }
+                                }
+
+                                // A renamed speaker's own name; Narrator reads it
+                                // after the new name, from the toggle.
+                                if root.item.system-name != "": QuietText {
+                                    text: Strings.speaker-device-caption(root.item.system-name);
+                                    wrap: no-wrap;
+                                    overflow: elide;
                                 }
 
                                 // A stereo pair or home theater group names its members
@@ -2144,8 +2156,10 @@ export component SpeakerRow inherits Rectangle {
 
 // A zone's header, lined up with the speaker rows: its toggle, name and
 // count, then its volume, its options and the arrow that shows or hides its
-// speakers. A click on the header toggles the zone; the arrow is left out of
-// the Tab order, as Left and Right on the toggle do its work.
+// speakers. Like a speaker row's box opening its delay panel, a click
+// anywhere but the toggle, the volume and the options shows or hides the
+// speakers; the arrow is left out of the Tab order, as Left and Right on the
+// toggle do its work.
 export component ZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
@@ -2187,9 +2201,7 @@ export component ZoneHeader inherits Rectangle {
 
     hover := TouchArea {
         clicked => {
-            if root.live {
-                root.toggled();
-            }
+            root.expanded-changed(!root.item.expanded);
         }
         menu := ContextMenuArea {
             Menu {
@@ -2272,26 +2284,35 @@ export component ZoneHeader inherits Rectangle {
                         }
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 1px;
+                    HorizontalLayout {
                         horizontal-stretch: 1;
 
-                        Text {
-                            text: root.item.name;
-                            font-size: Tokens.font-size-body;
-                            font-weight: root.item.state == RowState.playing ? 600 : 400;
-                            color: Tokens.text;
-                            overflow: elide;
-                            accessible-role: none;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            horizontal-stretch: 1;
+                            max-width: max(name-text.preferred-width, count-text.preferred-width);
+
+                            name-text := Text {
+                                text: root.item.name;
+                                font-size: Tokens.font-size-body;
+                                font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                color: Tokens.text;
+                                overflow: elide;
+                                accessible-role: none;
+                            }
+
+                            // The count, and the note of a zone whose members all
+                            // wait ("Waiting for device", "Reconnecting…").
+                            count-text := QuietText {
+                                text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
+                                wrap: no-wrap;
+                                overflow: elide;
+                            }
                         }
 
-                        // The count, and the note of a zone whose members all
-                        // wait ("Waiting for device", "Reconnecting…").
-                        QuietText {
-                            text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
-                            wrap: no-wrap;
-                            overflow: elide;
+                        Rectangle {
+                            horizontal-stretch: 1;
                         }
                     }
 

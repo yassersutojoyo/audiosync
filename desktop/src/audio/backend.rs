@@ -287,6 +287,10 @@ pub enum AirPlayProblem {
     /// An Apple TV that needs pairing with a PIN first (or again, after it
     /// stopped accepting AudioSync's credentials). Switching it on pairs it.
     NeedsPin,
+    /// As `NeedsPin` for a speaker that asked for no PIN or password: it
+    /// turned the session down before any pairing step, so the notice names
+    /// no code. Switching it on pairs it all the same.
+    NotAccepted,
     /// The pairing with an Apple TV failed, so it is off.
     PairingFailed,
     /// It needs another kind of pairing, which AudioSync can't do yet.
