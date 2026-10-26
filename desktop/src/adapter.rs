@@ -559,6 +559,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     ptp_taken: Option<BTreeSet<String>>,
     /// The windows' own settings.
     view: ViewSettings,
+    /// The AirPlay 2 flag of this launch (spec S312): the AirPlay 2 path is
+    /// on whatever the switch says.
+    airplay2_auto: bool,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,
     /// The microphone calibration running, or letting its cut-off sweep
@@ -674,6 +677,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             reconnecting: BTreeMap::new(),
             ptp_taken: None,
             view: ViewSettings::default(),
+            airplay2_auto: crate::audio::airplay::airplay2_auto_on(),
             when_source_quits: WhenSourceQuits::Stop,
             calibration_run: None,
             calibration: calibration::Status::default(),
@@ -1993,6 +1997,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
                     needs_airplay2: listed.is_none()
                         && !self.view.airplay2_experimental
+                        && !self.airplay2_auto
                         && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
                     in_target: matches!(&key, SpeakerKey::AirPlay(id)
                         if self.audio.airplay_holding_target(id).is_some()),
@@ -2108,6 +2113,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 needs_airplay2: listed.is_none()
                     && hidden.is_none()
                     && !self.view.airplay2_experimental
+                    && !self.airplay2_auto
                     && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
                 in_target,
                 fixed_volume: listed
@@ -4877,6 +4883,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.view
     }
 
+    fn airplay2_auto(&self) -> bool {
+        self.airplay2_auto
+    }
+
     fn set_view_settings(&mut self, settings: ViewSettings) {
         self.view = settings;
     }
@@ -5082,7 +5092,7 @@ mod tests {
     use crate::audio::airplay::StartedSender;
     use crate::audio::airplay::tests::{
         APPLE_TV_TXT, Call, FakeAirPlay, OPEN_TXT, airplay2_device, airplay2_every_time_tv,
-        airplay2_tv, device, id_of,
+        airplay2_tv, device, dual_device, id_of,
     };
     use crate::audio::capture::{CaptureTarget, LoopbackMode};
     use crate::audio::cast::tests::{
@@ -7736,6 +7746,37 @@ mod tests {
             state.speaker(&ap(&kitchen)).unwrap().kind,
             SpeakerKind::AirPlay
         );
+    }
+
+    /// Under the AirPlay 2 flag (spec S312) the sender's path is on with the
+    /// switch off: an AirPlay 2 only receiver plays over AirPlay 2, one that
+    /// speaks both stays on AirPlay 1 until the switch prefers AirPlay 2.
+    #[test]
+    fn under_the_airplay2_flag_only_the_switch_moves_a_dual_receiver_to_airplay2() {
+        for (preferred, dual_kind) in [(false, SpeakerKind::AirPlay), (true, SpeakerKind::AirPlay2)]
+        {
+            let mut audio = MockBackend::empty();
+            audio.connect_output(SPEAKERS, "Speakers");
+            let fake = FakeAirPlay::new();
+            fake.set_airplay2(true);
+            fake.set_airplay2_preferred(preferred);
+            audio.set_airplay(fake.link(), None);
+            let homepod = airplay2_device(9, "HomePod", false);
+            let den = dual_device(12, "Den");
+            fake.appear(&homepod);
+            fake.appear(&den);
+            let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+            adapter.airplay2_auto = true;
+            adapter.poll();
+            let state = adapter.snapshot();
+            let row = state.speaker(&ap(&homepod)).unwrap();
+            assert_eq!(row.kind, SpeakerKind::AirPlay2, "preferred {preferred}");
+            assert_eq!(row.availability, Availability::Open);
+            let row = state.speaker(&ap(&den)).unwrap();
+            assert_eq!(row.kind, dual_kind, "preferred {preferred}");
+            assert_eq!(row.availability, Availability::Open);
+            assert!(adapter.airplay2_auto(), "the item reads Prefer AirPlay 2");
+        }
     }
 
     /// After `speaker` turned its stored key down: the row asks for a code

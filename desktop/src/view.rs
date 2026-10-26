@@ -2947,6 +2947,8 @@ impl App {
     /// else the primary one, where it opens centered), maximized when it was.
     fn restore_view(&self) {
         let saved = self.backend.borrow().view_settings();
+        let airplay2_auto = self.backend.borrow().airplay2_auto();
+        self.main.set_airplay2_auto(airplay2_auto);
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
         self.ui.borrow_mut().remote = saved.remote;

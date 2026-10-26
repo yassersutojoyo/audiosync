@@ -1419,6 +1419,12 @@ pub trait Backend {
         ViewSettings::default()
     }
 
+    /// Whether AirPlay 2 is automatic per receiver for this launch (spec
+    /// S312); the AirPlay 2 item then reads Prefer AirPlay 2 (S313).
+    fn airplay2_auto(&self) -> bool {
+        false
+    }
+
     /// The windows' own settings changed; they are saved with the rest.
     fn set_view_settings(&mut self, _settings: ViewSettings) {}
 

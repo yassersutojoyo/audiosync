@@ -106,6 +106,10 @@ pub struct SenderConfig {
     /// with [`airplay2_switch`]; while it is off nothing of the AirPlay 2
     /// path runs (P170).
     pub airplay2: bool,
+    /// Every AirPlay 2 capable device with its `_airplay._tcp` service in
+    /// view takes the AirPlay 2 path, also one AirPlay 1 could serve (P214).
+    /// It acts only while [`SenderConfig::airplay2`] is on.
+    pub airplay2_preferred: bool,
     /// The AirPlay 2 device ID (P5, P43): a random value the host made once
     /// and stored ([`random_airplay2_device_id`]). `None` gives a random one
     /// for this sender's lifetime, until [`Sender::set_airplay2_device_id`].
@@ -129,6 +133,37 @@ pub const AIRPLAY2_SWITCH_ENV: &str = "AUDIOSYNC_AIRPLAY2";
 /// The switch's value from the environment variable's: on only for `1`.
 pub fn airplay2_switch(value: Option<&str>) -> bool {
     value == Some("1")
+}
+
+/// The environment variable that overrides [`AIRPLAY2_AUTO`] for one
+/// launch (S312).
+pub const AIRPLAY2_AUTO_ENV: &str = "AUDIOSYNC_AIRPLAY2_AUTO";
+
+/// The build's flag for AirPlay 2 per receiver (S312), off until the checks
+/// on real receivers pass.
+pub const AIRPLAY2_AUTO: bool = false;
+
+/// The flag from [`AIRPLAY2_AUTO_ENV`]'s value: `1` on, `0` off, anything
+/// else the build's [`AIRPLAY2_AUTO`].
+pub fn airplay2_auto(value: Option<&str>) -> bool {
+    match value {
+        Some("1") => true,
+        Some("0") => false,
+        _ => AIRPLAY2_AUTO,
+    }
+}
+
+impl SenderConfig {
+    /// The AirPlay 2 path and preference for the flag `auto` and the user's
+    /// switch (S312): with the flag off the switch turns the path on; with
+    /// it on the path is always on and the switch prefers AirPlay 2.
+    pub fn with_airplay2_switch(self, auto: bool, switch: bool) -> SenderConfig {
+        SenderConfig {
+            airplay2: auto || switch,
+            airplay2_preferred: auto && switch,
+            ..self
+        }
+    }
 }
 
 /// The debug hook that lets the devices it names use PCM where they offer
@@ -194,6 +229,7 @@ impl Default for SenderConfig {
             input_frames: DEFAULT_INPUT_FRAMES,
             clock: None,
             airplay2: false,
+            airplay2_preferred: false,
             airplay2_device_id: None,
             ptp_ports: PtpPorts::default(),
             ptp_receiver_ports: PtpPorts::default(),
@@ -519,7 +555,11 @@ impl Sender {
             events_out,
             latency_frames.clone(),
         )
-        .with_airplay2(config.airplay2, config.airplay2_device_id)
+        .with_airplay2(
+            config.airplay2,
+            config.airplay2_preferred,
+            config.airplay2_device_id,
+        )
         .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
         .with_pairing_hold(config.pairing_hold)
         .with_sounding(sounding.clone());
