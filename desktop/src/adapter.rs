@@ -6911,6 +6911,23 @@ mod tests {
     }
 
     #[test]
+    fn a_gone_airplay_speaker_keeps_its_name_while_it_asks_for_a_pin() {
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        adapter.set_speaker_enabled(&ap(&loft), true);
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        assert!(adapter.snapshot().pin_prompt.is_some());
+        fake.gone(&loft);
+        adapter.poll();
+        let names = &adapter.airplay_names;
+        assert_eq!(
+            names.get(&id_of(&loft)).map(String::as_str),
+            Some(loft.name.as_str()),
+            "{names:?}"
+        );
+    }
+
+    #[test]
     fn a_gone_airplay_speaker_keeps_its_name_only_while_settings_or_a_zone_name_it() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         let bedroom = device(3, "Bedroom", OPEN_TXT);
