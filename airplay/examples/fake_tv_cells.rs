@@ -592,7 +592,7 @@ fn main() -> ExitCode {
         }
     }
     host.sender.shutdown();
-    report.show_manual(&["D4.cover", "D5", "D6", "W1", "W2", "W3"]);
+    report.show_manual(&["D4.cover", "D5", "D6", "W1", "W2", "W3", "W4", "W5", "W6"]);
 
     if report.failed {
         ExitCode::FAILURE

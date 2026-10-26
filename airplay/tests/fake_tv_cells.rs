@@ -255,7 +255,7 @@ fn manual_cells_name_their_step() {
     assert_eq!(
         ids,
         [
-            "K1.row", "K2", "K3", "D3", "D4.cover", "D5", "D6", "W1", "W2", "W3"
+            "K1.row", "K2", "K3", "D3", "D4.cover", "D5", "D6", "W1", "W2", "W3", "W4", "W5", "W6"
         ]
     );
     assert!(manual.iter().all(|cell| cell.status == Status::Manual));

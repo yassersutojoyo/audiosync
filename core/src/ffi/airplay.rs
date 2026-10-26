@@ -7492,6 +7492,12 @@ mod tests {
         own
     }
 
+    /// A passed dry-run cell for `scripts/fake_tv_cells.sh`, which runs
+    /// these tests with `--nocapture`; a plain `cargo test` swallows it.
+    fn cell(id: &str, measured: &str) {
+        eprintln!("CELL {id} {measured}");
+    }
+
     /// Waits for the television to get `db` as its latest volume set.
     fn lands(receiver: &Loopback, db: f64) {
         let landed = || {
@@ -7519,6 +7525,13 @@ mod tests {
         let sets = receiver.volume_sets();
         assert!(sets.iter().all(|&db| same_db(db, -20.55)), "{sets:?}");
         assert!(read_once(handle, id).is_empty(), "the echo moved the row");
+        cell(
+            "K1.m63.echo",
+            &format!(
+                "own 50 at master 63 sent {:.2} dB (row 31), echo moved nothing",
+                sets[0]
+            ),
+        );
 
         // The television's remote to 20 (−24 dB): the row shows 20.
         receiver.press(-24.0);
@@ -7528,6 +7541,14 @@ mod tests {
         assert!((events[0].volume - 20.0 / 0.63).abs() < 1e-6, "{events:?}");
         assert_eq!(shown_row(events[0].volume, master), 20.0);
         assert_eq!(row_level(inside(handle).added[id].level), 20.0);
+        cell(
+            "K1.m63.tv20",
+            &format!(
+                "TV -24.00 dB shows row {}, own {:.2}",
+                row_level(events[0].device_level),
+                events[0].volume
+            ),
+        );
 
         // Its remote to 50, then the row moved to 20: 20 lands on it.
         receiver.press(-15.0);
@@ -7546,6 +7567,13 @@ mod tests {
         let tv_row = row_level(device_level_for_db(receiver.level().unwrap()).unwrap());
         assert_eq!(tv_row, 20.0, "the television shows another number");
         assert!(read_once(handle, id).is_empty(), "the echo moved the row");
+        cell(
+            "K1.m63.row20",
+            &format!(
+                "row 20 sent {:.2} dB, TV shows {tv_row}, echo moved nothing",
+                receiver.level().unwrap_or(f64::NAN)
+            ),
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -7560,25 +7588,36 @@ mod tests {
         // The dB each step leaves on the television, worked out by hand
         // from S289 (-30 + 0.3 x D, -144 at D = 0) rather than through the
         // code under test; every case starts with an add at own volume 0.
-        let wire: [(&str, &[f64]); 6] = [
-            ("row 100 at master 63 sends 100", &[0.0]),
+        // The first of each is its dry-run cell.
+        let wire: [(&str, &str, &[f64]); 7] = [
+            ("S290.row100", "row 100 at master 63 sends 100", &[0.0]),
             (
+                "S290.tv80.m64",
                 "TV at 80 at master 63, master to 64 gives 81",
                 &[-6.0, -5.619048],
             ),
             (
+                "S290.row100.m50",
                 "row 100 at master 63, master to 50 gives 79",
                 &[0.0, -6.190476],
             ),
             (
+                "S290.tv80.cap",
                 "TV at 80 at master 63, master to 100 caps at 100, back to 63 gives 80",
                 &[-6.0, 0.0, -6.0],
             ),
             (
+                "DV.100.m63",
                 "DeviceVolume 100 at master 63, master to 100 and back keeps 100",
                 &[0.0, 0.0, 0.0],
             ),
             (
+                "DV.80-99.m63",
+                "DeviceVolume 80 then 99 at master 63 stores own 126.98 then 157.14",
+                &[-6.0, -0.3],
+            ),
+            (
+                "DV.40.m0",
                 "DeviceVolume 40 at master 0 keeps own and shows 40 until the master moves",
                 &[-144.0, -18.0, -15.0],
             ),
@@ -7586,7 +7625,7 @@ mod tests {
         let cases = doc["cases"].as_array().expect("cases");
 
         let receiver = Loopback::television();
-        for (index, (name, dbs)) in wire.into_iter().enumerate() {
+        for (index, (cell_id, name, dbs)) in wire.into_iter().enumerate() {
             let case = cases
                 .iter()
                 .find(|case| case["name"].as_str() == Some(name))
@@ -7600,6 +7639,7 @@ mod tests {
             let mut own = 0.0;
             let mut handle = on_television(&receiver, &id, master, own);
             lands(&receiver, -144.0);
+            let mut measured = Vec::new();
             for (step, &db) in steps.iter().zip(dbs) {
                 let level = number(step, "level").expect("level");
                 let sets = receiver.volume_sets().len();
@@ -7664,8 +7704,15 @@ mod tests {
                 assert_eq!(row_level(inside(handle).added[&id].level), row, "{name}");
                 let own_after = number(step, "own_after").expect("own_after");
                 assert!((own - own_after).abs() < 1e-6, "{name}: {step}: own {own}");
+                measured.push(format!("TV {held:.2} dB row {row} own {own:.2}"));
             }
             assert!(read_once(handle, &id).is_empty(), "{name}: the echo moved");
+            let echo = if cell_id.starts_with("DV.") {
+                ", echo as sent and 0.2 dB off sent nothing"
+            } else {
+                ""
+            };
+            cell(cell_id, &format!("{}{echo}", measured.join("; ")));
             // SAFETY: destroyed once, by this thread.
             unsafe { asc_airplay_destroy(&mut handle) };
         }
@@ -7690,6 +7737,7 @@ mod tests {
         let own = move_row(handle, id, 40.0, master);
         lands(&receiver, forty);
         let mut rows = read_once(handle, id);
+        let mut reads = 1;
 
         // Paused and played again: the session stays.
         // SAFETY: a live handle, used by this thread only.
@@ -7700,6 +7748,7 @@ mod tests {
         // SAFETY: as above.
         unsafe { asc_airplay_resume(handle) };
         rows.extend(read_once(handle, id));
+        reads += 1;
 
         // The speaker turned off and on again, as the host stored it.
         let sets = receiver.volume_sets().len();
@@ -7724,6 +7773,7 @@ mod tests {
             "the first set after the add: {first}"
         );
         rows.extend(read_once(handle, id));
+        reads += 1;
 
         // The engine stopped and started: a new handle, as the host makes it.
         // SAFETY: destroyed once, by this thread.
@@ -7736,6 +7786,7 @@ mod tests {
             "the first set after a start: {first}"
         );
         rows.extend(read_once(handle, id));
+        reads += 1;
 
         let after_move = receiver.volume_sets();
         let index = after_move
@@ -7746,12 +7797,25 @@ mod tests {
             after_move[index..].iter().all(|&db| same_db(db, forty)),
             "{after_move:?}"
         );
+        // A read of the level the host sent is its echo and moves no row
+        // (S291), so no event is the expected answer; any event must say 40.
         assert!(
-            rows.iter().all(|e| row_level(e.device_level) == 40.0),
+            rows.is_empty() || rows.iter().all(|e| row_level(e.device_level) == 40.0),
             "the row reported another value: {rows:?}"
         );
+        let answered = if rows.is_empty() {
+            "no row move"
+        } else {
+            "all row 40"
+        };
         assert_eq!(shown_row(own, master), 40.0);
         assert_eq!(row_level(inside(handle).added[id].level), 40.0);
+        cell(
+            "K1.keep.m63",
+            &format!(
+                "row 40 at master 63 starts the TV at {first:.2} dB after pause, off/on and restart; {reads} reads, {answered}"
+            ),
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

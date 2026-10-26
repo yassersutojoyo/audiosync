@@ -1,8 +1,10 @@
 #!/bin/bash
-# Runs the dry-run cells the AirPlay sender can prove against the fake
-# television (the airplay example fake_tv_cells) on loopback only, and prints
-# one line per cell: <cell> PASS|FAIL|MANUAL <measured value>. Exits 1 when a
-# cell fails.
+# Runs every weekend cell a loopback fake television can prove, and prints
+# one line per cell: <cell> PASS|FAIL|MANUAL <measured value>. The volume
+# cells come from the core and AirPlay 2 tests that hold them (each prints a
+# CELL line once it passed); the rest from the airplay example fake_tv_cells.
+# A cell that needs the real television prints MANUAL with what to measure.
+# Exits 1 when a cell fails.
 #
 #   scripts/fake_tv_cells.sh [--pause-minutes <n>]    D4 pauses 11 min unless told less
 #
@@ -25,5 +27,51 @@ case "$(uname -s)" in
         ;;
 esac
 
-cd airplay
-exec cargo run --quiet --locked --example fake_tv_cells -- "$@"
+failed=0
+
+# Runs the tests named in "<test>=<cell>,<cell>" specs with their CELL lines
+# shown, then prints every expected cell in order: PASS with what its test
+# measured, or FAIL with the first panic message when it never printed.
+cells_from_tests() {
+    local target=$1 spec id cells names=() ids=() out why line status=0
+    shift
+    for spec in "$@"; do
+        names+=("${spec%%=*}")
+        IFS=, read -r -a cells <<<"${spec#*=}"
+        ids+=("${cells[@]}")
+    done
+    # The CELL lines and panics go to stderr; libtest's own lines are dropped.
+    # shellcheck disable=SC2086 # $target is one or two cargo arguments.
+    out=$(cargo test --quiet --locked $target -- --exact --nocapture --test-threads=1 \
+        "${names[@]}" 2>&1 >/dev/null) || status=$?
+    why=$(grep -A1 -m1 "panicked at" <<<"$out" | tail -n 1 || true)
+    for id in "${ids[@]}"; do
+        line=$(grep -m1 "^CELL $id " <<<"$out" || true)
+        if [ -n "$line" ]; then
+            printf '%-16s %-7s %s\n' "$id" PASS "${line#"CELL $id "}"
+        else
+            printf '%-16s %-7s %s\n' "$id" FAIL "${why:-its test did not pass: cargo test $target}"
+            failed=1
+        fi
+    done
+    # A panic after the last CELL line still fails the run.
+    if [ "$status" -ne 0 ]; then
+        echo "fake_tv_cells: cargo test $target exited $status" >&2
+        failed=1
+    fi
+}
+
+core=ffi::airplay::tests
+cd "$root/core"
+cells_from_tests --lib \
+    "$core::k1_at_master_63_the_row_and_the_television_agree_both_ways=K1.m63.echo,K1.m63.tv20,K1.m63.row20" \
+    "$core::k1_keep_a_row_at_40_comes_back_at_40_after_a_restart=K1.keep.m63" \
+    "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.m64,S290.row100.m50,S290.tv80.cap,DV.100.m63,DV.80-99.m63,DV.40.m0"
+
+cd "$root/airplay"
+cells_from_tests "--test ap2_volume" \
+    "k1_row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer=AP2.K1" \
+    "k1_keep_a_new_session_starts_the_samsung_at_the_level_it_holds=AP2.K1.keep"
+
+cargo run --quiet --locked --example fake_tv_cells -- "$@" || failed=1
+exit "$failed"

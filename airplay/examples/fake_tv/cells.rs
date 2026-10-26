@@ -320,12 +320,27 @@ pub fn manual() -> Vec<Cell> {
             "D6",
             "Mac app: grep -iE \"error|warn\" /tmp/audiosync-debug.log shows only the expected 500 volume lines",
         ),
-        ("W1", "real TV: K1 both ways, remote presses stay put"),
+        (
+            "W1",
+            "real TV at master 63: TV 20 by its remote reads 20 in AudioSync and AudioSync 20 reads 20 on the TV, within about 1 s; remote presses stay put",
+        ),
         (
             "W2",
             "real TV: a pause from its remote or the app is quiet within 1 s, a Spotify pause within 2 s; resume clean",
         ),
         ("W3", "real TV: the paused cover stays 11 min"),
+        (
+            "W4",
+            "real TV: TV 80 by its remote at master 63, master to 64: TV and row 81; master 100 then back to 63: 100, then 80 again",
+        ),
+        (
+            "W5",
+            "real TV: TV 40 by its remote at master 63, stop and start streaming: TV and row stay 40; same after Calibrate All",
+        ),
+        (
+            "W6",
+            "real TV: switch the source while it plays: no PIN prompt, no SETUP or GET timeout, the gap no longer than a track change",
+        ),
     ]
     .into_iter()
     .map(|(id, step)| Cell::new(id, Status::Manual, step.to_owned()))

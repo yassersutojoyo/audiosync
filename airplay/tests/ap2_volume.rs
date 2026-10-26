@@ -636,6 +636,12 @@ fn a_session_the_host_never_asked_sends_no_read() {
 /// The dB the host sends for row 20 (S289: -30 + 0.3 x 20).
 const ROW_20_DB: f64 = -24.0;
 
+/// A passed dry-run cell for `scripts/fake_tv_cells.sh`, which runs these
+/// tests with `--nocapture`; a plain `cargo test` swallows it.
+fn cell(id: &str, measured: &str) {
+    eprintln!("CELL {id} {measured}");
+}
+
 /// Whether every volume SET_PARAMETER went encrypted.
 fn sets_framed(rig: &Ap2Rig) -> bool {
     rig.fake
@@ -673,6 +679,10 @@ fn k1_row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer() {
     assert_eq!(rig.fake.level(), Some(ROW_20_DB));
     assert!(warnings(&rig).is_empty(), "{:?}", rig.events);
     assert!(rig.failure().is_none());
+    cell(
+        "AP2.K1",
+        "row 20 sent once as -24.000000 dB, encrypted, right after the FLUSH answer; read back -24 dB",
+    );
 }
 
 // covers: P183, P184
@@ -703,4 +713,8 @@ fn k1_keep_a_new_session_starts_the_samsung_at_the_level_it_holds() {
     assert_eq!(reported(&again), [ROW_20_DB]);
     assert!(warnings(&again).is_empty(), "{:?}", again.events);
     assert!(again.failure().is_none());
+    cell(
+        "AP2.K1.keep",
+        &format!("TV holding {held} dB, new session sent -24.000000 once, read back -24 dB"),
+    );
 }
