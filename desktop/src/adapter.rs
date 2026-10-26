@@ -5519,15 +5519,90 @@ mod tests {
     }
 
     #[test]
-    fn streaming_needs_a_speaker_that_is_on() {
+    fn streaming_starts_with_every_speaker_off_and_the_first_one_on_plays() {
         let mut adapter = adapter();
         adapter.set_running(true);
+        let snapshot = adapter.snapshot();
+        assert!(snapshot.running, "no alert, no refusal");
+        assert!(snapshot.no_speaker_on, "the speaker list says so");
+        assert!(messages(&adapter).is_empty());
+        // Switched on again while it streams, nothing changes.
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        turn_on(&mut adapter, SPEAKERS);
+        let snapshot = adapter.snapshot();
+        assert!(snapshot.running);
+        assert!(!snapshot.no_speaker_on);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        assert_eq!(captures(&adapter).len(), 1, "it joins the session");
+        // The last speaker of the session goes off: it stops.
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        assert!(!adapter.snapshot().running);
+        assert!(!adapter.snapshot().no_speaker_on);
+    }
+
+    #[test]
+    fn a_session_with_no_speaker_yet_waits_through_a_source_switch() {
+        let mut adapter = adapter();
+        adapter.set_running(true);
+        adapter.select_source(&player());
+        assert!(adapter.snapshot().running);
+        adapter.poll();
+        assert!(adapter.snapshot().running, "a poll stops nothing");
+        assert!(messages(&adapter).is_empty());
+    }
+
+    #[test]
+    fn an_automatic_start_with_no_speaker_on_asks_for_one_first() {
+        let mut adapter = adapter();
+        assert!(!adapter.start_session(StartOrigin::AutoConnect));
         assert!(!adapter.snapshot().running);
         assert_eq!(messages(&adapter), [NoticeMessage::NoSpeaker]);
         assert_eq!(adapter.snapshot().notices[0].time, "09.41");
-        turn_on(&mut adapter, SPEAKERS);
-        assert!(adapter.snapshot().running);
-        assert!(messages(&adapter).is_empty(), "the start clears it");
+        adapter.set_running(true);
+        assert!(messages(&adapter).is_empty(), "the user's start clears it");
+    }
+
+    #[test]
+    fn a_first_install_turns_the_pc_speakers_on_once() {
+        let dir = test_dir("adapter-first-install");
+        let path = dir.join(settings::FILE_NAME);
+        let first = || {
+            let mut audio = MockBackend::empty();
+            audio.connect_output_as("hdmi", "TV", OutputKind::Hdmi);
+            audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
+            audio.connect_output_as(HEADPHONES, "Headphones", OutputKind::BuiltIn);
+            audio
+        };
+        let mut adapter = launch(first(), &path);
+        adapter.poll();
+        assert!(enabled(&adapter, SPEAKERS), "the first built-in output");
+        assert!(!enabled(&adapter, HEADPHONES));
+        assert!(!enabled(&adapter, "hdmi"));
+        assert!(!adapter.snapshot().running, "on, not streaming");
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        adapter.save_settings();
+
+        // Turned off by the user, it stays off at the next launch.
+        let mut adapter = launch(first(), &path);
+        adapter.poll();
+        assert!(!enabled(&adapter, SPEAKERS));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_config_from_before_turns_nothing_on() {
+        let dir = test_dir("adapter-existing-config");
+        let path = dir.join(settings::FILE_NAME);
+        SettingsFile::at(path.clone())
+            .save(&Settings::default())
+            .unwrap();
+        let mut audio = MockBackend::empty();
+        audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        assert!(!enabled(&adapter, SPEAKERS), "an update keeps what was off");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -6057,8 +6132,7 @@ mod tests {
         audio.set_output_enabled(DAC_PORT_1, true).unwrap();
         let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
         adapter.set_running(true);
-        assert!(!adapter.snapshot().running);
-        assert_eq!(messages(&adapter), [NoticeMessage::NoSpeaker]);
+        assert!(adapter.snapshot().no_speaker_on, "it isn't listed, so it isn't on");
 
         turn_on(&mut adapter, SPEAKERS);
         assert!(adapter.snapshot().running);
@@ -6594,14 +6668,13 @@ mod tests {
                 "sources listed: All System Audio; Player (player.exe, process 2000)",
                 "source chosen: All System Audio (the default)",
                 "the user switched streaming on",
-                "start (User) refused: no speaker is on",
-                "notice about Start: NoSpeaker",
+                "start (User): All System Audio, 0 speaker(s) on",
                 "source chosen: Player (app:2000:player.exe)",
-                "the user switched Speakers on",
-                "output \"Speakers\" (speakers) switched on",
-                "start (User): Player, 1 speaker(s) on",
+                "start (User): Player, 0 speaker(s) on",
                 "starting: capturing the app of process 2000",
                 "capture started: process 2000 and its children",
+                "the user switched Speakers on",
+                "output \"Speakers\" (speakers) switched on",
                 "output \"Speakers\" (speakers) started:",
                 "the user switched Speakers off",
                 "output \"Speakers\" (speakers) switched off",
