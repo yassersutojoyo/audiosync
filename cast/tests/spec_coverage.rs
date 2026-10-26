@@ -292,6 +292,16 @@ fn the_id_check_allows_any_order_but_no_gaps_or_repeats() {
         Err("missing: C2".to_owned()),
         "an inserted clause follows one that exists"
     );
+    assert_eq!(check_ids(&ids(&["C1", "C1b", "C1a", "C2"])), Ok(()));
+    assert_eq!(
+        check_ids(&ids(&["C1", "C2", "C2b"])),
+        Err("missing: C2a".to_owned()),
+        "suffixes run a, b, c with none skipped"
+    );
+    assert_eq!(
+        check_ids(&ids(&["C1", "C1a", "C1c", "C1e"])),
+        Err("missing: C1b, C1d".to_owned())
+    );
 }
 
 #[test]
