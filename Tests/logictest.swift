@@ -3007,6 +3007,7 @@ do {
     // without beginNativeAttempts, and the sender starts no PIN pairing by
     // itself (the every-time tests in airplay/tests/ap2_driver.rs), so a
     // session is the only way to one.
+    // Copied from AppDelegate: when that order changes, change it here too.
     struct App {
         var model = NativeAirPlayModel()
         var everyTime = EveryTimeGuard()

@@ -72,8 +72,8 @@ cells_from_tests --lib \
 
 cd "$root/airplay"
 cells_from_tests "--test ap2_volume" \
-    "k1_row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer=AP2.K1" \
-    "k1_keep_a_new_session_starts_the_samsung_at_the_level_it_holds=AP2.K1.keep"
+    "row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer_without_master_volume=AP2.row20" \
+    "a_new_session_starts_the_samsung_at_the_level_it_holds_without_master_volume=AP2.row20.keep"
 cells_from_tests "--test ap2_samsung" \
     "capture_switch_without_flush=W6.switch" \
     "w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second=W2.flush" \
