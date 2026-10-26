@@ -9,7 +9,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use audiosync_airplay::discovery::{
-    Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
+    Device, DeviceId, DeviceKey, ProtocolPath, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::sender::{
@@ -213,6 +213,14 @@ fn a_second_dual_device_falls_back_to_airplay1_while_the_airplay2_place_is_taken
     assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
     assert!(second_ap2.fake().keys().is_empty());
     assert!(airplay1_keys(&first_ap1).is_empty());
+    // The host names the path each one actually takes (S313).
+    assert!(
+        events
+            .of(&second)
+            .contains(&SpeakerEvent::Path(ProtocolPath::AirPlay1)),
+        "{:?}",
+        events.of(&second)
+    );
 }
 
 // covers: P214

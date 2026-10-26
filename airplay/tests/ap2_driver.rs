@@ -1303,6 +1303,7 @@ fn session_status(event: &SpeakerEvent) -> bool {
     matches!(
         event,
         SpeakerEvent::State(_)
+            | SpeakerEvent::Path(_)
             | SpeakerEvent::Error(_)
             | SpeakerEvent::Warning(_)
             | SpeakerEvent::Latency(_)

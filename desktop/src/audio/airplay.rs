@@ -4036,7 +4036,9 @@ impl AirPlaySpeakers {
                     .log(|| format!("AirPlay speaker {} trace: {line}", self.label(id)));
                 false
             }
-            SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) => false,
+            SpeakerEvent::Methods(_) | SpeakerEvent::AudioJack(_) | SpeakerEvent::Path(_) => {
+                false
+            }
         }
     }
 

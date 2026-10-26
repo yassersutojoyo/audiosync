@@ -421,6 +421,10 @@ pub struct SpeakerError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpeakerEvent {
     State(SpeakerState),
+    /// The path a new session takes, sent before its Connecting state: a
+    /// receiver that speaks both can play over AirPlay 1 while the AirPlay 2
+    /// place is taken (P214).
+    Path(ProtocolPath),
     Error(SpeakerError),
     /// Something to show; the session goes on.
     Warning(Warning),

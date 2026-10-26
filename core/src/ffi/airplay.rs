@@ -4303,6 +4303,43 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S313
+    #[test]
+    fn a_dual_receiver_is_listed_on_the_path_its_session_takes() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        inside(handle).airplay2_preferred = true;
+        let airplay = airplay2_only();
+        let own = raop("02005E005305", "Living Room", OPEN);
+        let both = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))
+            .expect("a device");
+        let key = both.key.clone();
+        let info = ReceiverInfo::new(both);
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Appeared(Box::new(
+            info.clone(),
+        ))));
+        let speaker = |event| SenderEvent::Speaker {
+            key: key.clone(),
+            event,
+        };
+        let over_airplay2 = |handle: *mut AscAirPlay| {
+            let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+            report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2 != 0
+        };
+        assert!(over_airplay2(handle), "the preference sends it to AirPlay 2");
+
+        // The AirPlay 2 place is taken: it plays over AirPlay 1 (P214).
+        inside(handle).take_in(speaker(SpeakerEvent::Path(ProtocolPath::AirPlay1)));
+        assert!(!over_airplay2(handle), "its row says AirPlay");
+        inside(handle).take_in(speaker(SpeakerEvent::State(SpeakerState::Stopped)));
+        assert!(over_airplay2(handle), "stopped: the path a new session takes");
+        inside(handle).take_in(speaker(SpeakerEvent::Path(ProtocolPath::AirPlay1)));
+        inside(handle).take_in(speaker(SpeakerEvent::Path(ProtocolPath::AirPlay2)));
+        assert!(over_airplay2(handle), "a later session got the place");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     #[test]
     fn discovery_starts_on_the_handles_browser_and_destroy_is_prompt() {
         let mut handle = create_with(quiet);

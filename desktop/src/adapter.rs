@@ -7779,6 +7779,55 @@ mod tests {
         }
     }
 
+    /// A receiver that speaks both, which the preference sends to AirPlay 2,
+    /// plays over AirPlay 1 while the AirPlay 2 place is taken (P214): its
+    /// row names the path its session takes (spec S313).
+    // covers: S313
+    #[test]
+    fn a_dual_receiver_reads_the_path_its_session_takes() {
+        use audiosync_airplay::discovery::ProtocolPath;
+        use audiosync_airplay::sender::{SpeakerEvent, SpeakerState};
+
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        fake.set_airplay2_preferred(true);
+        audio.set_airplay(fake.link(), None);
+        let den = dual_device(12, "Den");
+        fake.appear(&den);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.airplay2_auto = true;
+        adapter.poll();
+        let kind = |adapter: &AudioAdapter<MockBackend>| {
+            adapter.snapshot().speaker(&ap(&den)).unwrap().kind
+        };
+        assert_eq!(kind(&adapter), SpeakerKind::AirPlay2);
+        adapter.set_speaker_enabled(&ap(&den), true);
+        let speaker_event = |event: SpeakerEvent| {
+            fake.push(SenderEvent::Speaker {
+                key: den.key.clone(),
+                event,
+            });
+        };
+
+        speaker_event(SpeakerEvent::Path(ProtocolPath::AirPlay1));
+        speaker_event(SpeakerEvent::State(SpeakerState::Connecting));
+        adapter.poll();
+        assert_eq!(kind(&adapter), SpeakerKind::AirPlay, "it plays over AirPlay 1");
+        speaker_event(SpeakerEvent::State(SpeakerState::Stopped));
+        adapter.poll();
+        assert_eq!(
+            kind(&adapter),
+            SpeakerKind::AirPlay2,
+            "stopped: the path a new session takes"
+        );
+        speaker_event(SpeakerEvent::Path(ProtocolPath::AirPlay1));
+        speaker_event(SpeakerEvent::Path(ProtocolPath::AirPlay2));
+        adapter.poll();
+        assert_eq!(kind(&adapter), SpeakerKind::AirPlay2, "a later session got the place");
+    }
+
     /// After `speaker` turned its stored key down: the row asks for a code
     /// again, it is off with a notice saying it needs a PIN, and switching it
     /// on starts a new pairing, which replaces the kept key.
