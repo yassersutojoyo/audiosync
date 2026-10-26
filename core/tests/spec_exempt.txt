@@ -85,7 +85,7 @@ S219 Mac host only: what the app hands its own AirPlay sender as track info; its
 S220 Mac host only: the delay field's typed text and when it applies; its logic suite checks it.
 S221 Mac host only: the delay panels of the speaker rows; its logic suite checks it.
 S222 Mac host only: the window's model of the native AirPlay sender's receivers, speakers and failures; its logic suite checks it.
-S223 Hosts only: pairing and password prompts for the native AirPlay sender, and when a speaker announcing flags bit 3 counts as paired; the Windows and Mac parts are still to be built (S223 Required).
+S223 Hosts only: pairing and password prompts for the native AirPlay sender, and when a speaker announcing flags bit 3 counts as paired; the Windows and Mac parts are still to be built (S223 Required), including the end of the PIN session at the end of the stream.
 S225 Test harness only: the soak run's memory rule; the soak rules suite checks it.
 S228 Mac host only: the names the user gives speakers and the inline rename; its logic suite checks it.
 S256 Web remote and hosts only: the snapshot's zones, presets and calibrating flag; the remote crate's, the Windows host's and the Mac logic suites check it.
