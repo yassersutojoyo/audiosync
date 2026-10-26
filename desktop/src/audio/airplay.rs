@@ -3687,6 +3687,16 @@ impl AirPlaySpeakers {
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
         }
+        // A session the sender restarts by itself (an ALAC retry, a path
+        // switch) says so with a state alone, no error.
+        if self
+            .added
+            .get(id)
+            .is_some_and(|added| self.gone_unplayed(id, added))
+        {
+            self.reconcile();
+            return true;
+        }
         relisted || was_playing != (state == SpeakerState::Playing)
     }
 
