@@ -177,8 +177,11 @@ enum AppLifecycle {
         ///     since the switch began, whatever came of it.
         static func afterWait(sourceIsSystem: Bool, userStopped: Bool, running: Bool,
                               userStarted: Bool) -> AfterWait {
-            if sourceIsSystem, !userStopped, !running { return .attempt }
-            return .drop(release: !userStopped && !running)
+            // A user start that failed has stopped streaming and shown its alert already.
+            guard !userStarted, !userStopped, sourceIsSystem else {
+                return .drop(release: !userStarted && !userStopped && !running)
+            }
+            return running ? .startedMeanwhile : .attempt
         }
 
         /// - Parameters:

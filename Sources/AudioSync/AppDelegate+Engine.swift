@@ -16,6 +16,7 @@ extension AppDelegate {
     func startEngine(origin: StartOrigin, rebuild: Bool = false, switching: CaptureSwitch.Change? = nil,
                      onCaptureFailure: (() -> Void)? = nil) {
         if origin != .automatic {
+            userStarts &+= 1
             userStopped = false
             autoStartFailed = false
             clearNotices([Notice.source, Notice.start, Notice.capture])
@@ -290,6 +291,7 @@ extension AppDelegate {
     /// refused capture again (`AppLifecycle.SystemSwitch`).
     private func switchToSystem(after bundleID: String, name: String) {
         var attempt = 0
+        let starts = userStarts
         let firstWait = AppLifecycle.SystemSwitch.firstWait(sinceDestroy: SourceCapture.sinceLastDestroy)
         if firstWait > 0, engine.isRunning {
             // Ends the capture still waiting for the app, whose own looks would report the quit again.
@@ -315,7 +317,10 @@ extension AppDelegate {
                 return .captureFailed
             },
             later: { delay, body in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: body) },
-            stillWanted: { [weak self] in self?.systemSwitchStillWanted() ?? .drop(release: false) },
+            stillWanted: { [weak self] in
+                guard let self else { return .drop(release: false) }
+                return systemSwitchStillWanted(userStarted: userStarts != starts)
+            },
             finish: { [weak self] started in
                 guard let self else { return }
                 // A failed start has its own "start" notice; this one still says which app quit.
@@ -326,9 +331,9 @@ extension AppDelegate {
     }
 
     /// Whether the whole system's next attempt still runs (`SystemSwitch.afterWait`).
-    private func systemSwitchStillWanted() -> AppLifecycle.SystemSwitch.AfterWait {
+    private func systemSwitchStillWanted(userStarted: Bool) -> AppLifecycle.SystemSwitch.AfterWait {
         let next = AppLifecycle.SystemSwitch.afterWait(sourceIsSystem: audioSource == .system, userStopped: userStopped,
-                                                       running: engine.isRunning, userStarted: false)
+                                                       running: engine.isRunning, userStarted: userStarted)
         if case .drop(let release) = next {
             DebugTrace.log("[AudioSync] the whole system's next attempt is dropped: streaming or the source changed meanwhile")
             if release { stopEngine(.startFailed) }
