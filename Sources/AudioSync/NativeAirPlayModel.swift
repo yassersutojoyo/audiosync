@@ -53,7 +53,7 @@ enum NativeTarget {
 
 /// What a stereo pair or home theater group row says about its members
 /// (P176, P181).
-/// The speakers (app IDs) the user switched on by hand this run, kept
+/// The speakers (app IDs) the user switched on by hand in this stream, kept
 /// apart from the sender's model so they outlive a sender Retry: one that
 /// asks for a code every time stays on when it appears again.
 struct EveryTimeGuard: Equatable {
@@ -71,9 +71,12 @@ struct EveryTimeGuard: Equatable {
         return asking.filter { enabled.contains($0) && !byHand.contains($0) }
     }
 
-    /// The stream ended. Of `asking`, the speakers that go off and why.
+    /// The stream ended, and with it the PIN session each click bought, so
+    /// every mark goes (a retry inside the stream keeps them). Of `asking`,
+    /// the speakers still on go off with the notice that they need a PIN.
     mutating func streamEnded(_ asking: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
-        turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+        byHand.removeAll()
+        return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
     }
 }
 

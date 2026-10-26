@@ -201,6 +201,17 @@ extension AppDelegate {
         closeWithdrawnPrompt()
     }
 
+    /// The stream ended: a speaker that asks for a code every time and was
+    /// switched on by hand goes off with the needs-a-PIN notice, since left
+    /// on it would play nothing in the next stream (S223).
+    func endNativePinSessions() {
+        guard let native = nativeAirPlay else { return }
+        let asking = native.model.askingEveryTime(native.model.rows(enabled: enabledAirPlay))
+        for off in everyTimeGuard.streamEnded(asking, enabled: enabledAirPlay) {
+            turnOffNativeSpeaker(off.id, reason: off.reason, origin: .automatic)
+        }
+    }
+
     /// The native speaker `id` (app ID) was switched off: its attempt ends,
     /// its prompt is dropped, and a pairing under way stops, since the
     /// sender would otherwise wait for its PIN forever.
