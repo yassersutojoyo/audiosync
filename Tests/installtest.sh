@@ -81,8 +81,14 @@ if run --dry-run >/dev/null; then flunk "API answer without a tag"; else pass "A
 
 if FAKE_CURL_FAIL=1 run --dry-run >/dev/null; then flunk "API unreachable"; else pass "API unreachable"; fi
 
-for bad in '1.0; rm -rf /' '../0.6.0' 'latest' ''; do
-  if run --dry-run "$bad" >/dev/null; then flunk "rejects version '$bad'"; else pass "rejects version '$bad'"; fi
+for bad in '1.0; rm -rf /' '../0.6.0' 'latest' $'0.6.0\nrm' ''; do
+  if got=$(run --dry-run "$bad"); then
+    flunk "rejects version '$bad'"
+  elif printf '%s' "$got" | grep -Eq "isn't a version number|is empty"; then
+    pass "rejects version '$bad'"
+  else
+    flunk "rejects version '$bad': got '$got'"
+  fi
 done
 
 if [ "$(uname -s)" != Darwin ]; then

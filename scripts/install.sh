@@ -31,8 +31,10 @@ tag_from_json() {
     | head -n 1
 }
 
+# [[ =~ ]] rather than grep, which matches line by line and would let a newline through.
 valid_version() {
-  printf '%s' "$1" | grep -Eq '^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$'
+  local re='^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$'
+  [[ $1 =~ $re ]]
 }
 
 check_mac() {
@@ -68,6 +70,7 @@ main() {
       --dry-run) dry_run=1 ;;
       -h|--help) usage; exit 0 ;;
       -*) usage >&2; exit 2 ;;
+      '') fail "the version argument is empty." ;;
       *) [ -z "$version" ] || { usage >&2; exit 2; }; version=$1 ;;
     esac
     shift
@@ -107,7 +110,8 @@ main() {
   say "Checking the SHA-256 checksum"
   local expected actual
   expected=$(awk -v f="$zip" '$2 == f || $2 == "*" f { print $1; exit }' "$tmp/SHA256SUMS.txt")
-  printf '%s' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' || fail "SHA256SUMS.txt lists no checksum for $zip."
+  local hex='^[0-9a-fA-F]{64}$'
+  [[ $expected =~ $hex ]] || fail "SHA256SUMS.txt lists no checksum for $zip."
   actual=$(shasum -a 256 "$tmp/$zip" | awk '{ print $1 }')
   [ "$actual" = "$expected" ] || fail "the checksum of $zip doesn't match SHA256SUMS.txt. Nothing was installed."
 
@@ -124,8 +128,13 @@ main() {
     mv "$dest" "$old" || fail "couldn't move the old $dest aside. Nothing was changed."
   fi
   if ! mv "$stage/$APP_NAME" "$dest"; then
-    if [ -e "$old" ]; then mv "$old" "$dest" || true; fi
-    fail "couldn't put the new app in place. The old one was put back."
+    if [ ! -e "$old" ]; then
+      fail "couldn't put the new app in place."
+    elif mv "$old" "$dest"; then
+      fail "couldn't put the new app in place. The old one was put back."
+    else
+      fail "couldn't put the new app in place or put the old one back. The old app is at $old; move it to $dest by hand."
+    fi
   fi
   if [ -e "$old" ]; then
     rm -rf "$old" || say "Couldn't delete the old copy at $old. Delete it by hand."
