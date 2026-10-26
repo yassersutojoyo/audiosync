@@ -5609,6 +5609,51 @@ do {
           "\(quit(rebuild)), \(quit(rebuild, music, .system))")
     check(quit(.rebuildFailed(SourceCapture.CaptureError.formatUnusable(1)), music, .system) == "keep",
           "source quit: a rebuild that fails for another cause is no app quit")
+    // S227 g: the capture let the app's tap go once its audio process ended
+    // ("waiting for one"), the app's quit came next, and Core Audio refused
+    // the whole system's first tap ('what'). Each wait runs at once here.
+    typealias Attempt = AppLifecycle.SystemSwitch.Attempt
+    func systemSwitch(_ answers: [Attempt], userActsAfter: Int? = nil)
+        -> (streaming: Bool?, lasts: [Bool], waits: [TimeInterval]) {
+        var left = answers, lasts: [Bool] = [], waits: [TimeInterval] = [], pending: [() -> Void] = []
+        var streaming: Bool?
+        AppLifecycle.SystemSwitch.run(
+            start: { last in
+                lasts.append(last)
+                return left.isEmpty ? .failed : left.removeFirst()
+            },
+            later: { delay, body in
+                waits.append(delay)
+                pending.append(body)
+            },
+            stillWanted: { userActsAfter != lasts.count },
+            finish: { streaming = $0 })
+        while !pending.isEmpty { pending.removeFirst()() }
+        return (streaming, lasts, waits)
+    }
+    var quitSource = music
+    var afterQuit: (streaming: Bool?, lasts: [Bool], waits: [TimeInterval]) = (nil, [], [])
+    if quit(musicQuit, music, .system) == "switchToSystem com.apple.Music" {
+        quitSource = .system
+        afterQuit = systemSwitch([.captureFailed, .started])
+    }
+    check(quitSource == .system && afterQuit.streaming == true && afterQuit.lasts == [false, false]
+            && afterQuit.waits == [AppLifecycle.SystemSwitch.spacing],
+          "source quit: a whole system whose first tap fails right after the app's tap went starts on the next try (S227 g)",
+          "\(quitSource), \(afterQuit)")
+    let refused = systemSwitch([.captureFailed, .captureFailed, .captureFailed, .started])
+    check(refused.streaming == false && refused.lasts == [false, false, true] && refused.waits.count == 2
+            && AppLifecycle.SystemSwitch.spacing * Double(refused.waits.count) <= 1,
+          "source quit: the whole system is tried 3 times, 0.5 s apart, then the last failure stops streaming (S227 g)",
+          "\(refused)")
+    let noSpeaker = systemSwitch([.failed, .started])
+    check(noSpeaker.streaming == false && noSpeaker.lasts == [false] && noSpeaker.waits.isEmpty,
+          "source quit: a start that fails before the capture (no speaker, permission) is not tried again (S227 g)",
+          "\(noSpeaker)")
+    let userActed = systemSwitch([.captureFailed, .started], userActsAfter: 1)
+    check(userActed.streaming == nil && userActed.lasts == [false],
+          "source quit: a stop, start or source change during the wait ends the retries, with no notice (S227 g)",
+          "\(userActed)")
     // macOS's app list can miss the mix's other apps in the turn one of them quits.
     let mix3 = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.apple.Safari", "com.apple.TextEdit"])
     func mixQuit(_ report: Report, running: Set<String> = []) -> String {
