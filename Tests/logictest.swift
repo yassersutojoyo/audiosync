@@ -2242,6 +2242,10 @@ do {
     check(beforeGone.isEmpty && afterGone.remove == ["K1"] && afterGone.add.isEmpty && afterGone.turnOff.isEmpty,
           "native airplay: a retrying speaker whose receiver is gone leaves the sender and stays on",
           "before \(beforeGone), after \(afterGone)")
+    let switchedOff = withdrawn.plan(streaming: true, enabled: [])
+    check(afterGone.gone == ["K1"] && switchedOff.remove == ["K1"] && switchedOff.gone.isEmpty,
+          "native airplay: a retrying speaker whose receiver is gone is named by no notice",
+          "after \(afterGone), switched off \(switchedOff)")
     withdrawn.removed("K1")
     check(withdrawn.apply(.state(id: "K1", .retrying, retryMs: 1000)) == nil
             && withdrawn.plan(streaming: true, enabled: kitchenOn).isEmpty,
@@ -2259,7 +2263,7 @@ do {
     _ = lapsed.apply(.error(id: "K1", .connectionLost, retryMs: 1000, detail: "Lost"))
     _ = lapsed.apply(.state(id: "K1", .retrying, retryMs: 1000))
     let lost = lapsed.plan(streaming: true, enabled: kitchenOn)
-    check(playingOn.isEmpty && lost.remove == ["K1"] && lost.turnOff.isEmpty,
+    check(playingOn.isEmpty && lost.remove == ["K1"] && lost.gone == ["K1"] && lost.turnOff.isEmpty,
           "native airplay: a speaker playing on after its announcement lapsed leaves the sender once it is lost",
           "playing \(playingOn), lost \(lost)")
 
@@ -3173,7 +3177,8 @@ do {
             && playing.holdingTarget(left, on: true) == pair && !playing.rows(enabled: [app(left)]).contains(app(left)),
           "P176 native airplay: a pair gone while it plays keeps its row until switched off, and its members can't join meanwhile")
     _ = playing.apply(.state(id: pair, .retrying, retryMs: 1000))
-    check(playing.rows(enabled: [app(pair)]).contains(app(pair)),
+    check(playing.rows(enabled: [app(pair)]).contains(app(pair))
+            && playing.plan(streaming: true, enabled: [app(pair)]).remove.isEmpty,
           "P176 native airplay: a gone pair still in the sender keeps its row while it reconnects")
     playing.removed(pair)
     check(playing.holdingTarget(left, on: false) == nil && playing.rows(enabled: []).contains(app(left))

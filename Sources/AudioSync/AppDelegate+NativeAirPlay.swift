@@ -379,10 +379,11 @@ extension AppDelegate {
         let released = Set(plan.release.map(NativeAirPlayID.app))
         airplayOrder.removeAll { released.contains($0) }   // their target's row stands for them now
         for id in plan.remove {
-            // Switched off or streaming stopped: it no longer waits for the slot.
-            if native.model.isWaiting(id) { clearNotices([SpeakerKey.make(id: NativeAirPlayID.app(id), airplay: true)]) }
+            let gone = plan.gone.contains(id)
+            // Its wait for the slot ends, and a gone one has no row for a notice to name (S222).
+            if gone || native.model.isWaiting(id) { clearNotices([SpeakerKey.make(id: NativeAirPlayID.app(id), airplay: true)]) }
             native.remove(id)
-            DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
+            DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))" + (gone ? ", its receiver is gone; it stays on" : ""))
         }
         // The plan's own streaming input: stopEngine stops the engine before it syncs.
         let appeared = plan.changesRows ? adoptNativeRows(native.model, stopped: !engine.isRunning) : []
