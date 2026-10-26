@@ -156,11 +156,10 @@ extension AppDelegate {
                 clearNotices([SpeakerKey.make(id: id, airplay: true)])
             }
             pushModel()   // the row says it waits, or no longer
-        case .volumeChanged(let id, let position, let level):
+        case .volumeChanged(let id, let position, _):
             // Calibrate All Speakers keeps it silent and sets its volume back when the run ends.
             guard calibrateAllRun?.silences(airPlay: id) != true else { return }
             airplayVolume[id] = position
-            airplayDeviceLevel[id] = AirPlayDeviceLevel(level: level, zone: airPlayZoneVolume(id), master: masterVolume)
             pushModel()
         case .ptpPortsTaken:
             updatePtpPortNotice { $0.reported() }
@@ -455,7 +454,6 @@ extension AppDelegate {
         let zone = airPlayZoneVolume(id)
         if let moved = AirPlayDeviceLevel.move(row: volume, zone: zone, master: masterVolume) {
             airplayVolume[id] = moved.own
-            airplayDeviceLevel[id] = AirPlayDeviceLevel(level: moved.level, zone: zone, master: masterVolume)
             // A speaker Calibrate All Speakers keeps silent gets its volume back when the run ends.
             if let receiver = NativeAirPlayID.receiver(id), calibrateAllRun?.silences(airPlay: id) != true {
                 nativeAirPlay?.setDeviceLevel(receiver, own: moved.own, level: moved.level)
@@ -465,25 +463,13 @@ extension AppDelegate {
     }
 
     /// A preset gave AirPlay speaker `id` its own volume back: it plays at
-    /// own × zone × master and its row shows that again (S290).
+    /// own × zone × master and its row shows that (S290).
     func setNativeAirPlayOwnVolume(_ id: String, _ own: Double) {
         airplayVolume[id] = own
-        airplayDeviceLevel[id] = nil
         if let receiver = NativeAirPlayID.receiver(id), calibrateAllRun?.silences(airPlay: id) != true {
             nativeAirPlay?.setVolume(receiver, volume: own)
         }
         pushModel()
-    }
-
-    /// A zone move keeps each own volume, so the AirPlay rows whose zone
-    /// volume changed show own × zone × master again (S290).
-    func forgetAirPlayDeviceLevels(zonedFrom old: [SpeakerZone]) {
-        let before: [String: Double] = SpeakerZone.volumes(old, kind: .airplay)
-        let after: [String: Double] = SpeakerZone.volumes(zones, kind: .airplay)
-        let ids: Set<String> = Set(before.keys).union(after.keys)
-        for id in ids where before[id] != after[id] {
-            airplayDeviceLevel[id] = nil
-        }
     }
 
     /// Sends AirPlay speaker `id` (app ID) the device level its row shows, as
@@ -491,8 +477,7 @@ extension AppDelegate {
     @discardableResult
     func sendNativeRowLevel(_ id: String) -> Double {
         let own = airplayVolume[id] ?? defaultVolume
-        let level = AirPlayDeviceLevel.sent(own: own, zone: airPlayZoneVolume(id), master: masterVolume,
-                                            remembered: airplayDeviceLevel[id])
+        let level = AirPlayDeviceLevel.sent(own: own, zone: airPlayZoneVolume(id), master: masterVolume)
         if let receiver = NativeAirPlayID.receiver(id) {
             nativeAirPlay?.setDeviceLevel(receiver, own: own, level: level)
         }
@@ -506,8 +491,7 @@ extension AppDelegate {
 
     /// The whole number AirPlay speaker `id`'s row shows (S290).
     func airPlayRowLevel(_ id: String) -> Double {
-        AirPlayDeviceLevel.row(own: airplayVolume[id] ?? defaultVolume, zone: airPlayZoneVolume(id),
-                               master: masterVolume, remembered: airplayDeviceLevel[id])
+        AirPlayDeviceLevel.row(own: airplayVolume[id] ?? defaultVolume, zone: airPlayZoneVolume(id), master: masterVolume)
     }
 
     /// A native speaker's slider drag began or ended: the core ignores read-backs during it.
