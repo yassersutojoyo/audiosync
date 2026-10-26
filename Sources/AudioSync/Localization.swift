@@ -643,6 +643,9 @@ struct UIStrings {
     func nativeAirPlayWaitingTitle(name: String) -> String { "\(name) waiting" }
     /// Under the name of a speaker waiting for the AirPlay 2 slot.
     let waitingForAirPlay2 = "Waiting for the other AirPlay 2 speaker"
+    /// Under the name of an AirPlay speaker that is not announced on the
+    /// network right now; it starts by itself once it is again (P215).
+    let notOnNetwork = "Not on the network right now, plays once it's back"
     /// An Apple TV whose home theater group AudioSync plays to (P177).
     func nativeAirPlayPlaysThroughSpeakers(name: String) -> String {
         "\(name) plays through its home theater speakers, and AudioSync already plays to them, so it's off. "
@@ -1184,11 +1187,13 @@ struct UIStrings {
     // MARK: Google Cast speakers
 
     /// The note under a speaker's name, also read in its VoiceOver hint:
-    /// what a Cast speaker does, that an AirPlay 2 speaker waits, or what a
-    /// stereo pair or home theater group is made of.
-    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, target: AirPlayTargetRow?) -> String? {
+    /// what a Cast speaker does, that an AirPlay 2 speaker waits, that an
+    /// AirPlay speaker is off the network, or what a stereo pair or home
+    /// theater group is made of.
+    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, unannounced: Bool, target: AirPlayTargetRow?) -> String? {
         if let cast { return castNote(cast) }
         if waitingForAirPlay2 { return self.waitingForAirPlay2 }
+        if unannounced { return notOnNetwork }
         return target.map(airPlayTargetNote)
     }
     /// A stereo pair or home theater group: its kind and members, or the

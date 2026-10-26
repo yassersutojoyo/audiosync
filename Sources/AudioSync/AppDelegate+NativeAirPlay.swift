@@ -171,6 +171,8 @@ extension AppDelegate {
             updatePtpPortNotice { $0.reported() }
         case .ptpPortsFree:
             updatePtpPortNotice { $0.portsFree() }
+        case .unannouncedChanged:
+            pushModel()   // the row says it is off the network, or no longer
         }
     }
 
