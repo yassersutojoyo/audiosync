@@ -1863,3 +1863,191 @@ fn no_status_flags_in_an_info_answer_make_the_sender_drop_stored_credentials() {
         sender.shutdown();
     }
 }
+
+fn status_flags_body(flags: i64) -> Vec<u8> {
+    common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(flags),
+    )]))
+}
+
+// Anyone can answer /info with bit 3, so it alone costs neither a PIN prompt
+// nor a turn-down: a receiver that still holds the stored credentials plays.
+// covers: P61, P154, P182
+#[test]
+fn a_pin_flag_alone_verifies_with_the_stored_credentials_and_plays() {
+    let _serial = serial();
+    for (id, flags) in [(73u8, 0x8), (74, 0x4c), (75, 0x8 | 0x80)] {
+        let mut fake = FakeAp2::new();
+        fake.hap.code = "4821".to_owned();
+        fake.info_body = status_flags_body(0x244);
+        let server = Ap2Server::start(fake);
+        let (sender, _host) = start();
+        let mut events = Events::default();
+        let device = airplay2_only(&server, id);
+        let key = device.key.clone();
+        let credentials = pair_first_time(&server, &sender, &mut events, &device);
+        let mut paired_options = options();
+        paired_options.homekit_credentials = Some(credentials);
+        // Turned-down credentials would give way to this password (P61).
+        paired_options.password = Some(Secret::new("4821".to_owned()));
+        {
+            let mut fake = server.fake();
+            fake.info_body = status_flags_body(flags);
+            fake.requests.clear();
+        }
+
+        // A turn-down after the first session would end the second one in
+        // a PIN or password pairing.
+        for session in 1..=2 {
+            sender.add_speaker(device.clone(), paired_options.clone());
+            assert!(
+                events
+                    .wait_state(&sender, &key, session, LONG, |s| *s
+                        == SpeakerState::Playing)
+                    .is_some(),
+                "{flags:#x} session {session}: {:?} {:?}",
+                events.of(&key),
+                server.fake().keys()
+            );
+            sender.remove_speaker(&key);
+            assert!(
+                events
+                    .wait_state(&sender, &key, session, LONG, |s| *s
+                        == SpeakerState::Stopped)
+                    .is_some(),
+                "{flags:#x} session {session}"
+            );
+        }
+        let keys = server.fake().keys();
+        assert!(
+            keys.contains(&"POST /pair-verify".to_owned()),
+            "{flags:#x}: {keys:?}"
+        );
+        assert!(
+            !keys.contains(&"POST /pair-setup".to_owned()),
+            "{flags:#x}: {keys:?}"
+        );
+        assert!(
+            !keys.contains(&"POST /pair-pin-start".to_owned()),
+            "{flags:#x}: {keys:?}"
+        );
+        assert_eq!(errors(&events, &key), [], "{flags:#x}");
+        assert!(credential_events(&events, &key).is_empty(), "{flags:#x}");
+        sender.shutdown();
+    }
+}
+
+// Bit 3 and a failed pair-verify: a TV now set to ask every time, or an
+// impostor without the receiver's key. Only that failure turns the stored
+// credentials down and offers the PIN; the next session asks for it without
+// verifying again, and the host's copy stays.
+// covers: P61, P154, P182
+#[test]
+fn a_pin_flag_and_a_failed_verify_turn_the_credentials_down_and_offer_the_pin() {
+    let _serial = serial();
+    for (id, impostor) in [(76u8, false), (77, true)] {
+        let mut fake = FakeAp2::new();
+        fake.hap.code = "4821".to_owned();
+        fake.info_body = status_flags_body(0x244);
+        let server = Ap2Server::start(fake);
+        let (sender, _host) = start();
+        let mut events = Events::default();
+        let device = airplay2_only(&server, id);
+        let key = device.key.clone();
+        let credentials = pair_first_time(&server, &sender, &mut events, &device);
+        let mut paired_options = options();
+        paired_options.homekit_credentials = Some(credentials);
+        {
+            let mut fake = server.fake();
+            fake.info_body = status_flags_body(0x4c);
+            if impostor {
+                fake.hap.seed = [0x77; 32];
+            } else {
+                fake.hap.pairing_per_connection = true;
+            }
+            fake.requests.clear();
+        }
+
+        sender.add_speaker(device.clone(), paired_options.clone());
+        assert!(
+            events
+                .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Failed)
+                .is_some(),
+            "impostor {impostor}: {:?} {:?}",
+            events.of(&key),
+            server.fake().keys()
+        );
+        let reasons: Vec<(ErrorKind, UserReason)> = events
+            .of(&key)
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeakerEvent::Error(error) => Some((error.error.kind, error.reason)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reasons,
+            [(ErrorKind::PairingRequired, UserReason::PairingRequired)],
+            "impostor {impostor}"
+        );
+        let keys = server.fake().keys();
+        assert!(
+            keys.contains(&"POST /pair-verify".to_owned()),
+            "impostor {impostor}: one pair-verify first: {keys:?}"
+        );
+        assert!(
+            !keys.contains(&"POST /pair-setup".to_owned()),
+            "impostor {impostor}: {keys:?}"
+        );
+        sender.remove_speaker(&key);
+        assert!(
+            events
+                .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Stopped)
+                .is_some()
+        );
+
+        // Turned down: the next session asks for the PIN at once.
+        server.fake().requests.clear();
+        sender.add_speaker(device.clone(), paired_options.clone());
+        assert!(
+            events
+                .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Failed)
+                .is_some(),
+            "impostor {impostor}: {:?} {:?}",
+            events.of(&key),
+            server.fake().keys()
+        );
+        assert_eq!(
+            errors(&events, &key),
+            [ErrorKind::PairingRequired, ErrorKind::PairingRequired],
+            "impostor {impostor}"
+        );
+        let keys = server.fake().keys();
+        assert!(
+            !keys.contains(&"POST /pair-verify".to_owned()),
+            "impostor {impostor}: {keys:?}"
+        );
+        assert!(
+            credential_events(&events, &key).is_empty(),
+            "impostor {impostor}: nothing tells the host to delete its copy"
+        );
+        sender.remove_speaker(&key);
+        assert!(
+            events
+                .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Stopped)
+                .is_some()
+        );
+
+        // The PIN the host is offered.
+        sender.start_pairing(device);
+        let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+        assert!(
+            wait_pairing(&mut events, &sender, &key, 2, pin_requested).is_some(),
+            "impostor {impostor}: {:?}",
+            pairing_events(&events, &key)
+        );
+        sender.cancel_pairing(&key);
+        sender.shutdown();
+    }
+}
