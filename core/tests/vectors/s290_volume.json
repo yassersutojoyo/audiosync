@@ -1,6 +1,6 @@
 {
   "clause": "S290",
-  "about": "AirPlay row, master and stored own volume. k = (zone/100)(master/100); level D = min(100, own x k); the row shows D rounded down with 0.01 of slack. Ops, applied in order to one speaker: own sets the stored own volume; row_move moves the row to R (sends D = R and stores own = R / k, or sends nothing at k = 0, marked sent false); tv_level is a level set on the speaker (D = tv_level, own = D / k); master moves the master and keeps own. After each step, level is the D the speaker gets (compare within 1e-6) and row is what the row shows.",
+  "about": "AirPlay row, master and stored own volume. k = (zone/100)(master/100); level D = min(100, own x k); the row shows D rounded down with 0.01 of slack. Ops, applied in order to one speaker that starts at own 0: own sets the own volume; stored_own is one loaded from settings, a preset or an add, kept unclamped above and at least 0; row_move moves the row to R (sends D = R and stores own = R / k); step is a remote VolumeUp (+5) or VolumeDown (-5), a row move to the shown row plus the step, clamped to 0 to 100; tv_level is a level read back from the speaker and device_volume a DACP DeviceVolume, both a change made on the speaker (D = value, own = D / k); master moves the master and keeps own. sent false marks a step that sends nothing and changes nothing (k at 0, an up step at 100, a down step at 0). After each step, level is the D the speaker has, own_after the stored own volume (both within 1e-6) and row what the row shows.",
   "cases": [
     {
       "name": "row 100 at master 63 sends 100",
@@ -10,7 +10,8 @@
         {
           "row_move": 100,
           "level": 100.0,
-          "row": 100.0
+          "row": 100.0,
+          "own_after": 158.73015873
         }
       ]
     },
@@ -22,12 +23,14 @@
         {
           "tv_level": 80,
           "level": 80.0,
-          "row": 80.0
+          "row": 80.0,
+          "own_after": 126.984126984
         },
         {
           "master": 64,
           "level": 81.26984127,
-          "row": 81.0
+          "row": 81.0,
+          "own_after": 126.984126984
         }
       ]
     },
@@ -39,12 +42,14 @@
         {
           "row_move": 100,
           "level": 100.0,
-          "row": 100.0
+          "row": 100.0,
+          "own_after": 158.73015873
         },
         {
           "master": 50,
           "level": 79.365079365,
-          "row": 79.0
+          "row": 79.0,
+          "own_after": 158.73015873
         }
       ]
     },
@@ -56,17 +61,20 @@
         {
           "tv_level": 80,
           "level": 80.0,
-          "row": 80.0
+          "row": 80.0,
+          "own_after": 126.984126984
         },
         {
           "master": 100,
           "level": 100.0,
-          "row": 100.0
+          "row": 100.0,
+          "own_after": 126.984126984
         },
         {
           "master": 63,
           "level": 80.0,
-          "row": 80.0
+          "row": 80.0,
+          "own_after": 126.984126984
         }
       ]
     },
@@ -78,12 +86,14 @@
         {
           "row_move": 40,
           "level": 40.0,
-          "row": 40.0
+          "row": 40.0,
+          "own_after": 126.984126984
         },
         {
           "master": 100,
           "level": 63.492063492,
-          "row": 63.0
+          "row": 63.0,
+          "own_after": 126.984126984
         }
       ]
     },
@@ -95,11 +105,117 @@
         {
           "own": 50,
           "level": 0.0,
-          "row": 0.0
+          "row": 0.0,
+          "own_after": 50
         },
         {
           "row_move": 40,
-          "sent": false
+          "sent": false,
+          "level": 0.0,
+          "row": 0.0,
+          "own_after": 50
+        }
+      ]
+    },
+    {
+      "name": "DeviceVolume 100 at master 63, master to 100 and back keeps 100",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "device_volume": 100,
+          "level": 100.0,
+          "row": 100.0,
+          "own_after": 158.73015873
+        },
+        {
+          "master": 100,
+          "level": 100.0,
+          "row": 100.0,
+          "own_after": 158.73015873
+        },
+        {
+          "master": 63,
+          "level": 100.0,
+          "row": 100.0,
+          "own_after": 158.73015873
+        }
+      ]
+    },
+    {
+      "name": "remote up from 95 at master 63 gives 100, down gives 95",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "row_move": 95,
+          "level": 95.0,
+          "row": 95.0,
+          "own_after": 150.793650794
+        },
+        {
+          "step": 5,
+          "level": 100.0,
+          "row": 100.0,
+          "own_after": 158.73015873
+        },
+        {
+          "step": -5,
+          "level": 95.0,
+          "row": 95.0,
+          "own_after": 150.793650794
+        }
+      ]
+    },
+    {
+      "name": "remote up at 100 and down at 0 change nothing",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "row_move": 100,
+          "level": 100.0,
+          "row": 100.0,
+          "own_after": 158.73015873
+        },
+        {
+          "step": 5,
+          "sent": false,
+          "level": 100.0,
+          "row": 100.0,
+          "own_after": 158.73015873
+        },
+        {
+          "row_move": 0,
+          "level": 0.0,
+          "row": 0.0,
+          "own_after": 0.0
+        },
+        {
+          "step": -5,
+          "sent": false,
+          "level": 0.0,
+          "row": 0.0,
+          "own_after": 0.0
+        }
+      ]
+    },
+    {
+      "name": "a stored own volume above 100 is kept, below 0 is 0",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "stored_own": 158.73015873015873,
+          "level": 100.0,
+          "row": 100.0,
+          "own_after": 158.73015873
+        },
+        {
+          "stored_own": -3,
+          "level": 0.0,
+          "row": 0.0,
+          "own_after": 0.0
         }
       ]
     },
@@ -111,7 +227,8 @@
         {
           "own": 0,
           "level": 0.0,
-          "row": 0.0
+          "row": 0.0,
+          "own_after": 0.0
         }
       ]
     },
@@ -123,7 +240,8 @@
         {
           "own": 20,
           "level": 0.2,
-          "row": 0.0
+          "row": 0.0,
+          "own_after": 20
         }
       ]
     },
@@ -135,7 +253,8 @@
         {
           "own": 50,
           "level": 0.5,
-          "row": 0.0
+          "row": 0.0,
+          "own_after": 50
         }
       ]
     },
@@ -147,7 +266,8 @@
         {
           "own": 80,
           "level": 0.8,
-          "row": 0.0
+          "row": 0.0,
+          "own_after": 80
         }
       ]
     },
@@ -159,7 +279,8 @@
         {
           "own": 100,
           "level": 1.0,
-          "row": 1.0
+          "row": 1.0,
+          "own_after": 100
         }
       ]
     },
@@ -171,7 +292,8 @@
         {
           "own": 0,
           "level": 0.0,
-          "row": 0.0
+          "row": 0.0,
+          "own_after": 0.0
         }
       ]
     },
@@ -183,7 +305,8 @@
         {
           "own": 20,
           "level": 10.0,
-          "row": 10.0
+          "row": 10.0,
+          "own_after": 20
         }
       ]
     },
@@ -195,7 +318,8 @@
         {
           "own": 50,
           "level": 25.0,
-          "row": 25.0
+          "row": 25.0,
+          "own_after": 50
         }
       ]
     },
@@ -207,7 +331,8 @@
         {
           "own": 80,
           "level": 40.0,
-          "row": 40.0
+          "row": 40.0,
+          "own_after": 80
         }
       ]
     },
@@ -219,7 +344,8 @@
         {
           "own": 100,
           "level": 50.0,
-          "row": 50.0
+          "row": 50.0,
+          "own_after": 100
         }
       ]
     },
@@ -231,7 +357,8 @@
         {
           "own": 0,
           "level": 0.0,
-          "row": 0.0
+          "row": 0.0,
+          "own_after": 0.0
         }
       ]
     },
@@ -243,7 +370,8 @@
         {
           "own": 20,
           "level": 12.6,
-          "row": 12.0
+          "row": 12.0,
+          "own_after": 20
         }
       ]
     },
@@ -255,7 +383,8 @@
         {
           "own": 50,
           "level": 31.5,
-          "row": 31.0
+          "row": 31.0,
+          "own_after": 50
         }
       ]
     },
@@ -267,7 +396,8 @@
         {
           "own": 80,
           "level": 50.4,
-          "row": 50.0
+          "row": 50.0,
+          "own_after": 80
         }
       ]
     },
@@ -279,7 +409,8 @@
         {
           "own": 100,
           "level": 63.0,
-          "row": 63.0
+          "row": 63.0,
+          "own_after": 100
         }
       ]
     },
@@ -291,7 +422,8 @@
         {
           "own": 0,
           "level": 0.0,
-          "row": 0.0
+          "row": 0.0,
+          "own_after": 0.0
         }
       ]
     },
@@ -303,7 +435,8 @@
         {
           "own": 20,
           "level": 20.0,
-          "row": 20.0
+          "row": 20.0,
+          "own_after": 20
         }
       ]
     },
@@ -315,7 +448,8 @@
         {
           "own": 50,
           "level": 50.0,
-          "row": 50.0
+          "row": 50.0,
+          "own_after": 50
         }
       ]
     },
@@ -327,7 +461,8 @@
         {
           "own": 80,
           "level": 80.0,
-          "row": 80.0
+          "row": 80.0,
+          "own_after": 80
         }
       ]
     },
@@ -339,7 +474,8 @@
         {
           "own": 100,
           "level": 100.0,
-          "row": 100.0
+          "row": 100.0,
+          "own_after": 100
         }
       ]
     }

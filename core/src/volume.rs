@@ -202,13 +202,36 @@ pub fn level_set_on_speaker(
     zone_position: f64,
     master_position: f64,
 ) -> Option<RowMove> {
-    let level = device_level_for_db(db)?;
-    let own = own_for_device_level(level, zone_position, master_position).unwrap_or(own_position);
-    let unchanged = own == own_position && row_level(level) == row_level(shown_level);
-    (!unchanged).then_some(RowMove {
-        own_position: own,
+    let moved = level_on_speaker(
+        device_level_for_db(db)?,
+        own_position,
+        zone_position,
+        master_position,
+    );
+    let unchanged = moved.own_position == own_position
+        && row_level(moved.device_level) == row_level(shown_level);
+    (!unchanged).then_some(moved)
+}
+
+/// A change made on the speaker to device level `level` (S290): a reading
+/// (S291) or a DACP DeviceVolume (S276). The row gets `level` and the own
+/// volume becomes D ÷ k, unclamped, or stays `own_position` with k at 0.
+pub fn level_on_speaker(
+    level: f64,
+    own_position: f64,
+    zone_position: f64,
+    master_position: f64,
+) -> RowMove {
+    let level = if level.is_finite() {
+        level.clamp(MIN_POSITION, MAX_POSITION)
+    } else {
+        MIN_POSITION
+    };
+    RowMove {
+        own_position: own_for_device_level(level, zone_position, master_position)
+            .unwrap_or(own_position),
         device_level: level,
-    })
+    }
 }
 
 /// The first reading this close to a level sent is the speaker's echo (S291).
