@@ -23,6 +23,22 @@ pub fn head_end(data: &[u8]) -> Option<usize> {
     data.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
+/// One read that waits up to the socket's read timeout. The wait is a peek:
+/// on Windows a timeout racing arriving bytes can end a read with
+/// ERROR_IO_PENDING and lose what it took, while a peek takes nothing.
+pub fn read_timed(stream: &mut TcpStream, buffer: &mut [u8]) -> io::Result<usize> {
+    const ERROR_IO_PENDING: i32 = 997;
+    match stream.peek(buffer) {
+        Ok(0) => return Ok(0),
+        Ok(_) => {}
+        Err(error) if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) => {
+            return Err(io::Error::from(io::ErrorKind::TimedOut));
+        }
+        Err(error) => return Err(error),
+    }
+    stream.read(buffer)
+}
+
 /// Reads until the head is complete, then for `body_for` more; returns
 /// the head and the raw body bytes read.
 pub fn read_response(stream: &mut TcpStream, body_for: Duration) -> (String, Vec<u8>) {
@@ -40,7 +56,7 @@ pub fn read_response(stream: &mut TcpStream, body_for: Duration) -> (String, Vec
         if head_at.is_none() && start.elapsed() > Duration::from_secs(5) {
             break;
         }
-        match stream.read(&mut buffer) {
+        match read_timed(stream, &mut buffer) {
             Ok(0) => break,
             Ok(count) => data.extend_from_slice(&buffer[..count]),
             Err(error)

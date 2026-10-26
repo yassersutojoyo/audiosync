@@ -580,7 +580,7 @@ fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_aud
     let mut notify = Some(on_first_audio);
     let mut buffer = [0u8; 8192];
     while !stop.load(Ordering::SeqCst) {
-        let count = match stream.read(&mut buffer) {
+        let count = match http::read_timed(&mut stream, &mut buffer) {
             Ok(0) => break,
             Ok(count) => count,
             Err(error)
@@ -618,6 +618,26 @@ fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_aud
     fetches.lock().expect("fetches")[index].ended = true;
 }
 
+/// The fake's TCP side under TLS, reading through [`http::read_timed`]: a
+/// lost byte would break the TLS stream and drop the connection.
+struct PeekedTcp(TcpStream);
+
+impl Read for PeekedTcp {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        http::read_timed(&mut self.0, buffer)
+    }
+}
+
+impl Write for PeekedTcp {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
 /// Serves one connection; true when the device should shut down.
 fn serve(
     tcp: TcpStream,
@@ -630,7 +650,7 @@ fn serve(
     let Ok(connection) = ServerConnection::new(Arc::clone(config)) else {
         return false;
     };
-    let mut stream = StreamOwned::new(connection, tcp);
+    let mut stream = StreamOwned::new(connection, PeekedTcp(tcp));
     let mut reader = FrameReader::new();
     let mut buffer = vec![0u8; 16 * 1024];
     let mut stalled = false;
@@ -650,7 +670,7 @@ fn serve(
                 Ok(Command::ClearApps) => device.apps.clear(),
                 Ok(Command::Stall) => stalled = true,
                 Ok(Command::DropConnection) => {
-                    let _ = stream.sock.shutdown(std::net::Shutdown::Both);
+                    let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
                     return false;
                 }
                 Ok(Command::Disconnect) | Err(mpsc::TryRecvError::Disconnected) => {
@@ -688,7 +708,7 @@ fn serve(
     }
 }
 
-fn write(stream: &mut StreamOwned<ServerConnection, TcpStream>, message: &CastMessage) {
+fn write(stream: &mut StreamOwned<ServerConnection, PeekedTcp>, message: &CastMessage) {
     let frame = encode_frame(message).expect("frame");
     let _ = stream.write_all(&frame);
     let _ = stream.flush();
