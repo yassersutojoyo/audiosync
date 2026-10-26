@@ -272,6 +272,21 @@ enum AppTapFollow: Equatable {
         return Set(named.map(\.pid) + seen).filter { $0 > 0 && alive($0) }.sorted()
     }
 
+    /// An app whose processes all ended between two looks, with the processes it had.
+    struct QuitApp: Equatable {
+        let bundleID: String
+        let pids: [pid_t]
+    }
+
+    /// The apps that ran a process at the last look (`before`, each app's live
+    /// processes then) and run none now: each quit, whether or not macOS sent
+    /// a terminate notice (S227). Sorted by bundle ID.
+    static func quitSince(before: [String: [pid_t]], now: [String: [pid_t]]) -> [QuitApp] {
+        before.filter { !$0.value.isEmpty && now[$0.key]?.isEmpty == true }
+            .map { QuitApp(bundleID: $0.key, pids: $0.value.sorted()) }
+            .sorted { $0.bundleID < $1.bundleID }
+    }
+
     /// Whether process `pid` exists; EPERM means it does, under another user.
     static func processExists(_ pid: pid_t) -> Bool {
         kill(pid, 0) == 0 || errno == EPERM

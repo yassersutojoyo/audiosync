@@ -86,6 +86,11 @@ final class SourceCapture {
     /// Called on the main queue, at most once per session.
     var onInterrupted: ((Interruption) -> Void)?
 
+    /// Called on the main queue when one of an app source's apps runs no
+    /// process any more, with the processes it had: some apps quit without
+    /// macOS's terminate notice (S227).
+    var onAppQuit: ((String, [pid_t]) -> Void)?
+
     /// The session's capture rate (Rc, S16): `CaptureRate.fallback` until a
     /// tap or input format has been read.
     private(set) var sampleRate: Double = CaptureRate.fallback
@@ -362,7 +367,13 @@ final class SourceCapture {
         let bundleID = apps.joined(separator: ", ")
         let pidsByApp = apps.map { Self.runningPIDs(of: $0, seen: seenPIDs[$0] ?? []) }
         let pids = pidsByApp.flatMap { $0 }
-        seenPIDs = Dictionary(zip(apps, pidsByApp), uniquingKeysWith: { first, _ in first })
+        let pidsNow = Dictionary(zip(apps, pidsByApp), uniquingKeysWith: { first, _ in first })
+        if AppTapFollow.followsRunningApps(source) {
+            for quit in AppTapFollow.quitSince(before: seenPIDs, now: pidsNow) {
+                Self.nextTurn { [weak self] in self?.onAppQuit?(quit.bundleID, quit.pids) }
+            }
+        }
+        seenPIDs = pidsNow
         let found = Self.audioProcesses(of: pids)
         let ranBefore = appsRunning
         let runningNow = zip(apps, pidsByApp).filter { !$0.1.isEmpty }.map { $0.0 }

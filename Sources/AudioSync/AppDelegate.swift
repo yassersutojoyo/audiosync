@@ -272,6 +272,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Set by `runQuitSteps`, so Quit and an exit signal never run them twice.
     private var quitStepsRan = false
     private var deviceRescanPending = false
+    /// The app quits macOS or the capture already reported (`appQuit`).
+    private var quitReports = AppLifecycle.QuitReports()
     /// The source picker's input lines last written to the debug log (`pushSources`).
     var loggedInputs: [String] = []
 
@@ -390,6 +392,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
             self?.devicesChanged()
         }
+        engine.onAppQuit = { [weak self] bundleID, pids in
+            self?.appQuit(bundleID: bundleID, pids: pids, seenByCapture: true)
+        }
         engine.onInterrupted = { [weak self] interruption in
             guard let self else { return }
             captureInterrupted = true
@@ -500,14 +505,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         observers.append(center.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
                                             object: nil, queue: .main) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            self?.appQuit(bundleID: app?.bundleIdentifier)
+            self?.appQuit(bundleID: app?.bundleIdentifier, pids: app.map { [$0.processIdentifier] } ?? [],
+                          seenByCapture: false)
         })
     }
 
-    private func appQuit(bundleID: String?) {
+    /// An app quit, as macOS's terminate notice or the capture seeing its
+    /// processes end (some apps quit without the notice) reports it; the
+    /// second report of the same quit only refreshes the source picker (S227 f).
+    private func appQuit(bundleID: String?, pids: [pid_t], seenByCapture: Bool) {
+        let first = quitReports.isNew(bundleID, pids: pids)
+        let repeated = first ? "" : ", already reported"
+        let id = bundleID ?? "no bundle ID"
+        // Shows which way a quit arrived, and under which bundle ID.
+        if seenByCapture {
+            DebugTrace.log("[AudioSync] app quit seen by the capture: \(id), streaming \(engine.isRunning)\(repeated)")
+        } else {
+            DebugTrace.log("[AudioSync] app terminated: \(id), streaming \(engine.isRunning)\(repeated)")
+        }
+        guard first else { pushSources(); return }
         let report = AppLifecycle.SourceQuitReport.terminated(bundleID: bundleID, streaming: engine.isRunning)
-        // Shows whether macOS reported a quit at all, and under which bundle ID.
-        DebugTrace.log("[AudioSync] app terminated: \(bundleID ?? "no bundle ID"), streaming \(engine.isRunning)")
         if let bundleID, AppLifecycle.waitsForRecheck(report, source: audioSource) {
             recheckMixQuit(bundleID)
         } else if let quit = AppLifecycle.sourceQuit(report, source: audioSource, setting: whenSourceQuits) {

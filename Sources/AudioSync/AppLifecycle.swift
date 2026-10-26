@@ -99,6 +99,30 @@ enum AppLifecycle {
         case rebuildFailed(Error)
     }
 
+    /// The app quits already reported, so macOS's terminate notice and the
+    /// capture seeing the same app's processes end act once, in either order
+    /// (S227 f). A quit is matched by bundle ID in any letter case and a
+    /// shared process; one without a process can't be matched and always counts.
+    struct QuitReports {
+        static let kept = 16
+        private var reported: [(bundleID: String, pids: Set<pid_t>)] = []
+
+        var count: Int { reported.count }
+
+        /// Whether this quit is reported for the first time; records it.
+        mutating func isNew(_ bundleID: String?, pids: [pid_t]) -> Bool {
+            let live = Set(pids.filter { $0 > 0 })
+            guard let bundleID, !live.isEmpty else { return true }
+            let seen = reported.contains {
+                $0.bundleID.caseInsensitiveCompare(bundleID) == .orderedSame && !$0.pids.isDisjoint(with: live)
+            }
+            if seen { return false }
+            reported.append((bundleID: bundleID, pids: live))
+            if reported.count > Self.kept { reported.removeFirst(reported.count - Self.kept) }
+            return true
+        }
+    }
+
     /// How long a mix waits after one of its apps quit before it is judged
     /// (S164). macOS refreshes its list of running apps on later turns of the
     /// main run loop, so in the turn an app quits in, the list can miss the

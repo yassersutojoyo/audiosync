@@ -104,6 +104,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A source that starts after an AirPlay stream no longer loses its first moment of sound on the AirPlay speakers.
 - On the Mac, a mix keeps playing when one of its apps quits while the others still run. Before, it could switch to All System Audio or stop. A source you pick or a stop you make right then is carried out too.
 - On the Mac, AudioSync notices within about 6 seconds when a paused source app quits, also when macOS doesn't report the quit.
+- On the Mac, an app in the source that quits without macOS reporting it now leaves the source menu right away, and a quit single source app is noticed about a second sooner.
 - An AirPlay speaker stopped while it's still connecting now has its session ended on the speaker too, on AirPlay 1 and AirPlay 2, so turning it on again right away doesn't run into the old session.
 - A paired AirPlay speaker that can't prove it's the same speaker no longer plays. AudioSync turns it off with its own notice and keeps the pairing.
 - When a speaker turns down its stored pairing, AudioSync keeps it until a new pairing replaces it, on the Mac and on Windows. Cancelling the PIN prompt no longer loses it, and Forget Pairing stays in the speaker's menu.

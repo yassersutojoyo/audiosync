@@ -5658,6 +5658,51 @@ do {
             && AppTapFollow.look(tapped: [7, 9], found: [9], appRunning: !mixPaused.isEmpty, secondLook: false) == .retap([9])
             && mixQuitJudged == nil,
           "source app quit: a paused mix member still runs, and a member's real quit leaves the mix on its other apps")
+    // macOS 27 sent no terminate notice when Podcasts quit from a Music + Podcasts mix; the capture's look saw it.
+    let mixLook: [String: [pid_t]] = [musicID: [610], podcasts: [702]]
+    let podcastsGone = AppTapFollow.quitSince(before: mixLook, now: [musicID: [610], podcasts: []])
+    check(podcastsGone == [AppTapFollow.QuitApp(bundleID: podcasts, pids: [702])]
+            && AppTapFollow.quitSince(before: mixLook, now: mixLook).isEmpty
+            && AppTapFollow.quitSince(before: [podcasts: []], now: [podcasts: []]).isEmpty
+            && AppTapFollow.quitSince(before: [:], now: [podcasts: []]).isEmpty
+            && AppTapFollow.quitSince(before: [podcasts: [702, 703]], now: [podcasts: [703]]).isEmpty,
+          "source app quit: the capture reports an app whose processes all ended since its last look, never one it saw no process of",
+          "\(podcastsGone)")
+    var quitReports = AppLifecycle.QuitReports()
+    let seenByCapture = quitReports.isNew(podcasts, pids: [702])
+    let noticeAfter = quitReports.isNew("com.apple.Podcasts", pids: [702])
+    let noticeFirst = quitReports.isNew(musicID, pids: [610])
+    let captureAfter = quitReports.isNew(musicID, pids: [610])
+    let relaunchedQuit = quitReports.isNew(podcasts, pids: [905])
+    let noProcess = quitReports.isNew(musicID, pids: []) && quitReports.isNew(musicID, pids: [])
+    let noBundleID = quitReports.isNew(nil, pids: [610])
+    check(seenByCapture && !noticeAfter && noticeFirst && !captureAfter && relaunchedQuit && noProcess && noBundleID,
+          "source app quit: the capture's report and macOS's notice of the same quit act once, whichever comes first",
+          "\(seenByCapture) \(noticeAfter) \(noticeFirst) \(captureAfter) \(relaunchedQuit) \(noProcess) \(noBundleID)")
+    for other in 0..<(AppLifecycle.QuitReports.kept + 4) {
+        _ = quitReports.isNew("com.example.app\(other)", pids: [pid_t(2000 + other)])
+    }
+    check(quitReports.count <= AppLifecycle.QuitReports.kept && quitReports.isNew(podcasts, pids: [702]),
+          "source app quit: the record of reported quits keeps only the latest ones", "\(quitReports.count)")
+    func capturedQuit(_ source: AudioSource, _ setting: WhenSourceQuits, running: Set<String> = []) -> String {
+        var reports = AppLifecycle.QuitReports()
+        guard let gone = AppTapFollow.quitSince(before: mixLook, now: [musicID: [610], podcasts: []]).first,
+              reports.isNew(gone.bundleID, pids: gone.pids) else { return "unreported" }
+        let report = AppLifecycle.SourceQuitReport.terminated(bundleID: gone.bundleID, streaming: true)
+        if AppLifecycle.waitsForRecheck(report, source: source) {
+            let judged = AppLifecycle.sourceQuit(.mixAppGone(bundleID: gone.bundleID, streaming: true), source: source,
+                                                 setting: setting, isRunning: { running.contains($0) })
+            return judged.map { "later \($0.action) \($0.bundleID)" } ?? "later keep"
+        }
+        let judged = AppLifecycle.sourceQuit(report, source: source, setting: setting, isRunning: { running.contains($0) })
+        return judged.map { "\($0.action) \($0.bundleID)" } ?? "keep"
+    }
+    check(capturedQuit(.app(bundleID: podcasts), .stop) == "stop \(podcasts)"
+            && capturedQuit(.app(bundleID: podcasts), .system) == "switchToSystem \(podcasts)"
+            && capturedQuit(pair, .system, running: [musicID]) == "later keep"
+            && capturedQuit(pair, .stop) == "later stop \(podcasts)",
+          "source app quit: an app quit seen by the capture takes the terminate notice's path, a mix's judged a second later",
+          "\(capturedQuit(.app(bundleID: podcasts), .stop)), \(capturedQuit(pair, .system, running: [musicID]))")
     // A paused app that quits later ends no audio process and Podcasts sends no notice, so a waiting capture looks again.
     let podcastsSource = AudioSource.app(bundleID: podcasts)
     func rechecks(_ source: AudioSource?, tapped: [AudioObjectID] = [], interrupted: Bool = false) -> Bool {
