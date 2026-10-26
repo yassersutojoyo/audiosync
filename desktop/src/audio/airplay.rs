@@ -7455,7 +7455,7 @@ pub mod tests {
         assert!(fake.take_reads().is_empty());
     }
 
-    // covers: S271, P184
+    // covers: S271
     #[test]
     fn a_new_session_asks_a_speaker_whose_reads_stopped_again() {
         let refused = Warning::RequestFailed {

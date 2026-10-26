@@ -1,0 +1,347 @@
+{
+  "clause": "S290",
+  "about": "AirPlay row, master and stored own volume. k = (zone/100)(master/100); level D = min(100, own x k); the row shows D rounded down with 0.01 of slack. Ops, applied in order to one speaker: own sets the stored own volume; row_move moves the row to R (sends D = R and stores own = R / k, or sends nothing at k = 0, marked sent false); tv_level is a level set on the speaker (D = tv_level, own = D / k); master moves the master and keeps own. After each step, level is the D the speaker gets (compare within 1e-6) and row is what the row shows.",
+  "cases": [
+    {
+      "name": "row 100 at master 63 sends 100",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "row_move": 100,
+          "level": 100.0,
+          "row": 100.0
+        }
+      ]
+    },
+    {
+      "name": "TV at 80 at master 63, master to 64 gives 81",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "tv_level": 80,
+          "level": 80.0,
+          "row": 80.0
+        },
+        {
+          "master": 64,
+          "level": 81.26984127,
+          "row": 81.0
+        }
+      ]
+    },
+    {
+      "name": "row 100 at master 63, master to 50 gives 79",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "row_move": 100,
+          "level": 100.0,
+          "row": 100.0
+        },
+        {
+          "master": 50,
+          "level": 79.365079365,
+          "row": 79.0
+        }
+      ]
+    },
+    {
+      "name": "TV at 80 at master 63, master to 100 caps at 100, back to 63 gives 80",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "tv_level": 80,
+          "level": 80.0,
+          "row": 80.0
+        },
+        {
+          "master": 100,
+          "level": 100.0,
+          "row": 100.0
+        },
+        {
+          "master": 63,
+          "level": 80.0,
+          "row": 80.0
+        }
+      ]
+    },
+    {
+      "name": "row 40 through zone 50 at master 63 sends 40",
+      "zone": 50,
+      "master": 63,
+      "steps": [
+        {
+          "row_move": 40,
+          "level": 40.0,
+          "row": 40.0
+        },
+        {
+          "master": 100,
+          "level": 63.492063492,
+          "row": 63.0
+        }
+      ]
+    },
+    {
+      "name": "with k at 0 a row move sends nothing",
+      "zone": 100,
+      "master": 0,
+      "steps": [
+        {
+          "own": 50,
+          "level": 0.0,
+          "row": 0.0
+        },
+        {
+          "row_move": 40,
+          "sent": false
+        }
+      ]
+    },
+    {
+      "name": "own 0 at master 1",
+      "zone": 100,
+      "master": 1,
+      "steps": [
+        {
+          "own": 0,
+          "level": 0.0,
+          "row": 0.0
+        }
+      ]
+    },
+    {
+      "name": "own 20 at master 1",
+      "zone": 100,
+      "master": 1,
+      "steps": [
+        {
+          "own": 20,
+          "level": 0.2,
+          "row": 0.0
+        }
+      ]
+    },
+    {
+      "name": "own 50 at master 1",
+      "zone": 100,
+      "master": 1,
+      "steps": [
+        {
+          "own": 50,
+          "level": 0.5,
+          "row": 0.0
+        }
+      ]
+    },
+    {
+      "name": "own 80 at master 1",
+      "zone": 100,
+      "master": 1,
+      "steps": [
+        {
+          "own": 80,
+          "level": 0.8,
+          "row": 0.0
+        }
+      ]
+    },
+    {
+      "name": "own 100 at master 1",
+      "zone": 100,
+      "master": 1,
+      "steps": [
+        {
+          "own": 100,
+          "level": 1.0,
+          "row": 1.0
+        }
+      ]
+    },
+    {
+      "name": "own 0 at master 50",
+      "zone": 100,
+      "master": 50,
+      "steps": [
+        {
+          "own": 0,
+          "level": 0.0,
+          "row": 0.0
+        }
+      ]
+    },
+    {
+      "name": "own 20 at master 50",
+      "zone": 100,
+      "master": 50,
+      "steps": [
+        {
+          "own": 20,
+          "level": 10.0,
+          "row": 10.0
+        }
+      ]
+    },
+    {
+      "name": "own 50 at master 50",
+      "zone": 100,
+      "master": 50,
+      "steps": [
+        {
+          "own": 50,
+          "level": 25.0,
+          "row": 25.0
+        }
+      ]
+    },
+    {
+      "name": "own 80 at master 50",
+      "zone": 100,
+      "master": 50,
+      "steps": [
+        {
+          "own": 80,
+          "level": 40.0,
+          "row": 40.0
+        }
+      ]
+    },
+    {
+      "name": "own 100 at master 50",
+      "zone": 100,
+      "master": 50,
+      "steps": [
+        {
+          "own": 100,
+          "level": 50.0,
+          "row": 50.0
+        }
+      ]
+    },
+    {
+      "name": "own 0 at master 63",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "own": 0,
+          "level": 0.0,
+          "row": 0.0
+        }
+      ]
+    },
+    {
+      "name": "own 20 at master 63",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "own": 20,
+          "level": 12.6,
+          "row": 12.0
+        }
+      ]
+    },
+    {
+      "name": "own 50 at master 63",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "own": 50,
+          "level": 31.5,
+          "row": 31.0
+        }
+      ]
+    },
+    {
+      "name": "own 80 at master 63",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "own": 80,
+          "level": 50.4,
+          "row": 50.0
+        }
+      ]
+    },
+    {
+      "name": "own 100 at master 63",
+      "zone": 100,
+      "master": 63,
+      "steps": [
+        {
+          "own": 100,
+          "level": 63.0,
+          "row": 63.0
+        }
+      ]
+    },
+    {
+      "name": "own 0 at master 100",
+      "zone": 100,
+      "master": 100,
+      "steps": [
+        {
+          "own": 0,
+          "level": 0.0,
+          "row": 0.0
+        }
+      ]
+    },
+    {
+      "name": "own 20 at master 100",
+      "zone": 100,
+      "master": 100,
+      "steps": [
+        {
+          "own": 20,
+          "level": 20.0,
+          "row": 20.0
+        }
+      ]
+    },
+    {
+      "name": "own 50 at master 100",
+      "zone": 100,
+      "master": 100,
+      "steps": [
+        {
+          "own": 50,
+          "level": 50.0,
+          "row": 50.0
+        }
+      ]
+    },
+    {
+      "name": "own 80 at master 100",
+      "zone": 100,
+      "master": 100,
+      "steps": [
+        {
+          "own": 80,
+          "level": 80.0,
+          "row": 80.0
+        }
+      ]
+    },
+    {
+      "name": "own 100 at master 100",
+      "zone": 100,
+      "master": 100,
+      "steps": [
+        {
+          "own": 100,
+          "level": 100.0,
+          "row": 100.0
+        }
+      ]
+    }
+  ]
+}
