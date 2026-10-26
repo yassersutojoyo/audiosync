@@ -514,6 +514,7 @@ export global Strings {
     public pure function notice-update-downloading(percent: string) -> string {
         return @tr("Downloading the update: {}%", percent);
     }
+    out property <string> notice-update-checking: @tr("Checking for updates…");
     out property <string> notice-update-downloading-started: @tr("Downloading the update.");
     public pure function notice-update-installed(version: string) -> string {
         return @tr("AudioSync {} is installed. It takes effect after AudioSync restarts.", version);
@@ -523,12 +524,12 @@ export global Strings {
     }
     out property <string> notice-update-unreachable: @tr("AudioSync couldn't reach the update server. Check your connection, then try again.");
     out property <string> notice-update-download-failed: @tr("The update didn't download completely, so nothing was installed. The running version stays.");
-    out property <string> notice-update-bad-signature: @tr("The download didn't pass its check, so nothing was installed. The running version stays.");
+    out property <string> notice-update-bad-signature: @tr("The download didn't pass its check, so nothing was installed. The running version stays. Try again later, or download the new version from the release page.");
     out property <string> notice-update-broken: @tr("The download is broken, so nothing was installed. The running version stays.");
     out property <string> notice-update-disk-full: @tr("There isn't enough disk space for the update, so nothing was installed. The running version stays.");
     out property <string> notice-update-read-only: @tr("AudioSync can't write to its own folder, so it can't install the update. The running version stays. You can download the new version from the release page.");
     out property <string> notice-update-in-use: @tr("Another copy of AudioSync is using its files, for example in another user's session. Close the other copies, then try again. The running version stays.");
-    out property <string> notice-update-failed: @tr("The update couldn't be installed. The running version stays.");
+    out property <string> notice-update-failed: @tr("The update couldn't be installed. The running version stays. Try again later, or download the new version from the release page.");
     // `renames` is one or more of notice-update-rename joined by list-and,
     // the exe first.
     public pure function notice-update-restore-failed(renames: string) -> string {

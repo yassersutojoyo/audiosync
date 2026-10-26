@@ -5135,6 +5135,7 @@ fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -
         N::Downloading {
             percent: Some(percent),
         } => strings.invoke_notice_update_downloading(percent.to_string().into()),
+        N::Checking => strings.get_notice_update_checking(),
         N::Downloading { percent: None } => strings.get_notice_update_downloading_started(),
         N::Installed { version } => strings.invoke_notice_update_installed(version.into()),
         N::UpToDate { running } => strings.invoke_notice_update_up_to_date(running.into()),
@@ -7262,6 +7263,7 @@ mod tests {
                 running: "0.8.0".to_owned(),
                 last: Some(ui_model::UpdateRecordReason::FailedStart),
             },
+            N::Checking,
             N::Downloading { percent: Some(42) },
             N::Downloading { percent: None },
             N::Installed {
@@ -7330,6 +7332,8 @@ mod tests {
                 N::RelaunchFailed,
                 [ui_model::UpdaterButton::OpenReleasePage],
             ),
+            (N::BadSignature, [ui_model::UpdaterButton::OpenReleasePage]),
+            (N::Failed, [ui_model::UpdaterButton::OpenReleasePage]),
         ] {
             assert_eq!(notice.buttons(), buttons, "{notice:?}");
         }

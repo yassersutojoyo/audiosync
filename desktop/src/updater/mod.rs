@@ -164,6 +164,7 @@ impl Updater {
                         .log
                         .log(|| "updater: a check runs, it answers this one".to_owned());
                     self.manual_waiting = true;
+                    self.set_notice(Some(UpdaterNotice::Checking));
                 }
                 return;
             }
@@ -174,6 +175,7 @@ impl Updater {
                         "updater: a cancelled install stops, then this check runs".to_owned()
                     });
                     self.manual_waiting = true;
+                    self.set_notice(Some(UpdaterNotice::Checking));
                 }
                 return;
             }
@@ -192,6 +194,9 @@ impl Updater {
             }
         }
         self.work = Work::Checking;
+        if trigger == Trigger::Manual {
+            self.set_notice(Some(UpdaterNotice::Checking));
+        }
         let env = self.env.clone();
         let sender = self.sender.clone();
         self.spawn(move || {
@@ -727,7 +732,7 @@ pub mod tests {
         reached.recv_timeout(WAIT).expect("the download starts");
         updater.press(UpdaterButton::Cancel);
         updater.check(Trigger::Manual);
-        assert_eq!(updater.notice(), None);
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::Checking));
         gate.send(()).unwrap();
         updater.wait();
         assert!(matches!(
@@ -828,6 +833,31 @@ pub mod tests {
         assert_eq!(updater.work, Work::Checking, "Try Again checks again");
         updater.wait();
         assert_eq!(updater.notice(), Some(&UpdaterNotice::Unreachable));
+    }
+
+    #[test]
+    fn a_manual_check_says_it_is_checking_until_the_answer_replaces_it() {
+        let (mut updater, _) = updater("checking");
+        Arc::get_mut(&mut updater.env).unwrap().running = Version::parse("0.9.0").unwrap();
+        let latest = Some(UpdaterNotice::UpToDate {
+            running: "0.9.0".to_owned(),
+        });
+        updater.check(Trigger::Launch);
+        assert_eq!(updater.notice(), None, "the launch check stays quiet");
+        updater.wait();
+        updater.check(Trigger::Manual);
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::Checking));
+        assert!(updater.notice().unwrap().buttons().is_empty());
+        updater.wait();
+        assert_eq!(updater.notice(), latest.as_ref());
+
+        // One asked while the launch check runs says so too.
+        updater.dismiss();
+        updater.check(Trigger::Launch);
+        updater.check(Trigger::Manual);
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::Checking));
+        updater.wait();
+        assert_eq!(updater.notice(), latest.as_ref());
     }
 
     #[test]

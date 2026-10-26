@@ -2458,6 +2458,8 @@ export component NoticeStack inherits VerticalLayout {
         // either one, whichever changed last.
         property <bool> dismiss-focused;
         property <bool> guide-focused;
+        // The update button that has focus, -1 for none.
+        property <int> update-focused: -1;
         changed dismiss-focused => {
             root.button-focus-changed(self.dismiss-focused || self.guide-focused);
         }
@@ -2562,14 +2564,22 @@ export component NoticeStack inherits VerticalLayout {
                 if notice.update-buttons.length > 0: HorizontalLayout {
                     alignment: start;
                     spacing: 8px;
-                    for button in notice.update-buttons: Button {
+                    for button[button-index] in notice.update-buttons: Button {
                         text: Strings.update-button(button);
                         accessible-label: Strings.update-button(button);
                         clicked => {
                             root.update-button-pressed(button);
                         }
+                        // Tab between two of these may report the gain before
+                        // the loss, so only the button holding focus clears it.
                         changed has-focus => {
-                            row.guide-focused = self.has-focus;
+                            if self.has-focus {
+                                row.update-focused = button-index;
+                                row.guide-focused = true;
+                            } else if row.update-focused == button-index {
+                                row.update-focused = -1;
+                                row.guide-focused = false;
+                            }
                         }
                     }
                 }

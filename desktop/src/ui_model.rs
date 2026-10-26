@@ -498,6 +498,8 @@ pub enum UpdaterNotice {
         /// Why this version didn't install last time (spec S316).
         last: Option<UpdateRecordReason>,
     },
+    /// A manual check waits for the server (spec S305).
+    Checking,
     Downloading {
         percent: Option<u8>,
     },
@@ -561,9 +563,11 @@ impl UpdaterNotice {
             UpdaterNotice::Available { .. } => &[Download, NotNow],
             UpdaterNotice::Downloading { .. } => &[Cancel],
             UpdaterNotice::Installed { .. } => &[RestartNow],
-            UpdaterNotice::ReadOnly | UpdaterNotice::RelaunchFailed | UpdaterNotice::Blocked => {
-                &[OpenReleasePage]
-            }
+            UpdaterNotice::ReadOnly
+            | UpdaterNotice::RelaunchFailed
+            | UpdaterNotice::Blocked
+            | UpdaterNotice::BadSignature
+            | UpdaterNotice::Failed => &[OpenReleasePage],
             UpdaterNotice::Unreachable
             | UpdaterNotice::DownloadFailed
             | UpdaterNotice::DiskFull
@@ -728,6 +732,7 @@ impl NoticeMessage {
                 | Self::GroupsBecameZones
                 | Self::Update(
                     UpdaterNotice::Available { .. }
+                        | UpdaterNotice::Checking
                         | UpdaterNotice::Downloading { .. }
                         | UpdaterNotice::Installed { .. }
                         | UpdaterNotice::UpToDate { .. }
