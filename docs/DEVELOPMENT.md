@@ -150,7 +150,7 @@ For debug runs, `AUDIOSYNC_AIRPLAY_PCM=<id>[,<id>…]` lets the listed speakers 
 For a dry run against a receiver that behaves like the Samsung television (`FakeAp2::samsung()` in `airplay/tests/common/ap2.rs`), `airplay/examples/fake_tv.rs` serves that fake. By default it listens on 127.0.0.1 only and advertises nothing; with `--lan` it serves the LAN and advertises itself over mDNS as "AudioSync Test TV", under `_airplay._tcp` only, so a sender with the AirPlay 2 switch on finds it and takes the AirPlay 2 path. It prints which mode it runs in. It's an example, so no release build contains it. Run it from the repository on a Mac or a Windows PC on the same network as the app:
 
 ```bash
-cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--pin every|once] [--code 4821] [--port 0] [--name "AudioSync Test TV"]
+cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--pin every|once] [--code 4821] [--port 0] [--name "AudioSync Test TV"] [--summary]
 ```
 
 Without `--pin` it pairs transiently with no code. `--pin every` asks for the code on every connection (flags bit 3) and `--pin once` only the first time (bit 9); the code is 4821 unless `--code` gives another. The port is picked at random unless `--port` names one (macOS keeps 7000 for its own AirPlay receiver). With `--lan` a firewall may ask whether to let it accept connections (Windows Firewall asks again for each new build); `scripts/pc_test.sh` builds it but never runs it. Every request goes to stdout with its answer status, marked `(encrypted)` once the pairing is done. Typing `vol -30` moves the level the way the television's remote does (on its 0.3 dB grid), and `quit` stops it. A pause shows up as a FLUSH, and a volume change as a SET_PARAMETER answered 500 that still moves the level (on a 0.6 dB grid):
@@ -159,6 +159,20 @@ Without `--pin` it pairs transiently with no code. `--pin every` asks for the co
 [    0.950] mDNS resolved AudioSync Test TV._airplay._tcp.local. port 54297 at <LAN address>
 [   41.210] FLUSH rtsp://<address>/<session> RTP-Info: seq=<seq>;rtptime=<rtptime> (encrypted) -> 200
 [   47.880] SET_PARAMETER rtsp://<address>/<session> [volume: -20.000000] (encrypted) -> 500, reads now answer volume: -19.799999
+```
+
+With `--summary` it prints one plain line per event a dry run judges instead of every request, each with a running count, so a check reads off the counts: PIN pairing started and done (`pairing without PIN` when there is no code), each new connection, SETUP session and stream, RECORD, FLUSH, TEARDOWN, a volume from the app with its level, and a level typed with `vol` (after the 0.3 dB grid). After a `vol`, the first read that answers the new level prints `app read the new level`. The first volume from the app after a `vol`, however late, prints `ECHO` when it is within 1 dB of the `vol` level and `OVERWRITE` (what the app sent and where the TV is) when it is not. A pause from the app's button should add exactly one FLUSH and no TEARDOWN, and resuming should add no SETUP or RECORD. A `vol` should show a read and then no volume line from the app at all: any `ECHO`, `OVERWRITE` or `volume from the app` after it is a FAIL, unless you moved the app's slider yourself. The formatting is tested in `airplay/tests/fake_tv_summary.rs`.
+
+```text
+[    3.050] connection #1 opened
+[    3.120] PIN pairing started #1
+[   12.480] PIN pairing done #1
+[   12.950] SETUP session #1
+[   13.010] SETUP stream #1
+[   13.040] RECORD #1 (play starts)
+[   41.210] FLUSH #1 (pause)
+[   60.300] volume set with vol #1: -30.0 dB
+[   61.020] app read the new level #1: -30.0 dB
 ```
 
 `cast/` is `audiosync-cast`, AudioSync's own Google Cast sender, which both apps use: the Windows app through `desktop/src/audio/cast.rs`, the Mac app through the core's `asc_cast_*` C interface (`core/src/ffi/cast.rs`, wrapped by `CastSender.swift`, with `CastTap.swift` as the capture's way in and `CastModel.swift` for the decisions). It's written from [`CAST_SPEC.md`](CAST_SPEC.md). It finds devices over `_googlecast._tcp`, opens the Cast channel over TLS with the platform's own TLS stack, launches the Default Media Receiver and has it fetch a live WAV stream from a small HTTP server in the app, with FLAC as the fallback for devices that need it, plus device volume, mute, recovery and Resync. One worker thread (`CastHost` in `cast/src/host.rs`) makes every network call; the apps send commands and poll events, so their UI thread never waits on the network. One Cast device plays at a time. A Cast group (a speaker group made in the Google Home app) plays as one target over one channel to the group's own port, with one volume and one offset, and its members are read from the group's multizone status (`CAST_SPEC.md` C89 to C103). Both apps show a group as one row that names its members once the session reports them, and keep its offset under the group's own ID; a member stays a row of its own. Cast has no shared clock, so a device is kept in step only by an offset the user sets by ear; it's kept per device with the device's audio format, in `cast-devices.json` in AudioSync's Application Support folder on the Mac and `cast-speakers.json` in the app's data folder on Windows. Local outputs wait that offset for the device but never wait for it to start. Resync restarts the stream with a short gap and is only ever a user action. Its CI checks the formatting, runs clippy and the tests, and lets in only permissive licenses, development dependencies included (`cargo deny check licenses` with `cast/deny.toml`).

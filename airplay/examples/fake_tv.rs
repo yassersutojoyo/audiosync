@@ -8,21 +8,25 @@
 //!
 //! ```text
 //! cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--name <text>]
-//!     [--port <n>] [--pin every|once] [--code <digits>]
+//!     [--port <n>] [--pin every|once] [--code <digits>] [--summary]
 //! ```
 //!
-//! Every request line and its answer status goes to stdout. On stdin,
+//! Every request line and its answer status goes to stdout; with `--summary`
+//! only one plain line per event a dry-run sheet judges, with its running
+//! count (the `summary` module). On stdin,
 //! `vol <dB>` moves the level as the television's remote does and `quit`
 //! stops it.
 
 #[path = "../tests/common/mod.rs"]
 mod common;
+#[path = "fake_tv/summary.rs"]
+mod summary;
 
 use std::io::BufRead;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,6 +34,7 @@ use audiosync_airplay::rtsp::Request;
 use common::ap2::{Ap2Server, FakeAp2, dict, int, plist, request_key};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use plist::Value;
+use summary::Summary;
 
 const SERVICE_TYPE: &str = "_airplay._tcp.local.";
 /// The label of its own mDNS host name, in the `.local.` domain.
@@ -59,6 +64,7 @@ struct Options {
     pin: Pin,
     code: String,
     on_network: bool,
+    summary: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -68,11 +74,13 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         pin: Pin::None,
         code: "4821".to_owned(),
         on_network: false,
+        summary: false,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
             "--lan" => options.on_network = true,
+            "--summary" => options.summary = true,
             "--name" => options.name = value()?,
             "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
             "--pin" => {
@@ -167,7 +175,7 @@ fn watch_advertisement(daemon: &ServiceDaemon, fullname: String, start: Instant)
 }
 
 fn stamp(start: Instant) -> String {
-    format!("[{:9.3}]", start.elapsed().as_secs_f64())
+    summary::stamp(start.elapsed().as_secs_f64())
 }
 
 /// The request line and what identifies it: the session or stream SETUP,
@@ -194,19 +202,39 @@ fn describe(request: &Request) -> String {
     line
 }
 
-/// Logs requests in order as their answers go out, and new connections.
-fn log_requests(server: &Ap2Server, start: Instant, stop: &AtomicBool) {
+/// Logs requests in order as their answers go out, and new connections:
+/// in full, or as the summary's lines when there is one.
+fn log_requests(
+    server: &Ap2Server,
+    start: Instant,
+    stop: &AtomicBool,
+    summary: Option<&Mutex<Summary>>,
+) {
     let (mut logged, mut connections) = (0, 0);
     while !stop.load(Ordering::SeqCst) {
         {
             let fake = server.fake();
-            if fake.connections != connections {
-                connections = fake.connections;
-                println!("{} connection {connections} opened", stamp(start));
+            // Two connections can open within one poll.
+            while connections < fake.connections {
+                connections += 1;
+                match summary {
+                    Some(summary) => println!("{}", lock(summary).connection(seconds(start))),
+                    None => println!("{} connection {connections} opened", stamp(start)),
+                }
             }
             while let (Some((request, framed)), Some(Some(answered))) =
                 (fake.requests.get(logged), fake.answered.get(logged))
             {
+                if let Some(summary) = summary {
+                    let level = answered.level.as_deref();
+                    let line =
+                        lock(summary).request(seconds(start), request, answered.status, level);
+                    if let Some(line) = line {
+                        println!("{line}");
+                    }
+                    logged += 1;
+                    continue;
+                }
                 let sealed = if *framed { " (encrypted)" } else { "" };
                 let level = answered
                     .level
@@ -224,6 +252,22 @@ fn log_requests(server: &Ap2Server, start: Instant, stop: &AtomicBool) {
         }
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// The level a volume read answers now, after the remote's grid.
+fn level_read(fake: &FakeAp2) -> Option<f64> {
+    let body = fake.bodies.get("GET_PARAMETER")?;
+    summary::parse_level(std::str::from_utf8(body).ok()?)
+}
+
+fn seconds(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64()
+}
+
+fn lock(summary: &Mutex<Summary>) -> std::sync::MutexGuard<'_, Summary> {
+    summary
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn main() -> ExitCode {
@@ -287,9 +331,12 @@ fn main() -> ExitCode {
 
     let server = Arc::new(server);
     let stop = Arc::new(AtomicBool::new(false));
+    let summary = options
+        .summary
+        .then(|| Arc::new(Mutex::new(Summary::default())));
     let logger = {
-        let (server, stop) = (server.clone(), stop.clone());
-        thread::spawn(move || log_requests(&server, start, &stop))
+        let (server, stop, summary) = (server.clone(), stop.clone(), summary.clone());
+        thread::spawn(move || log_requests(&server, start, &stop, summary.as_deref()))
     };
     let mut quit = false;
     for line in std::io::stdin().lock().lines() {
@@ -302,11 +349,20 @@ fn main() -> ExitCode {
             }
             (Some("vol"), Some(db)) => match db.parse::<f64>() {
                 Ok(db) => {
-                    server.fake().set_on_tv(db);
-                    println!(
-                        "{} remote: level set to {db} dB (0.3 dB grid)",
-                        stamp(start)
-                    );
+                    let level = {
+                        let mut fake = server.fake();
+                        fake.set_on_tv(db);
+                        level_read(&fake).unwrap_or(db)
+                    };
+                    match &summary {
+                        Some(summary) => {
+                            println!("{}", lock(summary).pushed(seconds(start), level))
+                        }
+                        None => println!(
+                            "{} remote: level set to {db} dB (0.3 dB grid)",
+                            stamp(start)
+                        ),
+                    }
                 }
                 Err(_) => println!("{} vol takes a number in dB", stamp(start)),
             },
