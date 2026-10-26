@@ -97,7 +97,8 @@ use audiosync_core::policy::remote::{
 use audiosync_core::resample::Resampler;
 use audiosync_core::volume::{
     DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION, ReadBack, device_level, device_level_for_db,
-    level_set_on_speaker, own_for_device_level, row_move, sanitize_position,
+    level_on_speaker, level_set_on_speaker, own_for_device_level, row_move, sanitize_own,
+    sanitize_position,
 };
 
 use super::SESSION_RATE;
@@ -712,9 +713,9 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
     }
 }
 
-/// The volume an AirPlay speaker gets for its slider position, its zone's
-/// and the master's (P118 leaves the mapping to the host; S249): the product
-/// of the three, 0 to 1, spread evenly over −30 to 0 dB, and muted at 0.
+/// The volume an AirPlay speaker gets for its own volume, its zone's and
+/// the master's (P118 leaves the mapping to the host; S249, S290): the
+/// device level min(100, s × k) on the default line, muted at 0.
 pub fn airplay_volume(position: f64, zone: f64, master: f64) -> Volume {
     device_volume(device_level(position, zone, master))
 }
@@ -729,12 +730,12 @@ fn device_volume(level: f64) -> Volume {
     }
 }
 
-/// The slider position, rounded to a whole step, that plays at `db` through
-/// the zone and the master ([`airplay_volume`] backwards, S250): 0 at −30 dB
-/// and below, muted included. None when zone × master is 0, where every
-/// position sounds the same, or `db` isn't finite.
-fn slider_position(db: f64, zone: f64, master: f64) -> Option<f64> {
-    own_for_device_level(device_level_for_db(db)?, zone, master)
+/// The device level a DeviceVolume of `db` asks for (S289): 0 at −30 dB and
+/// below, muted included. None when zone × master is 0, where every own
+/// volume sounds the same, or `db` isn't finite.
+fn reported_level(db: f64, zone: f64, master: f64) -> Option<f64> {
+    let level = device_level_for_db(db)?;
+    own_for_device_level(level, zone, master).map(|_| level)
 }
 
 /// How often playing speakers are asked for their own volume (P122, S291).
@@ -870,21 +871,14 @@ fn describe_availability(availability: AirPlayAvailability) -> &'static str {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Settings {
     enabled: bool,
-    /// The own volume s, 0 to 100 (S290).
+    /// The own volume s, unrounded, 0 up and above 100 when the zone and
+    /// the master are below 100 (S290).
     volume: f64,
     /// d_s in ms, 0 to 20 000.
     delay_ms: f64,
-    /// The device level a row move or the speaker itself set, which the row
-    /// shows until the zone or the master moves (S290).
-    level: Option<SetLevel>,
-}
-
-/// A device level D set by a row move or on the speaker, and the volume the
-/// speaker gets for it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct SetLevel {
-    level: f64,
-    volume: Volume,
+    /// The level set on the speaker while k is 0, which s can't hold; the
+    /// row shows it until s, the zone or the master moves (S290).
+    held_level: Option<f64>,
 }
 
 impl Default for Settings {
@@ -893,7 +887,7 @@ impl Default for Settings {
             enabled: false,
             volume: DEFAULT_LOCAL_POSITION,
             delay_ms: 0.0,
-            level: None,
+            held_level: None,
         }
     }
 }
@@ -2368,19 +2362,21 @@ impl AirPlaySpeakers {
             })
     }
 
-    /// Sets a speaker's own volume s, live: it plays at s × zone × master
-    /// (S290). A saved speaker and a preset's member come back this way.
+    /// Sets a speaker's own volume s, live: it plays at min(100, s × k)
+    /// (S290). A saved speaker and a preset's member come back this way,
+    /// unrounded and above 100 when S290 stored it so.
     pub fn set_volume(&mut self, id: &str, position: f64) {
-        let Some(position) = sanitize_position(position) else {
+        if !position.is_finite() {
             return;
-        };
+        }
+        let position = sanitize_own(position);
         let settings = self.settings(id);
-        if settings.volume == position && settings.level.is_none() {
+        if settings.volume == position && settings.held_level.is_none() {
             return;
         }
         let entry = self.entry(id);
         entry.volume = position;
-        entry.level = None;
+        entry.held_level = None;
         let volume = self.volume_of(id);
         self.log.log(|| {
             format!(
@@ -2397,8 +2393,8 @@ impl AirPlaySpeakers {
     }
 
     /// The speaker's row moved to `row` (S290): it gets device level `row`
-    /// and stores the smallest own volume reaching it; past what the zone
-    /// and the master allow, own 100. Nothing changes with either at 0.
+    /// and stores the own volume row ÷ k, unrounded and above 100 when the
+    /// zone and the master are below 100. Nothing changes with either at 0.
     pub fn move_row(&mut self, id: &str, row: f64) {
         let (zone, master) = (self.zone(id), self.master);
         let Some(moved) = row_move(row, zone, master) else {
@@ -2406,10 +2402,7 @@ impl AirPlaySpeakers {
         };
         let entry = self.entry(id);
         entry.volume = moved.own_position;
-        entry.level = Some(SetLevel {
-            level: moved.device_level,
-            volume: device_volume(moved.device_level),
-        });
+        entry.held_level = None;
         let volume = self.volume_of(id);
         self.log.log(|| {
             format!(
@@ -2427,13 +2420,14 @@ impl AirPlaySpeakers {
         self.remote.forget(id);
     }
 
-    /// The device level D speaker `id` gets: the level a row move or the
-    /// speaker set, else s × zone × master (S290).
+    /// The device level D speaker `id` has: min(100, s × k), or with k at 0
+    /// the level set on the speaker since (S290).
     fn device_level_of(&self, id: &str) -> f64 {
         let settings = self.settings(id);
-        match settings.level {
-            Some(set) => set.level,
-            None => device_level(settings.volume, self.zone(id), self.master),
+        let level = device_level(settings.volume, self.zone(id), self.master);
+        match settings.held_level {
+            Some(held) if level == 0.0 => held,
+            _ => level,
         }
     }
 
@@ -2448,10 +2442,10 @@ impl AirPlaySpeakers {
 
     /// Sets the master position, which scales every speaker, live.
     pub fn set_master(&mut self, master: f64) {
+        // A master move keeps s, so every row shows min(100, s × k) (S290).
         if master != self.master {
-            // A master move keeps s, so every row shows s × zone × master again (S290).
             for settings in self.settings.values_mut() {
-                settings.level = None;
+                settings.held_level = None;
             }
         }
         self.master = master;
@@ -2477,7 +2471,7 @@ impl AirPlaySpeakers {
         self.zones = zones;
         for id in &changed {
             if let Some(settings) = self.settings.get_mut(id) {
-                settings.level = None;
+                settings.held_level = None;
             }
         }
         let now = Instant::now();
@@ -2517,10 +2511,7 @@ impl AirPlaySpeakers {
     fn volume_of(&self, id: &str) -> Volume {
         match self.calibration_solo.as_deref() {
             Some(solo) if solo != id => Volume::Muted,
-            _ => match self.settings(id).level {
-                Some(set) => set.volume,
-                None => airplay_volume(self.settings(id).volume, self.zone(id), self.master),
-            },
+            _ => airplay_volume(self.settings(id).volume, self.zone(id), self.master),
         }
     }
 
@@ -2691,22 +2682,19 @@ impl AirPlaySpeakers {
                 false
             }
             (Action::Move { to, .. }, Some(row)) => {
-                let level = match command {
-                    Command::DeviceVolume(db) => device_level_for_db(db),
-                    _ => None,
-                };
-                self.remote_move(&row, to, level, now)
+                let on_speaker = matches!(command, Command::DeviceVolume(_));
+                self.remote_move(&row, to, on_speaker, now)
             }
             _ => false,
         }
     }
 
-    /// The own volume of the added row as a remote decision sees it; for a
-    /// DeviceVolume with S271's echo window and the position its level plays
-    /// at.
+    /// The volume of the added row as a remote decision sees it: its device
+    /// level (S290); for a DeviceVolume with S271's echo window and the level
+    /// it asks for.
     fn own_volume(&self, row: Option<&str>, command: Command, now: Instant) -> OwnVolume {
         let mut own = OwnVolume {
-            position: 0.0,
+            level: 0.0,
             dragging: false,
             echo: false,
             reported: None,
@@ -2714,28 +2702,34 @@ impl AirPlaySpeakers {
         let Some((row, added)) = row.and_then(|row| Some((row, self.added.get(row)?))) else {
             return own;
         };
-        own.position = self.settings(row).volume;
+        own.level = self.device_level_of(row);
         own.dragging = added.read.dragging;
         if let Command::DeviceVolume(db) = command {
             let has = self.volume_of(row).wire_db();
             own.echo = added.read.recent(now) && (db - has).abs() < VOLUME_TOLERANCE_DB;
-            own.reported = slider_position(db, self.zone(row), self.master);
+            own.reported = reported_level(db, self.zone(row), self.master);
         }
         own
     }
 
-    /// A remote moved `row`'s own volume to `position`: as at the end of a
-    /// drag, the speaker gets its new level, which starts S271's window
-    /// (S275 to S277). A DeviceVolume's `level` is the device level the
-    /// speaker gets and the row shows; a step's is s × zone × master (S290).
-    /// Returns true: the speaker list shows the position.
-    fn remote_move(&mut self, row: &str, position: f64, level: Option<f64>, now: Instant) -> bool {
+    /// A remote moved `row` to device level `to`: as at the end of a drag,
+    /// the speaker gets it, which starts S271's window (S275 to S277). A
+    /// DeviceVolume is a change made on the speaker, any other command a row
+    /// move (S290). Returns whether the speaker list changed.
+    fn remote_move(&mut self, row: &str, to: f64, on_speaker: bool, now: Instant) -> bool {
+        let (zone, master) = (self.zone(row), self.master);
+        let own = self.settings(row).volume;
+        let moved = if on_speaker {
+            level_on_speaker(to, own, zone, master)
+        } else {
+            let Some(moved) = row_move(to, zone, master) else {
+                return false;
+            };
+            moved
+        };
         let entry = self.entry(row);
-        entry.volume = position;
-        entry.level = level.map(|level| SetLevel {
-            level,
-            volume: device_volume(level),
-        });
+        entry.volume = moved.own_position;
+        entry.held_level = None;
         let volume = self.volume_of(row);
         if let Some(added) = self.added.get_mut(row) {
             added.read.set(now);
@@ -2789,10 +2783,8 @@ impl AirPlaySpeakers {
         added.keep_volume(self.link.as_mut(), level);
         let entry = self.entry(&row);
         entry.volume = moved.own_position;
-        entry.level = Some(SetLevel {
-            level: moved.device_level,
-            volume: level,
-        });
+        entry.held_level = own_for_device_level(moved.device_level, zone, master)
+            .map_or(Some(moved.device_level), |_| None);
         self.log.log(|| {
             format!(
                 "AirPlay speaker {} volume changed on the speaker to {}: own volume {}",
@@ -7322,13 +7314,13 @@ pub mod tests {
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -27.6);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
-        assert_eq!(airplay.speakers()[0].volume, 8.0);
+        assert_eq!(own(&airplay), 8.0);
         // More than 0.5 dB from a level just sent is a change at once.
         airplay.set_volume(&id, 10.0);
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -26.4);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
-        assert_eq!(airplay.speakers()[0].volume, 12.0);
+        assert_eq!(own(&airplay), 12.0);
     }
 
     // covers: S271
@@ -7422,7 +7414,7 @@ pub mod tests {
                 .speakers()
                 .into_iter()
                 .find(|speaker| speaker.id == id)
-                .map(|speaker| speaker.volume)
+                .map(|speaker| (speaker.volume * 1e6).round() / 1e6)
         };
         assert_eq!(volume_of(&airplay, &id), Some(52.0));
         assert_eq!(volume_of(&airplay, &other), Some(50.0));
@@ -7491,6 +7483,12 @@ pub mod tests {
         }
     }
 
+    /// The first speaker's own volume to 6 decimals, which S290 keeps
+    /// unrounded.
+    fn own(airplay: &AirPlaySpeakers) -> f64 {
+        (airplay.speakers()[0].volume * 1e6).round() / 1e6
+    }
+
     /// The whole number speaker `id`'s row shows (S290).
     fn row_of(airplay: &AirPlaySpeakers, id: &str) -> f64 {
         let info = airplay
@@ -7521,33 +7519,38 @@ pub mod tests {
 
     // covers: S290
     #[test]
-    fn a_row_move_sends_the_row_and_stores_the_smallest_own_volume_reaching_it() {
+    fn a_row_move_sends_the_row_and_stores_the_row_over_k() {
         let fake = FakeAirPlay::new();
         let (mut airplay, _, id) = kitchen_playing(&fake, OPEN_TXT);
         airplay.set_master(63.0);
         fake.take_calls();
         airplay.move_row(&id, 20.0);
-        assert_eq!(airplay.speakers()[0].volume, 32.0);
+        assert_eq!(own(&airplay), 31.746032);
         assert_eq!(row_of(&airplay, &id), 20.0);
         assert_eq!(sent_levels(&fake), [(id.clone(), Some(-24.0))]);
-        // A master move keeps own 32: 32 × 1.0.
+        // A master move keeps own 20 ÷ 0.63.
         airplay.set_master(100.0);
-        assert_eq!(airplay.speakers()[0].volume, 32.0);
-        assert_eq!(row_of(&airplay, &id), 32.0);
-        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-20.4))]);
-        // Past the ceiling own stops at 100 and the row settles at 100 × k.
+        assert_eq!(own(&airplay), 31.746032);
+        assert_eq!(row_of(&airplay, &id), 31.0);
+        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-20.5))]);
+        // The master is no ceiling: own passes 100 and the row is the one moved to.
         airplay.set_master(50.0);
         fake.take_calls();
         airplay.move_row(&id, 80.0);
-        assert_eq!(airplay.speakers()[0].volume, 100.0);
-        assert_eq!(row_of(&airplay, &id), 50.0);
-        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-15.0))]);
+        assert_eq!(own(&airplay), 160.0);
+        assert_eq!(row_of(&airplay, &id), 80.0);
+        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-6.0))]);
+        // Up to the cap at 100 and back gives 80 again.
+        airplay.set_master(100.0);
+        assert_eq!(row_of(&airplay, &id), 100.0);
+        airplay.set_master(50.0);
+        assert_eq!(row_of(&airplay, &id), 80.0);
         // With k at 0 nothing is sent and own stays.
         airplay.set_master(0.0);
         fake.take_calls();
         airplay.move_row(&id, 40.0);
         assert!(fake.take_calls().is_empty());
-        assert_eq!(airplay.speakers()[0].volume, 100.0);
+        assert_eq!(own(&airplay), 160.0);
         assert_eq!(row_of(&airplay, &id), 0.0);
     }
 
@@ -7568,13 +7571,13 @@ pub mod tests {
         }
         assert!(fake.take_calls().is_empty());
         assert_eq!(row_of(&airplay, &id), 20.0);
-        assert_eq!(airplay.speakers()[0].volume, 32.0);
-        // One press up on its remote: −23.7 dB, level 21, own 33.
+        assert_eq!(own(&airplay), 31.746032);
+        // One press up on its remote: −23.7 dB, level 21, own 21 ÷ 0.63.
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -23.7);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(row_of(&airplay, &id), 21.0);
-        assert_eq!(airplay.speakers()[0].volume, 33.0);
+        assert_eq!(own(&airplay), 33.333333);
         // Sent back, −23.7 dB would land on −24 dB and undo the press.
         assert_eq!(
             fake.take_calls(),
@@ -7589,34 +7592,34 @@ pub mod tests {
 
     // covers: S290
     #[test]
-    fn a_master_move_and_back_shows_own_times_k_not_the_level_read_before() {
+    fn a_master_or_zone_move_and_back_gives_the_level_read_before() {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
         airplay.set_master(63.0);
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -23.7);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
-        assert_eq!(airplay.speakers()[0].volume, 33.0);
+        assert_eq!(own(&airplay), 33.333333);
         assert_eq!(row_of(&airplay, &id), 21.0);
-        // 63 to 100 and back: own 33 × 0.63 = 20.79.
         airplay.set_master(100.0);
+        assert_eq!(row_of(&airplay, &id), 33.0);
         airplay.set_master(63.0);
-        assert_eq!(airplay.speakers()[0].volume, 33.0);
-        assert_eq!(row_of(&airplay, &id), 20.0);
-        // The same for a zone volume that moves and comes back: after the
-        // echo of 20.79, level 21.9 reads as own 35 and row 21; then
-        // 35 × 0.63 = 22.05.
+        assert_eq!(own(&airplay), 33.333333);
+        assert_eq!(row_of(&airplay, &id), 21.0);
+        // The same for a zone volume: after the echo of 21, level 21.9 reads
+        // as own 21.9 ÷ 0.63 and row 21, which it shows again after the zone.
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -23.763);
         assert!(airplay.poll().is_empty());
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -23.43);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
-        assert_eq!(airplay.speakers()[0].volume, 35.0);
+        assert_eq!(own(&airplay), 34.761905);
         assert_eq!(row_of(&airplay, &id), 21.0);
         airplay.set_zones(BTreeMap::from([(id.clone(), 50.0)]));
+        assert_eq!(row_of(&airplay, &id), 10.0);
         airplay.set_zones(BTreeMap::new());
-        assert_eq!(row_of(&airplay, &id), 22.0);
+        assert_eq!(row_of(&airplay, &id), 21.0);
     }
 
     // covers: S291
@@ -7635,29 +7638,28 @@ pub mod tests {
         }
     }
 
+    // covers: S276, S290
     #[test]
-    fn slider_positions_are_the_airplay_volume_backwards() {
+    fn a_device_volume_reports_its_level_unless_k_is_0() {
         for master in [100.0, 50.0, 25.0] {
             for position in (1..=100).map(f64::from) {
-                if position * master / 100.0 < 1.0 {
-                    continue;
-                }
                 let db = airplay_volume(position, NO_ZONE_POSITION, master).wire_db();
-                let back = slider_position(db, NO_ZONE_POSITION, master).expect("a master above 0");
+                let level = reported_level(db, NO_ZONE_POSITION, master).expect("a master above 0");
+                let expected = device_level(position, NO_ZONE_POSITION, master);
                 assert!(
-                    (back - position).abs() <= 1.0,
-                    "{position} at {master}: {back}"
+                    (level - expected).abs() < 1e-9,
+                    "{position} at {master}: {level}"
                 );
             }
         }
         assert_eq!(
-            slider_position(-144.0, NO_ZONE_POSITION, 100.0),
+            reported_level(-144.0, NO_ZONE_POSITION, 100.0),
             Some(0.0),
             "muted"
         );
-        assert_eq!(slider_position(3.0, NO_ZONE_POSITION, 100.0), Some(100.0));
-        assert_eq!(slider_position(-6.0, NO_ZONE_POSITION, 0.0), None);
-        assert_eq!(slider_position(f64::NAN, NO_ZONE_POSITION, 100.0), None);
+        assert_eq!(reported_level(3.0, NO_ZONE_POSITION, 100.0), Some(100.0));
+        assert_eq!(reported_level(-6.0, NO_ZONE_POSITION, 0.0), None);
+        assert_eq!(reported_level(f64::NAN, NO_ZONE_POSITION, 100.0), None);
     }
 
     #[test]
@@ -7706,7 +7708,7 @@ pub mod tests {
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -26.7);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
-        assert_eq!(airplay.speakers()[0].volume, 11.0);
+        assert_eq!(own(&airplay), 11.0);
         assert_eq!(
             fake.take_calls(),
             [Call::KeepVolume(id.clone(), Volume::Db(-26.7))]
@@ -7721,12 +7723,13 @@ pub mod tests {
         airplay.set_master(50.0);
         settle(&mut airplay, &id);
         fake.take_calls();
-        // −3 dB is past what the slider reaches at master 50 (−15 dB): the
-        // slider goes to its end, the speaker keeps −3 dB.
+        // −3 dB is level 90: own 90 ÷ 0.5, past 100, since the master is no
+        // ceiling (S290); the speaker keeps −3 dB.
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -3.0);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
-        assert_eq!(airplay.speakers()[0].volume, 100.0);
+        assert_eq!(own(&airplay), 180.0);
+        assert_eq!(row_of(&airplay, &id), 90.0);
         assert_eq!(
             fake.take_calls(),
             [Call::KeepVolume(id.clone(), Volume::Db(-3.0))]
@@ -7735,11 +7738,10 @@ pub mod tests {
         report_volume(&fake, &kitchen, -3.0);
         assert!(airplay.poll().is_empty(), "the level the sender has");
         assert!(fake.take_calls().is_empty());
-        // With own at its end already, the row still shows the new level.
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -1.0);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
-        assert_eq!(airplay.speakers()[0].volume, 100.0);
+        assert_eq!(own(&airplay), 193.333333);
         assert_eq!(row_of(&airplay, &id), 96.0);
         assert_eq!(
             fake.take_calls(),
@@ -7814,26 +7816,34 @@ pub mod tests {
         );
         fake.change(&moved);
         airplay.poll();
-        assert_eq!(
-            fake.take_calls(),
-            [Call::Add {
-                id: id.clone(),
-                volume: Volume::Db(-3.0),
-                delay: Duration::from_millis(120),
-            }],
-            "the level the speaker reported, not the slider's"
+        let calls = fake.take_calls();
+        let [
+            Call::Add {
+                id: added,
+                volume,
+                delay,
+            },
+        ] = calls.as_slice()
+        else {
+            panic!("one add: {calls:?}");
+        };
+        assert_eq!((added, *delay), (&id, Duration::from_millis(120)));
+        assert!(
+            (volume.wire_db() + 3.0).abs() < 1e-9,
+            "the level the speaker reported, not 100 × k: {volume:?}"
         );
         assert_eq!(airplay.listed[&id].device(), &moved);
     }
 
     #[test]
-    fn a_level_near_the_bottom_moves_the_slider_to_0_without_muting() {
+    fn a_level_near_the_bottom_moves_the_row_to_0_without_muting() {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -29.9);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
-        assert_eq!(airplay.speakers()[0].volume, 0.0);
+        assert_eq!(row_of(&airplay, &id), 0.0);
+        assert_eq!(own(&airplay), 0.333333);
         assert_eq!(
             fake.take_calls(),
             [Call::KeepVolume(id.clone(), Volume::Db(-29.9))]

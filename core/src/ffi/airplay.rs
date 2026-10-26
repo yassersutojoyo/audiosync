@@ -104,8 +104,8 @@ use crate::policy::remote::{
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
-    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, level_set_on_speaker,
-    own_position_for_level, sanitize_own,
+    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, level_on_speaker,
+    level_set_on_speaker, own_for_device_level, row_move, sanitize_own,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -906,15 +906,12 @@ fn device_volume(level: f64) -> Volume {
     }
 }
 
-/// The slider position, rounded to a whole step, that plays at `db` through
-/// the zone and the master ([`speaker_volume`] backwards, S250): 0 at −30 dB
-/// and below, muted included. None when zone × master is 0, where every
-/// position sounds the same, or `db` isn't finite.
-fn slider_position(db: f64, zone: f64, master: f64) -> Option<f64> {
-    if !db.is_finite() {
-        return None;
-    }
-    own_position_for_level((1.0 - db / MIN_DB).clamp(0.0, 1.0), zone, master)
+/// The device level a DeviceVolume of `db` asks for (S289): 0 at −30 dB
+/// and below, muted included. None when zone × master is 0, where every own
+/// volume sounds the same, or `db` isn't finite.
+fn reported_level(db: f64, zone: f64, master: f64) -> Option<f64> {
+    let level = device_level_for_db(db)?;
+    own_for_device_level(level, zone, master).map(|_| level)
 }
 
 /// A reported level this close to the one sent is the speaker rounding it,
@@ -1263,22 +1260,19 @@ impl AscAirPlay {
                 self.queue_event(Pending::Remote(row, control));
             }
             (Action::Move { to, .. }, Some(row)) => {
-                let level = match command {
-                    Command::DeviceVolume(db) => device_level_for_db(db),
-                    _ => None,
-                };
-                self.move_own(&row, to, level);
+                let on_speaker = matches!(command, Command::DeviceVolume(_));
+                self.move_level(&row, to, on_speaker);
             }
             _ => {}
         }
     }
 
-    /// The own volume of the added speaker or target `row` as a remote
-    /// decision sees it; for a DeviceVolume with S271's echo window and the
-    /// position its level plays at.
+    /// The volume of the added speaker or target `row` as a remote decision
+    /// sees it: its device level (S290); for a DeviceVolume with S271's echo
+    /// window and the level it asks for.
     fn own_volume(&self, row: Option<&str>, command: Command) -> OwnVolume {
         let mut own = OwnVolume {
-            position: 0.0,
+            level: 0.0,
             dragging: false,
             echo: false,
             reported: None,
@@ -1286,42 +1280,46 @@ impl AscAirPlay {
         let Some((row, added)) = row.and_then(|row| Some((row, self.added.get(row)?))) else {
             return own;
         };
-        own.position = added.position;
+        let zone = zone_in(&self.zones, row);
+        own.level = device_level(added.position, zone, self.master);
         own.dragging = added.dragging;
         if let Command::DeviceVolume(db) = command {
-            let zone = zone_in(&self.zones, row);
             let recent = added
                 .volume_set_at
                 .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
             let sent = speaker_volume(added.position, zone, self.master).wire_db();
             own.echo = recent && (db - sent).abs() < VOLUME_TOLERANCE_DB;
-            own.reported = slider_position(db, zone, self.master);
+            own.reported = reported_level(db, zone, self.master);
         }
         own
     }
 
-    /// A remote moved `row`'s own volume to `position`: as at the end of a
-    /// drag, the speaker gets its new level, which starts S271's window, and
-    /// the host shows the position without sending it back (S275 to S277).
-    /// A DeviceVolume's `level` is the device level the speaker gets and
-    /// the row shows; a step's is the own volume through k (S290).
-    fn move_own(&mut self, row: &str, position: f64, level: Option<f64>) {
+    /// A remote moved `row` to device level `to`: as at the end of a drag,
+    /// the speaker gets it, which starts S271's window, and the host shows
+    /// it without sending it back (S275 to S277). A DeviceVolume is a change
+    /// made on the speaker, any other command a row move (S290).
+    fn move_level(&mut self, row: &str, to: f64, on_speaker: bool) {
         let master = self.master;
         let zone = zone_in(&self.zones, row);
         let Some(added) = self.added.get_mut(row) else {
             return;
         };
-        added.position = position;
-        added.volume_set();
-        let (volume, level) = match level {
-            Some(level) => (device_volume(level), level),
-            None => (
-                speaker_volume(position, zone, master),
-                device_level(position, zone, master),
-            ),
+        let moved = if on_speaker {
+            level_on_speaker(to, added.position, zone, master)
+        } else {
+            let Some(moved) = row_move(to, zone, master) else {
+                return;
+            };
+            moved
         };
-        added.set_volume(&self.sender, volume);
-        self.queue_event(Pending::Volume(row.to_owned(), position, level));
+        added.position = moved.own_position;
+        added.volume_set();
+        added.set_volume(&self.sender, device_volume(moved.device_level));
+        self.queue_event(Pending::Volume(
+            row.to_owned(),
+            moved.own_position,
+            moved.device_level,
+        ));
     }
 
     /// A speaker's warning goes to the host. One that turned a volume read
@@ -2482,7 +2480,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
         live(airplay, false, |airplay| {
             airplay.pump();
             if let Some(target) = airplay.targets.get(id) {
-                let position = volume.clamp(0.0, 100.0);
+                let position = sanitize_own(volume);
                 let options = target_options(
                     airplay,
                     id,
@@ -2522,7 +2520,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 return false;
             };
             let device = info.device.clone();
-            let position = volume.clamp(0.0, 100.0);
+            let position = sanitize_own(volume);
             let key = device.key.clone();
             let zone = zone_in(&airplay.zones, id);
             let initial = speaker_volume(position, zone, airplay.master);
@@ -4668,6 +4666,24 @@ mod tests {
             "P143"
         );
         assert!((restarted[0].latency_ms - 1750.0).abs() < 0.01);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S290
+    #[test]
+    fn an_added_speaker_keeps_an_own_volume_above_100() {
+        let id = "02005E005332";
+        let mut handle = listing(vec![loopback_record(id, "Den", closed_port())]);
+        let c_id = c_string(id);
+        let own = 80.0 / 0.63;
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            asc_airplay_set_master(handle, 63.0);
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), own));
+        }
+        assert_eq!(inside(handle).added[id].position, own);
+        assert!((inside(handle).added[id].level - 80.0).abs() < 1e-9);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -7004,21 +7020,22 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
-    // covers: S275, S250
+    // covers: S275, S250, S290
     #[test]
-    fn a_remote_volume_up_moves_only_that_speakers_own_volume_by_5() {
+    fn a_remote_volume_up_moves_only_that_speakers_row_by_5() {
         let mut handle = create_with(quiet);
         let kitchen = speaker_key(0x02);
         add_for_volume(handle, "02005E005402", kitchen.clone(), 40.0);
         add_for_volume(handle, "02005E005403", speaker_key(0x03), 60.0);
         inside(handle).master = 80.0;
+        // Own 40 at master 80 is row 32; up 5 is row 37, own 37 ÷ 0.8.
         remote(handle, &kitchen, None, RemoteCommand::VolumeUp);
         assert_eq!(
             volume_events(handle),
-            vec![("02005E005402".to_owned(), 45.0)]
+            vec![("02005E005402".to_owned(), 46.25)]
         );
+        assert_eq!(own_of(handle, "02005E005402"), 46.25);
         let inner = inside(handle);
-        assert_eq!(inner.added["02005E005402"].position, 45.0);
         assert_eq!(inner.added["02005E005403"].position, 60.0);
         assert_eq!(inner.master, 80.0);
         assert!(!just_sent(handle, "02005E005403"));
@@ -7153,13 +7170,13 @@ mod tests {
         let inner = inside(handle);
         assert_eq!(inner.added["02005E005408"].position, 50.0);
         assert_eq!(inner.master, 100.0);
-        // A level that rounds to the position changes nothing.
+        // The level the row already has changes nothing.
         set_ago(handle, id, Duration::from_secs(3));
         remote(
             handle,
             &key,
             None,
-            RemoteCommand::DeviceVolume(Volume::Db(-6.1)),
+            RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
         );
         assert!(volume_events(handle).is_empty());
         assert!(!just_sent(handle, id));
@@ -7242,47 +7259,31 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S276, S290
     #[test]
-    fn slider_positions_are_the_speaker_volume_backwards() {
+    fn a_device_volume_reports_its_level_unless_k_is_0() {
+        let no_zone = NO_ZONE_POSITION;
         for master in [100.0, 50.0, 25.0] {
             for position in (1..=100).map(f64::from) {
-                if position * master / 100.0 < 1.0 {
-                    continue;
-                }
-                let db = speaker_volume(position, NO_ZONE_POSITION, master).wire_db();
-                let back = slider_position(db, NO_ZONE_POSITION, master).expect("a master above 0");
+                let db = speaker_volume(position, no_zone, master).wire_db();
+                let level = reported_level(db, no_zone, master).expect("a master above 0");
                 assert!(
-                    (back - position).abs() <= 1.0,
-                    "{position} at {master}: {back}"
+                    (level - device_level(position, no_zone, master)).abs() < 1e-9,
+                    "{position} at {master}: {level}"
                 );
             }
         }
-        let no_zone = NO_ZONE_POSITION;
-        assert_eq!(slider_position(-144.0, no_zone, 100.0), Some(0.0), "muted");
-        assert_eq!(slider_position(-40.0, no_zone, 100.0), Some(0.0));
-        assert_eq!(slider_position(3.0, no_zone, 100.0), Some(100.0));
+        assert_eq!(reported_level(-144.0, no_zone, 100.0), Some(0.0), "muted");
+        assert_eq!(reported_level(-40.0, no_zone, 100.0), Some(0.0));
+        assert_eq!(reported_level(3.0, no_zone, 100.0), Some(100.0));
+        assert_eq!(reported_level(-15.0, no_zone, 50.0), Some(50.0));
         assert_eq!(
-            slider_position(-6.0, no_zone, 0.0),
+            reported_level(-6.0, no_zone, 0.0),
             None,
-            "every position sounds the same"
+            "every own volume sounds the same"
         );
-        assert_eq!(slider_position(f64::NAN, no_zone, 100.0), None);
-        assert_eq!(
-            slider_position(-15.0, no_zone, 50.0),
-            Some(100.0),
-            "past the master's reach"
-        );
-        assert_eq!(slider_position(-18.0, 50.0, 100.0), Some(80.0), "0.4 ÷ 0.5");
-        assert_eq!(slider_position(-6.0, 0.0, 100.0), None, "zone 0");
-        for (db, master) in [(-15.0, 100.0), (-7.3, 61.0), (-29.0, 25.0)] {
-            let level = (1.0 - db / MIN_DB).clamp(0.0, 1.0);
-            let master_level = (master / 100.0_f64).clamp(0.0, 1.0);
-            assert_eq!(
-                slider_position(db, no_zone, master),
-                Some((level / master_level * 100.0).clamp(0.0, 100.0).round()),
-                "no zone: as before zones"
-            );
-        }
+        assert_eq!(reported_level(-6.0, 0.0, 100.0), None, "zone 0");
+        assert_eq!(reported_level(f64::NAN, no_zone, 100.0), None);
     }
 
     #[test]

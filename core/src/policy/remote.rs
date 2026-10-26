@@ -1,16 +1,17 @@
 //! Remote commands from AirPlay speakers (S273 to S279): what a speaker's
 //! remote asks for through DACP (`docs/AIRPLAY_SPEC.md` P192) becomes a
-//! now-playing control to send, a move of the row's own volume, or nothing,
-//! and one debug log line. Both hosts call it, so the Mac and Windows agree.
+//! now-playing control to send, a move of the row's device level, or
+//! nothing, and one debug log line. Both hosts call it, so the Mac and Windows agree.
 
 use std::collections::HashMap;
 
 use super::Seconds;
+use crate::volume::{MAX_POSITION, MIN_POSITION, row_level};
 
 /// Commands of one kind this close together count once (S278).
 pub const REPEAT_WINDOW: Seconds = 0.3;
 
-/// How far VolumeUp and VolumeDown move the own volume (S275).
+/// How far VolumeUp and VolumeDown move the row (S275).
 pub const VOLUME_STEP: f64 = 5.0;
 
 /// Presses exactly [`REPEAT_WINDOW`] apart both count, whatever the clock's
@@ -106,19 +107,19 @@ pub struct App<'a> {
     pub playback: Playback,
 }
 
-/// The acting row's own volume as the host has it now (S249, S271).
+/// The acting row's volume as the host has it now (S271, S290).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OwnVolume {
-    /// Its latest position, 0 to 100, one not sent yet included.
-    pub position: f64,
+    /// Its device level D, 0 to 100, unrounded: min(100, s × k) for its own
+    /// volume s, one not sent yet included (S290).
+    pub level: f64,
     /// The user drags its slider.
     pub dragging: bool,
     /// For a DeviceVolume: its level lies within 0.5 dB of the one the host
     /// sent the speaker in the last 3 s (S271).
     pub echo: bool,
-    /// For a DeviceVolume: the position, rounded to a whole step, that
-    /// plays at its level through the zone and the master; `None` when
-    /// every position sounds the same there.
+    /// For a DeviceVolume: the device level it asks for (S289); `None` when
+    /// zone × master is 0, where every own volume sounds the same.
     pub reported: Option<f64>,
 }
 
@@ -145,8 +146,10 @@ pub enum Action {
     Nothing,
     /// Send this control to the app the now-playing control follows.
     Send(Control),
-    /// Set the row's own volume to `to` as at the end of a drag: send it
-    /// to the speaker, which starts the 3 s window (S271).
+    /// Set the row's device level to `to` as at the end of a drag: send it
+    /// to the speaker, which starts the 3 s window (S271). For a
+    /// DeviceVolume `to` is the level the speaker asked for, a change made
+    /// on the speaker; for any other command a row move to `to` (S290).
     Move {
         from: f64,
         to: f64,
@@ -169,7 +172,7 @@ pub struct Remote {
     /// Per target row, the latest counted VolumeUp, VolumeDown or
     /// MuteToggle from one of its members.
     member_presses: HashMap<String, (u8, Seconds)>,
-    /// Per row, the position MuteToggle muted from.
+    /// Per row, the row MuteToggle muted from.
     muted_from: HashMap<String, f64>,
 }
 
@@ -227,9 +230,9 @@ impl Remote {
                     app => send(app, Control::PlayPause),
                 }
             }
-            Command::VolumeUp => self.step(row, own.position, VOLUME_STEP),
-            Command::VolumeDown => self.step(row, own.position, -VOLUME_STEP),
-            Command::MuteToggle => self.mute_toggle(row, own.position),
+            Command::VolumeUp => self.step(row, own.level, VOLUME_STEP),
+            Command::VolumeDown => self.step(row, own.level, -VOLUME_STEP),
+            Command::MuteToggle => self.mute_toggle(row, own.level),
             Command::DeviceVolume(_) => {
                 if own.dragging {
                     return (Action::Nothing, "ignored, slider dragged".to_owned());
@@ -247,13 +250,14 @@ impl Remote {
                             .to_owned(),
                     );
                 };
-                if to == own.position.round() {
+                if (to - own.level).abs() < LEVEL_SLACK {
                     return (
                         Action::Nothing,
-                        format!("own volume stays at {}", position_text(own.position)),
+                        format!("level stays at {}", level_text(own.level)),
                     );
                 }
-                self.move_to(row, own.position, to)
+                self.muted_from.remove(row);
+                moved(own.level, to)
             }
         }
     }
@@ -289,32 +293,31 @@ impl Remote {
         false
     }
 
-    fn step(&mut self, row: &str, position: f64, by: f64) -> (Action, String) {
-        let to = (position + by).clamp(0.0, 100.0);
-        self.move_to(row, position, to)
-    }
-
-    fn move_to(&mut self, row: &str, from: f64, to: f64) -> (Action, String) {
-        if to == from {
+    /// A step is a row move from the row shown: up from 100 or down from 0
+    /// changes nothing (S275, S290).
+    fn step(&mut self, row: &str, level: f64, by: f64) -> (Action, String) {
+        let shown = row_level(level);
+        let to = (shown + by).clamp(MIN_POSITION, MAX_POSITION);
+        if to == shown {
             return (
                 Action::Nothing,
-                format!("own volume stays at {}", position_text(from)),
+                format!("level stays at {}", level_text(level)),
             );
         }
         self.muted_from.remove(row);
-        moved(from, to)
+        moved(level, to)
     }
 
-    fn mute_toggle(&mut self, row: &str, position: f64) -> (Action, String) {
-        if position > 0.0 {
-            self.muted_from.insert(row.to_owned(), position);
-            return moved(position, 0.0);
+    fn mute_toggle(&mut self, row: &str, level: f64) -> (Action, String) {
+        if level > 0.0 {
+            self.muted_from.insert(row.to_owned(), row_level(level));
+            return moved(level, 0.0);
         }
         match self.muted_from.remove(row) {
             Some(before) => moved(0.0, before),
             None => (
                 Action::Nothing,
-                "nothing to restore, own volume stays at 0".to_owned(),
+                "nothing to restore, level stays at 0".to_owned(),
             ),
         }
     }
@@ -333,19 +336,18 @@ fn send(app: Option<App<'_>>, control: Control) -> (Action, String) {
 fn moved(from: f64, to: f64) -> (Action, String) {
     (
         Action::Move { from, to },
-        format!(
-            "own volume {} -> {}",
-            position_text(from),
-            position_text(to)
-        ),
+        format!("level {} -> {}", level_text(from), level_text(to)),
     )
 }
 
-/// A position as a whole number when it is one, else to one decimal.
-fn position_text(position: f64) -> String {
-    if position.fract() == 0.0 {
-        format!("{position:.0}")
+/// A DeviceVolume this close to the level the row has changes nothing.
+const LEVEL_SLACK: f64 = 1e-6;
+
+/// A level as a whole number when it is one, else to one decimal.
+fn level_text(level: f64) -> String {
+    if (level - level.round()).abs() < LEVEL_SLACK {
+        format!("{:.0}", level.round())
     } else {
-        format!("{position:.1}")
+        format!("{level:.1}")
     }
 }
