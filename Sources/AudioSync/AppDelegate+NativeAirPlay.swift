@@ -540,7 +540,9 @@ extension AppDelegate {
 
     private func nativeTurnOffText(_ id: String, _ reason: NativeTurnOff) -> String {
         let name = shownName(airPlay: id)
+        let unasked = NativeAirPlayID.receiver(id).map { nativeAirPlay?.model.refusedUnasked($0) == true } ?? false
         switch reason {
+        case .needsCode where unasked: return text.nativeAirPlayNotAccepted(name: name)
         case .needsCode, .needsPassword: return text.airPlayTurnedOff(name: name, reason: .needsCode)
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)

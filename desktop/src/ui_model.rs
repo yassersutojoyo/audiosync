@@ -172,6 +172,9 @@ pub enum AirPlayProblem {
     /// An Apple TV that needs pairing with a PIN first; switching it on
     /// pairs it.
     NeedsPin,
+    /// It turned the session down without asking for a PIN or password, so
+    /// it is off; the notice names no code.
+    NotAccepted,
     /// Pairing with an Apple TV failed, so it is off.
     PairingFailed,
     /// It needs pairing, which AudioSync for Windows can't do yet.

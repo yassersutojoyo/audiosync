@@ -585,6 +585,12 @@ struct UIStrings {
         }
     }
 
+    /// A receiver that asked for no PIN or password turned the session down
+    /// before any pairing step, so the cause stays unnamed.
+    func nativeAirPlayNotAccepted(name: String) -> String {
+        "\(name) didn't accept the connection, so it's off. Turn it on again to try once more."
+    }
+
     /// A PIN pairing ended without pairing, for another reason than a wrong
     /// PIN (which asks again).
     func nativeAirPlayPairingFailed(name: String) -> String {

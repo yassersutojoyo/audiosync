@@ -3823,6 +3823,17 @@ impl AirPlaySpeakers {
         })
     }
 
+    /// Whether the listed speaker `id` asked for nothing: no PIN or password
+    /// in its flags and no stored AirPlay 2 credentials, so a PairingRequired
+    /// from it came before any pairing step and its notice names no code.
+    fn refused_unasked(&self, id: &str) -> bool {
+        self.store.homekit(id).is_none()
+            && self.listed.get(id).is_some_and(|listed| {
+                let verdict = &listed.info.device.verdict;
+                !verdict.needs_password && !verdict.needs_pairing
+            })
+    }
+
     /// Returns whether the speaker list changed.
     fn speaker_event(
         &mut self,
@@ -3856,6 +3867,9 @@ impl AirPlaySpeakers {
                 let mut problem = problem(reason);
                 self.paired_for_session.remove(id);
                 self.note_path_switch(id, error.kind, retry_at.is_some());
+                let unasked = problem == AirPlayProblem::PairingNotYet
+                    && self.over_airplay2(id)
+                    && self.refused_unasked(id);
                 // A speaker reached over AirPlay 2 that wants a pairing:
                 // switching it on pairs it with a PIN, or with its password
                 // when it asks for one (P61, P154).
@@ -3930,6 +3944,9 @@ impl AirPlaySpeakers {
                         id: id.to_owned(),
                         problem,
                     });
+                } else if unasked {
+                    // Switching it on still pairs it, as for any PairingRequired.
+                    self.turn_off(id, AirPlayProblem::NotAccepted, events);
                 } else {
                     self.turn_off(id, problem, events);
                 }
@@ -5416,16 +5433,7 @@ pub mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(problems.len(), 1, "{events:?}");
-        assert!(
-            !matches!(
-                problems[0],
-                AirPlayProblem::NeedsPin
-                    | AirPlayProblem::NeedsPassword
-                    | AirPlayProblem::PairingFailed
-            ),
-            "{events:?}"
-        );
+        assert_eq!(problems, [AirPlayProblem::NotAccepted], "{events:?}");
         assert!(airplay.pin_prompt().is_none());
         assert!(
             !fake
