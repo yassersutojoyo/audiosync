@@ -4214,6 +4214,28 @@ do {
           "menu bar icon: a press held for over a second still counts as that click")
     check(tap(false, 98, 100) == .open,
           "menu bar icon: a click long after the panel closed under the icon opens it")
+    // Clicks 1 to 5 on the icon, 400 ms apart, open and close the panel in
+    // turn. The press of a closing click closes the popover first; AppKit may
+    // then drop that click's action or still deliver it.
+    for actionDropped in [true, false] {
+        var shown = false
+        var closingPress: TimeInterval?
+        var states: [Bool] = []
+        for press in [100.0, 100.4, 100.8, 101.2, 101.6] {
+            if shown {
+                shown = false
+                closingPress = press
+                if actionDropped { states.append(shown); continue }
+            }
+            if tap(shown, closingPress, press) == .open { shown = true }
+            closingPress = nil
+            states.append(shown)
+        }
+        let how = actionDropped ? "dropped" : "delivered"
+        check(states == [true, false, true, false, true],
+              "menu bar icon: five clicks open, close, open, close, open (closing click's action \(how))",
+              "\(states)")
+    }
     // The status item's window in AppKit coordinates, at the top of a 900-point screen.
     let icon = CGRect(x: 1142, y: 876, width: 24, height: 24)
     let pressed = StatusItemClick.pressClosed
