@@ -2,6 +2,13 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [0.7.1] - unreleased
+
+### Changed
+
+- A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Turn it on there to play it by itself; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
+- Only This Speaker, in a speaker's menu under its zone, turns the zone's other speakers off and plays this one. Nobody leaves the zone.
+
 ## [0.7.0] - unreleased
 
 ### Added

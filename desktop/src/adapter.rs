@@ -10735,6 +10735,31 @@ mod tests {
 
     // covers: S246
     #[test]
+    fn a_zone_members_own_row_keeps_one_cast_speaker_at_a_time() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN), cc(CAST_LIVING), key(SPEAKERS)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        assert!(messages(&adapter).contains(&cast_cant_play("Living Room", UiCastProblem::Busy)));
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.only_this_speaker(&cc(CAST_LIVING));
+        let state = adapter.snapshot();
+        assert!(state.running, "streaming goes on");
+        assert!(state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert_eq!(state.zones[0].members.len(), 3, "nobody leaves the zone");
+    }
+
+    // covers: S246
+    #[test]
     fn a_zone_click_turns_on_its_present_members_and_one_cast_speaker() {
         let (mut adapter, _fake) = cast_adapter();
         adapter.restore(Settings {
