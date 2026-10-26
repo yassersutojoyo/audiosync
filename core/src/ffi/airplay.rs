@@ -777,6 +777,7 @@ fn member_credentials(airplay: &AscAirPlay) -> impl FnMut(&DeviceKey, &mut Speak
         own.password = airplay.passwords.get(&member).cloned();
         own.credentials = airplay.store.get(&member).cloned();
         own.homekit_credentials = airplay.identity.get(&member).cloned();
+        own.timing = airplay.identity.timing(&member).cloned();
     }
 }
 
@@ -1035,6 +1036,16 @@ impl AscAirPlay {
                         self.relist(&id);
                     }
                     self.homekit_keys.insert(id, key);
+                    return;
+                }
+                // Kept for this handle even when the file can't be written,
+                // and the sender holds its own copy (P217).
+                if let SpeakerEvent::TimingRemembered(memory) = event {
+                    let _ = self.identity.keep_timing(&id, memory);
+                    return;
+                }
+                if matches!(event, SpeakerEvent::TimingForgotten) {
+                    let _ = self.identity.forget_timing(&id);
                     return;
                 }
                 if let SpeakerEvent::State(state) = &event
@@ -2544,6 +2555,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             options.password = airplay.passwords.get(id).cloned();
             options.credentials = airplay.store.get(id).cloned();
             options.homekit_credentials = airplay.identity.get(id).cloned();
+            options.timing = airplay.identity.timing(id).cloned();
             options.trace = debug_trace_on();
             options.pcm = pcm_debug_allows(
                 id,

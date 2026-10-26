@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::pairing::Credentials;
-use audiosync_airplay::sender::random_airplay2_device_id;
+use audiosync_airplay::sender::{TimingMemory, random_airplay2_device_id};
 use audiosync_core::airplay2_identity::{Airplay2Identity, Unreadable};
 use zeroize::Zeroizing;
 
@@ -396,6 +396,37 @@ impl PairingStore {
             return Ok(());
         };
         if !file.identity.remove(id) {
+            return Ok(());
+        }
+        self.save_airplay2()
+    }
+
+    /// The speaker's AirPlay 2 timing entry (P217), once
+    /// [`PairingStore::open_airplay2`] read it.
+    pub fn timing(&self, id: &str) -> Option<&TimingMemory> {
+        self.airplay2.as_ref()?.identity.timing(id)
+    }
+
+    /// Keeps the speaker's timing entry (P217) and writes the AirPlay 2
+    /// identity file when it changed; when it can't be written the entry
+    /// lasts for this run.
+    pub fn keep_timing(&mut self, id: &str, memory: TimingMemory) -> io::Result<()> {
+        let Some(file) = &mut self.airplay2 else {
+            return Err(io::Error::other("the AirPlay 2 identity isn't open"));
+        };
+        if !file.identity.keep_timing(id, memory) {
+            return Ok(());
+        }
+        self.save_airplay2()
+    }
+
+    /// Drops the speaker's timing entry (P217) and writes the AirPlay 2
+    /// identity file.
+    pub fn forget_timing(&mut self, id: &str) -> io::Result<()> {
+        let Some(file) = &mut self.airplay2 else {
+            return Ok(());
+        };
+        if !file.identity.forget_timing(id) {
             return Ok(());
         }
         self.save_airplay2()

@@ -2959,6 +2959,7 @@ impl AirPlaySpeakers {
         options.delay = self.sent_delay(id);
         options.credentials = self.store.get(id).cloned();
         options.homekit_credentials = self.store.homekit(id).cloned();
+        options.timing = self.store.timing(id).cloned();
         options.password = self.password(id);
         options.pcm = self.pcm_devices.contains(id);
         options.trace = self.log.enabled();
@@ -3068,6 +3069,7 @@ impl AirPlaySpeakers {
                 let mut own = options.clone();
                 own.credentials = self.store.get(&id).cloned();
                 own.homekit_credentials = self.store.homekit(&id).cloned();
+                own.timing = self.store.timing(&id).cloned();
                 own.password = self.password(&id);
                 (member.key.clone(), own)
             })
@@ -4029,6 +4031,27 @@ impl AirPlaySpeakers {
             }
             SpeakerEvent::HomeKitPaired(credentials) => {
                 self.keep_homekit(id, credentials);
+                false
+            }
+            SpeakerEvent::TimingRemembered(memory) => {
+                let timing = memory.timing;
+                let saved = self.store.keep_timing(id, memory);
+                self.log.log(|| {
+                    let saved = match &saved {
+                        Ok(()) => String::new(),
+                        Err(error) => format!(" for this run only ({error})"),
+                    };
+                    format!(
+                        "AirPlay speaker {}: {timing:?} timing kept{saved}",
+                        self.label(id)
+                    )
+                });
+                false
+            }
+            SpeakerEvent::TimingForgotten => {
+                let _ = self.store.forget_timing(id);
+                self.log
+                    .log(|| format!("AirPlay speaker {}: timing entry forgotten", self.label(id)));
                 false
             }
             SpeakerEvent::Trace(line) => {

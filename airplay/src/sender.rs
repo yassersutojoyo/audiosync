@@ -68,6 +68,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::ap2::Timing;
 use crate::clock::SenderClock;
 use crate::dacp::{DacpAdvertiser, RemoteCommand};
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
@@ -256,6 +257,9 @@ pub struct SpeakerOptions {
     /// HomeKit credentials of an earlier pairing on the AirPlay 2 path
     /// (P152): its sessions pair-verify with them (P61). Never logged.
     pub homekit_credentials: Option<HomeKitCredentials>,
+    /// The timing entry the host keeps for this receiver from an earlier
+    /// launch (P217).
+    pub timing: Option<TimingMemory>,
     /// The host keeps a debug log: an AirPlay 2 session reports
     /// [`SpeakerEvent::Trace`] lines and reads the receiver's volume once.
     pub trace: bool,
@@ -271,9 +275,84 @@ impl SpeakerOptions {
             pcm: false,
             credentials: None,
             homekit_credentials: None,
+            timing: None,
             trace: false,
         }
     }
+}
+
+/// The AirPlay 2 timing a receiver's session SETUP took, as the host keeps
+/// it across launches by `deviceid` (P217), with the TXT `features` and
+/// `srcvers` of that SETUP: a change of either makes the sender forget it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimingMemory {
+    pub timing: Timing,
+    pub features: u64,
+    pub srcvers: Option<String>,
+}
+
+impl TimingMemory {
+    /// The byte form a host stores: the timing (0 NTP, 1 PTP), the features
+    /// as 8 little-endian bytes, then 1 and the `srcvers` text, or 0.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(10 + self.srcvers.as_ref().map_or(0, String::len));
+        bytes.push(match self.timing {
+            Timing::Ntp => 0,
+            Timing::Ptp => 1,
+        });
+        bytes.extend_from_slice(&self.features.to_le_bytes());
+        match &self.srcvers {
+            Some(srcvers) => {
+                bytes.push(1);
+                bytes.extend_from_slice(srcvers.as_bytes());
+            }
+            None => bytes.push(0),
+        }
+        bytes
+    }
+
+    /// Reads [`TimingMemory::to_bytes`]; `None` for anything else.
+    pub fn from_bytes(bytes: &[u8]) -> Option<TimingMemory> {
+        let (&timing, rest) = bytes.split_first()?;
+        let timing = match timing {
+            0 => Timing::Ntp,
+            1 => Timing::Ptp,
+            _ => return None,
+        };
+        let (features, rest) = rest.split_first_chunk::<8>()?;
+        let srcvers = match rest.split_first()? {
+            (0, []) => None,
+            (1, text) => Some(std::str::from_utf8(text).ok()?.to_owned()),
+            _ => return None,
+        };
+        Some(TimingMemory {
+            timing,
+            features: u64::from_le_bytes(*features),
+            srcvers,
+        })
+    }
+
+    /// Whether `device`'s TXT record still shows the stored values.
+    pub fn matches(&self, device: &Device) -> bool {
+        self.features == device.features().0 && self.srcvers.as_deref() == srcvers(device)
+    }
+
+    /// The entry for a session SETUP that `device` answered 200 with
+    /// `timing`.
+    pub fn of(device: &Device, timing: Timing) -> TimingMemory {
+        TimingMemory {
+            timing,
+            features: device.features().0,
+            srcvers: srcvers(device).map(str::to_owned),
+        }
+    }
+}
+
+fn srcvers(device: &Device) -> Option<&str> {
+    device
+        .airplay_txt
+        .as_ref()
+        .and_then(|txt| txt.source_version.as_deref())
 }
 
 impl fmt::Debug for SpeakerOptions {
@@ -291,6 +370,7 @@ impl fmt::Debug for SpeakerOptions {
                 "homekit_credentials",
                 &self.homekit_credentials.as_ref().map(|_| "<hidden>"),
             )
+            .field("timing", &self.timing)
             .finish()
     }
 }
@@ -447,6 +527,13 @@ pub enum SpeakerEvent {
     /// them back in [`SpeakerOptions::homekit_credentials`]. The sender
     /// keeps them too, until it stops. `Debug` shows the identifiers only.
     HomeKitPaired(HomeKitCredentials),
+    /// A session SETUP was answered 200 with a timing other than the entry
+    /// the sender held for the receiver: the host keeps this one by
+    /// `deviceid` and hands it back in [`SpeakerOptions::timing`] (P217).
+    TimingRemembered(TimingMemory),
+    /// The receiver's timing entry no longer holds: its TXT record changed,
+    /// or it refused the remembered PTP. The host drops its copy (P217).
+    TimingForgotten,
     /// A line for the host's debug log, only with [`SpeakerOptions::trace`].
     Trace(String),
 }
