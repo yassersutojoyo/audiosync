@@ -378,3 +378,39 @@ impl InputReader {
         self.shared.slots.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::audio::FRAMES_PER_PACKET;
+
+    // P143: the stream filled the switch with silence, so the new capture's
+    // first write lands behind the floor and must start the audio there.
+    #[test]
+    fn a_new_captures_first_write_behind_the_floor_is_kept() {
+        let origin = Instant::now();
+        let (mut writer, mut reader) = ring(2 * MIN_INPUT_FRAMES, origin);
+        let block = [1000i16; 2 * FRAMES_PER_PACKET];
+        assert_eq!(writer.write_i16(&block, origin), FRAMES_PER_PACKET);
+        let mut out = [[0, 0]; FRAMES_PER_PACKET];
+        for packet in 0..10 {
+            reader.cut((packet * FRAMES_PER_PACKET) as i64, &mut out);
+        }
+        reader.drain_arrivals(|_| {});
+        let floor = reader.floor();
+        assert!(floor > writer.position() && floor - writer.position() < RESYNC_FRAMES);
+
+        writer.new_capture();
+        let kept = writer.write_i16(&block, origin + Duration::from_millis(300));
+
+        assert_eq!(kept, FRAMES_PER_PACKET);
+        let mut arrivals = Vec::new();
+        reader.drain_arrivals(|arrival| arrivals.push(arrival));
+        assert_eq!(arrivals.len(), 1);
+        assert!(arrivals[0].resync && !arrivals[0].late);
+        assert_eq!(arrivals[0].start, floor);
+        assert_eq!(writer.position(), floor + FRAMES_PER_PACKET as u64);
+    }
+}

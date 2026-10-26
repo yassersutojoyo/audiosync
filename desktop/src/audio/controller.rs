@@ -45,9 +45,9 @@
 //! With an AirPlay sender ([`Controller::set_airplay`]), the capture also
 //! feeds the sender and AirPlay speakers that are on join the stream while a
 //! session runs ([`airplay`](super::airplay)). L is the sender's base
-//! latency L_s plus the user's adjustment (S178). A new capture restarts the
-//! sender's timeline (P143); a new L_s from the sender re-times every
-//! playing output.
+//! latency L_s plus the user's adjustment (S178). A new capture carries on
+//! the sender's timeline after a silent gap (P143); a new L_s from the
+//! sender re-times every playing output.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

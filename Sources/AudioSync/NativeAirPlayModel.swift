@@ -150,7 +150,7 @@ enum NativeSpeakerEvent: Equatable {
     /// the reports that gave it (0 and 0 when none did).
     case latency(id: String, ms: Double, receiverFrames: Int64?, reportedUs: Int64 = 0, sources: UInt32 = 0)
     /// The sender holds an Lf set while a speaker sounds (`ms`: that Lf)
-    /// until the stream is empty or the capture restarts (P201).
+    /// until the stream is empty or the timeline restarts (P201).
     case latencyHeld(ms: Double)
     /// The app set a new Lf or E (S282), as its debug line says.
     case estimate(detail: String)
@@ -1282,7 +1282,7 @@ struct NativeReceiverLatency {
     }
 
     /// E over `rows` (each row's members): applied when `canChange` (no
-    /// speaker sounds, the stream is empty or the capture restarted),
+    /// speaker sounds or the stream is empty),
     /// otherwise held (P201).
     mutating func updateEstimate(rows: [[String]], canChange: Bool) -> EstimateChange {
         let wanted = rows.map { estimateMs(of: $0) }.max() ?? 0
