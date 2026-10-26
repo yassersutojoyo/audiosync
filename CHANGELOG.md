@@ -114,6 +114,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay 2 speaker set to ask for a code every time that was on when you quit no longer gets paired by auto-connect when it asks again, on the Mac and on Windows. It goes off each time it asks without playing, not only when it first shows up. While its code prompt is open, AudioSync starts no second pairing and plays nothing to it, and on Windows a speaker you turn on while its pairing runs goes off again if the pairing fails or you cancel it.
 - On the Mac, under All System Audio, a paused player's track and cover stay on the AirPlay speakers until another player plays, the player stops or it quits.
 - On the Mac, picking the source or input channels that are already playing clears the "Couldn't start" notice and changes nothing else.
+- On the Mac and on Windows, a click on the empty part of a zone's header, past its name, shows or hides the zone's speakers like the arrow does. Before, it switched the whole zone on or off.
 
 ### Windows and Linux (preview, not released yet)
 

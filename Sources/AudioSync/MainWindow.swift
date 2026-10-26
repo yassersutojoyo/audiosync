@@ -624,11 +624,13 @@ private struct ZoneCard: View {
         .accessibilityLabel(zone.name)
     }
 
+    private func toggleDisclosure() {
+        withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
+    }
+
     private func header(_ t: UIStrings) -> some View {
         HStack(spacing: 8) {
-            Button {
-                withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
-            } label: {
+            Button { toggleDisclosure() } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -649,7 +651,6 @@ private struct ZoneCard: View {
                             .lineLimit(1)
                         countLine(t)
                     }
-                    Spacer(minLength: 8)
                 }
                 .contentShape(Rectangle())
             }
@@ -661,6 +662,14 @@ private struct ZoneCard: View {
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: nil))
             .help(t.help(state))
+
+            // A click past the name shows or hides the speakers instead of
+            // switching the zone; the chevron stays the keyboard's way in.
+            Color.clear
+                .frame(minWidth: 8, maxWidth: .infinity, minHeight: 32, maxHeight: 32)
+                .contentShape(Rectangle())
+                .onTapGesture { toggleDisclosure() }
+                .accessibilityHidden(true)
 
             Slider(value: Binding(get: { zone.volume }, set: { model.actions.setZoneVolume(zone.id, $0) }),
                    in: 0...100)
