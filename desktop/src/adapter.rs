@@ -6986,11 +6986,10 @@ mod tests {
 
     #[test]
     fn an_airplay_speaker_alone_starts_and_stops_streaming() {
-        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let (mut adapter, _fake, kitchen, _) = airplay_adapter();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         assert!(adapter.snapshot().running, "one AirPlay speaker is enough");
         assert!(playing(&adapter).is_empty());
-        assert_eq!(fake.take_calls()[0], Call::RestartTimeline);
         adapter.set_speaker_enabled(&ap(&kitchen), false);
         assert!(!adapter.snapshot().running, "nothing is on anymore");
     }
@@ -8072,8 +8071,8 @@ mod tests {
         assert!(adapter.snapshot().running, "streaming goes on");
         assert_eq!(
             next.take_calls(),
-            [Call::RestartTimeline],
-            "the capture feeds the new sender"
+            [],
+            "the capture feeds the new sender, which needs no restart (P143)"
         );
         next.appear(&kitchen);
         adapter.poll();
@@ -8353,8 +8352,8 @@ mod tests {
         );
         assert_eq!(
             fake.take_calls(),
-            [Call::RestartTimeline],
-            "the speaker stays in the stream, only its timeline restarts (S141)"
+            [],
+            "the speaker stays in the stream and its timeline goes on (S141)"
         );
         assert!(adapter.snapshot().running);
     }
@@ -8381,8 +8380,8 @@ mod tests {
         assert_eq!(adapter.audio.running_source(), Some(SourceId::WholeSystem));
         assert_eq!(
             fake.take_calls(),
-            [Call::RestartTimeline],
-            "the speaker stays in the stream, only its timeline restarts"
+            [],
+            "the speaker stays in the stream and its timeline goes on"
         );
         assert_eq!(
             messages(&adapter),

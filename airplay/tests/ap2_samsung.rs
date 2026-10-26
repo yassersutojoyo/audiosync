@@ -17,13 +17,15 @@ use audiosync_airplay::discovery::{
 };
 use audiosync_airplay::error::Warning;
 use audiosync_airplay::rtsp::Method;
+use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::sender::{
     Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::volume::Volume;
 
-use common::ap2::{Ap2Server, FakeAp2};
-use common::net::{Events, HostAudio, recv_queued, serial, wait_until};
+use common::ap2::{Ap2Server, FakeAp2, open_packet, stream_key};
+use common::net::{Events, HostAudio, host_frame_of, recv_queued, serial, wait_until};
+use common::rig::decode;
 
 const LONG: Duration = Duration::from_secs(15);
 /// The host asks a playing speaker for its level once a second (S291 of
@@ -57,7 +59,7 @@ fn samsung_tv(server: &Ap2Server) -> Device {
 
 struct Playing {
     sender: Sender,
-    _host: HostAudio,
+    host: Option<HostAudio>,
     events: Events,
     key: DeviceKey,
     /// When the host asked for the level, and when it asks next.
@@ -97,7 +99,7 @@ fn play(server: &Ap2Server) -> Playing {
     );
     Playing {
         sender,
-        _host: host,
+        host: Some(host),
         events,
         key,
         asks: Vec::new(),
@@ -411,12 +413,13 @@ fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
 }
 
 /// Audio datagrams the receiver got, with when each came.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Datagram {
     at: Instant,
     seq: u16,
     rtptime: u32,
     marker: bool,
+    bytes: Vec<u8>,
 }
 
 /// A data port that keeps the RTP header of every audio datagram.
@@ -438,6 +441,7 @@ fn data_port() -> (UdpSocket, Arc<Mutex<Vec<Datagram>>>) {
                         seq: u16::from_be_bytes([buffer[2], buffer[3]]),
                         rtptime: u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]),
                         marker: buffer[1] & 0x80 != 0,
+                        bytes: buffer[..n].to_vec(),
                     };
                     match shared.lock() {
                         Ok(mut log) => log.push(datagram),
@@ -508,7 +512,7 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
         tv.run(Duration::from_millis(400), false);
         let (held, last) = {
             let audio = audio.lock().expect("audio");
-            (audio.len(), *audio.last().expect("audio"))
+            (audio.len(), audio.last().expect("audio").clone())
         };
         let (seq, rtptime) = flush_point(&server, cycle);
         assert_eq!(seq, last.seq.wrapping_add(1), "cycle {cycle}");
@@ -529,7 +533,7 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
         // A resume while playing does nothing.
         tv.sender.resume();
         assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) > held + 50));
-        let first = audio.lock().expect("audio")[held];
+        let first = audio.lock().expect("audio")[held].clone();
         assert!(first.at >= resumed);
         assert_eq!((first.seq, first.rtptime), (seq, rtptime), "cycle {cycle}");
         assert!(first.marker, "cycle {cycle}");
@@ -542,6 +546,179 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
     assert_eq!(count(&server, "SETUP stream"), setups);
     assert_eq!(count(&server, "RECORD"), records);
     no_session_header(&server);
+    tv.assert_no_error();
+    tv.sender.shutdown();
+}
+
+/// How long a host takes to build the new capture at a source switch.
+const REBUILD: Duration = Duration::from_millis(300);
+/// The longest silence a source switch may leave on the television.
+const SWITCH_GAP: Duration = Duration::from_secs(1);
+
+/// A source switch as both hosts make it: the old capture stops, and the
+/// new one, marked as new on the input, writes its own audio, numbered from
+/// 0 again, to the same input (P143).
+fn switch_capture(tv: &mut Playing) {
+    let mut writer = tv.host.take().expect("a capture").stop();
+    tv.run(REBUILD, false);
+    writer.new_capture();
+    tv.host = Some(HostAudio::start(writer));
+}
+
+/// The first-sound times the sender stated for the speaker (P115), with
+/// when each was seen.
+fn first_sounds(tv: &Playing) -> Vec<(Instant, Instant)> {
+    tv.events
+        .seen
+        .iter()
+        .filter_map(|(seen, event)| match event {
+            SenderEvent::Speaker {
+                key,
+                event: SpeakerEvent::Latency(latency),
+            } if *key == tv.key => Some((*seen, latency.first_sound)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// When each host frame in `audio` sounds on the television, with its
+/// number, in RTP order. A packet flagged as the first after a start or a
+/// FLUSH sounds at the first-sound time the sender stated last before
+/// `switched` when it came before then, or last of all when it came after;
+/// the frames after it follow on the RTP clock. The television drops what
+/// it holds at a FLUSH, so a frame due after the next flagged packet
+/// arrived is never heard.
+fn heard(
+    audio: &[Datagram],
+    shk: &[u8; 32],
+    sounds: &[(Instant, Instant)],
+    switched: Instant,
+) -> Vec<(Instant, u64)> {
+    let before = sounds
+        .iter()
+        .rev()
+        .find(|(seen, _)| *seen < switched)
+        .map(|(_, at)| *at);
+    let after = sounds.last().map(|(_, at)| *at);
+    let mut frames: Vec<(Instant, u64)> = Vec::new();
+    let mut anchor: Option<(Instant, u32)> = None;
+    for datagram in audio {
+        if datagram.marker {
+            let at = if datagram.at < switched {
+                before
+            } else {
+                after
+            };
+            let at = at.expect("a first-sound time for each first packet");
+            frames.retain(|(sounds, _)| *sounds <= datagram.at);
+            anchor = Some((at, datagram.rtptime));
+        }
+        let Some((at, rtptime)) = anchor else {
+            continue;
+        };
+        let opened = open_packet(shk, &datagram.bytes).expect("the packet opens with shk");
+        for (index, frame) in decode(Codec::Alac, &opened.payload).into_iter().enumerate() {
+            if let Some(number) = host_frame_of(frame) {
+                let offset = f64::from(datagram.rtptime.wrapping_sub(rtptime)) + index as f64;
+                frames.push((at + Duration::from_secs_f64(offset / 44_100.0), number));
+            }
+        }
+    }
+    frames
+}
+
+// covers: P143
+// A source switch on the Samsung television is an underrun of P112: the
+// new capture's first frame sounds within a second of the old one's last,
+// and the switch sends no FLUSH, TEARDOWN, SETUP, pair-verify or /info.
+#[test]
+fn capture_switch_without_flush() {
+    let _serial = serial();
+    let (socket, audio) = data_port();
+    let mut fake = FakeAp2::samsung();
+    fake.data_port = socket.local_addr().expect("address").port();
+    let server = Ap2Server::start(fake);
+    let mut tv = play(&server);
+    assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 250));
+    let requests = |server: &Ap2Server| {
+        [
+            "FLUSH",
+            "TEARDOWN",
+            "SETUP session",
+            "SETUP stream",
+            "POST /pair-verify",
+            "GET /info",
+        ]
+        .map(|key| (key, count(server, key)))
+    };
+    let before = requests(&server);
+
+    let switched = Instant::now();
+    switch_capture(&mut tv);
+    tv.run(Duration::from_secs(4), false);
+
+    let shk = stream_key(&server.fake()).expect("shk");
+    let audio = audio.lock().expect("audio").clone();
+    let frames = heard(&audio, &shk, &first_sounds(&tv), switched);
+    let boundary = frames
+        .windows(2)
+        .position(|pair| pair[1].1 < pair[0].1)
+        .expect("the new capture's audio reached the television");
+    let (last_old, first_new) = (frames[boundary], frames[boundary + 1]);
+    let gap = first_new.0.saturating_duration_since(last_old.0);
+    eprintln!(
+        "source switch: old frame {} then new frame {}, {} ms apart on the television",
+        last_old.1,
+        first_new.1,
+        gap.as_millis()
+    );
+    assert_eq!(requests(&server), before, "requests on the switch");
+    tv.assert_no_error();
+    tv.sender.shutdown();
+    assert!(gap <= SWITCH_GAP, "{gap:?} of silence at the switch");
+}
+
+/// How long the television holds the answer to a volume read.
+const HELD_READ: Duration = Duration::from_millis(800);
+
+// covers: P143
+// The timeline starts over while a volume read holds the connection: the
+// FLUSH queues behind the read, and no audio of the new timeline (a packet
+// at or after the FLUSH point) leaves before the FLUSH is answered.
+#[test]
+fn timeline_restart_waits_for_flush() {
+    let _serial = serial();
+    let (socket, audio) = data_port();
+    let mut fake = FakeAp2::samsung();
+    fake.data_port = socket.local_addr().expect("address").port();
+    let server = Ap2Server::start(fake);
+    let mut tv = play(&server);
+    assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
+    let reads = {
+        let mut fake = server.fake();
+        fake.pause.insert("GET_PARAMETER".to_owned(), HELD_READ);
+        fake.reads_seen.clone()
+    };
+    let seen = reads.load(Ordering::SeqCst);
+    tv.sender.read_volume(&tv.key);
+    assert!(wait_until(LONG, || reads.load(Ordering::SeqCst) > seen));
+    let read_at = Instant::now();
+    tv.sender.restart_timeline();
+    tv.run(Duration::from_secs(3), false);
+
+    let (seq, rtptime) = flush_point(&server, 1);
+    let audio = audio.lock().expect("audio").clone();
+    let first = audio
+        .iter()
+        .find(|datagram| datagram.at >= read_at && datagram.seq.wrapping_sub(seq) < 0x8000)
+        .expect("audio of the new timeline");
+    let waited = first.at.saturating_duration_since(read_at);
+    assert!(
+        waited + Duration::from_millis(50) >= HELD_READ,
+        "the new timeline's audio left {waited:?} after the read, before the FLUSH answer"
+    );
+    assert_eq!((first.seq, first.rtptime), (seq, rtptime));
+    assert!(first.marker);
     tv.assert_no_error();
     tv.sender.shutdown();
 }

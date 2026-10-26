@@ -169,10 +169,6 @@ pub trait AirPlayLink {
     /// Sets a speaker's own delay d_s.
     fn set_delay(&mut self, key: &DeviceKey, delay: Duration);
 
-    /// The capture restarted: every speaker is flushed and the timeline
-    /// starts over (P143).
-    fn restart_timeline(&mut self);
-
     /// The user paused on purpose: every speaker gets a FLUSH and no audio
     /// goes out until [`AirPlayLink::resume`] (P213).
     fn pause(&mut self);
@@ -355,10 +351,6 @@ impl AirPlayLink for SenderLink {
         self.sender.set_delay(key, delay);
     }
 
-    fn restart_timeline(&mut self) {
-        self.sender.restart_timeline();
-    }
-
     fn pause(&mut self) {
         self.sender.pause();
     }
@@ -524,6 +516,9 @@ impl FeedSlot {
             .take()?;
         feed.resampler.reset();
         feed.fade.restart(SESSION_RATE);
+        // Its first block follows the silence the stream sent meanwhile, on
+        // the same timeline (P143).
+        feed.input.new_capture();
         self.closing.store(false, Ordering::Release);
         Some(FeedLease {
             feed: Some(feed),
@@ -1458,7 +1453,7 @@ impl AirPlaySpeakers {
     }
 
     /// Applies E for `rows` while no speaker sounds, or `now` (the stream
-    /// emptied or restarted); otherwise holds it (S283, P201).
+    /// emptied); otherwise holds it (S283, P201).
     fn sync_estimate(&mut self, rows: &[String], now: bool) {
         let wanted = rows
             .iter()
@@ -1474,7 +1469,7 @@ impl AirPlaySpeakers {
                 let estimate_ms = self.estimate_ms;
                 self.log.log(|| {
                     format!(
-                        "AirPlay: E {wanted:.0} ms held while a speaker sounds; it stays {estimate_ms:.0} ms until the stream is empty or restarts"
+                        "AirPlay: E {wanted:.0} ms held while a speaker sounds; it stays {estimate_ms:.0} ms until the stream is empty"
                     )
                 });
                 for row in rows {
@@ -2898,15 +2893,11 @@ impl AirPlaySpeakers {
         self.reconcile();
     }
 
-    /// A new capture started (P143).
-    pub fn restart_timeline(&mut self) {
+    /// A new capture started (P143): a paused stream resumes. The timeline
+    /// goes on and the speakers get no FLUSH, so a held E stays held.
+    pub fn capture_started(&mut self) {
         let step = self.pause.clear();
         self.apply_pause(step, "new capture");
-        self.link.restart_timeline();
-        let before = self.sent_delays();
-        let rows = self.stream_rows(&[]);
-        self.sync_estimate(&rows, true);
-        self.send_changed(before);
     }
 
     /// The speaker's password, the one its sessions get too, for a pairing
@@ -4225,7 +4216,6 @@ pub mod tests {
         RemoveTarget(String),
         TargetVolume(String, Volume),
         TargetDelay(String, Duration),
-        RestartTimeline,
         Pause,
         Resume,
         /// Lf, in frames.
@@ -4518,10 +4508,6 @@ pub mod tests {
                 .borrow_mut()
                 .calls
                 .push(Call::Delay(speaker_id(key), delay));
-        }
-
-        fn restart_timeline(&mut self) {
-            self.0.borrow_mut().calls.push(Call::RestartTimeline);
         }
 
         fn pause(&mut self) {
@@ -7220,11 +7206,8 @@ pub mod tests {
         remote(&fake, &kitchen, RemoteCommand::Pause);
         airplay.poll();
         assert_eq!(pause_calls(&fake), [Call::Pause]);
-        airplay.restart_timeline();
-        let calls = fake.take_calls();
-        let resume = calls.iter().position(|call| *call == Call::Resume);
-        let restart = calls.iter().position(|call| *call == Call::RestartTimeline);
-        assert!(resume.is_some() && resume < restart, "{calls:?}");
+        airplay.capture_started();
+        assert_eq!(fake.take_calls(), [Call::Resume], "a resume and no restart");
 
         read(&mut airplay, spotify(true), t0);
         std::thread::sleep(Duration::from_millis(350));
@@ -9150,11 +9133,10 @@ pub mod tests {
         airplay.poll();
         assert_eq!(ms(airplay.latency()), 1970);
         assert_eq!(fake.take_calls(), []);
-        // A capture restart silences every speaker: E takes Den's 300 ms.
-        airplay.restart_timeline();
-        assert_eq!(ms(airplay.latency()), 2050);
-        let calls = fake.take_calls();
-        assert_eq!(delays(&calls), [(id_of(&kitchen), 80)], "{calls:?}");
+        // A new capture silences no speaker (P143): E stays held.
+        airplay.capture_started();
+        assert_eq!(ms(airplay.latency()), 1970);
+        assert_eq!(fake.take_calls(), []);
     }
 
     // covers: S283
@@ -9278,7 +9260,7 @@ pub mod tests {
         assert!(
             !calls
                 .iter()
-                .any(|call| matches!(call, Call::RestartTimeline | Call::Pause | Call::Delay(..))),
+                .any(|call| matches!(call, Call::Pause | Call::Delay(..))),
             "nothing flushed or re-timed, every d′_s held: {calls:?}"
         );
         assert_eq!(
@@ -9289,14 +9271,10 @@ pub mod tests {
         assert_eq!(ms(airplay.latency()), 3150, "E held at 1400 ms");
         airplay.poll();
         assert_eq!(fake.take_calls(), []);
-        airplay.restart_timeline();
-        assert_eq!(ms(airplay.latency()), 1750 + 220);
-        let calls = fake.take_calls();
-        assert_eq!(
-            delays(&calls),
-            [(id_of(a1), 0), (id_of(b2), 170)],
-            "{calls:?}"
-        );
+        // A new capture silences no speaker (P143): E stays held.
+        airplay.capture_started();
+        assert_eq!(ms(airplay.latency()), 3150);
+        assert_eq!(fake.take_calls(), []);
     }
 
     // covers: S285
@@ -9386,7 +9364,7 @@ pub mod tests {
         let calls = fake.take_calls();
         assert!(
             !calls.iter().any(|call| match call {
-                Call::Pause | Call::RestartTimeline | Call::Latency(_) => true,
+                Call::Pause | Call::Latency(_) => true,
                 Call::Remove(id) | Call::Delay(id, _) => *id == a1_id,
                 _ => false,
             }),
