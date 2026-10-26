@@ -52,6 +52,7 @@ pub fn double_click_ms() -> i64 {
 pub const DEFAULT_DOUBLE_CLICK_MS: i64 = 500;
 
 /// Windows caps the setting at 5000 ms; 0 would make every click a single one.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn double_click_or_default(ms: u32) -> i64 {
     if ms == 0 {
         DEFAULT_DOUBLE_CLICK_MS
