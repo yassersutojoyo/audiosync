@@ -2706,7 +2706,12 @@ impl AirPlaySpeakers {
         own.level = self.device_level_of(row);
         own.dragging = added.read.dragging;
         if let Command::DeviceVolume(db) = command {
-            let has = self.volume_of(row).wire_db();
+            // The level the speaker has, the held one with k at 0 (S290).
+            let has = match self.calibration_solo.as_deref() {
+                Some(solo) if solo != row => Volume::Muted,
+                _ => device_volume(own.level),
+            }
+            .wire_db();
             own.echo = added.read.recent(now) && (db - has).abs() < VOLUME_TOLERANCE_DB;
             own.reported = device_level_for_db(db);
         }

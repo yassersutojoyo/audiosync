@@ -1282,7 +1282,8 @@ impl AscAirPlay {
             let recent = added
                 .volume_set_at
                 .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
-            let sent = speaker_volume(added.position, zone, self.master).wire_db();
+            // The level the speaker has, the held one with k at 0 (S290).
+            let sent = device_volume(own.level).wire_db();
             own.echo = recent && (db - sent).abs() < VOLUME_TOLERANCE_DB;
             own.reported = device_level_for_db(db);
         }
