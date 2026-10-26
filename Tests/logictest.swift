@@ -2505,6 +2505,25 @@ do {
               "native pairing: switched off, the speaker leaves the sender")
     }
     do {
+        // A receiver that asks for nothing and answers 403 to everything (L341):
+        // its refusal comes before any pairing step, so no code is named or asked for.
+        var m = NativeAirPlayModel()
+        m.apply(.appeared(receiver("S1", "Samsung", .available)))
+        m.added("S1")
+        let off = m.apply(.error(id: "S1", .pairingRequired, retryMs: nil, detail: ""))
+        let words = UIStrings().nativeAirPlayNotAccepted(name: "Samsung")
+        check(off == .turnOff("native:S1", .needsCode) && m.refusedUnasked("S1") && m.nextPrompt() == nil
+                && !words.contains("PIN") && !words.contains("code") && !words.contains("password"),
+              "native pairing: a refusal before any pairing step turns the speaker off with neutral text and no code prompt")
+        var asking = NativeAirPlayModel()
+        asking.apply(.appeared(receiver("T1", "Den TV", .needsPin)))
+        var stored = receiver("P1", "Loft", .available)
+        stored.credentialsKept = true
+        asking.apply(.appeared(stored))
+        check(!asking.refusedUnasked("T1") && !asking.refusedUnasked("P1") && !asking.refusedUnasked("gone"),
+              "native pairing: a receiver that asks for a PIN, or holds a pairing, keeps its code text")
+    }
+    do {
         // Auto-connect and restored switches never pair or prompt.
         var m = NativeAirPlayModel()
         m.apply(.appeared(receiver("B2", "B2", .available)))

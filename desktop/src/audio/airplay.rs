@@ -5394,6 +5394,48 @@ pub mod tests {
     }
 
     #[test]
+    fn a_session_refused_before_any_pairing_step_names_no_code() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        // No PIN or password in its flags and no stored credentials: a TV
+        // that answers 403 to everything (L341).
+        let tv = airplay2_device(9, "Samsung", false);
+        let id = id_of(&tv);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        fake.take_calls();
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        let problems: Vec<AirPlayProblem> = events
+            .iter()
+            .filter_map(|event| match event {
+                BackendEvent::AirPlayFailed { problem, .. } => Some(*problem),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(problems.len(), 1, "{events:?}");
+        assert!(
+            !matches!(
+                problems[0],
+                AirPlayProblem::NeedsPin
+                    | AirPlayProblem::NeedsPassword
+                    | AirPlayProblem::PairingFailed
+            ),
+            "{events:?}"
+        );
+        assert!(airplay.pin_prompt().is_none());
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_)))
+        );
+    }
+
+    #[test]
     fn a_pairing_the_store_cant_write_is_reported_once_until_a_write_works() {
         use crate::audio::pairings::FILE_NAME;
         use crate::audio::pairings::tests::{credentials, sealer};
