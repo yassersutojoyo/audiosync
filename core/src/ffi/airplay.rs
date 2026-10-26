@@ -7424,11 +7424,6 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
-    /// The dB the television gets for device level `level` (S289).
-    fn db_for_level(level: f64) -> f64 {
-        device_volume(level).wire_db()
-    }
-
     /// What the host's row shows for an own volume at `master`, outside a
     /// zone (S290).
     fn shown_row(own: f64, master: f64) -> f64 {
@@ -7516,12 +7511,9 @@ mod tests {
         let id = "02005E005391";
         let master = 63.0;
         let mut handle = on_television(&receiver, id, master, 50.0);
-        // Own 50 at master 63 is device level 31.5, the row 31.
+        // Own 50 at master 63 is device level 31.5 (-30 + 0.3 x 31.5 dB), the row 31.
         let sets = receiver.volume_sets();
-        assert!(
-            sets.iter().all(|&db| same_db(db, db_for_level(31.5))),
-            "{sets:?}"
-        );
+        assert!(sets.iter().all(|&db| same_db(db, -20.55)), "{sets:?}");
         assert!(read_once(handle, id).is_empty(), "the echo moved the row");
 
         // The television's remote to 20 (−24 dB): the row shows 20.
@@ -7554,76 +7546,113 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
-    // covers: S290, S291
+    // covers: S290, S291, S276, S271
     #[test]
     fn the_s290_vector_cases_land_on_the_television() {
         use serde_json::Value;
         let doc: Value = serde_json::from_str(include_str!("../../tests/vectors/s290_volume.json"))
             .expect("valid JSON");
         let number = |value: &Value, key: &str| value.get(key).and_then(Value::as_f64);
-        // The cases a television alone plays out: its remote, the master
-        // and the row, outside a zone, each step sending.
-        let on_wire = |step: &Value| {
-            ["tv_level", "master", "row_move"]
-                .iter()
-                .any(|key| step.get(key).is_some())
-                && step.get("sent").is_none()
-        };
-        let cases: Vec<&Value> = doc["cases"]
-            .as_array()
-            .expect("cases")
-            .iter()
-            .filter(|case| {
-                number(case, "zone") == Some(NO_ZONE_POSITION)
-                    && case["steps"]
-                        .as_array()
-                        .is_some_and(|s| s.iter().all(on_wire))
-            })
-            .collect();
-        let names: Vec<&str> = cases.iter().filter_map(|c| c["name"].as_str()).collect();
-        for wanted in [
-            "TV at 80 at master 63, master to 64 gives 81",
-            "TV at 80 at master 63, master to 100 caps at 100, back to 63 gives 80",
-        ] {
-            assert!(names.contains(&wanted), "{wanted} missing from {names:?}");
-        }
+        // The dB each step leaves on the television, worked out by hand
+        // from S289 (-30 + 0.3 x D, -144 at D = 0) rather than through the
+        // code under test; every case starts with an add at own volume 0.
+        let wire: [(&str, &[f64]); 6] = [
+            ("row 100 at master 63 sends 100", &[0.0]),
+            (
+                "TV at 80 at master 63, master to 64 gives 81",
+                &[-6.0, -5.619048],
+            ),
+            (
+                "row 100 at master 63, master to 50 gives 79",
+                &[0.0, -6.190476],
+            ),
+            (
+                "TV at 80 at master 63, master to 100 caps at 100, back to 63 gives 80",
+                &[-6.0, 0.0, -6.0],
+            ),
+            (
+                "DeviceVolume 100 at master 63, master to 100 and back keeps 100",
+                &[0.0, 0.0, 0.0],
+            ),
+            (
+                "DeviceVolume 40 at master 0 keeps own and shows 40 until the master moves",
+                &[-144.0, -18.0, -15.0],
+            ),
+        ];
+        let cases = doc["cases"].as_array().expect("cases");
 
         let receiver = Loopback::television();
-        for (index, case) in cases.into_iter().enumerate() {
-            let name = case["name"].as_str().expect("name");
+        for (index, (name, dbs)) in wire.into_iter().enumerate() {
+            let case = cases
+                .iter()
+                .find(|case| case["name"].as_str() == Some(name))
+                .unwrap_or_else(|| panic!("{name} missing from the vectors"));
+            assert_eq!(number(case, "zone"), Some(NO_ZONE_POSITION), "{name}");
+            let steps = case["steps"].as_array().expect("steps");
+            assert_eq!(steps.len(), dbs.len(), "{name}");
             let id = format!("02005E0054{index:02X}");
+            let c_id = c_string(&id);
             let mut master = number(case, "master").expect("master");
             let mut own = 0.0;
             let mut handle = on_television(&receiver, &id, master, own);
-            lands(&receiver, db_for_level(0.0));
-            for step in case["steps"].as_array().expect("steps") {
+            lands(&receiver, -144.0);
+            for (step, &db) in steps.iter().zip(dbs) {
                 let level = number(step, "level").expect("level");
                 let sets = receiver.volume_sets().len();
-                if let Some(value) = number(step, "tv_level") {
-                    receiver.press(db_for_level(value));
+                // What the host's row shows: a level from the speaker as it
+                // came, any other change through the core's level.
+                let shown;
+                if let Some(value) = number(step, "own") {
+                    own = value;
+                    // SAFETY: a live handle, used by this thread only; a C string.
+                    assert!(unsafe { asc_airplay_set_volume(handle, c_id.as_ptr(), own) });
+                    lands(&receiver, db);
+                    shown = device_level(own, NO_ZONE_POSITION, master);
+                } else if number(step, "tv_level").is_some() {
+                    receiver.press(db);
                     let events = read_once(handle, &id);
                     assert_eq!(events.len(), 1, "{name}: {step}: {events:?}");
-                    assert!(
-                        (events[0].device_level - level).abs() < 1e-6,
-                        "{name}: {step}"
-                    );
-                    own = events[0].volume;
+                    (own, shown) = (events[0].volume, events[0].device_level);
                     assert_eq!(receiver.volume_sets().len(), sets, "{name}: sent back");
+                } else if number(step, "device_volume").is_some() {
+                    receiver.press(db);
+                    let key = inside(handle).added[&id].key.clone();
+                    let command = RemoteCommand::DeviceVolume(Volume::Db(db));
+                    remote(handle, &key, None, command.clone());
+                    let events = volume_events_of(handle, &id);
+                    assert_eq!(events.len(), 1, "{name}: {step}: {events:?}");
+                    (own, shown) = (events[0].volume, events[0].device_level);
+                    // Sent back as after a drag, which starts S271's window.
+                    lands(&receiver, db);
+                    assert_eq!(receiver.volume_sets().len(), sets + 1, "{name}");
+                    // The speaker echoes that set inside the window: nothing.
+                    remote(handle, &key, None, command);
+                    let echo = volume_events_of(handle, &id);
+                    assert!(echo.is_empty(), "{name}: the echo moved: {echo:?}");
+                    std::thread::sleep(Duration::from_millis(200));
+                    let after = receiver.volume_sets();
+                    assert_eq!(after.len(), sets + 1, "{name}: echo sent: {after:?}");
                 } else if let Some(value) = number(step, "master") {
                     master = value;
                     // SAFETY: a live handle, used by this thread only.
                     unsafe { asc_airplay_set_master(handle, master) };
-                    lands(&receiver, db_for_level(level));
+                    lands(&receiver, db);
+                    shown = device_level(own, NO_ZONE_POSITION, master);
                 } else if let Some(row) = number(step, "row_move") {
                     own = move_row(handle, &id, row, master);
-                    lands(&receiver, db_for_level(level));
+                    lands(&receiver, db);
+                    shown = device_level(own, NO_ZONE_POSITION, master);
+                } else {
+                    panic!("{name}: no fake for step {step}");
                 }
                 let row = number(step, "row").expect("row");
                 let held = receiver.level().expect("a level on the television");
-                assert!(same_db(held, db_for_level(level)), "{name}: {step}: {held}");
-                let tv_level = device_level_for_db(held).expect("finite");
-                assert_eq!(row_level(tv_level), row, "{name}: {step}: television");
-                assert_eq!(shown_row(own, master), row, "{name}: {step}: row");
+                assert!(same_db(held, db), "{name}: {step}: television at {held}");
+                assert!(
+                    (shown - level).abs() < 1e-6,
+                    "{name}: {step}: level {shown}"
+                );
+                assert_eq!(row_level(shown), row, "{name}: {step}: row");
                 assert_eq!(row_level(inside(handle).added[&id].level), row, "{name}");
                 let own_after = number(step, "own_after").expect("own_after");
                 assert!((own - own_after).abs() < 1e-6, "{name}: {step}: own {own}");
@@ -7634,6 +7663,13 @@ mod tests {
         }
     }
 
+    /// The volume events waiting for the speaker `id`, all taken.
+    fn volume_events_of(handle: *mut AscAirPlay, id: &str) -> Vec<Event> {
+        std::iter::from_fn(|| take_event(handle))
+            .filter(|event| event.kind == AIRPLAY_EVENT_VOLUME && event.id == id)
+            .collect()
+    }
+
     // covers: S290, S291
     #[test]
     fn k1_keep_a_row_at_40_comes_back_at_40_after_a_restart() {
@@ -7641,7 +7677,7 @@ mod tests {
         let id = "02005E005392";
         let c_id = c_string(id);
         let master = 63.0;
-        let forty = db_for_level(40.0);
+        let forty = -18.0;
         let mut handle = on_television(&receiver, id, master, 50.0);
         let own = move_row(handle, id, 40.0, master);
         lands(&receiver, forty);

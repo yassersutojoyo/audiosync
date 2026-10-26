@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use audiosync_airplay::ap2::{Ap2Config, Ap2Event, Ap2Output, Ap2Session};
 use audiosync_airplay::ids::{Entropy, EntropyUnavailable};
 use audiosync_airplay::rtsp::{Message, Method, Parser, Request, Response};
-use audiosync_airplay::volume::Volume;
+use audiosync_airplay::volume::{Volume, parse_reported};
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Tag};
 use plist::{Dictionary, Value};
@@ -339,6 +339,22 @@ impl FakeAp2 {
             None => db,
         };
         self.answer_level(level);
+    }
+
+    /// The Samsung profile switched on again for a new session, holding
+    /// the level `db` it had: reads answer it and its second `/info` gives
+    /// it as `initialVolume`.
+    pub fn samsung_holding(db: f64) -> FakeAp2 {
+        let mut fake = FakeAp2::samsung();
+        let held = f64::from(db as f32);
+        fake.second_info_body = Some(plist(dict(&[("initialVolume", Value::Real(held))])));
+        fake.answer_level(db);
+        fake
+    }
+
+    /// The level the television holds, as a read answers it now.
+    pub fn level(&self) -> Option<f64> {
+        parse_reported(self.bodies.get("GET_PARAMETER")?)
     }
 
     fn answer_level(&mut self, mut level: f64) {
