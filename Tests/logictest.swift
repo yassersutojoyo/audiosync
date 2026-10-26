@@ -5644,8 +5644,9 @@ do {
           "source quit: a whole system whose first tap fails right after the app's tap went starts on the next try (S227 g)",
           "\(quitSource), \(afterQuit)")
     let refused = systemSwitch([.captureFailed, .captureFailed, .captureFailed, .started])
-    check(refused.streaming == false && refused.lasts == [false, false, true] && refused.waits.count == 2
-            && AppLifecycle.SystemSwitch.spacing * Double(refused.waits.count) <= 1,
+    let spacing = AppLifecycle.SystemSwitch.spacing
+    check(refused.streaming == false && refused.lasts == [false, false, true] && refused.waits == [spacing, spacing]
+            && spacing == 0.5,
           "source quit: the whole system is tried 3 times, 0.5 s apart, then the last failure stops streaming (S227 g)",
           "\(refused)")
     let noSpeaker = systemSwitch([.failed, .started])
@@ -5671,6 +5672,27 @@ do {
     let actedFirst = systemSwitch([.started], userActsAfter: 0, firstWait: settleWait)
     check(actedFirst.streaming == nil && actedFirst.lasts.isEmpty,
           "source quit: a stop or source change before the first attempt makes none (S227 g)", "\(actedFirst)")
+    func afterWait(system: Bool = true, stopped: Bool = false, running: Bool = false, userStarted: Bool = false)
+        -> QuitSwitch.AfterWait {
+        QuitSwitch.afterWait(sourceIsSystem: system, userStopped: stopped, running: running, userStarted: userStarted)
+    }
+    check(afterWait() == .attempt && afterWait(stopped: true) == .drop(release: false)
+            && afterWait(system: false) == .drop(release: true),
+          "source quit: after a wait the next attempt runs, unless the user stopped or picked another source (S227 g)",
+          "\(afterWait()), \(afterWait(stopped: true)), \(afterWait(system: false))")
+    check(afterWait(userStarted: true) == .drop(release: false),
+          "source quit: a start by the user during the wait that failed ends the attempts, after its alert (S227 g)",
+          "\(afterWait(userStarted: true))")
+    check(afterWait(running: true) == .startedMeanwhile
+            && afterWait(running: true, userStarted: true) == .drop(release: false)
+            && afterWait(system: false, running: true) == .drop(release: false),
+          "source quit: auto-connect starting the whole system during the wait still says the app quit and the switch (S227 g)",
+          "\(afterWait(running: true)), \(afterWait(running: true, userStarted: true))")
+    var meanwhile: Bool?
+    QuitSwitch.run(start: { _ in .captureFailed }, later: { _, body in body() }, stillWanted: { .startedMeanwhile },
+                   finish: { meanwhile = $0 })
+    check(meanwhile == true, "source quit: a start during the wait ends the switch as started, with its notice (S227 g)",
+          "\(String(describing: meanwhile))")
     // macOS's app list can miss the mix's other apps in the turn one of them quits.
     let mix3 = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.apple.Safari", "com.apple.TextEdit"])
     func mixQuit(_ report: Report, running: Set<String> = []) -> String {
