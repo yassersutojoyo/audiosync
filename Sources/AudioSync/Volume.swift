@@ -20,15 +20,27 @@ enum VolumeCurve {
 /// An AirPlay speaker's device level, decided by the core from the stored
 /// own volume, the zone and the master (S290).
 enum AirPlayDeviceLevel {
-    /// The whole number an AirPlay row shows: `sent` rounded down (S290).
-    static func row(own: Double, zone: Double, master: Double) -> Double {
-        asc_airplay_row_level(sent(own: own, zone: zone, master: master))
+    /// The whole number an AirPlay row shows: `level` rounded down (S290).
+    static func row(own: Double, zone: Double, master: Double, held: Double?) -> Double {
+        asc_airplay_row_level(level(own: own, zone: zone, master: master, held: held))
+    }
+
+    /// The device level an AirPlay speaker has: `sent`, or with k at 0 the
+    /// level `held` from a change on the speaker (S290).
+    static func level(own: Double, zone: Double, master: Double, held: Double?) -> Double {
+        sent(own: own, zone: zone, master: master)
     }
 
     /// The device level an AirPlay speaker gets, as it joins or when
     /// Calibrate All Speakers gives its volume back too: min(100, own × k) (S290, S291).
     static func sent(own: Double, zone: Double, master: Double) -> Double {
         asc_airplay_device_level(own, zone, master)
+    }
+
+    /// The level a change on the speaker leaves held: `level` while k is 0,
+    /// where the own volume can't carry it, else nil (S290).
+    static func held(level: Double, zone: Double, master: Double) -> Double? {
+        nil
     }
 
     /// A row moved to `row`: the own volume to store and the device level to

@@ -38,7 +38,9 @@ struct SpeakerPreset: Codable, Equatable {
 
     /// The preset as S251 keeps it on load, through the core: bad, repeated
     /// and second Cast member keys dropped, a repeated zone ID dropped,
-    /// volumes clamped to 0…100 and the gains on the controls' steps.
+    /// volumes at least 0 (a local or Cast member is clamped to 100 where its
+    /// volume is applied, an AirPlay member's may pass it, S290) and the
+    /// gains on the controls' steps.
     func sanitized() -> SpeakerPreset {
         let keep = PresetCore.keeps(members.map(\.key))
         let kept = zip(members, keep).filter { $0.1 }.map { $0.0 }
