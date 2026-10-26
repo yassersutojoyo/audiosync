@@ -348,21 +348,22 @@ extension AppDelegate {
     /// rows that appeared and can play, for auto-connect (none if `stopped`).
     /// One that asks for a code every time goes off unless switched on by hand.
     private func adoptNativeRows(_ model: NativeAirPlayModel, stopped: Bool) -> [String] {
-        let rows = model.rows(enabled: enabledAirPlay)
+        let adoption = model.adopt(enabled: enabledAirPlay, known: airplayOrder, stopped: stopped,
+                                   everyTime: &everyTimeGuard)
+        let rows = adoption.rows
         for id in rows {
             guard let receiver = NativeAirPlayID.receiver(id) else { continue }
             if let name = model.names[receiver] { airplayNames[id] = name }
             airplayAccess[id] = model.access(receiver) ?? .open
         }
-        let joinable = model.joinable(rows, after: Set(airplayOrder), stopped: stopped)
-        for id in everyTimeGuard.turnsOff(model.askingEveryTime(rows), enabled: enabledAirPlay) {
+        for id in adoption.turnOff {
             enabledAirPlay.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) stays off, it asks for a code every time")
         }
         airplayOrder = rows
         updatePtpPortNotice { $0.listed(rows) }
         airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
-        return joinable
+        return adoption.joinable
     }
 
     /// Makes the sender's speakers match the switches while streaming, and

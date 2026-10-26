@@ -72,6 +72,29 @@ struct EveryTimeGuard: Equatable {
     }
 }
 
+/// What a new listing does to the AirPlay switches (`adoptNativeRows`).
+struct NativeRowsAdoption: Equatable {
+    /// The rows (app IDs), as `NativeAirPlayModel.rows` orders them.
+    let rows: [String]
+    /// The new rows auto-connect may switch on (`NativeAirPlayModel.joinable`).
+    let joinable: [String]
+    /// The rows that go off, as they ask for a code every time
+    /// (`EveryTimeGuard.turnsOff`).
+    let turnOff: [String]
+}
+
+extension NativeAirPlayModel {
+    /// The listing's rows against the switches `enabled` and the rows shown
+    /// before, `known`; `stopped` as for `joinable`.
+    func adopt(enabled: Set<String>, known: [String], stopped: Bool,
+               everyTime: inout EveryTimeGuard) -> NativeRowsAdoption {
+        let rows = self.rows(enabled: enabled)
+        return NativeRowsAdoption(rows: rows,
+                                  joinable: joinable(rows, after: Set(known), stopped: stopped),
+                                  turnOff: everyTime.turnsOff(askingEveryTime(rows), enabled: enabled))
+    }
+}
+
 struct AirPlayTargetRow: Equatable {
     enum Kind: Equatable { case stereoPair, homeTheater }
     let kind: Kind

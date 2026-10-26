@@ -2926,6 +2926,114 @@ do {
           "\(String(describing: retried))")
 }
 
+// MARK: Every time at launch: on from the last run and discovered, it stays off with no pairing for 15 s
+do {
+    func tv(_ availability: NativeReceiver.Availability, everyTime: Bool) -> NativeReceiver {
+        var receiver = NativeReceiver(id: "TV", name: "TV", model: "", availability: availability, reason: nil, hints: [])
+        receiver.codeEveryTime = everyTime
+        return receiver
+    }
+    enum Step { case listed(NativeReceiver), sender(NativeSpeakerEvent) }
+    // The app's steps in its order (AppDelegate+NativeAirPlay.swift
+    // refreshNativeRows, adoptNativeRows, syncNativeSpeakers, nativeOutcome,
+    // turnOffNativeSpeaker; AppDelegate+Zones.swift autoConnect), streaming
+    // from launch. No pairings are counted: auto-connect switches rows on
+    // without beginNativeAttempts, and the sender starts no PIN pairing by
+    // itself (the every-time tests in airplay/tests/ap2_driver.rs), so a
+    // session is the only way to one.
+    struct App {
+        var model = NativeAirPlayModel()
+        var everyTime = EveryTimeGuard()
+        var enabled: Set<String> = ["native:TV"]   // enabledAirPlayIds from the last run
+        let marked: Set<String> = ["native:TV"]   // auto-connect on
+        var order: [String] = []
+        var sessions: [Int] = []
+        var now = 0
+
+        mutating func refreshNativeRows() {
+            let joinable = adoptNativeRows()
+            syncNativeSpeakers()
+            autoConnect(joinable)
+        }
+        mutating func adoptNativeRows() -> [String] {
+            let adoption = model.adopt(enabled: enabled, known: order, stopped: false, everyTime: &everyTime)
+            for id in adoption.turnOff { enabled.remove(id) }
+            order = adoption.rows
+            return adoption.joinable
+        }
+        mutating func syncNativeSpeakers() {
+            let plan = model.plan(streaming: true, enabled: enabled)
+            guard !plan.isEmpty else { return }
+            for id in plan.release { enabled.remove(NativeAirPlayID.app(id)) }
+            for id in plan.remove { model.removed(id) }
+            let appeared = plan.changesRows ? adoptNativeRows() : []
+            for id in plan.add {
+                model.added(id)
+                sessions.append(now)
+            }
+            for off in plan.turnOff { turnOffNativeSpeaker(NativeAirPlayID.app(off.id)) }
+            autoConnect(appeared)
+        }
+        mutating func turnOffNativeSpeaker(_ id: String) {
+            guard enabled.contains(id) else { return }
+            enabled.remove(id)
+            syncNativeSpeakers()
+        }
+        mutating func autoConnect(_ ids: [String]) {
+            let hits = ids.filter { marked.contains($0) }
+            guard !hits.isEmpty else { return }
+            enabled.formUnion(hits)
+            syncNativeSpeakers()   // applyAirPlaySelection while streaming
+        }
+        mutating func nativeOutcome(_ outcome: NativeAirPlayOutcome?) {
+            switch outcome {
+            case .turnOff(let id, _)?: turnOffNativeSpeaker(id)
+            case .playingChanged?: refreshNativeRows()
+            default: break
+            }
+        }
+    }
+    // Each launch: what reaches the app at which second, the second the
+    // every-time flag is known, and the sessions that may start before it
+    // (the receiver was listed as open).
+    let launches: [(name: String, steps: [(Int, Step)], flagAt: Int, sessions: Int)] = [
+        ("listed asking", [(2, .listed(tv(.needsPin, everyTime: true)))], 2, 0),
+        ("open first, flag on a later listing", [(2, .listed(tv(.available, everyTime: false))),
+                                                 (10, .listed(tv(.available, everyTime: true)))], 10, 1),
+        ("listed able to play and asking", [(2, .listed(tv(.available, everyTime: true)))], 2, 0),
+        ("open over AirPlay 1, then asking over AirPlay 2", [(2, .listed(tv(.available, everyTime: false))),
+                                                             (3, .sender(.state(id: "TV", .retrying, retryMs: 10_000))),
+                                                             (3, .listed(tv(.needsPin, everyTime: true)))], 3, 1),
+    ]
+    for launch in launches {
+        var app = App()
+        var listedYet = false
+        var inSenderAfterFlag: [Int] = []
+        for t in 0...15 {
+            app.now = t
+            for (at, step) in launch.steps where at == t {
+                switch step {
+                case .listed(let receiver):   // nativeReceiverChanged
+                    app.model.apply(listedYet ? .changed(receiver) : .appeared(receiver))
+                    listedYet = true
+                    app.refreshNativeRows()
+                case .sender(let event):   // nativeSpeakerEvent
+                    let outcome = app.model.apply(event)
+                    app.nativeOutcome(outcome)
+                }
+            }
+            // reconcileNativeAirPlay, here every second (the app: at launch, on wake, every 30 s).
+            app.syncNativeSpeakers()
+            if t >= launch.flagAt, app.model.states["TV"] != nil { inSenderAfterFlag.append(t) }
+        }
+        check(app.sessions.count == launch.sessions && app.sessions.allSatisfy { $0 < launch.flagAt }
+                && inSenderAfterFlag.isEmpty && !app.enabled.contains("native:TV")
+                && app.model.plan(streaming: true, enabled: app.enabled).add.isEmpty,
+              "every time at launch (\(launch.name)): on from the last run, auto-connect on, it goes off once it asks and no session starts for 15 s",
+              "sessions \(app.sessions), in the sender \(inSenderAfterFlag), on \(app.enabled)")
+    }
+}
+
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")
 
 // MARK: Native AirPlay targets — stereo pairs and home theater groups as one row (P176 to P181)
@@ -4006,6 +4114,54 @@ do {
     step = look(&spotify, song, at: artworkEnds, artwork: .wait)
     check(step.fields == nil && step.picture === icon && step.recheckAt == nil,
           "track info feed: the scheduled look at the wait's end sends AudioSync's icon")
+}
+
+// MARK: Track info — Spotify paused, read as empty every 2 s for 11 minutes, never sends the fallback
+do {
+    let spotify = NowPlayingMonitor.spotify
+    let cover = NSImage(size: NSSize(width: 1, height: 1))
+    let icon = NSImage(size: NSSize(width: 2, height: 2))
+    func track(playing: Bool) -> NowPlayingMonitor.Track {
+        NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Song", artist: "Band",
+                                album: "Record", isPlaying: playing, artwork: cover)
+    }
+    let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let poll: TimeInterval = 2
+    let emptyReadings = Int(11 * 60 / poll)
+    let sources: [(AudioSource, String)] = [(.app(bundleID: spotify), "Spotify"), (.system, "All System Audio")]
+    for (source, sourceName) in sources {
+        let untitled = TrackMetadata.Fields(title: "AudioSync", artist: sourceName, album: "From your Mac")
+        var empty = NowPlayingMonitor.EmptyReadings()
+        var played = NowPlayingMonitor.LastPlayed()
+        played.note(source: source)
+        var feed = TrackInfoFeed()
+        _ = feed.modelUpdated(sending: true)
+        var last: NowPlayingMonitor.Track?
+        var fallbackAt: [TimeInterval] = []
+        // One Now Playing reading at `now`, as NowPlayingMonitor.refresh and
+        // AppDelegate.sendTrackInfo take it; a paused Spotify with no track
+        // name answers as unreadable.
+        func read(_ reading: NowPlayingMonitor.Track?, at now: Date) {
+            let shown = empty.next(reading: reading, last: last, lastPlayerRuns: true, lastPlayer: .unreadable)
+            played.note(shown: shown, last: last, dropped: empty.dropped != nil)
+            last = shown
+            let info = ReceiverInfo.decide(track: shown, source: source, sourceName: sourceName,
+                                           untitled: untitled, lastPlayed: played.bundleID)
+            let step = feed.send(sending: true, now: now, pollingSince: start, hasReading: true, icon: icon) {
+                (info, shown?.artwork)
+            }
+            if info.fields == untitled || info.artwork != .track || step.fields == untitled || step.picture === icon {
+                fallbackAt.append(now.timeIntervalSince(start))
+            }
+        }
+        read(track(playing: true), at: start)
+        read(track(playing: false), at: start + poll)
+        for n in 0..<emptyReadings { read(nil, at: start + poll * Double(n + 2)) }
+        check(fallbackAt.isEmpty && last?.title == "Song" && empty.dropped == nil
+                && feed.sent?.fields == TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record"),
+              "track info (\(sourceName)): Spotify paused and read as empty every 2 s for 11 minutes keeps its track and cover, never the fallback",
+              "fallback at \(fallbackAt.prefix(3)) s, shown \(String(describing: last?.title))")
+    }
 }
 
 // MARK: Windows and the view model (WindowRules.swift)
