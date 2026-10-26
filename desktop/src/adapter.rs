@@ -2719,6 +2719,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed.insert(speaker.id);
         }
         self.airplay_listed = listed;
+        // One whose row went has left the sender (S222): nothing retries it.
+        let gone: Vec<String> = self
+            .reconnecting
+            .keys()
+            .filter(|id| !self.airplay_listed.contains(*id))
+            .cloned()
+            .collect();
+        for id in gone {
+            self.reconnecting.remove(&id);
+            self.clear_if(airplay_subject(&id), |message| {
+                matches!(message, NoticeMessage::AirPlayRetrying { .. })
+            });
+        }
         let mut names = std::mem::take(&mut self.airplay_names);
         let enabled = self.audio.enabled_airplay();
         let pin = self.audio.airplay_pin_prompt().map(|prompt| prompt.id);

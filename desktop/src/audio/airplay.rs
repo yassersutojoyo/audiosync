@@ -1562,6 +1562,15 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// Whether the speaker `id` in the sender has no row: discovery no
+    /// longer lists it and it doesn't play. It leaves the sender and stays
+    /// on, so its next announcement adds it again (S222).
+    fn gone_unplayed(&self, id: &str, added: &Added) -> bool {
+        added.key().is_some()
+            && !self.listed.contains_key(id)
+            && added.state != SpeakerState::Playing
+    }
+
     fn is_playing(&self, id: &str) -> bool {
         self.added
             .get(id)
@@ -2929,14 +2938,16 @@ impl AirPlaySpeakers {
 
     /// Adds the speakers that should play and removes the ones that
     /// shouldn't: while streaming, every speaker that is on and listed as
-    /// able to play joins; one already in the sender stays while it is on,
-    /// listed or not, as the sender keeps trying to reach it.
+    /// able to play joins; one already in the sender stays while it is on
+    /// and listed or playing, as the sender keeps trying to reach it.
     fn reconcile(&mut self) {
         let leaving: Vec<String> = self
             .added
-            .keys()
-            .filter(|id| !self.streaming || !self.settings(id).enabled)
-            .cloned()
+            .iter()
+            .filter(|(id, added)| {
+                !self.streaming || !self.settings(id).enabled || self.gone_unplayed(id, added)
+            })
+            .map(|(id, _)| id.clone())
             .collect();
         let left = !leaving.is_empty();
         for id in leaving {
@@ -3529,6 +3540,7 @@ impl AirPlaySpeakers {
                     self.log
                         .log(|| format!("AirPlay receiver gone: {}", self.label(&id)));
                 }
+                self.reconcile();
                 self.forget_name_unless_used(&id);
             }
             // Listed only while the AirPlay 2 switch is on, as on the Mac.
@@ -3920,6 +3932,12 @@ impl AirPlaySpeakers {
                     && problem.retried()
                 {
                     added.state = SpeakerState::Retrying { at };
+                    if !self.listed.contains_key(id) {
+                        // It played on after its announcement lapsed: lost
+                        // now, it has no row to retry for.
+                        self.reconcile();
+                        return true;
+                    }
                     events.push(BackendEvent::AirPlayTrouble {
                         id: id.to_owned(),
                         problem,
