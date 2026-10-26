@@ -2167,7 +2167,7 @@ export component MainWindow inherits Window {
                         property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                         property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
                         property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
-                        property <string> cast-note: self.both-none || (self.list-note == Strings.looking-for-speakers && root.cast-list == CastList.searching) ? "" : Strings.cast-list(root.cast-list);
+                        property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                         note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {
                             root.speaker-toggled(id);

@@ -719,6 +719,12 @@ fn no_text_promises_airplay() {
         "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
     );
     assert!(
+        include_str!("../ui/main.slint").contains(
+            "property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? \"\" : Strings.cast-list(root.cast-list);"
+        ),
+        "while the list says it looks, no Google Cast note follows it"
+    );
+    assert!(
         include_str!("../ui/main.slint").contains("note: root.airplay-none-found ? ("),
         "the note that no AirPlay speaker was found shows only when the backend says so"
     );
