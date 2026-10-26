@@ -631,13 +631,17 @@ private struct ZoneCard: View {
         .accessibilityLabel(zone.name)
     }
 
-    private func toggleDisclosure() {
-        withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
+    private func hit(_ area: ZoneHeaderHit.Area) {
+        switch ZoneHeaderHit.action(for: area) {
+        case .fold: withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
+        case .toggleZone: model.actions.toggleZone(zone.id)
+        case .none: break
+        }
     }
 
     private func header(_ t: UIStrings) -> some View {
         HStack(spacing: 8) {
-            Button { toggleDisclosure() } label: {
+            Button { hit(.chevron) } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -649,7 +653,7 @@ private struct ZoneCard: View {
             .accessibilityLabel(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
             .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
 
-            Button { model.actions.toggleZone(zone.id) } label: {
+            Button { hit(.zoneIcon) } label: {
                 SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
             }
             .buttonStyle(.plain)
@@ -669,7 +673,9 @@ private struct ZoneCard: View {
                     .lineLimit(1)
                     // Read through the switch's label.
                     .accessibilityHidden(true)
+                    .onTapGesture { hit(.name) }
                 countLine(t)
+                    .onTapGesture { hit(.count) }
             }
             .opacity(zone.present == 0 ? 0.45 : 1)
 
@@ -704,7 +710,7 @@ private struct ZoneCard: View {
         // the badge, the slider and the menu shows or hides the speakers.
         // The chevron stays the keyboard's way in.
         .contentShape(Rectangle())
-        .onTapGesture { toggleDisclosure() }
+        .onTapGesture { hit(.blank) }
         .contextMenu { menuItems(t) }
     }
 

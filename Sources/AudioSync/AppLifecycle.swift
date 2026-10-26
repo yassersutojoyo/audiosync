@@ -13,6 +13,10 @@ enum StartOrigin: Equatable {
     /// A phone through the web remote (S256 to S258, S266): it counts as the
     /// user's act, but nobody may be at the Mac, so a failure only posts a notice.
     case remote
+
+    /// Only a click at the Mac may raise a modal alert; every other start
+    /// posts a notice and leaves the focus where it is.
+    var raisesAlert: Bool { self == .user }
 }
 
 /// The decisions behind the app's launch, when the speakers are reconciled, a

@@ -28,8 +28,8 @@ extension AppDelegate {
         let hasSpeaker = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                                     enabledLocal: enabledLocal)
         let continuing = rebuild || switching != nil
-        let starts = StreamingPolicy.starts(hasSpeaker: hasSpeaker, continuing: continuing,
-                                            hadSpeaker: sessionHadSpeaker, origin: origin)
+        let starts = StreamingPolicy.noSpeakerAsk(hasSpeaker: hasSpeaker, continuing: continuing,
+                                                  hadSpeaker: sessionHadSpeaker, origin: origin) == .nothing
         // A tap's first capture raises the audio capture prompt; Not Now keeps what plays.
         if starts, CaptureCheck.provesPermission(audioSource),
            !permissionAllows(.audioCapture, state: .unknown, origin: origin) {
@@ -257,7 +257,7 @@ extension AppDelegate {
     func notify(_ message: String, origin: StartOrigin, subject: String,
                 style: NSAlert.Style = .warning, settings: PrivacyPane? = nil) {
         postNotice(message, subject: subject, settings: settings)
-        if origin == .user { showAlert(message, style: style, settings: settings) }
+        if origin.raisesAlert { showAlert(message, style: style, settings: settings) }
     }
 
     func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil,
