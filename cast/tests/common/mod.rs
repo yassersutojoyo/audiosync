@@ -189,6 +189,8 @@ pub struct FakeDevice {
     pub log: Arc<Mutex<Vec<CastMessage>>>,
     pub fetches: Arc<Mutex<Vec<Fetch>>>,
     pub connections: Arc<Mutex<u32>>,
+    /// Accepted connections whose serving ended.
+    hangups: Arc<Mutex<u32>>,
     pub certificate_der: Vec<u8>,
     commands: mpsc::Sender<Command>,
     stop_fetching: Arc<AtomicBool>,
@@ -219,6 +221,7 @@ impl FakeDevice {
         let log = Arc::new(Mutex::new(Vec::new()));
         let fetches = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(Mutex::new(0));
+        let hangups = Arc::new(Mutex::new(0));
         let stop_fetching = Arc::new(AtomicBool::new(false));
         let (commands, receiver) = mpsc::channel();
         let mut device = Device {
@@ -232,6 +235,7 @@ impl FakeDevice {
         };
         let thread_log = Arc::clone(&log);
         let thread_connections = Arc::clone(&connections);
+        let thread_hangups = Arc::clone(&hangups);
         let config = Arc::new(config);
         let thread = thread::spawn(move || {
             loop {
@@ -243,7 +247,9 @@ impl FakeDevice {
                     Ok((tcp, _)) => {
                         *thread_connections.lock().expect("count") += 1;
                         let _ = tcp.set_nonblocking(false);
-                        if serve(tcp, &config, &mut device, &thread_log, &receiver) {
+                        let shut_down = serve(tcp, &config, &mut device, &thread_log, &receiver);
+                        *thread_hangups.lock().expect("hangups") += 1;
+                        if shut_down {
                             return;
                         }
                     }
@@ -256,6 +262,7 @@ impl FakeDevice {
             log,
             fetches,
             connections,
+            hangups,
             certificate_der: certificate.to_vec(),
             commands,
             stop_fetching,
@@ -319,6 +326,21 @@ impl FakeDevice {
         let until = Instant::now() + limit;
         while Instant::now() < until {
             if self.types().iter().filter(|t| *t == kind).count() >= count {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// Waits until every accepted connection has ended, up to `limit`. The
+    /// log then holds all the sender wrote before closing, however late the
+    /// device's thread got to read it.
+    pub fn wait_for_hangup(&self, limit: Duration) -> bool {
+        let until = Instant::now() + limit;
+        while Instant::now() < until {
+            let accepted = self.connection_count();
+            if accepted > 0 && *self.hangups.lock().expect("hangups") >= accepted {
                 return true;
             }
             thread::sleep(Duration::from_millis(10));
