@@ -1729,6 +1729,13 @@ pub mod tests {
                 }));
         }
 
+        /// The goodbye of a speaker announced with [`FakeCast::announce`].
+        pub fn withdraw(&self, id: &str, name: &str) {
+            self.state().browse.push_back(BrowseEvent::Removed {
+                fullname: format!("{name}-{id}._googlecast._tcp.local."),
+            });
+        }
+
         pub fn report(&self, event: HostEvent) {
             self.state().events.push_back(event);
         }

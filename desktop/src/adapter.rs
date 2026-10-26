@@ -6873,6 +6873,29 @@ mod tests {
     }
 
     #[test]
+    fn a_gone_airplay_speaker_keeps_its_name_only_while_settings_or_a_zone_name_it() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let bedroom = device(3, "Bedroom", OPEN_TXT);
+        let den = device(4, "Den", OPEN_TXT);
+        fake.appear(&bedroom);
+        fake.appear(&den);
+        adapter.poll();
+        adapter.set_speaker_volume(&ap(&kitchen), 30.0);
+        adapter.set_speaker_enabled(&ap(&den), true);
+        adapter.new_zone("Downstairs").unwrap();
+        adapter.set_speaker_enabled(&ap(&den), false);
+        adapter.poll();
+        for gone in [&kitchen, &bedroom, &den] {
+            fake.gone(gone);
+        }
+        adapter.poll();
+        let names = &adapter.airplay_names;
+        assert!(!names.contains_key(&id_of(&bedroom)), "{names:?}");
+        assert_eq!(names.get(&id_of(&kitchen)).map(String::as_str), Some("Kitchen"));
+        assert_eq!(names.get(&id_of(&den)).map(String::as_str), Some("Den"));
+    }
+
+    #[test]
     fn turning_an_airplay_speaker_on_and_off_lines_local_outputs_up_and_back() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         turn_on(&mut adapter, SPEAKERS);
@@ -10131,6 +10154,19 @@ mod tests {
         let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
         adapter.poll();
         (adapter, fake)
+    }
+
+    #[test]
+    fn a_gone_cast_speaker_keeps_its_name_only_while_settings_name_it() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.rename_speaker(&cc(CAST_KITCHEN), "Pantry");
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        fake.withdraw(CAST_LIVING, "Living Room");
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&cc(CAST_LIVING)).is_none());
+        let names = &adapter.cast_names;
+        assert!(!names.contains_key(CAST_LIVING), "{names:?}");
+        assert_eq!(names.get(CAST_KITCHEN).map(String::as_str), Some("Kitchen"));
     }
 
     /// The UI's ID of a Google Cast speaker.
