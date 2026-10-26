@@ -39,7 +39,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 - **S15** *Observed* (`AppDelegate+Engine.swift:21-40`). An input source needs the microphone permission: authorized → start; not determined → request, then start or fail; denied or restricted → the start fails with a notice.
 - **S16** *Required.* The capture stage delivers interleaved stereo float32 at Rc in blocks of any size ≥ 1 frame. Rc is read at session start: the nominal rate of the device the capture IOProc runs on (the input device, or the tap's private aggregate device), else the tap's own format rate when the device's can't be read, else 48 000 Hz when neither gives a rate above 0. Rates from 8 000 to 384 000 Hz MUST be accepted (the suites exercise 32 000, 44 100, 48 000, 96 000 and size a ring for 192 000).
 - **S17** *Observed* (`CaptureCheck.swift:5-9`; `AppDelegate+Engine.swift:120-121`). A process tap delivers no frames until its source actually plays; "no frames yet" is normal. `framesCaptured` is the number of frames written to the ring in the current session and restarts at 0 with each session.
-- **S18** *Observed* (`CaptureCheck.swift:18-30`; `AppDelegate+Engine.swift:125-150`; tests "capture: …"). Capture verdict: `framesCaptured > 0` → *flowing*; otherwise, if the source is known to have been playing for at least 6 s (`playingGrace`) → *notWorking*; otherwise → *waiting*. The host checks 3 s after a start, then every 2 s until audio flows or the session ends, posting a notice only when the verdict changes; a paused or unknown source never yields *notWorking*.
+- **S18** *Observed* (`CaptureCheck.swift:30-80`; `CaptureSupport.swift:184-187`; `AppDelegate+Engine.swift:324-357`; tests "capture: …"). Capture verdict: a session *hears* sound once any captured frame, among the frames a block delivers, has a sample other than zero; a tap that delivers only zeros hears nothing, since a denied tap and a silent source look alike. A session that heard sound → *flowing*. Otherwise → *notWorking* only when Now Playing has shown the source playing, its position moving on between two distinct readings, for at least 6 s (`playingGrace`) and no system or app tap in this app run has heard sound (a microphone or line-in heard proves nothing about the tap permission); otherwise → *waiting*. A source reported paused or unknown, one reported playing whose position stands still or that has no position to watch, never yields *notWorking*, and sound arriving later clears the verdict. The host checks 3 s after a start, then every 2 s until audio flows or the session ends, posting a notice only when the verdict changes.
 - **S19** *Observed* (`AppDelegate+Engine.swift:155-165`). "Known playing" comes only from a live Now Playing reading (Spotify, Music): for the system source any playing player counts; for an app source only that app; for an input source never.
 - **S20** *Observed* (`AppDelegate.swift:267-274`; `AppLifecycle.swift:49`). When the capture format changes under a running session, the engine reports an interruption `formatChanged` on the main thread, and the host restarts the session (stop, then start, automatic origin) at the new rate.
 - **S157** *Observed* (`CaptureCheck.swift:33-43`; tests "EC4 rate: …"). Capture-rate decision: a rate reported for the running capture rebuilds the session (S20) only when it is a real rate (greater than 0) that differs from the session's Rc, lower or higher (48 000 → 44 100 and 44 100 → 96 000 both rebuild); the same rate, or one that couldn't be read (reported as 0), keeps the session playing. *Required:* the engine reports `interrupted(formatChanged)` only when this rule asks for a rebuild.
@@ -463,7 +463,7 @@ Retired with the bundled engine on 2026-10-20, all but S111 and part of S101 and
   | no speaker enabled at start | none (host checks) | informational "start" notice (`AppDelegate+Engine.swift:17-20`) |
   | microphone denied for an input source | none (host checks) | start fails, notice (`AppDelegate+Engine.swift:21-40`) |
   | capture can't start | `start` throws | stop (the chosen AirPlay speakers stay chosen), "start" notice, alert if user (S121) |
-  | audio never arrives | `framesCaptured` stays 0 | waiting / not-working notice (S18) |
+  | audio never arrives | no captured frame carries sound | waiting / not-working notice (S18) |
   | capture format change | `interrupted(formatChanged)` | automatic restart (S20) |
   | capture lost | `interrupted(sourceLost)` | stop (the chosen AirPlay speakers stay chosen), "source" notice (S21) |
   | source app quits | none (host watches apps) | stop (the AirPlay sessions end, the chosen speakers stay chosen), notice (`AppDelegate.swift:386-394`; `AppLifecycle.swift:54-56`) |
@@ -1872,12 +1872,12 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | the_estimate_waits_while_an_airplay_speaker_sounds (a joiner at 300 ms with E = 220 plays 80 ms late until the stream is empty) | S283 |
 | calibrate_all_measures_relative_to_the_reported_latency (the AirPlay delay moves only by the measured excess over L_s + E + d_s) | S283, S237 |
 | calibrate_all_window_grows_with_the_reported_latency (core, `airplay_wait_ms` with R_s 220: 220 ms longer) | S235 |
-| planned: several AirPlay 2 receivers share Lf and E, and a target uses its largest member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s) | S284 |
-| planned: an AirPlay 2 receiver leaving while others sound changes no delay (Lf, E and every d′_s held until the stream is empty) | S284 |
-| planned: every AirPlay 2 speaker switched on plays, and only a 17th or one needing PTP on another network waits | S285 |
-| planned: one AirPlay 2 speaker failing leaves the others playing | S285 |
+| several_airplay2_receivers_share_lf_and_e_and_a_target_uses_its_largest_member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s; Mac only, the Windows test is planned) | S284 |
+| an_airplay2_receiver_leaving_while_others_sound_changes_no_delay (E and every d′_s held until the stream is empty; the sender holds Lf; Mac only, the Windows test is planned) | S284 |
+| every_airplay2_speaker_switched_on_goes_to_the_sender_and_only_one_it_refuses_waits_switched_on_and_on_its_own_row (Mac only, the Windows test is planned) | S285 |
+| one_airplay2_speaker_failing_leaves_the_others_playing (a password prompt, a PIN pairing and an unreachable speaker; Mac only, the Windows test is planned) | S285 |
 
-The four planned rows have no test on either host yet; the follow-up writes them in `desktop/` and as "airplay latency: …" checks in the logic suite.
+The Mac logic suite has these four as "airplay latency: …" checks; their Windows tests in `desktop/` are still to be written. The sender has no code yet for the two wait reasons of S285 (AirPlay spec P204 and P205), so the third check refuses a 17th speaker with P169's reason, the only wait the sender reports today; the reasons themselves get their checks once the sender has them.
 
 ### Explicit pause: Windows and Mac (`cargo test` in `desktop/`, the logic suite)
 
