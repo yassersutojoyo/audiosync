@@ -86,13 +86,29 @@ pub fn asks_code_every_time(flags: u64) -> bool {
     flags & FLAG_PIN != 0
 }
 
+/// The HomeKit credentials a session starts with (P61, P154).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stored {
+    None,
+    /// Credentials of an earlier pairing.
+    Kept,
+    /// Credentials an answer turned down earlier in this sender's life,
+    /// with no session played on a pair-verify with them since. They stay,
+    /// since a reset receiver and an impostor answer alike, and only a new
+    /// pairing replaces them.
+    TurnedDown,
+}
+
 /// P61's order: flags bit 3 (a PIN every time, stored credentials or not),
-/// then stored credentials, then bit 9 (PIN), then bit 7 (password),
-/// otherwise transient.
-pub fn choose_mode(flags: u64, has_credentials: bool) -> Mode {
+/// then a password pairing in place of turned-down credentials, then stored
+/// credentials, then bit 9 (PIN), then bit 7 (password), otherwise
+/// transient.
+pub fn choose_mode(flags: u64, stored: Stored) -> Mode {
     if asks_code_every_time(flags) {
         Mode::Pin
-    } else if has_credentials {
+    } else if stored == Stored::TurnedDown && flags & FLAG_PASSWORD != 0 {
+        Mode::Password
+    } else if stored != Stored::None {
         Mode::Verify
     } else if flags & (FLAG_ONE_TIME | FLAG_PIN) != 0 {
         Mode::Pin
@@ -361,6 +377,9 @@ pub struct PairSetup {
     /// B or S of this attempt is shorter than N, so a receiver that pads
     /// them computes another proof (P151).
     short_values: bool,
+    /// Why the receiver last turned the PIN down or asked for a wait, for
+    /// the host's debug log ([`PairSetup::take_refusal`]).
+    refusal: Option<String>,
     public: Vec<u8>,
     key: Zeroizing<Vec<u8>>,
     server_proof: Vec<u8>,
@@ -408,6 +427,7 @@ impl PairSetup {
             retried: false,
             same_code_retried: false,
             short_values: false,
+            refusal: None,
             public: Vec::new(),
             key: Zeroizing::new(Vec::new()),
             server_proof: Vec::new(),
@@ -460,6 +480,25 @@ impl PairSetup {
         Some(self.m1())
     }
 
+    /// Why the receiver turned the last PIN down or asked for a wait, once,
+    /// after [`SetupStep::WrongPin`], [`SetupStep::BackOff`] or the
+    /// `/pair-pin-start` that follows a second wrong PIN (P150): the step it
+    /// answered and how, for the host's debug log. Never the PIN.
+    pub fn take_refusal(&mut self) -> Option<String> {
+        self.refusal.take()
+    }
+
+    /// The step the receiver is answering now, for [`PairSetup::take_refusal`].
+    fn answering(&self) -> &'static str {
+        match self.stage {
+            SetupStage::M1 => "M1",
+            SetupStage::M3 => "M3",
+            SetupStage::M5 => "M5",
+            SetupStage::PinStart => "/pair-pin-start",
+            SetupStage::Idle | SetupStage::WaitingForPin | SetupStage::Done => "no request",
+        }
+    }
+
     /// The last request sent, for the resend after a 401.
     pub fn last_request(&self) -> Option<&Request> {
         self.last.as_ref()
@@ -505,8 +544,14 @@ impl PairSetup {
 
     /// An authentication failure after M3: a wrong PIN, the one P151 retry
     /// when B or S was short, else P150's mapping.
-    fn authentication_after_m3(&mut self) -> SetupStep {
+    fn authentication_after_m3(&mut self, how: &str) -> SetupStep {
         if self.kind == SetupKind::Pin {
+            let short = if self.short_values {
+                ", with B or S shorter than 384 bytes (P151)"
+            } else {
+                ""
+            };
+            self.refusal = Some(format!("{how}{short}"));
             self.code = None;
             if self.same_code_retried {
                 self.same_code_retried = false;
@@ -526,9 +571,14 @@ impl PairSetup {
 
     fn error_item(&mut self, code: u8, reply: &Tlv8) -> SetupStep {
         if code == 3 && self.kind == SetupKind::Pin {
+            let wait = back_off(reply).unwrap_or(Duration::ZERO);
+            self.refusal = Some(format!(
+                "error 3 (back-off, {} s) in answer to {}",
+                wait.as_secs(),
+                self.answering()
+            ));
             self.stage = SetupStage::WaitingForPin;
             self.code = None;
-            let wait = back_off(reply).unwrap_or(Duration::ZERO);
             return SetupStep::BackOff(wait.min(MAX_PIN_BACK_OFF));
         }
         let (kind, detail) = match code {
@@ -602,7 +652,7 @@ impl PairSetup {
         if let Some(code) = reply.get(tlv8::ERROR) {
             let code = code.first().copied().unwrap_or(1);
             if code == 2 && self.stage == SetupStage::M3 {
-                return self.authentication_after_m3();
+                return self.authentication_after_m3("error 2 (authentication) in answer to M3");
             }
             return self.error_item(code, &reply);
         }
@@ -699,7 +749,7 @@ impl PairSetup {
         let proof = reply.get(tlv8::PROOF).unwrap_or_default();
         let matches: bool = proof.ct_eq(&self.server_proof).into();
         if !matches {
-            return self.authentication_after_m3();
+            return self.authentication_after_m3("an M4 with a proof that didn't check");
         }
         let Some(identity) = self.identity.clone() else {
             self.stage = SetupStage::Done;

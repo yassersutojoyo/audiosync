@@ -10,6 +10,155 @@ use audiosync_core::volume::{
 };
 use proptest::prelude::*;
 
+mod airplay_device_level {
+    use audiosync_core::volume::{
+        ReadBack, RowMove, device_level, device_level_for_db, level_set_on_speaker,
+        own_for_device_level, row_level, row_move,
+    };
+
+    /// The row a speaker at own volume `own` shows through `zone` and `master`.
+    fn row(own: f64, zone: f64, master: f64) -> f64 {
+        row_level(device_level(own, zone, master))
+    }
+
+    // covers: S289
+    #[test]
+    fn a_reading_maps_linearly_onto_0_to_100() {
+        assert_eq!(device_level_for_db(-24.0).map(row_level), Some(20.0));
+        assert_eq!(device_level_for_db(-15.0), Some(50.0));
+        assert_eq!(device_level_for_db(0.0), Some(100.0));
+        assert_eq!(device_level_for_db(-30.0), Some(0.0));
+        assert_eq!(device_level_for_db(-144.0), Some(0.0));
+        assert_eq!(device_level_for_db(f64::NAN), None);
+    }
+
+    // covers: S290
+    #[test]
+    fn the_row_shows_the_device_level_rounded_down() {
+        assert_eq!(row(50.0, 100.0, 63.0), 31.0);
+        assert_eq!(row(90.0, 100.0, 63.0), 56.0);
+        assert_eq!(row(100.0, 100.0, 63.0), 63.0);
+        assert_eq!(row(100.0, 100.0, 100.0), 100.0);
+        assert_eq!(row(0.0, 100.0, 63.0), 0.0);
+        // Float error just under a whole number still shows it.
+        assert_eq!(row_level(19.999_999_999), 20.0);
+        assert_eq!(row_level(f64::NAN), 0.0);
+    }
+
+    // covers: S290
+    #[test]
+    fn a_row_move_sends_the_row_and_stores_the_smallest_own_volume_reaching_it() {
+        let moved = row_move(20.0, 100.0, 63.0).expect("k above 0");
+        assert_eq!(
+            moved,
+            RowMove {
+                own_position: 32.0,
+                device_level: 20.0
+            }
+        );
+        assert_eq!(row_level(moved.device_level), 20.0);
+        // The row never jumps on release, at any row and master.
+        for master in [1.0, 7.0, 33.0, 63.0, 99.0, 100.0] {
+            for target in 0..=100 {
+                let r = f64::from(target);
+                let moved = row_move(r, 100.0, master).expect("k above 0");
+                let shown = row(moved.own_position, 100.0, master);
+                assert!(shown <= r, "master {master} row {r} shows {shown}");
+                if moved.own_position < 100.0 {
+                    assert_eq!(shown, r, "master {master} row {r}");
+                    assert_eq!(moved.device_level, r);
+                }
+            }
+        }
+    }
+
+    // covers: S290
+    #[test]
+    fn a_row_past_the_ceiling_stops_at_it() {
+        let moved = row_move(80.0, 100.0, 63.0).expect("k above 0");
+        assert_eq!(moved.own_position, 100.0);
+        assert!((moved.device_level - 63.0).abs() < 1e-9);
+        assert_eq!(row_level(moved.device_level), 63.0);
+        assert_eq!(
+            row_move(63.0, 100.0, 63.0).map(|m| m.own_position),
+            Some(100.0)
+        );
+        // Through a zone at 50 and the master at 63 the ceiling is 31.
+        let moved = row_move(40.0, 50.0, 63.0).expect("k above 0");
+        assert_eq!(moved.own_position, 100.0);
+        assert_eq!(row_level(moved.device_level), 31.0);
+    }
+
+    // covers: S290
+    #[test]
+    fn with_k_at_0_a_row_move_sends_nothing() {
+        assert_eq!(row_move(40.0, 100.0, 0.0), None);
+        assert_eq!(row_move(40.0, 0.0, 100.0), None);
+        assert_eq!(row_move(f64::NAN, 100.0, 100.0), None);
+        assert_eq!(own_for_device_level(20.0, 100.0, 0.0), None);
+    }
+
+    // covers: S290
+    #[test]
+    fn a_master_move_keeps_the_own_volume() {
+        let moved = row_move(20.0, 100.0, 63.0).expect("k above 0");
+        assert_eq!(row(moved.own_position, 100.0, 63.0), 20.0);
+        assert_eq!(row(moved.own_position, 100.0, 100.0), 32.0);
+        assert_eq!(row(moved.own_position, 100.0, 50.0), 16.0);
+    }
+
+    // covers: S290
+    #[test]
+    fn a_level_set_on_the_speaker_sets_the_row_and_the_own_volume() {
+        let level = device_level_for_db(-24.0).expect("finite");
+        assert_eq!(row_level(level), 20.0);
+        assert_eq!(own_for_device_level(level, 100.0, 63.0), Some(32.0));
+        assert_eq!(own_for_device_level(80.0, 100.0, 63.0), Some(100.0));
+        assert_eq!(
+            level_set_on_speaker(-24.0, 50.0, 31.5, 100.0, 63.0),
+            Some(RowMove {
+                own_position: 32.0,
+                device_level: 20.0
+            })
+        );
+        // Zone × master at 0 keeps the own volume and still shows the level.
+        assert_eq!(
+            level_set_on_speaker(-24.0, 50.0, 0.0, 100.0, 0.0).map(|moved| moved.own_position),
+            Some(50.0)
+        );
+        // Own 32 at master 63 already shows row 20.
+        assert_eq!(level_set_on_speaker(-23.9, 32.0, 20.0, 100.0, 63.0), None);
+        assert_eq!(
+            level_set_on_speaker(f64::NAN, 32.0, 20.0, 100.0, 63.0),
+            None
+        );
+        // Own 21 stays, but a row showing 20.6 moves to 21.
+        assert_eq!(
+            level_set_on_speaker(-23.7, 21.0, 20.6, 100.0, 100.0).map(|moved| moved.own_position),
+            Some(21.0)
+        );
+    }
+
+    // covers: S291
+    #[test]
+    fn the_first_reading_near_a_level_sent_is_its_echo_and_the_baseline() {
+        let mut read = ReadBack::default();
+        read.sent(-24.0);
+        assert_eq!(read.echo_of(), Some(-24.0));
+        // The 0.6 dB grid echoes −24 as −24.3: the baseline, no change.
+        assert!(!read.set_on_speaker(-24.3));
+        assert_eq!(read.echo_of(), None);
+        assert!(!read.set_on_speaker(-24.27));
+        assert!(!read.set_on_speaker(f64::NAN));
+        // One remote press away from the baseline is a change and the new baseline.
+        assert!(read.set_on_speaker(-23.7));
+        assert!(!read.set_on_speaker(-23.7));
+        // More than 0.5 dB from a level just sent is a change at once.
+        read.sent(-24.0);
+        assert!(read.set_on_speaker(-23.4));
+    }
+}
+
 // covers: S70
 #[test]
 fn zero_is_silent_and_100_is_unity() {

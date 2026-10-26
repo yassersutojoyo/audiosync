@@ -28,7 +28,9 @@ use audiosync_airplay::stream::{Ap2Audio, PacketKind, SpeakerConfig, StreamEvent
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2, dict, int, open_packet, plist, read_dict, stream_key};
-use common::net::{Events, HostAudio, free_ptp_ports, host_frame_of, serial, wait_until};
+use common::net::{
+    Events, HostAudio, free_ptp_ports, host_frame_of, ptp_bind_v4, serial, wait_until,
+};
 use common::rig::{Rig, decode, speaker};
 
 const LONG: Duration = Duration::from_secs(15);
@@ -663,8 +665,8 @@ impl Udp {
 
 /// Whether someone else could bind both of `ports` now.
 fn ports_free(ports: PtpPorts) -> bool {
-    UdpSocket::bind(("0.0.0.0", ports.event)).is_ok()
-        && UdpSocket::bind(("0.0.0.0", ports.general)).is_ok()
+    UdpSocket::bind((ptp_bind_v4(), ports.event)).is_ok()
+        && UdpSocket::bind((ptp_bind_v4(), ports.general)).is_ok()
 }
 
 fn device(server: &Ap2Server, id: u8, features: &str) -> Device {
@@ -818,6 +820,69 @@ fn ap2_audio_reaches_the_receiver() {
     assert_ne!(second, shk);
     assert_eq!(open_packet(&second, &again).expect("opens").counter, 0);
     assert!(open_packet(&shk, &again).is_none());
+    sender.shutdown();
+}
+
+// Part of P213 on the AirPlay 2 path: the pause sends the realtime FLUSH,
+// whose answer releases the resume while the answer to a delay FLUSH still
+// in flight does not, and POST /feedback goes on while paused.
+#[test]
+fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
+    const ANSWER: Duration = Duration::from_millis(800);
+    let _serial = serial();
+    let udp = Udp::bind();
+    let server = Ap2Server::start(udp.fake(FakeAp2::new()));
+    let clock = SenderClock::new(Instant::now());
+    let (sender, _host) = start(clock, free_ptp_ports(), udp.ptp_ports());
+    let mut events = Events::default();
+    let speaker = device(&server, 62, "0x0,0x10040");
+    let key = speaker.key.clone();
+    sender.add_speaker(speaker, options());
+    assert!(playing(&mut events, &sender, &key, 1));
+    assert!(udp.data.wait_for(|_| true).is_some());
+    let count = |server: &Ap2Server, wanted: &str| {
+        server.fake().keys().iter().filter(|k| *k == wanted).count()
+    };
+
+    // Paused for a while: no audio, the feedback goes on.
+    let feedback = count(&server, "POST /feedback");
+    sender.pause();
+    let paused = Instant::now();
+    assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
+    let quiet = paused + Duration::from_millis(50);
+    std::thread::sleep(Duration::from_millis(4_500));
+    assert!(count(&server, "POST /feedback") >= feedback + 2);
+    assert!(udp.data.take().iter().all(|(at, _, _)| *at <= quiet));
+    assert_eq!(count(&server, "FLUSHBUFFERED"), 0);
+    let (seq, rtptime) = rtp_info(&server);
+    sender.resume();
+    let (_, _, bytes) = udp.data.wait_for(|_| true).expect("audio after the resume");
+    assert_eq!(seq_of(&bytes), seq);
+    assert_eq!(bytes[1], 0xE0);
+    assert_eq!(u32_at(&bytes, 4), rtptime);
+
+    // A delay FLUSH in flight when the pause comes: only the pause FLUSH's
+    // answer, about 2 ANSWER after the pause, lets the audio out.
+    server.fake().pause.insert("FLUSH".to_owned(), ANSWER);
+    sender.set_delay(&key, Duration::from_millis(200));
+    std::thread::sleep(Duration::from_millis(400));
+    udp.data.take();
+    sender.pause();
+    let paused = Instant::now();
+    sender.resume();
+    let quiet = paused + Duration::from_millis(50);
+    let (at, _, bytes) = udp
+        .data
+        .wait_for(|(at, _, _)| *at > quiet)
+        .expect("audio after the resume");
+    assert!(
+        at >= paused + ANSWER + ANSWER / 2,
+        "audio {:?} after the pause",
+        at - paused
+    );
+    assert_eq!(count(&server, "FLUSH"), 4);
+    assert_eq!(seq_of(&bytes), rtp_info(&server).0);
+    assert_eq!(bytes[1], 0xE0);
     sender.shutdown();
 }
 
@@ -990,7 +1055,7 @@ fn ap2_ptp_unavailable() {
     let server = Ap2Server::start(udp.fake(fake));
     let local = free_ptp_ports();
     // Another PTP stack holds the event port.
-    let _holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
+    let _holder = UdpSocket::bind((ptp_bind_v4(), local.event)).expect("the port");
     let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
     let mut events = Events::default();
     let speaker = device(&server, 63, PTP_FEATURES);
@@ -1049,7 +1114,7 @@ fn ap2_ptp_clash_is_told_again_after_ptp_bound() {
     fake.status.insert("SETUP session".to_owned(), 501);
     let server = Ap2Server::start(udp.fake(fake));
     let local = free_ptp_ports();
-    let holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
+    let holder = UdpSocket::bind((ptp_bind_v4(), local.event)).expect("the port");
     let (sender, _host) = start(SenderClock::new(Instant::now()), local, udp.ptp_ports());
     let mut events = Events::default();
     let speaker = device(&server, 65, PTP_FEATURES);
@@ -1088,7 +1153,7 @@ fn ap2_ptp_clash_is_told_again_after_ptp_bound() {
     assert_eq!((told(&events), opened(&events)), (1, 1));
     // It takes the port again: the clash is told once more.
     assert!(wait_until(LONG, || ports_free(local)));
-    let _holder = UdpSocket::bind(("0.0.0.0", local.event)).expect("the port");
+    let _holder = UdpSocket::bind((ptp_bind_v4(), local.event)).expect("the port");
     attempt(&mut events, 3);
     assert_eq!((told(&events), opened(&events)), (2, 1));
     sender.shutdown();

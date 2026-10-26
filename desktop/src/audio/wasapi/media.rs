@@ -40,13 +40,14 @@ pub(super) fn describe(
     session: &Session,
     properties: &MediaProperties,
 ) -> windows::core::Result<MediaSession> {
-    let playing = session.GetPlaybackInfo()?.PlaybackStatus()? == PlaybackStatus::Playing;
+    let status = session.GetPlaybackInfo()?.PlaybackStatus()?;
     Ok(MediaSession {
         app_id: session.SourceAppUserModelId()?.to_string(),
         title: properties.Title()?.to_string(),
         artist: properties.Artist()?.to_string(),
         album: properties.AlbumTitle()?.to_string(),
-        playing,
+        playing: status == PlaybackStatus::Playing,
+        paused: status == PlaybackStatus::Paused,
     })
 }
 

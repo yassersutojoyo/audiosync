@@ -179,8 +179,10 @@ pub struct AirPlayInfo {
     pub availability: AirPlayAvailability,
     /// Whether the user turned it on.
     pub enabled: bool,
-    /// The volume slider position, 0 to 100.
+    /// Its own volume s, 0 to 100, which is saved (S290).
     pub volume: f64,
+    /// Its device level D, 0 to 100, which its row shows rounded down (S290).
+    pub device_level: f64,
     /// Its own delay d_s in milliseconds, 0 to 20 000.
     pub delay_ms: f64,
     /// The latency it reported in this run, R_s in ms (a group's largest
@@ -194,8 +196,14 @@ pub struct AirPlayInfo {
     /// Whether AudioSync holds the password the user typed for it, until
     /// AudioSync quits.
     pub holds_password: bool,
+    /// Whether AudioSync stores pairing credentials for it, also ones the
+    /// speaker turned down (P154), which Forget Pairing drops.
+    pub holds_credentials: bool,
     /// Whether a pairing with it is running.
     pub pairing: bool,
+    /// It asks for a code every time it connects over AirPlay 2 (status
+    /// flag bit 3, P61), so auto-connect leaves it off.
+    pub code_every_time: bool,
     /// AudioSync reaches it over AirPlay 2, which happens only while the
     /// AirPlay 2 switch is on.
     pub airplay2: bool,
@@ -296,6 +304,9 @@ pub enum AirPlayProblem {
     /// An Apple TV whose home theater group plays: its sound goes to those
     /// speakers, so it is off.
     PlaysThroughSpeakers,
+    /// A paired Apple TV didn't prove it is the one that was paired, so it
+    /// is off; its stored pairing stays (P56).
+    ReceiverUnverified,
     /// A home theater group whose Apple TV plays by itself, so the group is
     /// off.
     AppleTvPlays,
@@ -490,6 +501,13 @@ pub enum BackendEvent {
     /// session now captures the whole system, every output still on and
     /// every AirPlay speaker still in the stream (spec S227).
     SwitchedToSystem,
+    /// A source or channel pair started while streaming couldn't start, so
+    /// the one the last session played plays again, to the same speakers
+    /// (spec S141).
+    SwitchFailed {
+        /// Why the new one couldn't start.
+        error: BackendError,
+    },
     /// Whether the source is heard twice: straight from Windows, undelayed,
     /// as well as through AudioSync's delayed copies. Checked every few
     /// seconds while streaming and reported when the answer changes.
@@ -727,8 +745,16 @@ pub trait AudioBackend {
     fn enabled_outputs(&self) -> Vec<String>;
 
     /// Starts capturing `source` and playing it on every enabled, connected
-    /// output. A running session is stopped first.
+    /// output. A running session is stopped first, its AirPlay and Google
+    /// Cast speakers staying in the stream; when `source` can't start, the
+    /// source that session played starts again and
+    /// [`BackendEvent::SwitchFailed`] tells (spec S141).
     fn start(&mut self, source: &SourceId) -> Result<(), BackendError>;
+
+    /// Whether a source switch still waits for the last session's outputs
+    /// to fade out: until it starts, the source before it is the one a
+    /// failed switch goes back to.
+    fn switch_waits(&self) -> bool;
 
     /// Stops capture and every output. Does nothing when nothing runs.
     fn stop(&mut self);
@@ -867,13 +893,22 @@ pub trait AudioBackend {
         None
     }
 
-    /// Sets an AirPlay speaker's volume slider position (0 to 100), live. A
-    /// value that isn't finite is ignored.
+    /// Sets an AirPlay speaker's own volume s (0 to 100), live: a saved
+    /// speaker and a preset's member (S290). A value that isn't finite is
+    /// ignored.
     fn set_airplay_volume(&mut self, id: &str, position: f64);
+
+    /// An AirPlay speaker's row moved to `row`, its device level (S290).
+    fn move_airplay_row(&mut self, id: &str, row: f64);
 
     /// The AirPlay speaker's volume slider is held (true) or let go
     /// (false): a level it reads back meanwhile is ignored (S271).
     fn set_airplay_volume_dragging(&mut self, _id: &str, _dragging: bool) {}
+
+    /// The now-playing card's play-pause went to `app`, shown playing or
+    /// paused: the AirPlay speakers pause with it when the reading agrees
+    /// (P213).
+    fn airplay_play_pause_pressed(&mut self, _app: &str, _playing: bool) {}
 
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
     /// that isn't finite is ignored; others are clamped to 0 to 20 000.

@@ -15,7 +15,7 @@ use audiosync_airplay::pairing::{
 };
 use audiosync_airplay::rtsp::{Method, Request};
 use audiosync_airplay::secret::Secret;
-use audiosync_airplay::session::{SessionEvent, State, Verifier};
+use audiosync_airplay::session::{SessionEvent, State, Verifier, VerifyFailure};
 use common::atv::{CLIENT, FakeAppleTv, PairLink, SealAnswer, TestEntropy, public_of};
 use common::{FakeReceiver, Link, PasswordGate, digest_params, key};
 use plist::Value;
@@ -926,8 +926,14 @@ fn stored_credentials_verify_first_on_every_connection() {
     // session reports as a failed verification, P55) and an atv_pub that
     // gives an all-zero shared secret.
     let mut verifier = LegacyVerifier::new(&credentials, &mut entropy).expect("a verifier");
-    assert_eq!(verifier.second_request(&[0x5A; 95]), None);
-    assert_eq!(verifier.second_request(&[0; 96]), None);
+    assert_eq!(
+        verifier.second_request(&[0x5A; 95]),
+        Err(VerifyFailure::Malformed)
+    );
+    assert_eq!(
+        verifier.second_request(&[0; 96]),
+        Err(VerifyFailure::Malformed)
+    );
 
     // A spare key pair for the one reconnect of P58, and only one.
     let before = verifier.verify_public();
@@ -938,7 +944,7 @@ fn stored_credentials_verify_first_on_every_connection() {
 
 // covers: P56
 #[test]
-fn a_receiver_signature_that_fails_the_check_is_a_warning_only() {
+fn a_receiver_signature_that_fails_the_check_ends_the_session_before_the_sender_signs() {
     let atv = FakeAppleTv::new(PIN);
     let credentials = pair(&atv);
     assert!(credentials.receiver_key().is_some());
@@ -949,16 +955,15 @@ fn a_receiver_signature_that_fails_the_check_is_a_warning_only() {
     ));
     let mut link = Link::new(config, apple_tv_receiver(&atv));
     link.connect();
-    assert_eq!(link.session.state(), State::Playing, "{:?}", link.events);
-    let warnings: Vec<&Warning> = link
-        .events
-        .iter()
-        .filter_map(|event| match event {
-            SessionEvent::Warning(warning) => Some(warning),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(warnings, [&Warning::ReceiverSignatureInvalid]);
+    assert_ne!(link.session.state(), State::Playing, "{:?}", link.events);
+    let error = link.failure().expect("failed");
+    // Not PairingRequired: a host drops stored credentials on that, and a
+    // device that can't sign must not be able to wipe them.
+    assert_eq!(error.kind, ErrorKind::ReceiverUnverified);
+    assert!(error.kind.needs_user());
+    // The sender's signature never leaves.
+    assert_eq!(link.keys(), ["POST /pair-verify"]);
+    assert!(link.closed);
 
     // Without the receiver's key there is nothing to check.
     let without_key =

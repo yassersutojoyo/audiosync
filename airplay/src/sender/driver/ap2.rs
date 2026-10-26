@@ -17,7 +17,7 @@ use crate::error::{UnsupportedReason, Warning};
 use crate::ptp::{MessageType, PtpService, clock_identity};
 use crate::session::{Connection, MediaDestinations};
 use crate::stream::Ap2Audio;
-use crate::transport::PtpIo;
+use crate::transport::{PtpIo, Queued};
 
 /// How often a session waiting for the old PTP service's ports looks again.
 const PTP_PORTS_POLL: Duration = Duration::from_millis(10);
@@ -101,7 +101,7 @@ impl Ap2Active {
 }
 
 impl Driver {
-    fn ap2_active(&mut self, key: &DeviceKey) -> Option<&mut Ap2Active> {
+    pub(super) fn ap2_active(&mut self, key: &DeviceKey) -> Option<&mut Ap2Active> {
         match &mut self.speakers.get_mut(key)?.phase {
             Phase::Ap2(active) => Some(active),
             _ => None,
@@ -222,6 +222,7 @@ impl Driver {
             .clone()
             .or_else(|| self.homekit.get(key).cloned());
         let verifying = config.credentials.is_some();
+        config.credentials_turned_down = verifying && self.homekit_turned_down.contains(key);
         config.password = speaker.options.password.clone();
         config.device_id = self.device_id;
         let ptp_configured = ptp.is_some();
@@ -392,6 +393,7 @@ impl Driver {
             speaker.options.homekit_credentials = Some(credentials.clone());
         }
         self.homekit.insert(key.clone(), credentials);
+        self.homekit_turned_down.remove(key);
     }
 
     /// Drops the HomeKit credentials kept for a device, so its next session
@@ -401,13 +403,7 @@ impl Driver {
             speaker.options.homekit_credentials = None;
         }
         self.homekit.remove(key);
-    }
-
-    /// Drops HomeKit credentials the receiver turned down (P154), and tells
-    /// the host to delete its stored copy.
-    fn reject_homekit(&mut self, key: &DeviceKey) {
-        self.forget_homekit(key);
-        self.emit_speaker(key, SpeakerEvent::HomeKitRejected);
+        self.homekit_turned_down.remove(key);
     }
 
     pub(super) fn next_ap2_output(&mut self, key: &DeviceKey) -> Option<Ap2Output> {
@@ -442,11 +438,20 @@ impl Driver {
                 }
             }
             Ap2Output::SendEvents(bytes) => {
-                if let Some(io) = self
+                let Some(io) = self
                     .ap2_active(key)
                     .and_then(|active| active.events_io.as_ref())
-                {
-                    io.write(bytes);
+                else {
+                    return;
+                };
+                if io.write_bounded(bytes, transport::EVENT_BACKLOG) == Queued::Overflowed {
+                    let line = format!(
+                        "warning: the receiver left more than {} event answers or {} bytes unread; \
+                         closing the event connection",
+                        transport::EVENT_BACKLOG.messages,
+                        transport::EVENT_BACKLOG.bytes
+                    );
+                    self.emit_speaker(key, SpeakerEvent::Trace(line));
                 }
             }
             Ap2Output::Close => self.release_ap2(key),
@@ -838,11 +843,17 @@ impl Driver {
         }
     }
 
-    /// The stream restarted a speaker: FLUSH on its session (P100, P143).
-    pub(super) fn ap2_flush(&mut self, key: &DeviceKey, seq: u16, rtptime: u32, now: Instant) {
-        if let Some(active) = self.ap2_active(key) {
-            active.session.flush(seq, rtptime, now);
-        }
+    /// The stream restarted or paused a speaker: FLUSH on its session
+    /// (P100, P143, P213). False when none goes out.
+    pub(super) fn ap2_flush(
+        &mut self,
+        key: &DeviceKey,
+        seq: u16,
+        rtptime: u32,
+        now: Instant,
+    ) -> bool {
+        self.ap2_active(key)
+            .is_some_and(|active| active.session.flush(seq, rtptime, now))
     }
 
     pub(super) fn ap2_event(&mut self, key: &DeviceKey, event: Ap2Event, now: Instant) {
@@ -850,7 +861,8 @@ impl Driver {
             // Only a PinPairing's session reports these.
             Ap2Event::Info(_)
             | Ap2Event::PinRequested
-            | Ap2Event::WrongPin
+            | Ap2Event::WrongPin(_)
+            | Ap2Event::PinStartAgain(_)
             | Ap2Event::Verified => {}
             Ap2Event::Server(server) => self.emit_speaker(key, SpeakerEvent::Server(server)),
             Ap2Event::Credentials(credentials) => {
@@ -860,6 +872,7 @@ impl Driver {
                     speaker.options.homekit_credentials = Some(credentials.clone());
                 }
                 self.homekit.insert(key.clone(), credentials.clone());
+                self.homekit_turned_down.remove(key);
                 self.emit_speaker(key, SpeakerEvent::HomeKitPaired(credentials));
             }
             Ap2Event::TimingChosen(timing) => {
@@ -905,6 +918,14 @@ impl Driver {
                 ..
             } => self.peers_refused(key, added, first_accepted, now),
             Ap2Event::Ready(_) => {
+                // A pair-verify that led to playing clears the turn-down,
+                // as the host's mark is cleared (P154).
+                if self
+                    .ap2_active(key)
+                    .is_some_and(|active| active.session.pair_verified())
+                {
+                    self.homekit_turned_down.remove(key);
+                }
                 self.ap2_ready(key, now);
                 if let Some(speaker) = self.speakers.get_mut(key) {
                     speaker.backoff.on_playing();
@@ -914,6 +935,7 @@ impl Driver {
                 self.send_now_playing(key, now);
             }
             Ap2Event::Warning(warning) => self.emit_speaker(key, SpeakerEvent::Warning(warning)),
+            Ap2Event::Flushed => self.flush_answered(key),
             Ap2Event::Trace(line) => self.emit_speaker(key, SpeakerEvent::Trace(line)),
             Ap2Event::VolumeReported(db) => {
                 self.emit_speaker(key, SpeakerEvent::VolumeReported(db))
@@ -932,8 +954,10 @@ impl Driver {
                     .get(key)
                     .is_some_and(|speaker| speaker.target.is_some());
                 let settling = member && self.settling(key, error.kind, now);
+                // No answer at this point proves the receiver, so the
+                // credentials stay for the host and for the next session (P154).
                 if verifying && error.kind == ErrorKind::PairingRequired && !settling {
-                    self.reject_homekit(key);
+                    self.homekit_turned_down.insert(key.clone());
                 }
                 self.on_failed(key, error, now);
                 if ptp_wait {

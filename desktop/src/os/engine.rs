@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::audio::controller::{Controller, Driver};
 use crate::audio::now_playing::{ReceiverLabels, SharedLabels, TrackReader};
-use crate::debug_log::DebugLog;
+use crate::debug_log::{self, DebugLog};
 use crate::now_playing_card::MediaControls;
 use crate::view::App;
 use crate::{Strings, adapter, audio, data_folder, settings, ui_model};
@@ -32,8 +32,13 @@ pub fn backend<D: Driver + 'static>(
     let cast_file = start_cast(&mut audio, log);
     audio.set_track_reader(track_reader);
     audio.set_receiver_labels(labels.clone());
-    let mut adapter =
-        adapter::AudioAdapter::with_settings(audio, super::notice_time, log.clone(), settings_file);
+    let mut adapter = adapter::AudioAdapter::launched(
+        audio,
+        super::notice_time,
+        log.clone(),
+        settings_file,
+        debug_log::env_skips_auto_connect(),
+    );
     adapter.set_cast_file(cast_file);
     Box::new(adapter)
 }

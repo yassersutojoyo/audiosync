@@ -77,6 +77,8 @@ pub struct PairingStore {
     path: Option<PathBuf>,
     /// False when the file belongs to a newer AudioSync.
     writable: bool,
+    /// How private the file was found.
+    access: Access,
     entries: BTreeMap<String, Credentials>,
 }
 
@@ -86,6 +88,7 @@ impl fmt::Debug for PairingStore {
         f.debug_struct("PairingStore")
             .field("path", &self.path)
             .field("writable", &self.writable)
+            .field("access", &self.access)
             .field("receivers", &self.entries.keys().collect::<Vec<_>>())
             .finish()
     }
@@ -103,13 +106,17 @@ impl PairingStore {
         PairingStore {
             path: None,
             writable: true,
+            access: Access::Private,
             entries: BTreeMap::new(),
         }
     }
 
-    /// The store kept in the file at `path`, with what was found there.
+    /// The store kept in the file at `path`, with what was found there. A
+    /// file other accounts may read or write is made owner-only first; one
+    /// another account owns is ignored ([`read_private`]).
     pub fn open(path: PathBuf) -> (PairingStore, Loaded) {
-        let (entries, writable, loaded) = match read(&path) {
+        let (found, access) = read(&path);
+        let (entries, writable, loaded) = match found {
             Ok(Some(entries)) => {
                 let count = entries.len();
                 (entries, true, Loaded::Receivers(count))
@@ -121,9 +128,15 @@ impl PairingStore {
         let store = PairingStore {
             path: Some(path),
             writable,
+            access,
             entries,
         };
         (store, loaded)
+    }
+
+    /// How private the file was found when the store was opened.
+    pub fn access(&self) -> Access {
+        self.access
     }
 
     /// How many receivers are paired.
@@ -192,17 +205,29 @@ enum Unreadable {
     Ignored(String),
 }
 
-/// The entries in the file at `path`, `None` without a file.
-fn read(path: &Path) -> Result<Option<BTreeMap<String, Credentials>>, Unreadable> {
-    let plain = match fs::read(path) {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(Unreadable::Ignored(format!(
-                "the file can't be read: {error}"
-            )));
-        }
-    };
+/// The entries in the file at `path`, `None` without a file, and how
+/// private the file was found, also when its entries can't be used.
+fn read(
+    path: &Path,
+) -> (
+    Result<Option<BTreeMap<String, Credentials>>, Unreadable>,
+    Access,
+) {
+    match read_private(path) {
+        Ok(Contents::Read(bytes, access)) => (parse(&bytes).map(Some), access),
+        Ok(Contents::Missing) => (Ok(None), Access::Private),
+        Ok(Contents::Foreign(reason)) => (Err(Unreadable::Ignored(reason)), Access::Unread),
+        Ok(Contents::Failed(error, access)) => (Err(unreadable(&error)), access),
+        Err(error) => (Err(unreadable(&error)), Access::Unread),
+    }
+}
+
+fn unreadable(error: &io::Error) -> Unreadable {
+    Unreadable::Ignored(format!("the file can't be read: {error}"))
+}
+
+/// The entries in the file's contents `plain`.
+fn parse(plain: &[u8]) -> Result<BTreeMap<String, Credentials>, Unreadable> {
     let format = || Unreadable::Ignored("the file isn't in the expected format".to_owned());
     let Some([version, rest @ ..]) = plain.strip_prefix(MAGIC) else {
         return Err(format());
@@ -213,7 +238,7 @@ fn read(path: &Path) -> Result<Option<BTreeMap<String, Credentials>>, Unreadable
     if *version != VERSION {
         return Err(format());
     }
-    decode(rest).map(Some).ok_or_else(format)
+    decode(rest).ok_or_else(format)
 }
 
 /// The file's contents for `entries`.
@@ -313,4 +338,137 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+/// How private a file was found when it was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// Only its owner, the current user, could read or write it.
+    Private,
+    /// Other accounts could read or write it; it is owner-only (0600) now.
+    Tightened,
+    /// Other accounts can read or write it, and its mode couldn't be changed.
+    StillOpen,
+    /// It wasn't read: another account owns it, it isn't a regular file, or
+    /// opening it failed.
+    Unread,
+}
+
+/// What reading a private file found.
+pub(crate) enum Contents {
+    Missing,
+    Read(Zeroizing<Vec<u8>>, Access),
+    /// Reading failed after the file's mode was checked, and tightened when
+    /// it had to be.
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "only Unix hosts check the mode first")
+    )]
+    Failed(io::Error, Access),
+    /// Another account owns the file, so it isn't read; why, for the log.
+    #[cfg_attr(
+        not(unix),
+        allow(dead_code, reason = "only Unix hosts check the owner")
+    )]
+    Foreign(String),
+}
+
+/// What a file with permission bits `mode`, owned by user `owner`, is to
+/// user `me`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only Unix hosts check the mode and owner")
+)]
+enum Verdict {
+    Private,
+    OpenToOthers,
+    Foreign,
+}
+
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only Unix hosts check the mode and owner")
+)]
+fn verdict(mode: u32, owner: u32, me: u32) -> Verdict {
+    if owner != me {
+        Verdict::Foreign
+    } else if mode & 0o077 != 0 {
+        Verdict::OpenToOthers
+    } else {
+        Verdict::Private
+    }
+}
+
+/// Reads the file at `path`, made owner-only first when other accounts may
+/// read or write it. It is opened once without following a symbolic link,
+/// and checked, tightened and read through that one handle, so the path is
+/// never resolved twice. A symbolic link or anything but a regular file is
+/// an error, as an unreadable file is.
+#[cfg(unix)]
+pub(crate) fn read_private(path: &Path) -> io::Result<Contents> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Contents::Missing),
+        Err(error) => return Err(error),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::other("not a regular file"));
+    }
+    // SAFETY: geteuid has no preconditions and can't fail.
+    let me = unsafe { libc::geteuid() };
+    let access = match verdict(metadata.mode(), metadata.uid(), me) {
+        Verdict::Private => Access::Private,
+        Verdict::OpenToOthers => match file.set_permissions(fs::Permissions::from_mode(0o600)) {
+            Ok(()) => Access::Tightened,
+            Err(_) => Access::StillOpen,
+        },
+        Verdict::Foreign => {
+            return Ok(Contents::Foreign(format!(
+                "another account (user ID {}) owns the file",
+                metadata.uid()
+            )));
+        }
+    };
+    // Sized up front, so growing never leaves a copy of a secret behind.
+    let size = usize::try_from(metadata.len()).unwrap_or(0);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(size));
+    match file.read_to_end(&mut bytes) {
+        Ok(_) => Ok(Contents::Read(bytes, access)),
+        Err(error) => Ok(Contents::Failed(error, access)),
+    }
+}
+
+/// Windows keeps these files in the user's own profile.
+#[cfg(not(unix))]
+pub(crate) fn read_private(path: &Path) -> io::Result<Contents> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Contents::Read(Zeroizing::new(bytes), Access::Private)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Contents::Missing),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // covers: S224
+    #[test]
+    fn the_owner_and_mode_decide_how_a_file_is_used() {
+        assert_eq!(verdict(0o100600, 501, 501), Verdict::Private);
+        assert_eq!(verdict(0o100400, 501, 501), Verdict::Private);
+        assert_eq!(verdict(0o100644, 501, 501), Verdict::OpenToOthers);
+        assert_eq!(verdict(0o100620, 501, 501), Verdict::OpenToOthers);
+        assert_eq!(verdict(0o100602, 501, 501), Verdict::OpenToOthers);
+        assert_eq!(verdict(0o100600, 502, 501), Verdict::Foreign);
+        assert_eq!(verdict(0o100644, 0, 501), Verdict::Foreign);
+    }
 }

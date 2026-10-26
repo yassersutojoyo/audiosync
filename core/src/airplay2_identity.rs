@@ -19,7 +19,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs;
 use std::io;
 use std::path::PathBuf;
 
@@ -27,7 +26,9 @@ use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::sender::random_airplay2_device_id;
 use zeroize::Zeroizing;
 
-use crate::airplay_pairings::{Loaded, take_field, write_atomically};
+use crate::airplay_pairings::{
+    Access, Contents, Loaded, read_private, take_field, write_atomically,
+};
 
 /// The byte form's first bytes.
 pub const MAGIC: &[u8] = b"AudioSync AirPlay 2 identity\n";
@@ -168,6 +169,8 @@ pub struct IdentityStore {
     /// False when the file belongs to a newer AudioSync, or no random device
     /// ID could be made: nothing is written then.
     writable: bool,
+    /// How private the file was found.
+    access: Access,
     identity: Airplay2Identity,
 }
 
@@ -176,6 +179,7 @@ impl fmt::Debug for IdentityStore {
         f.debug_struct("IdentityStore")
             .field("path", &self.path)
             .field("writable", &self.writable)
+            .field("access", &self.access)
             .field("identity", &self.identity)
             .finish()
     }
@@ -195,6 +199,12 @@ fn fresh() -> (Airplay2Identity, bool) {
     }
 }
 
+fn left_as_it_is(error: &std::io::Error) -> Loaded {
+    Loaded::Ignored(format!(
+        "the file can't be read, so it is left as it is: {error}"
+    ))
+}
+
 impl IdentityStore {
     /// A store with no file and a fresh device ID, which forgets everything
     /// when dropped.
@@ -202,6 +212,7 @@ impl IdentityStore {
         IdentityStore {
             path: None,
             writable: true,
+            access: Access::Private,
             identity: fresh().0,
         }
     }
@@ -210,10 +221,17 @@ impl IdentityStore {
     /// new device ID is written at once when the file is missing or was
     /// ignored, so it stays the same from then on (P5). A file that can't
     /// be read now, or that a newer AudioSync wrote, is never written over.
+    /// A file other accounts may read or write is made owner-only first;
+    /// one another account owns is ignored and replaced ([`read_private`]).
     pub fn open(path: PathBuf) -> (IdentityStore, Loaded) {
-        let (identity, writable, loaded) = match fs::read(&path) {
-            Ok(bytes) => {
-                let bytes = Zeroizing::new(bytes);
+        let mut access = Access::Unread;
+        let (identity, writable, loaded) = match read_private(&path) {
+            Ok(Contents::Foreign(reason)) => {
+                let (identity, random) = fresh();
+                (identity, random, Loaded::Ignored(reason))
+            }
+            Ok(Contents::Read(bytes, found)) => {
+                access = found;
                 match Airplay2Identity::from_bytes(&bytes) {
                     Ok(identity) => {
                         let count = identity.len();
@@ -227,20 +245,23 @@ impl IdentityStore {
                     }
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(Contents::Missing) => {
+                access = Access::Private;
                 let (identity, random) = fresh();
                 (identity, random, Loaded::NoFile)
             }
             // A permission or disk error may pass, and the file may still
             // hold the device ID and credentials.
-            Err(error) => {
-                let reason = format!("the file can't be read, so it is left as it is: {error}");
-                (fresh().0, false, Loaded::Ignored(reason))
+            Ok(Contents::Failed(error, found)) => {
+                access = found;
+                (fresh().0, false, left_as_it_is(&error))
             }
+            Err(error) => (fresh().0, false, left_as_it_is(&error)),
         };
         let store = IdentityStore {
             path: Some(path),
             writable,
+            access,
             identity,
         };
         if store.writable && matches!(loaded, Loaded::NoFile | Loaded::Ignored(_)) {
@@ -248,6 +269,11 @@ impl IdentityStore {
             let _ = store.save();
         }
         (store, loaded)
+    }
+
+    /// How private the file was found when the store was opened.
+    pub fn access(&self) -> Access {
+        self.access
     }
 
     pub fn device_id(&self) -> [u8; 6] {
@@ -295,6 +321,7 @@ impl IdentityStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn credentials(fill: u8) -> HomeKitCredentials {
         let mut blob = vec![1u8];
@@ -384,5 +411,45 @@ mod tests {
             );
         }
         assert!(Airplay2Identity::from_bytes(&bytes[..MAGIC.len() + 7]).is_ok());
+    }
+
+    // covers: S224
+    #[cfg(unix)]
+    #[test]
+    fn a_file_others_may_write_is_made_owner_only_and_still_used() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("open-to-others.dat");
+        let (store, _) = IdentityStore::open(path.clone());
+        let device_id = store.device_id();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).expect("mode set");
+        let (again, loaded) = IdentityStore::open(path.clone());
+        assert_eq!(loaded, Loaded::Receivers(0));
+        assert_eq!(again.access(), Access::Tightened);
+        assert_eq!(again.device_id(), device_id);
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = fs::remove_file(&path);
+    }
+
+    // covers: S224
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_isnt_read_is_reported_unread_and_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let target = scratch("link-target.dat");
+        let _ = IdentityStore::open(target.clone());
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("mode set");
+        let path = scratch("link.dat");
+        std::os::unix::fs::symlink(&target, &path).expect("a symbolic link");
+        let (store, loaded) = IdentityStore::open(path.clone());
+        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert_eq!(store.access(), Access::Unread);
+        let mode = fs::metadata(&target)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644, "the link's target is left alone");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&target);
     }
 }

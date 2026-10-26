@@ -65,7 +65,7 @@ extension AppDelegate {
     func stopIfIdle() {
         if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                   enabledLocal: enabledLocal) {
-            stopEngine()
+            stopEngine(.noSpeakerOn)
         }
     }
 
@@ -74,6 +74,12 @@ extension AppDelegate {
         localVolume[uid] = v
         engine.setGain(uid: uid, g: effectiveGain(uid))
         pushModel()
+    }
+
+    /// Per drag, not per step: a slider sends many positions while it moves.
+    func logLocalVolume(_ uid: String) {
+        guard let v = localVolume[uid] else { return }
+        DebugTrace.log("[AudioSync] volume of \(uid) set to \(String(format: "%.2f", v))")
     }
 
     /// The master scales every speaker AudioSync plays: a local speaker's
@@ -218,22 +224,24 @@ extension AppDelegate {
         case .mix: nowPlaying.preferredBundleID = nil
         case .input: nowPlaying.preferredBundleID = ""
         }
+        if nowPlaying.noteSource(audioSource) {
+            DispatchQueue.main.async { [weak self] in self?.sendTrackInfo() }
+        }
         nowPlaying.refresh()
     }
 
     func setSource(_ source: AudioSource) {
         let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
+        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else { return }
+        microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
+        let old = audioSource
         audioSource = source
         updateNowPlayingTarget()
-        clearNotices([Notice.source, Notice.capture])   // about the old source
-        // The tap is built for one source; switching means rebuilding it. The
-        // AirPlay selection stays as it is (deselecting would race the reselect).
+        // The tap is built for one source; switching rebuilds only it, under
+        // the speakers (S141).
         autoStartFailed = false
-        if change == .restart {
-            stopEngine()
-            startEngine(origin: .user)
-        }
+        if change == .restart { startEngine(origin: .user, switching: .source(from: old, to: source)) }
         pushModel()
     }
 
@@ -245,18 +253,17 @@ extension AppDelegate {
     }
 
     /// Chooses the channel pair the input source plays (S14). A running
-    /// session restarts on it, as for a source switch.
+    /// session rebuilds its capture on it, as for a source switch.
     func setInputPair(_ index: Int) {
         guard case .input(let uid) = audioSource else { return }
         let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
+        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else { return }
+        microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
+        let old = currentInputPair
         inputPairs[uid] = index == 0 ? nil : index
-        clearNotices([Notice.capture])   // about the old pair
         autoStartFailed = false
-        if change == .restart {
-            stopEngine()
-            startEngine(origin: .user)
-        }
+        if change == .restart { startEngine(origin: .user, switching: .inputPair(uid: uid, from: old, to: index)) }
         pushModel()
     }
 
@@ -323,7 +330,8 @@ extension AppDelegate {
         if report.alertNames != nil {   // the failures' names, for a click of the user's
             let shown = applied.failures.map { shownName(local: $0.uid, system: $0.deviceName) }.joined(separator: ", ")
             let rate = LocalOutputSync.sharedRefusedRate(applied.failures)
-            showAlert(text.outputCouldNotStart(names: shown, refusedCaptureRate: rate), style: .warning)
+            showAlert(text.outputCouldNotStart(names: shown, count: applied.failures.count, refusedCaptureRate: rate),
+                      style: .warning)
         }
         for failure in report.notices {   // one notice per speaker, so each one clears by itself
             postNotice(text.outputCouldNotStart(names: shownName(local: failure.uid, system: failure.deviceName),

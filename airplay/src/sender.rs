@@ -419,10 +419,6 @@ pub enum SpeakerEvent {
     /// them back in [`SpeakerOptions::homekit_credentials`]. The sender
     /// keeps them too, until it stops. `Debug` shows the identifiers only.
     HomeKitPaired(HomeKitCredentials),
-    /// The receiver no longer takes the speaker's HomeKit credentials
-    /// (P154): the sender dropped its copy, and the host deletes the stored
-    /// one, so the next start pairs again. A PairingRequired error follows.
-    HomeKitRejected,
     /// A line for the host's debug log, only with [`SpeakerOptions::trace`].
     Trace(String),
 }
@@ -792,6 +788,14 @@ impl Sender {
         self.command(Command::SetVolume(key.clone(), volume));
     }
 
+    /// Takes a level the user set on the speaker itself as the speaker's
+    /// volume without sending it: the next session starts at it, and a
+    /// receiver that rounds sets more coarsely than its own remote steps
+    /// keeps the level the remote chose (S291). NaN levels are ignored.
+    pub fn keep_volume(&self, key: &DeviceKey, volume: Volume) {
+        self.command(Command::KeepVolume(key.clone(), volume));
+    }
+
     /// Asks a playing speaker for its volume (P122); the answer comes as
     /// [`SpeakerEvent::VolumeReported`].
     pub fn read_volume(&self, key: &DeviceKey) {
@@ -823,6 +827,24 @@ impl Sender {
     /// [`SenderEvent::Timeline`].
     pub fn restart_timeline(&self) {
         self.command(Command::RestartTimeline);
+    }
+
+    /// The host paused playback on purpose (P213): a Pause or pausing
+    /// PlayPause from a speaker's remote, a media key or the app's pause
+    /// button, never silence. Every speaker gets a FLUSH, so its buffer
+    /// drops at once, and no audio goes out until [`Sender::resume`]; the
+    /// sessions stay up. A pause while paused, or with nothing playing yet,
+    /// sends nothing.
+    pub fn pause(&self) {
+        self.command(Command::Pause);
+    }
+
+    /// The host resumed after [`Sender::pause`] (P213): every speaker
+    /// continues from its flush point, in step, without a new request,
+    /// starting with the first whole packet of the frames written from
+    /// now on. A resume while playing does nothing.
+    pub fn resume(&self) {
+        self.command(Command::Resume);
     }
 
     /// The next event, if one is waiting.

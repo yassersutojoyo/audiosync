@@ -36,7 +36,7 @@ if [ "${1:-}" = "--install" ]; then
 fi
 
 if ! command -v shellcheck >/dev/null 2>&1; then
-  echo "shellcheck is not installed (macOS: brew install shellcheck; it must be $VERSION)" >&2
+  echo "shellcheck is not installed (macOS: brew install shellcheck; Windows: pip install shellcheck-py==$VERSION.1, then put its Scripts folder on PATH; it must be $VERSION)" >&2
   exit 1
 fi
 found_version=$(shellcheck --version | sed -n 's/^version: //p')

@@ -88,15 +88,7 @@ impl DebugLog {
 
     /// A log written to `path`, emptied first when `empty` is set.
     fn open(path: Option<PathBuf>, max_bytes: u64, empty: bool) -> DebugLog {
-        // Emptied, then reopened for appending: every write lands at the
-        // end even if something else truncates or writes the file meanwhile.
-        let file = path.and_then(|path| {
-            if empty {
-                File::create(&path).ok()?;
-            }
-            OpenOptions::new().append(true).create(true).open(path).ok()
-        });
-        let Some(file) = file else {
+        let Some(file) = path.and_then(|path| open_file(&path, empty)) else {
             return DebugLog::default();
         };
         let (writer, requests) = mpsc::channel();
@@ -134,10 +126,70 @@ impl DebugLog {
     }
 }
 
+/// Opens the log for appending, so every write lands at the end even if
+/// something else truncates or writes the file meanwhile.
+#[cfg(not(target_os = "linux"))]
+fn open_file(path: &Path, empty: bool) -> Option<File> {
+    if empty {
+        File::create(path).ok()?;
+    }
+    OpenOptions::new().append(true).create(true).open(path).ok()
+}
+
+/// Opens the log for appending, readable by this user only: it can hold a
+/// live pairing code, and the `/tmp` fallback is shared by every user. A
+/// symlink, a non-regular file, a hard-linked one or another user's file at
+/// the path is refused.
+#[cfg(target_os = "linux")]
+fn open_file(path: &Path, empty: bool) -> Option<File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    // O_NONBLOCK keeps a FIFO at the path from blocking the open.
+    let file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(path)
+        .ok()?;
+    let info = file.metadata().ok()?;
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let me = unsafe { libc::getuid() };
+    if !info.is_file() || info.uid() != me || info.nlink() != 1 {
+        return None;
+    }
+    // An older log may have been readable by everyone.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .ok()?;
+    if empty {
+        file.set_len(0).ok()?;
+    }
+    Some(file)
+}
+
 /// Where the log goes for the value of `AUDIOSYNC_DEBUG`: [`FILE_NAME`] in
 /// `dir` when the value is exactly `1`, nowhere for any other value or none.
 pub fn log_path(setting: Option<&OsStr>, dir: &Path) -> Option<PathBuf> {
     (setting == Some(OsStr::new("1"))).then(|| dir.join(FILE_NAME))
+}
+
+/// With `AUDIOSYNC_DEBUG=1`, set to `1` to keep auto-connect off for one
+/// launch, so a debug run never switches on the household's speakers.
+pub const NO_AUTO_CONNECT_VAR: &str = "AUDIOSYNC_NO_AUTO_CONNECT";
+
+/// Whether a launch skips auto-connect, for the values of `AUDIOSYNC_DEBUG`
+/// and [`NO_AUTO_CONNECT_VAR`]: only when both are exactly `1`.
+pub fn skips_auto_connect(debug: Option<&OsStr>, no_auto_connect: Option<&OsStr>) -> bool {
+    let one = Some(OsStr::new("1"));
+    debug == one && no_auto_connect == one
+}
+
+/// Whether this launch's environment skips auto-connect.
+pub fn env_skips_auto_connect() -> bool {
+    skips_auto_connect(
+        std::env::var_os(ENV_VAR).as_deref(),
+        std::env::var_os(NO_AUTO_CONNECT_VAR).as_deref(),
+    )
 }
 
 /// Where the environment asks for the log, and a line to start it with
@@ -220,17 +272,42 @@ fn write_requests(requests: &Receiver<Request>, file: File, max_bytes: u64) {
     }
 }
 
-/// Writes `text` stamped with `time`. Each line of a message that has
-/// several gets the stamp, so every line of the file starts with one.
+/// What starts each line of a message after its first, in place of a stamp.
+const CONTINUATION: &str = "    | ";
+
+/// Writes `text` stamped with `time`. A line after the first starts with
+/// [`CONTINUATION`], and every other control character shows escaped (`\r`,
+/// `\x1b`), so text from a device can't pass for an entry of its own.
 fn write_line(out: &mut impl Write, time: SystemTime, text: &str) -> io::Result<()> {
     let stamp = utc_timestamp(time);
-    if text.is_empty() {
-        return writeln!(out, "{stamp}");
+    let mut lines = text.split_terminator('\n');
+    write!(out, "{stamp}")?;
+    if let Some(first) = lines.next() {
+        out.write_all(b" ")?;
+        write_escaped(out, first)?;
     }
-    for line in text.lines() {
-        writeln!(out, "{stamp} {line}")?;
+    writeln!(out)?;
+    for line in lines {
+        out.write_all(CONTINUATION.as_bytes())?;
+        write_escaped(out, line)?;
+        writeln!(out)?;
     }
     Ok(())
+}
+
+fn write_escaped(out: &mut impl Write, text: &str) -> io::Result<()> {
+    let mut rest = text;
+    while let Some(at) = rest.find(char::is_control) {
+        out.write_all(&rest.as_bytes()[..at])?;
+        let control = rest[at..].chars().next().unwrap_or_default();
+        match control {
+            '\r' => out.write_all(b"\\r")?,
+            '\t' => out.write_all(b"\\t")?,
+            other => write!(out, "\\x{:02x}", u32::from(other))?,
+        }
+        rest = &rest[at + control.len_utf8()..];
+    }
+    out.write_all(rest.as_bytes())
 }
 
 /// `time` in UTC, to the millisecond, as `2026-10-18T17:52:13.456Z`. A time
@@ -297,14 +374,17 @@ pub fn test_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// The messages of the log at `path`, in order, without their time stamps.
-/// Panics on a line that doesn't start with one.
+/// The lines of the log at `path`, in order, without their time stamps or
+/// continuation marks. Panics on a line that starts with neither.
 #[cfg(test)]
 pub fn read_messages(path: &Path) -> Vec<String> {
     const PATTERN: &str = "dddd-dd-ddTdd:dd:dd.dddZ";
     let text = std::fs::read_to_string(path).expect("the log file is there");
     text.lines()
         .map(|line| {
+            if let Some(continued) = line.strip_prefix(CONTINUATION) {
+                return continued.to_owned();
+            }
             let stamp = line.get(..PATTERN.len()).unwrap_or(line);
             let stamped = stamp.len() == PATTERN.len()
                 && stamp
@@ -385,10 +465,28 @@ mod tests {
         clone.log(|| "second".to_owned());
         log.log(|| "third, with two\nlines".to_owned());
         log.log(String::new);
+        log.log(|| "Den\r\n2026-01-01T00:00:00.000Z forged\t\u{1b}[2J\u{85}".to_owned());
         assert!(log.flush(TEST_FLUSH));
         assert_eq!(
             read_messages(&dir.join(FILE_NAME)),
-            ["first", "second", "third, with two", "lines", ""]
+            [
+                "first",
+                "second",
+                "third, with two",
+                "lines",
+                "",
+                r"Den\r",
+                r"2026-01-01T00:00:00.000Z forged\t\x1b[2J\x85"
+            ]
+        );
+        let text = fs::read_to_string(dir.join(FILE_NAME)).expect("the log file is there");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 7, "{text:?}");
+        assert_eq!(lines[3], "    | lines");
+        assert!(lines[5].ends_with(r"Z Den\r"));
+        assert_eq!(
+            lines[6], r"    | 2026-01-01T00:00:00.000Z forged\t\x1b[2J\x85",
+            "a forged entry stays marked as a continuation"
         );
         let _ = fs::remove_dir_all(dir);
     }
@@ -458,6 +556,32 @@ mod tests {
         assert!(!bytes.contains(&0), "no gap of NUL bytes");
         assert_eq!(read_messages(&path), ["after"]);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_log_file_is_private_to_this_user_and_a_symlink_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = test_dir("private");
+        let fresh = dir.join(FILE_NAME);
+        let log = DebugLog::new(Some(fresh.clone()));
+        assert!(log.enabled());
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&fresh), 0o600, "a new log");
+
+        let older = dir.join("older.log");
+        std::fs::write(&older, "").unwrap();
+        std::fs::set_permissions(&older, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(DebugLog::new(Some(older.clone())).enabled());
+        assert_eq!(mode(&older), 0o600, "an older log readable by everyone");
+
+        let link = dir.join("link.log");
+        std::os::unix::fs::symlink(&older, &link).unwrap();
+        assert!(!DebugLog::new(Some(link)).enabled());
+        let hard = dir.join("hard.log");
+        std::fs::hard_link(&older, &hard).unwrap();
+        assert!(!DebugLog::new(Some(hard)).enabled());
     }
 
     #[test]

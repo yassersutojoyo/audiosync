@@ -36,7 +36,7 @@ mod adapter;
     all(target_os = "linux", not(test)),
     expect(
         dead_code,
-        reason = "the PipeWire driver has no app capture, mix or local output yet"
+        reason = "the WASAPI capture formats, stream mixer and endpoint listing serve the Windows driver only"
     )
 )]
 mod audio;
@@ -105,6 +105,12 @@ const PREVIEW_PIN_VAR: &str = "AUDIOSYNC_PREVIEW_PIN";
 /// Nothing plays.
 #[cfg(feature = "mock-backend")]
 const PREVIEW_ZONES_VAR: &str = "AUDIOSYNC_PREVIEW_ZONES";
+
+/// With the debug log on, `list`, `left-off` or `empty` here shows example
+/// speakers with that state of the Presets card instead of the real ones
+/// (`ui_model::MockBackend::presets_preview`). Nothing plays.
+#[cfg(feature = "mock-backend")]
+const PREVIEW_PRESETS_VAR: &str = "AUDIOSYNC_PREVIEW_PRESETS";
 
 fn main() -> ExitCode {
     let Some(instance) = os::claim_instance() else {
@@ -194,6 +200,17 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
             format!("audio: example speakers in zones from the mock backend; nothing plays ({PREVIEW_ZONES_VAR})")
         });
         os::start_with(log, Box::new(ui_model::MockBackend::zones_preview()))
+    } else if let Some(which) = log
+        .enabled()
+        .then(|| std::env::var(PREVIEW_PRESETS_VAR).ok())
+        .flatten()
+        .as_deref()
+        .and_then(ui_model::PresetsPreview::from_value)
+    {
+        log.log(|| {
+            format!("audio: example speakers with presets ({which:?}) from the mock backend; nothing plays ({PREVIEW_PRESETS_VAR})")
+        });
+        os::start_with(log, Box::new(ui_model::MockBackend::presets_preview(which)))
     } else {
         os::start(log)?
     };

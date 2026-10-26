@@ -950,6 +950,28 @@ fn scope_and_protocol_choice() {
         Err(UnsupportedReason::Codec)
     );
 
+    // With HomeKit credentials no RAOP record leads to AirPlay 1, whatever
+    // it says and whatever the last AirPlay 1 attempt gave.
+    for device in [&both, &only, &plain] {
+        for outcome in [None, Some(ErrorKind::Refused), Some(ErrorKind::Busy)] {
+            assert_eq!(
+                device.choose_path_paired(true, outcome, true),
+                Ok(ProtocolPath::AirPlay2),
+                "{device:?} {outcome:?}"
+            );
+            assert_eq!(
+                device.choose_path_paired(false, outcome, true),
+                Err(UnsupportedReason::AirPlay2Only)
+            );
+            for enabled in [true, false] {
+                assert_eq!(
+                    device.choose_path_paired(enabled, outcome, false),
+                    device.choose_path(enabled, outcome)
+                );
+            }
+        }
+    }
+
     // The mode table (P45).
     let apple_tv = &["am=AppleTV9,2", "sf=0x8", "pw=true", "et=0,3,5"][..];
     let cases: [(&[&str], Vec<SecurityMode>); 5] = [

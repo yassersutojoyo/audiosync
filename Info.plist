@@ -25,7 +25,7 @@
 	<key>NSAppleEventsUsageDescription</key>
 	<string>AudioSync shows the current track and its play/pause/skip controls for Spotify and Music, and sends the track to AirPlay speakers with a screen, such as a TV.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>AudioSync captures the audio you choose (all system audio or one app) to play it in sync on your local and AirPlay speakers.</string>
+	<string>AudioSync captures the audio you choose (all system audio, one app or a set of apps) to play it in sync on your local and AirPlay speakers.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_airplay._tcp</string>

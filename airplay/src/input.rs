@@ -292,6 +292,11 @@ impl InputReader {
         silent
     }
 
+    /// The ring position the host's next frame will take.
+    pub(crate) fn written(&self) -> u64 {
+        self.shared.write.load(Ordering::Acquire)
+    }
+
     /// The first ring position not yet cut.
     pub fn floor(&self) -> u64 {
         self.shared.floor.load(Ordering::Relaxed)

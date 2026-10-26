@@ -2087,21 +2087,24 @@ fn pairing_values_from_the_receiver_survive_any_length() {
         for len in 0..=200 {
             if len != 96 {
                 let answer = random_bytes(&mut rng, len);
-                assert!(verifier.second_request(&answer).is_none());
+                assert!(verifier.second_request(&answer).is_err());
             }
         }
         let mut answer = vec![0; 32];
         answer.extend(random_bytes(&mut rng, 64));
         assert!(
-            verifier.second_request(&answer).is_none(),
+            verifier.second_request(&answer).is_err(),
             "a low-order point"
         );
         for _ in 0..8 {
             let answer = random_bytes(&mut rng, 96);
-            if let Some(second) = verifier.second_request(&answer) {
-                assert_eq!(second.len(), 68);
+            match verifier.second_request(&answer) {
+                Ok(second) => {
+                    assert!(receiver_key.is_none(), "a random signature passed");
+                    assert_eq!(second.len(), 68);
+                }
+                Err(_) => assert!(receiver_key.is_some()),
             }
-            let _ = verifier.take_warning();
         }
     }
 

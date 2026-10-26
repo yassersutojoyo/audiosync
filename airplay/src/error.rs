@@ -77,6 +77,11 @@ pub enum ErrorKind {
     /// The receiver closed the connection while the sender waited for the PIN
     /// (P51, P136).
     PairingCancelled,
+    /// A paired receiver's pair-verify signature didn't check out against
+    /// the key it gave at pairing, so it may be another device at its
+    /// address. The sender never signs, and the stored credentials stay
+    /// (P56, P136).
+    ReceiverUnverified,
     /// 453 to ANNOUNCE, SETUP or RECORD, or 409 to any request before RECORD
     /// is answered, pairing and verification included (P137).
     Busy,
@@ -100,6 +105,7 @@ impl ErrorKind {
                 | ErrorKind::WrongPassword
                 | ErrorKind::PairingRequired
                 | ErrorKind::PairingFailed
+                | ErrorKind::ReceiverUnverified
                 | ErrorKind::Unsupported(_)
         )
     }
@@ -115,6 +121,7 @@ impl ErrorKind {
             ErrorKind::PairingRequired | ErrorKind::PairingFailed | ErrorKind::PairingCancelled => {
                 UserReason::PairingRequired
             }
+            ErrorKind::ReceiverUnverified => UserReason::ReceiverUnverified,
             ErrorKind::Busy => UserReason::Busy,
             ErrorKind::Refused => UserReason::Refused,
             ErrorKind::Unsupported(reason) => UserReason::Unsupported(reason),
@@ -138,6 +145,8 @@ pub enum UserReason {
     WrongPassword,
     /// The speaker needs pairing, or rejected or cancelled it.
     PairingRequired,
+    /// The speaker didn't prove it is the one that was paired.
+    ReceiverUnverified,
     /// Another sender seems to be playing to it.
     Busy,
     /// The speaker turned the session down.
@@ -213,10 +222,6 @@ pub enum Warning {
     /// keep-alive OPTIONS of a running session other than a 401 (P131,
     /// P138); a failed metadata request lands here too (P127).
     RequestFailed { method: Method, status: u16 },
-    /// The receiver's signature in its first pair-verify answer didn't
-    /// check out against the Ed25519 key it gave at pairing; the
-    /// verification goes on (P56).
-    ReceiverSignatureInvalid,
     /// PTP port 319 or 320 couldn't be bound, so a receiver that needs PTP
     /// timing is Unsupported; told once per sender (P158).
     PtpUnavailable,

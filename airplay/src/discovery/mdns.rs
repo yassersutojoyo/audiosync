@@ -20,10 +20,12 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{
+    DaemonEvent, RRType, ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo,
+};
 
 use super::{BrowseEvent, Browser, ScopedAddr, ServiceKind, ServiceRecord};
-use crate::dacp::{AdvertiseError, DacpAdvertiser, DacpRecord, SERVICE_TYPE};
+use crate::dacp::{AdvertiseError, DacpAdvertiser, DacpRecord, NameConflict, SERVICE_TYPE};
 
 /// The live browser could not start.
 #[derive(Debug)]
@@ -284,9 +286,15 @@ pub fn instance_name(fullname: &str, kind: ServiceKind) -> Option<String> {
 #[derive(Default)]
 pub struct MdnsAdvertiser {
     daemon: Option<ServiceDaemon>,
+    /// The daemon's own events, read for its renames after a conflict.
+    monitor: Option<mdns_sd::Receiver<DaemonEvent>>,
     /// The registered record's full name.
     registered: Option<String>,
 }
+
+/// Monitor events read per call. The daemon's monitor channel already holds
+/// at most 100 and drops the rest; the cap is defensive.
+const MONITOR_READS: usize = 100;
 
 impl fmt::Debug for MdnsAdvertiser {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -308,7 +316,9 @@ impl DacpAdvertiser for MdnsAdvertiser {
         let failed = |error: mdns_sd::Error| AdvertiseError(error.to_string());
         if self.daemon.is_none() {
             DAEMONS_STARTED.fetch_add(1, Ordering::SeqCst);
-            self.daemon = Some(ServiceDaemon::new().map_err(failed)?);
+            let daemon = ServiceDaemon::new().map_err(failed)?;
+            self.monitor = daemon.monitor().ok();
+            self.daemon = Some(daemon);
         }
         let Some(daemon) = self.daemon.as_ref() else {
             return Err(AdvertiseError("no daemon".to_owned()));
@@ -347,6 +357,33 @@ impl DacpAdvertiser for MdnsAdvertiser {
             let _ = daemon.unregister(&name);
         }
     }
+
+    fn conflicts(&mut self) -> Vec<NameConflict> {
+        match self.monitor.as_ref() {
+            Some(monitor) => name_conflicts(monitor.try_iter()),
+            None => Vec::new(),
+        }
+    }
+}
+
+/// The renames among the first [`MONITOR_READS`] daemon events, once per
+/// name and interface: the daemon reports each renamed record (SRV and
+/// TXT, or A and AAAA), and an address record's rename is the host name's.
+fn name_conflicts(events: impl Iterator<Item = DaemonEvent>) -> Vec<NameConflict> {
+    let mut conflicts: Vec<NameConflict> = Vec::new();
+    for event in events.take(MONITOR_READS) {
+        let DaemonEvent::NameChange(change) = event else {
+            continue;
+        };
+        let conflict = NameConflict {
+            host: matches!(change.rr_type, RRType::A | RRType::AAAA),
+            interface: change.intf_name,
+        };
+        if !conflicts.contains(&conflict) {
+            conflicts.push(conflict);
+        }
+    }
+    conflicts
 }
 
 impl Drop for MdnsAdvertiser {
@@ -355,5 +392,67 @@ impl Drop for MdnsAdvertiser {
         if let Some(daemon) = self.daemon.take() {
             let _ = daemon.shutdown();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mdns_sd::DnsNameChange;
+
+    use super::*;
+
+    fn rename(rr_type: RRType, interface: &str) -> DaemonEvent {
+        DaemonEvent::NameChange(DnsNameChange {
+            original: "iTunes_Ctrl_0123456789ABCDEF._dacp._tcp.local.".to_owned(),
+            new_name: "iTunes_Ctrl_0123456789ABCDEF (2)._dacp._tcp.local.".to_owned(),
+            rr_type,
+            intf_name: interface.to_owned(),
+        })
+    }
+
+    fn conflict(host: bool, interface: &str) -> NameConflict {
+        NameConflict {
+            host,
+            interface: interface.to_owned(),
+        }
+    }
+
+    #[test]
+    fn address_renames_are_the_host_name_and_other_events_are_skipped() {
+        let events = [
+            DaemonEvent::Respond("eth0".to_owned()),
+            rename(RRType::SRV, "eth0"),
+            rename(RRType::A, "wlan0"),
+            rename(RRType::SRV, "wlan0"),
+        ];
+        assert_eq!(
+            name_conflicts(events.into_iter()),
+            [
+                conflict(false, "eth0"),
+                conflict(true, "wlan0"),
+                conflict(false, "wlan0"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_conflict_renaming_several_records_is_one_conflict() {
+        let events = [
+            rename(RRType::SRV, "eth0"),
+            rename(RRType::TXT, "eth0"),
+            rename(RRType::A, "eth0"),
+            rename(RRType::AAAA, "eth0"),
+        ];
+        assert_eq!(
+            name_conflicts(events.into_iter()),
+            [conflict(false, "eth0"), conflict(true, "eth0")]
+        );
+    }
+
+    #[test]
+    fn at_most_the_cap_is_read_per_call() {
+        let mut events = (0..MONITOR_READS + 5).map(|n| rename(RRType::SRV, &format!("if{n}")));
+        assert_eq!(name_conflicts(events.by_ref()).len(), MONITOR_READS);
+        assert_eq!(events.count(), 5);
     }
 }

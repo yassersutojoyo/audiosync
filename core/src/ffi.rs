@@ -206,6 +206,54 @@ pub extern "C" fn asc_zone_output_gain(
     volume::zoned_output_gain(local_position, zone_position, master_position)
 }
 
+/// [`volume::device_level`]: an AirPlay speaker's device level, 0 to 100,
+/// for its own volume through its zone (100 outside one) and the master (S290).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_airplay_device_level(
+    own_position: f64,
+    zone_position: f64,
+    master_position: f64,
+) -> f64 {
+    volume::device_level(own_position, zone_position, master_position)
+}
+
+/// [`volume::row_level`]: the whole number an AirPlay row shows for a
+/// device level (S290).
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_airplay_row_level(device_level: f64) -> f64 {
+    volume::row_level(device_level)
+}
+
+/// [`volume::row_move`]: an AirPlay row moved to `row` writes the own
+/// volume to store and the device level to send through `own_position` and
+/// `device_level` (S290). False, writing nothing, when zone × master is 0,
+/// `row` isn't finite or a pointer is null.
+///
+/// # Safety
+///
+/// `own_position` and `device_level` are null or point to writable doubles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_row_move(
+    row: f64,
+    zone_position: f64,
+    master_position: f64,
+    own_position: *mut f64,
+    device_level: *mut f64,
+) -> bool {
+    if own_position.is_null() || device_level.is_null() {
+        return false;
+    }
+    let Some(moved) = volume::row_move(row, zone_position, master_position) else {
+        return false;
+    };
+    // SAFETY: both checked non-null above; by the caller's contract writable.
+    unsafe {
+        *own_position = moved.own_position;
+        *device_level = moved.device_level;
+    }
+    true
+}
+
 /// [`volume::apply_gain`] on `frames` interleaved stereo frames, in place (S64, S65).
 /// Real-time safe.
 ///
@@ -983,6 +1031,14 @@ mod tests {
                 "ASC_AIRPLAY_FLAG_INCOMPLETE",
                 AIRPLAY_FLAG_INCOMPLETE.to_string(),
             ),
+            (
+                "ASC_AIRPLAY_FLAG_CODE_EVERY_TIME",
+                AIRPLAY_FLAG_CODE_EVERY_TIME.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT",
+                AIRPLAY_FLAG_CREDENTIALS_KEPT.to_string(),
+            ),
             ("ASC_AIRPLAY_FLAG_RAOP", AIRPLAY_FLAG_RAOP.to_string()),
             ("ASC_AIRPLAY_FLAG_AIRPLAY", AIRPLAY_FLAG_AIRPLAY.to_string()),
             (
@@ -1074,6 +1130,10 @@ mod tests {
                 AIRPLAY_ERROR_WRONG_PIN.to_string(),
             ),
             (
+                "ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED",
+                AIRPLAY_ERROR_RECEIVER_UNVERIFIED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_EVENT_PIN_NEEDED",
                 AIRPLAY_EVENT_PIN_NEEDED.to_string(),
             ),
@@ -1127,10 +1187,6 @@ mod tests {
                 AIRPLAY_WARNING_REQUEST_FAILED.to_string(),
             ),
             (
-                "ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID",
-                AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID.to_string(),
-            ),
-            (
                 "ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN",
                 AIRPLAY_WARNING_PTP_PORTS_TAKEN.to_string(),
             ),
@@ -1157,6 +1213,10 @@ mod tests {
             (
                 "ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL",
                 AIRPLAY_WARNING_LATENCY_SHORTFALL.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_PTP_FREE",
+                AIRPLAY_WARNING_PTP_FREE.to_string(),
             ),
             (
                 "ASC_AIRPLAY_WARNING_PEERS_UPDATE_REFUSED",
@@ -1194,6 +1254,16 @@ mod tests {
             (
                 "ASC_AIRPLAY_PAIRINGS_NEWER",
                 AIRPLAY_PAIRINGS_NEWER.to_string(),
+            ),
+            ("ASC_AIRPLAY_FILE_UNREAD", AIRPLAY_FILE_UNREAD.to_string()),
+            ("ASC_AIRPLAY_FILE_PRIVATE", AIRPLAY_FILE_PRIVATE.to_string()),
+            (
+                "ASC_AIRPLAY_FILE_TIGHTENED",
+                AIRPLAY_FILE_TIGHTENED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_FILE_STILL_OPEN",
+                AIRPLAY_FILE_STILL_OPEN.to_string(),
             ),
             (
                 "ASC_DEVICE_VOLUME_UNKNOWN",

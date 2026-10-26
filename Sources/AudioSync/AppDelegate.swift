@@ -81,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Settings kept between launches (AppSettings.swift)
 
     typealias Keys = AppSettings.Keys
-    private let store: SettingsStore
+    let store: SettingsStore
 
     /// The mode the several-apps menu shows while no mix is the source.
     var rememberedMixMode: AppMixMode = .only
@@ -102,7 +102,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet { if enabledLocal != oldValue { store.save(ids: enabledLocal, forKey: Keys.enabledLocal) } }
     }
     var masterVolume: Double {
-        didSet { if masterVolume != oldValue { store.save(master: masterVolume) } }
+        didSet {
+            guard masterVolume != oldValue else { return }
+            store.save(master: masterVolume)
+            // A master move keeps each own volume, so every AirPlay row shows own × zone × master again (S290).
+            airplayDeviceLevel = [:]
+        }
     }
     /// Slider positions (0…100) of local speakers, by device UID.
     var localVolume: [String: Double] {
@@ -123,12 +128,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var airplayVolume: [String: Double] {
         didSet { if airplayVolume != oldValue { store.save(levels: airplayVolume, forKey: Keys.airplayVolumes) } }
     }
+    /// Each AirPlay speaker's device level from a row move or the speaker
+    /// itself, by output ID, for this run (S290).
+    var airplayDeviceLevel: [String: AirPlayDeviceLevel] = [:]
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }
     /// The zones (S245), migrated from the groups once (S248).
     var zones: [SpeakerZone] {
-        didSet { if zones != oldValue { store.save(zones: zones); applyZoneVolumes() } }
+        didSet {
+            guard zones != oldValue else { return }
+            store.save(zones: zones)
+            if !SpeakerZone.differInNamesOnly(zones, oldValue) {
+                forgetAirPlayDeviceLevels(zonedFrom: oldValue)
+                applyZoneVolumes()
+            }
+        }
     }
     /// The groups became zones and this launch says so in a notice, once.
     private let zonesNoticeDue: Bool
@@ -183,6 +198,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet { retimeLocalOutputs() }   // a chosen speaker may have come or gone (S79, S177)
     }
     var airplayNames: [String: String] = [:]
+    /// Outlives the sender, so a Retry keeps what the user turned on.
+    var everyTimeGuard = EveryTimeGuard()
     var airplayAccess: [String: AirPlayPairing.Access] = [:]
     /// The Mac is asleep: the AirPlay reconcile waits for the wake (EC3).
     var macAsleep = false
@@ -228,6 +245,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The user switched streaming off: auto-connect doesn't start it again
     /// until they switch it on (S120).
     var userStopped = false
+    /// True while a capture interruption is handled: the engine stopped the
+    /// session before reporting it, and the stop still names its reason.
+    var captureInterrupted = false
     /// The microphone permission request a start has out, if any.
     var microphoneRequest = MicrophoneRequestGate()
     /// An automatic start failed: no more automatic starts until the user acts.
@@ -256,8 +276,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var loggedInputs: [String] = []
 
     override init() {
-        store = .standard
-        let saved = store.load()
+        store = LaunchAutoConnect.skipped ? SettingsStore.standard.memoryOnly() : .standard
+        let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
         // A hidden speaker is never switched on, not even by the saved on-state.
         enabledAirPlay = saved.enabledAirPlay.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: true)) }
@@ -308,6 +328,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         DebugTrace.beginLaunchLog()   // each launch starts a fresh debug log (S170)
+        if LaunchAutoConnect.skipped {
+            DebugTrace.log("[AudioSync] auto-connect: skipped in this run (\(LaunchAutoConnect.environmentKey)=1 with \(DebugTrace.environmentKey)=1); speakers saved as on stay off, and nothing is saved until the next launch")
+        }
         appearance.apply()   // before any window or alert exists
         // Every window stands on its own: no tab items in the menus, and the
         // Equalizer and the Guide never open as tabs of the main window.
@@ -317,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let loginItem = Self.launchedAsLoginItem()
         DebugTrace.log("[AudioSync] launched\(loginItem ? " at login" : ""); audio engine: the Rust core")
-        SettingsStore.standard.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
+        store.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
             .forEach { DebugTrace.log($0) }
         AudioSyncCore.logVersion()   // which Rust core this build carries
 
@@ -341,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         reconcileAirPlaySpeakers()
         webRemote?.startIfEnabled()   // after the window too: listening on the network can raise that prompt
         if zonesNoticeDue {
-            postNotice(text.groupsBecameZones, subject: Notice.zones)
+            postNotice(text.groupsBecameZones, subject: Notice.zones, info: true)
             store.zonesNoticeShown()
         }
         pushModel()
@@ -369,6 +392,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         }
         engine.onInterrupted = { [weak self] interruption in
             guard let self else { return }
+            captureInterrupted = true
+            defer { captureInterrupted = false }
             switch interruption {
             case .formatChanged:
                 DebugTrace.log("[AudioSync] capture rate changed")
@@ -376,17 +401,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 // the new rate, with the speakers and the AirPlay selection
                 // as they are (S20, EC4).
                 if AppLifecycle.restartsAfterFormatChange(userStopped: userStopped) {
+                    DebugTrace.log(SessionStop.formatChanged.logLine())
                     startEngine(origin: .automatic, rebuild: true)
+                } else {
+                    DebugTrace.log(SessionStop.formatChangedSwitchedOff.logLine())
                 }
             case .sourceLost(let error):
                 DebugTrace.log("[AudioSync] capture lost: \(error)")
+                if AppLifecycle.waitsForRecheck(.captureLost(error), source: audioSource) {
+                    rebuildMixLater()
+                    return
+                }
                 if let quit = AppLifecycle.sourceQuit(.captureLost(error), source: audioSource,
                                                       setting: whenSourceQuits) {
                     sourceAppQuit(quit.bundleID, quit.action)
                     return
                 }
                 // A notice, never a modal alert: nobody clicked anything (S21).
-                stopEngine()
+                stopEngine(.captureLost)
                 postNotice(text.sourceStopped(error), subject: Notice.source)
             }
         }
@@ -420,7 +452,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Arms the AirPlay reconcile for the next thing that falls due with no
     /// event to say so (`AppLifecycle.nextDueReconcile`): the sender's restart
     /// after a failed start, the Local Network recheck while access is
-    /// denied, the moment the Local Network hint may show. Runs with every
+    /// denied, the moment the Local Network hint may show, the end of the
+    /// first 20-second search for speakers. Runs with every
     /// model update, which follows every change that can move one of those
     /// times; arms nothing while the Mac sleeps or once AudioSync quits.
     func scheduleDueReconcile() {
@@ -428,7 +461,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         let restart = nativeAirPlay == nil ? nativeStarts.restartAt : nil   // none while a start is under way
         let hint = LocalNetworkHint.dueAt(access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
                                           emptySince: airplayEmptySince, now: Date())
-        let next = AppLifecycle.nextDueReconcile(due: [restart, localNetworkProbe.recheckAt, hint],
+        let searchEnd = AirPlaySearch.endsAt(access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
+                                             emptySince: airplayEmptySince, now: Date())
+        let next = AppLifecycle.nextDueReconcile(due: [restart, localNetworkProbe.recheckAt, hint, searchEnd],
                                                  last: lastDueReconcile, asleep: macAsleep)
         guard next != dueReconcileAt else { return }
         dueTimer?.invalidate()
@@ -470,8 +505,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
 
     private func appQuit(bundleID: String?) {
-        if let quit = AppLifecycle.sourceQuit(.terminated(bundleID: bundleID, streaming: engine.isRunning),
-                                              source: audioSource, setting: whenSourceQuits) {
+        let report = AppLifecycle.SourceQuitReport.terminated(bundleID: bundleID, streaming: engine.isRunning)
+        // Shows whether macOS reported a quit at all, and under which bundle ID.
+        DebugTrace.log("[AudioSync] app terminated: \(bundleID ?? "no bundle ID"), streaming \(engine.isRunning)")
+        if let bundleID, AppLifecycle.waitsForRecheck(report, source: audioSource) {
+            recheckMixQuit(bundleID)
+        } else if let quit = AppLifecycle.sourceQuit(report, source: audioSource, setting: whenSourceQuits) {
             sourceAppQuit(quit.bundleID, quit.action)
         }
         pushSources()
@@ -555,7 +594,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         dueTimer?.invalidate()
         // Nothing needs to reach the views any more.
         localNetworkProbe.onChange = { _ in }
-        stopEngine()
+        stopEngine(.quitting)
         engine.finishStopping()   // local outputs finish their fades and capture halts before the sender's teardown
         nativeAirPlay?.shutdown()   // AudioSync's own sender: every speaker gets its TEARDOWN
         nowPlaying.stopWatching()

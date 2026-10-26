@@ -481,7 +481,7 @@ export component TrayFlyout inherits Window {
                 }
             }
 
-            if root.connected-all-hidden && root.zones.length == 0: SecondaryText {
+            if root.connected-all-hidden: SecondaryText {
                 text: Strings.flyout-connected-hidden;
             }
 

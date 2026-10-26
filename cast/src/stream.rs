@@ -34,6 +34,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Connections served at once for a single device: the stream, its
 /// replacement (C61), artwork; a group serves more (C103).
 const MAX_CONNECTIONS: usize = 4;
+/// The most responses a group serves at once: its leader and every member
+/// the member list keeps.
+const MAX_GROUP_RESPONSES: usize = crate::group::MAX_GROUP_MEMBERS + 1;
 /// How long a refused connection is kept open to read the rest of its
 /// request, so the close is not a reset that would lose the answer.
 const REFUSED_LINGER: Duration = Duration::from_secs(1);
@@ -387,7 +390,7 @@ impl Responses {
 
     /// Serves a group: one response per address, at most `limit` at once.
     pub fn set_group_limit(&mut self, limit: usize) {
-        self.group_limit = Some(limit.max(1));
+        self.group_limit = Some(limit.clamp(1, MAX_GROUP_RESPONSES));
     }
 
     /// Opens a response for a `GET` from `from` and returns its id, and
@@ -1205,6 +1208,14 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_group_limit_from_a_huge_member_count_is_clamped() {
+        let mut responses = Responses::new(1024);
+        responses.set_group_limit(10_001);
+        assert_eq!(responses.group_limit, Some(MAX_GROUP_RESPONSES));
+        assert_eq!(responses.connection_limit(), MAX_GROUP_RESPONSES + 2);
     }
 
     #[test]

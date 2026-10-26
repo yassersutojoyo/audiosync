@@ -38,7 +38,7 @@ extension AppDelegate {
         let native = NativeAirPlay(
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
-        native.onRemote = { [weak self] command in self?.nowPlaying.send(command) }
+        native.onRemote = { [weak self] command in self?.sendTransport(command) }
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         sendPlayback()
         native.setZones(nativeZoneVolumes())
@@ -138,10 +138,6 @@ extension AppDelegate {
             nativeSenderFailed()
         case .startPairing(let receiver):
             startNativePairing(receiver)
-        case .repair(let receiver):
-            nativeAirPlay?.forgetPairing(receiver)   // the sender's queue runs it before the pairing starts
-            DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) refused its stored pairing; forgotten, pairing again")
-            startNativePairing(receiver)
         case .cancelPairing(let receiver):
             nativeAirPlay?.cancelPairing(receiver)
         case .prompt:
@@ -162,23 +158,27 @@ extension AppDelegate {
                 clearNotices([SpeakerKey.make(id: id, airplay: true)])
             }
             pushModel()   // the row says it waits, or no longer
-        case .volumeChanged(let id, let position):
+        case .volumeChanged(let id, let position, let level):
             // Calibrate All Speakers keeps it silent and sets its volume back when the run ends.
             guard calibrateAllRun?.silences(airPlay: id) != true else { return }
             airplayVolume[id] = position
+            airplayDeviceLevel[id] = AirPlayDeviceLevel(level: level, zone: airPlayZoneVolume(id), master: masterVolume)
             pushModel()
         case .ptpPortsTaken:
             updatePtpPortNotice { $0.reported() }
+        case .ptpPortsFree:
+            updatePtpPortNotice { $0.portsFree() }
         }
     }
 
     /// Posts or clears the PTP port notice when `change` flips whether it
-    /// shows; `again` posts it anew while it shows, in case it was dismissed.
-    private func updatePtpPortNotice(again: Bool = false, _ change: (inout PtpPortNotice) -> Void) {
-        let was = ptpPortNotice.shown
+    /// shows, and posts it anew when `change` raises it while it shows, in
+    /// case it was dismissed.
+    private func updatePtpPortNotice(_ change: (inout PtpPortNotice) -> Void) {
+        let (was, raises) = (ptpPortNotice.shown, ptpPortNotice.raises)
         change(&ptpPortNotice)
         let shown = ptpPortNotice.shown
-        if shown && (!was || again) {
+        if shown && (!was || ptpPortNotice.raises != raises) {
             postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp)
         } else if was && !shown {
             clearNotices([Notice.airplayPtp])
@@ -193,6 +193,7 @@ extension AppDelegate {
     /// Call before the sender's speakers follow the switches, so a speaker
     /// that pairs or prompts waits instead of going off.
     func beginNativeAttempts(_ ids: [String]) {
+        everyTimeGuard.turnedOnByHand(ids)
         guard let native = nativeAirPlay else { return }
         for id in ids {
             guard let receiver = NativeAirPlayID.receiver(id) else { continue }
@@ -298,7 +299,7 @@ extension AppDelegate {
 
     /// The sender stopped after an internal error: it goes (torn down off
     /// the main queue), its rows with it, and the AirPlay section shows it
-    /// as failed, with Retry, and a notice says so. The switches stay as
+    /// as failed, with Retry, in place of a notice. The switches stay as
     /// they are, so the speakers rejoin once a new sender runs.
     private func nativeSenderFailed() {
         guard let native = nativeAirPlay else { return }
@@ -311,7 +312,8 @@ extension AppDelegate {
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
         stopNativeLocalNetworkProbe()
-        notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender)
+        // No notice: Connected Speakers says so in place of the AirPlay speakers, with Retry.
+        clearNotices([Notice.airplaySender])
         retimeLocalOutputs()   // no native speaker is chosen any more
         pushModel()
     }
@@ -334,15 +336,19 @@ extension AppDelegate {
     /// speakers, local delays and auto-connect follow.
     func refreshNativeRows() {
         guard let native = nativeAirPlay else { return }
+        let wasOn = enabledAirPlay
         let joinable = adoptNativeRows(native.model, stopped: false)
         retimeLocalOutputs()   // also when only a speaker's playing state changed
         syncNativeSpeakers()
         autoConnect(joinable.map { SpeakerKey.make(id: $0, airplay: true) })
+        // One that asks for a code every time went off, maybe the last one on.
+        if !wasOn.isSubset(of: enabledAirPlay) { stopIfIdle() }
         pushModel()
     }
 
     /// Sets the AirPlay rows, names and access from `model`; returns the
     /// rows that appeared and can play, for auto-connect (none if `stopped`).
+    /// One that asks for a code every time goes off unless switched on by hand.
     private func adoptNativeRows(_ model: NativeAirPlayModel, stopped: Bool) -> [String] {
         let rows = model.rows(enabled: enabledAirPlay)
         for id in rows {
@@ -351,6 +357,10 @@ extension AppDelegate {
             airplayAccess[id] = model.access(receiver) ?? .open
         }
         let joinable = model.joinable(rows, after: Set(airplayOrder), stopped: stopped)
+        for id in everyTimeGuard.turnsOff(model.askingEveryTime(rows), enabled: enabledAirPlay) {
+            enabledAirPlay.remove(id)
+            DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) stays off, it asks for a code every time")
+        }
         airplayOrder = rows
         updatePtpPortNotice { $0.listed(rows) }
         airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
@@ -379,6 +389,8 @@ extension AppDelegate {
         let appeared = plan.changesRows ? adoptNativeRows(native.model, stopped: !engine.isRunning) : []
         for id in plan.add {
             let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume
+            // It starts at own × zone × master, so its row shows that again.
+            airplayDeviceLevel[NativeAirPlayID.app(id)] = nil
             native.add(id, volume: volume)
             DebugTrace.log("[AudioSync] native AirPlay: added \(nativeLabel(id)) at volume \(Int(volume.rounded())), master \(Int(masterVolume.rounded()))")
         }
@@ -438,15 +450,53 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// A native speaker's slider position (0 to 100), live.
+    /// A native speaker's row moved to `volume`, the speaker's own level
+    /// (S290): it gets that level, and the own volume behind it is stored.
+    /// With the zone or the master at 0 nothing changes.
     func setNativeAirPlayVolume(_ id: String, _ volume: Double) {
-        airplayVolume[id] = max(0, min(100, volume))
-        // A speaker Calibrate All Speakers keeps silent gets its volume back when the run ends.
-        if let receiver = NativeAirPlayID.receiver(id), let position = airplayVolume[id],
-           calibrateAllRun?.silences(airPlay: id) != true {
-            nativeAirPlay?.setVolume(receiver, volume: position)
+        let zone = airPlayZoneVolume(id)
+        if let moved = AirPlayDeviceLevel.move(row: volume, zone: zone, master: masterVolume) {
+            airplayVolume[id] = moved.own
+            airplayDeviceLevel[id] = AirPlayDeviceLevel(level: moved.level, zone: zone, master: masterVolume)
+            // A speaker Calibrate All Speakers keeps silent gets its volume back when the run ends.
+            if let receiver = NativeAirPlayID.receiver(id), calibrateAllRun?.silences(airPlay: id) != true {
+                nativeAirPlay?.setDeviceLevel(receiver, own: moved.own, level: moved.level)
+            }
         }
         pushModel()
+    }
+
+    /// A preset gave AirPlay speaker `id` its own volume back: it plays at
+    /// own × zone × master and its row shows that again (S290).
+    func setNativeAirPlayOwnVolume(_ id: String, _ own: Double) {
+        airplayVolume[id] = own
+        airplayDeviceLevel[id] = nil
+        if let receiver = NativeAirPlayID.receiver(id), calibrateAllRun?.silences(airPlay: id) != true {
+            nativeAirPlay?.setVolume(receiver, volume: own)
+        }
+        pushModel()
+    }
+
+    /// A zone move keeps each own volume, so the AirPlay rows whose zone
+    /// volume changed show own × zone × master again (S290).
+    func forgetAirPlayDeviceLevels(zonedFrom old: [SpeakerZone]) {
+        let before: [String: Double] = SpeakerZone.volumes(old, kind: .airplay)
+        let after: [String: Double] = SpeakerZone.volumes(zones, kind: .airplay)
+        let ids: Set<String> = Set(before.keys).union(after.keys)
+        for id in ids where before[id] != after[id] {
+            airplayDeviceLevel[id] = nil
+        }
+    }
+
+    /// The zone volume of AirPlay speaker `id` (app ID), 100 in no zone (S249).
+    func airPlayZoneVolume(_ id: String) -> Double {
+        SpeakerZone.volumes(zones, kind: .airplay)[id] ?? SpeakerZone.noZoneVolume
+    }
+
+    /// The whole number AirPlay speaker `id`'s row shows (S290).
+    func airPlayRowLevel(_ id: String) -> Double {
+        AirPlayDeviceLevel.row(own: airplayVolume[id] ?? defaultVolume, zone: airPlayZoneVolume(id),
+                               master: masterVolume, remembered: airplayDeviceLevel[id])
     }
 
     /// A native speaker's slider drag began or ended: the core ignores read-backs during it.
@@ -471,7 +521,7 @@ extension AppDelegate {
         enabledAirPlay.remove(id)
         notify(nativeTurnOffText(id, reason), origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
         let timing = reason == .timingUnavailable
-        updatePtpPortNotice(again: timing) { $0.turnedOff(id, timing: timing) }
+        updatePtpPortNotice { $0.turnedOff(id, timing: timing) }
         syncNativeSpeakers()
         stopIfIdle()
         pushModel()
@@ -485,6 +535,7 @@ extension AppDelegate {
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         case .needsAirPlay2: return text.nativeAirPlayNeedsAirPlay2(name: name)
         case .timingUnavailable: return text.nativeAirPlayTimingUnavailable(name: name)
+        case .receiverUnverified: return text.nativeAirPlayReceiverUnverified(name: name)
         case .playsThroughSpeakers:
             return NativeAirPlayID.receiver(id).flatMap(NativeTarget.kind) == nil
                 ? text.nativeAirPlayPlaysThroughSpeakers(name: name)

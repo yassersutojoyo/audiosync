@@ -79,6 +79,10 @@ impl MultizoneMessage {
     }
 }
 
+/// The most members a group's list keeps; a home group is a handful of
+/// speakers, so a longer list is a hostile or broken leader.
+pub const MAX_GROUP_MEMBERS: usize = 64;
+
 /// A group's members as the session knows them: unknown until the first
 /// message that names some (C94).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -101,12 +105,17 @@ impl MemberList {
     pub fn apply(&mut self, message: &MultizoneMessage) -> bool {
         let before = self.members.clone();
         match message {
-            MultizoneMessage::Status(members) => self.members = Some(members.clone()),
+            MultizoneMessage::Status(members) => {
+                let kept = members.len().min(MAX_GROUP_MEMBERS);
+                self.members = Some(members[..kept].to_vec());
+            }
             MultizoneMessage::Upsert(member) => {
                 let list = self.members.get_or_insert_with(Vec::new);
+                let full = list.len() >= MAX_GROUP_MEMBERS;
                 match list.iter_mut().find(|known| known.is(&member.device_id)) {
                     Some(known) => *known = member.clone(),
-                    None => list.push(member.clone()),
+                    None if !full => list.push(member.clone()),
+                    None => {}
                 }
             }
             MultizoneMessage::Removed(device_id) => {
@@ -182,5 +191,39 @@ impl GroupRecords {
         allowed.sort();
         allowed.dedup();
         allowed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn member(n: usize) -> GroupMember {
+        GroupMember {
+            device_id: format!("member-{n}"),
+            id: None,
+            name: None,
+        }
+    }
+
+    #[test]
+    fn the_member_list_stops_at_its_cap() {
+        let mut list = MemberList::new();
+        for n in 0..10_000 {
+            list.apply(&MultizoneMessage::Upsert(member(n)));
+        }
+        assert_eq!(list.members().map(<[_]>::len), Some(MAX_GROUP_MEMBERS));
+        let renamed = GroupMember {
+            name: Some("Kitchen".to_owned()),
+            ..member(0)
+        };
+        assert!(list.apply(&MultizoneMessage::Upsert(renamed)));
+        list.apply(&MultizoneMessage::Removed("member-1".to_owned()));
+        assert!(list.apply(&MultizoneMessage::Upsert(member(20_000))));
+        assert_eq!(list.members().map(<[_]>::len), Some(MAX_GROUP_MEMBERS));
+
+        let mut status = MemberList::new();
+        status.apply(&MultizoneMessage::Status((0..10_000).map(member).collect()));
+        assert_eq!(status.members().map(<[_]>::len), Some(MAX_GROUP_MEMBERS));
     }
 }

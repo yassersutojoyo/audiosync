@@ -35,6 +35,48 @@ impl SettingsPage {
     }
 }
 
+/// The program that shows `page` on Linux, with its arguments: the first
+/// one `installed` for the desktops in `XDG_CURRENT_DESKTOP` (`desktops`,
+/// colon-separated). GNOME's Settings has no per-app output, so app routing
+/// needs a volume control such as pavucontrol there. `None`: no button.
+#[cfg_attr(
+    not(any(target_os = "linux", test)),
+    expect(dead_code, reason = "only Linux launches a settings program")
+)]
+pub fn linux_program(
+    page: SettingsPage,
+    desktops: &str,
+    installed: impl Fn(&str) -> bool,
+) -> Option<(&'static str, &'static [&'static str])> {
+    let on = |name: &str| {
+        desktops
+            .split(':')
+            .any(|desktop| desktop.eq_ignore_ascii_case(name))
+    };
+    let mut candidates: Vec<(&'static str, &'static [&'static str])> = Vec::new();
+    match page {
+        SettingsPage::VolumeMixer => {
+            candidates.push(("pavucontrol", &[]));
+            if on("KDE") {
+                candidates.push(("systemsettings", &["kcm_pulseaudio"]));
+            }
+        }
+        SettingsPage::Sound => {
+            if on("GNOME") {
+                candidates.push(("gnome-control-center", &["sound"]));
+            }
+            if on("KDE") {
+                candidates.push(("systemsettings", &["kcm_pulseaudio"]));
+            }
+            candidates.push(("pavucontrol", &[]));
+        }
+        SettingsPage::MicrophonePrivacy => {}
+    }
+    candidates
+        .into_iter()
+        .find(|(program, _)| installed(program))
+}
+
 /// One paragraph of the guide.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GuideStep {
@@ -384,6 +426,42 @@ mod tests {
         // A double-audio notice that names no output has no guide.
         notices[1].message = twice(None, &[], &[], None);
         assert_eq!(notice_with_guide(&notices), None);
+    }
+
+    #[test]
+    fn linux_opens_the_first_installed_program_for_the_desktop() {
+        let all = |_: &str| true;
+        let only = |wanted: &'static str| move |program: &str| program == wanted;
+        assert_eq!(
+            linux_program(SettingsPage::Sound, "ubuntu:GNOME", all),
+            Some(("gnome-control-center", &["sound"][..]))
+        );
+        assert_eq!(
+            linux_program(SettingsPage::VolumeMixer, "ubuntu:GNOME", all),
+            Some(("pavucontrol", &[][..]))
+        );
+        // GNOME's Settings can't route an app: no button without pavucontrol.
+        assert_eq!(
+            linux_program(
+                SettingsPage::VolumeMixer,
+                "GNOME",
+                only("gnome-control-center")
+            ),
+            None
+        );
+        assert_eq!(
+            linux_program(SettingsPage::VolumeMixer, "KDE", only("systemsettings")),
+            Some(("systemsettings", &["kcm_pulseaudio"][..]))
+        );
+        assert_eq!(
+            linux_program(SettingsPage::Sound, "XFCE", only("pavucontrol")),
+            Some(("pavucontrol", &[][..]))
+        );
+        assert_eq!(linux_program(SettingsPage::Sound, "XFCE", |_| false), None);
+        assert_eq!(
+            linux_program(SettingsPage::MicrophonePrivacy, "GNOME", all),
+            None
+        );
     }
 
     #[test]

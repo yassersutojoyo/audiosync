@@ -50,7 +50,7 @@ extension AppDelegate {
     /// The addresses the user added before, given to the sender again: it
     /// keeps nothing added by hand from one launch to the next.
     private func addStoredCastAddresses(_ sender: CastSender) {
-        for address in SettingsStore.standard.castManualList.addresses {
+        for address in store.castManualList.addresses {
             // Not probed: a speaker that is off now still comes back once it answers.
             sender.addDevice(address, probe: false) { [weak self] id in
                 guard let self, self.castSender === sender else { return }
@@ -249,7 +249,7 @@ extension AppDelegate {
                 return
             }
             DebugTrace.log("[AudioSync] Cast: \(address.text) added by address as \(id)")
-            let store = SettingsStore.standard
+            let store = self.store
             var list = store.castManualList
             // Two addresses for one device keep only the newer.
             if let before = self.castModel.addedManually(id, address: address) { list.remove(before) }
@@ -269,7 +269,6 @@ extension AppDelegate {
         guard let address = castModel.removeManual(id) else { return }
         if unfound { castSender?.removeDevice(id) }
         DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
-        let store = SettingsStore.standard
         var list = store.castManualList
         list.remove(address)
         store.save(list)
@@ -299,7 +298,8 @@ extension AppDelegate {
 
     private func castShows() -> (info: ReceiverInfo, artwork: NSImage?) {
         let track = nowPlaying.hasReading ? nowPlaying.track : nil
-        return (ReceiverInfo.decideForCast(track: track, source: audioSource), track?.artwork)
+        return (ReceiverInfo.decideForCast(track: track, source: audioSource,
+                                           lastPlayed: nowPlaying.lastPlayedBundleID), track?.artwork)
     }
 
     // MARK: - Rows and names

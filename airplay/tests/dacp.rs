@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_airplay::dacp::{
     self, ActiveRemotes, AdvertiseError, DacpAdvertiser, DacpId, DacpRecord, HeadRead,
-    RemoteCommand,
+    NameConflict, RemoteCommand,
 };
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
@@ -54,6 +54,8 @@ enum Call {
 struct FakeAdvertiser {
     calls: Arc<Mutex<Vec<Call>>>,
     fail: bool,
+    /// Handed out at the next `conflicts` call.
+    conflicts: Arc<Mutex<Vec<NameConflict>>>,
 }
 
 impl FakeAdvertiser {
@@ -75,6 +77,10 @@ impl DacpAdvertiser for FakeAdvertiser {
     fn withdraw(&mut self) {
         let call = Call::Withdraw;
         self.calls.lock().expect("calls").push(call);
+    }
+
+    fn conflicts(&mut self) -> Vec<NameConflict> {
+        std::mem::take(&mut *self.conflicts.lock().expect("conflicts"))
     }
 }
 
@@ -268,7 +274,10 @@ impl Client {
             if left.is_zero() {
                 return None;
             }
-            self.stream.set_read_timeout(Some(left)).expect("timeout");
+            // macOS answers EINVAL here once the server has closed the socket.
+            if self.stream.set_read_timeout(Some(left)).is_err() {
+                return None;
+            }
             let mut chunk = [0u8; 1024];
             match self.stream.read(&mut chunk) {
                 Ok(0) | Err(_) => return None,
@@ -286,7 +295,9 @@ impl Client {
             if left.is_zero() {
                 return None;
             }
-            self.stream.set_read_timeout(Some(left)).expect("timeout");
+            if self.stream.set_read_timeout(Some(left)).is_err() {
+                return Some(self.sent_at.elapsed());
+            }
             let mut chunk = [0u8; 1024];
             match self.stream.read(&mut chunk) {
                 Ok(0) => return Some(self.sent_at.elapsed()),
@@ -708,6 +719,7 @@ fn dacp_binding_and_peers() {
             .status,
         403
     );
+    let mut client = Client::connect(LOOPBACK, port);
     assert_eq!(
         client
             .request("/ctrl-int/1/playpause", Some(&a_remote))
@@ -801,7 +813,8 @@ fn dacp_answers() {
         Some("-1"),
         Some(unknown.as_str()),
     ] {
-        let reply = client.request("/ctrl-int/1/playpause", value);
+        let mut refused = Client::connect(LOOPBACK, port);
+        let reply = refused.request("/ctrl-int/1/playpause", value);
         assert_eq!(reply.status, 403, "{value:?}");
         assert_plain_answer(&reply);
     }
@@ -1055,6 +1068,62 @@ fn dacp_events_name_the_speaker() {
     sender.shutdown();
 }
 
+// covers: P191, P194
+#[test]
+fn dacp_refusals_close() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let (_, remote) = play(&sender, &mut events, &receiver, 1);
+    let port = sender.dacp_counters().port();
+    let unknown = (dacp::parse_active_remote(&remote).expect("number") ^ 1).to_string();
+
+    let mut client = Client::connect(LOOPBACK, port);
+    let reply = client.request("/ctrl-int/1/playpause", Some(&unknown));
+    assert_eq!(reply.status, 403);
+    assert_eq!(reply.header("Connection"), Some("close"), "{reply:?}");
+    let _ = client
+        .stream
+        .write_all(&get("/ctrl-int/1/beginff", Some(&remote)));
+    assert!(
+        client.reply().is_none(),
+        "a request after a 403 on the same connection is not answered"
+    );
+
+    // Eight 403s within 5 s close the peer's connections unread until
+    // the 5 s from its first 403 have passed.
+    let first = client.sent_at;
+    for _ in 1..8 {
+        let mut client = Client::connect(LOOPBACK, port);
+        assert_eq!(
+            client
+                .request("/ctrl-int/1/playpause", Some(&unknown))
+                .status,
+            403
+        );
+    }
+    let mut client = Client::connect(LOOPBACK, port);
+    let _ = client
+        .stream
+        .write_all(&get("/ctrl-int/1/beginff", Some(&remote)));
+    assert!(client.reply().is_none(), "a capped peer gets no answer");
+    thread::sleep((first + Duration::from_millis(5_200)).saturating_duration_since(Instant::now()));
+    let mut client = Client::connect(LOOPBACK, port);
+    assert_eq!(
+        client.request("/ctrl-int/1/beginff", Some(&remote)).status,
+        204,
+        "the cap lifts when the window passes"
+    );
+    events.drain(&sender);
+    assert!(
+        log_lines(&events)
+            .iter()
+            .any(|line| line.contains("8 requests refused with 403"))
+    );
+    sender.shutdown();
+}
+
 // covers: P194
 #[test]
 fn dacp_limits() {
@@ -1234,6 +1303,7 @@ fn dacp_log_lines() {
             .status,
         403
     );
+    let mut client = Client::connect(LOOPBACK, port);
     assert_eq!(client.request("/nothing?x=1", Some(&remote)).status, 404);
     assert_eq!(
         client
@@ -1322,5 +1392,45 @@ fn dacp_log_lines() {
     assert_eq!(counters.bad(), 2);
     assert_eq!(counters.over_limit(), 5);
     assert_eq!(counters.accepted(), 3 + 10);
+    sender.shutdown();
+}
+
+// covers: P195
+#[test]
+fn dacp_name_conflicts_are_logged() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let advertiser = FakeAdvertiser::default();
+    let (sender, _host) = start();
+    sender.set_dacp_advertiser(Box::new(advertiser.clone()));
+    let mut events = Events::default();
+    let (_, remote) = play(&sender, &mut events, &receiver, 1);
+    let id = last_header(&receiver, "DACP-ID").expect("DACP-ID");
+
+    advertiser.conflicts.lock().expect("conflicts").extend([
+        NameConflict {
+            host: false,
+            interface: "eth0".to_owned(),
+        },
+        NameConflict {
+            host: true,
+            interface: "eth0".to_owned(),
+        },
+    ]);
+    assert!(wait_until(LONG, || {
+        events.drain(&sender);
+        log_lines(&events)
+            .iter()
+            .filter(|line| line.contains("eth0 claimed"))
+            .count()
+            == 2
+    }));
+    let lines = log_lines(&events);
+    assert!(lines.iter().any(|line| line.contains("service name")));
+    assert!(lines.iter().any(|line| line.contains("host name")));
+    for line in &lines {
+        assert!(!line.contains(&id), "no DACP ID: {line}");
+        assert!(!line.contains(&remote), "no Active-Remote: {line}");
+    }
     sender.shutdown();
 }

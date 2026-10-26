@@ -37,7 +37,7 @@ export enum CastList { quiet, searching, none-found, failed }
 export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, airplay2-next-launch, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, too-many-airplay2-speakers, ptp-other-network, plays-through-speakers, apple-tv-plays, plays-in-group, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, too-many-airplay2-speakers, ptp-other-network, plays-through-speakers, receiver-unverified, apple-tv-plays, plays-in-group, unsupported }
 
 // View > Appearance: as Windows is set, or always light or dark.
 export enum Appearance { system, light, dark }
@@ -150,6 +150,12 @@ export struct SpeakerItem {
     // An AirPlay speaker whose password AudioSync holds until it quits:
     // its menu offers Forget Password.
     holds-password: bool,
+    // An AirPlay speaker AudioSync stores pairing credentials for, also ones
+    // it turned down: its menu still offers Forget Pairing.
+    holds-credentials: bool,
+    // An AirPlay speaker that asks for a code every time it connects:
+    // auto-connect leaves it off, and its note says so.
+    code-every-time: bool,
     // The output's own volume in Windows, when it is low or muted, and its
     // whole percent.
     device-volume: DeviceVolumeHint,
@@ -220,7 +226,7 @@ export struct ZoneItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones, presets-left-off }
+export enum NoticeKind { no-speaker, source-quit, source-switched, switch-failed, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones, presets-left-off }
 
 export struct NoticeItem {
     id: int,
@@ -235,6 +241,9 @@ export struct NoticeItem {
     has-retry: bool,
     // The notice offers Open Privacy Settings, for microphone access.
     has-privacy: bool,
+    // The notice reports a change rather than a problem: it shows the info
+    // glyph in place of the warning one.
+    info: bool,
 }
 
 // The Settings page a guide step opens, if any.

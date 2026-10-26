@@ -166,6 +166,175 @@ enum SourceSwitch {
         if chosen == current { return .none }
         return streaming ? .restart : .remember
     }
+
+    /// The notice subjects a pick of a source or channel pair clears (S163).
+    /// Picking the one that plays again answers "still on <old>", so that
+    /// notice goes; once stopped, the notice says why and stays.
+    static func noticesCleared(by step: Step, streaming: Bool) -> [String] {
+        guard step == .none else { return [Notice.source, Notice.capture] }
+        return streaming ? [Notice.source] : []
+    }
+}
+
+/// A running session moving to another source or input channel pair (S141,
+/// S14). Only the capture is rebuilt: the AirPlay and Cast speakers stay
+/// connected, since a reconnect makes a speaker that asks for a code ask
+/// again and some TVs time out on it.
+enum CaptureSwitch {
+    enum Change: Equatable {
+        case source(from: AudioSource, to: AudioSource)
+        /// `InputChannelPair.index` values of the input device `uid`.
+        case inputPair(uid: String, from: Int, to: Int)
+        /// The source app `bundleID` quit and the whole system takes over (S227).
+        case sourceAppQuit(bundleID: String)
+
+        var stop: SessionStop {
+            switch self {
+            case .source: return .sourceChanged
+            case .inputPair: return .inputPairChanged
+            case .sourceAppQuit: return .sourceSwitchedToSystem
+            }
+        }
+
+        var quitApp: String? {
+            if case .sourceAppQuit(let bundleID) = self { return bundleID }
+            return nil
+        }
+
+        /// The capture a failed switch falls back to: the old source with
+        /// its stored pair (`pairOf` a device UID), or the old pair. None
+        /// after the source app quit, since that capture is gone.
+        func oldCapture(pairOf: (String) -> Int) -> (source: AudioSource, pair: Int)? {
+            switch self {
+            case .source(let from, _):
+                if case .input(let uid) = from { return (from, pairOf(uid)) }
+                return (from, 0)
+            case .inputPair(let uid, let from, _): return (.input(uid: uid), from)
+            case .sourceAppQuit: return nil
+            }
+        }
+    }
+
+    /// The microphone permission a switch's new source needs.
+    enum Microphone: Equatable {
+        case notNeeded
+        case allowed
+        case undetermined
+        case denied
+    }
+
+    /// How a switch begins, before any capture is touched.
+    enum Start: Equatable {
+        /// Only the capture is rebuilt, under the speakers.
+        case rebuildCapture
+        /// No speaker is on, so nothing can play: the session stops.
+        case stopSession
+        /// macOS asks for the microphone first. The old source is stored
+        /// again and plays on, so the picker and the level meter show it,
+        /// until the answer.
+        case askMicrophone
+        /// The microphone is denied: the old capture plays on.
+        case keepOld
+    }
+
+    static func start(hasSpeaker: Bool, microphone: Microphone) -> Start {
+        guard hasSpeaker else { return .stopSession }
+        switch microphone {
+        case .notNeeded, .allowed: return .rebuildCapture
+        case .undetermined: return .askMicrophone
+        case .denied: return .keepOld
+        }
+    }
+
+    /// What macOS's answer to the microphone prompt of a switch does.
+    enum Answer: Equatable {
+        /// The user picked something else while macOS asked.
+        case none
+        /// Streaming stopped meanwhile: the new choice is only stored.
+        case remember
+        /// The new choice is stored and the capture rebuilt under the speakers.
+        case switchNow
+        /// Denied: the old capture plays on, and the alert says where to allow it.
+        case keepOld
+    }
+
+    /// `source` and `pair` are what is stored when the answer comes
+    /// (`pair` the stored pair of `source` when it is an input device).
+    static func answer(granted: Bool, to change: Change, source: AudioSource, pair: Int, running: Bool) -> Answer {
+        let oldStored = switch change {
+        case .source(let from, _): source == from
+        case .inputPair(let uid, let from, _): source == .input(uid: uid) && pair == from
+        case .sourceAppQuit: false   // the whole system never waits on the microphone
+        }
+        guard oldStored else { return .none }
+        if !running { return granted ? .remember : .none }
+        return granted ? .switchNow : .keepOld
+    }
+
+    enum Failure: Equatable {
+        case microphoneDenied
+        case startFailed
+    }
+
+    enum Outcome: Equatable {
+        /// The new capture runs, at whatever rate it has; the AirPlay
+        /// timeline starts over with it.
+        case switched
+        /// The new capture didn't start and the old one plays (again).
+        case keptOld(Failure)
+        /// Neither capture runs: streaming stops as after any failed start.
+        case stopped
+    }
+
+    /// `failure` is nil when the new capture started; `oldRunning` says
+    /// whether the old capture runs after a failure.
+    static func outcome(failure: Failure?, oldRunning: Bool) -> Outcome {
+        guard let failure else { return .switched }
+        return oldRunning ? .keptOld(failure) : .stopped
+    }
+
+    enum Message: Equatable {
+        case none
+        /// The alert that says where to allow the microphone.
+        case microphoneDenied
+        /// "Couldn't start <new>, still on <old>", as a source notice.
+        case stillOnOld(new: String, old: String)
+    }
+
+    /// `sourceName` and `pairName` give the names the source picker shows.
+    static func message(_ outcome: Outcome, change: Change, sourceName: (AudioSource) -> String,
+                        pairName: (_ uid: String, _ index: Int) -> String) -> Message {
+        // A stop has its own "start" notice already.
+        guard case .keptOld(let failure) = outcome else { return .none }
+        if failure == .microphoneDenied { return .microphoneDenied }
+        switch change {
+        case .source(let from, let to): return .stillOnOld(new: sourceName(to), old: sourceName(from))
+        case .inputPair(let uid, let from, let to): return .stillOnOld(new: pairName(uid, to), old: pairName(uid, from))
+        case .sourceAppQuit: return .none
+        }
+    }
+
+    /// `kept`: the AirPlay and Cast speakers that stayed connected.
+    static func logLine(_ outcome: Outcome, change: Change? = nil, kept: Int, fromRate: Double,
+                        toRate: Double) -> String {
+        let speakers = "\(kept) AirPlay or Cast speaker(s) stayed connected"
+        let quit = change?.quitApp
+        switch outcome {
+        case .switched:
+            let rate = fromRate == toRate ? "runs at \(Int(toRate)) Hz"
+                : "went from \(Int(fromRate)) to \(Int(toRate)) Hz"
+            let what = quit.map { "source app quit (\($0)), the whole system plays" } ?? "source switch"
+            return "[AudioSync] \(what): \(speakers), the capture \(rate)"
+        case .keptOld(let failure):
+            let why = failure == .microphoneDenied ? "the microphone isn't allowed" : "the new capture didn't start"
+            return "[AudioSync] source switch failed (\(why)): the old source plays on, \(speakers)"
+        case .stopped:
+            if let quit {
+                return "[AudioSync] source app quit (\(quit)) and the whole system didn't start: streaming stops"
+            }
+            return "[AudioSync] source switch failed and the old source didn't start again: streaming stops"
+        }
+    }
 }
 
 // MARK: - When the source app quits
@@ -303,9 +472,14 @@ enum SourceApps {
                            bundleID: bundleID)
     }
 
-    /// Whether some instance of the app runs and hasn't terminated.
+    /// Whether some instance of the app runs: listed under its bundle ID in
+    /// any letter case, not terminated, and its process still exists.
     static func isRunning(_ bundleID: String) -> Bool {
-        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).contains { !$0.isTerminated }
+        let listed = NSWorkspace.shared.runningApplications.map {
+            AppTapFollow.ListedApp(bundleID: $0.bundleIdentifier, pid: $0.processIdentifier, terminated: $0.isTerminated)
+        }
+        return !AppTapFollow.runningPIDs(of: bundleID, listed: listed, seen: [],
+                                         alive: AppTapFollow.processExists).isEmpty
     }
 
     /// The icon of a running or installed app; nil when the app isn't on the Mac.

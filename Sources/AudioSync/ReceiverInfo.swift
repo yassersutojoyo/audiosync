@@ -26,8 +26,10 @@ struct ReceiverInfo: Equatable {
 
     /// `track`: Now Playing's current reading, nil while there is none (not
     /// polling, or no reading since polling started).
-    /// A paused track only counts when its player is the chosen source: with
-    /// the whole system as the source, what plays may be another app.
+    /// A paused track counts when its player is the chosen source, or with
+    /// the whole system as the source when its player is `lastPlayed`, the
+    /// one seen playing last since the source was chosen
+    /// (`NowPlayingMonitor.LastPlayed`).
     /// A track's fields go out as its player gave them, blank ones included.
     /// `sourceName`: the source's name as the source picker shows it (the
     /// whole system's label, the app's or the input device's name), nil when
@@ -38,8 +40,10 @@ struct ReceiverInfo: Equatable {
     /// show no text at all when the artist is blank. The source's name, when
     /// there is one to show, takes the artist's place.
     static func decide(track: NowPlayingMonitor.Track?, source: AudioSource,
-                       sourceName: String?, untitled: TrackMetadata.Fields) -> ReceiverInfo {
-        if let track, track.isPlaying || source.bundleID == track.bundleID {
+                       sourceName: String?, untitled: TrackMetadata.Fields,
+                       lastPlayed: String? = nil) -> ReceiverInfo {
+        if let track, track.isPlaying || source.bundleID == track.bundleID
+            || (source == .system && track.bundleID == lastPlayed) {
             let artwork: Artwork = track.artwork != nil ? .track
                 : track.bundleID == NowPlayingMonitor.spotify ? .wait : .neutral
             return ReceiverInfo(fields: .init(title: track.title, artist: track.artist, album: track.album),
@@ -55,8 +59,10 @@ struct ReceiverInfo: Equatable {
 
     /// What a Cast device shows: the track as `decide` takes it, else blank
     /// fields, which the sender leaves out instead of AudioSync's labels (C53).
-    static func decideForCast(track: NowPlayingMonitor.Track?, source: AudioSource) -> ReceiverInfo {
-        decide(track: track, source: source, sourceName: nil, untitled: .init(title: "", artist: "", album: ""))
+    static func decideForCast(track: NowPlayingMonitor.Track?, source: AudioSource,
+                              lastPlayed: String? = nil) -> ReceiverInfo {
+        decide(track: track, source: source, sourceName: nil, untitled: .init(title: "", artist: "", album: ""),
+               lastPlayed: lastPlayed)
     }
 
     /// How long receivers wait for a player's own artwork that is on its way.

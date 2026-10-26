@@ -62,14 +62,8 @@ pub trait Verifier: Send {
     /// The body of the first request.
     fn first_request(&mut self) -> Vec<u8>;
     /// The body of the second request, computed from the first response's
-    /// body (96 bytes, P55); `None` when that body is malformed.
-    fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>>;
-    /// Something the last [`Verifier::second_request`] found worth a
-    /// warning without failing the verification, such as a receiver
-    /// signature that didn't check out (P56).
-    fn take_warning(&mut self) -> Option<Warning> {
-        None
-    }
+    /// body (96 bytes, P55), or why there is none (P56).
+    fn second_request(&mut self, first_response: &[u8]) -> Result<Vec<u8>, VerifyFailure>;
     /// Gets ready for one more connection of the same session (P58's
     /// reconnect after a close right behind a verification): a fresh key
     /// pair where the verification uses one. `false` when it can't, which
@@ -77,6 +71,16 @@ pub trait Verifier: Send {
     fn renew(&mut self) -> bool {
         true
     }
+}
+
+/// Why a [`Verifier`] sends no second request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyFailure {
+    /// The first answer is malformed: a ProtocolError.
+    Malformed,
+    /// The receiver's signature didn't check out against the key it gave at
+    /// pairing: ReceiverUnverified (P56).
+    ReceiverUnverified,
 }
 
 /// Bytes of the first pair-verify answer: atv_pub (32) and atv_data (64)
@@ -262,7 +266,8 @@ pub enum SessionEvent {
         receiver_ports: ReceiverPorts,
         destinations: MediaDestinations,
     },
-    /// A FLUSH was answered with success (P34).
+    /// A FLUSH was answered (P34); a failure status comes as a warning
+    /// first.
     Flushed { seq: u16, rtptime: u32 },
     /// The level a GET_PARAMETER answer reported (P122). The session's own
     /// volume doesn't change.
@@ -503,6 +508,15 @@ impl Session {
     /// Whether audio, sync and retransmission packets may be sent: only after
     /// RECORD was answered with 200, and not once teardown has started (P26,
     /// P35).
+    /// A FLUSH is queued or waiting for its answer (P213).
+    pub fn flushing(&self) -> bool {
+        self.pending_flush.is_some()
+            || self
+                .in_flight
+                .as_ref()
+                .is_some_and(|in_flight| matches!(in_flight.kind, Kind::Flush { .. }))
+    }
+
     pub fn media_allowed(&self) -> bool {
         self.state == State::Playing
     }
@@ -836,13 +850,18 @@ impl Session {
 
     /// Stops the session (P35, P129): no more media, TEARDOWN once the
     /// request in flight (if any) is answered, then close after the answer or
-    /// 2 s after this call, whichever comes first. Before SETUP succeeded
+    /// 2 s after this call, whichever comes first. Before SETUP goes out
     /// there is no receiver session to tear down, so the connection just
-    /// closes.
+    /// closes; a SETUP already sent is waited for, since the receiver may
+    /// have made the session it asked for.
     pub fn teardown(&mut self, now: Instant) {
+        let setup_in_flight = self
+            .in_flight
+            .as_ref()
+            .is_some_and(|in_flight| in_flight.kind == Kind::Setup);
         match self.state {
             State::Closed | State::TearingDown => {}
-            _ if self.session_header.is_none() => self.finish(),
+            _ if self.session_header.is_none() && !setup_in_flight => self.finish(),
             _ => {
                 self.state = State::TearingDown;
                 self.teardown_deadline = Some(now + TEARDOWN_TIMEOUT);
@@ -1124,6 +1143,16 @@ impl Session {
             // sent before the teardown only clears the way for TEARDOWN.
             if in_flight.kind == Kind::Teardown {
                 self.finish();
+            } else if in_flight.kind == Kind::Setup {
+                let session = response
+                    .headers
+                    .get("Session")
+                    .and_then(rtsp::session_id)
+                    .filter(|_| response.is_success());
+                match session {
+                    Some(session) => self.session_header = Some(session.to_owned()),
+                    None => self.finish(),
+                }
             }
             return;
         }
@@ -1198,23 +1227,23 @@ impl Session {
                     );
                     return;
                 }
-                let (second, warning) = match self.config.verifier.as_mut() {
-                    Some(verifier) => {
-                        let second = verifier.second_request(&response.body);
-                        (second, verifier.take_warning())
-                    }
-                    None => (None, None),
+                let second = match self.config.verifier.as_mut() {
+                    Some(verifier) => verifier.second_request(&response.body),
+                    None => Err(VerifyFailure::Malformed),
                 };
-                if let Some(warning) = warning {
-                    self.event(SessionEvent::Warning(warning));
-                }
                 match second {
-                    Some(body) => self.send(Kind::VerifySecond(body), now, false),
-                    None => self.fail(
+                    Ok(body) => self.send(Kind::VerifySecond(body), now, false),
+                    Err(VerifyFailure::Malformed) => self.fail(
                         ErrorKind::ProtocolError,
                         Some(method),
                         Some(code),
                         Some("malformed pair-verify answer"),
+                    ),
+                    Err(VerifyFailure::ReceiverUnverified) => self.fail(
+                        ErrorKind::ReceiverUnverified,
+                        Some(method),
+                        Some(code),
+                        Some("receiver signature does not match the paired key"),
                     ),
                 }
             }
@@ -1250,9 +1279,7 @@ impl Session {
             Kind::Metadata(Metadata::Artwork { .. }) => {
                 self.artwork_answered(success, Some(code));
             }
-            Kind::Volume(_) | Kind::Metadata(_) | Kind::ReadVolume | Kind::Flush { .. }
-                if !success =>
-            {
+            Kind::Volume(_) | Kind::Metadata(_) | Kind::ReadVolume if !success => {
                 self.event(SessionEvent::Warning(Warning::RequestFailed {
                     method,
                     status: code,
@@ -1264,6 +1291,12 @@ impl Session {
                 }
             }
             Kind::Flush { seq, rtptime } => {
+                if !success {
+                    self.event(SessionEvent::Warning(Warning::RequestFailed {
+                        method,
+                        status: code,
+                    }));
+                }
                 // An RTP-Info header in the answer is ignored (P34).
                 self.event(SessionEvent::Flushed { seq, rtptime });
             }

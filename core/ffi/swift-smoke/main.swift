@@ -241,6 +241,10 @@ func airPlaySender() {
     check(asc_airplay_open_airplay2_identity(nil, pairings) == ASC_AIRPLAY_PAIRINGS_FAILED
               && asc_airplay_open_airplay2_identity(handle, nil) == ASC_AIRPLAY_PAIRINGS_FAILED,
           "a NULL sender or path opens no AirPlay 2 identity")
+    check(asc_airplay_pairings_access(handle) == ASC_AIRPLAY_FILE_PRIVATE
+              && asc_airplay_pairings_access(nil) == ASC_AIRPLAY_FILE_UNREAD
+              && asc_airplay_airplay2_identity_access(nil) == ASC_AIRPLAY_FILE_UNREAD,
+          "a new pairings file is private, and a NULL sender reads none")
     check(!asc_airplay_start_pairing(handle, "02005E005301") && !asc_airplay_submit_pin(handle, "02005E005301", "1234"),
           "only a listed receiver pairs")
     asc_airplay_cancel_pairing(handle, "02005E005301")
@@ -274,7 +278,8 @@ func airPlaySender() {
               && ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN == 5 && ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY == 6,
           "the AirPlay constants cross the header")
     // The Rust side checks the same size (`the_event_layout_matches_the_header`).
-    check(MemoryLayout<AscAirPlayEvent>.size == 104, "the event struct has the header's layout")
+    check(MemoryLayout<AscAirPlayEvent>.size == 112 && MemoryLayout<AscAirPlayEvent>.offset(of: \AscAirPlayEvent.device_level) == 104,
+          "the event struct has the header's layout")
 }
 
 func castSender() {

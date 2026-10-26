@@ -173,7 +173,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-start-title;
-                            body: Strings.help-start;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-start-linux : Strings.help-start;
                         }
 
                         HelpSection {
@@ -209,17 +209,17 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-calibration-title;
-                            body: Strings.help-calibration;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-calibration-linux : Strings.help-calibration;
                         }
 
                         HelpSection {
                             title: Strings.help-more-title;
-                            body: Strings.help-more;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-more-linux : Strings.help-more;
                         }
 
                         HelpSection {
                             title: Strings.help-airplay-title;
-                            body: Strings.help-airplay;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-airplay-linux : Strings.help-airplay;
                         }
 
                         HelpSection {
@@ -234,17 +234,17 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-volume-title;
-                            body: Strings.help-volume;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-volume-linux : Strings.help-volume;
                         }
 
                         HelpSection {
                             title: Strings.help-remote-title;
-                            body: Strings.help-remote;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-remote-linux : Strings.help-remote;
                         }
 
                         HelpSection {
                             title: Strings.help-double-title;
-                            body: Strings.help-double;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-double-linux : Strings.help-double;
 
                             if root.show-how-shown: HorizontalLayout {
                                 alignment: start;

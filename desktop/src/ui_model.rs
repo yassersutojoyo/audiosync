@@ -6,7 +6,8 @@
 //! Windows the backend is `crate::adapter::AudioAdapter` over the WASAPI audio
 //! backend. [`MockBackend`], built only with the `mock-backend` feature, stands
 //! in with example data for UI work: off Windows always, on Windows for
-//! `AUDIOSYNC_PREVIEW_ZONES`. Nothing here makes a sound or opens an audio
+//! `AUDIOSYNC_PREVIEW_ZONES` and `AUDIOSYNC_PREVIEW_PRESETS`. Nothing here
+//! makes a sound or opens an audio
 //! device.
 
 use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
@@ -186,6 +187,8 @@ pub enum AirPlayProblem {
     PtpOtherNetwork,
     /// An Apple TV whose home theater group plays, so it is off.
     PlaysThroughSpeakers,
+    /// It didn't prove it is the speaker that was paired, so it is off.
+    ReceiverUnverified,
     /// A home theater group whose Apple TV plays by itself, so it is off.
     AppleTvPlays,
     /// A member of a pair or group that plays as part of it, so it is off.
@@ -205,8 +208,12 @@ pub struct Speaker {
     pub kind: SpeakerKind,
     /// Chosen by the user; it plays while streaming is on.
     pub enabled: bool,
-    /// 0 to 100.
+    /// 0 to 100: an AirPlay row's device level rounded down (spec S290),
+    /// any other row's own volume.
     pub volume: f64,
+    /// An AirPlay row's own volume s behind `volume`, which a preset keeps
+    /// (spec S290).
+    pub own_volume: Option<f64>,
     /// The offset of a local output relative to the reference; the
     /// reference has none, and neither do AirPlay speakers (the AirPlay
     /// sender keeps them in sync, and local outputs follow it).
@@ -219,6 +226,12 @@ pub struct Speaker {
     /// An AirPlay speaker whose password AudioSync holds until it quits,
     /// which the user can forget.
     pub holds_password: bool,
+    /// An AirPlay speaker AudioSync stores pairing credentials for, also
+    /// ones it turned down, which the user can forget.
+    pub holds_credentials: bool,
+    /// An AirPlay speaker that asks for a code every time it connects:
+    /// auto-connect leaves it off, and its row says why.
+    pub code_every_time: bool,
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
@@ -467,6 +480,19 @@ pub enum SourceName {
     AllAppsExcept(Vec<String>),
 }
 
+/// What a source switch that couldn't start names: a source as the picker
+/// shows it, or an input device's channel pair.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SwitchName {
+    System,
+    Source(SourceName),
+    /// Channels numbered from 1; the same one twice for a lone channel.
+    Channels {
+        first: u16,
+        last: u16,
+    },
+}
+
 /// What a notice says. The UI words it (the notice texts in
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -482,6 +508,9 @@ pub enum NoticeMessage {
     /// The app being captured quit, so streaming went on with the whole
     /// system (spec S227).
     SourceSwitched { source: String },
+    /// A source or channel pair picked while streaming couldn't start, so
+    /// the one before it plays on, to the same speakers (spec S141).
+    SwitchFailed { new: SwitchName, old: SwitchName },
     /// The chosen app isn't running, so streaming didn't start.
     SourceNotRunning { source: String },
     /// Capturing the chosen app would capture AudioSync's own sound too, so
@@ -604,6 +633,17 @@ pub enum NoticeMessage {
     },
 }
 
+impl NoticeMessage {
+    /// Whether the notice tells of a change AudioSync made or will make,
+    /// with nothing that failed, so it shows the info glyph.
+    pub fn reports_a_change(&self) -> bool {
+        matches!(
+            self,
+            Self::SourceSwitched { .. } | Self::AirPlay2NextLaunch { .. } | Self::GroupsBecameZones
+        )
+    }
+}
+
 /// Why a preset's member stayed off at recall (spec S252, S265).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PresetLeftOff {
@@ -632,7 +672,7 @@ pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
         .map(|speaker| SpeakerNow {
             key: speaker.id.clone(),
             volume: (!speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed))
-                .then_some(speaker.volume),
+                .then_some(speaker.own_volume.unwrap_or(speaker.volume)),
         })
         .collect()
 }
@@ -1198,6 +1238,9 @@ pub trait Backend {
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     /// The speaker's volume slider is held (true) or let go (false).
     fn set_speaker_volume_editing(&mut self, _id: &str, _on: bool) {}
+    /// The now-playing card's play-pause went to `app`, which the card shows
+    /// playing or paused: the AirPlay speakers may pause with it (P213).
+    fn play_pause_pressed(&mut self, _app: &str, _playing: bool) {}
     fn set_speaker_delay(&mut self, id: &str, ms: f64);
     /// Mutes or unmutes a Google Cast speaker on the speaker itself.
     fn set_speaker_muted(&mut self, _id: &str, _muted: bool) {}
@@ -1506,6 +1549,32 @@ fn mock_cast_answers(address: &crate::audio::cast_address::CastAddress) -> bool 
 #[cfg(any(test, feature = "mock-backend"))]
 const PRESETS: &str = "Presets";
 
+/// What the Presets card shows for `AUDIOSYNC_PREVIEW_PRESETS`.
+#[cfg(any(test, feature = "mock-backend"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresetsPreview {
+    /// `list`: three presets, the first one current.
+    List,
+    /// `left-off`: a recall that left a hidden speaker and one not found
+    /// off, with its notice.
+    LeftOff,
+    /// `empty`: no preset yet.
+    Empty,
+}
+
+#[cfg(any(test, feature = "mock-backend"))]
+impl PresetsPreview {
+    /// The preview a value of `AUDIOSYNC_PREVIEW_PRESETS` asks for.
+    pub fn from_value(value: &str) -> Option<Self> {
+        match value {
+            "list" => Some(PresetsPreview::List),
+            "left-off" => Some(PresetsPreview::LeftOff),
+            "empty" => Some(PresetsPreview::Empty),
+            _ => None,
+        }
+    }
+}
+
 /// Example data for UI work and tests: no device is opened, nothing plays.
 #[cfg(any(test, feature = "mock-backend"))]
 pub struct MockBackend {
@@ -1517,6 +1586,9 @@ pub struct MockBackend {
     presets: Vec<Preset>,
     /// The preset the preset notice is about.
     preset_notice: Option<String>,
+    /// Each play-pause of the now-playing card: its app and whether it
+    /// showed playing.
+    pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
 }
 
 #[cfg(any(test, feature = "mock-backend"))]
@@ -1562,6 +1634,9 @@ impl MockBackend {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            holds_credentials: false,
+            code_every_time: false,
+            own_volume: None,
             device_volume: None,
             waiting: None,
             cast: None,
@@ -1680,6 +1755,7 @@ impl MockBackend {
             hidden_rows: Vec::new(),
             presets: Vec::new(),
             preset_notice: None,
+            play_pauses: std::rc::Rc::default(),
         }
     }
 
@@ -1735,7 +1811,6 @@ impl MockBackend {
 
     /// Adds preset `id` of the speakers `members` at the master and the
     /// curve now, with no own volumes.
-    #[cfg(test)]
     pub fn add_preset(&mut self, id: &str, name: &str, members: &[&str]) {
         self.presets.push(Preset {
             id: id.to_owned(),
@@ -1865,6 +1940,54 @@ impl MockBackend {
         mock
     }
 
+    /// The example data with presets, for `AUDIOSYNC_PREVIEW_PRESETS`:
+    /// Evening plays now, Movie Night and Whole House don't. For
+    /// [`PresetsPreview::LeftOff`], Whole House was recalled with Den hidden
+    /// and Patio, the Outdoors zone's only member, not found.
+    pub fn presets_preview(which: PresetsPreview) -> Self {
+        let mut mock = MockBackend::new();
+        if which == PresetsPreview::Empty {
+            return mock;
+        }
+        mock.state.running = true;
+        mock.save_preset("Evening")
+            .expect("the example has speakers on");
+        mock.add_preset(
+            "preset:2",
+            "Movie Night",
+            &["local:speakers", "airplay:living"],
+        );
+        mock.add_preset(
+            "preset:3",
+            "Whole House",
+            &[
+                "airplay:kitchen",
+                "airplay:bedroom",
+                "local:desk",
+                "airplay:den",
+                "airplay:patio",
+            ],
+        );
+        if which == PresetsPreview::LeftOff {
+            mock.state.hidden.push(HiddenSpeaker {
+                id: "airplay:den".into(),
+                name: "Den".into(),
+                kind_text: "AirPlay".into(),
+                present: None,
+            });
+            mock.state.absent.push(AbsentMember {
+                id: "airplay:patio".into(),
+                name: "Patio".into(),
+                kind: SpeakerKind::AirPlay,
+            });
+            mock.zones_mut(|zones| {
+                add_zone(zones, "zone:outdoors", "Outdoors", &["airplay:patio"])
+            });
+            mock.recall_preset("preset:3");
+        }
+        mock
+    }
+
     fn speaker_mut(&mut self, id: &str) -> Option<&mut Speaker> {
         self.state.speakers.iter_mut().find(|s| s.id == id)
     }
@@ -1895,6 +2018,12 @@ fn add_zone(zones: &mut Zones, id: &str, name: &str, members: &[&str]) {
 
 #[cfg(any(test, feature = "mock-backend"))]
 impl Backend for MockBackend {
+    fn play_pause_pressed(&mut self, app: &str, playing: bool) {
+        self.play_pauses
+            .borrow_mut()
+            .push((app.to_owned(), playing));
+    }
+
     fn snapshot(&self) -> AppState {
         let mut state = self.state.clone();
         show_presets(&mut state, &self.presets);
@@ -2171,6 +2300,9 @@ impl Backend for MockBackend {
                 availability: Availability::Open,
                 paired: false,
                 holds_password: false,
+                holds_credentials: false,
+                code_every_time: false,
+                own_volume: None,
                 device_volume: None,
                 waiting: None,
                 cast: Some(CastRow {
@@ -2261,7 +2393,11 @@ impl Backend for MockBackend {
             } else if self.state.speaker(&member.key).is_some() {
                 members.push((member.key.clone(), member.volume));
             } else {
-                left_off.push((member.key.clone(), PresetLeftOff::NotFound));
+                let name = self
+                    .state
+                    .absent_member(&member.key)
+                    .map_or_else(|| member.key.clone(), |absent| absent.name.clone());
+                left_off.push((name, PresetLeftOff::NotFound));
             }
         }
         let nothing_changed = members.is_empty();
@@ -2553,6 +2689,9 @@ mod tests {
             availability: Availability::Open,
             paired: false,
             holds_password: false,
+            holds_credentials: false,
+            code_every_time: false,
+            own_volume: None,
             device_volume: None,
             waiting: None,
             cast: None,
@@ -2645,6 +2784,25 @@ mod tests {
         );
         state.running = false;
         assert_eq!(state.zone_state(&zone), SpeakerState::WillPlay);
+    }
+
+    #[test]
+    fn only_notices_that_report_a_change_show_the_info_glyph() {
+        assert!(NoticeMessage::GroupsBecameZones.reports_a_change());
+        assert!(NoticeMessage::AirPlay2NextLaunch { on: true }.reports_a_change());
+        assert!(
+            NoticeMessage::SourceSwitched {
+                source: "Spotify".into()
+            }
+            .reports_a_change()
+        );
+        assert!(
+            !NoticeMessage::SpeakerFailed {
+                speaker: "Den".into()
+            }
+            .reports_a_change()
+        );
+        assert!(!NoticeMessage::AirPlayStopped.reports_a_change());
     }
 
     #[test]
@@ -2841,5 +2999,80 @@ mod tests {
         assert_eq!(picked_curve(0, 1), Some(CurveMatch::Preset(0)));
         assert_eq!(picked_curve(index + 1, 1), None);
         assert_eq!(picked_curve(-1, 1), None);
+    }
+
+    #[test]
+    fn the_presets_preview_reads_the_values_of_its_switch() {
+        assert_eq!(
+            PresetsPreview::from_value("list"),
+            Some(PresetsPreview::List)
+        );
+        assert_eq!(
+            PresetsPreview::from_value("left-off"),
+            Some(PresetsPreview::LeftOff)
+        );
+        assert_eq!(
+            PresetsPreview::from_value("empty"),
+            Some(PresetsPreview::Empty)
+        );
+        for other in ["", "1", "List", "left_off"] {
+            assert_eq!(PresetsPreview::from_value(other), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_presets_preview_lists_three_presets_with_the_first_current() {
+        let state = MockBackend::presets_preview(PresetsPreview::List).snapshot();
+        let shown: Vec<(&str, bool)> = state
+            .presets
+            .iter()
+            .map(|preset| (preset.name.as_str(), preset.current))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("Evening", true),
+                ("Movie Night", false),
+                ("Whole House", false)
+            ]
+        );
+        assert!(state.running);
+        assert!(state.notices.is_empty());
+    }
+
+    #[test]
+    fn the_left_off_preview_names_the_hidden_speaker_and_the_one_not_found() {
+        let state = MockBackend::presets_preview(PresetsPreview::LeftOff).snapshot();
+        assert_eq!(state.presets.len(), 3);
+        let notices: Vec<&NoticeMessage> = state.notices.iter().map(|n| &n.message).collect();
+        assert_eq!(
+            notices,
+            [&NoticeMessage::PresetLeftOff {
+                preset: "Whole House".into(),
+                left_off: vec![
+                    ("Den".into(), PresetLeftOff::Hidden),
+                    ("Patio".into(), PresetLeftOff::NotFound),
+                ],
+                nothing_changed: false,
+            }]
+        );
+        assert!(
+            state
+                .zones
+                .iter()
+                .any(|zone| zone.members.iter().any(|m| m == "airplay:patio")),
+            "Patio is a zone member not found, as the real adapter lists one"
+        );
+        assert!(state.absent_member("airplay:patio").is_some());
+        for id in ["airplay:kitchen", "airplay:bedroom", "local:desk"] {
+            assert!(state.speaker(id).is_some_and(|s| s.enabled), "{id} is on");
+        }
+    }
+
+    #[test]
+    fn the_empty_presets_preview_has_no_preset_and_no_notice() {
+        let state = MockBackend::presets_preview(PresetsPreview::Empty).snapshot();
+        assert!(state.presets.is_empty());
+        assert!(state.notices.is_empty());
     }
 }

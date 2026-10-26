@@ -12,7 +12,9 @@ extension AppDelegate {
     func presetScene() -> PresetScene {
         let layout = appModel.layout
         let on = (layout.thisMac + layout.connected).filter(\.enabled).map { speaker in
-            PresetScene.Speaker(key: speaker.key, volume: speaker.cast?.volumeFixed == true ? nil : speaker.volume)
+            // An AirPlay member keeps its own volume, not the row's device level, so presets saved before S290 still mean the same.
+            let volume = speaker.tag == .airplay ? airplayVolume[speaker.id] ?? defaultVolume : speaker.volume
+            return PresetScene.Speaker(key: speaker.key, volume: speaker.cast?.volumeFixed == true ? nil : volume)
         }
         return PresetScene(on: on, zones: zones, master: masterVolume,
                            gains: equalizerModel?.settings.gains ?? Equalizer.Settings().gains)
@@ -50,7 +52,8 @@ extension AppDelegate {
         let leftOff = zip(preset.members, zip(states, plan.steps)).compactMap { member, pair -> PresetNotice.LeftOff? in
             let (state, step) = pair
             guard case .leftOff(let reason) = step, !keepOff.contains(member.key) else { return nil }
-            return PresetNotice.LeftOff(name: state.map(memberName) ?? text.unknownDevice, reason: reason,
+            let kept = SpeakerZone.storedName(of: member.key, in: zones).map(text.deviceName)
+            return PresetNotice.LeftOff(name: state.map(memberName) ?? kept ?? text.unknownDevice, reason: reason,
                                         target: state?.target.map { shownName(airPlay: NativeAirPlayID.app($0)) },
                                         key: member.key)
         }
@@ -71,7 +74,7 @@ extension AppDelegate {
             guard let state = states[index], let volume = member.volume else { continue }
             switch state.kind {
             case .local: setLocalVolume(state.appID, volume)
-            case .airplay: setNativeAirPlayVolume(state.appID, volume)
+            case .airplay: setNativeAirPlayOwnVolume(state.appID, volume)
             case .cast: continue   // once its session is live, below
             }
         }

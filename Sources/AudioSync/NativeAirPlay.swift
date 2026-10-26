@@ -19,8 +19,8 @@ final class NativeAirPlay {
     /// How often the queue asks the sender for discovery changes and events.
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
     /// Every how many polls the speakers are asked for their own volume
-    /// (2 s), so a change made on a speaker reaches its slider.
-    static let volumeReadPolls = 8
+    /// (1 s, S291), so a change made on a speaker reaches its row.
+    static let volumeReadPolls = 4
     /// The receivers the debug hook AUDIOSYNC_AIRPLAY_PCM names; the core
     /// reads the same variable and lets them use PCM when they are added.
     static let pcmDebugIDs = NativeAirPlayID.pcmDebugIDs(ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY_PCM"])
@@ -50,6 +50,10 @@ final class NativeAirPlay {
     private var playback: (app: String?, state: Int32) = (nil, ASC_AIRPLAY_PLAYBACK_UNKNOWN)
     /// Gets each transport control a speaker's remote asked for (main queue).
     var onRemote: ((NowPlayingMonitor.Command) -> Void)?
+    /// Whether the user paused the speakers on purpose (main queue, P213).
+    private var explicitPause = ExplicitPause()
+    /// While paused, checks whether the capture carries sound again (main queue).
+    private var soundWatch: Timer?
     /// The hold-back last asked for (main queue), and the one the sender
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
@@ -144,6 +148,15 @@ final class NativeAirPlay {
         }
     }
 
+    /// A row move (S290): the speaker `id` stores own volume `own` and
+    /// gets device level `level`, live.
+    func setDeviceLevel(_ id: String, own: Double, level: Double) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_airplay_set_device_level(handle, id, own, level)
+        }
+    }
+
     /// Whether the user drags the slider of the speaker `id`.
     func setVolumeDragging(_ id: String, _ dragging: Bool) {
         queue.async { [weak self] in
@@ -162,6 +175,52 @@ final class NativeAirPlay {
             guard let self, self.playback.app != app || self.playback.state != state else { return }
             self.playback = (app, state)
             if let handle = self.handle { _ = asc_airplay_set_playback(handle, app, state) }
+        }
+    }
+
+    /// A play-pause goes to `app`, read as playing, paused or (nil) not at
+    /// all: the speakers pause or resume with it (P213). Main queue.
+    func togglePause(app: String?, playing: Bool?) {
+        applyPause(explicitPause.toggled(app: app, playing: playing, at: Date()))
+    }
+
+    /// A reading of the players that started at `startedAt`: the player seen
+    /// pausing pauses the speakers while they play (`sending`), and a paused
+    /// stream resumes once the reading no longer shows the player paused
+    /// (P213). Main queue.
+    func readPause(app: String?, playing: Bool?, startedAt: Date, sending: Bool) {
+        applyPause(explicitPause.read(app: app, playing: playing, at: startedAt, sending: sending))
+    }
+
+    /// The readings stopped: a paused stream resumes. Main queue.
+    func clearPause() {
+        applyPause(explicitPause.readingsStopped())
+    }
+
+    private func applyPause(_ step: ExplicitPause.Step) {
+        switch step {
+        case .nothing:
+            return
+        case .pause:
+            DebugTrace.log("[AudioSync] native AirPlay: paused on purpose, every speaker flushed")
+        case .resume:
+            DebugTrace.log("[AudioSync] native AirPlay: resumed after a pause")
+        }
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            if step == .pause { asc_airplay_pause(handle) } else { asc_airplay_resume(handle) }
+        }
+        if step == .resume {
+            soundWatch?.invalidate()
+            soundWatch = nil
+        } else if soundWatch == nil {
+            // Common modes, so an open menu doesn't hold the resume back.
+            let watch = Timer(timeInterval: 0.25, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                self.applyPause(self.explicitPause.heard(sound: NativeAirPlayTap.soundSeconds, at: Date()))
+            }
+            RunLoop.main.add(watch, forMode: .common)
+            soundWatch = watch
         }
     }
 
@@ -298,9 +357,25 @@ final class NativeAirPlay {
         }
     }
 
+    /// How private the core found a pairing file, for the debug log; nil
+    /// when it wasn't read.
+    static func fileAccessLogLine(_ access: Int32) -> String? {
+        switch access {
+        case ASC_AIRPLAY_FILE_PRIVATE:
+            return "private"
+        case ASC_AIRPLAY_FILE_TIGHTENED:
+            return "tightened (was open to other accounts, owner-only now)"
+        case ASC_AIRPLAY_FILE_STILL_OPEN:
+            return "still open to other accounts (its mode couldn't be changed)"
+        default:
+            return nil
+        }
+    }
+
     /// A new capture session started (P143): the speakers are flushed and the
     /// timeline starts over.
     func restartTimeline() {
+        applyPause(explicitPause.clear())
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
             asc_airplay_restart_timeline(handle)
@@ -433,6 +508,8 @@ final class NativeAirPlay {
         let airPlay2 = support.map {
             asc_airplay_open_airplay2_identity(created, NativeAirPlayPairings.airPlay2File(in: $0).path)
         }
+        let pairingsAccess = support == nil ? nil : Self.fileAccessLogLine(asc_airplay_pairings_access(created))
+        let identityAccess = support == nil ? nil : Self.fileAccessLogLine(asc_airplay_airplay2_identity_access(created))
         DispatchQueue.main.async {
             if let line = NativeAirPlayPairings.moveLogLine(moved) {
                 DebugTrace.log("[AudioSync] native AirPlay: " + line)
@@ -441,6 +518,12 @@ final class NativeAirPlay {
             if let airPlay2, airPlay2 != 0 {
                 DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: "
                     + (airPlay2 > 0 ? "\(airPlay2) paired receiver(s)" : "ignored or left as it is (code \(airPlay2))"))
+            }
+            if let pairingsAccess {
+                DebugTrace.log("[AudioSync] native AirPlay: pairings file: " + pairingsAccess)
+            }
+            if let identityAccess {
+                DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: " + identityAccess)
             }
             if !excluded {
                 DebugTrace.log("[AudioSync] native AirPlay: the pairings folder couldn't be kept out of backups")
@@ -614,7 +697,9 @@ final class NativeAirPlay {
                                       paired: raw.flags & UInt32(ASC_AIRPLAY_FLAG_PAIRED) != 0,
                                       target: text(raw.target),
                                       isTarget: raw.flags & UInt32(ASC_AIRPLAY_FLAG_TARGET) != 0,
-                                      incomplete: raw.flags & UInt32(ASC_AIRPLAY_FLAG_INCOMPLETE) != 0)
+                                      incomplete: raw.flags & UInt32(ASC_AIRPLAY_FLAG_INCOMPLETE) != 0,
+                                      codeEveryTime: raw.flags & UInt32(ASC_AIRPLAY_FLAG_CODE_EVERY_TIME) != 0,
+                                      credentialsKept: raw.flags & UInt32(ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT) != 0)
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
     }
 
@@ -649,8 +734,9 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_EVENT_PAIRED:
             return .paired(id: id, storeNote: text(raw.detail))
         case ASC_AIRPLAY_EVENT_VOLUME:
-            return .volume(id: id, position: raw.volume)
+            return .volume(id: id, position: raw.volume, level: raw.device_level)
         case ASC_AIRPLAY_EVENT_WARNING:
+            if raw.warning == ASC_AIRPLAY_WARNING_PTP_FREE { return .ptpFree(id: id) }
             return .warning(id: id, ptpPortsTaken: raw.warning == ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN,
                             detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_TRACE:
@@ -695,6 +781,7 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_ERROR_PASSWORD_REQUIRED: return .passwordRequired
         case ASC_AIRPLAY_ERROR_WRONG_PASSWORD: return .wrongPassword
         case ASC_AIRPLAY_ERROR_PAIRING_REQUIRED: return .pairingRequired
+        case ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED: return .receiverUnverified
         case ASC_AIRPLAY_ERROR_UNSUPPORTED: return .unsupported
         default: return .incompatible
         }
@@ -742,6 +829,8 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_PAIRED, "paired"),
             (ASC_AIRPLAY_FLAG_TARGET, "target"),
             (ASC_AIRPLAY_FLAG_INCOMPLETE, "incomplete"),
+            (ASC_AIRPLAY_FLAG_CODE_EVERY_TIME, "code-every-time"),
+            (ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT, "credentials-kept"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
     }
@@ -750,7 +839,7 @@ final class NativeAirPlay {
 extension NativeSpeakerCounters {
     init(_ raw: AscAirPlayCounters) {
         self.init(packetsSent: raw.packets_sent, latePackets: raw.late_packets, resendRequests: raw.resend_requests,
-                  packetsResent: raw.packets_resent, timingReplies: raw.timing_replies,
+                  packetsResent: raw.packets_resent, notHeld: raw.not_held, timingReplies: raw.timing_replies,
                   foreignDatagrams: raw.foreign_datagrams, sessions: raw.sessions)
     }
 }

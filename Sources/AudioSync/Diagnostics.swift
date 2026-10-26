@@ -81,6 +81,24 @@ enum DebugTrace {
     }
 }
 
+/// A debug launch that switches no speaker on by itself and starts with every
+/// speaker off, so a soak or a test run never reaches the household's
+/// speakers. Nothing is saved: the next launch starts from the settings as
+/// they were.
+enum LaunchAutoConnect {
+    /// Set to exactly `1`, next to `AUDIOSYNC_DEBUG=1`, to skip auto-connect.
+    static let environmentKey = "AUDIOSYNC_NO_AUTO_CONNECT"
+
+    /// True when this run skips auto-connect.
+    static let skipped = skips(environment: ProcessInfo.processInfo.environment)
+
+    /// Whether `environment` skips auto-connect: both this switch and the
+    /// debug log's set to exactly `1`; without the debug log it is ignored.
+    static func skips(environment: [String: String]) -> Bool {
+        DebugTrace.isEnabled(environment: environment) && environment[environmentKey] == "1"
+    }
+}
+
 /// Hands finished lines to one serial queue that does all the file work, so a
 /// thread that logs never takes the file's lock or waits on the disk. Each
 /// line keeps the time it was handed over, and lines land in that order.
@@ -199,7 +217,33 @@ final class DebugLogFile: @unchecked Sendable {
     /// `message` as a log line: the UTC time to the millisecond, a space, the
     /// message and a line break.
     static func line(_ message: String, at date: Date) -> String {
-        timestamp(date) + " " + message + "\n"
+        timestamp(date) + " " + escaped(message) + "\n"
+    }
+
+    /// What starts each line of a message after its first, in place of a stamp.
+    static let continuation = "    | "
+
+    /// `message` with each line after the first marked as a continuation and
+    /// every other control character escaped (`\r`, `\x1b`), so text from a
+    /// device can't pass for an entry of its own.
+    static func escaped(_ message: String) -> String {
+        let isControl = { (scalar: Unicode.Scalar) in scalar.properties.generalCategory == .control }
+        guard message.unicodeScalars.contains(where: isControl) else { return message }
+        var out = ""
+        for scalar in message.unicodeScalars {
+            switch scalar {
+            case "\n":
+                out += "\n"
+                out += continuation
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case _ where isControl(scalar):
+                out += scalar.value < 0x10 ? "\\x0" : "\\x"
+                out += String(scalar.value, radix: 16)
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
     }
 
     /// `date` in UTC as `yyyy-MM-ddTHH:mm:ss.SSSZ`, rounded down to the

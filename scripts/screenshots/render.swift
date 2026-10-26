@@ -48,8 +48,8 @@ enum Mock {
             artist: "Example Artist", album: "Example Album", isPlaying: true, artwork: artwork())
         model.equalizerOn = true
         model.zones = [AppModel.Zone(id: "zone:1", name: "Downstairs", volume: 60, members: [
-            AppModel.ZoneMember(key: "airplay:living", name: "Living Room", symbol: "hifispeaker", speakerID: "living"),
-            AppModel.ZoneMember(key: "airplay:kitchen", name: "Kitchen", symbol: "hifispeaker", speakerID: "kitchen"),
+            AppModel.ZoneMember(key: SpeakerKey.make(id: "living", kind: .airplay), name: "Living Room", symbol: "hifispeaker", speakerID: "living"),
+            AppModel.ZoneMember(key: SpeakerKey.make(id: "kitchen", kind: .airplay), name: "Kitchen", symbol: "hifispeaker", speakerID: "kitchen"),
         ], on: 2, present: 2, allOn: true)]
         model.airplay = [
             AppModel.Speaker(id: "living", name: "Living Room", tag: .airplay, enabled: true, volume: 64, offsetMs: nil),

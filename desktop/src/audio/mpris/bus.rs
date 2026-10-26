@@ -1,13 +1,16 @@
-//! The MPRIS players on the session bus, listed and driven through zbus's
-//! blocking API. The connection sets [`APP_WAIT`] as its method call
-//! timeout, so a player that hangs costs the reading thread that wait and no
-//! more; proxies never cache, so every reading asks the player.
+//! The MPRIS players on the session bus, listed and driven through zbus
+//! from the reading thread. The connection sets [`APP_WAIT`] as its method
+//! call timeout and a listing asks every player at once, so however many
+//! players hang, a listing costs the reading thread that wait and no more;
+//! proxies never cache, so every reading asks the player.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs::{self, File};
+use std::future::{Future, poll_fn};
 use std::io::Read;
+use std::task::Poll;
 use std::time::Instant;
 
 use image::RgbaImage;
@@ -156,10 +159,16 @@ impl SessionList for Players {
             .filter(|name| name.starts_with(&self.prefix))
             .collect();
         names.sort();
+        let asked = names
+            .iter()
+            .map(|name| player_properties(connection.inner(), name))
+            .collect();
+        let answers = async_io::block_on(all(asked));
         Ok(names
             .into_iter()
-            .filter_map(|name| {
-                let properties = player_properties(&connection, &name).ok()?;
+            .zip(answers)
+            .filter_map(|(name, properties)| {
+                let properties = properties.ok()?;
                 let player = fields::player(&name, &properties)?;
                 let entry = Entry {
                     name,
@@ -285,18 +294,50 @@ fn properties_proxy<'a>(
 }
 
 /// Every property of the player's `Player` interface, in one call.
-fn player_properties(
-    connection: &Connection,
+async fn player_properties(
+    connection: &zbus::Connection,
     name: &str,
 ) -> Result<HashMap<String, Field>, String> {
     let interface = InterfaceName::try_from(PLAYER_INTERFACE).map_err(message)?;
-    let values = properties_proxy(connection, name)?
+    let values = zbus::fdo::PropertiesProxy::builder(connection)
+        .destination(name)
+        .and_then(|builder| builder.path(OBJECT_PATH))
+        .map_err(message)?
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await
+        .map_err(message)?
         .get_all(interface)
+        .await
         .map_err(message)?;
     Ok(values
         .iter()
         .map(|(key, value)| (key.clone(), field(value)))
         .collect())
+}
+
+/// What `futures` give, in their order, waited for side by side.
+async fn all<F: Future>(futures: Vec<F>) -> Vec<F::Output> {
+    let mut futures: Vec<_> = futures.into_iter().map(Box::pin).collect();
+    let mut outputs: Vec<Option<F::Output>> = futures.iter().map(|_| None).collect();
+    poll_fn(|context| {
+        let mut waiting = false;
+        for (future, output) in futures.iter_mut().zip(outputs.iter_mut()) {
+            if output.is_none() {
+                match future.as_mut().poll(context) {
+                    Poll::Ready(answer) => *output = Some(answer),
+                    Poll::Pending => waiting = true,
+                }
+            }
+        }
+        if waiting {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    })
+    .await;
+    outputs.into_iter().flatten().collect()
 }
 
 /// `value` as the mapping reads it: any integer type as an integer, a

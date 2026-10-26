@@ -26,7 +26,7 @@
 //!
 //! [`LegacyVerifier`] runs the pair-verify on every later connection
 //! (P55, P56), through the session's [`Verifier`] seam, and checks the
-//! receiver's signature when the credentials hold its key (a warning only).
+//! receiver's signature when the credentials hold its key, failing closed.
 //!
 //! The arithmetic is in [`srp`] (SRP-6a, RFC 5054) and [`keys`] (the AES,
 //! Ed25519 and X25519 steps); both use established crates for every
@@ -47,12 +47,12 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::digest::{self, Challenge};
 use crate::error::UnsupportedReason;
-use crate::error::{ErrorKind, SessionError, Warning};
+use crate::error::{ErrorKind, SessionError};
 use crate::homekit::HomeKitCredentials;
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::rtsp::{self, Message, Method, ParseError, Parser, Request, Response};
 use crate::secret::Secret;
-use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, STATUS_CONFLICT, Verifier};
+use crate::session::{CONNECT_TIMEOUT, RESPONSE_TIMEOUT, STATUS_CONFLICT, Verifier, VerifyFailure};
 
 use keys::{KEY_BYTES, RECEIVER_DATA_BYTES};
 use srp::{HASH_BYTES, SrpError, SrpGroup};
@@ -344,6 +344,11 @@ pub enum PairingEvent {
     },
     /// The host cancelled the pairing; the connection is closed.
     Stopped,
+    /// An AirPlay 2 receiver turned the PIN down, or asked for a wait, and
+    /// the pairing goes on (P150): which step it answered and how, never
+    /// the PIN, for the host's debug log. A [`PairingEvent::PinRequested`]
+    /// follows, at once or after `/pair-pin-start` sent again is answered.
+    PinTurnedDown(String),
 }
 
 /// What the driver does next for a pairing.
@@ -1202,7 +1207,6 @@ pub struct LegacyVerifier {
     verify_public: [u8; KEY_BYTES],
     /// A second X25519 secret for the one reconnect of P58.
     spare_secret: Option<Zeroizing<[u8; KEY_BYTES]>>,
-    warning: Option<Warning>,
 }
 
 impl fmt::Debug for LegacyVerifier {
@@ -1233,7 +1237,6 @@ impl LegacyVerifier {
             verify_public: keys::x25519_public(&verify_secret),
             verify_secret,
             spare_secret: Some(spare_secret),
-            warning: None,
         })
     }
 
@@ -1257,17 +1260,20 @@ impl Verifier for LegacyVerifier {
     /// signature, 68 bytes (P56). Another length, or an atv_pub that gives
     /// an all-zero shared secret, is a malformed answer. With the
     /// receiver's key in the credentials, atv_data is decrypted and checked
-    /// as its signature over atv_pub | v_pub; a failed check is only a
-    /// warning (P56).
-    fn second_request(&mut self, first_response: &[u8]) -> Option<Vec<u8>> {
+    /// as its signature over atv_pub | v_pub, and a failed check ends the
+    /// verification before the sender signs (P56).
+    fn second_request(&mut self, first_response: &[u8]) -> Result<Vec<u8>, VerifyFailure> {
         if first_response.len() != KEY_BYTES + RECEIVER_DATA_BYTES {
-            return None;
+            return Err(VerifyFailure::Malformed);
         }
         let mut receiver_public = [0u8; KEY_BYTES];
         receiver_public.copy_from_slice(&first_response[..KEY_BYTES]);
         let mut receiver_data = [0u8; RECEIVER_DATA_BYTES];
         receiver_data.copy_from_slice(&first_response[KEY_BYTES..]);
-        let shared = Zeroizing::new(keys::shared_secret(&self.verify_secret, &receiver_public)?);
+        let shared = Zeroizing::new(
+            keys::shared_secret(&self.verify_secret, &receiver_public)
+                .ok_or(VerifyFailure::Malformed)?,
+        );
         if let Some(receiver_key) = &self.receiver_key {
             let receiver_signature = keys::decrypt_receiver_data(&shared, &receiver_data);
             let valid = keys::check_receiver_signature(
@@ -1277,7 +1283,7 @@ impl Verifier for LegacyVerifier {
                 &receiver_signature,
             );
             if !valid {
-                self.warning = Some(Warning::ReceiverSignatureInvalid);
+                return Err(VerifyFailure::ReceiverUnverified);
             }
         }
         let signature = keys::verify_signature(&self.secret, &self.verify_public, &receiver_public);
@@ -1285,11 +1291,7 @@ impl Verifier for LegacyVerifier {
         let mut body = Vec::with_capacity(4 + encrypted.len());
         body.extend_from_slice(&[0, 0, 0, 0]);
         body.extend_from_slice(&encrypted);
-        Some(body)
-    }
-
-    fn take_warning(&mut self) -> Option<Warning> {
-        self.warning.take()
+        Ok(body)
     }
 
     /// Switches to the spare key pair for the reconnect of P58; there is
@@ -1300,7 +1302,6 @@ impl Verifier for LegacyVerifier {
         };
         self.verify_public = keys::x25519_public(&spare);
         self.verify_secret = spare;
-        self.warning = None;
         true
     }
 }

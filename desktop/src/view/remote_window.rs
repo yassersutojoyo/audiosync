@@ -93,6 +93,9 @@ pub(super) struct RemoteHost {
     public_since: String,
     /// The last reading failed and the log says so; repeats aren't logged.
     profiles_unread: bool,
+    /// The port the debug switch started this run's remote on; kept out of
+    /// the settings, and dropped once the user changes the setting.
+    debug_port: Option<u16>,
 }
 
 impl Default for RemoteHost {
@@ -106,7 +109,11 @@ impl Default for RemoteHost {
             host: remote::local_host(&computer_name),
             computer_name,
             lan_address: None,
+            #[cfg(not(test))]
             listen: Config::default().listen,
+            // The wildcard default could make Windows Firewall ask about the test program.
+            #[cfg(test)]
+            listen: vec![Ipv4Addr::LOCALHOST.into()],
             devices_path: devices_path(),
             qr: None,
             devices_offline: None,
@@ -115,6 +122,7 @@ impl Default for RemoteHost {
             watch: None,
             public: PublicNetworkWarning::default(),
             public_since: String::new(),
+            debug_port: None,
             profiles_unread: false,
         }
     }
@@ -241,9 +249,25 @@ impl App {
         });
     }
 
-    /// Starts the remote at launch when it was left on.
+    /// Starts the remote at launch when it was left on or the debug switch
+    /// asks for it.
     pub(super) fn restore_remote(&self) {
-        if self.ui.borrow().remote.on {
+        let debug_port = remote::debug_switch_port(
+            self.log.enabled(),
+            std::env::var_os(remote::DEBUG_SWITCH_VAR).as_deref(),
+            std::env::var_os(remote::DEBUG_PORT_VAR).as_deref(),
+            self.ui.borrow().remote,
+        );
+        self.restore_remote_with(debug_port);
+    }
+
+    pub(super) fn restore_remote_with(&self, debug_port: Option<u16>) {
+        if debug_port.is_some() {
+            self.remote.borrow_mut().debug_port = debug_port;
+            self.log
+                .log(|| "remote: on for this run (debug switch)".to_owned());
+        }
+        if self.ui.borrow().remote.on || debug_port.is_some() {
             self.start_remote();
         }
         self.show_remote_state();
@@ -272,6 +296,7 @@ impl App {
             return;
         }
         self.ui.borrow_mut().remote.on = on;
+        self.remote.borrow_mut().debug_port = None;
         self.remember_view();
         if on {
             self.start_remote();
@@ -289,7 +314,8 @@ impl App {
 
     fn start_remote(&self) {
         self.stop_remote();
-        let port = self.ui.borrow().remote.port;
+        let debug_port = self.remote.borrow().debug_port;
+        let port = debug_port.unwrap_or(self.ui.borrow().remote.port);
         let config = {
             let host = self.remote.borrow();
             Config {
@@ -297,6 +323,7 @@ impl App {
                 listen: host.listen.clone(),
                 local_name: host.host.clone(),
                 devices_path: host.devices_path.clone(),
+                log_pairing_codes: self.log.enabled(),
                 ..Config::default()
             }
         };
@@ -406,6 +433,7 @@ impl App {
             return;
         };
         self.ui.borrow_mut().remote = RemoteSettings { on: true, port };
+        self.remote.borrow_mut().debug_port = None;
         self.remember_view();
         self.start_remote();
         self.show_remote_state();
@@ -836,6 +864,91 @@ mod tests {
         app.remote.borrow_mut().devices_path = Some(blocker.join("remote-devices.json"));
         app.remote_window.invoke_forget_all_requested();
         assert!(app.remote_window.get_forget_failed());
+    }
+
+    fn current_code(app: &super::App) -> String {
+        let host = app.remote.borrow();
+        host.server
+            .as_ref()
+            .and_then(audiosync_remote::RemoteServer::pairing_code)
+            .expect("a code in force")
+    }
+
+    #[test]
+    fn the_debug_switch_starts_the_remote_for_this_run_and_saves_nothing() {
+        use crate::debug_log::{self, DebugLog};
+
+        let path = debug_log::test_dir("remote-switch").join(debug_log::FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        let app = super::super::tests::app_logging(MockBackend::new(), log.clone());
+        app.remote.borrow_mut().listen = vec![Ipv4Addr::LOCALHOST.into()];
+        let before = app.backend.borrow().view_settings();
+        assert!(!before.remote.on);
+
+        app.restore_remote_with(None);
+        assert!(!app.remote_listening(), "no switch, no remote");
+
+        let port = free_port();
+        app.restore_remote_with(Some(port));
+        assert!(app.remote_listening());
+        assert_eq!(
+            app.remote.borrow().server.as_ref().map(|s| s.port()),
+            Some(port)
+        );
+        app.remember_view();
+        assert_eq!(
+            app.backend.borrow().view_settings(),
+            before,
+            "the saved setting stays off with its port"
+        );
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        debug_log::assert_in_order(
+            &debug_log::read_messages(&path),
+            &[
+                "remote: on for this run (debug switch)",
+                &format!("web remote: listening on port {port}"),
+            ],
+        );
+    }
+
+    #[test]
+    fn the_debug_log_gets_each_pairing_code_and_a_normal_run_none() {
+        use crate::debug_log::{self, DebugLog};
+
+        let path = debug_log::test_dir("remote-codes").join(debug_log::FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        let app = super::super::tests::app_logging(MockBackend::new(), log.clone());
+        app.remote.borrow_mut().listen = vec![Ipv4Addr::LOCALHOST.into()];
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        let first = current_code(&app);
+        app.remote_window.invoke_new_code_requested();
+        let second = current_code(&app);
+        app.poll_remote();
+        app.remote_window.invoke_remote_toggled(false);
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let messages = debug_log::read_messages(&path);
+        debug_log::assert_in_order(
+            &messages,
+            &[
+                &format!("remote: pairing code {first} (debug only)"),
+                &format!("remote: pairing code {second} (debug only)"),
+            ],
+        );
+
+        let quiet = over_loopback(MockBackend::new());
+        quiet.ui.borrow_mut().remote.port = free_port();
+        quiet.remote_window.invoke_remote_toggled(true);
+        quiet.remote_window.invoke_new_code_requested();
+        let host = quiet.remote.borrow();
+        let server = host.server.as_ref().expect("listening");
+        let events: Vec<String> = std::iter::from_fn(|| server.poll_event())
+            .map(|event| event.to_string())
+            .collect();
+        assert!(
+            events.iter().all(|line| !line.contains("pairing code")),
+            "{events:?}"
+        );
     }
 
     #[test]

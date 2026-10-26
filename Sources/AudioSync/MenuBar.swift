@@ -38,6 +38,9 @@ final class AppModel: ObservableObject {
         var waitingForPtp = false
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
+        /// An AirPlay speaker with stored credentials, also ones it turned
+        /// down: Forget Pairing drops them.
+        var holdsCredentials = false
         /// An AirPlay speaker whose password AudioSync holds until it quits.
         var holdsPassword = false
         /// A stereo pair or home theater group: its kind and members (P176).
@@ -128,6 +131,7 @@ final class AppModel: ObservableObject {
         var forgetAirPlayPairing: (String) -> Void = { _ in }
         var setLocalEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
         var setLocalVolume: (String, Double) -> Void = { _, _ in }
+        var localVolumeSettled: (String) -> Void = { _ in }
         var setLocalOffset: (String, Double) -> Void = { _, _ in }
         var setAirPlayDelay: (Double) -> Void = { _ in }
         var setCastEnabled: (String, Bool, StartOrigin) -> Void = { _, _, _ in }
@@ -245,6 +249,8 @@ final class AppModel: ObservableObject {
     /// Whether AudioSync is (or may be) kept off the local network, where
     /// the sender can't see any AirPlay speaker.
     @Published var localNetworkHint: LocalNetworkHint = .none
+    /// AirPlay discovery takes its first look (`AirPlaySearch`).
+    @Published var airplaySearching = false
     @Published var nowPlaying: NowPlayingMonitor.Track?
     @Published var equalizerOn = false
     /// The curve the equalizer picker shows, or "Custom".
@@ -423,7 +429,11 @@ final class AppModel: ObservableObject {
 
     /// While an AirPlay speaker's slider is dragged, levels read back from it are ignored.
     func setVolumeDragging(_ speaker: Speaker, _ dragging: Bool) {
-        if speaker.tag == .airplay { actions.setAirPlayVolumeDragging(speaker.id, dragging) }
+        switch speaker.tag {
+        case .airplay: actions.setAirPlayVolumeDragging(speaker.id, dragging)
+        case .cast: break
+        default: if !dragging { actions.localVolumeSettled(speaker.id) }
+        }
     }
 
     func setVolume(_ speaker: Speaker, _ position: Double) {
@@ -491,7 +501,7 @@ final class AppModel: ObservableObject {
     /// shows, gives the network advice once for both.
     var networkNote: String? {
         text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList,
-                                 hint: shownLocalNetworkHint)
+                                 hint: shownLocalNetworkHint, airPlaySearching: airplaySearching)
     }
     /// Connected Speakers with no speaker at all.
     var networkEmptyText: String { networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint) }
@@ -1229,7 +1239,7 @@ struct AvailabilityNote: View {
     var body: some View {
         if let note = text.availability(availability) {
             HStack(spacing: 3) {
-                Image(systemName: availability == .needsCode ? "lock.fill" : "exclamationmark.triangle.fill")
+                Image(systemName: availability == .open ? "exclamationmark.triangle.fill" : "lock.fill")
                     .imageScale(.small)
                 Text(note).lineLimit(1)
             }
@@ -1322,10 +1332,16 @@ struct SourcePicker: View {
         } label: {
             HStack(spacing: 8) {
                 sourceIcon(model.currentSource)
+                    .accessibilityHidden(true)
                 Text(model.currentSource?.name ?? t.sourceSystem)
                     .lineLimit(1)
                 Spacer()
             }
+            // The menu takes its title from this content, which read the
+            // chosen app's name instead of the fixed label.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(t.sourceLabel)
+            .accessibilityValue(model.currentSource?.name ?? t.sourceSystem)
         }
         .menuStyle(.borderlessButton)
         // A borderless menu draws its label and chevron in the tint; the brand
@@ -1343,16 +1359,23 @@ struct SourcePicker: View {
     private func sourceIcon(_ source: AppModel.Source?) -> some View {
         let edge: CGFloat = large ? 20 : 18
         if let source, source.isInput {
-            Image(systemName: "mic.fill")
+            Self.unnamedSymbol("mic.fill")
                 .frame(width: edge, height: edge)
                 .foregroundStyle(Brand.tealText)
         } else if let icon = source?.icon {
             Image(nsImage: icon).resizable().frame(width: edge, height: edge)
         } else {
-            Image(systemName: "speaker.wave.3.fill")
+            Self.unnamedSymbol("speaker.wave.3.fill")
                 .frame(width: edge, height: edge)
                 .foregroundStyle(Brand.tealText)
         }
+    }
+
+    /// The menu hands its label image to AppKit, which ignores
+    /// `accessibilityHidden`; `Image(systemName:)` made VoiceOver read the
+    /// symbol's name ("Volume Higher") before the label.
+    private static func unnamedSymbol(_ name: String) -> Image {
+        Image(nsImage: NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage())
     }
 }
 
@@ -1505,8 +1528,8 @@ struct NoticeBanner<Footer: View>: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+            Image(systemName: notice.info ? "info.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(notice.info ? Brand.tealText : .orange)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1545,7 +1568,7 @@ struct NoticeBanner<Footer: View>: View {
             .help(text.dismissNotice)
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.12)))
+        .background(RoundedRectangle(cornerRadius: 10).fill((notice.info ? Brand.teal : Color.orange).opacity(0.12)))
     }
 }
 
@@ -1576,7 +1599,7 @@ struct PowerSwitch: View {
         .buttonStyle(.plain)
         .accessibilityLabel(text.streamingSwitch)
         .accessibilityValue(isOn ? text.on : text.off)
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(.isToggle)
     }
 }
 

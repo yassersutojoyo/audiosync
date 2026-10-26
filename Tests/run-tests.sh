@@ -8,6 +8,10 @@
 # check, scripts/privacy_check.py. The logic and core suites, the soak harness
 # and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
+# Off macOS (the Windows PC's Git Bash) the Swift suites can't build, so it runs
+# the checks that don't need them and the Rust crates' cargo tests instead, and
+# skips shellcheck when it isn't installed (CI runs it).
+# AUDIOSYNC_TESTS_ONLY=python runs only the Python checks (Tests/pythonpicktest.sh).
 set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 SRC=Sources/AudioSync
@@ -48,17 +52,49 @@ build() {   # build <name> <test file> <source files…> [-- <more swiftc argume
 }
 
 status=0
-echo "▶ shellcheck"
-scripts/shellcheck.sh || status=1
+macos=0
+if [ "$(uname -s)" = Darwin ]; then macos=1; fi
+only=${AUDIOSYNC_TESTS_ONLY:-}
+
+if [ -z "$only" ]; then
+  echo "▶ shellcheck"
+  scripts/shellcheck.sh || status=1
+fi
+
+# Windows puts a Microsoft Store stub named python3 on PATH that only prints
+# "Python was not found", so a candidate counts only when it runs code.
+python=
+for candidate in python3 python; do
+  if [ "$("$candidate" -I -c 'print(6 * 7)' 2>/dev/null)" = 42 ]; then
+    python=$candidate
+    break
+  fi
+done
+no_python="FAIL: no working Python (python3 or python) on PATH"
 
 echo "▶ private references (scripts/privacy_check.py)"
 # --verify-names checks scripts/forbidden-names.txt against the local plain
 # list (info/forbidden-names in the git directory) and skips without one.
-{ python3 -I scripts/privacy_check.py --self-test && python3 -I scripts/privacy_check.py \
-  && python3 -I scripts/privacy_check.py --verify-names; } || status=1
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  { "$python" -I scripts/privacy_check.py --self-test && "$python" -I scripts/privacy_check.py \
+    && "$python" -I scripts/privacy_check.py --verify-names; } || status=1
+fi
 
 echo "▶ no em dashes in public docs (scripts/text_check.py)"
-{ python3 -I scripts/text_check.py --self-test && python3 -I scripts/text_check.py; } || status=1
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  { "$python" -I scripts/text_check.py --self-test && "$python" -I scripts/text_check.py; } || status=1
+fi
+
+if [ "$only" = python ]; then
+  finished=1
+  exit $status
+fi
 
 echo "▶ side effects in debug logging"
 # DebugTrace.log takes an autoclosure that only runs with AUDIOSYNC_DEBUG=1, so a
@@ -149,6 +185,26 @@ fi
 echo "▶ cargo lookup (Tests/cargolookuptest.sh)"
 Tests/cargolookuptest.sh || status=1
 
+echo "▶ Python lookup (Tests/pythonpicktest.sh)"
+Tests/pythonpicktest.sh || status=1
+
+if [ "$macos" = 0 ]; then
+  # shellcheck source=scripts/cargo_path.sh disable=SC1091
+  source scripts/cargo_path.sh
+  for crate in core airplay cast remote desktop; do
+    echo "▶ $crate crate (cargo test)"
+    (cd "$crate" && cargo test --locked --quiet) || status=1
+  done
+  echo "SKIP: Rust core library (scripts/build_core.sh) needs macOS (xcrun)"
+  echo "SKIP: logic and core suites need macOS (swiftc and the core library)"
+  echo "SKIP: soak rules and soak harness need macOS (swiftc)"
+  if [ "${1:-}" = "--hardware" ]; then
+    echo "SKIP: engine test needs macOS (Core Audio output devices)"
+  fi
+  finished=1
+  exit $status
+fi
+
 echo "▶ Rust core (scripts/build_core.sh)"
 if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   echo "▶ logic"
@@ -161,7 +217,7 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
     AirPlayPairing.swift Notices.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
     AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift PanelColors.swift \
     NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift FieldEditor.swift AppSettings.swift Zones.swift Presets.swift HiddenSpeakers.swift SpeakerNames.swift AppLifecycle.swift MicrophoneRequestGate.swift LocalDelay.swift InputLevel.swift DeviceVolume.swift \
-    Localization.swift MenuNote.swift BrandTokens.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+    Localization.swift MenuNote.swift MenuActions.swift BrandTokens.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"
   build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"

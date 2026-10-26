@@ -113,9 +113,11 @@ extern "C" {
 #define ASC_AIRPLAY_FLAG_BUSY 64           /* its flags hint that another sender plays */
 #define ASC_AIRPLAY_FLAG_AIRPLAY2 128      /* it lists AirPlay 2 features */
 #define ASC_AIRPLAY_FLAG_OVER_AIRPLAY2 256 /* the AirPlay 2 switch is on and the sender reaches it over AirPlay 2 */
-#define ASC_AIRPLAY_FLAG_PAIRED 512        /* credentials are kept for it, which asc_airplay_forget_pairing drops */
+#define ASC_AIRPLAY_FLAG_PAIRED 512        /* credentials are kept for it, and no answer turned them down this run */
 #define ASC_AIRPLAY_FLAG_TARGET 1024       /* a stereo pair or home theater group, added like a speaker; only with the AirPlay 2 switch on */
 #define ASC_AIRPLAY_FLAG_INCOMPLETE 2048   /* a target with a member out of view, playing nothing, or reporting its partner unreachable */
+#define ASC_AIRPLAY_FLAG_CODE_EVERY_TIME 4096 /* reached over AirPlay 2, it asks for a code every time it connects; auto-connect leaves it off */
+#define ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT 8192 /* credentials are stored for it, turned down or not, which asc_airplay_forget_pairing drops */
 
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
@@ -131,6 +133,7 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
 #define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
 #define ASC_AIRPLAY_EVENT_REMOTE 13         /* a speaker's remote asked for .remote: send it through the now-playing control */
+#define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
 
 /* AscAirPlayEvent.remote: the transport control a speaker's remote asked for */
 #define ASC_AIRPLAY_REMOTE_PLAY_PAUSE 1
@@ -141,7 +144,6 @@ extern "C" {
 #define ASC_AIRPLAY_PLAYBACK_UNKNOWN 0
 #define ASC_AIRPLAY_PLAYBACK_PLAYING 1
 #define ASC_AIRPLAY_PLAYBACK_PAUSED 2
-#define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
 
 /* Which reports gave a speaker's latency (AscAirPlayEvent.receiver_latency_sources bits). */
 #define ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY 1     /* Audio-Latency of a RECORD answer */
@@ -152,7 +154,7 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_JACK_DISCONNECTED 1          /* nothing is plugged into its audio jack */
 #define ASC_AIRPLAY_WARNING_AUTH_SETUP_FAILED 2          /* POST /auth-setup failed */
 #define ASC_AIRPLAY_WARNING_REQUEST_FAILED 3             /* a volume, metadata, flush or keep-alive request failed */
-#define ASC_AIRPLAY_WARNING_RECEIVER_SIGNATURE_INVALID 4 /* its pair-verify signature didn't check out */
+/* 4 is retired: a receiver signature that fails its check is ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED. */
 #define ASC_AIRPLAY_WARNING_PTP_PORTS_TAKEN 5            /* PTP port 319 or 320 can't be bound: receivers that need PTP can't play; once per sender */
 #define ASC_AIRPLAY_WARNING_PTP_OUTSIDE_FAMILY 6         /* it has no address in the PTP service's family and plays on NTP */
 #define ASC_AIRPLAY_WARNING_VOLUME_READS_STOPPED 7       /* three volume reads in a row failed on an AirPlay 2 session: it isn't asked again */
@@ -160,6 +162,7 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE 9 /* no remote control port could be bound for the session: its remote buttons do nothing */
 #define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED 10 /* the remote control's _dacp._tcp record couldn't be registered */
 #define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 11         /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
+#define ASC_AIRPLAY_WARNING_PTP_FREE 12                  /* a session bound the PTP ports after PTP_PORTS_TAKEN: they are free again, and a later clash is reported anew */
 #define ASC_AIRPLAY_WARNING_PEERS_UPDATE_REFUSED 13      /* a SETPEERS update was refused or unanswered; it plays on; once per session */
 #define ASC_AIRPLAY_WARNING_GRANDMASTER_OUTRANKED 14     /* it announced a clock ranked ahead of AudioSync's and may not follow it; once per session */
 
@@ -181,11 +184,18 @@ extern "C" {
 #define ASC_AIRPLAY_ERROR_PAIRING_REQUIRED 8  /* it needs pairing, or rejected or cancelled it */
 #define ASC_AIRPLAY_ERROR_UNSUPPORTED 9       /* the sender can't drive it; .unsupported says why */
 #define ASC_AIRPLAY_ERROR_WRONG_PIN 10        /* a pairing's Apple TV turned the PIN down; a new pairing shows a PIN again */
+#define ASC_AIRPLAY_ERROR_RECEIVER_UNVERIFIED 11 /* a paired speaker didn't prove it is the one paired; not connected, its credentials stay */
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
 #define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* unreadable or not in the format: ignored, the next pairing replaces it */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
+
+/* How private asc_airplay_pairings_access and asc_airplay_airplay2_identity_access found a file. */
+#define ASC_AIRPLAY_FILE_UNREAD -1     /* NULL or dead handle, the identity file with AirPlay 2 off, or a file not read: another account owns it, it isn't a regular file, or opening it failed */
+#define ASC_AIRPLAY_FILE_PRIVATE 0     /* only its owner could read or write it, or there was none */
+#define ASC_AIRPLAY_FILE_TIGHTENED 1   /* other accounts could read or write it; it is owner-only now */
+#define ASC_AIRPLAY_FILE_STILL_OPEN 2  /* other accounts can read or write it; its mode couldn't be changed */
 
 /* The largest hold-back asc_airplay_set_hold_back applies, in ms: the sender's limit on a speaker's delay. */
 #define ASC_AIRPLAY_MAX_DELAY_MS 20000
@@ -387,6 +397,19 @@ double asc_output_gain(double local_position, double master_position);
  * asc_volume_gain(local) * asc_volume_gain(zone) * asc_volume_gain(master);
  * at zone 100 bit-identical to asc_output_gain. */
 double asc_zone_output_gain(double local_position, double zone_position, double master_position);
+
+/* An AirPlay speaker's device level D, 0 to 100: own x zone x master as
+ * fractions, times 100 (zone 100 outside a zone). */
+double asc_airplay_device_level(double own_position, double zone_position, double master_position);
+
+/* The whole number an AirPlay row shows for device level D: D rounded down. */
+double asc_airplay_row_level(double device_level);
+
+/* An AirPlay row moved to `row`: writes the own volume to store and the
+ * device level to send. False, writing nothing, when zone x master is 0,
+ * row isn't finite or a pointer is NULL. */
+bool asc_airplay_row_move(double row, double zone_position, double master_position,
+                          double *own_position, double *device_level);
 
 /*
  * Multiplies frames x 2 interleaved samples by gain, in place. Gain 0 (or a
@@ -1512,6 +1535,7 @@ typedef struct AscAirPlayEvent {
     int32_t remote;                  /* a remote event's ASC_AIRPLAY_REMOTE_* */
     int64_t receiver_latency_us;     /* a latency event's reported latency R_s in microseconds; 0 when no source gave one */
     uint32_t receiver_latency_sources; /* a latency event's ASC_AIRPLAY_LATENCY_SOURCE_* bits; 0 when none */
+    double device_level;             /* a volume event's device level D, 0 to 100 (show asc_airplay_row_level of it) */
 } AscAirPlayEvent;
 
 /*
@@ -1600,6 +1624,15 @@ bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
 
 /*
+ * An AirPlay row move (asc_airplay_row_move's results): stores own volume
+ * `own_position` for the speaker added under `id` and sends it device level
+ * `device_level`, live. Returns false, changing nothing, when the handle or
+ * id is NULL, no speaker was added under id, or a value isn't finite.
+ */
+bool asc_airplay_set_device_level(AscAirPlay *airplay, const char *id, double own_position,
+                                  double device_level);
+
+/*
  * Tells whether the user is dragging the volume slider of the speaker added
  * under `id`: while it is, a level read back from the speaker is ignored.
  * Returns false when the handle or id is NULL or no speaker was added under
@@ -1659,6 +1692,21 @@ double asc_airplay_latency_ms(const AscAirPlay *airplay);
  * starts over; a timeline event follows.
  */
 void asc_airplay_restart_timeline(AscAirPlay *airplay);
+
+/*
+ * The user paused playback on purpose (a remote's Pause, a media key or the
+ * app's pause button, never silence): every speaker gets a FLUSH so its
+ * buffer drops at once, and no audio goes out until asc_airplay_resume. The
+ * sessions stay up. A pause while paused does nothing. NULL does nothing.
+ */
+void asc_airplay_pause(AscAirPlay *airplay);
+
+/*
+ * Resumes after asc_airplay_pause: every speaker goes on from its flush
+ * point, in step, with the audio written from now on. A resume while
+ * playing does nothing. NULL does nothing.
+ */
+void asc_airplay_resume(AscAirPlay *airplay);
 
 /*
  * Sets the stream's base latency Lf in frames, clamped to 11025 to 88200.
@@ -1797,6 +1845,21 @@ int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
  * many receivers it holds credentials for, or an ASC_AIRPLAY_PAIRINGS_* code.
  */
 int32_t asc_airplay_open_airplay2_identity(AscAirPlay *airplay, const char *path);
+
+/*
+ * How private asc_airplay_open_pairings found the pairings file, for the
+ * host's log: an ASC_AIRPLAY_FILE_* code. A file other accounts could read
+ * or write is made owner-only when it is opened, also when it is then
+ * ignored.
+ */
+int32_t asc_airplay_pairings_access(const AscAirPlay *airplay);
+
+/*
+ * How private asc_airplay_open_airplay2_identity found the identity file, for
+ * the host's log: an ASC_AIRPLAY_FILE_* code, ASC_AIRPLAY_FILE_UNREAD with
+ * the hidden AirPlay 2 switch off.
+ */
+int32_t asc_airplay_airplay2_identity_access(const AscAirPlay *airplay);
 
 /*
  * Starts a PIN pairing with the listed receiver `id` (one listed as
@@ -2285,7 +2348,14 @@ const char *asc_remote_pairing_code(AscRemote *remote);
  */
 const char *asc_remote_rotate_code(AscRemote *remote);
 
-/* Whether 20 wrong codes locked pairing until the next asc_remote_rotate_code. */
+/*
+ * Makes <local_name>.local the accepted address in place of the name the
+ * remote started with, for when the computer is renamed; NULL or empty
+ * leaves only the IP address. The pairing code, its age and a lockout stay.
+ */
+void asc_remote_set_local_name(AscRemote *remote, const char *local_name);
+
+/* Whether 40 wrong codes locked pairing until the next asc_remote_rotate_code. */
 bool asc_remote_pairing_locked(AscRemote *remote);
 
 /* How many devices are paired (8 at most; pairing a ninth drops the oldest). */

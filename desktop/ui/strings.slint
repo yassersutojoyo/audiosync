@@ -36,9 +36,9 @@ export global Strings {
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
     // without finding a speaker (a firewall or a Public network blocks it).
-    out property <string> airplay-none-found: @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
+    out property <string> airplay-none-found: Platform.os == OperatingSystemType.linux ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
     // In place of that note and the Google Cast one when neither finds any.
-    out property <string> network-none-found: @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
+    out property <string> network-none-found: Platform.os == OperatingSystemType.linux ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
     // Under Connected Speakers while no Google Cast speaker is listed: the
     // search runs, has found nothing for 20 seconds, or couldn't start.
     public pure function cast-list(state: CastList) -> string {
@@ -46,6 +46,9 @@ export global Strings {
             return @tr("Looking for Google Cast speakers…");
         }
         if state == CastList.none-found {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.");
+            }
             return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
         }
         if state == CastList.failed {
@@ -75,7 +78,7 @@ export global Strings {
     out property <string> edit-cut: @tr("Cut");
     out property <string> edit-copy: @tr("Copy");
     out property <string> edit-paste: @tr("Paste");
-    out property <string> edit-select-all: @tr("Select all");
+    out property <string> edit-select-all: @tr("Select All");
     out property <string> source-label: @tr("Audio Source");
     // The channel pair choice of an input device with more than two channels.
     out property <string> input-channels-label: @tr("Input Channels");
@@ -116,16 +119,17 @@ export global Strings {
     // AirPlay speakers.
     out property <string> airplay-delay-title: @tr("AirPlay Delay");
     out property <string> airplay-delay-hint: @tr("While an AirPlay speaker is on, the speakers on this PC wait this long for it. Heard the AirPlay speakers late? Raise it.");
-    out property <string> auto-connect: @tr("Auto-connect when available");
+    out property <string> auto-connect: @tr("Auto-Connect When Available");
     out property <string> source-system: @tr("All System Audio");
     // Several apps as the source: the list under the source menu.
-    out property <string> source-mix-title: @tr("Several apps");
-    out property <string> source-mix-only: @tr("Only the checked apps");
-    out property <string> source-mix-all-except: @tr("All apps except the checked ones");
-    out property <string> source-mix-mode: @tr("Which apps to send");
+    out property <string> source-mix-title: @tr("Several Apps");
+    out property <string> source-mix-only: @tr("Only the Checked Apps");
+    out property <string> source-mix-all-except: @tr("All Apps Except the Checked Ones");
+    out property <string> source-mix-mode: @tr("Which Apps to Send");
     out property <string> source-mix-empty: @tr("Apps show up here once they play sound.");
     // Windows' process loopback reaches apps only, never the system sounds session.
-    out property <string> source-mix-all-except-note: @tr("Windows system sounds, such as notification chimes, aren't included.");
+    // PipeWire plays system sounds as app streams, so Linux shows no note.
+    out property <string> source-mix-all-except-note: Platform.os == OperatingSystemType.linux ? "" : @tr("Windows system sounds, such as notification chimes, aren't included.");
 
     // Notices: what happened and what to do about it
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
@@ -141,8 +145,8 @@ export global Strings {
     // Launch at Sign-In: Windows refused to add AudioSync to its startup
     // apps, refused to remove it, or has it turned off in Task Manager or
     // Settings (AudioSync then opens Settings > Apps > Startup).
-    out property <string> notice-launch-at-login-failed: @tr("Windows didn't let AudioSync add itself to the startup apps, so Launch at Sign-In stays off. To start AudioSync at sign-in anyway, put a shortcut to it in your Startup folder (press Windows+R and enter shell:startup), then add a space and --background at the end of the shortcut's Target so AudioSync starts in the tray.");
-    out property <string> notice-launch-at-login-not-removed: @tr("Windows didn't let AudioSync remove itself from the startup apps. To stop it launching at sign-in, turn AudioSync off in Settings > Apps > Startup.");
+    out property <string> notice-launch-at-login-failed: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't add itself to your desktop's autostart programs, so Launch at Sign-In stays off. Check that the autostart folder in your config folder (usually ~/.config/autostart) can be written to, then turn it on again.") : @tr("Windows didn't let AudioSync add itself to the startup apps, so Launch at Sign-In stays off. To start AudioSync at sign-in anyway, put a shortcut to it in your Startup folder (press Windows+R and enter shell:startup), then add a space and --background at the end of the shortcut's Target so AudioSync starts in the tray.");
+    out property <string> notice-launch-at-login-not-removed: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't remove itself from your desktop's autostart programs. To stop it launching at sign-in, delete io.github.yassersutojoyo.audiosync.desktop from the autostart folder in your config folder (usually ~/.config/autostart).") : @tr("Windows didn't let AudioSync remove itself from the startup apps. To stop it launching at sign-in, turn AudioSync off in Settings > Apps > Startup.");
     out property <string> notice-launch-at-login-off-in-settings: @tr("AudioSync is turned off in Windows' startup apps. Turn it on in Settings > Apps > Startup to finish turning on Launch at Sign-In.");
     // Windows lists no active sound output (none connected, or all turned
     // off) while a network speaker is on: apps have nowhere to play.
@@ -150,7 +154,7 @@ export global Strings {
     // sender keeps the mode it started with until the next launch.
     out property <string> notice-airplay2-on-next-launch: @tr("AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
     out property <string> notice-airplay2-off-next-launch: @tr("AirPlay 2 (Experimental) is off. AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
-    out property <string> notice-no-sound-output: @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
+    out property <string> notice-no-sound-output: Platform.os == OperatingSystemType.linux ? @tr("PipeWire has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.") : @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
     // speaker menu.
@@ -403,6 +407,9 @@ export global Strings {
     }
     // Windows keeps some ports for itself (Hyper-V, WSL) or refuses them for another reason.
     public pure function remote-port-unavailable(port: int) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Linux doesn't let AudioSync use port {}, so the web remote can't start. Enter another port and select Use Port.", port);
+        }
         return @tr("Windows doesn't let AudioSync use port {}, so the web remote can't start. Enter another port and select Use Port.", port);
     }
     out property <string> remote-port-label: @tr("Port");
@@ -445,7 +452,7 @@ export global Strings {
 
     // About dialog
     out property <string> about-copyright: "Copyright © 2026 Yasser Sutojoyo Kusumo";
-    out property <string> about-license: @tr("Licensed under GPL-3.0. Comes with no warranty.");
+    out property <string> about-license: @tr("Licensed under GPL-3.0-or-later. Comes with no warranty.");
 
     public pure function version(version: string) -> string {
         return @tr("Version {}", version);
@@ -463,6 +470,9 @@ export global Strings {
     // Windows audio couldn't be reached at startup, so AudioSync exits;
     // `detail` is the system's reason.
     public pure function audio-failed(detail: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("AudioSync couldn't reach PipeWire, so it can't start. Check that PipeWire is running, then open AudioSync again.\n\nDetails: {}", detail);
+        }
         return @tr("AudioSync couldn't reach Windows audio, so it can't start. Restart your PC, then open AudioSync again.\n\nDetails: {}", detail);
     }
 
@@ -528,6 +538,12 @@ export global Strings {
         return @tr("{} quit, so AudioSync switched to All System Audio.", source);
     }
 
+    // A source or channel pair picked while streaming couldn't start, so the
+    // one before it plays on: both as the source picker names them.
+    public pure function notice-switch-failed(new: string, old: string) -> string {
+        return @tr("Couldn't start {}, still on {}.", new, old);
+    }
+
     // Streaming was turned on while the chosen app wasn't running.
     public pure function notice-source-not-running(source: string) -> string {
         return @tr("{} is not running. Open it first, or pick another source.", source);
@@ -570,7 +586,7 @@ export global Strings {
 
     // A speaker that couldn't start was turned off.
     public pure function notice-speaker-failed(speaker: string) -> string {
-        return @tr("Could not start output for this speaker, so it was turned off: {}\nAnother app may be using it exclusively, or the format may be incompatible.", speaker);
+        return @tr("{} couldn't start, so it's off. Another app may be using it exclusively. Close that app and turn the speaker on again.", speaker);
     }
 
     // A speaker was unplugged or switched off while it played; it stays on.
@@ -589,7 +605,7 @@ export global Strings {
     // A zone or preset turned on from the web remote left out a speaker that
     // asks for a code: the prompt would wait on the PC with nobody there.
     public pure function notice-pair-first(speaker: string) -> string {
-        return @tr("{} stayed off. Pair it on the computer first.", speaker);
+        return @tr("{} stayed off. Pair it on this PC first.", speaker);
     }
 
     // A member of the stereo pair or home theater group `target` stays off
@@ -622,7 +638,7 @@ export global Strings {
             return @tr("{} declined the stream. AudioSync tries again shortly.", speaker);
         }
         if problem == AirPlayProblem.needs-password {
-            return @tr("{} asks for a password, so it's off. Turn it on again to enter it. To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) to \"Anyone on the Same Network\" and turn off Require Password.", speaker);
+            return @tr("{} asks for a password, so it's off. Turn it on again to enter it. To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) to “Anyone on the Same Network” and turn off Require Password.", speaker);
         }
         if problem == AirPlayProblem.needs-pin {
             return @tr("{} needs pairing with a PIN, so it's off. Turn it on again to pair.", speaker);
@@ -631,6 +647,9 @@ export global Strings {
             return @tr("Pairing with {} didn't finish, so it's off. To try again, turn it on and enter the PIN it shows.", speaker);
         }
         if problem == AirPlayProblem.pairing-not-yet {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("{} needs a kind of pairing AudioSync for Linux can't do yet, so it's off.", speaker);
+            }
             return @tr("{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.", speaker);
         }
         if problem == AirPlayProblem.airplay2-not-yet {
@@ -648,6 +667,9 @@ export global Strings {
         // An Apple TV and its home theater group never play at once.
         if problem == AirPlayProblem.plays-through-speakers {
             return @tr("{} plays through its home theater speakers, and AudioSync already plays to them, so it's off. Turn the group off to play to the Apple TV itself.", speaker);
+        }
+        if problem == AirPlayProblem.receiver-unverified {
+            return @tr("{} didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and turn it on to pair again with its PIN.", speaker);
         }
         if problem == AirPlayProblem.apple-tv-plays {
             return @tr("AudioSync already plays to {}'s Apple TV, so the group is off. Turn the Apple TV off to play to the group.", speaker);
@@ -680,6 +702,9 @@ export global Strings {
             return @tr("Another app started casting to {}, so it's off in AudioSync.", speaker);
         }
         if problem == CastProblem.blocked {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("{} couldn't reach the stream on this PC, so it's off. If a firewall runs on this PC, allow AudioSync in it, then turn it on again.", speaker);
+            }
             return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall on Private networks, or on Public networks if this network is set to Public, then turn it on again.", speaker);
         }
         return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
@@ -690,7 +715,18 @@ export global Strings {
     // names the ones AudioSync doesn't play to (muting them helps), `shared`
     // the ones AudioSync plays to as well (only moving the app helps); each is
     // one output's name, several as "A, B and C" (list-and), or empty.
+    // On Linux PipeWire plays the app on its output the same way; a volume
+    // control such as pavucontrol sets an app's output there.
     public pure function notice-heard-twice-app(source: string, mute: string, shared: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            if shared == "" {
+                return @tr("You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (volume control), or mute {1}.", source, mute);
+            }
+            if mute == "" {
+                return @tr("You may hear {0} twice: it also plays straight from {1}, where AudioSync plays too. Send it to an output you don't listen to (volume control).", source, shared);
+            }
+            return @tr("You may hear {0} twice: it also plays straight from {1}, and from {2}, where AudioSync plays too. Send it to an output you don't listen to (volume control). Muting {1} alone isn't enough.", source, mute, shared);
+        }
         if shared == "" {
             return @tr("You may hear {0} twice: it also plays straight from {1}. Send it to an output you don't listen to (Volume mixer), or mute {1}.", source, mute);
         }
@@ -703,6 +739,15 @@ export global Strings {
     // The same while the whole system is captured: what Windows plays on its
     // default output, or another app plays elsewhere, is heard there too.
     public pure function notice-heard-twice-system(mute: string, shared: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            if shared == "" {
+                return @tr("You may hear your PC's sound twice: it also plays straight from {0}. Make an output you don't listen to the default output (Sound settings), or mute {0}.", mute);
+            }
+            if mute == "" {
+                return @tr("You may hear your PC's sound twice: it also plays straight from {0}, where AudioSync plays too. Make an output you don't listen to the default output (Sound settings).", shared);
+            }
+            return @tr("You may hear your PC's sound twice: it also plays straight from {0}, and from {1}, where AudioSync plays too. Make an output you don't listen to the default output (Sound settings). Muting {0} alone isn't enough.", mute, shared);
+        }
         if shared == "" {
             return @tr("You may hear your PC's sound twice: it also plays straight from {0}. Make an output you don't listen to the Windows default (Sound settings), or mute {0}.", mute);
         }
@@ -720,8 +765,9 @@ export global Strings {
     out property <string> guide-steps: @tr("Steps");
     out property <string> guide-footer: @tr("AudioSync doesn't change these settings itself. The notice goes away on its own once the sound plays only through AudioSync.");
     out property <string> guide-close: @tr("Close");
-    // Shown in the guide when the shell didn't open the Settings page.
-    out property <string> guide-settings-failed: @tr("Couldn't open Settings. Open it from the Start menu: Settings > System > Sound.");
+    // Shown in the guide when the shell didn't open the Settings page (on
+    // Linux, when the sound settings program didn't start).
+    out property <string> guide-settings-failed: Platform.os == OperatingSystemType.linux ? @tr("Couldn't start the sound settings program. Open your desktop's sound settings, or a volume control such as pavucontrol, yourself.") : @tr("Couldn't open Settings. Open it from the Start menu: Settings > System > Sound.");
 
     // Joins a list of names: `head` is all but the last, already joined by
     // commas ("TV, Speakers"), `last` the last one.
@@ -729,33 +775,59 @@ export global Strings {
         return @tr("{0} and {1}", head, last);
     }
 
+    // routing.rs never counts a virtual output AudioSync doesn't play to as
+    // heard, so on Linux a PipeWire null sink is the way out when no output is free.
     public pure function guide-intro-app(source: string, outputs: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("PipeWire keeps playing {0} straight from {1}, next to AudioSync's synced copies. To hear it only once:", source, outputs);
+        }
         return @tr("Windows keeps playing {0} straight from {1}, next to AudioSync's synced copies. To hear it only once:", source, outputs);
     }
 
     public pure function guide-intro-system(outputs: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("PipeWire keeps playing your PC's sound straight from {0}, next to AudioSync's synced copies. To hear it only once:", outputs);
+        }
         return @tr("Windows keeps playing your PC's sound straight from {0}, next to AudioSync's synced copies. To hear it only once:", outputs);
     }
 
     public pure function guide-route-app(source: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Open a volume control that sets each app's output (pavucontrol does), find {0} and set its output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on. If you have no such output, add a virtual one (a PipeWire null sink) and send {0} there.", source);
+        }
         return @tr("Open the Volume mixer, find {0} and set its output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", source);
     }
 
     // For an "all apps except" source: `names` are the apps it leaves out.
     public pure function guide-route-all-except(names: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Open a volume control that sets each app's output (pavucontrol does), find every app other than {0} and set each one's output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on. If you have no such output, add a virtual one (a PipeWire null sink) and send them there.", names);
+        }
         return @tr("Open the Volume mixer, find every app other than {0} and set each one's output to one you don't listen to, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", names);
     }
 
     public pure function guide-change-default(current: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Open Sound settings and make an output you don't listen to the default instead of {0}, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on. If you have no such output, add a virtual one (a PipeWire null sink) and make it the default.", current);
+        }
         return @tr("Open Sound settings and make an output you don't listen to the default instead of {0}, such as a monitor's speakers you keep muted or an unused jack. AudioSync keeps playing to the speakers you turned on.", current);
     }
 
     public pure function guide-route-other-apps(outputs: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Some apps play straight to {0}. In a volume control such as pavucontrol, set them to an output you don't listen to as well.", outputs);
+        }
         return @tr("Some apps play straight to {0}. In the Volume mixer, set them to an output you don't listen to as well.", outputs);
     }
 
     // `count` is how many outputs `outputs` names.
     public pure function guide-mute-outputs(outputs: string, count: int) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            if count == 1 {
+                return @tr("Or, if you don't need {0}, mute it in Sound settings or in a volume control such as pavucontrol. AudioSync doesn't play there, so its copies stay as they are.", outputs);
+            }
+            return @tr("Or, if you don't need {0}, mute them in Sound settings or in a volume control such as pavucontrol. AudioSync doesn't play there, so its copies stay as they are.", outputs);
+        }
         if count == 1 {
             return @tr("Or, if you don't need {0}, mute it: in Sound settings, open it and turn its volume all the way down. AudioSync doesn't play there, so its copies stay as they are.", outputs);
         }
@@ -766,16 +838,27 @@ export global Strings {
         return @tr("Muting {0} won't help: AudioSync plays there too, so its copies would go quiet as well.", outputs);
     }
 
+    // PipeWire applies an app's own volume before the ports AudioSync links,
+    // so turning it down lowers the copies too.
     public pure function guide-keep-app-unmuted(source: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Don't mute or turn down {0} itself in a volume control: AudioSync captures it at that volume, so its copies would go quiet too.", source);
+        }
         return @tr("Don't mute {0} itself in the Volume mixer: AudioSync would capture silence.", source);
     }
 
     public pure function guide-keep-all-except-unmuted(names: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Don't mute or turn down any app other than {0} in a volume control: AudioSync captures each one at that volume, so its copies would go quiet too.", names);
+        }
         return @tr("Don't mute any app other than {0} in the Volume mixer: AudioSync would capture silence from it.", names);
     }
 
     // The label of a guide step's button.
     public pure function guide-open(page: GuidePage) -> string {
+        if page == GuidePage.volume-mixer && Platform.os == OperatingSystemType.linux {
+            return @tr("Open Volume Control");
+        }
         if page == GuidePage.volume-mixer {
             return @tr("Open Volume Mixer");
         }
@@ -787,11 +870,13 @@ export global Strings {
 
     // The Guide (Help > AudioSync Guide): how to use the Windows app, one
     // heading and one text per section, paragraphs split by a blank line.
+    // A `-linux` text replaces its section's text on Linux.
     // Each claim follows what desktop/src does; nothing the Mac app alone does.
     out property <string> help-title: @tr("AudioSync Guide");
     out property <string> help-intro: @tr("AudioSync plays your PC's sound on AirPlay and Google Cast speakers and on the outputs connected to this PC at the same time, and lines them up with a delay for each speaker.");
     out property <string> help-start-title: @tr("First Steps");
     out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens AudioSync quick settings, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. If Windows blocks microphone access for desktop apps, a notice says so, with a button that opens those privacy settings.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your zones, each with its speakers under it, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with its kind under its name.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
+    out property <string> help-start-linux: @tr("The main window holds every control. Where your desktop shows tray icons, the AudioSync icon there opens the main window, and its menu turns streaming on or off, turns Launch at Sign-In on or off, and quits AudioSync. Closing the window keeps AudioSync running in the tray, and streaming goes on. On a desktop without tray icons, closing the window quits AudioSync. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. AudioSync captures it through PipeWire and plays to the outputs PipeWire lists.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your zones, each with its speakers under it, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with its kind under its name.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
     out property <string> help-sync-title: @tr("Sync");
     out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S (File > Apply Typed Delay); the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay card under Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.");
     // The Sync section's second part, after the delay illustration.
@@ -804,18 +889,24 @@ export global Strings {
     out property <string> help-art-classes: @tr("Left: local and AirPlay speakers playing in step. Right: a Google Cast speaker starting after an offset you set by ear.");
     out property <string> help-calibration-title: @tr("Calibration");
     out property <string> help-calibration: @tr("A microphone can measure delays for you. Put it where you listen and keep the room quiet. Each measurement compares a speaker with the PC's own speakers, so they have to be on and playing, and streaming has to be on too.\n\nTo measure one local speaker, turn it on, select its row or its delay, and select Calibrate with Microphone under the delay controls. Headphones and virtual outputs don't have that button. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets its delay from the difference. Cancel stops it and leaves the delay as it was.\n\nCalibrate All Speakers, on the Calibration card under Equalizer, measures every speaker that is on, AirPlay and Google Cast included. Headphones, headsets, earbuds and virtual outputs are left out, since the microphone can't hear them, and their delay stays yours to set; the card lists them with the reason. If a speaker reports itself as headphones or a virtual output, Include Anyway measures it with the others until you close the results. AudioSync fades the music out, plays a sweep on each speaker in turn, twice each, and fades the music back in. The results show each speaker's old and new delay; the AirPlay speakers share one AirPlay delay, the middle of their values. Nothing changes until you choose Apply. Undo puts the old delays back, and Measure Again repeats one speaker.\n\nIf Windows blocks microphone access for desktop apps, AudioSync says so and where to allow it.");
+    out property <string> help-calibration-linux: @tr("A microphone can measure delays for you. Put it where you listen and keep the room quiet. Each measurement compares a speaker with the PC's own speakers, so they have to be on and playing, and streaming has to be on too.\n\nTo measure one local speaker, turn it on, select its row or its delay, and select Calibrate with Microphone under the delay controls. Headphones and virtual outputs don't have that button. AudioSync fades the music out, plays a short, quiet sweep on the PC's own speakers and then on this speaker, and sets its delay from the difference. Cancel stops it and leaves the delay as it was.\n\nCalibrate All Speakers, on the Calibration card under Equalizer, measures every speaker that is on, AirPlay and Google Cast included. Headphones, headsets, earbuds and virtual outputs are left out, since the microphone can't hear them, and their delay stays yours to set; the card lists them with the reason. If a speaker reports itself as headphones or a virtual output, Include Anyway measures it with the others until you close the results. AudioSync fades the music out, plays a sweep on each speaker in turn, twice each, and fades the music back in. The results show each speaker's old and new delay; the AirPlay speakers share one AirPlay delay, the middle of their values. Nothing changes until you choose Apply. Undo puts the old delays back, and Measure Again repeats one speaker.\n\nIf PipeWire doesn't let AudioSync use the microphone, AudioSync says so.");
     out property <string> help-volume-title: @tr("Volume");
     out property <string> help-volume: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay and Google Cast speakers included. A Google Cast speaker's slider sets the speaker's own volume, and Master Volume scales it like every other speaker. Mute under it mutes the speaker itself.\n\nWhen a local speaker that is on is turned down low or muted in Windows, a line under its slider says so, with a button that fixes it. AudioSync changes the Windows volume only when you select that button.");
+    out property <string> help-volume-linux: @tr("Each speaker has its own volume slider, and Master Volume sets the level of all of them at once, AirPlay and Google Cast speakers included. A Google Cast speaker's slider sets the speaker's own volume, and Master Volume scales it like every other speaker. Mute under it mutes the speaker itself.\n\nWhen a local speaker that is on is turned down low or muted in PipeWire, a line under its slider says so, with a button that fixes it. AudioSync changes the PipeWire volume only when you select that button.");
     out property <string> help-bluetooth-title: @tr("Bluetooth");
     out property <string> help-bluetooth: @tr("Bluetooth speakers and headphones add a lag of their own, so they often need a delay below 0. They also take a little longer to start playing.\n\nFor a headset, AudioSync lists its stereo output and leaves out its Hands-Free output and microphone, which carry call audio.");
     out property <string> help-double-title: @tr("Hearing Sound Twice");
     out property <string> help-double: @tr("Windows keeps playing the source on its own outputs while AudioSync plays its synced copies, so you may hear it twice. For one app, open the Volume mixer and send the app to an output you don't listen to. For All System Audio, make such an output the Windows default in Sound settings. Don't mute the app itself in the Volume mixer: AudioSync would capture silence.\n\nWhen AudioSync detects this, it shows a notice. Its Show How button opens the steps for your setup.");
+    out property <string> help-double-linux: @tr("PipeWire keeps playing the source on its own outputs while AudioSync plays its synced copies, so you may hear it twice. For one app, send it to an output you don't listen to in a volume control that sets each app's output (pavucontrol does). For All System Audio, make such an output the default in Sound settings. If you have no such output, add a virtual one (a PipeWire null sink). Don't mute or turn down the app itself: AudioSync captures it at that volume.\n\nWhen AudioSync detects this, it shows a notice. Its Show How button opens the steps for your setup, with a button that starts your desktop's sound settings or pavucontrol when one is installed.");
     out property <string> help-more-title: @tr("More Controls");
-    out property <string> help-more: @tr("To make a zone, turn on the speakers you want, then choose Speakers > New Zone from Active Speakers (Ctrl+N). They move under the zone, and a speaker is in one zone at most. Select the zone's name to turn its speakers on or off at once; its arrow shows or hides them. Each zone has its own volume. To rename or delete a zone, right-click it or use its … button; F2 renames the zone you're on. Deleting a zone puts its speakers back under This PC or Connected Speakers. To move a speaker, right-click it or use its … button and choose Move to Zone or Remove from Zone.\n\nTo save a preset, turn on the speakers you want and set their volumes, the zone volumes, the master volume and the curve, then select Save as Preset… in the Presets card or in View > Presets. Delays and the preamp aren't saved. To recall a preset, select it in the card, pick it in the flyout that opens from the AudioSync icon in the notification area, or press Ctrl+1 to Ctrl+9 for the first nine. Speakers you hid are never saved in a preset, and recalling one leaves them hidden. To rename, update or delete a preset, right-click it or use its … button.\n\nTo rename a speaker, double-click its name, or right-click it or use its … button and choose Rename. Type a name and press Enter. Leave it empty to use the device's own name; while a speaker is renamed, its tooltip shows that name.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-connect when available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nTo keep a speaker you never use out of the lists, choose Hide Speaker in its menu. A speaker that is on turns off first. Hidden Speakers in the Speakers menu lists what you hid; choose one to show it again, off, with its volume and delay as you left them.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp, preset curves and curves you save yourself. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media controls Windows shows for apps that support them. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as loopback drivers, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in to Windows, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync icon in the notification area. AudioSync then starts there without opening its window. If AudioSync is turned off in Settings > Apps > Startup, that page opens with a notice: turn AudioSync on there.\n\nView > Appearance: Match System follows Windows; Light or Dark keeps AudioSync's windows that way. The AudioSync icon in the notification area always follows the Windows theme.\n\nAudioSync saves the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer, and restores them the next time it starts.");
+    out property <string> help-more: @tr("To make a zone, turn on the speakers you want, then choose Speakers > New Zone from Active Speakers (Ctrl+N). They move under the zone, and a speaker is in one zone at most. Select the zone's name to turn its speakers on or off at once; its arrow shows or hides them. Each zone has its own volume. To rename or delete a zone, right-click it or use its … button; F2 renames the zone you're on. Deleting a zone puts its speakers back under This PC or Connected Speakers. To move a speaker, right-click it or use its … button and choose Move to Zone or Remove from Zone.\n\nTo save a preset, turn on the speakers you want and set their volumes, the zone volumes, the master volume and the curve, then select Save as Preset… in the Presets card or in View > Presets. Delays and the preamp aren't saved. To recall a preset, select it in the card, pick it in the flyout that opens from the AudioSync icon in the notification area, or press Ctrl+1 to Ctrl+9 for the first nine. Speakers you hid are never saved in a preset, and recalling one leaves them hidden. To rename, update or delete a preset, right-click it or use its … button.\n\nTo rename a speaker, double-click its name, or right-click it or use its … button and choose Rename. Type a name and press Enter. Leave it empty to use the device's own name; while a speaker is renamed, its tooltip shows that name.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-Connect When Available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nTo keep a speaker you never use out of the lists, choose Hide Speaker in its menu. A speaker that is on turns off first. Hidden Speakers in the Speakers menu lists what you hid; choose one to show it again, off, with its volume and delay as you left them.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp, preset curves and curves you save yourself. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media controls Windows shows for apps that support them. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as loopback drivers, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in to Windows, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync icon in the notification area. AudioSync then starts there without opening its window. If AudioSync is turned off in Settings > Apps > Startup, that page opens with a notice: turn AudioSync on there.\n\nView > Appearance: Match System follows Windows; Light or Dark keeps AudioSync's windows that way. The AudioSync icon in the notification area always follows the Windows theme.\n\nAudioSync saves the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer, and restores them the next time it starts.");
+    out property <string> help-more-linux: @tr("To make a zone, turn on the speakers you want, then choose Speakers > New Zone from Active Speakers (Ctrl+N). They move under the zone, and a speaker is in one zone at most. Select the zone's name to turn its speakers on or off at once; its arrow shows or hides them. Each zone has its own volume. To rename or delete a zone, right-click it or use its … button; F2 renames the zone you're on. Deleting a zone puts its speakers back under This PC or Connected Speakers. To move a speaker, right-click it or use its … button and choose Move to Zone or Remove from Zone.\n\nTo save a preset, turn on the speakers you want and set their volumes, the zone volumes, the master volume and the curve, then select Save as Preset… in the Presets card or in View > Presets. Delays and the preamp aren't saved. To recall a preset, select it in the card, or press Ctrl+1 to Ctrl+9 for the first nine. Speakers you hid are never saved in a preset, and recalling one leaves them hidden. To rename, update or delete a preset, right-click it or use its … button.\n\nTo rename a speaker, double-click its name, or right-click it or use its … button and choose Rename. Type a name and press Enter. Leave it empty to use the device's own name; while a speaker is renamed, its tooltip shows that name.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-Connect When Available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nTo keep a speaker you never use out of the lists, choose Hide Speaker in its menu. A speaker that is on turns off first. Hidden Speakers in the Speakers menu lists what you hid; choose one to show it again, off, with its volume and delay as you left them.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp, preset curves and curves you save yourself. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media players that share it over MPRIS. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as PipeWire null sinks, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync tray icon. AudioSync adds itself to your desktop's autostart programs, then starts in the tray without opening its window; on a desktop without tray icons, it opens its window.\n\nView > Appearance: Match System follows your desktop's light or dark setting; Light or Dark keeps AudioSync's windows that way.\n\nAudioSync saves the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer, and restores them the next time it starts.");
     out property <string> help-airplay-title: @tr("AirPlay");
-    out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows \"Asks for a code\". When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead.\n\nA speaker protected by a password shows \"Asks for a code\" too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\n'AirPlay 2 (Experimental)', in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync. With it on, a stereo pair or home theater group shows as one row, and its note names the speakers in it.");
+    out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows “Asks for a code”. When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead. A speaker set to ask for a code every time shows “Asks for a code every time”. Auto-connect leaves it off, and AudioSync asks for the code each time you turn it on.\n\nA speaker protected by a password shows “Asks for a code” too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\nAirPlay 2 (Experimental), in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync. With it on, a stereo pair or home theater group shows as one row, and its note names the speakers in it.");
+    out property <string> help-airplay-linux: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that no firewall on this PC blocks AudioSync.\n\nAudioSync for Linux plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Linux can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows “Asks for a code”. When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead. A speaker set to ask for a code every time shows “Asks for a code every time”. Auto-connect leaves it off, and AudioSync asks for the code each time you turn it on.\n\nA speaker protected by a password shows “Asks for a code” too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\nAirPlay 2 (Experimental), in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync. With it on, a stereo pair or home theater group shows as one row, and its note names the speakers in it.");
     out property <string> help-remote-title: @tr("Web Remote");
-    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off and set their volume and delay and the master volume, and it shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. On a network Windows calls Public, the window and a notice say so. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
+    out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off, and set their volume, their delay and the master volume. It also shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. On a network Windows calls Public, the window and a notice say so. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
+    out property <string> help-remote-linux: @tr("A phone on the same network as this PC can switch your speakers on and off, and set their volume, their delay and the master volume. It also shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-notices-title: @tr("Notices");
     out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in quick settings. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on File > Switch to All System Audio When the Source App Quits: AudioSync then moves to All System Audio, and stays there when the app opens again.");
 
@@ -835,6 +926,9 @@ export global Strings {
         }
         if kind == NoticeKind.source-quit || kind == NoticeKind.source-switched {
             return @tr("{} quit", name);
+        }
+        if kind == NoticeKind.switch-failed {
+            return @tr("{} didn't start", name);
         }
         if kind == NoticeKind.source-not-running {
             return @tr("{} not running", name);
@@ -992,6 +1086,15 @@ export global Strings {
             return root.will-play-help;
         }
         return root.turn-off;
+    }
+
+    // The note of a speaker that asks for a code every time, while it asks
+    // for one or is off; any other note otherwise (`availability`).
+    public pure function speaker-availability(a: Availability, every-time: bool, state: RowState) -> string {
+        if every-time && (a == Availability.needs-code || (a == Availability.open && state == RowState.off)) {
+            return @tr("Asks for a code every time");
+        }
+        return root.availability(a);
     }
 
     // The note next to an AirPlay speaker that can't simply play.
@@ -1232,12 +1335,21 @@ export global Strings {
 
     public pure function device-volume-hint(hint: DeviceVolumeHint, percent: int) -> string {
         if hint == DeviceVolumeHint.low {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("PipeWire volume is {}%", percent);
+            }
             return @tr("Windows volume is {}%", percent);
         }
         if hint == DeviceVolumeHint.muted {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("Muted in PipeWire");
+            }
             return @tr("Muted in Windows");
         }
         if hint == DeviceVolumeHint.muted-low {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("Muted in PipeWire, volume {}%", percent);
+            }
             return @tr("Muted in Windows, volume {}%", percent);
         }
         return "";
@@ -1261,12 +1373,21 @@ export global Strings {
     // ("Speakers: Windows volume is 13%").
     public pure function device-volume-hint-label(name: string, hint: DeviceVolumeHint, percent: int) -> string {
         if hint == DeviceVolumeHint.low {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("{0}: PipeWire volume is {1}%", name, percent);
+            }
             return @tr("{0}: Windows volume is {1}%", name, percent);
         }
         if hint == DeviceVolumeHint.muted {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("{}: muted in PipeWire", name);
+            }
             return @tr("{}: muted in Windows", name);
         }
         if hint == DeviceVolumeHint.muted-low {
+            if Platform.os == OperatingSystemType.linux {
+                return @tr("{0}: muted in PipeWire, volume {1}%", name, percent);
+            }
             return @tr("{0}: muted in Windows, volume {1}%", name, percent);
         }
         return "";
@@ -1307,18 +1428,18 @@ export global Strings {
     out property <string> calibration-a-speaker: @tr("a speaker");
     out property <string> calibration-no-reference: @tr("Calibration measures against the PC's own speakers, and they aren't listed.");
     out property <string> calibration-turn-on: @tr("Turn on streaming and this speaker to calibrate it.");
-    out property <string> calibration-microphone-denied: @tr("Windows is blocking microphone access for desktop apps. Turn on \"Let desktop apps access your microphone\" in Settings > Privacy & security > Microphone, and try again.");
-    out property <string> calibration-no-microphone: @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
-    out property <string> calibration-unsupported-rate: @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.");
+    out property <string> calibration-microphone-denied: Platform.os == OperatingSystemType.linux ? @tr("PipeWire didn't let AudioSync use the microphone. Allow microphone access for AudioSync in your desktop's privacy settings, and try again.") : @tr("Windows is blocking microphone access for desktop apps. Turn on “Let desktop apps access your microphone” in Settings > Privacy & security > Microphone, and try again.");
+    out property <string> calibration-no-microphone: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't record from the microphone. Check the input in Sound settings.") : @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
+    out property <string> calibration-unsupported-rate: Platform.os == OperatingSystemType.linux ? @tr("The microphone runs at a sample rate calibration can't use. Choose another input in Sound settings, and try again.") : @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.");
     out property <string> calibration-source-silent: @tr("The test sound couldn't start because streaming stalled. Turn streaming off and on, and try again.");
     out property <string> calibration-interrupted: @tr("Streaming, the speakers or their delays changed during the measurement.");
     out property <string> calibration-microphone-changed: @tr("The microphone changed between the two measurements. Keep one microphone as the default input, and try again.");
     out property <string> calibration-microphone-skipped: @tr("The microphone dropped audio during the measurement, so its timing can't be trusted. Try again.");
-    out property <string> calibration-hands-free: @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.");
-    out property <string> calibration-microphone-in-use: @tr("Another app has the microphone to itself. Close that app, or under Settings > System > Sound > More sound settings > Recording, open the microphone's Properties and turn off \"Allow applications to take exclusive control of this device\" on the Advanced tab, and try again.");
+    out property <string> calibration-hands-free: Platform.os == OperatingSystemType.linux ? @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Sound settings, and try again.") : @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.");
+    out property <string> calibration-microphone-in-use: Platform.os == OperatingSystemType.linux ? @tr("Another app has the microphone to itself. Close that app, and try again.") : @tr("Another app has the microphone to itself. Close that app, or under Settings > System > Sound > More sound settings > Recording, open the microphone's Properties and turn off “Allow applications to take exclusive control of this device” on the Advanced tab, and try again.");
     out property <string> calibration-unfinished: @tr("AudioSync couldn't finish working out the delay. Try again.");
     out property <string> calibration-too-short: @tr("The recording was too short. Try again.");
-    out property <string> calibration-too-long: @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48 kHz in Settings > System > Sound, and try again.");
+    out property <string> calibration-too-long: Platform.os == OperatingSystemType.linux ? @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, and try again.") : @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48 kHz in Settings > System > Sound, and try again.");
     out property <string> calibration-implausible: @tr("The two speakers were too far apart to measure.");
 
     public pure function calibrate-label(name: string) -> string {
@@ -1531,7 +1652,7 @@ export global Strings {
     // those wait; with none of them listed, how many it has.
     public pure function zone-count(on: int, total: int, waiting: int, present: int) -> string {
         if present == 0 && total > 0 {
-            return @tr("0 of {} here", total);
+            return @tr("None of {} found", total);
         }
         if waiting > 0 {
             return @tr("{} of {} on, {} waiting", on, total, waiting);

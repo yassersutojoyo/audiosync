@@ -95,6 +95,9 @@ pub struct Config {
     pub devices_path: Option<PathBuf>,
     pub timing: Timing,
     pub capacity: Capacity,
+    /// Reports each new pairing code as [`ServerEvent::PairingCode`], for a
+    /// debug log only: whoever reads that log can pair while the code works.
+    pub log_pairing_codes: bool,
 }
 
 /// How many connections the server holds; the defaults are the product's,
@@ -137,14 +140,16 @@ impl Default for Config {
             devices_path: None,
             timing: Timing::default(),
             capacity: Capacity::default(),
+            log_pairing_codes: false,
         }
     }
 }
 
 impl Config {
-    /// Reads `{"port"?, "local_name"?, "devices_path"?, "listen"?}`, the
-    /// defaults filling in what is missing; `listen` is a list of IP
-    /// literals. None when a field has the wrong type or value.
+    /// Reads `{"port"?, "local_name"?, "devices_path"?, "listen"?,
+    /// "log_pairing_codes"?}`, the defaults filling in what is missing;
+    /// `listen` is a list of IP literals. None when a field has the wrong
+    /// type or value.
     pub fn from_json(text: &str) -> Option<Config> {
         let value: serde_json::Value = serde_json::from_str(text).ok()?;
         let object = value.as_object()?;
@@ -165,6 +170,9 @@ impl Config {
                 .iter()
                 .map(|address| address.as_str()?.parse().ok())
                 .collect::<Option<_>>()?;
+        }
+        if let Some(log) = object.get("log_pairing_codes") {
+            config.log_pairing_codes = log.as_bool()?;
         }
         Some(config)
     }
@@ -202,7 +210,8 @@ impl fmt::Display for RemoteError {
 impl std::error::Error for RemoteError {}
 
 /// What the server reports for the debug log: who paired, failed or was
-/// refused, never a code or a token.
+/// refused, never a token, and a pairing code only with
+/// [`Config::log_pairing_codes`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerEvent {
     Paired {
@@ -242,6 +251,9 @@ pub enum ServerEvent {
     AcceptFailed(String),
     /// A connection's thread panicked; only that connection ended.
     ConnectionPanicked,
+    /// A new pairing code: at start, on a rotation and after a pairing used
+    /// the last one. Only with [`Config::log_pairing_codes`].
+    PairingCode(String),
 }
 
 impl fmt::Display for ServerEvent {
@@ -288,6 +300,9 @@ impl fmt::Display for ServerEvent {
             }
             ServerEvent::AcceptFailed(error) => write!(f, "remote: accepting failed: {error}"),
             ServerEvent::ConnectionPanicked => f.write_str("remote: a connection ended in a panic"),
+            ServerEvent::PairingCode(code) => {
+                write!(f, "remote: pairing code {code} (debug only)")
+            }
         }
     }
 }
@@ -325,11 +340,12 @@ impl Published {
 
 struct Shared {
     stopped: AtomicBool,
-    local_name: Option<String>,
+    local_name: Mutex<Option<String>>,
     content_security_policy: String,
     heartbeat: Duration,
     request_timeout: Duration,
     capacity: Capacity,
+    log_pairing_codes: bool,
     pairing: Mutex<Pairing>,
     devices: Mutex<TokenStore>,
     device_file: DeviceFile,
@@ -544,6 +560,12 @@ fn bind_all(config: &Config) -> Result<(Vec<TcpListener>, u16), RemoteError> {
     Ok((listeners, port))
 }
 
+fn own_name(name: Option<&str>) -> Option<String> {
+    name.map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
 impl RemoteServer {
     /// Opens the listeners and makes the first pairing code. `on_command`
     /// runs on a connection thread for each accepted change, one call at a
@@ -558,21 +580,22 @@ impl RemoteServer {
             code_lifetime: config.timing.code_lifetime,
             window: config.timing.wrong_code_window,
         };
-        let pairing = Pairing::new(limits, Instant::now()).map_err(|_| RemoteError::Random)?;
+        let now = Instant::now();
+        let pairing = Pairing::new(limits, now).map_err(|_| RemoteError::Random)?;
+        let first_code = config
+            .log_pairing_codes
+            .then(|| pairing.current(now).map(str::to_owned))
+            .flatten();
         let (devices, problem) = TokenStore::open(config.devices_path.clone());
         let (listeners, port) = bind_all(&config)?;
         let shared = Arc::new(Shared {
             stopped: AtomicBool::new(false),
-            local_name: config
-                .local_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned),
+            local_name: Mutex::new(own_name(config.local_name.as_deref())),
             content_security_policy,
             heartbeat: config.timing.heartbeat,
             request_timeout: config.timing.request,
             capacity: config.capacity,
+            log_pairing_codes: config.log_pairing_codes,
             pairing: Mutex::new(pairing),
             devices: Mutex::new(devices),
             device_file: DeviceFile::default(),
@@ -594,6 +617,9 @@ impl RemoteServer {
                 ));
             }
             None => {}
+        }
+        if let Some(code) = first_code {
+            shared.report(ServerEvent::PairingCode(code));
         }
         let rewrite = lock(&shared.devices).take_rewrite();
         if let Some(snapshot) = rewrite {
@@ -663,9 +689,20 @@ impl RemoteServer {
     /// A new pairing code, for when the user opens the setting: the old one
     /// stops working and a lockout ends.
     pub fn rotate_code(&self) -> Result<String, RemoteError> {
-        lock(&self.shared.pairing)
+        let code = lock(&self.shared.pairing)
             .rotate(Instant::now())
-            .map_err(|_| RemoteError::Random)
+            .map_err(|_| RemoteError::Random)?;
+        if self.shared.log_pairing_codes {
+            self.shared.report(ServerEvent::PairingCode(code.clone()));
+        }
+        Ok(code)
+    }
+
+    /// Makes `<name>.local` the accepted `Host` name in place of the one
+    /// before (none: only the address), for when the computer is renamed.
+    /// The pairing code, its age and the wrong-code counts stay as they are.
+    pub fn set_local_name(&self, name: Option<&str>) {
+        *lock(&self.shared.local_name) = own_name(name);
     }
 
     /// Whether too many wrong codes locked pairing until the next rotation.
@@ -997,7 +1034,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
     let host = match request.header("host") {
         Some(host)
             if request.header_count("host") == 1
-                && net::host_allowed(host, local, shared.local_name.as_deref()) =>
+                && net::host_allowed(host, local, lock(&shared.local_name).as_deref()) =>
         {
             host
         }
@@ -1121,7 +1158,15 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
     let Ok(token) = auth::random_token() else {
         return error(text::not_ready());
     };
-    let outcome = lock(&shared.pairing).attempt(from, &code, Instant::now());
+    let (outcome, next_code) = {
+        let mut pairing = lock(&shared.pairing);
+        let now = Instant::now();
+        let outcome = pairing.attempt(from, &code, now);
+        let next_code = (shared.log_pairing_codes && outcome == PairOutcome::Paired)
+            .then(|| pairing.current(now).map(str::to_owned))
+            .flatten();
+        (outcome, next_code)
+    };
     let failure = match outcome {
         PairOutcome::Paired => None,
         PairOutcome::Wrong => Some(text::wrong_code()),
@@ -1137,6 +1182,9 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
     let snapshot = lock(&shared.devices).add(&token, SystemTime::now());
     shared.save(snapshot);
     shared.report(ServerEvent::Paired { from });
+    if let Some(next_code) = next_code {
+        shared.report(ServerEvent::PairingCode(next_code));
+    }
     Response::json(200, json!({ "paired": true }).to_string())
         .with("Set-Cookie", token_cookie(&token, COOKIE_MAX_AGE))
         .into()
@@ -1496,6 +1544,60 @@ mod tests {
         assert_eq!(percent_decode("bad%zz"), None);
         assert_eq!(percent_decode("%FF"), None);
         assert_eq!(percent_decode(""), None);
+    }
+
+    fn pair_request(host: &str, code: &str) -> Request {
+        let head = format!(
+            "POST /api/pair HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json"
+        );
+        let mut request = http::parse_head(head.as_bytes()).unwrap();
+        request.body = json!({ "code": code }).to_string().into_bytes();
+        request
+    }
+
+    fn status(answer: Answer) -> u16 {
+        match answer {
+            Answer::Response(response) => response.status,
+            Answer::Events { .. } => 200,
+        }
+    }
+
+    // Through route, not sockets: a test can't connect from 127.0.0.2 on macOS.
+    #[test]
+    fn a_new_local_name_keeps_the_pairing_lockout_and_the_code() {
+        let config = Config {
+            port: 0,
+            listen: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            local_name: Some("kitchen".to_owned()),
+            ..Config::default()
+        };
+        let server = RemoteServer::start(config, |_: &Command| {}).unwrap();
+        let port = server.port();
+        let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+        let named = |name: &str| format!("{name}.local:{port}");
+        let code = server.pairing_code().unwrap();
+        let wrong: String = code
+            .chars()
+            .map(|digit| if digit == '0' { '1' } else { '0' })
+            .collect();
+        for index in 0..auth::WRONG_BEFORE_LOCK {
+            let host = 1 + (index as usize / auth::WRONG_PER_WINDOW) as u8;
+            let from = IpAddr::V4(Ipv4Addr::new(127, 0, 0, host));
+            let request = pair_request(&named("kitchen"), &wrong);
+            assert_eq!(status(route(&request, from, local, &server.shared)), 401);
+        }
+        assert!(server.pairing_locked());
+
+        server.set_local_name(Some("kitchen-2"));
+
+        assert!(server.pairing_locked());
+        assert_eq!(server.pairing_code().as_deref(), Some(code.as_str()));
+        let from = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 100));
+        let renamed = pair_request(&named("kitchen-2"), &code);
+        assert_eq!(status(route(&renamed, from, local, &server.shared)), 429);
+        let old = pair_request(&named("kitchen"), &code);
+        assert_eq!(status(route(&old, from, local, &server.shared)), 403);
+        server.stop();
     }
 
     #[test]

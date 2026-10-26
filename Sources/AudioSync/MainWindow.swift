@@ -972,7 +972,7 @@ struct SpeakerRow: View {
             if cast.removable { Button(t.castRemove) { model.actions.removeCastAddress(speaker.id) } }
         } else {
             autoConnectToggle(t)
-            if speaker.paired {
+            if speaker.paired || speaker.holdsCredentials {
                 Button(t.forgetPairing) { model.actions.forgetAirPlayPairing(speaker.id) }
                     .help(t.forgetPairingHelp)
             } else if speaker.holdsPassword {
@@ -1179,7 +1179,7 @@ private struct DelayValueButton: View {
         .accessibilityLabel(label)
         .accessibilityValue(value)
         .accessibilityHint(t.syncAdjust)
-        .onChange(of: value) { _, now in DebugTrace.log("[AudioSync] delay value \(id) shows \(now)") }
+        .onChange(of: value) { _, now in DebugTrace.log(DelayBadge.traceLine(id: id, shows: now)) }
         // Only for the field being typed in, which keeps VoiceOver's focus;
         // Command-S applying other open panels stays quiet.
         .onChange(of: draft.applied) { _, _ in
@@ -1387,8 +1387,8 @@ private enum GearMenu {
     static func make(model: AppModel, text t: UIStrings) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        menu.addItem(item(t.newZone) { model.actions.newZone() })
-        menu.addItem(item(t.refreshDevices) { model.actions.refreshDevices() })
+        menu.addItem(MenuAction.item(t.newZone) { model.actions.newZone() })
+        menu.addItem(MenuAction.item(t.refreshDevices) { model.actions.refreshDevices() })
         let hidden = NSMenu(title: t.hiddenSpeakers)
         hidden.autoenablesItems = false
         if model.hidden.menu.isEmpty {
@@ -1397,56 +1397,39 @@ private enum GearMenu {
             hidden.addItem(none)
         } else {
             for entry in model.hidden.menu {
-                hidden.addItem(item(entry.title) { model.unhide(entry) })
+                hidden.addItem(MenuAction.item(entry.title) { model.unhide(entry) })
             }
         }
         menu.addItem(withTitle: t.hiddenSpeakers, action: nil, keyEquivalent: "").submenu = hidden
-        menu.addItem(item(t.showVirtualDevices, on: model.showVirtualDevices) {
+        menu.addItem(MenuAction.item(t.showVirtualDevices, on: model.showVirtualDevices) {
             model.actions.setShowVirtualDevices(!model.showVirtualDevices)
         })
         menu.addItem(.separator())
         let appearance = NSMenu(title: t.appearance)
         appearance.autoenablesItems = false
         for choice in AppAppearance.allCases {
-            appearance.addItem(item(t.appearanceName(choice), on: model.appearance == choice) {
+            appearance.addItem(MenuAction.item(t.appearanceName(choice), on: model.appearance == choice) {
                 model.actions.setAppearance(choice)
             })
         }
         menu.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
-        menu.addItem(item(t.launchAtLogin, on: model.launchAtLogin) {
+        menu.addItem(MenuAction.item(t.launchAtLogin, on: model.launchAtLogin) {
             model.actions.setLaunchAtLogin(!model.launchAtLogin)
         })
-        menu.addItem(item(t.switchToSystemWhenSourceQuits, on: model.switchWhenSourceQuits) {
+        menu.addItem(MenuAction.item(t.switchToSystemWhenSourceQuits, on: model.switchWhenSourceQuits) {
             model.actions.setSwitchWhenSourceQuits(!model.switchWhenSourceQuits)
         })
-        menu.addItem(item(t.webRemoteMenu) { model.actions.openWebRemote() })
+        menu.addItem(MenuAction.item(t.webRemoteMenu) { model.actions.openWebRemote() })
         let airPlay2 = MenuAction { model.actions.setAirPlay2(!model.airPlay2) }
         for entry in MenuNoteItem.airPlay2Items(text: t, on: model.airPlay2, onAtLaunch: model.airPlay2AtLaunch,
-                                                action: #selector(MenuAction.perform(_:)), target: airPlay2) {
+                                                action: #selector(MenuAction.choose(_:)), target: airPlay2) {
             entry.representedObject = entry.target
             menu.addItem(entry)
         }
         menu.addItem(.separator())
-        menu.addItem(item(t.guideTitle) { model.actions.openGuide() })
+        menu.addItem(MenuAction.item(t.guideTitle) { model.actions.openGuide() })
         return menu
     }
-
-    private static func item(_ title: String, on: Bool? = nil, _ run: @escaping () -> Void) -> NSMenuItem {
-        let action = MenuAction(run)
-        let item = NSMenuItem(title: title, action: #selector(MenuAction.perform(_:)), keyEquivalent: "")
-        item.target = action
-        item.representedObject = action   // the target is weak
-        if let on { item.state = on ? .on : .off }
-        return item
-    }
-}
-
-/// Runs a closure when its menu item is chosen.
-@MainActor
-private final class MenuAction: NSObject {
-    let run: () -> Void
-    init(_ run: @escaping () -> Void) { self.run = run }
-    @objc func perform(_ sender: Any?) { run() }
 }
 
 /// An empty view behind a button that a menu opens under.
@@ -1466,19 +1449,14 @@ private struct MenuAnchor: NSViewRepresentable {
     func updateNSView(_ view: NSView, context: Context) { box.view = view }
 }
 
-private extension NSMenu {
-    func popUp(under view: NSView) {
-        let below = view.isFlipped ? view.bounds.maxY + 4 : view.bounds.minY - 4
-        _ = popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
-    }
-}
-
 /// A main-window column that scrolls when the window is too short for it.
 /// Cards scrolling under the header fade out instead of meeting a hard edge;
 /// the fade lies in the gap above the column and in the window's bottom margin.
+/// An edge fades only while content lies past it.
 private struct FadingScroll<Content: View>: View {
     let onBlankTap: () -> Void
     let content: Content
+    @StateObject private var edges = ScrollEdgeState()
 
     init(onBlankTap: @escaping () -> Void, @ViewBuilder content: () -> Content) {
         self.onBlankTap = onBlankTap
@@ -1497,25 +1475,51 @@ private struct FadingScroll<Content: View>: View {
                     .padding(.vertical, Self.fade)
                     // Blank space under a short column is outside every control too.
                     .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
+                    // The scroll geometry callback may not run before the first
+                    // scroll, so a column already too long at open is seeded here.
+                    .background(GeometryReader { column in
+                        Color.clear.onAppear {
+                            edges.fades = ScrollEdgeFades.of(contentHeight: column.size.height, visibleTop: 0,
+                                                             visibleHeight: viewport.size.height, fade: Self.fade)
+                        }
+                    })
                     .contentShape(Rectangle())
                     .onTapGesture(perform: onBlankTap)
             }
+            // The faded edges show there is more; a scroller would cover the
+            // cards' right edge and appear on one column only.
+            .scrollIndicators(.never)
+            .scrollBounceBehavior(.basedOnSize)
+            .onScrollGeometryChange(for: ScrollEdgeFades.self) { geometry in
+                ScrollEdgeFades.of(contentHeight: geometry.contentSize.height,
+                                   visibleTop: geometry.visibleRect.minY,
+                                   visibleHeight: geometry.visibleRect.height, fade: Self.fade)
+            } action: { _, fades in
+                edges.fades = fades
+            }
         }
-        .mask(ScrollEdgeFade(height: Self.fade))
+        .mask(ScrollEdgeFade(height: Self.fade, fades: edges.fades))
         .padding(.vertical, -Self.fade)
     }
 }
 
+private final class ScrollEdgeState: ObservableObject {
+    @Published var fades = ScrollEdgeFades.none
+}
+
 /// The scroll list's mask: opaque, fading out over `height` at the top and
-/// the bottom.
+/// the bottom as strongly as `fades` says.
 private struct ScrollEdgeFade: View {
     let height: CGFloat
+    let fades: ScrollEdgeFades
 
     var body: some View {
         VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: height)
+            LinearGradient(colors: [.black.opacity(1 - fades.top), .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: height)
             Color.black
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: height)
+            LinearGradient(colors: [.black, .black.opacity(1 - fades.bottom)], startPoint: .top, endPoint: .bottom)
+                .frame(height: height)
         }
     }
 }
@@ -1597,7 +1601,8 @@ struct SyncControls: View {
             HStack(spacing: 4) {
                 step(-100)
                 step(-10)
-                DelayTextField(rowID: id, text: draft.field.text, placeholder: text.delayFieldLabel, label: label, hint: cue,
+                DelayTextField(rowID: id, text: draft.field.text, placeholder: text.delayFieldPlaceholder,
+                               label: text.delayFieldLabel(label), hint: cue,
                                typed: { typed in
                                    draft.clearBlock()
                                    draft.field.type(typed)

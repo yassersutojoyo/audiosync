@@ -8,7 +8,7 @@
 //! follow IEEE 1588-2008 version 2.
 
 use std::collections::VecDeque;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use crate::clock::{PtpTime, SenderClock};
@@ -110,6 +110,34 @@ impl Default for PtpPorts {
             event: EVENT_PORT,
             general: GENERAL_PORT,
         }
+    }
+}
+
+/// Set by CI only: debug builds (the tests) then bind every address as a
+/// release does. Unset, they keep every socket on loopback, since Windows
+/// Firewall asks about each new test program that binds another address.
+pub const LAN_TESTS: &str = "AUDIOSYNC_LAN_TESTS";
+
+/// Whether this build keeps its sockets on loopback: a debug build without
+/// [`LAN_TESTS`]. Release builds ignore it and always bind every address.
+#[doc(hidden)]
+pub fn loopback_only() -> bool {
+    cfg!(debug_assertions) && std::env::var_os(LAN_TESTS).is_none_or(|value| value.is_empty())
+}
+
+/// The address the PTP service binds for receivers of `family`'s kind: every
+/// address of that kind (P158), or its loopback in a [`loopback_only`] build.
+#[doc(hidden)]
+pub fn service_bind_ip(family: IpAddr) -> IpAddr {
+    bind_ip(family, loopback_only())
+}
+
+fn bind_ip(family: IpAddr, loopback: bool) -> IpAddr {
+    match (family, loopback) {
+        (IpAddr::V4(_), false) => Ipv4Addr::UNSPECIFIED.into(),
+        (IpAddr::V6(_), false) => Ipv6Addr::UNSPECIFIED.into(),
+        (IpAddr::V4(_), true) => Ipv4Addr::LOCALHOST.into(),
+        (IpAddr::V6(_), true) => Ipv6Addr::LOCALHOST.into(),
     }
 }
 
@@ -537,5 +565,22 @@ impl ForeignAnnounce {
     /// Ranked ahead of `own`; the sender's own grandmaster never is.
     fn outranks(&self, own: &Dataset) -> bool {
         self.grandmaster.identity != own.identity && self.grandmaster < *own
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use super::bind_ip;
+
+    #[test]
+    fn the_service_binds_every_address_unless_tests_keep_to_loopback() {
+        let v4 = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
+        let v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        assert_eq!(bind_ip(v4, false), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(bind_ip(v6, false), IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+        assert_eq!(bind_ip(v4, true), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(bind_ip(v6, true), IpAddr::V6(Ipv6Addr::LOCALHOST));
     }
 }

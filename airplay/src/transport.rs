@@ -66,7 +66,7 @@ use std::net::{
     IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV6, TcpStream, UdpSocket,
 };
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
@@ -262,6 +262,8 @@ impl Udp {
 pub(crate) struct SessionIo {
     tcp: TcpStream,
     writer: Option<mpsc::Sender<Vec<u8>>>,
+    /// Shared with the writer thread, which may have been a pairing's.
+    backlog: Arc<Backlog>,
     control: Arc<UdpSocket>,
     timing: Arc<UdpSocket>,
     stop: Arc<AtomicBool>,
@@ -293,7 +295,8 @@ impl SessionIo {
         let writer_stream = tcp.try_clone()?;
         let (writer, writes) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
-        let (mut io, connection) = SessionIo::with(tcp, writer, stop, Vec::new(), udp);
+        let backlog = Arc::new(Backlog::default());
+        let (mut io, connection) = SessionIo::with(tcp, writer, backlog, stop, Vec::new(), udp);
         // On a failed spawn, dropping `io` stops the threads already
         // running.
         io.spawn_udp(session, attempt, clock, counters, notify.clone())?;
@@ -310,6 +313,7 @@ impl SessionIo {
                 attempt,
                 writer_stream,
                 writes,
+                io.backlog.clone(),
                 io.stop.clone(),
                 notify.clone(),
             ),
@@ -342,7 +346,14 @@ impl SessionIo {
             return Err(Vec::new());
         };
         let threads = std::mem::take(&mut rtsp.threads);
-        let (mut io, connection) = SessionIo::with(tcp, writer, rtsp.stop.clone(), threads, udp);
+        let (mut io, connection) = SessionIo::with(
+            tcp,
+            writer,
+            rtsp.backlog.clone(),
+            rtsp.stop.clone(),
+            threads,
+            udp,
+        );
         match io.spawn_udp(session, attempt, clock, counters, notify) {
             Ok(()) => Ok((io, connection)),
             Err(_) => Err(io.close()),
@@ -352,6 +363,7 @@ impl SessionIo {
     fn with(
         tcp: TcpStream,
         writer: mpsc::Sender<Vec<u8>>,
+        backlog: Arc<Backlog>,
         stop: Arc<AtomicBool>,
         threads: Vec<JoinHandle<()>>,
         udp: Udp,
@@ -359,6 +371,7 @@ impl SessionIo {
         let io = SessionIo {
             tcp,
             writer: Some(writer),
+            backlog,
             control: Arc::new(udp.control),
             timing: Arc::new(udp.timing),
             stop,
@@ -414,6 +427,7 @@ impl SessionIo {
     /// in order.
     pub(crate) fn write(&self, bytes: Vec<u8>) {
         if let Some(writer) = &self.writer {
+            self.backlog.add(bytes.len());
             let _ = writer.send(bytes);
         }
     }
@@ -469,6 +483,71 @@ impl Drop for SessionIo {
     }
 }
 
+/// How much a connection may hold queued and not yet written.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BacklogLimit {
+    pub(crate) messages: usize,
+    pub(crate) bytes: usize,
+}
+
+/// The unwritten answers an AirPlay 2 event connection may hold: the
+/// receiver sends a few requests a session and reads each answer, so a
+/// backlog this deep means it stopped reading.
+pub(crate) const EVENT_BACKLOG: BacklogLimit = BacklogLimit {
+    messages: 256,
+    bytes: 256 * 1024,
+};
+
+/// What a bounded write did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Queued {
+    Yes,
+    /// This write passed the limit: nothing was queued and the connection
+    /// is shut down, so its reader reports it closed.
+    Overflowed,
+    /// An earlier write overflowed; nothing was queued.
+    Dropped,
+}
+
+/// The messages and bytes handed to a writer thread and not yet written.
+#[derive(Debug, Default)]
+pub(crate) struct Backlog {
+    messages: AtomicUsize,
+    bytes: AtomicUsize,
+    overflowed: AtomicBool,
+}
+
+impl Backlog {
+    /// Counts a message of `len` bytes in, unless that passes `limit`.
+    /// Only one thread admits; the writer only takes away, so the check
+    /// can't be overtaken.
+    fn admit(&self, len: usize, limit: BacklogLimit) -> bool {
+        let (messages, bytes) = self.queued();
+        if messages >= limit.messages || bytes.saturating_add(len) > limit.bytes {
+            return false;
+        }
+        self.add(len);
+        true
+    }
+
+    fn add(&self, len: usize) {
+        self.messages.fetch_add(1, Ordering::AcqRel);
+        self.bytes.fetch_add(len, Ordering::AcqRel);
+    }
+
+    fn written(&self, len: usize) {
+        self.messages.fetch_sub(1, Ordering::AcqRel);
+        self.bytes.fetch_sub(len, Ordering::AcqRel);
+    }
+
+    fn queued(&self) -> (usize, usize) {
+        (
+            self.messages.load(Ordering::Acquire),
+            self.bytes.load(Ordering::Acquire),
+        )
+    }
+}
+
 /// The connection of a pairing (P47): an RTSP reader and writer on their
 /// own threads, as in a session, without UDP sockets.
 #[derive(Debug)]
@@ -476,6 +555,7 @@ pub(crate) struct RtspIo {
     /// None once a session took the connection over.
     tcp: Option<TcpStream>,
     writer: Option<mpsc::Sender<Vec<u8>>>,
+    backlog: Arc<Backlog>,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
 }
@@ -498,6 +578,7 @@ impl RtspIo {
         let mut io = RtspIo {
             tcp: Some(tcp),
             writer: Some(writer),
+            backlog: Arc::new(Backlog::default()),
             stop: Arc::new(AtomicBool::new(false)),
             threads: Vec::new(),
         };
@@ -515,6 +596,7 @@ impl RtspIo {
                 attempt,
                 writer_stream,
                 writes,
+                io.backlog.clone(),
                 io.stop.clone(),
                 notify.clone(),
             ),
@@ -528,8 +610,31 @@ impl RtspIo {
     /// order.
     pub(crate) fn write(&self, bytes: Vec<u8>) {
         if let Some(writer) = &self.writer {
+            self.backlog.add(bytes.len());
             let _ = writer.send(bytes);
         }
+    }
+
+    /// Queues bytes unless the unwritten backlog would pass `limit`, for a
+    /// connection whose writes answer the peer, so a peer that reads slowly
+    /// can't grow the queue without end.
+    pub(crate) fn write_bounded(&self, bytes: Vec<u8>, limit: BacklogLimit) -> Queued {
+        let Some(writer) = &self.writer else {
+            return Queued::Dropped;
+        };
+        if self.backlog.overflowed.load(Ordering::Acquire) {
+            return Queued::Dropped;
+        }
+        if !self.backlog.admit(bytes.len(), limit) {
+            self.backlog.overflowed.store(true, Ordering::Release);
+            // The stop flag stays clear, so the reader reports the close.
+            if let Some(tcp) = &self.tcp {
+                let _ = tcp.shutdown(Shutdown::Both);
+            }
+            return Queued::Overflowed;
+        }
+        let _ = writer.send(bytes);
+        Queued::Yes
     }
 
     /// Closes the connection and stops the threads, whose handles come back
@@ -572,19 +677,16 @@ pub(crate) struct PtpIo {
 }
 
 impl PtpIo {
-    /// Binds both ports on every address of `family`'s kind; either bind
+    /// Binds both ports on [`crate::ptp::service_bind_ip`]; either bind
     /// failing makes PTP unavailable (P158).
     pub(crate) fn open(
         family: IpAddr,
         ports: crate::ptp::PtpPorts,
         notify: impl Notify,
     ) -> io::Result<PtpIo> {
-        let any = match family {
-            IpAddr::V4(_) => IpAddr::from([0u8; 4]),
-            IpAddr::V6(_) => IpAddr::from([0u16; 8]),
-        };
-        let event = UdpSocket::bind(SocketAddr::new(any, ports.event))?;
-        let general = UdpSocket::bind(SocketAddr::new(any, ports.general))?;
+        let ip = crate::ptp::service_bind_ip(family);
+        let event = UdpSocket::bind(SocketAddr::new(ip, ports.event))?;
+        let general = UdpSocket::bind(SocketAddr::new(ip, ports.general))?;
         for socket in [&event, &general] {
             socket.set_read_timeout(Some(UDP_BACKSTOP))?;
             socket.set_write_timeout(Some(UDP_SEND_TIMEOUT))?;
@@ -911,6 +1013,7 @@ fn write_loop(
     attempt: u32,
     mut stream: TcpStream,
     writes: mpsc::Receiver<Vec<u8>>,
+    backlog: Arc<Backlog>,
     stop: Arc<AtomicBool>,
     notify: impl Notify,
 ) -> impl FnOnce() + Send + 'static {
@@ -925,6 +1028,7 @@ fn write_loop(
                     return;
                 }
             }
+            backlog.written(bytes.len());
         }
     }
 }
@@ -1125,6 +1229,72 @@ mod tests {
                 .try_iter()
                 .any(|event| matches!(event, IoEvent::RtspClosed { .. }))
         );
+    }
+
+    // Answers that never drain are admitted up to the limit and no further,
+    // by count for small ones and by bytes for large ones.
+    #[test]
+    fn a_backlog_admits_up_to_its_limit_only() {
+        let small = Backlog::default();
+        let admitted = (0..10_000)
+            .filter(|_| small.admit(120, EVENT_BACKLOG))
+            .count();
+        assert_eq!(admitted, EVENT_BACKLOG.messages);
+        assert_eq!(
+            small.queued(),
+            (EVENT_BACKLOG.messages, 120 * EVENT_BACKLOG.messages)
+        );
+        let large = Backlog::default();
+        let admitted = (0..10_000)
+            .filter(|_| large.admit(64 * 1024, EVENT_BACKLOG))
+            .count();
+        assert_eq!(admitted, EVENT_BACKLOG.bytes / (64 * 1024));
+        small.written(120);
+        assert!(small.admit(120, EVENT_BACKLOG));
+    }
+
+    // A receiver that stops reading its answers has its connection shut
+    // down once the backlog passes the limit, and the close is reported as
+    // the receiver's, so the session takes its usual closed path.
+    #[test]
+    fn an_unread_backlog_past_its_limit_closes_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let tcp = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+        let (_receiver, _) = listener.accept().expect("accept");
+        let (notify, received) = panicking_on(|_| false);
+        let io = RtspIo::open(SessionKey(9), 1, tcp, notify).expect("event I/O");
+        let limit = BacklogLimit {
+            messages: 8,
+            bytes: 1024 * 1024,
+        };
+        let answer = vec![0u8; 64 * 1024];
+        let mut refused = Vec::new();
+        for _ in 0..10_000 {
+            let queued = io.write_bounded(answer.clone(), limit);
+            let (messages, bytes) = io.backlog.queued();
+            assert!(messages <= limit.messages, "{messages} messages queued");
+            assert!(bytes <= limit.bytes, "{bytes} bytes queued");
+            if queued != Queued::Yes {
+                refused.push(queued);
+                if refused.len() == 2 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(refused, [Queued::Overflowed, Queued::Dropped]);
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match received.recv_timeout(left) {
+                Ok(IoEvent::RtspClosed { session, attempt }) => {
+                    assert_eq!((session, attempt), (SessionKey(9), 1));
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) => panic!("no close reported: {error:?}"),
+            }
+        }
+        drop(io);
     }
 
     /// A timing request with sequence number `seq` (P90).

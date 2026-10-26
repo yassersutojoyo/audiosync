@@ -141,6 +141,9 @@ pub struct MediaSession {
     pub artist: String,
     pub album: String,
     pub playing: bool,
+    /// The app reports itself paused: false while it plays, and while it is
+    /// stopped, changing tracks or opening.
+    pub paused: bool,
 }
 
 /// Which sessions count, from the capture source.
@@ -540,6 +543,15 @@ impl TrackInfo {
         Some((track.session.app_id.clone(), track.session.playing))
     }
 
+    /// The session that counts as the explicit pause reads it (S292): its
+    /// app ID and whether it plays; `None` unless it plays or is paused,
+    /// so a stop or a track change is never taken for a pause.
+    pub fn player_state(&self) -> Option<(String, bool)> {
+        self.following.as_ref()?;
+        let session = &self.reading.as_ref()?.track.as_ref()?.session;
+        (session.playing || session.paused).then(|| (session.app_id.clone(), session.playing))
+    }
+
     /// Sends a speaker remote's control to the session that counts.
     pub fn send(&mut self, command: Transport) {
         if self.following.is_some()
@@ -830,6 +842,7 @@ pub mod fake {
             artist: format!("{title} artist"),
             album: format!("{title} album"),
             playing,
+            paused: !playing,
         }
     }
 
@@ -908,6 +921,35 @@ mod tests {
         reader.read(None);
         info.sync(Some(&whole_system()), now);
         assert_eq!(info.playback(), None, "no session counts");
+    }
+
+    // covers: S292
+    #[test]
+    fn only_a_session_that_plays_or_pauses_has_a_player_state() {
+        let reader = FakeReader::default();
+        let mut info = track_info(&reader);
+        let now = Instant::now();
+        info.sync(Some(&whole_system()), now);
+        let spotify = |playing: bool, paused: bool| {
+            let mut read = track("Spotify.exe", "Song", playing, None);
+            read.session.paused = paused;
+            read
+        };
+        let spotify_state = |playing| Some(("Spotify.exe".to_owned(), playing));
+        reader.read(Some(spotify(true, false)));
+        info.sync(Some(&whole_system()), now);
+        assert_eq!(info.player_state(), spotify_state(true));
+        reader.read(Some(spotify(false, false)));
+        info.sync(Some(&whole_system()), now);
+        assert_eq!(info.player_state(), None, "stopped or changing tracks");
+        assert_eq!(
+            info.playback(),
+            spotify_state(false),
+            "S274 still reads it as not playing"
+        );
+        reader.read(Some(spotify(false, true)));
+        info.sync(Some(&whole_system()), now);
+        assert_eq!(info.player_state(), spotify_state(false));
     }
 
     #[test]

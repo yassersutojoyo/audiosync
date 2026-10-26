@@ -41,7 +41,7 @@ use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transpo
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
     MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
-    SourceKind, SourceName, SpeakerState, ViewSettings, WindowFrame,
+    SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame,
 };
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
@@ -1136,6 +1136,14 @@ impl App {
             _ => Transport::Next,
         };
         self.log.log(|| format!("now playing: {command:?} pressed"));
+        let shown = self
+            .now_playing
+            .borrow()
+            .track()
+            .map(|track| (track.app_id.clone(), track.playing));
+        if let (Transport::PlayPause, Some((app, playing))) = (command, shown) {
+            self.backend.borrow_mut().play_pause_pressed(&app, playing);
+        }
         self.now_playing.borrow_mut().send(command);
     }
 
@@ -3891,6 +3899,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::TooManyAirPlay2Speakers => AirPlayProblem::TooManyAirplay2Speakers,
         P::PtpOtherNetwork => AirPlayProblem::PtpOtherNetwork,
         P::PlaysThroughSpeakers => AirPlayProblem::PlaysThroughSpeakers,
+        P::ReceiverUnverified => AirPlayProblem::ReceiverUnverified,
         P::AppleTvPlays => AirPlayProblem::AppleTvPlays,
         P::PlaysInGroup => AirPlayProblem::PlaysInGroup,
         P::Unsupported => AirPlayProblem::Unsupported,
@@ -3996,14 +4005,19 @@ pub fn speaker_item(
             .is_none(),
         // Needs the strings: set by the caller (`App::refresh`).
         calibration_status: SharedString::default(),
-        calibration_privacy: state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
-            && state.calibration.phase == Phase::Failed(Failure::MicrophoneDenied),
+        calibration_privacy: offers_privacy(
+            state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str())
+                && state.calibration.phase == Phase::Failed(Failure::MicrophoneDenied),
+            crate::platform::can_open_settings,
+        ),
         // Needs the strings: set by the caller (`App::refresh`).
         calibration_left_out: SharedString::default(),
         auto_connect: speaker.auto_connect,
         availability: availability(speaker.availability),
         paired: speaker.paired,
         holds_password: speaker.holds_password,
+        holds_credentials: speaker.holds_credentials,
+        code_every_time: speaker.code_every_time,
         device_volume,
         device_volume_percent,
         cast: speaker.cast.is_some(),
@@ -4239,6 +4253,13 @@ struct CalibrateAllCard {
     said: SharedString,
 }
 
+/// Whether a calibration the microphone refused (`denied`) offers Open
+/// Privacy Settings: only where something can open that page (`can_open`,
+/// [`crate::platform::can_open_settings`]), which Linux can't.
+fn offers_privacy(denied: bool, can_open: impl Fn(&str) -> bool) -> bool {
+    denied && can_open(SettingsPage::MicrophonePrivacy.uri())
+}
+
 fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCard {
     let all = &state.calibrate_all;
     let busy = state.calibration.busy;
@@ -4283,8 +4304,11 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
     CalibrateAllCard {
         running: matches!(all.phase, AllPhase::Running(_)),
         can_start: !busy && all.blocked.is_none(),
-        privacy: all.phase == AllPhase::Failed(Failure::MicrophoneDenied)
-            || sheet.is_some_and(|sheet| sheet.failure == Some(Failure::MicrophoneDenied)),
+        privacy: offers_privacy(
+            all.phase == AllPhase::Failed(Failure::MicrophoneDenied)
+                || sheet.is_some_and(|sheet| sheet.failure == Some(Failure::MicrophoneDenied)),
+            crate::platform::can_open_settings,
+        ),
         results_shown: sheet.is_some(),
         left_out: all
             .left_out
@@ -4531,6 +4555,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
         has_privacy: matches!(notice.message, NoticeMessage::MicrophoneBlocked { .. }),
+        info: notice.message.reports_a_change(),
     }
 }
 
@@ -4552,6 +4577,17 @@ fn source_name(strings: &Strings<'_>, source: &SourceName) -> SharedString {
         SourceName::Apps(names) => joined(strings, names),
         SourceName::AllAppsExcept(names) => {
             strings.invoke_source_all_except(joined(strings, names))
+        }
+    }
+}
+
+/// A source or channel pair as the source picker names it.
+fn switch_name(strings: &Strings<'_>, name: &SwitchName) -> SharedString {
+    match name {
+        SwitchName::System => strings.get_source_system(),
+        SwitchName::Source(source) => source_name(strings, source),
+        SwitchName::Channels { first, last } => {
+            strings.invoke_input_channel_pair(i32::from(*first), i32::from(*last))
         }
     }
 }
@@ -4604,8 +4640,12 @@ fn guide_step_text(strings: &Strings<'_>, step: &GuideStep) -> SharedString {
     }
 }
 
-/// The UI's name of a step's Settings page.
+/// The UI's name of a step's Settings page; none when nothing installed
+/// could show it, so the step has no button.
 fn guide_page(page: Option<SettingsPage>) -> GuidePage {
+    if page.is_some_and(|page| !crate::platform::can_open_settings(page.uri())) {
+        return GuidePage::None;
+    }
     match page {
         None | Some(SettingsPage::MicrophonePrivacy) => GuidePage::None,
         Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,
@@ -4632,6 +4672,8 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SourceSwitched { source } => {
             strings.invoke_notice_source_switched(source.as_str().into())
         }
+        NoticeMessage::SwitchFailed { new, old } => strings
+            .invoke_notice_switch_failed(switch_name(strings, new), switch_name(strings, old)),
         NoticeMessage::SourceNotRunning { source } => {
             strings.invoke_notice_source_not_running(source.as_str().into())
         }
@@ -4787,6 +4829,10 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::NoSpeaker => (NoticeKind::NoSpeaker, ""),
         NoticeMessage::SourceQuit { source } => (NoticeKind::SourceQuit, source.as_str()),
         NoticeMessage::SourceSwitched { source } => (NoticeKind::SourceSwitched, source.as_str()),
+        NoticeMessage::SwitchFailed { new, .. } => {
+            return strings
+                .invoke_notice_title(NoticeKind::SwitchFailed, switch_name(strings, new));
+        }
         NoticeMessage::SourceNotRunning { source } => {
             (NoticeKind::SourceNotRunning, source.as_str())
         }
@@ -4942,10 +4988,15 @@ mod tests {
 
     /// The App over `backend`, with headless windows.
     pub(super) fn app_over(backend: MockBackend) -> Rc<App> {
+        app_logging(backend, DebugLog::new(None))
+    }
+
+    /// [`app_over`] writing to `log`.
+    pub(super) fn app_logging(backend: MockBackend, log: DebugLog) -> Rc<App> {
         // The platform is set per thread: a thread that already built an
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
-        App::new(Box::new(backend), DebugLog::new(None)).expect("the windows build headless")
+        App::new(Box::new(backend), log).expect("the windows build headless")
     }
 
     #[test]
@@ -5069,6 +5120,37 @@ mod tests {
         assert!(
             app.ui.borrow().airplay2_experimental,
             "dismissing keeps it on"
+        );
+    }
+
+    // covers: P213
+    #[test]
+    fn the_now_playing_play_pause_tells_the_backend_what_the_card_showed() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        let backend = MockBackend::new();
+        let pressed = backend.play_pauses.clone();
+        let app = app_over(backend);
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        app.main.invoke_now_playing_transport(1);
+        assert!(pressed.borrow().is_empty(), "no session shown");
+
+        fake.read(Some(track("Spotify.exe", "Song", "", true)));
+        app.poll();
+        app.main.invoke_now_playing_transport(0);
+        app.main.invoke_now_playing_transport(1);
+        app.main.invoke_now_playing_transport(2);
+        fake.read(Some(track("Spotify.exe", "Song", "", false)));
+        app.poll();
+        app.main.invoke_now_playing_transport(1);
+        assert_eq!(
+            *pressed.borrow(),
+            [
+                ("Spotify.exe".to_owned(), true),
+                ("Spotify.exe".to_owned(), false)
+            ]
         );
     }
 
@@ -5427,7 +5509,7 @@ mod tests {
         let speaker = state.speaker("local:desk").unwrap().clone();
         let line = calibration_status(&app.strings(), &state, &speaker);
         assert!(
-            line.contains("Privacy"),
+            line.to_lowercase().contains("privacy"),
             "it says where to allow it: {line}"
         );
         state.calibration.phase = Phase::Done {
@@ -5597,7 +5679,11 @@ mod tests {
         state.calibrate_all.phase = AllPhase::Failed(Failure::MicrophoneDenied);
         let card = calibrate_all_card(&strings, &state);
         assert!(card.privacy && !card.results_shown);
-        assert!(card.said.contains("Privacy"), "{}", card.said);
+        assert!(
+            card.said.to_lowercase().contains("privacy"),
+            "{}",
+            card.said
+        );
     }
 
     #[test]
@@ -5710,6 +5796,15 @@ mod tests {
         assert!(speaker_item(&state, &speaker, false, true, None).calibration_privacy);
         let bt = state.speaker("local:bt").unwrap().clone();
         assert!(!speaker_item(&state, &bt, false, true, None).calibration_privacy);
+    }
+
+    #[test]
+    fn open_privacy_settings_shows_only_where_something_opens_that_page() {
+        let privacy = SettingsPage::MicrophonePrivacy.uri();
+        assert!(offers_privacy(true, |uri| uri == privacy));
+        // Linux has no program for the page (guide::linux_program): no button.
+        assert!(!offers_privacy(true, |uri| uri != privacy));
+        assert!(!offers_privacy(false, |_| true));
     }
 
     /// Opens the desk's and the headset's sync controls, types 400 into the
@@ -7288,7 +7383,7 @@ mod tests {
             "2 of 5 on, 1 waiting"
         );
         assert_eq!(strings.invoke_zone_count(1, 3, 0, 2), "1 of 3 on");
-        assert_eq!(strings.invoke_zone_count(0, 3, 0, 0), "0 of 3 here");
+        assert_eq!(strings.invoke_zone_count(0, 3, 0, 0), "None of 3 found");
         assert_eq!(
             strings.invoke_zone_value(2, 5, 1),
             "2 of 5 speakers on, 1 waiting"
@@ -8131,6 +8226,11 @@ mod tests {
                 "Right",
                 "Right plays as part of its stereo pair or home theater group",
             ),
+            (
+                ui_model::AirPlayProblem::ReceiverUnverified,
+                "Den TV",
+                "Den TV didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
+            ),
         ] {
             let text = notice_text(
                 &strings,
@@ -8184,12 +8284,12 @@ mod tests {
             "{route}"
         );
         let unmuted = guide_step_text(&strings, &GuideStep::KeepAppUnmuted { app: source });
-        assert!(
-            unmuted.starts_with(
-                "Don't mute any app other than Spotify and Chrome in the Volume mixer"
-            ),
-            "{unmuted}"
-        );
+        let expected = if cfg!(target_os = "linux") {
+            "Don't mute or turn down any app other than Spotify and Chrome in a volume control"
+        } else {
+            "Don't mute any app other than Spotify and Chrome in the Volume mixer"
+        };
+        assert!(unmuted.starts_with(expected), "{unmuted}");
         let several = SourceName::Apps(vec!["Spotify".into(), "Chrome".into()]);
         let route = guide_step_text(&strings, &GuideStep::RouteApp { app: several });
         assert!(route.contains("find Spotify and Chrome and set"), "{route}");
@@ -8508,6 +8608,37 @@ mod tests {
             enabled(&app, "airplay:bedroom"),
             bedroom,
             "the rebuilt row has the focus back"
+        );
+    }
+
+    #[test]
+    fn the_presets_previews_fill_the_card_and_the_notice() {
+        use crate::ui_model::PresetsPreview;
+        let app = app_over(MockBackend::presets_preview(PresetsPreview::List));
+        assert_eq!(
+            preset_rows(&app),
+            [
+                ("Evening".to_owned(), true),
+                ("Movie Night".to_owned(), false),
+                ("Whole House".to_owned(), false)
+            ]
+        );
+        assert_eq!(app.main.get_notices().row_count(), 0);
+
+        let app = app_over(MockBackend::presets_preview(PresetsPreview::LeftOff));
+        let notice = app.main.get_notices().row_data(0).expect("a notice");
+        assert!(
+            notice.message.contains("Whole House")
+                && notice.message.contains("Den")
+                && notice.message.contains("Patio"),
+            "{}",
+            notice.message
+        );
+
+        let app = app_over(MockBackend::presets_preview(PresetsPreview::Empty));
+        assert!(
+            preset_rows(&app).is_empty(),
+            "the card shows its empty line"
         );
     }
 

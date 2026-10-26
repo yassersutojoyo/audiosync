@@ -18,6 +18,9 @@ permissions:
 env:
   # A warning in a .slint file fails the build, like a Rust warning in clippy.
   SLINT_COMPILER_DENY_WARNINGS: '1'
+  # Debug test builds bind every address only with this, as the app does;
+  # without it (a plain run on a desktop) they keep to loopback.
+  AUDIOSYNC_LAN_TESTS: '1'
 
 jobs:
   test:
@@ -67,13 +70,16 @@ jobs:
       # Slint's fonts and windows, the Cast sender's native-tls (OpenSSL), and
       # dbus-run-session for the now-playing tests' private session bus, and
       # the PipeWire client library with libclang for its bindings. The
-      # daemon, WirePlumber and the pw-* tools run the capture's smoke test.
+      # daemon, WirePlumber and the pw-* tools run the live tests; the
+      # PulseAudio server and paplay play the PulseAudio-API app. avahi-daemon
+      # and its tools share mDNS port 5353 with the app's discovery.
       - name: System libraries
         run: >-
           sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
           libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
           libpipewire-0.3-dev clang libclang-dev
-          pipewire pipewire-bin wireplumber dbus dbus-user-session
+          pipewire pipewire-bin wireplumber dbus dbus-user-session pipewire-pulse pulseaudio-utils
+          avahi-daemon avahi-utils iproute2
 
       - name: Format
         run: cargo fmt --check
@@ -128,6 +134,64 @@ jobs:
             done
             pw-link -l
             cargo test --locked -- --ignored --test-threads 1 audio::pipewire::stream::tests::
+          '
+
+      # A daemon of its own, with its PulseAudio server for paplay, and two
+      # null sinks, as-a (the default) and as-b, for the outputs, the linked
+      # captures and their timing, and the whole system's capture heard by
+      # the airplay and cast crates' mock receivers.
+      - name: PipeWire outputs and capture tests
+        if: ${{ !cancelled() }}
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-outputs"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          dbus-run-session -- bash -euo pipefail -c '
+            pipewire & sleep 1
+            wireplumber & sleep 2
+            pipewire-pulse & sleep 1
+            for sink in a b; do
+              upper=$(echo "$sink" | tr a-z A-Z)
+              pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=as-$sink node.description=\"AudioSync $upper\" media.class=Audio/Sink object.linger=true audio.position=[FL FR] }"
+            done
+            sleep 1
+            wpctl status
+            cargo test --locked -- --ignored --test-threads 1 audio::pipewire::live_tests::
+          '
+
+      # avahi-daemon holds UDP 5353 and publishes an AirPlay and a Cast
+      # service; the app's mDNS binds next to it, resolves both and
+      # announces a service avahi-browse lists.
+      - name: mDNS next to avahi-daemon
+        if: ${{ !cancelled() }}
+        run: |
+          sudo systemctl start avahi-daemon
+          systemctl is-active avahi-daemon
+          avahi-publish -s 0123456789AB@AudioSyncCI _raop._tcp 7000 \
+            txtvers=1 ch=2 cn=0 et=0 sr=44100 ss=16 tp=UDP md=0,1,2 &
+          avahi-publish -s AudioSyncCICast _googlecast._tcp 8009 \
+            id=0123456789abcdef0123456789abcdef md=Chromecast fn=AudioSyncCICast &
+          sleep 2
+          ss -H -u -a -n 'sport = :5353'
+          status=0
+          cargo test --locked -- --ignored --exact audio::mdns_live_tests::mdns_shares_port_5353_with_avahi || status=$?
+          jobs -p | xargs -r kill
+          exit $status
+
+      # A daemon of its own again, since these tests stop and start it and
+      # WirePlumber.
+      - name: PipeWire restart tests
+        if: ${{ !cancelled() }}
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg-restart"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          dbus-run-session -- bash -euo pipefail -c '
+            pipewire & sleep 1
+            wireplumber & sleep 2
+            for sink in a b; do
+              pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=as-$sink media.class=Audio/Sink object.linger=true audio.position=[FL FR] }"
+            done
+            sleep 1
+            cargo test --locked -- --ignored --test-threads 1 audio::pipewire::restart_tests::
           '
 
   build:

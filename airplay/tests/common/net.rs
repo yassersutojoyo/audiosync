@@ -24,7 +24,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::input::InputWriter;
-use audiosync_airplay::ptp::PtpPorts;
+use audiosync_airplay::ptp::{PtpPorts, service_bind_ip};
 use audiosync_airplay::rtp::{
     HEADER_BYTES, ResendRequest, RtpHeader, SyncPacket, TYPE_RESEND_REPLY, TimingPacket,
 };
@@ -77,12 +77,18 @@ pub fn free_ptp_ports() -> PtpPorts {
     PtpPorts { event, general }
 }
 
+/// The IPv4 address the sender's PTP service binds, which the port checks
+/// and holders use too.
+pub fn ptp_bind_v4() -> IpAddr {
+    service_bind_ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
 /// One family after the other, since a dual-stack IPv6 bind takes the IPv4 port too.
 fn port_free(port: u16) -> bool {
-    if UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_err() {
+    if UdpSocket::bind((ptp_bind_v4(), port)).is_err() {
         return false;
     }
-    match UdpSocket::bind((Ipv6Addr::UNSPECIFIED, port)) {
+    match UdpSocket::bind((service_bind_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)), port)) {
         Ok(_) => true,
         Err(error) => !matches!(
             error.kind(),
@@ -125,6 +131,9 @@ pub struct Behavior {
     /// The `Public` header of the OPTIONS answer, in place of the full
     /// method list (P27).
     pub public: Option<String>,
+    /// Requests answered only after this long, by key; read per request,
+    /// so a test may change it mid-session.
+    pub answer_delay: HashMap<String, Duration>,
 }
 
 impl Default for Behavior {
@@ -142,6 +151,7 @@ impl Default for Behavior {
             close_after_verify: 0,
             timing_quirks: None,
             public: None,
+            answer_delay: HashMap::new(),
         }
     }
 }
@@ -238,6 +248,32 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Waits for the sender's bytes in a peek: on Windows a read that times out
+/// as bytes land can drop them (core/NOTES.md, `SO_RCVTIMEO`).
+pub fn read_queued(stream: &mut TcpStream, buf: &mut [u8]) -> std::io::Result<usize> {
+    const ERROR_IO_PENDING: i32 = 997;
+    match stream.peek(buf) {
+        Ok(0) => Ok(0),
+        Ok(_) => stream.read(buf),
+        Err(error) if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) => {
+            Err(std::io::ErrorKind::TimedOut.into())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// `read_queued` for a datagram: a peek that times out leaves it queued.
+pub fn recv_queued(socket: &UdpSocket, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+    const ERROR_IO_PENDING: i32 = 997;
+    match socket.peek_from(buf) {
+        Ok(_) => socket.recv_from(buf),
+        Err(error) if cfg!(windows) && error.raw_os_error() == Some(ERROR_IO_PENDING) => {
+            Err(std::io::ErrorKind::TimedOut.into())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub struct NetReceiver {
@@ -447,7 +483,7 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
             thread::sleep(POLL);
             continue;
         }
-        match stream.read(&mut buf) {
+        match read_queued(&mut stream, &mut buf) {
             Ok(0) => return closed(&shared),
             Ok(len) => {
                 parser.push(&buf[..len]);
@@ -462,6 +498,13 @@ fn serve(shared: Arc<Shared>, mut stream: TcpStream, peer: SocketAddr) {
                         on_setup(&shared, &request, peer);
                     }
                     let answer = fake.feed(&request.encode());
+                    let delay = lock(&shared.behavior)
+                        .answer_delay
+                        .get(&key(&request))
+                        .copied();
+                    if let Some(delay) = delay {
+                        thread::sleep(delay);
+                    }
                     if !answer.is_empty() && stream.write_all(&answer).is_err() {
                         return closed(&shared);
                     }
@@ -547,7 +590,7 @@ fn probe_timing(ip: IpAddr, to: SocketAddr) -> Option<SocketAddr> {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut buf = [0u8; 64];
     while Instant::now() < deadline {
-        if let Ok((len, from)) = socket.recv_from(&mut buf) {
+        if let Ok((len, from)) = recv_queued(&socket, &mut buf) {
             let reply = TimingPacket::parse(&buf[..len])?;
             if reply.reply && reply.seq == 7 {
                 return Some(from);

@@ -74,9 +74,12 @@ final class WebRemote {
     private var publishPending = false
     private var lastPublished = ""
     private var computerName = ""
-    /// The server accepts only the `.local` name it started with as a Host.
-    private var startedLocalName: String?
+    /// The `.local` name the server accepts as a Host.
+    private var serverLocalName: String?
     private var nowPlayingNeeded = false
+    /// The port the debug switch started this run's remote on; never saved,
+    /// and dropped once the user changes the setting.
+    private var debugPort: Int?
 
     var isRunning: Bool { handle != nil }
     /// A remote nobody paired with costs no Now Playing polling and raises no Automation prompt.
@@ -95,7 +98,10 @@ final class WebRemote {
     }
 
     func startIfEnabled() {
-        if settings.enabled { start() }
+        debugPort = RemoteDebugSwitch.port(environment: ProcessInfo.processInfo.environment,
+                                           debugLog: DebugTrace.enabled, savedPort: settings.port)
+        if debugPort != nil { DebugTrace.log("[AudioSync] web remote: remote: on for this run (debug switch)") }
+        if settings.enabled || debugPort != nil { start() }
     }
 
     /// The window opened: a code shown earlier stops working (design: a new code each time).
@@ -111,15 +117,25 @@ final class WebRemote {
     private func setEnabled(_ on: Bool) {
         guard on != settings.enabled else { return }
         settings.enabled = on
+        // A remote the debug switch started still listens on its port; restart it on the saved one.
+        let restart = debugPort != nil
+        debugPort = nil
         store.save(webRemote: on)
         DebugTrace.log("[AudioSync] web remote turned \(on ? "on" : "off")")
-        if on { start() } else { stop() }
+        if on {
+            if restart { stop() }
+            start()
+        } else {
+            stop()
+        }
     }
 
     private func usePort(_ port: Int) {
         settings.port = port
+        let running = settings.enabled || debugPort != nil
+        debugPort = nil
         store.save(webRemotePort: port)
-        guard settings.enabled else { return }
+        guard running else { return }
         stop()
         start()
     }
@@ -158,10 +174,10 @@ final class WebRemote {
     private func start() {
         guard handle == nil else { return }
         refreshAddresses()
-        var config: [String: Any] = ["port": settings.port]
-        startedLocalName = settings.addresses.localHostName
-        if let name = startedLocalName { config["local_name"] = name }
-        if let file = Self.devicesFile { config["devices_path"] = file.path }
+        serverLocalName = settings.addresses.localHostName
+        let port = debugPort ?? settings.port
+        let config = RemoteStartConfig.make(port: port, localName: serverLocalName,
+                                            devicesPath: Self.devicesFile?.path, debugLog: DebugTrace.enabled)
         guard let data = try? JSONSerialization.data(withJSONObject: config) else { return }
         let box = Unmanaged.passRetained(RemoteInbox(owner: self))
         var error: Int32 = ASC_REMOTE_ERROR_NONE
@@ -170,8 +186,8 @@ final class WebRemote {
         }
         guard let created else {
             box.release()
-            settings.status = .failed(error: error, port: settings.port)
-            DebugTrace.log("[AudioSync] web remote didn't start on port \(settings.port): error \(error)")
+            settings.status = .failed(error: error, port: port)
+            DebugTrace.log("[AudioSync] web remote didn't start on port \(port): error \(error)")
             return
         }
         handle = created
@@ -259,7 +275,7 @@ final class WebRemote {
                 volume: s.volume, isAirPlay: s.isAirPlay,
                 cast: s.cast.map { (live: $0.live, volumeFixed: $0.volumeFixed) },
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
-                needsCode: s.availability == .needsCode, paired: s.paired,
+                needsCode: s.availability != .open, paired: s.paired,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,
                                 waitingForPtp: s.waitingForPtp, target: s.airPlayTarget),
                 key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp)), text: t)
@@ -303,7 +319,10 @@ final class WebRemote {
         case .setEnabled(let id, let on):
             if let s = speaker(id) { model.setEnabled(s, on, origin: .remote) }
         case .setVolume(let id, let position):
-            if let s = speaker(id) { model.setVolume(s, position) }
+            if let s = speaker(id) {
+                model.setVolume(s, position)
+                if s.tag != .airplay && s.tag != .cast { model.actions.localVolumeSettled(id) }
+            }
         case .setLocalOffset(let id, let ms): model.actions.setLocalOffset(id, ms)
         case .setCastOffset(let id, let ms): model.actions.setCastOffset(id, ms)
         case .setAirPlayDelay(let ms): model.actions.setAirPlayDelay(ms)
@@ -331,10 +350,15 @@ final class WebRemote {
             publishNow()
         }
         refreshAddresses()
-        if settings.addresses.localHostName != startedLocalName {
-            DebugTrace.log("[AudioSync] web remote restarts: the Mac's local name changed")
-            stop()
-            start()
+        // In place: a restart makes a new code and ends a lockout, and mDNS conflicts can force renames.
+        if settings.addresses.localHostName != serverLocalName {
+            serverLocalName = settings.addresses.localHostName
+            if let name = serverLocalName {
+                name.withCString { asc_remote_set_local_name(handle, $0) }
+            } else {
+                asc_remote_set_local_name(handle, nil)
+            }
+            DebugTrace.log("[AudioSync] web remote follows the Mac's new local name")
         }
     }
 

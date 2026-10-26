@@ -177,3 +177,114 @@ fn an_in_memory_store_writes_nothing() {
     assert!(store.contains("02005E005301"));
     assert!(store.remove("02005E005301").expect("nothing to write"));
 }
+
+// covers: S224
+#[cfg(unix)]
+#[test]
+fn a_file_others_may_read_is_made_owner_only_and_still_used() {
+    use audiosync_core::airplay_pairings::Access;
+    use std::os::unix::fs::PermissionsExt;
+    let path = folder("open-to-others").join("airplay-pairings.dat");
+    let (mut store, _) = PairingStore::open(path.clone());
+    assert_eq!(store.access(), Access::Private);
+    store
+        .insert("02005E005301", credentials("0123456789ABCDEF", 3))
+        .expect("written");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("mode set");
+
+    let (store, loaded) = PairingStore::open(path.clone());
+    assert_eq!(loaded, Loaded::Receivers(1));
+    assert_eq!(store.access(), Access::Tightened);
+    let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+
+    let (store, loaded) = PairingStore::open(path);
+    assert_eq!(loaded, Loaded::Receivers(1));
+    assert_eq!(
+        store.access(),
+        Access::Private,
+        "an owner-only file is left as it is"
+    );
+}
+
+// covers: S224
+#[cfg(unix)]
+#[test]
+fn an_ignored_file_others_may_read_still_reports_it_was_tightened() {
+    use audiosync_core::airplay_pairings::Access;
+    use std::os::unix::fs::PermissionsExt;
+    let folder = folder("ignored-open-to-others");
+    fs::create_dir_all(&folder).expect("folder made");
+    let mut newer = MAGIC.to_vec();
+    newer.push(VERSION + 1);
+    for (name, bytes) in [
+        ("corrupt.dat", b"not a pairings file".to_vec()),
+        ("newer.dat", newer),
+    ] {
+        let path = folder.join(name);
+        fs::write(&path, bytes).expect("written");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("mode set");
+
+        let (store, loaded) = PairingStore::open(path.clone());
+        assert!(
+            matches!(loaded, Loaded::Ignored(_) | Loaded::Newer(_)),
+            "{name}: {loaded:?}"
+        );
+        assert_eq!(store.access(), Access::Tightened, "{name}");
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{name}");
+    }
+}
+
+// covers: S224
+#[cfg(unix)]
+#[test]
+fn a_symbolic_link_in_the_files_place_is_not_followed() {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = folder("symlink");
+    let target = folder.join("elsewhere.dat");
+    let (mut store, _) = PairingStore::open(target.clone());
+    store
+        .insert("02005E005301", credentials("0123456789ABCDEF", 5))
+        .expect("written");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).expect("mode set");
+    let path = folder.join("airplay-pairings.dat");
+    std::os::unix::fs::symlink(&target, &path).expect("a symbolic link");
+
+    let (store, loaded) = PairingStore::open(path.clone());
+    assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+    assert!(store.is_empty());
+    assert_eq!(
+        store.access(),
+        audiosync_core::airplay_pairings::Access::Unread
+    );
+    let mode = fs::metadata(&target)
+        .expect("metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o644, "the link's target is left alone");
+}
+
+// covers: S224
+#[cfg(unix)]
+#[test]
+fn a_file_another_account_owns_is_reported_unread() {
+    use audiosync_core::airplay_pairings::Access;
+    use std::os::unix::fs::MetadataExt;
+    let mine = folder("foreign").join("mine.dat");
+    fs::create_dir_all(mine.parent().expect("a folder")).expect("folder made");
+    fs::write(&mine, b"x").expect("written");
+    let me = fs::metadata(&mine).expect("metadata").uid();
+    // A system file root owns; running as root there is no other account.
+    let foreign = PathBuf::from("/etc/hosts");
+    let Ok(metadata) = fs::metadata(&foreign) else {
+        return;
+    };
+    if metadata.uid() == me {
+        return;
+    }
+    let (store, loaded) = PairingStore::open(foreign);
+    assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+    assert!(store.is_empty());
+    assert_eq!(store.access(), Access::Unread);
+}
