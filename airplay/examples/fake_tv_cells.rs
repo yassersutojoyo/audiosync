@@ -176,17 +176,29 @@ impl Tv {
 
     /// Track info, artwork and progress sets the television received.
     fn metadata_sets(&self) -> usize {
+        self.sets_of(|kind, body| {
+            kind == "application/x-dmap-tagged"
+                || kind == "image/jpeg"
+                || (kind == "text/parameters" && body.starts_with(b"progress:"))
+        })
+    }
+
+    /// The DMAP track text sets alone, so progress cannot stand in for them.
+    fn track_text_sets(&self) -> usize {
+        self.sets_of(|kind, _| kind == "application/x-dmap-tagged")
+    }
+
+    fn sets_of(&self, wanted: impl Fn(&str, &[u8]) -> bool) -> usize {
         self.server
             .fake()
             .requests
             .iter()
             .filter(|(request, _)| {
                 request.method == Method::SetParameter
-                    && request.headers.get("Content-Type").is_some_and(|kind| {
-                        kind == "application/x-dmap-tagged"
-                            || kind == "image/jpeg"
-                            || (kind == "text/parameters" && request.body.starts_with(b"progress:"))
-                    })
+                    && request
+                        .headers
+                        .get("Content-Type")
+                        .is_some_and(|kind| wanted(kind, &request.body))
             })
             .count()
     }
@@ -457,6 +469,7 @@ fn now_playing(title: &str, elapsed: u64) -> NowPlaying {
 fn d3_track(tv: &Tv, host: &mut Host, key: &DeviceKey) -> Cell {
     let before = tv.count("FLUSH");
     let sets_before = tv.metadata_sets();
+    let text_before = tv.track_text_sets();
     let changes = [
         now_playing("Track One", 10),
         now_playing("Track Two", 0),
@@ -471,6 +484,7 @@ fn d3_track(tv: &Tv, host: &mut Host, key: &DeviceKey) -> Cell {
     cells::d3_track(
         count,
         tv.metadata_sets() - sets_before,
+        tv.track_text_sets() - text_before,
         tv.count("FLUSH") - before,
     )
 }

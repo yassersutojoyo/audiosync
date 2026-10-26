@@ -181,24 +181,40 @@ fn d2_passes_with_one_flush_and_nothing_else() {
 
 #[test]
 fn d3_passes_when_track_changes_and_a_seek_reach_the_tv_without_a_flush() {
-    let cell = cells::d3_track(3, 6, 0);
+    let cell = cells::d3_track(3, 6, 3, 0);
     assert_eq!(cell.status, Status::Pass, "{}", cell.line());
     assert_eq!(
         cell.value,
-        "3 track info changes (2 tracks, 1 seek): 6 metadata sets, 0 FLUSH"
+        "3 track info changes (2 tracks, 1 seek): 6 metadata sets, 3 track text, 0 FLUSH"
     );
-    assert_eq!(cells::d3_track(3, 6, 1).status, Status::Fail);
+    assert_eq!(cells::d3_track(3, 6, 3, 1).status, Status::Fail);
 }
 
 #[test]
 fn d3_fails_when_the_track_info_never_reaches_the_tv() {
-    let none = cells::d3_track(3, 0, 0);
+    let none = cells::d3_track(3, 0, 0, 0);
     assert_eq!(none.status, Status::Fail, "{}", none.line());
     assert_eq!(
         none.value,
-        "3 track info changes (2 tracks, 1 seek): 0 metadata sets, 0 FLUSH; fewer sets than changes"
+        "3 track info changes (2 tracks, 1 seek): 0 metadata sets, 0 track text, 0 FLUSH; fewer sets than changes"
     );
-    assert_eq!(cells::d3_track(3, 2, 0).status, Status::Fail);
+    assert_eq!(cells::d3_track(3, 2, 2, 0).status, Status::Fail);
+}
+
+#[test]
+fn d3_fails_when_only_progress_reaches_the_tv_without_the_track_text() {
+    let progress_only = cells::d3_track(3, 3, 0, 0);
+    assert_eq!(
+        progress_only.status,
+        Status::Fail,
+        "{}",
+        progress_only.line()
+    );
+    assert_eq!(
+        progress_only.value,
+        "3 track info changes (2 tracks, 1 seek): 3 metadata sets, 0 track text, 0 FLUSH; fewer track text sets than changes"
+    );
+    assert_eq!(cells::d3_track(3, 5, 2, 0).status, Status::Fail);
 }
 
 #[test]

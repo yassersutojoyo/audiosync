@@ -244,19 +244,23 @@ pub fn d2(pause: Pause) -> Cell {
 }
 
 /// D3, the sender's part: new track info, one of them a seek, reaches the
-/// television (`seen` metadata SET_PARAMETERs, at least one per change)
-/// and sends no FLUSH.
-pub fn d3_track(changes: usize, seen: usize, flushes: usize) -> Cell {
+/// television (`seen` metadata SET_PARAMETERs, at least one per change, and
+/// `track_text` of them DMAP track text, also one per change) and sends no
+/// FLUSH. Progress alone must not pass for track info.
+pub fn d3_track(changes: usize, seen: usize, track_text: usize, flushes: usize) -> Cell {
     let value = format!(
-        "{changes} track info changes ({} tracks, 1 seek): {seen} metadata sets, {flushes} FLUSH",
+        "{changes} track info changes ({} tracks, 1 seek): {seen} metadata sets, {track_text} track text, {flushes} FLUSH",
         changes.saturating_sub(1)
     );
-    if seen < changes {
-        return Cell::new(
-            "D3.track",
-            Status::Fail,
-            format!("{value}; fewer sets than changes"),
-        );
+    let short = if seen < changes {
+        Some("fewer sets than changes")
+    } else if track_text < changes {
+        Some("fewer track text sets than changes")
+    } else {
+        None
+    };
+    if let Some(short) = short {
+        return Cell::new("D3.track", Status::Fail, format!("{value}; {short}"));
     }
     let status = if flushes == 0 {
         Status::Pass
