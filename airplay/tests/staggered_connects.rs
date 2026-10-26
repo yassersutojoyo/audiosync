@@ -6,7 +6,6 @@
 mod common;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -46,13 +45,6 @@ const PCM_TXT: &[&str] = &[
     "tp=UDP",
     "md=0,1,2",
 ];
-
-/// The tests here measure real time against bounds of 50 to 250 ms, so they
-/// run one at a time rather than load the machine against each other.
-fn one_at_a_time() -> MutexGuard<'static, ()> {
-    static TURN: Mutex<()> = Mutex::new(());
-    TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 fn airplay2_only(server: &Ap2Server, id: u8) -> Device {
     let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
@@ -166,7 +158,6 @@ fn session_requests(receiver: &NetReceiver) -> usize {
 // covers: P222, P223, P224, P225
 #[test]
 fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
-    let _turn = one_at_a_time();
     let _serial = serial();
     let playing = NetReceiver::start(Behavior::default());
     let airplay1: Vec<NetReceiver> = (0..5)
@@ -264,7 +255,6 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
 // covers: P222, P223, P224, P225
 #[test]
 fn a_silent_receiver_holds_no_one_and_a_removed_start_opens_no_connection() {
-    let _turn = one_at_a_time();
     let _serial = serial();
     let silent = Behavior {
         silent: Some("OPTIONS".to_owned()),
@@ -320,7 +310,6 @@ fn a_silent_receiver_holds_no_one_and_a_removed_start_opens_no_connection() {
 // covers: P169, P222, P224, P225
 #[test]
 fn a_queued_airplay2_start_keeps_the_one_place() {
-    let _turn = one_at_a_time();
     let _serial = serial();
     let airplay1: Vec<NetReceiver> = (0..3)
         .map(|_| NetReceiver::start(Behavior::default()))
@@ -376,7 +365,6 @@ fn a_queued_airplay2_start_keeps_the_one_place() {
 // covers: P142, P222, P223, P225
 #[test]
 fn a_click_while_retries_wait_connects_first() {
-    let _turn = one_at_a_time();
     let _serial = serial();
     let lost: Vec<NetReceiver> = (0..3)
         .map(|_| NetReceiver::start(Behavior::default()))
@@ -465,7 +453,6 @@ fn a_click_while_retries_wait_connects_first() {
 // covers: P224
 #[test]
 fn stopping_the_stream_drops_every_waiting_start() {
-    let _turn = one_at_a_time();
     let _serial = serial();
     let receivers: Vec<NetReceiver> = (0..4)
         .map(|_| NetReceiver::start(Behavior::default()))
