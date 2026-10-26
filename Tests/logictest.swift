@@ -2923,6 +2923,84 @@ do {
           "\(String(describing: retried))")
 }
 
+// MARK: Every time at launch: on from the last run and discovered, it stays off with no pairing for 15 s
+do {
+    func tv(_ availability: NativeReceiver.Availability, everyTime: Bool) -> NativeReceiver {
+        var receiver = NativeReceiver(id: "TV", name: "TV", model: "", availability: availability, reason: nil, hints: [])
+        receiver.codeEveryTime = everyTime
+        return receiver
+    }
+    enum Step { case listed(NativeReceiver), sender(NativeSpeakerEvent) }
+    // Each launch: what reaches the app at which second, and how many
+    // sessions may start before the every-time flag is known (a receiver
+    // first listed as open over AirPlay 1, then moved to AirPlay 2).
+    let launches: [(name: String, steps: [(Int, Step)], flagAt: Int, sessions: Int)] = [
+        ("listed asking", [(2, .listed(tv(.needsPin, everyTime: true)))], 2, 0),
+        ("flag on a later listing", [(2, .listed(tv(.needsPin, everyTime: false))),
+                                     (10, .listed(tv(.needsPin, everyTime: true)))], 10, 0),
+        ("listed able to play and asking", [(2, .listed(tv(.available, everyTime: true)))], 2, 0),
+        ("open first, then asking", [(2, .listed(tv(.available, everyTime: false))),
+                                     (3, .sender(.state(id: "TV", .retrying, retryMs: 10_000))),
+                                     (3, .listed(tv(.needsPin, everyTime: true)))], 3, 1),
+    ]
+    for launch in launches {
+        var model = NativeAirPlayModel()
+        var everyTime = EveryTimeGuard()
+        var enabled: Set<String> = ["native:TV"]   // enabledAirPlayIds from the last run
+        let marked: Set<String> = ["native:TV"]   // auto-connect on
+        var known: [String] = []
+        var sessions: [Int] = [], pairings: [Int] = [], inSenderAfterFlag: [Int] = []
+        var listedYet = false
+        // The app's steps: syncNativeSpeakers, refreshNativeRows with
+        // adoptNativeRows, and autoConnect; streaming runs from launch.
+        func outcome(_ outcome: NativeAirPlayOutcome?, at t: Int) {
+            switch outcome {
+            case .turnOff(let id, _)?: enabled.remove(id)
+            case .startPairing?, .prompt?: pairings.append(t)
+            default: break
+            }
+        }
+        func sync(at t: Int) {
+            let plan = model.plan(streaming: true, enabled: enabled)
+            for id in plan.remove { model.removed(id) }
+            for id in plan.add {
+                model.added(id)
+                sessions.append(t)
+            }
+            for off in plan.turnOff { enabled.remove(NativeAirPlayID.app(off.id)) }
+        }
+        func refresh(at t: Int) {
+            let rows = model.rows(enabled: enabled)
+            let joinable = model.joinable(rows, after: Set(known), stopped: false)
+            for id in everyTime.turnsOff(model.askingEveryTime(rows), enabled: enabled) { enabled.remove(id) }
+            known = rows
+            sync(at: t)
+            enabled.formUnion(joinable.filter { marked.contains($0) })
+            sync(at: t)
+        }
+        for t in 0...15 {
+            for (at, step) in launch.steps where at == t {
+                switch step {
+                case .listed(let receiver):
+                    outcome(model.apply(listedYet ? .changed(receiver) : .appeared(receiver)), at: t)
+                    listedYet = true
+                    refresh(at: t)
+                case .sender(let event):
+                    outcome(model.apply(event), at: t)
+                    refresh(at: t)
+                }
+            }
+            sync(at: t)   // the reconcile timer
+            if t >= launch.flagAt, model.states["TV"] != nil { inSenderAfterFlag.append(t) }
+        }
+        check(sessions.count == launch.sessions && sessions.allSatisfy { $0 < launch.flagAt }
+                && pairings.isEmpty && inSenderAfterFlag.isEmpty && !enabled.contains("native:TV")
+                && model.plan(streaming: true, enabled: enabled).add.isEmpty,
+              "every time at launch (\(launch.name)): on from the last run, auto-connect on, it stays off and nothing pairs for 15 s",
+              "sessions \(sessions), pairings \(pairings), in the sender \(inSenderAfterFlag), on \(enabled)")
+    }
+}
+
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")
 
 // MARK: Native AirPlay targets — stereo pairs and home theater groups as one row (P176 to P181)
