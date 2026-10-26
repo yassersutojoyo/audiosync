@@ -10,7 +10,7 @@ Build every release on the same Mac with the same identity, so updates keep the 
 
 ## Cutting a release
 
-First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`, set the same version in `desktop/Cargo.toml` and in the `audiosync-desktop` entry of `desktop/Cargo.lock`, move the Unreleased entries in `CHANGELOG.md` under the new version (and update the compare links at the bottom), and commit. Then:
+First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`, set the same version in `desktop/Cargo.toml` and in the `audiosync-desktop` entry of `desktop/Cargo.lock`, and in `CHANGELOG.md` put the release date on the version's heading (it waits there as `## [x.y.z] - unreleased`; if the entries sit under `## [Unreleased]` instead, move them under a new heading). Point that version's link at the bottom to `compare/v<previous>...vx.y.z`, since the tag exists once you push it below, and commit. Then:
 
 ```bash
 ./build.sh
