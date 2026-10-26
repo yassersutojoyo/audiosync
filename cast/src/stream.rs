@@ -272,6 +272,8 @@ pub struct StreamStats {
     pub frames_sent: u64,
     /// Frames dropped: queue overflow (C64) and ring backlog.
     pub frames_dropped: u64,
+    /// The part of `frames_dropped` that a full response queue dropped (C64).
+    pub queue_frames_dropped: u64,
     /// Frames waiting in the queue now.
     pub frames_queued: u64,
     /// Whether a stream response is open now.
@@ -700,11 +702,12 @@ impl StreamServer {
 
     pub fn stats(&self) -> StreamStats {
         let live = lock(&self.shared.live);
+        let queue_frames_dropped = live.responses.dropped();
         StreamStats {
             fetches: self.shared.fetches.load(Ordering::Relaxed),
             frames_sent: self.shared.frames_sent.load(Ordering::Relaxed),
-            frames_dropped: live.responses.dropped()
-                + self.shared.ring_dropped.load(Ordering::Relaxed),
+            frames_dropped: queue_frames_dropped + self.shared.ring_dropped.load(Ordering::Relaxed),
+            queue_frames_dropped,
             frames_queued: live.responses.frames_queued() as u64,
             streaming: !live.responses.is_empty(),
         }

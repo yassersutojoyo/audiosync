@@ -310,27 +310,24 @@ fn a_device_that_stops_reading_fills_a_2_s_queue_and_drops_the_oldest() {
     let mut stream = get(&server, "GET", "");
     let (head, _) = http::read_response(&mut stream, Duration::ZERO);
     assert_eq!(http::status(&head), 200);
-    // The socket buffers fill first; then the queue, then drops.
+    // The socket buffers fill first; then the queue, then drops. A feeder
+    // that runs late also drops its backlog in the pump (C79), counted apart.
     let until = Instant::now() + Duration::from_secs(30);
-    // A feeder that runs late drops its backlog in the pump (C79), which
-    // counts as dropped too; only drops once the queue was full are its own.
     let mut most_queued = 0;
-    let mut dropped_when_full = None;
     let mut stats = server.stats();
     while Instant::now() < until {
         thread::sleep(Duration::from_millis(50));
         stats = server.stats();
         assert!(stats.frames_queued <= 96_000, "{stats:?}");
         most_queued = most_queued.max(stats.frames_queued);
-        if most_queued >= 96_000 - 2 * 960
-            && stats.frames_dropped > *dropped_when_full.get_or_insert(stats.frames_dropped)
-        {
+        if stats.queue_frames_dropped > 0 {
             break;
         }
     }
     assert!(most_queued >= 96_000 - 2 * 960, "{most_queued} {stats:?}");
+    assert!(stats.queue_frames_dropped > 0, "{stats:?}");
     assert!(
-        dropped_when_full.is_some_and(|before| stats.frames_dropped > before),
+        stats.frames_dropped >= stats.queue_frames_dropped,
         "{stats:?}"
     );
     assert!(stats.streaming, "a slow reader is not a closed one");
@@ -553,6 +550,7 @@ fn a_backlog_in_the_ring_past_100_ms_is_dropped_and_counted() {
     let _stream = streaming(&server);
     writer.write_i16(&vec![3i16; 2 * 24_000]);
     assert!(dropped_reaches(&server, 1) > 0, "{:?}", server.stats());
+    assert_eq!(server.stats().queue_frames_dropped, 0);
     server.stop();
 }
 
@@ -568,6 +566,7 @@ fn frames_the_full_ring_refused_count_as_dropped() {
         dropped >= 60_000,
         "{dropped}: the ring's overflow is missing"
     );
+    assert_eq!(server.stats().queue_frames_dropped, 0);
     server.stop();
 }
 

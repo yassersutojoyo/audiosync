@@ -11,8 +11,15 @@ extension AppDelegate {
     /// source app that quit meanwhile turns into a stop or a switch (S227 e).
     /// `switching`: a source or channel pair change of a running session,
     /// already stored; a new capture that fails gives way to the old one.
-    func startEngine(origin: StartOrigin, rebuild: Bool = false, switching: CaptureSwitch.Change? = nil) {
+    /// `onCaptureFailure`: a capture that fails calls it instead of being
+    /// handled as final, for a caller that tries again (S227 g).
+    func startEngine(origin: StartOrigin, rebuild: Bool = false, switching: CaptureSwitch.Change? = nil,
+                     onCaptureFailure: (() -> Void)? = nil) {
+        // The permission setup's capture would write the same AirPlay and Cast feed as this one.
+        setupCaptureProbe?.halt()
+        setupCaptureProbe = nil
         if origin != .automatic {
+            userStarts &+= 1
             userStopped = false
             autoStartFailed = false
             clearNotices([Notice.source, Notice.start, Notice.capture])
@@ -20,14 +27,18 @@ extension AppDelegate {
         defer { refreshStreamingViews() }   // every path, including failures, refreshes the switch
         let hasSpeaker = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                                     enabledLocal: enabledLocal)
+        let continuing = rebuild || switching != nil
+        let starts = StreamingPolicy.starts(hasSpeaker: hasSpeaker, continuing: continuing,
+                                            hadSpeaker: sessionHadSpeaker, origin: origin)
         // A tap's first capture raises the audio capture prompt; Not Now keeps what plays.
-        if hasSpeaker, CaptureCheck.provesPermission(audioSource),
+        if starts, CaptureCheck.provesPermission(audioSource),
            !permissionAllows(.audioCapture, state: .unknown, origin: origin) {
             if let switching { storeSwitch(switching, new: false) }
             return
         }
-        if let switching, !beginSwitch(switching, hasSpeaker: hasSpeaker, origin: origin) { return }
-        guard hasSpeaker else {
+        if let switching, !beginSwitch(switching, starts: starts, origin: origin) { return }
+        guard starts else {
+            if engine.isRunning { stopEngine(.noSpeakerOn) }   // a rebuild with the last speaker gone
             notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
             return
         }
@@ -63,6 +74,10 @@ extension AppDelegate {
                 sourceAppQuit(quit.bundleID, quit.action)
                 return
             }
+            if let onCaptureFailure {
+                onCaptureFailure()
+                return
+            }
             if let switching {
                 let old = switching.oldCapture { self.inputPairs[$0] ?? 0 }
                 let oldRunning = old.map { (try? engine.start(source: $0.source, inputPair: $0.pair)) != nil } ?? false
@@ -76,8 +91,9 @@ extension AppDelegate {
             }
         }
         clearNotices([Notice.start, Notice.source])   // streaming did start, from a working source
+        sessionHadSpeaker = hasSpeaker || (continuing && sessionHadSpeaker)
         session += 1
-        restartNativeTimeline()   // a new capture: AudioSync's own sender starts a new timeline (P143)
+        nativeCaptureStarted()   // a new capture is an underrun to AudioSync's own sender, never a FLUSH (P143)
         applyAirPlaySelection()   // the sender's speakers join, each at its own volume
         syncCast()   // the Cast speaker that is on connects
         syncLocalOutputs(origin: origin)
@@ -90,8 +106,8 @@ extension AppDelegate {
 
     /// Acts on how a switch begins (`CaptureSwitch.start`); true when its
     /// capture is rebuilt now.
-    private func beginSwitch(_ change: CaptureSwitch.Change, hasSpeaker: Bool, origin: StartOrigin) -> Bool {
-        switch CaptureSwitch.start(hasSpeaker: hasSpeaker, microphone: microphone(for: audioSource)) {
+    private func beginSwitch(_ change: CaptureSwitch.Change, starts: Bool, origin: StartOrigin) -> Bool {
+        switch CaptureSwitch.start(starts: starts, microphone: microphone(for: audioSource)) {
         case .rebuildCapture:
             return true
         case .stopSession:
@@ -241,7 +257,7 @@ extension AppDelegate {
     func notify(_ message: String, origin: StartOrigin, subject: String,
                 style: NSAlert.Style = .warning, settings: PrivacyPane? = nil) {
         postNotice(message, subject: subject, settings: settings)
-        if origin == .user { showAlert(message, style: style, settings: settings) }
+        if origin.raisesAlert { showAlert(message, style: style, settings: settings) }
     }
 
     func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil,
@@ -275,13 +291,62 @@ extension AppDelegate {
             updateNowPlayingTarget()
             clearNotices([Notice.source, Notice.capture])   // about the app
             autoStartFailed = false
-            // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
-            startEngine(origin: .automatic, switching: .sourceAppQuit(bundleID: bundleID))
-            // A failed start has its own "start" notice; this one still says which app quit.
-            postNotice(text.sourceSwitchedToSystem(name: name, started: engine.isRunning), subject: Notice.source,
-                       info: engine.isRunning)
-            pushModel()
+            switchToSystem(after: bundleID, name: name)
         }
+    }
+
+    /// Starts the whole system in place of the app that quit, trying a
+    /// refused capture again (`AppLifecycle.SystemSwitch`).
+    private func switchToSystem(after bundleID: String, name: String) {
+        var attempt = 0
+        let starts = userStarts
+        let firstWait = AppLifecycle.SystemSwitch.firstWait(sinceDestroy: SourceCapture.sinceLastDestroy)
+        if firstWait > 0, engine.isRunning {
+            // Ends the capture still waiting for the app, whose own looks would report the quit again.
+            DebugTrace.log(SessionStop.sourceSwitchedToSystem.logLine(detail: bundleID))
+            engine.stop()
+        }
+        if firstWait > 0 {
+            DebugTrace.log("[AudioSync] the whole system starts in \(Int(firstWait * 1000)) ms, once the app's tap settled")
+        }
+        AppLifecycle.SystemSwitch.run(
+            firstWait: firstWait,
+            start: { [weak self] last in
+                guard let self else { return .failed }
+                attempt += 1
+                var captureFailed = false
+                // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
+                startEngine(origin: .automatic, switching: .sourceAppQuit(bundleID: bundleID),
+                            onCaptureFailure: last ? nil : { captureFailed = true })
+                if engine.isRunning { return .started }
+                guard captureFailed else { return .failed }
+                let attempts = AppLifecycle.SystemSwitch.attempts
+                DebugTrace.log("[AudioSync] the whole system didn't start (attempt \(attempt) of \(attempts)); trying again")
+                return .captureFailed
+            },
+            later: { delay, body in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: body) },
+            stillWanted: { [weak self] in
+                guard let self else { return .drop(release: false) }
+                return systemSwitchStillWanted(userStarted: userStarts != starts)
+            },
+            finish: { [weak self] started in
+                guard let self else { return }
+                // A failed start has its own "start" notice; this one still says which app quit.
+                postNotice(text.sourceSwitchedToSystem(name: name, started: started), subject: Notice.source,
+                           info: started)
+                pushModel()
+            })
+    }
+
+    /// Whether the whole system's next attempt still runs (`SystemSwitch.afterWait`).
+    private func systemSwitchStillWanted(userStarted: Bool) -> AppLifecycle.SystemSwitch.AfterWait {
+        let next = AppLifecycle.SystemSwitch.afterWait(sourceIsSystem: audioSource == .system, userStopped: userStopped,
+                                                       running: engine.isRunning, userStarted: userStarted)
+        if case .drop(let release) = next {
+            DebugTrace.log("[AudioSync] the whole system's next attempt is dropped: streaming or the source changed meanwhile")
+            if release { stopEngine(.startFailed) }
+        }
+        return next
     }
 
     /// An app of the "only these" mix quit: judge it `mixQuitRecheck` later,

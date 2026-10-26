@@ -49,6 +49,8 @@ export global Fluent {
 // The app cuts a speaker name to its limit while it is typed.
 export global NameField {
     pure callback fit(string) -> string;
+    // The system's double-click time; the app sets it at startup.
+    in property <duration> double-click: 500ms;
 }
 
 // Segoe Fluent Icons code points (the icon font Windows 11 ships). Other
@@ -1537,10 +1539,11 @@ export component SpeakerRow inherits Rectangle {
     // A press on the name hides its tooltip until the pointer leaves the name.
     property <bool> tip-allowed: true;
 
-    // A click on the name waits for a second one: two make a double-click,
-    // which renames, and one alone is a click on the row's box.
+    // A click on the name waits for a second one: two within the system's
+    // double-click time rename, and one alone is a click on the row's box.
+    // Slint's own double-click time is a fixed 500 ms, so the timer decides.
     click-wait := Timer {
-        interval: 500ms;
+        interval: NameField.double-click;
         running: false;
         triggered => {
             self.running = false;
@@ -1781,11 +1784,12 @@ export component SpeakerRow inherits Rectangle {
                                                 }
                                             }
                                             clicked => {
-                                                click-wait.running = true;
-                                            }
-                                            double-clicked => {
-                                                click-wait.running = false;
-                                                root.rename-requested();
+                                                if click-wait.running {
+                                                    click-wait.running = false;
+                                                    root.rename-requested();
+                                                } else {
+                                                    click-wait.running = true;
+                                                }
                                             }
                                         }
                                     }
@@ -1848,6 +1852,14 @@ export component SpeakerRow inherits Rectangle {
                                         font-size: Tokens.font-size-caption;
                                         color: Tokens.teal-text;
                                     }
+                                }
+
+                                // A renamed speaker's own name; Narrator reads it
+                                // after the new name, from the toggle.
+                                if root.item.system-name != "": QuietText {
+                                    text: Strings.speaker-device-caption(root.item.system-name);
+                                    wrap: no-wrap;
+                                    overflow: elide;
                                 }
 
                                 // A stereo pair or home theater group names its members
@@ -2269,9 +2281,10 @@ export component ZoneMemberRow inherits Rectangle {
 
 // A zone's header, lined up with the speaker rows: its toggle, name and
 // count, then its volume, its options and the arrow that shows or hides its
-// speakers. A click on the header toggles the zone, except on the empty
-// stretch after the name, which works like the arrow; the arrow is left out
-// of the Tab order, as Left and Right on the toggle do its work.
+// speakers. Like a speaker row's box opening its delay panel, a click
+// anywhere but the toggle, the volume and the options shows or hides the
+// speakers; the arrow is left out of the Tab order, as Left and Right on the
+// toggle do its work.
 export component ZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
@@ -2313,9 +2326,7 @@ export component ZoneHeader inherits Rectangle {
 
     hover := TouchArea {
         clicked => {
-            if root.live {
-                root.toggled();
-            }
+            root.expanded-changed(!root.item.expanded);
         }
         menu := ContextMenuArea {
             Menu {
@@ -2425,13 +2436,8 @@ export component ZoneHeader inherits Rectangle {
                             }
                         }
 
-                        // A click past the name shows or hides the speakers
-                        // instead of switching the zone, like the arrow.
-                        TouchArea {
+                        Rectangle {
                             horizontal-stretch: 1;
-                            clicked => {
-                                root.expanded-changed(!root.item.expanded);
-                            }
                         }
                     }
 

@@ -766,6 +766,7 @@ mod tests {
         desk.enabled = true;
         AppState {
             running: true,
+            no_speaker_on: false,
             sources: Vec::new(),
             source_id: String::new(),
             input_pair: 0,

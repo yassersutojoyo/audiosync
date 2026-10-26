@@ -1563,6 +1563,8 @@ impl App {
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_airplay_searching(state.airplay_searching);
         self.flyout.set_airplay_searching(state.airplay_searching);
+        self.main.set_no_speaker_on(state.no_speaker_on);
+        self.flyout.set_no_speaker_on(state.no_speaker_on);
         self.main.set_cast_list(cast_list(state.cast_list));
         self.main.set_cast_by_address(state.cast_by_address);
         self.main.set_this_pc_all_hidden(state.hidden_in(true));
@@ -2163,6 +2165,8 @@ impl App {
         main.on_blank_clicked(move || with_app(&w, App::blank_click));
         main.global::<NameField>()
             .on_fit(|text| speaker_names::fitting(&text).into());
+        main.global::<NameField>()
+            .set_double_click(crate::platform::double_click_ms());
         let w = weak.clone();
         main.on_speaker_rename_requested(move |id| with_app(&w, |app| app.start_rename(&id)));
         let w = weak.clone();
@@ -3908,6 +3912,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::Refused => AirPlayProblem::Refused,
         P::NeedsPassword => AirPlayProblem::NeedsPassword,
         P::NeedsPin => AirPlayProblem::NeedsPin,
+        P::NotAccepted => AirPlayProblem::NotAccepted,
         P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
@@ -6034,6 +6039,19 @@ mod tests {
     }
 
     #[test]
+    fn streaming_with_every_speaker_off_says_the_first_one_on_plays() {
+        let mut backend = MockBackend::new();
+        backend.set_no_speaker_on(true);
+        let app = app_over(backend);
+        assert!(app.main.get_no_speaker_on());
+        assert!(app.flyout.get_no_speaker_on());
+
+        let app = app_over(MockBackend::new());
+        assert!(!app.main.get_no_speaker_on());
+        assert!(!app.flyout.get_no_speaker_on());
+    }
+
+    #[test]
     fn a_click_on_the_no_airplay_note_alone_is_outside_every_row() {
         let app = app_with_the_no_airplay_note(false);
         app.main.invoke_airplay_delay_edited("2100".into());
@@ -6620,6 +6638,96 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_a_name_waits_the_systems_double_click_time() {
+        let app = app_over(MockBackend::new());
+        let field = app.main.global::<NameField>();
+        assert_eq!(
+            field.get_double_click(),
+            crate::platform::double_click_ms(),
+            "set at startup"
+        );
+        draw_frames();
+        let window = app.main.window();
+        let (x, y) = name_point(&app, "local:desk");
+
+        field.set_double_click(150);
+        click(window, x, y);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        draw_frames();
+        assert!(
+            app.ui.borrow().sync_open.contains("local:desk"),
+            "a short setting answers a single click sooner than 500 ms"
+        );
+
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert!(app.ui.borrow().sync_open.is_empty());
+        field.set_double_click(1200);
+        click(window, x, y);
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        draw_frames();
+        click(window, x, y);
+        assert!(
+            row_of(&app, "local:desk").renaming,
+            "a long setting still renames on a slow second click"
+        );
+        assert!(app.ui.borrow().sync_open.is_empty());
+    }
+
+    #[test]
+    fn a_renamed_row_shows_its_device_name_under_the_new_one() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        assert_eq!(
+            row_of(&app, "local:desk").system_name,
+            "",
+            "no caption before a rename"
+        );
+
+        for (typed, caption) in [("Desk left", true), ("Desk Speaker", false)] {
+            app.main
+                .invoke_speaker_rename_requested("local:desk".into());
+            app.main
+                .invoke_speaker_rename_edited("local:desk".into(), typed.into());
+            app.main
+                .invoke_speaker_rename_committed("local:desk".into());
+            let row = row_of(&app, "local:desk");
+            assert_eq!(!row.system_name.is_empty(), caption, "after {typed:?}");
+        }
+
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk left".into());
+        app.main
+            .invoke_speaker_rename_committed("local:desk".into());
+        let row = row_of(&app, "local:desk");
+        assert_eq!(
+            strings.invoke_speaker_device_caption(row.system_name.clone()),
+            "Device name: Desk Speaker"
+        );
+        let flyout_row = app
+            .flyout
+            .get_speakers()
+            .iter()
+            .find(|s| s.id == "local:desk")
+            .unwrap();
+        assert_eq!(
+            flyout_row.system_name, "Desk Speaker",
+            "the tray flyout shows it too"
+        );
+        let label = strings.invoke_speaker_label(
+            row.name.clone(),
+            row.kind,
+            row.show_kind,
+            row.system_name,
+        );
+        assert!(
+            label.starts_with("Desk left,"),
+            "Narrator reads the new name first: {label}"
+        );
+    }
+
+    #[test]
     fn rename_in_the_menu_opens_the_name_field_with_the_focus() {
         let app = app_over(MockBackend::new());
         app.main.show().unwrap();
@@ -7088,6 +7196,26 @@ mod tests {
             "Right plays as part of Living Room, so it stays off by itself."
         );
         assert_eq!(notice_title(&strings, &notice).as_str(), "Right can't play");
+    }
+
+    #[test]
+    fn a_refusal_before_any_pairing_step_names_no_code() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notice = NoticeMessage::AirPlayCantPlay {
+            speaker: "Samsung".to_owned(),
+            problem: ui_model::AirPlayProblem::NotAccepted,
+        };
+        let text = notice_text(&strings, &notice);
+        assert_eq!(
+            text.as_str(),
+            "Samsung didn't accept the connection, so it's off. Turn it on again to try once more."
+        );
+        assert!(
+            !["PIN", "code", "password"]
+                .iter()
+                .any(|word| text.contains(word))
+        );
     }
 
     #[test]

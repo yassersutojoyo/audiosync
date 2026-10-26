@@ -22,6 +22,43 @@ enum WindowPlacement {
     }
 }
 
+/// What a click on the menu bar icon does to its panel. The press on the icon
+/// closes the popover before the click itself arrives, and AppKit may drop
+/// that click's action or still deliver it. A click whose press is the one
+/// that closed the panel leaves it closed; any later press opens it.
+enum StatusItemClick: Equatable {
+    case open
+    case close
+    /// The click that already closed the panel: leave it closed.
+    case stayClosed
+
+    /// Two press times this close are the same press, read twice; two real
+    /// clicks are far further apart.
+    static let samePress: TimeInterval = 0.02
+
+    /// How recent a mouse press must be for the panel closing now to be its doing.
+    static let pressRecency: TimeInterval = 0.5
+
+    /// Whether the panel closing now was caused by a press on the icon: a
+    /// press came just now with the pointer on `itemFrame`. AppKit's y grows
+    /// upward, and the top edge counts: a pointer pushed against the top of
+    /// the screen sits exactly on it.
+    static func pressClosed(pointer: CGPoint, itemFrame: CGRect, secondsSincePress: TimeInterval) -> Bool {
+        secondsSincePress >= 0 && secondsSincePress < pressRecency
+            && pointer.x >= itemFrame.minX && pointer.x < itemFrame.maxX
+            && pointer.y > itemFrame.minY && pointer.y <= itemFrame.maxY
+    }
+
+    /// `closingPress` is when the press on the icon that last closed the
+    /// panel came, if one did; `latestPress` is when the latest press came,
+    /// on the same clock (system uptime).
+    static func action(panelVisible: Bool, closingPress: TimeInterval?, latestPress: TimeInterval) -> StatusItemClick {
+        if panelVisible { return .close }
+        if let closingPress, abs(latestPress - closingPress) < samePress { return .stayClosed }
+        return .open
+    }
+}
+
 /// How strongly a scrolling column fades at its top and bottom edges, from 0
 /// (nothing hidden past that edge) to 1 (at least the fade's height hidden).
 struct ScrollEdgeFades: Equatable {

@@ -1225,6 +1225,8 @@ export component MainWindow inherits Window {
     in property <bool> airplay-none-found;
     // AirPlay discovery runs and has listed no speaker yet, short of those 20 seconds.
     in property <bool> airplay-searching;
+    // Streaming is on with every speaker off.
+    in property <bool> no-speaker-on;
     // What the Google Cast search says while it lists no speaker.
     in property <CastList> cast-list;
     // A Google Cast sender runs, so Add by Address… can list a speaker.
@@ -1989,6 +1991,14 @@ export component MainWindow inherits Window {
                     padding-right: 14px;
                     // Rows keep their height when the list is shorter than the view.
                     alignment: start;
+
+                    if root.no-speaker-on: HorizontalLayout {
+                        padding-left: 4px;
+                        SecondaryText {
+                            text: Strings.no-speaker-on;
+                            font-size: Tokens.font-size-callout;
+                        }
+                    }
 
                     SpeakerSection {
                         title: Strings.this-pc-section;

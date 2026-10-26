@@ -196,7 +196,6 @@ export component RemoteWindow inherits Window {
                                 text: Strings.remote-use-port;
                                 accessible-label: Strings.remote-use-port;
                                 enabled: root.use-port-enabled(port-field.text, root.port, root.port-problem);
-                                accessible-description: root.port-invalid ? Strings.remote-port-invalid : "";
                                 clicked => {
                                     root.port-submitted(port-field.text);
                                 }

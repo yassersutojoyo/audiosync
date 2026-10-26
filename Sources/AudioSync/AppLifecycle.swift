@@ -13,6 +13,10 @@ enum StartOrigin: Equatable {
     /// A phone through the web remote (S256 to S258, S266): it counts as the
     /// user's act, but nobody may be at the Mac, so a failure only posts a notice.
     case remote
+
+    /// Only a click at the Mac may raise a modal alert; every other start
+    /// posts a notice and leaves the focus where it is.
+    var raisesAlert: Bool { self == .user }
 }
 
 /// The decisions behind the app's launch, when the speakers are reconciled, a
@@ -132,6 +136,88 @@ enum AppLifecycle {
     /// How often a capture waiting for its app's audio process looks whether
     /// the app still runs (S164, `AppTapFollow.rechecksWhileWaiting`).
     static let waitRecheck: TimeInterval = 5
+
+    /// The whole system's start after the source app quit (S227 g). Core
+    /// Audio can refuse a process tap made soon after an earlier one was
+    /// destroyed (`CaptureClose`), and a capture that let its app's tap go
+    /// when the app's audio process ended leaves exactly that gap before the
+    /// quit arrives. A capture that fails is tried again, `attempts` times in
+    /// all, `spacing` apart; only the last failure stops streaming.
+    enum SystemSwitch {
+        enum Attempt: Equatable {
+            case started
+            /// The capture didn't start; another attempt may.
+            case captureFailed
+            /// The start ended before the capture (no speaker, a permission).
+            case failed
+        }
+
+        static let attempts = 3
+        static let spacing: TimeInterval = 0.5
+        /// How long after a tap was destroyed the first attempt waits. On the
+        /// Mac sitting (2026-10-26) a tap made 1 ms after one always failed,
+        /// and one made 1.9 s after worked in 5 of 5 runs.
+        static let settle: TimeInterval = 1
+
+        /// The wait before the first attempt, given how long ago the capture
+        /// last destroyed a tap; none when it never did or long enough ago.
+        static func firstWait(sinceDestroy elapsed: TimeInterval?) -> TimeInterval {
+            guard let elapsed, elapsed >= 0, elapsed < settle else { return 0 }
+            return settle - elapsed
+        }
+
+        /// What a wait between attempts ends in.
+        enum AfterWait: Equatable {
+            case attempt
+            /// Streaming started from elsewhere (auto-connect) on the whole system.
+            case startedMeanwhile
+            /// The user took over. `release`: nothing streams and nothing else
+            /// let the speakers go, so the caller does.
+            case drop(release: Bool)
+        }
+
+        /// - Parameters:
+        ///   - userStarted: the user switched streaming on or picked a source
+        ///     since the switch began, whatever came of it.
+        static func afterWait(sourceIsSystem: Bool, userStopped: Bool, running: Bool,
+                              userStarted: Bool) -> AfterWait {
+            // A user start that failed has stopped streaming and shown its alert already.
+            guard !userStarted, !userStopped, sourceIsSystem else {
+                return .drop(release: !userStarted && !userStopped && !running)
+            }
+            return running ? .startedMeanwhile : .attempt
+        }
+
+        /// - Parameters:
+        ///   - firstWait: `firstWait(sinceDestroy:)`, waited before the first attempt.
+        ///   - start: one attempt; `last` says a failure is final and handled as one.
+        ///   - later: runs a block the given time later.
+        ///   - stillWanted: `afterWait`, asked after each wait.
+        ///   - finish: the outcome, whether streaming runs; not called when the user took over.
+        static func run(attempt: Int = 1, firstWait: TimeInterval = 0,
+                        start: @escaping (_ last: Bool) -> Attempt,
+                        later: @escaping (TimeInterval, @escaping () -> Void) -> Void,
+                        stillWanted: @escaping () -> AfterWait,
+                        finish: @escaping (Bool) -> Void) {
+            func next(_ attempt: Int) {
+                switch stillWanted() {
+                case .attempt: run(attempt: attempt, start: start, later: later, stillWanted: stillWanted, finish: finish)
+                case .startedMeanwhile: finish(true)
+                case .drop: return
+                }
+            }
+            if firstWait > 0 {
+                later(firstWait) { next(attempt) }
+                return
+            }
+            let answer = start(attempt >= attempts)
+            guard answer == .captureFailed, attempt < attempts else {
+                finish(answer == .started)
+                return
+            }
+            later(spacing) { next(attempt + 1) }
+        }
+    }
 
     /// Whether `report` is judged only `mixQuitRecheck` later: an app of an
     /// "only these" mix quitting while it streams comes back as `mixAppGone`,

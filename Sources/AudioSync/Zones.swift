@@ -297,3 +297,24 @@ enum ZoneLayout {
         return text.zoneCount(on: on, of: total) + (waiting > 0 ? text.zoneWaiting(waiting) : "")
     }
 }
+
+/// What a click on each part of a zone's header in the main window does.
+/// Folding never switches the zone: only its round icon does, and the slider
+/// and the options menu keep their clicks to themselves.
+enum ZoneHeaderHit {
+    enum Area: CaseIterable {
+        case chevron, name, count, blank, zoneIcon, slider, menu
+    }
+
+    enum Action: Equatable {
+        case fold, toggleZone, none
+    }
+
+    static func action(for area: Area) -> Action {
+        switch area {
+        case .chevron, .name, .count, .blank: return .fold
+        case .zoneIcon: return .toggleZone
+        case .slider, .menu: return .none
+        }
+    }
+}

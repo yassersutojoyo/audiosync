@@ -172,6 +172,9 @@ pub enum AirPlayProblem {
     /// An Apple TV that needs pairing with a PIN first; switching it on
     /// pairs it.
     NeedsPin,
+    /// It turned the session down without asking for a PIN or password, so
+    /// it is off; the notice names no code.
+    NotAccepted,
     /// Pairing with an Apple TV failed, so it is off.
     PairingFailed,
     /// It needs pairing, which AudioSync for Windows can't do yet.
@@ -775,6 +778,9 @@ impl SpeakerState {
 pub struct AppState {
     /// Streaming is on.
     pub running: bool,
+    /// Streaming is on with every speaker off: the speaker list says the
+    /// first one turned on plays (spec S162).
+    pub no_speaker_on: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
     /// The channel pair saved for the chosen input device, as an index (1
@@ -1753,6 +1759,7 @@ impl MockBackend {
         speakers[0].device_volume = Some(Hint::Low { percent: 13 });
         let state = AppState {
             running: false,
+            no_speaker_on: false,
             sources: vec![
                 source("system", "All System Audio", SourceKind::System),
                 source("app:player", "Music Player", SourceKind::App),
@@ -1858,6 +1865,12 @@ impl MockBackend {
     #[cfg(test)]
     pub fn set_airplay_searching(&mut self, on: bool) {
         self.state.airplay_searching = on;
+    }
+
+    /// Streaming is on with every speaker off.
+    #[cfg(test)]
+    pub fn set_no_speaker_on(&mut self, on: bool) {
+        self.state.no_speaker_on = on;
     }
 
     /// Keeps only the example speakers `keep` accepts, and the zones.

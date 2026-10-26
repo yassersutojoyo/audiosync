@@ -56,6 +56,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var helpWindow: NSWindow?
     var webRemote: WebRemote?
     var webRemoteWindow: WebRemoteWindowController?
+    /// The permission setup window, made the first time it opens and kept.
+    var setupWindow: SetupWindowController?
+    /// The setup's Allow asked for Local Network and waits for the answer.
+    var setupAsking = false
+    /// The setup asked macOS for the microphone and waits for the answer.
+    var setupMicrophoneAsking = false
+    /// The short capture that raises the audio capture prompt (`probeAudioCapture`).
+    var setupCaptureProbe: SourceCapture?
 
     // MARK: - AudioSync's own AirPlay sender (`+NativeAirPlay`)
 
@@ -82,6 +90,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     typealias Keys = AppSettings.Keys
     let store: SettingsStore
+    /// Nothing was saved before this launch: This Mac starts on
+    /// (`SettingsStore.speakerOnAtInstall`).
+    let freshInstall: Bool
 
     /// The mode the several-apps menu shows while no mix is the source.
     var rememberedMixMode: AppMixMode = .only
@@ -105,8 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet {
             guard masterVolume != oldValue else { return }
             store.save(master: masterVolume)
-            // A master move keeps each own volume, so every AirPlay row shows own × zone × master again (S290).
-            airplayDeviceLevel = [:]
+            airplayHeldLevel = [:]   // the rows show min(100, s × k) again (S290)
         }
     }
     /// Slider positions (0…100) of local speakers, by device UID.
@@ -124,13 +134,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// The delays were migrated to offsets (S179), in this launch or before.
     private var localDelaysMigrated: Bool
-    /// Each AirPlay speaker's own slider position (0…100), by output ID (S73).
+    /// Each AirPlay speaker's own volume s, by output ID (S73): unrounded,
+    /// above 100 when the zone or the master is below 100 (S290).
     var airplayVolume: [String: Double] {
         didSet { if airplayVolume != oldValue { store.save(levels: airplayVolume, forKey: Keys.airplayVolumes) } }
     }
-    /// Each AirPlay speaker's device level from a row move or the speaker
-    /// itself, by output ID, for this run (S290).
-    var airplayDeviceLevel: [String: AirPlayDeviceLevel] = [:]
+    /// A level set on an AirPlay speaker while its k was 0, by output ID,
+    /// which its row shows until s, its zone or the master moves (S290).
+    var airplayHeldLevel: [String: Double] = [:]
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }
@@ -140,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             guard zones != oldValue else { return }
             store.save(zones: zones)
             if !SpeakerZone.differInNamesOnly(zones, oldValue) {
-                forgetAirPlayDeviceLevels(zonedFrom: oldValue)
+                forgetAirPlayHeldLevels(zonedFrom: oldValue)
                 applyZoneVolumes()
             }
         }
@@ -245,6 +256,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The user switched streaming off: auto-connect doesn't start it again
     /// until they switch it on (S120).
     var userStopped = false
+    /// A speaker was on at some point in this session (`StreamingPolicy.isIdle`).
+    var sessionHadSpeaker = false
+    /// Counts the user's starts, failed ones included, so a switch waiting to
+    /// start the whole system sees one happened meanwhile (S227 g).
+    var userStarts = 0
     /// True while a capture interruption is handled: the engine stopped the
     /// session before reporting it, and the stop still names its reason.
     var captureInterrupted = false
@@ -281,6 +297,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     override init() {
         store = LaunchAutoConnect.skipped ? SettingsStore.standard.memoryOnly() : .standard
+        let readStore = store.read
+        freshInstall = !LaunchAutoConnect.skipped && !PermissionAsks.usedBefore { readStore($0) != nil }
         let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
         // A hidden speaker is never switched on, not even by the saved on-state.
@@ -364,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         reconcileLocal()   // lists the local speakers; auto-connect may start streaming
         startSafetyNet()
         if AppLifecycle.opensMainWindow(loginItemLaunch: loginItem) { showMainWindow() }
+        openPermissionSetupIfFirstRun()   // before the sender, whose discovery would offer Local Network alone
         // AudioSync's own sender and its discovery start, after the window,
         // so a Local Network prompt they raise comes up in front of it.
         reconcileAirPlaySpeakers()

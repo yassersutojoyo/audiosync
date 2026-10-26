@@ -268,6 +268,64 @@ fn airplay1_refusal_moves_to_airplay2() {
     sender.shutdown();
 }
 
+// covers: P2, P61
+#[test]
+fn an_airplay1_refusal_moves_an_every_time_receiver_to_airplay2_without_pairing() {
+    let _serial = serial();
+    let mut behavior = Behavior::default();
+    behavior.status.insert("ANNOUNCE".to_owned(), 403);
+    let airplay1 = NetReceiver::start(behavior);
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x4c),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+
+    // A television set to ask for a code every time, listed on both paths.
+    let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 55]);
+    let raop = airplay1.record(55, PCM_TXT);
+    let mut airplay = airplay_record(server.address.port(), 55);
+    for entry in &mut airplay.txt {
+        if entry.starts_with(b"flags=") {
+            *entry = b"flags=0x4c".to_vec();
+        }
+    }
+    let device = Device::from_records(DeviceKey::Id(device_id), Some(&raop), Some(&airplay))
+        .expect("device");
+    let key = device.key.clone();
+    sender.add_speaker(device, options());
+    let asked = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(e) }
+            if *k == key && e.error.kind == ErrorKind::PairingRequired)
+    });
+    assert!(
+        asked.is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    events.drain(&sender);
+    // AirPlay 1 refuses, the AirPlay 2 attempt asks for pairing once, and
+    // nothing starts a PIN pairing or a retry by itself.
+    assert_eq!(
+        errors(&events, &key),
+        [ErrorKind::Refused, ErrorKind::PairingRequired]
+    );
+    assert!(retrying(&events, &key).is_empty(), "{:?}", events.of(&key));
+    let keys = server.fake().keys();
+    assert!(
+        !keys.contains(&"POST /pair-pin-start".to_owned()),
+        "{keys:?}"
+    );
+    assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    sender.shutdown();
+}
+
 // covers: P169
 #[test]
 fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
@@ -1217,11 +1275,27 @@ fn stored_credentials_stay_but_never_verify_once_a_receiver_asks_every_time() {
         matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
     });
     assert!(refused.is_some(), "{:?}", events.of(&key));
+    std::thread::sleep(Duration::from_secs(2));
+    events.drain(&sender);
     assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
     assert!(credential_events(&events, &key).is_empty());
+    assert!(retrying(&events, &key).is_empty(), "{:?}", events.of(&key));
     let keys = server.fake().keys();
     assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(
+        !keys.contains(&"POST /pair-pin-start".to_owned()),
+        "{keys:?}"
+    );
     sender.shutdown();
+}
+
+/// The Retrying states the speaker reported.
+fn retrying(events: &Events, key: &DeviceKey) -> Vec<SpeakerEvent> {
+    events
+        .of(key)
+        .into_iter()
+        .filter(|event| matches!(event, SpeakerEvent::State(SpeakerState::Retrying { .. })))
+        .collect()
 }
 
 /// Whether a speaker event reports on the session, not on its credentials.

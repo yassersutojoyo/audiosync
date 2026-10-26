@@ -72,6 +72,29 @@ struct EveryTimeGuard: Equatable {
     }
 }
 
+/// What a new listing does to the AirPlay switches (`adoptNativeRows`).
+struct NativeRowsAdoption: Equatable {
+    /// The rows (app IDs), as `NativeAirPlayModel.rows` orders them.
+    let rows: [String]
+    /// The new rows auto-connect may switch on (`NativeAirPlayModel.joinable`).
+    let joinable: [String]
+    /// The rows that go off, as they ask for a code every time
+    /// (`EveryTimeGuard.turnsOff`).
+    let turnOff: [String]
+}
+
+extension NativeAirPlayModel {
+    /// The listing's rows against the switches `enabled` and the rows shown
+    /// before, `known`; `stopped` as for `joinable`.
+    func adopt(enabled: Set<String>, known: [String], stopped: Bool,
+               everyTime: inout EveryTimeGuard) -> NativeRowsAdoption {
+        let rows = self.rows(enabled: enabled)
+        return NativeRowsAdoption(rows: rows,
+                                  joinable: joinable(rows, after: Set(known), stopped: stopped),
+                                  turnOff: everyTime.turnsOff(askingEveryTime(rows), enabled: enabled))
+    }
+}
+
 struct AirPlayTargetRow: Equatable {
     enum Kind: Equatable { case stereoPair, homeTheater }
     let kind: Kind
@@ -150,7 +173,7 @@ enum NativeSpeakerEvent: Equatable {
     /// the reports that gave it (0 and 0 when none did).
     case latency(id: String, ms: Double, receiverFrames: Int64?, reportedUs: Int64 = 0, sources: UInt32 = 0)
     /// The sender holds an Lf set while a speaker sounds (`ms`: that Lf)
-    /// until the stream is empty or the capture restarts (P201).
+    /// until the stream is empty or the timeline restarts (P201).
     case latencyHeld(ms: Double)
     /// The app set a new Lf or E (S282), as its debug line says.
     case estimate(detail: String)
@@ -318,8 +341,11 @@ struct NativeAirPlayPlan: Equatable {
 
     /// Switched on, listed as able to play, and not in the sender yet.
     var add: [String] = []
-    /// In the sender, but switched off, or streaming stopped.
+    /// In the sender, but switched off, or streaming stopped, or in `gone`.
     var remove: [String] = []
+    /// In the sender and on, but its receiver is gone and it doesn't play:
+    /// it leaves, stays on, and no notice names it (S222).
+    var gone: [String] = []
     /// Switched on but asking for what this sender can't give yet.
     var turnOff: [TurnOff] = []
     /// Switched-on members of a switched-on target: they play as part of
@@ -482,6 +508,14 @@ struct NativeAirPlayModel {
     /// Whether credentials are stored for the listed receiver `id`, also ones
     /// it turned down (P154): its row offers Forget Pairing.
     func keepsCredentials(_ id: String) -> Bool { receivers[id]?.credentialsKept == true }
+
+    /// Whether the listed receiver `id` asked for nothing: listed as able to
+    /// play, with no stored pairing, so a refused pairing from it came before
+    /// any pairing step and its `.needsCode` notice names no code.
+    func refusedUnasked(_ id: String) -> Bool {
+        guard let receiver = receivers[id] else { return false }
+        return receiver.availability == .available && !receiver.paired && !receiver.credentialsKept
+    }
 
     /// Whether the sender holds a password the user typed for the listed
     /// receiver `id` this run: its row offers Forget Password.
@@ -812,8 +846,10 @@ struct NativeAirPlayModel {
     /// as does one that asks for a password this run has; one that asks for
     /// a PIN or a password waits while the user's attempt pairs or prompts,
     /// and is turned off otherwise (auto-connect and restored switches never
-    /// pair or prompt); a speaker in the sender stays while it is on, listed
-    /// or not, as the sender keeps trying to reach it; everything leaves
+    /// pair or prompt); a speaker in the sender stays while it is on and
+    /// listed or playing, as the sender keeps trying to reach it, and one
+    /// whose receiver is gone and that doesn't play leaves but stays on (a
+    /// target keeps its row while in the sender, P176); everything leaves
     /// when streaming stops. A switched-on receiver that isn't listed, or is
     /// listed as unable to play in another way (which can be a moment's
     /// flicker while its records lapse), waits, and so does one that just
@@ -825,7 +861,10 @@ struct NativeAirPlayModel {
             memberOf[id].map { wanted.contains($0) && (receivers[$0] != nil || states[$0] != nil) } ?? false
         }
         plan.release = released.sorted()
-        plan.remove = states.keys.filter { !streaming || !wanted.contains($0) || released.contains($0) }.sorted()
+        plan.gone = states.keys.filter { streaming && wanted.contains($0) && !released.contains($0) && goneUnplayed($0) }.sorted()
+        plan.remove = states.keys.filter {
+            !streaming || !wanted.contains($0) || released.contains($0) || plan.gone.contains($0)
+        }.sorted()
         guard streaming else { return plan }
         for id in wanted.sorted() where states[id] == nil && !released.contains(id) {
             // A target waits while a member's password prompt is open.
@@ -850,6 +889,13 @@ struct NativeAirPlayModel {
             }
         }
         return plan
+    }
+
+    /// Whether the speaker `id` in the sender has no row: discovery no
+    /// longer lists it and it doesn't play (S222).
+    func goneUnplayed(_ id: String) -> Bool {
+        guard let state = states[id], NativeTarget.kind(id) == nil else { return false }
+        return receivers[id] == nil && state != .playing
     }
 
     /// The app added a speaker to the sender.
@@ -1282,7 +1328,7 @@ struct NativeReceiverLatency {
     }
 
     /// E over `rows` (each row's members): applied when `canChange` (no
-    /// speaker sounds, the stream is empty or the capture restarted),
+    /// speaker sounds or the stream is empty),
     /// otherwise held (P201).
     mutating func updateEstimate(rows: [[String]], canChange: Bool) -> EstimateChange {
         let wanted = rows.map { estimateMs(of: $0) }.max() ?? 0
