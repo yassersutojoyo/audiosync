@@ -47,7 +47,8 @@ impl Driver {
     /// Unsupported or Refused: with a [`Switch`] it goes on as the
     /// AirPlay 2 PIN pairing on a new connection, the host seeing one
     /// pairing (P220). Only OPTIONS gives these outcomes in a pairing, so
-    /// no `/pair-pin-start` went out. Whether it went on.
+    /// no `/pair-pin-start` went out. Returns true when the pairing went
+    /// on to the AirPlay 2 path.
     pub(super) fn switch_pairing(
         &mut self,
         key: &DeviceKey,

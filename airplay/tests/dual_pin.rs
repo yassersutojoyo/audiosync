@@ -54,13 +54,15 @@ enum Variant {
     Unsupported,
     /// ANNOUNCE answered with 406 (P138); `/pair-pin-start` with 404.
     Announce406,
+    /// OPTIONS answered with 404, Refused (P138).
+    Options404,
 }
 
 impl Variant {
     fn outcome(self) -> ErrorKind {
         match self {
             Variant::Unsupported => ErrorKind::Unsupported(UnsupportedReason::Methods),
-            Variant::Announce406 => ErrorKind::Refused,
+            Variant::Announce406 | Variant::Options404 => ErrorKind::Refused,
         }
     }
 }
@@ -105,6 +107,9 @@ fn raop_behavior(variant: Variant) -> Behavior {
             behavior
                 .status
                 .insert("POST /pair-pin-start".to_owned(), 404);
+        }
+        Variant::Options404 => {
+            behavior.status.insert("OPTIONS".to_owned(), 404);
         }
     }
     behavior
@@ -402,6 +407,20 @@ fn a_pairing_from_the_hint_switches_to_airplay2_after_an_unsupported_options() {
         logs[0].contains("Unsupported(Methods) remembered"),
         "{logs:?}"
     );
+    rig.sender.shutdown();
+}
+
+// covers: P220
+#[test]
+fn a_pairing_from_the_hint_switches_to_airplay2_after_a_refused_options() {
+    let _serial = serial();
+    let mut rig = Rig::new(Variant::Options404, ONE_TIME, 89, true);
+    rig.pair_and_play(1, true, 1);
+    assert_eq!(rig.raop_keys(), ["OPTIONS"]);
+    assert!(rig.errors().is_empty(), "{:?}", rig.events.of(&rig.key));
+    let logs = rig.path_logs();
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    assert!(logs[0].contains("Refused remembered"), "{logs:?}");
     rig.sender.shutdown();
 }
 
