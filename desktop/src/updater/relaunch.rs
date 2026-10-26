@@ -8,8 +8,14 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+use std::os::windows::io::AsRawHandle;
+
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::System::Threading::{
+    CreateEventW, EVENT_MODIFY_STATE, OpenEventW, OpenProcess, PROCESS_SYNCHRONIZE, ResetEvent,
+    SetEvent, WaitForMultipleObjects, WaitForSingleObject,
+};
+use windows::core::PCWSTR;
 
 pub const MARKER: &str = "--relaunched-from";
 pub const WAIT: Duration = Duration::from_secs(10);
@@ -57,7 +63,7 @@ fn claim_after_with<T>(
             note: None,
         };
     };
-    let _ = signal;
+    signal(parent);
     let exited = wait(parent, WAIT);
     claim_retrying(parent, exited, claim, sleep)
 }
@@ -131,8 +137,21 @@ pub fn signal_name(old: u32) -> String {
 /// Sets the start signal the old process `old` waits on; false when there
 /// is none (that process is gone).
 pub fn signal_started(old: u32) -> bool {
-    let _ = old;
-    false
+    let name = wide(&signal_name(old));
+    // SAFETY: a NUL-terminated name that outlives the call.
+    let Ok(event) = (unsafe { OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(name.as_ptr())) })
+    else {
+        return false;
+    };
+    // SAFETY: the handle is open with EVENT_MODIFY_STATE access.
+    let set = unsafe { SetEvent(event) }.is_ok();
+    // SAFETY: closed once.
+    let _ = unsafe { CloseHandle(event) };
+    set
+}
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
 }
 
 /// How the new version's first start went.
@@ -173,11 +192,43 @@ impl Launch for ProcessLaunch {
 /// to `wait` for the start signal named after `own`; a child that neither
 /// signals nor ends in time is ended.
 pub fn start_and_wait(command: &mut Command, own: u32, wait: Duration) -> Start {
-    let _ = (own, wait);
-    match command.stdin(Stdio::null()).spawn() {
-        Ok(child) => Start::Signalled { pid: child.id() },
+    let name = wide(&signal_name(own));
+    // SAFETY: a NUL-terminated name that outlives the call.
+    let event = match unsafe { CreateEventW(None, true, false, PCWSTR(name.as_ptr())) } {
+        Ok(event) => event,
+        Err(error) => return Start::Failed(io::Error::from_raw_os_error(error.code().0 & 0xFFFF)),
+    };
+    // An event an earlier try left set would read as this start's signal.
+    // SAFETY: the handle is open; CreateEventW grants full access.
+    let _ = unsafe { ResetEvent(event) };
+    let start = match command.stdin(Stdio::null()).spawn() {
         Err(error) => Start::Failed(error),
-    }
+        Ok(mut child) => {
+            let pid = child.id();
+            let process = HANDLE(child.as_raw_handle());
+            let millis = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX);
+            // SAFETY: both handles stay open for the call; the event comes
+            // first, so a child that signals and then ends counts as started.
+            let woke = unsafe { WaitForMultipleObjects(&[event, process], false, millis) };
+            if woke == WAIT_OBJECT_0 {
+                Start::Signalled { pid }
+            } else if woke.0 == WAIT_OBJECT_0.0 + 1 {
+                let code = child
+                    .try_wait()
+                    .ok()
+                    .flatten()
+                    .and_then(|status| status.code());
+                Start::Exited { pid, code }
+            } else {
+                let _ = child.kill();
+                let _ = child.wait();
+                Start::TimedOut { pid }
+            }
+        }
+    };
+    // SAFETY: closed once.
+    let _ = unsafe { CloseHandle(event) };
+    start
 }
 
 #[cfg(test)]

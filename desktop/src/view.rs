@@ -5117,9 +5117,21 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
 fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -> SharedString {
     use ui_model::UpdaterNotice as N;
     match notice {
-        N::Available { new, running, .. } => {
-            strings.invoke_notice_update_available(new.into(), running.into())
-        }
+        N::Available {
+            new,
+            running,
+            last: None,
+        } => strings.invoke_notice_update_available(new.into(), running.into()),
+        N::Available {
+            new,
+            running,
+            last: Some(ui_model::UpdateRecordReason::Blocked),
+        } => strings.invoke_notice_update_available_blocked_before(new.into(), running.into()),
+        N::Available {
+            new,
+            running,
+            last: Some(ui_model::UpdateRecordReason::FailedStart),
+        } => strings.invoke_notice_update_available_failed_before(new.into(), running.into()),
         N::Downloading {
             percent: Some(percent),
         } => strings.invoke_notice_update_downloading(percent.to_string().into()),
@@ -5146,7 +5158,7 @@ fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -
             strings.invoke_notice_update_restore_failed(joined(strings, &renames))
         }
         N::RelaunchFailed => strings.get_notice_update_relaunch_failed(),
-        N::Blocked => strings.get_notice_update_failed(),
+        N::Blocked => strings.get_notice_update_blocked(),
     }
 }
 

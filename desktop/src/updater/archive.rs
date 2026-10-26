@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::appcast::Arch;
-use super::files::{Files, is_disk_full};
+use super::files::{Files, is_blocked, is_disk_full};
 
 pub const EXE_NAME: &str = "audiosync.exe";
 pub const NOTICES_NAME: &str = "THIRD-PARTY-NOTICES.txt";
@@ -21,6 +21,8 @@ pub enum ArchiveError {
     /// The exe isn't a PE image for this machine.
     WrongMachine,
     DiskFull,
+    /// Windows security removed or blocked a file (spec S315).
+    Blocked,
     Io(io::Error),
 }
 
@@ -34,6 +36,7 @@ impl std::fmt::Display for ArchiveError {
             ArchiveError::TooBig => write!(f, "over {MAX_UNPACKED} bytes unpacked"),
             ArchiveError::WrongMachine => write!(f, "an exe for another machine"),
             ArchiveError::DiskFull => write!(f, "the disk is full"),
+            ArchiveError::Blocked => write!(f, "blocked by Windows security"),
             ArchiveError::Io(error) => write!(f, "{error}"),
         }
     }
@@ -43,6 +46,8 @@ impl From<io::Error> for ArchiveError {
     fn from(error: io::Error) -> ArchiveError {
         if is_disk_full(&error) {
             ArchiveError::DiskFull
+        } else if is_blocked(&error) {
+            ArchiveError::Blocked
         } else {
             ArchiveError::Io(error)
         }
@@ -72,7 +77,7 @@ pub fn unpack(
     arch: Arch,
     files: &dyn Files,
 ) -> Result<Unpacked, ArchiveError> {
-    let mut archive = zip::ZipArchive::new(files.open(zip)?)
+    let mut archive = zip::ZipArchive::new(files.open(zip).map_err(gone_is_blocked)?)
         .map_err(|error| ArchiveError::NotAZip(error.to_string()))?;
     let mut exe = None;
     let mut notices = None;
@@ -96,7 +101,7 @@ pub fn unpack(
     let mut budget = MAX_UNPACKED;
     let exe_path = dir.join(EXE_NAME);
     write_entry(&mut archive, exe, &exe_path, &mut budget, files)?;
-    if pe_machine(files, &exe_path)? != Some(arch.pe_machine()) {
+    if pe_machine(files, &exe_path).map_err(gone_is_blocked)? != Some(arch.pe_machine()) {
         return Err(ArchiveError::WrongMachine);
     }
     let notices = match notices {
@@ -111,6 +116,15 @@ pub fn unpack(
         exe: exe_path,
         notices,
     })
+}
+
+/// A file this update just wrote that is gone was removed by Windows security.
+fn gone_is_blocked(error: io::Error) -> ArchiveError {
+    if error.kind() == io::ErrorKind::NotFound {
+        ArchiveError::Blocked
+    } else {
+        ArchiveError::from(error)
+    }
 }
 
 fn write_entry(

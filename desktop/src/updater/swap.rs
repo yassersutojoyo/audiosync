@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use super::archive::{EXE_NAME, NOTICES_NAME};
-use super::files::{Files, is_disk_full, remove_if_there};
+use super::files::{Files, is_blocked, is_disk_full, remove_if_there};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SwapError {
@@ -114,8 +114,7 @@ fn swap_one(
 ) -> Result<(), SwapError> {
     let is_exe = name == EXE_NAME;
     let leftover = remove_if_there(files, &pair.new);
-    logged(log, format!("1: remove a leftover {name}.new"), leftover)
-        .map_err(|_| SwapError::InUse)?;
+    logged(log, format!("1: remove a leftover {name}.new"), leftover).map_err(in_use)?;
     let created = logged(
         log,
         format!("1: create {name}.new"),
@@ -123,6 +122,7 @@ fn swap_one(
     );
     let mut out = match created {
         Ok(out) => out,
+        Err(error) if is_blocked(&error) => return Err(SwapError::Blocked),
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied && is_exe => {
             return Err(SwapError::ReadOnly);
         }
@@ -135,14 +135,30 @@ fn swap_one(
             });
         }
     };
-    let copied = files
-        .open(source)
-        .and_then(|mut file| io::copy(&mut file, &mut out))
+    // The unpacked file gone before this step was removed by Windows security.
+    let opened = logged(
+        log,
+        format!("1: open the unpacked {name}"),
+        files.open(source),
+    );
+    let mut source = opened.map_err(|error| {
+        if is_blocked(&error) || error.kind() == io::ErrorKind::NotFound {
+            SwapError::Blocked
+        } else {
+            SwapError::Failed {
+                step: "open",
+                code: code(&error),
+            }
+        }
+    })?;
+    let copied = io::copy(&mut source, &mut out)
         .and_then(|_| out.flush())
         .and_then(|()| out.sync());
     drop(out);
     if let Err(error) = logged(log, format!("1: copy into {name}.new"), copied) {
-        return Err(if is_disk_full(&error) {
+        return Err(if is_blocked(&error) {
+            SwapError::Blocked
+        } else if is_disk_full(&error) {
             SwapError::DiskFull
         } else {
             SwapError::Failed {
@@ -152,8 +168,7 @@ fn swap_one(
         });
     }
     let earlier = remove_if_there(files, &pair.bak);
-    logged(log, format!("2: remove an earlier {name}.bak"), earlier)
-        .map_err(|_| SwapError::InUse)?;
+    logged(log, format!("2: remove an earlier {name}.bak"), earlier).map_err(in_use)?;
     match files.rename(&pair.live, &pair.bak) {
         Ok(()) => {
             log.push((format!("3: rename {name} to {name}.bak"), 0));
@@ -165,18 +180,33 @@ fn swap_one(
         }
         Err(error) => {
             log.push((format!("3: rename {name} to {name}.bak"), code(&error)));
-            return Err(SwapError::InUse);
+            return Err(in_use(error));
         }
     }
     let into_place = files.rename(&pair.new, &pair.live);
     logged(log, format!("4: rename {name}.new to {name}"), into_place).map_err(|error| {
-        SwapError::Failed {
-            step: "rename into place",
-            code: code(&error),
+        // A `.new` gone since step 1 was removed by Windows security.
+        if is_blocked(&error) || error.kind() == io::ErrorKind::NotFound {
+            SwapError::Blocked
+        } else {
+            SwapError::Failed {
+                step: "rename into place",
+                code: code(&error),
+            }
         }
     })?;
     progress.renamed_in = true;
     Ok(())
+}
+
+/// A refused step 1, 2 or 3: another copy holds the file, unless Windows
+/// security blocked it.
+fn in_use(error: io::Error) -> SwapError {
+    if is_blocked(&error) {
+        SwapError::Blocked
+    } else {
+        SwapError::InUse
+    }
 }
 
 fn restore(

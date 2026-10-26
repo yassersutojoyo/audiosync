@@ -503,6 +503,14 @@ export global Strings {
     public pure function notice-update-available(new: string, running: string) -> string {
         return @tr("AudioSync {} is available. You have {}.", new, running);
     }
+    // The same notice for a version that Windows security blocked, or that
+    // didn't start, the last time it was installed.
+    public pure function notice-update-available-blocked-before(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}. Windows security blocked this version last time.", new, running);
+    }
+    public pure function notice-update-available-failed-before(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}. This version didn't start last time.", new, running);
+    }
     public pure function notice-update-downloading(percent: string) -> string {
         return @tr("Downloading the update: {}%", percent);
     }
@@ -530,7 +538,8 @@ export global Strings {
     public pure function notice-update-rename(bak: string, live: string) -> string {
         return @tr("{} to {}", bak, live);
     }
-    out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync put the old version back. The running version stays.");
+    out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync put the old version back. The running version stays. You can download the new version from the release page.");
+    out property <string> notice-update-blocked: @tr("Windows security blocked the update file, so nothing was installed. The running version stays. You can download the new version from the release page.");
 
     // Windows audio couldn't be reached at startup, so AudioSync exits;
     // `detail` is the system's reason.

@@ -1995,7 +1995,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | leftover_new_files_and_temp_folders_go_at_launch_and_the_bak_stays | S304 |
 | the_launch_check_runs_once_a_day_and_a_failed_check_stores_no_time (23 h no, 24 h yes, a clock moved back yes) | S305 |
 | turning_the_switch_off_stops_the_launch_check_not_the_manual_one | S305 |
-| the_updater_texts (every text of S308 comes from strings.slint) | S308 |
+| the_updater_texts (every text of S308 comes from strings.slint; the blocked and failed-start notices offer Open Release Page) | S308, S314, S315, S316 |
 | the_updater_writes_its_debug_log_lines | S309 |
 | the_fake_appcast_end_to_end_through_a_memory_fetch | S296, S298, S299, S300, S301 |
 | a_bad_signature_deletes_the_download_and_changes_nothing | S299 |
@@ -2004,16 +2004,17 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | a_disk_full_copy_deletes_every_partial_file | S302 |
 | a_manual_check_with_nothing_newer_says_the_running_version_is_the_latest | S296, S305 |
 | a_failed_install_reports_and_try_again_retries | S302, S306 |
-| update_checks_are_on_by_default_and_keep_their_time | S305 |
-| a_new_exe_that_exits_or_never_signals_is_ended_and_the_bak_restored (pending; a stand-in exe that exits at once, and one that sleeps past a shortened wait; the old process keeps streaming throughout) | S303, S314, S316 |
-| the_new_instance_signals_before_it_reads_the_settings_or_claims_the_instance (pending; a stand-in new exe records the order of its steps: the signal comes first, the lock and the settings read come only after the old process ended, and with an old process that never ends, only after the 10 s wait) | S303, S314 |
-| a_sharing_violation_is_retried_five_times_then_fails (pending; the test holds the unpacked exe open without sharing: released after 1 s the update goes on, held throughout it fails after the fifth retry in under 10 s) | S315 |
-| a_download_that_vanishes_before_its_check_is_reported_as_blocked (pending; the fake appcast serves a signed zip and a test hook deletes it once the download ends) | S315, S316 |
-| an_infected_error_at_any_swap_step_undoes_the_swap_and_offers_the_release_page (pending; errors 225 and 226 injected at the copy into `.new`, at step 3 and at step 4) | S302, S315, S316 |
-| a_new_exe_gone_before_the_restart_restores_the_bak (pending; the stand-in new exe is deleted after step 4, then Restart Now) | S303, S315 |
-| quitting_after_a_swap_whose_exe_is_gone_renames_the_bak_back (pending; delete the new exe after step 4, then Quit: `audiosync.exe` is the old version again and the version is stored as blocked) | S315 |
-| the_updater_writes_no_zone_identifier_stream (pending; a full update from the fake appcast on 127.0.0.1 into a temp install folder on NTFS, then opening `audiosync.exe:Zone.Identifier` there fails with file not found) | S315 |
-| a_failed_or_blocked_version_is_skipped_at_launch_offered_on_a_manual_check_and_cleared_by_a_newer_one (pending; settings that store version N as blocked and a fake appcast offering N: the launch check shows nothing and logs it, a manual check offers N with the blocked line; the appcast then offers a higher version: it is offered and the record is gone) | S316 |
+| update_checks_are_on_by_default_and_keep_their_time (and a record of a blocked version, kept and read back) | S305, S316 |
+| a_new_exe_that_exits_or_never_signals_is_ended_and_the_bak_restored (a stand-in exe that exits at once, and one that sleeps past a shortened wait; the old process keeps streaming throughout) | S303, S314, S316 |
+| the_new_instance_signals_before_it_reads_the_settings_or_claims_the_instance (a stand-in new exe records the order of its steps: the signal comes first, the lock and the settings read come only after the old process ended, and with an old process that never ends, only after the 10 s wait) | S303, S314 |
+| the_start_signal_reaches_the_old_process_and_a_silent_child_is_ended (a ping.exe stand-in: signalled from another thread, `cmd.exe /c exit 3`, and one that outlives a 300 ms wait and is ended) | S314 |
+| a_sharing_violation_is_retried_five_times_then_fails (the test holds the unpacked exe open without sharing: released after 1 s the update goes on, held throughout it fails after the fifth retry in under 10 s) | S315 |
+| a_download_that_vanishes_before_its_check_is_reported_as_blocked (the fake appcast serves a signed zip and a test hook deletes it once the download ends) | S315, S316 |
+| an_infected_error_at_any_swap_step_undoes_the_swap_and_offers_the_release_page (errors 225 and 226 injected at the copy into `.new`, at step 3 and at step 4) | S302, S315, S316 |
+| a_new_exe_gone_before_the_restart_restores_the_bak (the stand-in new exe is deleted after step 4, then Restart Now) | S303, S315 |
+| quitting_after_a_swap_whose_exe_is_gone_renames_the_bak_back (delete the new exe after step 4, then Quit: `audiosync.exe` is the old version again and the version is stored as blocked) | S315 |
+| the_updater_writes_no_zone_identifier_stream (a full update from the fake appcast through the memory fetch into a temp install folder on NTFS, then opening `audiosync.exe:Zone.Identifier` there fails with file not found) | S315 |
+| a_failed_or_blocked_version_is_skipped_at_launch_offered_on_a_manual_check_and_cleared_by_a_newer_one (settings that store version N as blocked and a fake appcast offering N: the launch check shows nothing and logs it, a manual check offers N with the blocked line; the appcast then offers a higher version: it is offered and the record is gone) | S316 |
 
 The Mac (pending, [MAC]):
 

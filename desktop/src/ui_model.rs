@@ -561,7 +561,9 @@ impl UpdaterNotice {
             UpdaterNotice::Available { .. } => &[Download, NotNow],
             UpdaterNotice::Downloading { .. } => &[Cancel],
             UpdaterNotice::Installed { .. } => &[RestartNow],
-            UpdaterNotice::ReadOnly => &[OpenReleasePage],
+            UpdaterNotice::ReadOnly | UpdaterNotice::RelaunchFailed | UpdaterNotice::Blocked => {
+                &[OpenReleasePage]
+            }
             UpdaterNotice::Unreachable
             | UpdaterNotice::DownloadFailed
             | UpdaterNotice::DiskFull

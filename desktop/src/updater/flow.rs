@@ -14,7 +14,7 @@ use ed25519_dalek::VerifyingKey;
 use super::appcast::{self, Arch, Update};
 use super::archive::{self, ArchiveError};
 use super::fetch::{self, Fetch, FetchError, Kind};
-use super::files::{Files, Retrying, is_disk_full};
+use super::files::{Files, Retrying, is_blocked, is_disk_full};
 use super::relaunch::Launch;
 use super::signature;
 use super::swap::{self, Rename, StepLog, SwapError, Swapped};
@@ -209,13 +209,7 @@ fn install_in(
     let mut write_error: Option<io::Error> = None;
     let mut out = match files.create(&zip, true) {
         Ok(out) => out,
-        Err(error) => {
-            return if is_disk_full(&error) {
-                Installed::DiskFull
-            } else {
-                Installed::Failed
-            };
-        }
+        Err(error) => return file_failure(env, "create the download", &error),
     };
     let mut last_percent = None;
     let fetched = env.fetch.get(&enclosure.url, Kind::Download, &mut |bytes| {
@@ -253,11 +247,7 @@ fn install_in(
         return Installed::Cancelled;
     }
     if let Some(error) = write_error.or(flushed.err()) {
-        return if is_disk_full(&error) {
-            Installed::DiskFull
-        } else {
-            Installed::Failed
-        };
+        return file_failure(env, "write the download", &error);
     }
     match fetched {
         Ok(()) => {}
@@ -275,12 +265,15 @@ fn install_in(
     }
 
     let mut bytes = Vec::new();
-    if files
+    if let Err(error) = files
         .open(&zip)
         .and_then(|mut file| file.read_to_end(&mut bytes))
-        .is_err()
     {
-        return Installed::Failed;
+        // The download gone before its check was removed by Windows security.
+        if error.kind() == io::ErrorKind::NotFound {
+            return blocked(env, "read the download", &error);
+        }
+        return file_failure(env, "read the download", &error);
     }
     let good = signature::verifies(&bytes, enclosure.signature.as_deref(), &env.key);
     env.log.log(|| {
@@ -315,6 +308,7 @@ fn install_in(
     let unpacked = match unpacked {
         Ok(unpacked) => unpacked,
         Err(ArchiveError::DiskFull) => return Installed::DiskFull,
+        Err(ArchiveError::Blocked) => return Installed::Blocked,
         Err(_) => return Installed::BrokenDownload,
     };
     // The last point where a Cancel still leaves the install folder untouched.
@@ -343,6 +337,34 @@ fn install_in(
         Err(SwapError::RestoreFailed { renames }) => Installed::RestoreFailed { renames },
         Err(SwapError::Blocked) => Installed::Blocked,
     }
+}
+
+/// What a failed file step means: a Windows security block, a full disk,
+/// or another failure.
+fn file_failure(env: &Env, step: &str, error: &io::Error) -> Installed {
+    if is_blocked(error) {
+        blocked(env, step, error)
+    } else if is_disk_full(error) {
+        Installed::DiskFull
+    } else {
+        env.log
+            .log(|| format!("updater: {step} failed (error {})", code(error)));
+        Installed::Failed
+    }
+}
+
+fn blocked(env: &Env, step: &str, error: &io::Error) -> Installed {
+    env.log.log(|| {
+        format!(
+            "updater: {step}: blocked by Windows security (error {})",
+            code(error)
+        )
+    });
+    Installed::Blocked
+}
+
+fn code(error: &io::Error) -> i32 {
+    error.raw_os_error().unwrap_or(-1)
 }
 
 /// Deletes the `.new` files in the install folder and every temp folder an

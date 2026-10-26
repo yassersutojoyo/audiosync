@@ -245,12 +245,22 @@ impl Updater {
                 match checked {
                     Checked::Update(update) => {
                         polled.checked = true;
-                        self.set_notice(Some(UpdaterNotice::Available {
-                            new: update.version_text.clone(),
-                            running: self.env.running.to_string(),
-                            last: None,
-                        }));
-                        self.offered = Some(update);
+                        let last = self.last_time(&update, polled);
+                        if let (Some(reason), false) = (last, manual) {
+                            self.env.log.log(|| {
+                                format!(
+                                    "updater: {} not offered at launch ({reason:?} last time)",
+                                    update.version_text
+                                )
+                            });
+                        } else {
+                            self.set_notice(Some(UpdaterNotice::Available {
+                                new: update.version_text.clone(),
+                                running: self.env.running.to_string(),
+                                last,
+                            }));
+                            self.offered = Some(update);
+                        }
                     }
                     Checked::UpToDate => {
                         polled.checked = true;
@@ -276,6 +286,7 @@ impl Updater {
                 let notice = match installed {
                     Installed::Done(swapped) => {
                         self.swapped = Some((version.clone(), swapped));
+                        self.keep_record(None, polled);
                         Some(UpdaterNotice::Installed { version })
                     }
                     Installed::Cancelled => None,
@@ -289,7 +300,16 @@ impl Updater {
                     Installed::RestoreFailed { renames } => Some(UpdaterNotice::RestoreFailed {
                         renames: notice_renames(renames),
                     }),
-                    Installed::Blocked => Some(UpdaterNotice::Failed),
+                    Installed::Blocked => {
+                        self.keep_record(
+                            Some(UpdateRecord {
+                                version,
+                                reason: UpdateRecordReason::Blocked,
+                            }),
+                            polled,
+                        );
+                        Some(UpdaterNotice::Blocked)
+                    }
                 };
                 self.set_notice(notice);
                 if std::mem::take(&mut self.manual_waiting) {
@@ -305,7 +325,26 @@ impl Updater {
                         });
                         polled.quit = true;
                     }
-                    other => self.start_failed(&format!("{other:?}")),
+                    Start::Failed(error)
+                        if files::is_blocked(&error)
+                            || error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        self.start_failed(&error.to_string(), UpdateRecordReason::Blocked, polled);
+                    }
+                    other => {
+                        let why = match other {
+                            Start::Exited { pid, code } => {
+                                format!("process {pid} ended ({code:?}) before its start signal")
+                            }
+                            Start::TimedOut { pid } => format!(
+                                "process {pid} gave no start signal in {} ms and was ended",
+                                self.env.start_wait.as_millis()
+                            ),
+                            Start::Failed(error) => format!("the exe didn't start ({error})"),
+                            Start::Signalled { .. } => unreachable!("handled above"),
+                        };
+                        self.start_failed(&why, UpdateRecordReason::FailedStart, polled);
+                    }
                 }
             }
         }
@@ -386,20 +425,49 @@ impl Updater {
         let env = self.env.clone();
         let sender = self.sender.clone();
         self.spawn(move || {
-            let start = env.launch.start(&exe, env.start_wait);
+            // An installed exe gone since the swap was removed by Windows
+            // security (spec S315).
+            let start = if exe.exists() {
+                env.launch.start(&exe, env.start_wait)
+            } else {
+                Start::Failed(std::io::Error::from(std::io::ErrorKind::NotFound))
+            };
             let _ = sender.send(Event::Started(start));
         });
     }
 
+    /// Why the stored version didn't install last time, when `update` is
+    /// that version; a higher one clears the record (spec S316).
+    fn last_time(&mut self, update: &Update, polled: &mut Polled) -> Option<UpdateRecordReason> {
+        let record = self.record.as_ref()?;
+        match Version::parse(&record.version) {
+            Some(stored) if stored == update.version => Some(record.reason),
+            Some(stored) if stored > update.version => None,
+            _ => {
+                self.keep_record(None, polled);
+                None
+            }
+        }
+    }
+
+    fn keep_record(&mut self, record: Option<UpdateRecord>, polled: &mut Polled) {
+        if self.record != record {
+            self.env.log.log(|| format!("updater: record {record:?}"));
+            self.record = record;
+            polled.record_changed = true;
+        }
+    }
+
     /// The new exe couldn't be started or gave no start signal: the new
     /// files go and each `.bak` the swap made is renamed back (spec S303).
-    fn start_failed(&mut self, why: &str) {
+    fn start_failed(&mut self, why: &str, reason: UpdateRecordReason, polled: &mut Polled) {
         self.env
             .log
             .log(|| format!("updater: restart failed ({why})"));
-        let Some((_, swapped)) = self.swapped.take() else {
+        let Some((version, swapped)) = self.swapped.take() else {
             return;
         };
+        self.keep_record(Some(UpdateRecord { version, reason }), polled);
         let mut steps = swap::StepLog::new();
         let undone = swap::undo_completed(
             &self.env.install_dir,
@@ -416,6 +484,7 @@ impl Updater {
             Err(swap::SwapError::RestoreFailed { renames }) => UpdaterNotice::RestoreFailed {
                 renames: notice_renames(renames),
             },
+            _ if reason == UpdateRecordReason::Blocked => UpdaterNotice::Blocked,
             _ => UpdaterNotice::RelaunchFailed,
         }));
     }
@@ -424,7 +493,16 @@ impl Updater {
     /// `.bak` back, so the next start finds one (spec S315). True when the
     /// record changed.
     pub fn at_quit(&mut self) -> bool {
-        false
+        if self.swapped.is_none() || self.env.install_dir.join(archive::EXE_NAME).exists() {
+            return false;
+        }
+        let mut polled = Polled::default();
+        self.start_failed(
+            "the installed exe is gone at quit",
+            UpdateRecordReason::Blocked,
+            &mut polled,
+        );
+        polled.record_changed
     }
 
     /// Closing the notice of a running download (its X or Dismiss All)

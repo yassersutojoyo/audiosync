@@ -85,6 +85,11 @@ pub fn is_disk_full(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::StorageFull || matches!(error.raw_os_error(), Some(39 | 112))
 }
 
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+}
+
 /// Whether `error` says Windows security removed or quarantined the file:
 /// ERROR_VIRUS_INFECTED or ERROR_VIRUS_DELETED (spec S315).
 pub fn is_blocked(error: &io::Error) -> bool {
@@ -116,8 +121,33 @@ pub struct Retrying<'a> {
 
 impl Retrying<'_> {
     fn retried<T>(&self, what: &str, path: &Path, op: impl Fn() -> io::Result<T>) -> io::Result<T> {
-        let _ = (what, path);
-        op()
+        let mut waits = LOCK_RETRIES.iter();
+        loop {
+            match op() {
+                Err(error) if is_locked(&error) => {
+                    let code = error.raw_os_error().unwrap_or(-1);
+                    let Some(wait) = waits.next() else {
+                        self.log.log(|| {
+                            format!(
+                                "updater: {what} {} still locked (error {code}) after {} retries",
+                                file_name(path),
+                                LOCK_RETRIES.len()
+                            )
+                        });
+                        return Err(error);
+                    };
+                    self.log.log(|| {
+                        format!(
+                            "updater: {what} {} locked (error {code}), again in {} ms",
+                            file_name(path),
+                            wait.as_millis()
+                        )
+                    });
+                    std::thread::sleep(*wait);
+                }
+                other => return other,
+            }
+        }
     }
 }
 
