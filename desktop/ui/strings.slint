@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup, UpdateButton } from "types.slint";
 
 export global Strings {
     // Main window
@@ -349,6 +349,9 @@ export global Strings {
     out property <string> launch-at-login: @tr("Launch at Sign-In");
     // File > AirPlay 2 (Experimental): read at launch only.
     out property <string> airplay2-experimental: @tr("AirPlay 2 (Experimental)");
+    // The updater's menu items (Windows release builds only).
+    out property <string> check-updates-automatically: @tr("Check for Updates Automatically");
+    out property <string> menu-check-for-updates: @tr("Check for Updates…");
 
     // File > Web Remote… and its window: a page on the home network that a
     // paired phone uses to switch speakers and set their volume and delay.
@@ -467,6 +470,54 @@ export global Strings {
     public pure function window-failed(detail: string) -> string {
         return @tr("AudioSync couldn't open a window: {}", detail);
     }
+
+    // The buttons of the updater's notice.
+    public pure function update-button(button: UpdateButton) -> string {
+        if button == UpdateButton.download {
+            return @tr("Download and Install");
+        }
+        if button == UpdateButton.not-now {
+            return @tr("Not Now");
+        }
+        if button == UpdateButton.cancel {
+            return @tr("Cancel");
+        }
+        if button == UpdateButton.try-again {
+            return @tr("Try Again");
+        }
+        if button == UpdateButton.open-release-page {
+            return @tr("Open Release Page");
+        }
+        return @tr("Relaunch Now");
+    }
+
+    // The updater's notices. `new` and `running` are version numbers such
+    // as 0.8.0; `percent` is how much is downloaded, a whole number.
+    public pure function notice-update-available(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}.", new, running);
+    }
+    public pure function notice-update-downloading(percent: string) -> string {
+        return @tr("Downloading the update: {}%", percent);
+    }
+    out property <string> notice-update-downloading-started: @tr("Downloading the update.");
+    public pure function notice-update-installed(version: string) -> string {
+        return @tr("AudioSync {} is installed. It takes effect after a relaunch.", version);
+    }
+    public pure function notice-update-up-to-date(running: string) -> string {
+        return @tr("AudioSync {} is the latest version.", running);
+    }
+    out property <string> notice-update-unreachable: @tr("AudioSync couldn't reach the update server. Check your connection, then try again.");
+    out property <string> notice-update-download-failed: @tr("The update didn't download completely, so nothing was installed. The running version stays.");
+    out property <string> notice-update-bad-signature: @tr("The download didn't pass its check, so nothing was installed. The running version stays.");
+    out property <string> notice-update-broken: @tr("The download is broken, so nothing was installed. The running version stays.");
+    out property <string> notice-update-disk-full: @tr("There isn't enough disk space for the update, so nothing was installed. The running version stays.");
+    out property <string> notice-update-read-only: @tr("AudioSync can't write to its own folder, so it can't install the update. The running version stays. You can download the new version from the release page.");
+    out property <string> notice-update-in-use: @tr("Another copy of AudioSync is using its files, for example in another user's session. Close the other copies, then try again. The running version stays.");
+    out property <string> notice-update-failed: @tr("The update couldn't be installed. The running version stays.");
+    public pure function notice-update-restore-failed(bak: string) -> string {
+        return @tr("The update failed and AudioSync couldn't put its old version back. In the AudioSync folder, rename {} to audiosync.exe.", bak);
+    }
+    out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync put the old version back. The running version stays.");
 
     // Windows audio couldn't be reached at startup, so AudioSync exits;
     // `detail` is the system's reason.
@@ -1005,6 +1056,9 @@ export global Strings {
         }
         if kind == NoticeKind.airplay2-next-launch {
             return @tr("AirPlay 2 after restart");
+        }
+        if kind == NoticeKind.update {
+            return @tr("update");
         }
         if kind == NoticeKind.remote-public-network {
             return @tr("web remote on Public network");

@@ -7,7 +7,7 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { DeviceVolumeHint, NoticeItem, PresetItem, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, ZoneItem } from "types.slint";
 import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
@@ -218,6 +218,7 @@ export component TrayFlyout inherits Window {
     callback notice-retry-requested(int);
     // Open Privacy Settings on a notice.
     callback notice-privacy-requested(int);
+    callback notice-update-button-pressed(UpdateButton);
     callback open-app();
     callback exit-app();
     callback close-requested();
@@ -339,6 +340,9 @@ export component TrayFlyout inherits Window {
                 }
                 privacy-requested(id) => {
                     root.notice-privacy-requested(id);
+                }
+                update-button-pressed(button) => {
+                    root.notice-update-button-pressed(button);
                 }
                 button-focus-changed(focused) => {
                     root.notice-focused = focused;

@@ -82,10 +82,15 @@ windows = { version = "0.62", features = [
     # Network List Manager: whether a connected network is Public, which
     # the web remote warns about (src/network_profile.rs).
     "Win32_Networking_NetworkListManager",
+    # WinHTTP: the updater's appcast and download, through the system's
+    # proxy settings and certificate store (src/updater/fetch.rs).
+    "Win32_Networking_WinHttp",
     "Win32_Security",
     # DPAPI (CryptProtectData): the Apple TV pairing store, encrypted for the
     # current user (src/audio/pairings.rs).
     "Win32_Security_Cryptography",
+    # MoveFileExW with write-through: the updater's swap (src/updater/files.rs).
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Diagnostics_ToolHelp",
@@ -109,6 +114,15 @@ windows-core = "0.62"
 windows-future = "0.3.2"
 # The notification-area icon and its menu (MIT OR Apache-2.0).
 tray-icon = { version = "0.26.1", default-features = false }
+# The updater (src/updater): the appcast read with DTDs refused (MIT OR
+# Apache-2.0, already in the build through Slint's fonts), the EdDSA
+# signature of the download (BSD-3-Clause, the AirPlay sender's own), its
+# base64 (MIT OR Apache-2.0, already in the build) and the zip (MIT) with
+# deflate only.
+roxmltree = "0.21.1"
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["fast"] }
+base64 = "0.23.1"
+zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The tray icon as a StatusNotifier item over D-Bus (ksni), with no GTK.

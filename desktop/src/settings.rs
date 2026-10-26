@@ -705,6 +705,11 @@ pub struct Settings {
     pub cast_addresses: Vec<String>,
     /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
     pub airplay2_experimental: bool,
+    /// File > Check for Updates Automatically (spec S305), on by default.
+    pub check_updates_automatically: bool,
+    /// The last update check that read the appcast, in seconds since the
+    /// Unix epoch (spec S305).
+    pub last_update_check: Option<u64>,
 }
 
 impl Default for Settings {
@@ -736,6 +741,8 @@ impl Default for Settings {
             remote: RemoteSettings::default(),
             cast_addresses: Vec::new(),
             airplay2_experimental: false,
+            check_updates_automatically: true,
+            last_update_check: None,
         }
     }
 }
@@ -999,6 +1006,8 @@ impl Settings {
             remote: self.remote.clamped(),
             cast_addresses: cast_address::clamped(self.cast_addresses),
             airplay2_experimental: self.airplay2_experimental,
+            check_updates_automatically: self.check_updates_automatically,
+            last_update_check: self.last_update_check,
         }
     }
 
@@ -1857,6 +1866,20 @@ mod tests {
         let on = read(r#"{"version": 2, "airplay2_experimental": true}"#);
         assert!(on.airplay2_experimental);
         assert!(read(&on.to_json()).airplay2_experimental);
+    }
+
+    #[test]
+    fn update_checks_are_on_by_default_and_keep_their_time() {
+        let read = |json: &str| Settings::from_json(json).expect("read").0;
+        assert!(Settings::default().check_updates_automatically);
+        assert!(read(r#"{"version": 2}"#).check_updates_automatically);
+        let off = read(
+            r#"{"version": 2, "check_updates_automatically": false, "last_update_check": 1800000000}"#,
+        );
+        assert!(!off.check_updates_automatically);
+        let again = read(&off.to_json());
+        assert_eq!(again.last_update_check, Some(1_800_000_000));
+        assert!(!again.check_updates_automatically);
     }
 
     #[test]

@@ -63,6 +63,8 @@ mod speaker_names;
 #[rustfmt::skip]
 mod tokens;
 mod ui_model;
+#[cfg(windows)]
+mod updater;
 mod view;
 
 use std::process::ExitCode;
@@ -113,6 +115,12 @@ const PREVIEW_ZONES_VAR: &str = "AUDIOSYNC_PREVIEW_ZONES";
 const PREVIEW_PRESETS_VAR: &str = "AUDIOSYNC_PREVIEW_PRESETS";
 
 fn main() -> ExitCode {
+    // After Relaunch Now the quitting copy still holds the single instance;
+    // claiming it first would hand this launch over to that copy.
+    #[cfg(windows)]
+    if let Some(parent) = updater::relaunch::marked_parent(std::env::args_os()) {
+        updater::relaunch::wait_for_exit(parent, updater::relaunch::WAIT);
+    }
     let Some(instance) = os::claim_instance() else {
         return ExitCode::SUCCESS;
     };

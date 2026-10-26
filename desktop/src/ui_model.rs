@@ -487,6 +487,53 @@ pub enum SwitchName {
     },
 }
 
+/// What the updater's notice says (spec S297 to S305); the UI words it
+/// from `strings.slint`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum UpdaterNotice {
+    Available { new: String, running: String },
+    Downloading { percent: Option<u8> },
+    Installed { version: String },
+    UpToDate { running: String },
+    Unreachable,
+    DownloadFailed,
+    BadSignature,
+    BrokenDownload,
+    DiskFull,
+    ReadOnly,
+    InUse,
+    Failed,
+    RestoreFailed { bak: String },
+    RelaunchFailed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum UpdaterButton {
+    Download,
+    NotNow,
+    Cancel,
+    TryAgain,
+    OpenReleasePage,
+    RelaunchNow,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl UpdaterNotice {
+    pub fn buttons(&self) -> &'static [UpdaterButton] {
+        use UpdaterButton::*;
+        match self {
+            UpdaterNotice::Available { .. } => &[Download, NotNow],
+            UpdaterNotice::Downloading { .. } => &[Cancel],
+            UpdaterNotice::Installed { .. } => &[RelaunchNow],
+            UpdaterNotice::ReadOnly => &[OpenReleasePage],
+            UpdaterNotice::InUse => &[TryAgain],
+            _ => &[],
+        }
+    }
+}
+
 /// What a notice says. The UI words it (the notice texts in
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -617,6 +664,9 @@ pub enum NoticeMessage {
     AirPlayAheadOfCast { speaker: String, tenths: u32 },
     /// The saved groups became zones at this launch (spec S248); posted once.
     GroupsBecameZones,
+    /// The Windows updater's notice.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Update(UpdaterNotice),
     /// A preset recall left stored members off (spec S265), each by its
     /// shown name with why; `nothing_changed`: none could go on, so the
     /// recall changed nothing.
@@ -633,7 +683,15 @@ impl NoticeMessage {
     pub fn reports_a_change(&self) -> bool {
         matches!(
             self,
-            Self::SourceSwitched { .. } | Self::AirPlay2NextLaunch { .. } | Self::GroupsBecameZones
+            Self::SourceSwitched { .. }
+                | Self::AirPlay2NextLaunch { .. }
+                | Self::GroupsBecameZones
+                | Self::Update(
+                    UpdaterNotice::Available { .. }
+                        | UpdaterNotice::Downloading { .. }
+                        | UpdaterNotice::Installed { .. }
+                        | UpdaterNotice::UpToDate { .. }
+                )
         )
     }
 }
@@ -1484,6 +1542,10 @@ pub struct ViewSettings {
     /// File > AirPlay 2 (Experimental), as saved; the sender reads it at
     /// launch only.
     pub airplay2_experimental: bool,
+    /// File > Check for Updates Automatically.
+    pub check_updates_automatically: bool,
+    /// The last update check that read the appcast, Unix seconds.
+    pub last_update_check: Option<u64>,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in

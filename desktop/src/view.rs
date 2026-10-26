@@ -48,8 +48,8 @@ use crate::{
     CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GuidePage, GuideStepItem,
     GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow, MixAppItem, NameField,
     NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart,
-    RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, ZoneItem,
-    ZoneNameDialog, ZoneTarget, speaker_names,
+    RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, UpdateButton,
+    ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
 };
 
 mod help_window;
@@ -106,6 +106,10 @@ struct UiState {
     airplay2_experimental: bool,
     /// What the item was at launch: the mode the running sender has.
     airplay2_at_launch: bool,
+    /// File > Check for Updates Automatically, as saved.
+    check_updates_automatically: bool,
+    /// The last update check that read the appcast, Unix seconds.
+    last_update_check: Option<u64>,
     /// Says the item applies at the next launch, while it differs from
     /// `airplay2_at_launch`.
     airplay2_notice: Option<ui_model::Notice>,
@@ -355,6 +359,9 @@ const AIRPLAY2_NOTICE_ID: u64 = launch_at_login::NOTICE_ID - 1;
 
 /// The web remote's Public network notice's id, next to those.
 const REMOTE_PUBLIC_NOTICE_ID: u64 = AIRPLAY2_NOTICE_ID - 1;
+
+/// The Windows updater's notice's id, next to those.
+const UPDATER_NOTICE_ID: u64 = REMOTE_PUBLIC_NOTICE_ID - 1;
 
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
@@ -696,6 +703,9 @@ pub struct App {
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
     login_timer: Timer,
+    /// The Windows updater, in a release build only.
+    #[cfg(windows)]
+    updater: RefCell<Option<crate::updater::Updater>>,
     /// The Now Playing card, and the source it was last given.
     now_playing: RefCell<NowPlayingCard>,
     now_playing_source: RefCell<Option<CardSource>>,
@@ -721,6 +731,13 @@ impl MenuBarTheme {
 }
 
 /// Runs `action` on the app if it still exists.
+#[cfg(windows)]
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
 fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     if let Some(app) = app.upgrade() {
         action(&app);
@@ -832,6 +849,8 @@ fn fitted_main_frame(
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
     pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
+        #[cfg(windows)]
+        let log_for_updater = log.clone();
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
@@ -896,6 +915,8 @@ impl App {
                 launch_at_login::own_exe(),
             )),
             login_timer: Timer::default(),
+            #[cfg(windows)]
+            updater: RefCell::new(crate::updater::for_this_exe(log_for_updater)),
             now_playing: RefCell::default(),
             now_playing_source: RefCell::default(),
         });
@@ -911,12 +932,14 @@ impl App {
         app.connect_remote();
         app.restore_view();
         app.restore_remote();
+        app.launch_update_check();
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
             .start(TimerMode::Repeated, POLL_INTERVAL, move || {
                 with_app(&weak, |app| {
                     app.poll();
+                    app.poll_updater();
                     app.follow_input_level(&weak);
                 })
             });
@@ -957,6 +980,7 @@ impl App {
             .notices
             .extend(self.ui.borrow().airplay2_notice.clone());
         state.notices.extend(self.remote_public_notice());
+        state.notices.extend(self.updater_notice());
         state
     }
 
@@ -999,7 +1023,11 @@ impl App {
     fn dismiss_notice(&self, id: u64) {
         let airplay2 =
             id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
-        if airplay2 || self.login.borrow_mut().dismiss(id) || self.dismiss_remote_notice(id) {
+        if airplay2
+            || self.login.borrow_mut().dismiss(id)
+            || self.dismiss_remote_notice(id)
+            || self.dismiss_updater_notice(id)
+        {
             self.refresh();
         } else {
             self.update(|b| b.dismiss_notice(id));
@@ -1010,6 +1038,7 @@ impl App {
         self.login.borrow_mut().dismiss_notice();
         self.ui.borrow_mut().airplay2_notice = None;
         self.dismiss_remote_notice(REMOTE_PUBLIC_NOTICE_ID);
+        self.dismiss_updater_notice(UPDATER_NOTICE_ID);
         self.update(|b| b.dismiss_all_notices());
     }
 
@@ -1819,6 +1848,9 @@ impl App {
         self.main
             .set_airplay2_experimental(ui.airplay2_experimental);
         self.main.set_launch_at_login(self.login.borrow().is_on());
+        self.main.set_updater_available(self.has_updater());
+        self.main
+            .set_check_updates_automatically(ui.check_updates_automatically);
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
@@ -2336,6 +2368,16 @@ impl App {
         let w = weak.clone();
         main.on_launch_at_login_toggled(move |on| with_app(&w, |app| app.set_launch_at_login(on)));
         let w = weak.clone();
+        main.on_check_updates_automatically_toggled(move |on| {
+            with_app(&w, |app| app.set_check_updates_automatically(on))
+        });
+        let w = weak.clone();
+        main.on_check_for_updates_requested(move || with_app(&w, App::check_for_updates));
+        let w = weak.clone();
+        main.on_notice_update_button_pressed(move |button| {
+            with_app(&w, |app| app.press_update_button(button))
+        });
+        let w = weak.clone();
         main.on_airplay2_experimental_toggled(move |on| {
             with_app(&w, |app| app.set_airplay2_experimental(on))
         });
@@ -2463,6 +2505,10 @@ impl App {
         });
         let w = weak.clone();
         flyout.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
+        let w = weak.clone();
+        flyout.on_notice_update_button_pressed(move |button| {
+            with_app(&w, |app| app.press_update_button(button))
+        });
         let w = weak.clone();
         flyout.on_open_app(move || {
             with_app(&w, |app| {
@@ -2866,6 +2912,139 @@ impl App {
         }
     }
 
+    fn has_updater(&self) -> bool {
+        #[cfg(windows)]
+        return self.updater.borrow().is_some();
+        #[cfg(not(windows))]
+        return false;
+    }
+
+    fn updater_notice(&self) -> Option<ui_model::Notice> {
+        #[cfg(windows)]
+        return self.updater.borrow().as_ref().and_then(|updater| {
+            updater.notice().map(|notice| ui_model::Notice {
+                id: UPDATER_NOTICE_ID,
+                subject: "update".to_owned(),
+                message: NoticeMessage::Update(notice.clone()),
+                time: crate::platform::notice_time(),
+            })
+        });
+        #[cfg(not(windows))]
+        return None;
+    }
+
+    fn dismiss_updater_notice(&self, id: u64) -> bool {
+        if id != UPDATER_NOTICE_ID {
+            return false;
+        }
+        #[cfg(windows)]
+        if let Some(updater) = self.updater.borrow_mut().as_mut() {
+            updater.dismiss();
+            return true;
+        }
+        false
+    }
+
+    /// The launch check (spec S305), once the saved settings are in.
+    fn launch_update_check(&self) {
+        #[cfg(windows)]
+        {
+            let (automatic, last) = {
+                let ui = self.ui.borrow();
+                (ui.check_updates_automatically, ui.last_update_check)
+            };
+            if let Some(updater) = self.updater.borrow_mut().as_mut() {
+                updater.launch_check(automatic, last, unix_now());
+            }
+        }
+    }
+
+    /// Takes the updater worker's news; a check that read the appcast
+    /// stores its time.
+    fn poll_updater(&self) {
+        #[cfg(windows)]
+        {
+            let polled = match self.updater.borrow_mut().as_mut() {
+                Some(updater) => updater.poll(),
+                None => return,
+            };
+            if polled.checked {
+                self.ui.borrow_mut().last_update_check = Some(unix_now());
+                self.remember_view();
+            }
+            if polled.changed {
+                self.refresh();
+            }
+        }
+    }
+
+    fn set_check_updates_automatically(&self, on: bool) {
+        self.ui.borrow_mut().check_updates_automatically = on;
+        self.log.log(|| {
+            format!(
+                "updater: check for updates automatically turned {}",
+                if on { "on" } else { "off" }
+            )
+        });
+        self.remember_view();
+        self.refresh();
+    }
+
+    /// Help > Check for Updates…, whatever the switch and the time say.
+    fn check_for_updates(&self) {
+        #[cfg(windows)]
+        if let Some(updater) = self.updater.borrow_mut().as_mut() {
+            updater.check(crate::updater::Trigger::Manual);
+        }
+        self.refresh();
+    }
+
+    fn press_update_button(&self, button: UpdateButton) {
+        #[cfg(windows)]
+        {
+            use crate::updater::{Action, UpdaterButton};
+            let button = match button {
+                UpdateButton::Download => UpdaterButton::Download,
+                UpdateButton::NotNow => UpdaterButton::NotNow,
+                UpdateButton::Cancel => UpdaterButton::Cancel,
+                UpdateButton::TryAgain => UpdaterButton::TryAgain,
+                UpdateButton::OpenReleasePage => UpdaterButton::OpenReleasePage,
+                UpdateButton::RelaunchNow => UpdaterButton::RelaunchNow,
+            };
+            let action = match self.updater.borrow_mut().as_mut() {
+                Some(updater) => updater.press(button),
+                None => return,
+            };
+            match action {
+                Action::Nothing => {}
+                Action::OpenReleasePage => {
+                    if !crate::platform::open_settings(crate::updater::RELEASE_PAGE) {
+                        self.log
+                            .log(|| "updater: the release page didn't open".to_owned());
+                    }
+                }
+                Action::Relaunch(exe) => {
+                    self.remember_view();
+                    match crate::updater::relaunch::start(&exe) {
+                        Ok(()) => {
+                            self.log
+                                .log(|| "updater: relaunch started, quitting".to_owned());
+                            let _ = slint::quit_event_loop();
+                        }
+                        Err(error) => {
+                            if let Some(updater) = self.updater.borrow_mut().as_mut() {
+                                updater.relaunch_failed(&error);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = button;
+        self.refresh();
+    }
+
     /// Saved for the next launch: the running sender keeps the mode it
     /// started with, which a notice says until the item is back to it.
     fn set_airplay2_experimental(&self, on: bool) {
@@ -2935,6 +3114,8 @@ impl App {
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
             remote: self.ui.borrow().remote,
             airplay2_experimental: self.ui.borrow().airplay2_experimental,
+            check_updates_automatically: self.ui.borrow().check_updates_automatically,
+            last_update_check: self.ui.borrow().last_update_check,
         };
         if settings != saved {
             backend.set_view_settings(settings);
@@ -2952,6 +3133,8 @@ impl App {
         self.ui.borrow_mut().remote = saved.remote;
         self.ui.borrow_mut().airplay2_experimental = saved.airplay2_experimental;
         self.ui.borrow_mut().airplay2_at_launch = saved.airplay2_experimental;
+        self.ui.borrow_mut().check_updates_automatically = saved.check_updates_automatically;
+        self.ui.borrow_mut().last_update_check = saved.last_update_check;
         self.apply_appearance(saved.appearance);
         let Some(saved_frame) = saved.window else {
             return;
@@ -4556,6 +4739,7 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
         has_privacy: matches!(notice.message, NoticeMessage::MicrophoneBlocked { .. }),
+        update_buttons: update_buttons(&notice.message),
         info: notice.message.reports_a_change(),
     }
 }
@@ -4743,6 +4927,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         }
         NoticeMessage::RemoteOnPublicNetwork => strings.get_remote_public_network(),
         NoticeMessage::GroupsBecameZones => strings.get_notice_groups_became_zones(),
+        NoticeMessage::Update(notice) => update_notice_text(strings, notice),
         NoticeMessage::PresetLeftOff {
             preset,
             left_off,
@@ -4884,10 +5069,58 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::AirPlay2NextLaunch { .. } => (NoticeKind::Airplay2NextLaunch, ""),
         NoticeMessage::RemoteOnPublicNetwork => (NoticeKind::RemotePublicNetwork, ""),
         NoticeMessage::GroupsBecameZones => (NoticeKind::GroupsBecameZones, ""),
+        NoticeMessage::Update(_) => (NoticeKind::Update, ""),
         NoticeMessage::PresetLeftOff { .. } => (NoticeKind::PresetsLeftOff, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
     strings.invoke_notice_title(kind, name.into())
+}
+
+/// The updater's notice in the UI's words (spec S308).
+fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -> SharedString {
+    use ui_model::UpdaterNotice as N;
+    match notice {
+        N::Available { new, running } => {
+            strings.invoke_notice_update_available(new.into(), running.into())
+        }
+        N::Downloading {
+            percent: Some(percent),
+        } => strings.invoke_notice_update_downloading(percent.to_string().into()),
+        N::Downloading { percent: None } => strings.get_notice_update_downloading_started(),
+        N::Installed { version } => strings.invoke_notice_update_installed(version.into()),
+        N::UpToDate { running } => strings.invoke_notice_update_up_to_date(running.into()),
+        N::Unreachable => strings.get_notice_update_unreachable(),
+        N::DownloadFailed => strings.get_notice_update_download_failed(),
+        N::BadSignature => strings.get_notice_update_bad_signature(),
+        N::BrokenDownload => strings.get_notice_update_broken(),
+        N::DiskFull => strings.get_notice_update_disk_full(),
+        N::ReadOnly => strings.get_notice_update_read_only(),
+        N::InUse => strings.get_notice_update_in_use(),
+        N::Failed => strings.get_notice_update_failed(),
+        N::RestoreFailed { bak } => strings.invoke_notice_update_restore_failed(bak.into()),
+        N::RelaunchFailed => strings.get_notice_update_relaunch_failed(),
+    }
+}
+
+/// The updater's notice's buttons as the UI names them.
+fn update_buttons(message: &NoticeMessage) -> ModelRc<UpdateButton> {
+    use ui_model::UpdaterButton as B;
+    let NoticeMessage::Update(notice) = message else {
+        return ModelRc::default();
+    };
+    let buttons: Vec<UpdateButton> = notice
+        .buttons()
+        .iter()
+        .map(|button| match button {
+            B::Download => UpdateButton::Download,
+            B::NotNow => UpdateButton::NotNow,
+            B::Cancel => UpdateButton::Cancel,
+            B::TryAgain => UpdateButton::TryAgain,
+            B::OpenReleasePage => UpdateButton::OpenReleasePage,
+            B::RelaunchNow => UpdateButton::RelaunchNow,
+        })
+        .collect();
+    ModelRc::new(VecModel::from(buttons))
 }
 
 #[cfg(test)]

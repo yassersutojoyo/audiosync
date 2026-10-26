@@ -9,7 +9,7 @@
 import { Button, ComboBox, Slider, Switch } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
+import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 
 import "../../brand/fonts/Poppins-Medium.ttf";
 
@@ -2436,6 +2436,8 @@ export component NoticeStack inherits VerticalLayout {
     callback retry-requested(int);
     // Open Privacy Settings on a notice: open the microphone privacy page.
     callback privacy-requested(int);
+    // A button of the updater's notice.
+    callback update-button-pressed(UpdateButton);
     // Whether one of a notice's buttons has keyboard focus, each time that
     // changes.
     callback button-focus-changed(bool);
@@ -2551,6 +2553,21 @@ export component NoticeStack inherits VerticalLayout {
                             root.privacy-requested(notice.id);
                         }
                         // Only the microphone notice has this button.
+                        changed has-focus => {
+                            row.guide-focused = self.has-focus;
+                        }
+                    }
+                }
+
+                if notice.update-buttons.length > 0: HorizontalLayout {
+                    alignment: start;
+                    spacing: 8px;
+                    for button in notice.update-buttons: Button {
+                        text: Strings.update-button(button);
+                        accessible-label: Strings.update-button(button);
+                        clicked => {
+                            root.update-button-pressed(button);
+                        }
                         changed has-focus => {
                             row.guide-focused = self.has-focus;
                         }

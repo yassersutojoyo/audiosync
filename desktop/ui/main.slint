@@ -8,7 +8,7 @@
 import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { Appearance, CalibrationRowItem, CastList, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -1151,6 +1151,9 @@ export component MainWindow inherits Window {
     in property <bool> switch-source-on-quit;
     // File > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
+    // A release build that updates itself shows the updater's menu items.
+    in property <bool> updater-available;
+    in property <bool> check-updates-automatically;
     // File > AirPlay 2 (Experimental): as saved; it applies at the next launch.
     in property <bool> airplay2-experimental;
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
@@ -1287,6 +1290,8 @@ export component MainWindow inherits Window {
     callback appearance-chosen(Appearance);
     callback switch-source-on-quit-toggled(bool);
     callback launch-at-login-toggled(bool);
+    callback check-updates-automatically-toggled(bool);
+    callback check-for-updates-requested();
     callback airplay2-experimental-toggled(bool);
     // File > Web Remote…
     callback remote-requested();
@@ -1298,6 +1303,7 @@ export component MainWindow inherits Window {
     callback notice-retry-requested(int);
     // Open Privacy Settings on a notice.
     callback notice-privacy-requested(int);
+    callback notice-update-button-pressed(UpdateButton);
     callback close-requested();
     callback exit-requested();
     callback about-requested();
@@ -1394,6 +1400,15 @@ export component MainWindow inherits Window {
                 checked: root.launch-at-login;
                 activated => {
                     root.launch-at-login-toggled(!root.launch-at-login);
+                }
+            }
+
+            if root.updater-available: MenuItem {
+                title: Strings.check-updates-automatically;
+                checkable: true;
+                checked: root.check-updates-automatically;
+                activated => {
+                    root.check-updates-automatically-toggled(!root.check-updates-automatically);
                 }
             }
 
@@ -1575,6 +1590,13 @@ export component MainWindow inherits Window {
                 }
             }
 
+            if root.updater-available: MenuItem {
+                title: Strings.menu-check-for-updates;
+                activated => {
+                    root.check-for-updates-requested();
+                }
+            }
+
             MenuSeparator { }
 
             MenuItem {
@@ -1674,6 +1696,9 @@ export component MainWindow inherits Window {
             }
             privacy-requested(id) => {
                 root.notice-privacy-requested(id);
+            }
+            update-button-pressed(button) => {
+                root.notice-update-button-pressed(button);
             }
         }
 
