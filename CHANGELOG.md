@@ -2,11 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [0.8.0] - unreleased
+## [0.7.0] - unreleased
 
 ### Added
 
 - A Terminal install for the Mac: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash` downloads the latest release, checks its SHA-256 checksum and installs or updates AudioSync in Applications, with no Open Anyway step. The DMG stays the main download.
+- The Mac disk image opens on a window with an arrow to drag AudioSync to Applications and the Open Anyway steps for the first launch.
 - The Mac app updates itself. Check for Updates… in the AudioSync menu looks for a newer release on GitHub, checks the download's signature, installs it and opens AudioSync again; it also checks now and then on its own once you allow it. Builds you make yourself never check.
 - Zones, on the Mac and on Windows. They replace speaker groups. A zone is a set of speakers with its own volume, and a speaker is in one zone at a time. Click a zone's name to switch its speakers on or off together. A zone turns on at most one Google Cast speaker and never switches off a Cast speaker outside it. Move a speaker with Move to Zone in its menu; a zone you empty stays until you delete it.
 - A speaker in a zone plays at its own volume times the zone's volume times the master, on local speakers, AirPlay and Google Cast. A zone volume change reaches its playing speakers right away. When a speaker changes its own volume, say from its buttons, AudioSync moves that speaker's slider and leaves the zone and the master alone. A speaker in no zone plays exactly as before.
@@ -66,7 +67,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The arrow keys on a Google Cast speaker's volume slider now move by the step the speaker reports, if it reports one.
 - On the Mac, a Bluetooth speaker gets the speaker icon instead of headphones, unless its name says it's headphones, such as AirPods or a name with "headphones", "headset", "earbuds", "earphones" or "buds" in it. Calibration goes by the same names, so a Bluetooth speaker that macOS reports as headphones, such as a soundcore Select 4 Go, is still measured.
 - A speaker's name tooltip in the main window starts with its full name, on the Mac and on Windows, so a long name cut short in the row can still be read. On Windows the tooltip wraps instead of cutting the name off, and on the Mac the menu bar panel row has the full name as its tooltip.
-- On Windows, the notification area flyout says "Looking for speakers…" while it searches, and "No speakers found" only after 20 seconds without one.
+- On Windows, the notification area flyout says "Looking for speakers…" while it searches, and "No speakers found" only after 20 seconds without one. The main window's Connected Speakers says "Looking for speakers…" during that search too, with no Google Cast note under it.
 - On the Mac, the Add by Address button reads "Checking…" while AudioSync tries the address, and the Web Remote window now says "Control your speakers from a phone on the same network as this Mac."
 - On the Mac, the Guide uses the system font and wraps its text to the width of the window.
 - On the Mac, a column in the main window fades at its top or bottom only while there's more to scroll that way, and a column that fits no longer bounces.
@@ -114,6 +115,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay 2 speaker set to ask for a code every time that was on when you quit no longer gets paired by auto-connect when it asks again, on the Mac and on Windows. It goes off each time it asks without playing, not only when it first shows up. While its code prompt is open, AudioSync starts no second pairing and plays nothing to it, and on Windows a speaker you turn on while its pairing runs goes off again if the pairing fails or you cancel it.
 - On the Mac, under All System Audio, a paused player's track and cover stay on the AirPlay speakers until another player plays, the player stops or it quits.
 - On the Mac, picking the source or input channels that are already playing clears the "Couldn't start" notice and changes nothing else.
+- In the dark theme the teal text, such as a link or a delay value, is lighter, so it stays readable on a hovered or playing row, and so do the speaker icons in the Mac menu bar panel over a light window. On the Mac and on Windows.
+- On Windows, Narrator reads a name for the port box and each button in the Web Remote window.
 - On the Mac and on Windows, a click on the empty part of a zone's header, past its name, shows or hides the zone's speakers like the arrow does. Before, it switched the whole zone on or off.
 
 ### Windows and Linux (preview, not released yet)
@@ -312,6 +315,6 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[0.8.0]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...HEAD
+[0.7.0]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.5.0

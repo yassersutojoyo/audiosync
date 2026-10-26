@@ -275,7 +275,7 @@ enum CaptureSwitch {
 
     enum Outcome: Equatable {
         /// The new capture runs, at whatever rate it has; the AirPlay
-        /// timeline starts over with it.
+        /// timeline goes on, with silence for the rebuild (P143).
         case switched
         /// The new capture didn't start and the old one plays (again).
         case keptOld(Failure)

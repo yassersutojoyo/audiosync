@@ -850,6 +850,17 @@ impl HostAudio {
             thread: Some(thread),
         }
     }
+
+    /// Stops the capture and gives its writer back, for the next capture
+    /// of a host that switches sources.
+    pub fn stop(mut self) -> InputWriter {
+        self.stop.store(true, Ordering::SeqCst);
+        self.thread
+            .take()
+            .expect("a running capture")
+            .join()
+            .expect("the capture thread ends")
+    }
 }
 
 impl Drop for HostAudio {

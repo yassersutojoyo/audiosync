@@ -116,8 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet {
             guard masterVolume != oldValue else { return }
             store.save(master: masterVolume)
-            // A master move keeps each own volume, so every AirPlay row shows own × zone × master again (S290).
-            airplayDeviceLevel = [:]
+            airplayHeldLevel = [:]   // the rows show min(100, s × k) again (S290)
         }
     }
     /// Slider positions (0…100) of local speakers, by device UID.
@@ -135,13 +134,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// The delays were migrated to offsets (S179), in this launch or before.
     private var localDelaysMigrated: Bool
-    /// Each AirPlay speaker's own slider position (0…100), by output ID (S73).
+    /// Each AirPlay speaker's own volume s, by output ID (S73): unrounded,
+    /// above 100 when the zone or the master is below 100 (S290).
     var airplayVolume: [String: Double] {
         didSet { if airplayVolume != oldValue { store.save(levels: airplayVolume, forKey: Keys.airplayVolumes) } }
     }
-    /// Each AirPlay speaker's device level from a row move or the speaker
-    /// itself, by output ID, for this run (S290).
-    var airplayDeviceLevel: [String: AirPlayDeviceLevel] = [:]
+    /// A level set on an AirPlay speaker while its k was 0, by output ID,
+    /// which its row shows until s, its zone or the master moves (S290).
+    var airplayHeldLevel: [String: Double] = [:]
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }
@@ -151,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             guard zones != oldValue else { return }
             store.save(zones: zones)
             if !SpeakerZone.differInNamesOnly(zones, oldValue) {
-                forgetAirPlayDeviceLevels(zonedFrom: oldValue)
+                forgetAirPlayHeldLevels(zonedFrom: oldValue)
                 applyZoneVolumes()
             }
         }
@@ -258,6 +258,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var userStopped = false
     /// A speaker was on at some point in this session (`StreamingPolicy.isIdle`).
     var sessionHadSpeaker = false
+    /// Counts the user's starts, failed ones included, so a switch waiting to
+    /// start the whole system sees one happened meanwhile (S227 g).
+    var userStarts = 0
     /// True while a capture interruption is handled: the engine stopped the
     /// session before reporting it, and the stop still names its reason.
     var captureInterrupted = false
