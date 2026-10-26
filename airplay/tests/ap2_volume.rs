@@ -632,3 +632,75 @@ fn a_session_the_host_never_asked_sends_no_read() {
     assert!(!rig.keys().contains(&READ), "{:?}", rig.keys());
     assert!(reported(&rig).is_empty());
 }
+
+/// The dB the host sends for row 20 (S289: -30 + 0.3 x 20).
+const ROW_20_DB: f64 = -24.0;
+
+/// Whether every volume SET_PARAMETER went encrypted.
+fn sets_framed(rig: &Ap2Rig) -> bool {
+    rig.fake
+        .requests
+        .iter()
+        .filter(|(request, _)| {
+            request.method == Method::SetParameter && request.body.starts_with(b"volume:")
+        })
+        .all(|(_, framed)| *framed)
+}
+
+// covers: P183, P184
+#[test]
+fn k1_row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer() {
+    let mut fake = FakeAp2::samsung();
+    fake.hold = Some("FLUSH".to_owned());
+    let mut config = reading_config();
+    config.initial_volume = Volume::Db(ROW_20_DB);
+    let mut rig = Ap2Rig::new(config, fake);
+    assert_eq!(rig.keys().last(), Some(&"FLUSH"), "{:?}", rig.keys());
+    assert!(volume_sets(&rig).is_empty(), "{:?}", rig.keys());
+
+    rig.release();
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    rig.advance(Duration::from_secs(5));
+    let keys = rig.keys();
+    let flush = keys.iter().position(|key| *key == "FLUSH").expect("FLUSH");
+    assert_eq!(keys[flush + 1], SET, "{keys:?}");
+    assert_eq!(volume_sets(&rig), ["volume: -24.000000\r\n"]);
+    assert!(sets_framed(&rig), "a volume set went in plain text");
+    let read = keys.iter().position(|key| *key == READ).expect("a read");
+    assert!(read > flush + 1, "{keys:?}");
+    assert_eq!(rig.times_of(READ).len(), 1, "{keys:?}");
+    assert_eq!(reported(&rig), [ROW_20_DB]);
+    assert_eq!(rig.fake.level(), Some(ROW_20_DB));
+    assert!(warnings(&rig).is_empty(), "{:?}", rig.events);
+    assert!(rig.failure().is_none());
+}
+
+// covers: P183, P184
+#[test]
+fn k1_keep_a_new_session_starts_the_samsung_at_the_level_it_holds() {
+    let mut rig = Ap2Rig::new(reading_config(), FakeAp2::samsung());
+    assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
+    let now = rig.now;
+    rig.session.set_volume(Volume::Db(ROW_20_DB), now);
+    rig.pump();
+    rig.advance(Duration::from_secs(2));
+    assert_eq!(
+        volume_sets(&rig).last().map(String::as_str),
+        Some("volume: -24.000000\r\n")
+    );
+    let held = rig.fake.level().expect("a level on the television");
+    assert_eq!(held, ROW_20_DB);
+
+    // Switched off and on: the host starts the new session at the row it kept.
+    let mut config = reading_config();
+    config.initial_volume = Volume::Db(ROW_20_DB);
+    let mut again = Ap2Rig::new(config, FakeAp2::samsung_holding(held));
+    assert!(again.ready(), "{:?} {:?}", again.keys(), again.events);
+    again.advance(Duration::from_secs(5));
+    assert_eq!(volume_sets(&again), ["volume: -24.000000\r\n"]);
+    assert!(sets_framed(&again), "a volume set went in plain text");
+    assert_eq!(again.times_of(READ).len(), 1, "{:?}", again.keys());
+    assert_eq!(reported(&again), [ROW_20_DB]);
+    assert!(warnings(&again).is_empty(), "{:?}", again.events);
+    assert!(again.failure().is_none());
+}

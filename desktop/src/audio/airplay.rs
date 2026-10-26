@@ -2706,7 +2706,12 @@ impl AirPlaySpeakers {
         own.level = self.device_level_of(row);
         own.dragging = added.read.dragging;
         if let Command::DeviceVolume(db) = command {
-            let has = self.volume_of(row).wire_db();
+            // The level the speaker has, the held one with k at 0 (S290).
+            let has = match self.calibration_solo.as_deref() {
+                Some(solo) if solo != row => Volume::Muted,
+                _ => device_volume(own.level),
+            }
+            .wire_db();
             own.echo = added.read.recent(now) && (db - has).abs() < VOLUME_TOLERANCE_DB;
             own.reported = device_level_for_db(db);
         }
@@ -7890,6 +7895,31 @@ pub mod tests {
         // A master move gives the row min(100, s × k) again.
         airplay.set_master(100.0);
         assert_eq!(row_of(&airplay, &id), 50.0);
+    }
+
+    // covers: S271, S276, S290
+    #[test]
+    fn the_echo_of_a_level_held_at_k_0_changes_nothing() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_master(0.0);
+        settle(&mut airplay, &id);
+        let device_volume = RemoteCommand::DeviceVolume(Volume::Db(-18.0));
+        remote(&fake, &kitchen, device_volume);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        fake.take_calls();
+        // The speaker echoes the level sent back inside the 3 s window, as
+        // sent and 0.2 dB off as it rounds.
+        for echoed in [-18.0, -18.2] {
+            remote(
+                &fake,
+                &kitchen,
+                RemoteCommand::DeviceVolume(Volume::Db(echoed)),
+            );
+            assert!(airplay.poll().is_empty(), "{echoed} moved the row");
+            assert!(sent_levels(&fake).is_empty(), "{echoed} went out again");
+            assert_eq!(row_of(&airplay, &id), 40.0);
+        }
     }
 
     #[test]
