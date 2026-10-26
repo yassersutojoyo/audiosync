@@ -2585,7 +2585,7 @@ impl AirPlaySpeakers {
         let step = self
             .pause
             .read(playback_reading(&player), now, self.streaming);
-        self.apply_pause(step);
+        self.apply_pause(step, "player reading");
     }
 
     /// The window's play-pause went to `app`, shown `playing`: the speakers
@@ -2593,18 +2593,20 @@ impl AirPlaySpeakers {
     pub fn play_pause_pressed(&mut self, app: &str, playing: bool, now: Instant) {
         let agreed = playback_reading(&self.playback).filter(|&reading| reading == (app, playing));
         let step = self.pause.toggled(agreed, now);
-        self.apply_pause(step);
+        self.apply_pause(step, "app button");
     }
 
     /// The capture carried `sound` seconds of sound so far, a running total
     /// ([`FeedSlot::sound_seconds`]): a paused stream may resume (P213).
     pub fn heard(&mut self, sound: f64, now: Instant) {
         let step = self.pause.heard(sound, now);
-        self.apply_pause(step);
+        self.apply_pause(step, "sound heard");
     }
 
-    /// Hands the sender an explicit pause or resume (P213).
-    fn apply_pause(&mut self, step: Step) {
+    /// Hands the sender an explicit pause or resume (P213). `cause` names what
+    /// resumed the speakers in the debug log, so a resume with nothing audible
+    /// can be traced.
+    fn apply_pause(&mut self, step: Step, cause: &'static str) {
         match step {
             Step::Pause => {
                 self.log
@@ -2612,7 +2614,8 @@ impl AirPlaySpeakers {
                 self.link.pause();
             }
             Step::Resume => {
-                self.log.log(|| "AirPlay: resumed after a pause".to_owned());
+                self.log
+                    .log(|| format!("AirPlay: resumed after a pause ({cause})"));
                 self.link.resume();
             }
             Step::Nothing => {}
@@ -2678,7 +2681,7 @@ impl AirPlaySpeakers {
             (Action::Send(control), Some(_)) => {
                 if control == Control::PlayPause {
                     let step = self.pause.toggled(playback_reading(&self.playback), now);
-                    self.apply_pause(step);
+                    self.apply_pause(step, "speaker remote");
                 }
                 self.remote_controls.push(match control {
                     Control::PlayPause => Transport::PlayPause,
@@ -2884,7 +2887,7 @@ impl AirPlaySpeakers {
     pub fn set_streaming(&mut self, streaming: bool) {
         if !streaming {
             let step = self.pause.clear();
-            self.apply_pause(step);
+            self.apply_pause(step, "streaming stopped");
         }
         self.streaming = streaming;
         self.reconcile();
@@ -2893,7 +2896,7 @@ impl AirPlaySpeakers {
     /// A new capture started (P143).
     pub fn restart_timeline(&mut self) {
         let step = self.pause.clear();
-        self.apply_pause(step);
+        self.apply_pause(step, "new capture");
         self.link.restart_timeline();
         let before = self.sent_delays();
         let rows = self.stream_rows(&[]);
@@ -7140,6 +7143,31 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), []);
         airplay.heard(1.25, later);
         assert_eq!(pause_calls(&fake), [Call::Resume]);
+    }
+
+    #[test]
+    fn the_debug_log_names_what_resumed_a_pause() {
+        let path = crate::debug_log::test_dir("airplay-resume-cause").join("log.txt");
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, _) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
+        let t0 = Instant::now();
+        read(&mut airplay, spotify(true), t0);
+        read(&mut airplay, spotify(false), t0);
+        let later = t0 + STALE_READING;
+        airplay.heard(1.0, later);
+        airplay.heard(1.25, later);
+        read(&mut airplay, spotify(true), later);
+        read(&mut airplay, spotify(false), later);
+        read(&mut airplay, spotify(true), later);
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let resumes: Vec<String> = crate::debug_log::read_messages(&path)
+            .into_iter()
+            .filter(|message| message.contains("resumed after a pause"))
+            .collect();
+        assert_eq!(resumes.len(), 2, "{resumes:?}");
+        assert!(resumes[0].ends_with("(sound heard)"), "{resumes:?}");
+        assert!(resumes[1].ends_with("(player reading)"), "{resumes:?}");
     }
 
     // covers: P213
