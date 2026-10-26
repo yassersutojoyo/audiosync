@@ -5,8 +5,9 @@ The core, cast and airplay crates check their own markers in their
 spec_coverage tests. This covers the rest: tracked Rust and Swift files
 outside those crates (desktop/, remote/, Tests/, Sources/). The letter picks
 the spec: S is docs/ENGINE_SPEC.md, P is docs/AIRPLAY_SPEC.md, C is
-docs/CAST_SPEC.md. A withdrawn clause counts as missing. Each ID may carry a
-note in parentheses, and a note may run on to the next lines:
+docs/CAST_SPEC.md. A withdrawn or retired clause counts as missing (one
+retired in part does not). Each ID may carry a note in parentheses, and a
+note may run on to the next lines:
 
     // covers: S290, S291 (a level set on the speaker is kept)
 
@@ -26,8 +27,8 @@ SPECS = {"S": "ENGINE_SPEC.md", "P": "AIRPLAY_SPEC.md", "C": "CAST_SPEC.md"}
 CRATES_WITH_OWN_CHECK = ("core/", "cast/", "airplay/")
 _ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
 _CLAUSE = re.compile(r"\s*- \*\*([SPC][1-9][0-9]*[a-z]?)\*\*(.*)")
-# Only the opening word: a live clause may mention withdrawn things later on.
-_WITHDRAWN = re.compile(r"\s*[*(]*withdrawn", re.IGNORECASE)
+# Only the opening words: a live clause may mention withdrawn things later on.
+_WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|retired(?! in part))", re.IGNORECASE)
 
 
 def in_scope(path):
@@ -108,8 +109,10 @@ def self_test():
     spec = (
         "- **S1** One.\n  - **S2** Two.\n- **S3** *Withdrawn*: gone.\n- **G1** Gap.\n"
         "- **S4** *Required.* Replaces the withdrawn S3.\n"
+        "- **S5** *Retired with the bundled engine; kept as a record.*\n"
+        "- **S6** *Retired in part with the bundled engine*: the rest holds.\n"
     )
-    if spec_ids(spec) != {"S1", "S2", "S4"}:
+    if spec_ids(spec) != {"S1", "S2", "S4", "S6"}:
         failures.append(f"spec_ids: got {sorted(spec_ids(spec))}")
     text = "// covers: S1\n    // covers: S2, S3\n/// What it covers: x\n//covers:S1\n"
     got = problems_in("a.rs", text, {"S1", "S2"})
