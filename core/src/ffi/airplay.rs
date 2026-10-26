@@ -6698,6 +6698,44 @@ mod tests {
         assert_eq!(again.get("02005E005350"), Some(&credentials));
     }
 
+    // covers: P217
+    #[test]
+    fn a_timing_entry_leaves_the_airplay2_identity_file_at_format_1() {
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let folder = scratch("airplay2-timing");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        let before = std::fs::read(&path).expect("the identity file");
+        let memory = TimingMemory {
+            timing: Timing::Ptp,
+            features: 0x1_0240_0000_0000,
+            srcvers: Some("366.0".to_owned()),
+        };
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x51])),
+            event: SpeakerEvent::TimingRemembered(memory),
+        });
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        // An older AudioSync reads only identity format 1, and a newer one
+        // would cost it every AirPlay 2 pairing.
+        let after = std::fs::read(&path).expect("the identity file");
+        assert_eq!(after, before, "the identity file is left as it was");
+        assert_eq!(after[crate::airplay2_identity::MAGIC.len()], 1);
+    }
+
     // covers: S224
     #[test]
     fn the_host_is_told_how_private_the_files_were_found() {

@@ -4327,6 +4327,9 @@ pub mod tests {
         Password(String, String),
         /// The speaker added just before may use PCM.
         Pcm(String),
+        /// The speaker added just before came with this stored timing entry
+        /// (P217).
+        Timing(String, audiosync_airplay::ap2::Timing),
         StartPairing(String),
         SubmitPin(String, String),
         CancelPairing(String),
@@ -4537,6 +4540,9 @@ pub mod tests {
             }
             if options.pcm {
                 state.calls.push(Call::Pcm(id_of(device)));
+            }
+            if let Some(memory) = &options.timing {
+                state.calls.push(Call::Timing(id_of(device), memory.timing));
             }
             None
         }
@@ -5376,6 +5382,58 @@ pub mod tests {
             "{events:?}"
         );
         assert_eq!(airplay.store.homekit(&id), None, "forgotten all the same");
+    }
+
+    // covers: P217
+    #[test]
+    fn a_timing_entry_reaches_the_next_launch_and_leaves_the_identity_file_alone() {
+        use crate::audio::pairings::tests::sealer;
+        use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let folder = crate::debug_log::test_dir("airplay2-timing-relaunch");
+        let speaker = airplay2_device(12, "Study", false);
+        let id = id_of(&speaker);
+        let launch = |fake: &FakeAirPlay| {
+            fake.set_airplay2(true);
+            let (store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+            AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store)
+        };
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = launch(&fake);
+        let identity = folder.join(AIRPLAY2_FILE_NAME);
+        let before = std::fs::read(&identity).expect("the identity file");
+        fake.push(SenderEvent::Speaker {
+            key: speaker.key.clone(),
+            event: SpeakerEvent::TimingRemembered(TimingMemory::of(&speaker, Timing::Ptp)),
+        });
+        airplay.poll();
+        // An older AudioSync reads only identity format 1, and a newer one
+        // would cost it every AirPlay 2 pairing.
+        let after = std::fs::read(&identity).expect("the identity file");
+        assert_eq!(after, before, "the identity file is left as it was");
+        let plain = sealer().open(&after).expect("sealed by the test sealer");
+        assert_eq!(
+            plain[audiosync_core::airplay2_identity::MAGIC.len()],
+            1,
+            "identity format 1"
+        );
+        drop(airplay);
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = launch(&fake);
+        fake.appear(&speaker);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        airplay.poll();
+        let calls = fake.take_calls();
+        assert!(
+            calls.contains(&Call::Timing(id.clone(), Timing::Ptp)),
+            "{calls:?}"
+        );
     }
 
     #[test]
