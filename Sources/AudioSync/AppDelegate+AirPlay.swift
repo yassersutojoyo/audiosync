@@ -254,29 +254,7 @@ extension AppDelegate {
                                  sending: sendsTrackInfo)
     }
 
-    /// A new sender knows nothing of what plays: send everything again.
-    func resendTrackInfo() {
-        if trackInfoFeed.senderStarted(sending: sendsTrackInfo) { sendTrackInfo() }
-    }
-
-    /// Sends the senders what changed in what their receivers should show.
-    func sendTrackInfo() {
-        sendPlayback()
-        let now = Date()
-        let step = trackInfoFeed.send(sending: sendsTrackInfo, now: now, pollingSince: nowPlaying.startedAt,
-                                      hasReading: nowPlaying.hasReading, icon: NSApp.applicationIconImage,
-                                      shows: receiverShows)
-        sendCastTrackInfo(now: now)
-        if let date = step.recheckAt { recheckTrackInfo(at: date) }
-        // Encoded on the sender's queue, so it gets an image of its own.
-        let own = step.picture.map { $0.copy() as? NSImage ?? $0 }
-        guard step.fields != nil || own != nil || step.sendsPosition else { return }
-        nativeAirPlay?.setTrackInfo(fields: step.fields, artwork: own, sendsPosition: step.sendsPosition,
-                                    position: step.position)
-    }
-
-    /// What receivers should show now, and the track's artwork.
-    private func receiverShows() -> (info: ReceiverInfo, artwork: NSImage?) {
+    func receiverShows() -> (info: ReceiverInfo, artwork: NSImage?) {
         let track = nowPlaying.hasReading ? nowPlaying.track : nil
         // The source's name as the source picker shows it; none while the
         // picker doesn't list the source (an input device that was unplugged).
@@ -296,5 +274,21 @@ extension AppDelegate {
             self.castSender?.trackInfo.recheckFired(at: date)
             self.sendTrackInfo()
         }
+    }
+}
+
+extension AppDelegate: TrackInfoHost {
+    var nowPlayingPollingSince: Date? { nowPlaying.startedAt }
+    var nowPlayingHasReading: Bool { nowPlaying.hasReading }
+    var trackInfoIcon: NSImage? { NSApp.applicationIconImage }
+
+    func showNowPlaying(_ track: NowPlayingMonitor.Track?) {
+        if appModel.nowPlaying != track { appModel.nowPlaying = track }
+    }
+
+    func setSenderTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?, sendsPosition: Bool,
+                            position: NowPlayingMonitor.Position?) {
+        nativeAirPlay?.setTrackInfo(fields: fields, artwork: artwork, sendsPosition: sendsPosition,
+                                    position: position)
     }
 }

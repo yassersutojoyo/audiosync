@@ -93,11 +93,6 @@ extension AppDelegate {
         MainActor.assumeIsolated { PresetsMenu.update(rows) }
     }
 
-    private func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {
-        if appModel.nowPlaying != track { appModel.nowPlaying = track }
-        sendTrackInfo()   // does nothing unless AirPlay receivers show the track
-    }
-
     /// macOS refuses (or allows again) AudioSync's Apple Events to a player:
     /// a notice with a button to the Automation settings, until it is allowed.
     private func automationChanged(_ bundleID: String, denied: Bool) {

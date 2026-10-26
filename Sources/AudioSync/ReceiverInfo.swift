@@ -227,3 +227,54 @@ struct TrackInfoFeed {
         return step
     }
 }
+
+/// What the track info wiring reads and calls in the app. `AppDelegate`
+/// conforms; the logic suite drives the wiring with a recorder.
+protocol TrackInfoHost: AnyObject {
+    var trackInfoFeed: TrackInfoFeed { get set }
+    /// An AirPlay speaker that shows track info plays.
+    var sendsTrackInfo: Bool { get }
+    /// When Now Playing started polling; nil while it doesn't.
+    var nowPlayingPollingSince: Date? { get }
+    var nowPlayingHasReading: Bool { get }
+    /// Shown in place of artwork; AudioSync's icon in the app.
+    var trackInfoIcon: NSImage? { get }
+    /// Puts Now Playing's track in the window's model.
+    func showNowPlaying(_ track: NowPlayingMonitor.Track?)
+    /// What receivers should show now, and the track's artwork.
+    func receiverShows() -> (info: ReceiverInfo, artwork: NSImage?)
+    func sendPlayback()
+    func sendCastTrackInfo(now: Date)
+    /// Runs `sendTrackInfo` again at `date`.
+    func recheckTrackInfo(at date: Date)
+    func setSenderTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?, sendsPosition: Bool,
+                            position: NowPlayingMonitor.Position?)
+}
+
+extension TrackInfoHost {
+    /// Now Playing read another track, or the same one in another state.
+    func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {
+        showNowPlaying(track)
+        sendTrackInfo()   // does nothing unless AirPlay receivers show the track
+    }
+
+    /// A new sender knows nothing of what plays: send everything again.
+    func resendTrackInfo() {
+        if trackInfoFeed.senderStarted(sending: sendsTrackInfo) { sendTrackInfo() }
+    }
+
+    /// Sends the senders what changed in what their receivers should show.
+    func sendTrackInfo(now: Date = Date()) {
+        sendPlayback()
+        let step = trackInfoFeed.send(sending: sendsTrackInfo, now: now, pollingSince: nowPlayingPollingSince,
+                                      hasReading: nowPlayingHasReading, icon: trackInfoIcon,
+                                      shows: { receiverShows() })
+        sendCastTrackInfo(now: now)
+        if let date = step.recheckAt { recheckTrackInfo(at: date) }
+        // Encoded on the sender's queue, so it gets an image of its own.
+        let own = step.picture.map { $0.copy() as? NSImage ?? $0 }
+        guard step.fields != nil || own != nil || step.sendsPosition else { return }
+        setSenderTrackInfo(fields: step.fields, artwork: own, sendsPosition: step.sendsPosition,
+                           position: step.position)
+    }
+}
