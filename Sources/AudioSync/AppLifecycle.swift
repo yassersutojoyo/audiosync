@@ -133,6 +133,46 @@ enum AppLifecycle {
     /// the app still runs (S164, `AppTapFollow.rechecksWhileWaiting`).
     static let waitRecheck: TimeInterval = 5
 
+    /// The whole system's start after the source app quit (S227 g). Core
+    /// Audio can refuse a process tap made soon after an earlier one was
+    /// destroyed (`CaptureClose`), and a capture that let its app's tap go
+    /// when the app's audio process ended leaves exactly that gap before the
+    /// quit arrives. A capture that fails is tried again, `attempts` times in
+    /// all, `spacing` apart; only the last failure stops streaming.
+    enum SystemSwitch {
+        enum Attempt: Equatable {
+            case started
+            /// The capture didn't start; another attempt may.
+            case captureFailed
+            /// The start ended before the capture (no speaker, a permission).
+            case failed
+        }
+
+        static let attempts = 3
+        static let spacing: TimeInterval = 0.5
+
+        /// - Parameters:
+        ///   - start: one attempt; `last` says a failure is final and handled as one.
+        ///   - later: runs a block the given time later.
+        ///   - stillWanted: false once the user stopped, started or changed the source meanwhile.
+        ///   - finish: the outcome, whether streaming runs; not called when the user took over.
+        static func run(attempt: Int = 1,
+                        start: @escaping (_ last: Bool) -> Attempt,
+                        later: @escaping (TimeInterval, @escaping () -> Void) -> Void,
+                        stillWanted: @escaping () -> Bool,
+                        finish: @escaping (Bool) -> Void) {
+            let answer = start(attempt >= attempts)
+            guard answer == .captureFailed, attempt < attempts else {
+                finish(answer == .started)
+                return
+            }
+            later(spacing) {
+                guard stillWanted() else { return }
+                run(attempt: attempt + 1, start: start, later: later, stillWanted: stillWanted, finish: finish)
+            }
+        }
+    }
+
     /// Whether `report` is judged only `mixQuitRecheck` later: an app of an
     /// "only these" mix quitting while it streams comes back as `mixAppGone`,
     /// and the capture of such a mix finding none of its apps rebuilds the

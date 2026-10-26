@@ -11,7 +11,10 @@ extension AppDelegate {
     /// source app that quit meanwhile turns into a stop or a switch (S227 e).
     /// `switching`: a source or channel pair change of a running session,
     /// already stored; a new capture that fails gives way to the old one.
-    func startEngine(origin: StartOrigin, rebuild: Bool = false, switching: CaptureSwitch.Change? = nil) {
+    /// `onCaptureFailure`: a capture that fails calls it instead of being
+    /// handled as final, for a caller that tries again (S227 g).
+    func startEngine(origin: StartOrigin, rebuild: Bool = false, switching: CaptureSwitch.Change? = nil,
+                     onCaptureFailure: (() -> Void)? = nil) {
         if origin != .automatic {
             userStopped = false
             autoStartFailed = false
@@ -61,6 +64,10 @@ extension AppDelegate {
             if rebuild, let quit = AppLifecycle.sourceQuit(.rebuildFailed(error), source: audioSource,
                                                            setting: whenSourceQuits) {
                 sourceAppQuit(quit.bundleID, quit.action)
+                return
+            }
+            if let onCaptureFailure {
+                onCaptureFailure()
                 return
             }
             if let switching {
@@ -275,13 +282,47 @@ extension AppDelegate {
             updateNowPlayingTarget()
             clearNotices([Notice.source, Notice.capture])   // about the app
             autoStartFailed = false
-            // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
-            startEngine(origin: .automatic, switching: .sourceAppQuit(bundleID: bundleID))
-            // A failed start has its own "start" notice; this one still says which app quit.
-            postNotice(text.sourceSwitchedToSystem(name: name, started: engine.isRunning), subject: Notice.source,
-                       info: engine.isRunning)
-            pushModel()
+            switchToSystem(after: bundleID, name: name)
         }
+    }
+
+    /// Starts the whole system in place of the app that quit, trying a
+    /// refused capture again (`AppLifecycle.SystemSwitch`).
+    private func switchToSystem(after bundleID: String, name: String) {
+        var attempt = 0
+        AppLifecycle.SystemSwitch.run(
+            start: { [weak self] last in
+                guard let self else { return .failed }
+                attempt += 1
+                var captureFailed = false
+                // Automatic: a failure gets a notice, not an alert, since nobody clicked (S21).
+                startEngine(origin: .automatic, switching: .sourceAppQuit(bundleID: bundleID),
+                            onCaptureFailure: last ? nil : { captureFailed = true })
+                if engine.isRunning { return .started }
+                guard captureFailed else { return .failed }
+                let attempts = AppLifecycle.SystemSwitch.attempts
+                DebugTrace.log("[AudioSync] the whole system didn't start (attempt \(attempt) of \(attempts)); trying again")
+                return .captureFailed
+            },
+            later: { delay, body in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: body) },
+            stillWanted: { [weak self] in self?.systemSwitchStillWanted() ?? false },
+            finish: { [weak self] started in
+                guard let self else { return }
+                // A failed start has its own "start" notice; this one still says which app quit.
+                postNotice(text.sourceSwitchedToSystem(name: name, started: started), subject: Notice.source,
+                           info: started)
+                pushModel()
+            })
+    }
+
+    /// Whether the whole system's next attempt still runs: not once the user
+    /// stopped, started or picked another source during the wait. A source
+    /// picked meanwhile doesn't start it, so the speakers are let go here.
+    private func systemSwitchStillWanted() -> Bool {
+        if audioSource == .system, !userStopped, !engine.isRunning { return true }
+        DebugTrace.log("[AudioSync] the whole system's next attempt is dropped: streaming or the source changed meanwhile")
+        if !userStopped, !engine.isRunning { stopEngine(.startFailed) }
+        return false
     }
 
     /// An app of the "only these" mix quit: judge it `mixQuitRecheck` later,
