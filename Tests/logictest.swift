@@ -4574,9 +4574,9 @@ do {
           "settings: volumes are clamped to 0…100, anything else is dropped (S76)")
     check(damaged.localDelays == ["a": 20_000, "b": 0, "d": 1820],
           "settings: delays are clamped to 0…20 000 ms, anything else is dropped (S77)")
-    check(damaged.airplayVolumes == ["x": 100] && damaged.groups.isEmpty && damaged.enabledLocal == ["lc"]
+    check(damaged.airplayVolumes == ["x": 101] && damaged.groups.isEmpty && damaged.enabledLocal == ["lc"]
             && damaged.appearance == .system,
-          "settings: unreadable groups, IDs or appearance fall back to the defaults")
+          "settings: unreadable groups, IDs or appearance fall back to the defaults; an AirPlay own volume above 100 stays (S290)")
     stored.values = [Keys.master: 130]
     check(store.load().master == 100, "settings: a master above 100 is clamped")
 
