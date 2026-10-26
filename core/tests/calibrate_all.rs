@@ -1001,6 +1001,7 @@ fn a_cancel_after_the_last_step_changes_nothing() {
 }
 
 // covers: S241
+// CAST_SPEC: C77a
 #[test]
 fn a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format() {
     use audiosync_cast::audio::Codec;
