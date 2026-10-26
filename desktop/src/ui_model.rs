@@ -1589,6 +1589,8 @@ pub struct MockBackend {
     /// Each play-pause of the now-playing card: its app and whether it
     /// showed playing.
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
+    /// The speaker that asks for its password once it is turned on.
+    password_on: Option<String>,
 }
 
 #[cfg(any(test, feature = "mock-backend"))]
@@ -1757,6 +1759,7 @@ impl MockBackend {
             presets: Vec::new(),
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
+            password_on: None,
         }
     }
 
@@ -1795,6 +1798,13 @@ impl MockBackend {
             name,
             wrong,
         });
+    }
+
+    /// Has the speaker `id` ask for its password when it is turned on, as a
+    /// speaker with a password does in the adapter.
+    #[cfg(test)]
+    pub fn ask_password_when_on(&mut self, id: &str) {
+        self.password_on = Some(id.into());
     }
 
     /// AirPlay discovery has found nothing for a while: Connected Speakers
@@ -2122,6 +2132,17 @@ impl Backend for MockBackend {
                 name: speaker.name.clone(),
                 phase: PinPhase::Ready,
                 wrong_pin: false,
+            });
+        }
+        if let Some(speaker) = self
+            .state
+            .speaker(id)
+            .filter(|_| on && self.password_on.as_deref() == Some(id))
+        {
+            self.state.password_prompt = Some(PasswordPrompt {
+                speaker_id: speaker.id.clone(),
+                name: speaker.name.clone(),
+                wrong: false,
             });
         }
         // Like the Mac: turning a speaker on starts streaming.

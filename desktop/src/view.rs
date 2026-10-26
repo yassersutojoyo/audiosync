@@ -1543,37 +1543,14 @@ impl App {
         };
         let (this_pc, connected) = state.layout();
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
-        self.main
-            .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
-        self.main.set_airplay_none_found(state.airplay_none_found);
-        self.flyout.set_airplay_none_found(state.airplay_none_found);
-        self.main.set_airplay_searching(state.airplay_searching);
-        self.flyout.set_airplay_searching(state.airplay_searching);
-        self.main.set_no_speaker_on(state.no_speaker_on);
-        self.flyout.set_no_speaker_on(state.no_speaker_on);
-        self.main.set_cast_list(cast_list(state.cast_list));
-        self.main.set_cast_by_address(state.cast_by_address);
-        self.main.set_this_pc_all_hidden(state.hidden_in(true));
-        self.main.set_connected_all_hidden(state.hidden_in(false));
-        self.flyout.set_all_hidden(state.all_hidden());
-        self.flyout
-            .set_connected_all_hidden(state.connected_all_hidden());
-        self.main
-            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
-        sync_model(&self.models.speaker_presets, preset_items(&state));
-        self.main
-            .set_can_save_preset(state.presets.len() < MAX_PRESETS);
-        self.flyout
-            .set_current_preset(current_preset_name(&state).into());
+        let connected_virtual_hidden = only_virtual_outputs_hidden(&connected, lists);
         let listed = |s: &&ui_model::Speaker| lists(s);
         // A speaker in a zone is listed under it instead (spec S245).
         let zoned = |s: &&ui_model::Speaker| state.zone_of(&s.id).is_some();
         let this_pc: Vec<&ui_model::Speaker> = this_pc.into_iter().filter(listed).collect();
         let connected: Vec<&ui_model::Speaker> = connected.into_iter().filter(listed).collect();
-        self.main
-            .set_this_pc_all_in_zones(!this_pc.is_empty() && this_pc.iter().all(zoned));
-        self.main
-            .set_connected_all_in_zones(!connected.is_empty() && connected.iter().all(zoned));
+        let this_pc_all_in_zones = !this_pc.is_empty() && this_pc.iter().all(zoned);
+        let connected_all_in_zones = !connected.is_empty() && connected.iter().all(zoned);
         let this_pc: Vec<SpeakerItem> = this_pc
             .into_iter()
             .filter(|s| !zoned(s))
@@ -1637,6 +1614,40 @@ impl App {
                 }
             })
             .collect();
+        let show_virtual = ui.show_virtual;
+        let airplay2_experimental = ui.airplay2_experimental;
+        let airplay_typed = ui
+            .airplay_delay_draft
+            .text(state.airplay_delay_ms)
+            .map(str::to_owned);
+        // No window call while `ui` is borrowed: showing a dialog runs Slint's
+        // pending change handlers, and the focus ones borrow `ui` mutably (UI
+        // Automation focuses and toggles in one turn).
+        drop(ui);
+        self.main
+            .set_connected_virtual_hidden(connected_virtual_hidden);
+        self.main.set_this_pc_all_in_zones(this_pc_all_in_zones);
+        self.main.set_connected_all_in_zones(connected_all_in_zones);
+        self.main.set_airplay_none_found(state.airplay_none_found);
+        self.flyout.set_airplay_none_found(state.airplay_none_found);
+        self.main.set_airplay_searching(state.airplay_searching);
+        self.flyout.set_airplay_searching(state.airplay_searching);
+        self.main.set_no_speaker_on(state.no_speaker_on);
+        self.flyout.set_no_speaker_on(state.no_speaker_on);
+        self.main.set_cast_list(cast_list(state.cast_list));
+        self.main.set_cast_by_address(state.cast_by_address);
+        self.main.set_this_pc_all_hidden(state.hidden_in(true));
+        self.main.set_connected_all_hidden(state.hidden_in(false));
+        self.flyout.set_all_hidden(state.all_hidden());
+        self.flyout
+            .set_connected_all_hidden(state.connected_all_hidden());
+        self.main
+            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
+        sync_model(&self.models.speaker_presets, preset_items(&state));
+        self.main
+            .set_can_save_preset(state.presets.len() < MAX_PRESETS);
+        self.flyout
+            .set_current_preset(current_preset_name(&state).into());
         let flyout_speakers: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
         let all: Vec<SpeakerItem> = flyout_speakers
             .iter()
@@ -1815,14 +1826,13 @@ impl App {
             window.show_live_input_hint(&live_hint);
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
-        self.main.set_show_virtual_devices(ui.show_virtual);
-        self.main
-            .set_airplay2_experimental(ui.airplay2_experimental);
+        self.main.set_show_virtual_devices(show_virtual);
+        self.main.set_airplay2_experimental(airplay2_experimental);
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
-        let typed = ui.airplay_delay_draft.text(state.airplay_delay_ms);
+        let typed = airplay_typed.as_deref();
         let airplay_typed = is_draft(typed, &airplay_delay);
         self.main.set_airplay_delay_pending(airplay_typed);
         self.main.set_delay_typing(rows_typed || airplay_typed);
@@ -1847,7 +1857,6 @@ impl App {
 
         self.show_calibrate_all(card);
         self.show_equalizer_state(&state);
-        drop(ui);
         *self.now_playing_source.borrow_mut() = CardSource::of(&state);
         let _ = self.sync_now_playing();
         self.publish_remote(&state);
@@ -7919,6 +7928,32 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.password_prompt, None);
         assert!(state.speaker("airplay:kitchen").unwrap().enabled);
+    }
+
+    /// Moves the main window's focus without running its `changed has-focus`
+    /// handlers, as a UI Automation client's focus and toggle in one turn
+    /// leave them, then turns `id` on: showing a dialog runs those handlers.
+    fn turn_on_with_a_focus_change_pending(app: &App, id: &str) {
+        app.main.show().unwrap();
+        draw_frames();
+        app.main.invoke_focus_streaming_switch();
+        app.main.invoke_speaker_toggled(id.into());
+    }
+
+    #[test]
+    fn a_focus_change_pending_as_the_pin_dialog_opens_is_handled() {
+        let app = app_over(MockBackend::new());
+        turn_on_with_a_focus_change_pending(&app, "airplay:living");
+        assert!(app.pin_dialog.window().is_visible());
+    }
+
+    #[test]
+    fn a_focus_change_pending_as_the_password_dialog_opens_is_handled() {
+        let mut backend = MockBackend::new();
+        backend.ask_password_when_on("airplay:kitchen");
+        let app = app_over(backend);
+        turn_on_with_a_focus_change_pending(&app, "airplay:kitchen");
+        assert!(app.password_dialog.window().is_visible());
     }
 
     #[test]
