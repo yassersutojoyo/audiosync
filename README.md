@@ -25,7 +25,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
-    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window: audio source, now playing, master volume and equalizer on the left; on the right, the MacBook Pro speakers under This Mac, a group of two speakers, then Connected Speakers listed by name, each with a small AirPlay, USB or Bluetooth icon for its kind, with volume and, for local outputs, a sync delay">
+    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window: audio source, now playing, master volume, presets with Evening checked, and the equalizer set to Loudness on the left; on the right, the MacBook Pro speakers under This Mac, a Downstairs zone holding Living Room and Kitchen, then Connected Speakers listed by name, each with a small icon for its kind and a volume slider, and a delay on the local outputs">
   </picture>
 </p>
 
