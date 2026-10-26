@@ -30,7 +30,7 @@ S97 Retired with the bundled engine; host-side by design: the password and the c
 S98 Retired with the bundled engine: its process lifecycle; the core's policy::engine went too.
 S99 Retired with the bundled engine: its pipe playback; the core's policy::engine went too.
 S100 Retired with the bundled engine: its output list; the core's policy::reconcile went too.
-S101 The host's 3 s poll; the rest, the bundled engine's HTTP client transport (timeouts, serial write queue, path encoding), is retired.
+S101 The host's reconciles, driven by Core Audio's device-list notice, the sender's events and a 30 s safety net (the Mac logic suite's "reconcile: …" tests); the rest, the bundled engine's HTTP client transport (timeouts, serial write queue, path encoding), is retired.
 S102 Retired with the bundled engine: its reachability and restarts; the core's policy::reconcile went too.
 S103 Retired with the bundled engine: its switch-on tracking; the core's policy::reconcile went too.
 S104 Retired with the bundled engine: its reconcile of each reported speaker; the core's policy::reconcile went too.
@@ -43,8 +43,8 @@ S110 Retired with the bundled engine: its quit sequence, the API write drain and
 S111 The app's SIGTERM and SIGINT handlers: process signals and the exit path.
 S112 Engine control interface of the host's engine wrapper (Core Audio device IDs, callbacks).
 S113 Main-thread dispatch of the host's control calls and callbacks.
-S114 Session start orchestration, which starts Core Audio capture after the core's ring and equalizer.
-S115 Session stop orchestration, which stops Core Audio capture and renderers.
+S114 Session start orchestration, which starts the host's capture after the core's ring and equalizer; the Windows controller's a_failed_start_leaves_nothing_running_and_every_feed_free tests its failure path.
+S115 Session stop orchestration, which stops the host's capture and renderers; the Windows controller's a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished tests it.
 S129 Retired with the FIFO feed: its writer thread.
 S143 Retired with the bundled engine and the FIFO feed: the engine's restart and the pipe's reopen.
 S148 Retired with the bundled engine and the FIFO feed: a network loss as the engine's reconcile saw it.
