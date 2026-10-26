@@ -41,6 +41,12 @@ final class StreamEngine {
     /// already stopping (its outputs fade out) when this is called.
     var onInterrupted: ((SourceCapture.Interruption) -> Void)?
 
+    /// An app the capture followed quit (`SourceCapture.onAppQuit`), with its processes.
+    var onAppQuit: ((String, [pid_t]) -> Void)? {
+        get { capture.onAppQuit }
+        set { capture.onAppQuit = newValue }
+    }
+
     /// A local output's device went away (S68), with the output's UID. Its
     /// renderer is already halted and detached.
     var onOutputGone: ((String) -> Void)?
