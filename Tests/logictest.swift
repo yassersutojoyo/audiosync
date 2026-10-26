@@ -55,6 +55,13 @@ do {
     check(AirPlayDeviceLevel.held(level: 40, zone: 100, master: 63) == nil && moved == 25
             && AirPlayDeviceLevel.sent(own: 50, zone: 100, master: 0) == 0,
           "airplay level: with k above 0 nothing is held, and a held level is never sent", "row \(moved)")
+
+    // covers: S276 (a DACP DeviceVolume of −18 dB at master 0: the core reports own 50, level 40)
+    let dacpHeld = AirPlayDeviceLevel.held(level: 40, zone: 100, master: 0)
+    let dacpRow = AirPlayDeviceLevel.row(own: 50, zone: 100, master: 0, held: dacpHeld)
+    check(dacpHeld == 40 && dacpRow == 40 && AirPlayDeviceLevel.sent(own: 50, zone: 100, master: 0) == 0,
+          "airplay level: a DeviceVolume at master 0 keeps own 50, the row shows the TV's 40 and 0 is what a send gives",
+          "\(String(describing: dacpHeld)) row \(dacpRow)")
 }
 
 // covers: S290 (core/tests/vectors/s290_volume.json, the vectors the core and Windows run, through the calls the Mac makes)

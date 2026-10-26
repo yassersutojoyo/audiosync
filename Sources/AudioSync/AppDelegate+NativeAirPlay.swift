@@ -491,6 +491,7 @@ extension AppDelegate {
     func sendNativeRowLevel(_ id: String) -> Double {
         let own = airplayVolume[id] ?? defaultVolume
         let level = AirPlayDeviceLevel.sent(own: own, zone: airPlayZoneVolume(id), master: masterVolume)
+        airplayHeldLevel[id] = nil   // the row shows what was sent again, as on Windows (S290)
         if let receiver = NativeAirPlayID.receiver(id) {
             nativeAirPlay?.setDeviceLevel(receiver, own: own, level: level)
         }
