@@ -2693,6 +2693,31 @@ do {
     check(retried == nil && pin.withdrawPrompt() == nil,
           "every time: a refusal the sender retries while the PIN prompt is open starts no second pairing and keeps the prompt",
           "\(String(describing: retried))")
+
+    // S223: switched on by hand lasts only for the PIN session that click
+    // bought. Once the stream ends the speaker goes off with the needs-a-PIN
+    // notice, the next stream opens no prompt, and the next click pairs again.
+    var session = NativeAirPlayModel()
+    session.apply(.appeared(tv("S1", .needsPin, everyTime: true)))
+    var hand = EveryTimeGuard()
+    hand.turnedOnByHand(["native:S1"])
+    _ = session.turnedOnByUser("S1")
+    session.added("S1")
+    _ = session.apply(.state(id: "S1", .playing, retryMs: nil))
+    for id in session.plan(streaming: false, enabled: ["native:S1"]).remove { session.removed(id) }
+    let ended = hand.streamEnded(session.askingEveryTime(session.rows(enabled: ["native:S1"])),
+                                 enabled: ["native:S1"])
+    for off in ended { _ = session.turnedOff(off.id) }
+    let enabledAfter: Set<String> = ended.isEmpty ? ["native:S1"] : []
+    let restart = session.plan(streaming: true, enabled: enabledAfter)
+    let reopened = session.nextPrompt()
+    let relisted = hand.turnsOff(session.askingEveryTime(session.rows(enabled: enabledAfter)), enabled: enabledAfter)
+    check(ended == [NativeAirPlayPlan.TurnOff(id: "native:S1", reason: .needsCode)]
+            && restart.add.isEmpty && reopened == nil && relisted.isEmpty,
+          "every time: stop then start: row off + needs-a-PIN notice",
+          "ended \(ended), restart \(restart), prompt \(String(describing: reopened)), relisted \(relisted)")
+    check(session.turnedOnByUser("S1") == .startPairing("S1"),
+          "every time: after the stream ended, the next click on it pairs again")
 }
 
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")

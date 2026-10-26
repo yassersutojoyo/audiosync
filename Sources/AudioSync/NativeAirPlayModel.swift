@@ -70,6 +70,11 @@ struct EveryTimeGuard: Equatable {
         byHand.formIntersection(enabled)
         return asking.filter { enabled.contains($0) && !byHand.contains($0) }
     }
+
+    /// The stream ended. Of `asking`, the speakers that go off and why.
+    mutating func streamEnded(_ asking: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
+        turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+    }
 }
 
 struct AirPlayTargetRow: Equatable {
