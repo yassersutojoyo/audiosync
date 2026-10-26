@@ -676,3 +676,48 @@ fn capture_switch_without_flush() {
     tv.sender.shutdown();
     assert!(gap <= SWITCH_GAP, "{gap:?} of silence at the switch");
 }
+
+/// How long the television holds the answer to a volume read.
+const HELD_READ: Duration = Duration::from_millis(800);
+
+// covers: P143
+// The timeline starts over while a volume read holds the connection: the
+// FLUSH queues behind the read, and no audio of the new timeline (a packet
+// at or after the FLUSH point) leaves before the FLUSH is answered.
+#[test]
+fn timeline_restart_waits_for_flush() {
+    let _serial = serial();
+    let (socket, audio) = data_port();
+    let mut fake = FakeAp2::samsung();
+    fake.data_port = socket.local_addr().expect("address").port();
+    let server = Ap2Server::start(fake);
+    let mut tv = play(&server);
+    assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
+    let reads = {
+        let mut fake = server.fake();
+        fake.pause.insert("GET_PARAMETER".to_owned(), HELD_READ);
+        fake.reads_seen.clone()
+    };
+    let seen = reads.load(Ordering::SeqCst);
+    tv.sender.read_volume(&tv.key);
+    assert!(wait_until(LONG, || reads.load(Ordering::SeqCst) > seen));
+    let read_at = Instant::now();
+    tv.sender.restart_timeline();
+    tv.run(Duration::from_secs(3), false);
+
+    let (seq, rtptime) = flush_point(&server, 1);
+    let audio = audio.lock().expect("audio").clone();
+    let first = audio
+        .iter()
+        .find(|datagram| datagram.at >= read_at && datagram.seq.wrapping_sub(seq) < 0x8000)
+        .expect("audio of the new timeline");
+    let waited = first.at.saturating_duration_since(read_at);
+    assert!(
+        waited + Duration::from_millis(50) >= HELD_READ,
+        "the new timeline's audio left {waited:?} after the read, before the FLUSH answer"
+    );
+    assert_eq!((first.seq, first.rtptime), (seq, rtptime));
+    assert!(first.marker);
+    tv.assert_no_error();
+    tv.sender.shutdown();
+}
