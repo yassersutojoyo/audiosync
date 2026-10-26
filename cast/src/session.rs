@@ -35,10 +35,17 @@ pub const RESYNC_DRIFT: Duration = Duration::from_millis(250);
 pub const STOP_BUDGET: Duration = Duration::from_secs(5);
 /// Session events kept for a host that doesn't poll.
 pub const MAX_SESSION_EVENTS: usize = 64;
+/// How soon after an unrequested `FINISHED` another one ends the session
+/// instead of reloading it again (C86).
+pub const FINISHED_WINDOW: Duration = Duration::from_secs(10 * 60);
 const SLICE: Duration = Duration::from_millis(50);
 
 /// Takes a session event at once, or hands it back when it can't.
 pub type EventSink = Box<dyn FnMut(SessionEvent) -> Result<(), SessionEvent> + Send>;
+
+/// The time the session reads its `FINISHED` window against (C86); a test
+/// may replace it.
+pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 /// Why a session could not start or carry on.
 #[derive(Debug)]
@@ -264,6 +271,8 @@ pub struct CastSession {
     next_diagnostics: Instant,
     error_recovered: bool,
     finished_reloaded: bool,
+    finished_window: Duration,
+    clock: Clock,
     /// Set by the host once it quits: every teardown from then on keeps to
     /// [`QUIT_BUDGET`] (C88).
     quitting: Arc<AtomicBool>,
@@ -421,6 +430,8 @@ impl CastSession {
             next_diagnostics: Instant::now(),
             error_recovered: false,
             finished_reloaded: false,
+            finished_window: FINISHED_WINDOW,
+            clock: Arc::new(Instant::now),
             quitting,
             group,
             members: MemberList::new(),
@@ -552,6 +563,18 @@ impl CastSession {
             _ => self.recover(EndReason::Io("resync failed".to_owned()), true),
         }
         Err(error)
+    }
+
+    /// Sets the window of C86: an unrequested `FINISHED` sooner than this
+    /// after the previous one ends the session. [`FINISHED_WINDOW`] by
+    /// default.
+    pub fn set_finished_window(&mut self, window: Duration) {
+        self.finished_window = window;
+    }
+
+    /// Replaces the clock the `FINISHED` window is read against (C86).
+    pub fn set_clock(&mut self, clock: Clock) {
+        self.clock = clock;
     }
 
     /// Sends the events of every later recovery to `sink` as they happen:

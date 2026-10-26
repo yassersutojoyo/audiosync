@@ -4,8 +4,8 @@
 
 mod common;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -319,6 +319,93 @@ fn playback_ends_are_handled_by_their_reason() {
         0,
         "not the sender's to stop"
     );
+    device.join();
+}
+
+fn send_finished(device: &FakeDevice, media_session_id: i64) {
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        media_session_id,
+        "IDLE",
+        Some("FINISHED"),
+    )));
+}
+
+/// A session clock that moves only when the test moves it.
+fn fake_clock(session: &mut CastSession) -> Arc<Mutex<Duration>> {
+    let offset = Arc::new(Mutex::new(Duration::ZERO));
+    let base = Instant::now();
+    let read = Arc::clone(&offset);
+    session.set_clock(Arc::new(move || base + *read.lock().expect("clock")));
+    offset
+}
+
+// Part of C86 (pending): a reload per unrequested FINISHED, the end on a second one within the window.
+#[test]
+fn every_unrequested_finished_reloads_unless_the_previous_one_was_within_the_window() {
+    // Twenty minutes apart on the session's clock: a reload each, and the
+    // session plays on.
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let clock = fake_clock(&mut session);
+    for media_session_id in [1, 2] {
+        send_finished(&device, media_session_id);
+        run_until(&mut session, Duration::from_secs(10), |event| {
+            matches!(event, SessionEvent::Reloaded)
+        });
+        *clock.lock().expect("clock") += Duration::from_secs(20 * 60);
+    }
+    assert_eq!(
+        count(&device, NS_MEDIA, "LOAD"),
+        3,
+        "a reload LOAD per FINISHED"
+    );
+    session.run_for(Duration::from_millis(500));
+    assert!(!session.is_ended());
+    session.stop();
+    device.join();
+
+    // Thirty seconds apart: one reload, then the end with FINISHED.
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let clock = fake_clock(&mut session);
+    send_finished(&device, 1);
+    run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Reloaded)
+    });
+    *clock.lock().expect("clock") += Duration::from_secs(30);
+    send_finished(&device, 2);
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Ended(_))
+    });
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(SessionEnd::Failed(SessionError::Media(MediaError::Idle(
+                IdleReason::Finished
+            ))))
+        )),
+        "{seen:?}"
+    );
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2, "one reload LOAD");
+    device.join();
+
+    // A shortened window on the real clock: two windows apart reloads again.
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let window = Duration::from_millis(300);
+    session.set_finished_window(window);
+    for media_session_id in [1, 2] {
+        send_finished(&device, media_session_id);
+        run_until(&mut session, Duration::from_secs(10), |event| {
+            matches!(event, SessionEvent::Reloaded)
+        });
+        thread::sleep(window * 2);
+    }
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 3);
+    assert!(!session.is_ended());
+    session.stop();
     device.join();
 }
 
