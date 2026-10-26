@@ -687,6 +687,8 @@ fn no_text_promises_airplay() {
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
                 || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
                 || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
+                || line.contains("property <string> notice-airplay2-prefer-on-next-launch: @tr(")
+                || line.contains("property <string> notice-airplay2-prefer-off-next-launch: @tr(")
                 || line.contains("return @tr(\"AirPlay 2 after restart\");")
                 || line.contains(
                     "network-none-found: Platform.os == OperatingSystemType.linux ? \
@@ -706,6 +708,8 @@ fn no_text_promises_airplay() {
                     "help-airplay-title",
                     "help-airplay",
                     "help-airplay-linux",
+                    "help-airplay-prefer",
+                    "help-airplay-linux-prefer",
                     "help-calibration",
                     "help-calibration-linux",
                 ]

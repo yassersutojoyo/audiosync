@@ -601,8 +601,9 @@ pub enum NoticeMessage {
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
     /// File > AirPlay 2 (Experimental) was turned on (`on`) or off, which
-    /// applies once AudioSync is quit and opened again.
-    AirPlay2NextLaunch { on: bool },
+    /// applies once AudioSync is quit and opened again; `prefer`: the item
+    /// is Prefer AirPlay 2, under the AirPlay 2 flag (spec S313).
+    AirPlay2NextLaunch { on: bool, prefer: bool },
     /// The web remote listens while a connected network is Public, where
     /// anyone on it can reach the pairing page.
     RemoteOnPublicNetwork,
@@ -2805,7 +2806,13 @@ mod tests {
     #[test]
     fn only_notices_that_report_a_change_show_the_info_glyph() {
         assert!(NoticeMessage::GroupsBecameZones.reports_a_change());
-        assert!(NoticeMessage::AirPlay2NextLaunch { on: true }.reports_a_change());
+        assert!(
+            NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false
+            }
+            .reports_a_change()
+        );
         assert!(
             NoticeMessage::SourceSwitched {
                 source: "Spotify".into()

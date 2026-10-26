@@ -2252,15 +2252,25 @@ do {
           "P169 native airplay: the waiting notice reads as on Windows")
     let lets = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
     let stops = "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
-    check(UIStrings().airPlay2Note(on: false, onAtLaunch: true) == stops
-            && UIStrings().airPlay2Note(on: true, onAtLaunch: true) == lets
-            && UIStrings().airPlay2Note(on: true, onAtLaunch: false) == lets
-            && UIStrings().airPlay2Note(on: false, onAtLaunch: false) == lets,
+    check(UIStrings(airPlay2Auto: false).airPlay2Note(on: false, onAtLaunch: true) == stops
+            && UIStrings(airPlay2Auto: false).airPlay2Note(on: true, onAtLaunch: true) == lets
+            && UIStrings(airPlay2Auto: false).airPlay2Note(on: true, onAtLaunch: false) == lets
+            && UIStrings(airPlay2Auto: false).airPlay2Note(on: false, onAtLaunch: false) == lets,
           "AirPlay 2 switch: its note says AirPlay 2 stops only once turned off from a launch that runs it, as on Windows")
+    let preferring = UIStrings(airPlay2Auto: true)
+    check(preferring.airPlay2Toggle == "Prefer AirPlay 2"
+            && UIStrings(airPlay2Auto: false).airPlay2Toggle == "AirPlay 2 (Experimental)"
+            && preferring.airPlay2Note(on: true, onAtLaunch: false)
+                == "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
+            && preferring.airPlay2Note(on: false, onAtLaunch: true)
+                == "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
+            && preferring.helpText.contains("unless 'Prefer AirPlay 2'")
+            && !preferring.helpText.contains("(Experimental)"),
+          "S313 AirPlay 2 switch: under the AirPlay 2 flag it reads Prefer AirPlay 2, in its note and the Guide too")
     // The menu classes are main-actor bound; top-level code runs on the main thread.
     MainActor.assumeIsolated {
         let noteMenu = NSMenu()
-        MenuNoteItem.airPlay2Items(text: UIStrings(), on: true, onAtLaunch: true,
+        MenuNoteItem.airPlay2Items(text: UIStrings(airPlay2Auto: false), on: true, onAtLaunch: true,
                                    action: #selector(NSApplication.terminate(_:))).forEach(noteMenu.addItem)
         let noteRow = noteMenu.items.last as? MenuNoteItem
         check(noteMenu.items.count == 2 && noteMenu.items[0].title == "AirPlay 2 (Experimental)"

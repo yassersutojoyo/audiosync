@@ -1,4 +1,5 @@
 import Foundation
+import CAudioSyncCore
 
 /// Every user-facing string in one place, so a translation can be added later
 /// without hunting through view code.
@@ -17,6 +18,8 @@ struct UIStrings {
     /// How numbers such as percentages are written: the user's locale (the
     /// logic suite fixes one).
     var locale = Locale.autoupdatingCurrent
+    /// The build's AirPlay 2 flag (S312), which renames the AirPlay 2 switch.
+    var airPlay2Auto = asc_airplay2_auto()
 
     // MARK: Main window
 
@@ -655,12 +658,19 @@ struct UIStrings {
     }
 
     /// The AirPlay 2 switch in the gear menu and the AudioSync menu, off at
-    /// first; the sender reads it at launch.
-    let airPlay2Toggle = "AirPlay 2 (Experimental)"
+    /// first; the sender reads it at launch. Under the AirPlay 2 flag it only
+    /// moves speakers that also play AirPlay 1 (S313).
+    var airPlay2Toggle: String { airPlay2Auto ? "Prefer AirPlay 2" : "AirPlay 2 (Experimental)" }
     /// Its subtitle in both menus, its tooltip and VoiceOver hint. The stop
     /// sentence only once the user turns off AirPlay 2 that this launch runs.
     func airPlay2Note(on: Bool, onAtLaunch: Bool) -> String {
-        !on && onAtLaunch
+        let stops = !on && onAtLaunch
+        if airPlay2Auto {
+            return stops
+                ? "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
+                : "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
+        }
+        return stops
             ? "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
             : "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
     }
@@ -1586,11 +1596,7 @@ struct UIStrings {
         AirPlay
         AudioSync sends to AirPlay speakers itself. If its AirPlay sender stops
         after an internal error, Connected Speakers says so, with a Retry button.
-        '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, lets
-        AudioSync play to AirPlay 2 speakers, stereo pairs and home theater
-        groups. It's off at first; turn it on, then quit and reopen AudioSync.
-        With it on, a stereo pair or home theater group shows as one row, and
-        its note names the speakers in it.
+        \(guideAirPlay2Note)
 
         Google Cast
         Local and AirPlay speakers play in step: once their delays are set,
@@ -1679,6 +1685,29 @@ struct UIStrings {
         case .classes:
             return "Left: local and AirPlay speakers playing in step. Right: a Google Cast speaker starting after an offset you set by ear."
         }
+    }
+
+    /// The Guide's lines on the AirPlay 2 switch, which the AirPlay 2 flag
+    /// turns into a preference (S312, S313).
+    private var guideAirPlay2Note: String {
+        guard airPlay2Auto else {
+            return """
+                '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, lets
+                AudioSync play to AirPlay 2 speakers, stereo pairs and home theater
+                groups. It's off at first; turn it on, then quit and reopen AudioSync.
+                With it on, a stereo pair or home theater group shows as one row, and
+                its note names the speakers in it.
+                """
+        }
+        return """
+            AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater
+            groups. A speaker that plays both AirPlay 1 and AirPlay 2 uses AirPlay 1
+            unless '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, is
+            on; turn it on, then quit and reopen AudioSync. While another speaker
+            plays over AirPlay 2, such a speaker plays over AirPlay 1, and its row
+            says AirPlay. A stereo pair or home theater group shows as one row, and
+            its note names the speakers in it.
+            """
     }
 
     /// The Guide's note on “Asks for a code”.
