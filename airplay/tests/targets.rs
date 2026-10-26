@@ -183,7 +183,7 @@ fn the_pair_leader_falls_back_to_the_gid_middle_field_then_the_lowest_identifier
 
 // covers: P173, P216
 #[test]
-fn a_lone_member_is_an_incomplete_pair_only_with_bit_14() {
+fn a_lone_member_is_an_incomplete_pair_with_bit_14_or_a_partner_seen_before() {
     let lone = pair_member(1, "0x4", TSID);
     assert!(find_targets([&lone]).is_empty());
     let unreachable = pair_member(1, "0x4004", TSID);
