@@ -4227,7 +4227,7 @@ do {
         var last: NowPlayingMonitor.Track?
         var fallbackAt: [TimeInterval] = []
         // One Now Playing reading at `now`, as NowPlayingMonitor.refresh and
-        // AppDelegate.sendTrackInfo take it; a paused Spotify with no track
+        // TrackInfoHost.sendTrackInfo take it; a paused Spotify with no track
         // name answers as unreadable.
         func read(_ reading: NowPlayingMonitor.Track?, at now: Date) {
             let shown = empty.next(reading: reading, last: last, lastPlayerRuns: true, lastPlayer: .unreadable)

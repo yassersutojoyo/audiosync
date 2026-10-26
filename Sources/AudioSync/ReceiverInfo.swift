@@ -160,7 +160,7 @@ struct SentTrackInfo {
 
 /// When track info goes to AudioSync's own sender, kept apart from AppKit so
 /// the logic suite can drive it: each event returns what to do, and the
-/// caller does it (`AppDelegate.sendTrackInfo`).
+/// caller does it (`TrackInfoHost.sendTrackInfo`).
 struct TrackInfoFeed {
     /// What the sender was given; nil while no receiver shows track info.
     private(set) var sent: SentTrackInfo?
