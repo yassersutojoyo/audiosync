@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multiroom with Bluetooth speakers on a Mac: AudioSync</title>
+<link rel="canonical" href="https://audiosync-ruddy.vercel.app/multiroom-bluetooth">
+<meta name="description" content="Play one Mac's sound on several Bluetooth, AirPlay and Google Cast speakers at once, lined up with a delay per speaker. Free and open source.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f1f7f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AudioSync">
+<meta property="og:url" content="https://audiosync-ruddy.vercel.app/multiroom-bluetooth">
+<meta property="og:title" content="Multiroom with Bluetooth speakers on a Mac">
+<meta property="og:description" content="Play one Mac's sound on several Bluetooth, AirPlay and Google Cast speakers at once, lined up with a delay per speaker. Free and open source.">
+<meta property="og:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
+<meta property="og:image:alt" content="The AudioSync logo and tagline beside the app's main window">
+<meta name="twitter:card" content="summary_large_image">
+
+<style>
+  /* Same colors as the landing page; scripts/brand/tokens.py only rewrites index.html. */
+  :root {
+    --page: #f1f7f6;
+    --text: #292929;
+    --text-2: #525c5a;
+    --accent: #147167;
+    --card: rgba(255, 255, 255, .84);
+    --edge: rgba(28, 159, 145, .18);
+    --line: #d9dedd;
+    --focus: #147167;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #1e1e1e;
+      --text: #f6f6f6;
+      --text-2: #b8c2c0;
+      --accent: #20b6a6;
+      --card: rgba(43, 43, 43, .78);
+      --edge: rgba(99, 218, 194, .14);
+      --line: #3d3d3d;
+      --focus: #63dac2;
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 17px/1.6 var(--font); }
+  a { color: var(--accent); text-underline-offset: .18em; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+  .skip {
+    position: absolute; left: 16px; top: -60px; padding: 10px 16px;
+    background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .skip:focus { top: 12px; }
+  .wrap { width: min(720px, 100% - 32px); margin-inline: auto; }
+  header { padding: 20px 0; }
+  .brand { display: inline-flex; padding: 4px; margin: -4px; border-radius: 8px; }
+  .brand img { width: 148px; height: auto; display: block; }
+  h1, h2 { line-height: 1.2; letter-spacing: -0.015em; margin: 0 0 .5em; }
+  h1 { font-size: clamp(1.9rem, 5.5vw, 2.8rem); margin-top: 24px; }
+  h2 { font-size: clamp(1.3rem, 3.4vw, 1.6rem); margin-top: 2em; }
+  p, ul { margin: 0 0 1em; }
+  li { margin-bottom: .4em; }
+  .lede { font-size: 1.12rem; color: var(--text-2); }
+  .card { background: var(--card); border: 1px solid var(--edge); border-radius: 18px; padding: 20px 24px; }
+  .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+  footer { margin-top: 64px; padding: 32px 0 48px; border-top: 1px solid var(--line); color: var(--text-2); font-size: .92rem; }
+  footer p { margin: 0 0 .8em; }
+  .after { margin-top: 1em; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="AudioSync home">
+      <picture>
+        <source srcset="/wordmark-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/wordmark.svg" alt="AudioSync" width="148" height="30">
+      </picture>
+    </a>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+  <h1>Multiroom with Bluetooth speakers on a Mac</h1>
+  <p class="lede">AudioSync is a free, open-source Mac app that plays one source on several speakers at once: Bluetooth speakers, AirPlay speakers, a Google Cast speaker, and anything else macOS can play to. It needs macOS 15 or later and it's still an early alpha.</p>
+
+  <h2>How it works</h2>
+  <ul>
+    <li>Pick a source: everything the Mac plays, one app, or an input like a mic or an audio interface.</li>
+    <li>Turn on the speakers you want. A Bluetooth speaker paired with the Mac shows up as an output like the built-in speakers, the headphone jack, HDMI or USB.</li>
+    <li>Line them up. Every local output has its own delay, from &minus;2 to +20 seconds. Bluetooth runs behind the rest, so it usually ends up around &minus;150 to &minus;300 ms. AirPlay speakers share one delay of their own.</li>
+    <li>Google Cast plays one speaker, or one Google Home group, at a time. Cast has no shared clock, so you set its offset by ear and AudioSync remembers it.</li>
+  </ul>
+  <p>Each speaker also gets its own volume, next to a master volume and a 10-band EQ.</p>
+
+  <h2>The catch with several Bluetooth speakers</h2>
+  <div class="card">
+    <p>Your Mac has one Bluetooth radio. It serves every Bluetooth speaker in turns, and it shares the 2.4 GHz band with Wi-Fi. So with two or more Bluetooth outputs on, you may hear stutter. AudioSync handles clock drift between speakers, but it can't fix the radio.</p>
+    <p>What helps:</p>
+    <ul>
+      <li>5 GHz Wi-Fi, or a cable for the internet</li>
+      <li>Fewer Bluetooth outputs at once</li>
+      <li>A dual-link USB Bluetooth transmitter</li>
+      <li>AirPlay for the other rooms</li>
+    </ul>
+  </div>
+  <p class="after">One more thing: everything plays about two seconds late. That's fine for music, not for video or games.</p>
+
+  <h2>Getting it</h2>
+  <p>Download <code>AudioSync.dmg</code> from the <a href="https://github.com/yassersutojoyo/audiosync/releases/latest">latest release on GitHub</a>. It isn't notarized, so macOS blocks the first launch; the <a href="https://github.com/yassersutojoyo/audiosync#install">README's install notes</a> say how to open it anyway. There's also a Windows 11 preview, not released yet.</p>
+  <p>More about the app on the <a href="/">AudioSync home page</a>.</p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>AudioSync is free and open-source software by Yasser Sutojoyo Kusumo, licensed under GPL-3.0-or-later, with no warranty.</p>
+    <p>Apple, Mac, macOS and AirPlay are trademarks of Apple Inc., Google Cast of Google LLC, and the Bluetooth&reg; word mark of Bluetooth SIG, Inc. AudioSync isn't affiliated with or endorsed by any of them.</p>
+  </div>
+</footer>
+</body>
+</html>

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  A free, open-source Airfoil alternative for macOS: play your Mac's audio on AirPlay speakers and every local output at once, in sync.
+  Multiroom audio for your Mac: play its sound on AirPlay speakers, Bluetooth speakers and every other output macOS knows, plus Google Cast, all at once and in sync. A free, open-source Airfoil alternative.
 </p>
 
 <p align="center">
