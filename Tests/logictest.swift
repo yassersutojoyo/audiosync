@@ -2931,73 +2931,103 @@ do {
         return receiver
     }
     enum Step { case listed(NativeReceiver), sender(NativeSpeakerEvent) }
-    // Each launch: what reaches the app at which second, and how many
-    // sessions may start before the every-time flag is known (a receiver
-    // first listed as open over AirPlay 1, then moved to AirPlay 2).
-    let launches: [(name: String, steps: [(Int, Step)], flagAt: Int, sessions: Int)] = [
-        ("listed asking", [(2, .listed(tv(.needsPin, everyTime: true)))], 2, 0),
-        ("flag on a later listing", [(2, .listed(tv(.needsPin, everyTime: false))),
-                                     (10, .listed(tv(.needsPin, everyTime: true)))], 10, 0),
-        ("listed able to play and asking", [(2, .listed(tv(.available, everyTime: true)))], 2, 0),
-        ("open first, then asking", [(2, .listed(tv(.available, everyTime: false))),
-                                     (3, .sender(.state(id: "TV", .retrying, retryMs: 10_000))),
-                                     (3, .listed(tv(.needsPin, everyTime: true)))], 3, 1),
-    ]
-    for launch in launches {
+    // The app's steps in its order (AppDelegate+NativeAirPlay.swift
+    // refreshNativeRows, adoptNativeRows, syncNativeSpeakers, nativeOutcome,
+    // turnOffNativeSpeaker; AppDelegate+Zones.swift autoConnect), streaming
+    // from launch. No pairings are counted: auto-connect switches rows on
+    // without beginNativeAttempts, and the sender starts no PIN pairing by
+    // itself (the every-time tests in airplay/tests/ap2_driver.rs), so a
+    // session is the only way to one.
+    struct App {
         var model = NativeAirPlayModel()
         var everyTime = EveryTimeGuard()
         var enabled: Set<String> = ["native:TV"]   // enabledAirPlayIds from the last run
         let marked: Set<String> = ["native:TV"]   // auto-connect on
-        var known: [String] = []
-        var sessions: [Int] = [], pairings: [Int] = [], inSenderAfterFlag: [Int] = []
-        var listedYet = false
-        // The app's steps: syncNativeSpeakers, refreshNativeRows with
-        // adoptNativeRows, and autoConnect; streaming runs from launch.
-        func outcome(_ outcome: NativeAirPlayOutcome?, at t: Int) {
+        var order: [String] = []
+        var sessions: [Int] = []
+        var now = 0
+
+        mutating func refreshNativeRows() {
+            let joinable = adoptNativeRows()
+            syncNativeSpeakers()
+            autoConnect(joinable)
+        }
+        mutating func adoptNativeRows() -> [String] {
+            let adoption = model.adopt(enabled: enabled, known: order, stopped: false, everyTime: &everyTime)
+            for id in adoption.turnOff { enabled.remove(id) }
+            order = adoption.rows
+            return adoption.joinable
+        }
+        mutating func syncNativeSpeakers() {
+            let plan = model.plan(streaming: true, enabled: enabled)
+            guard !plan.isEmpty else { return }
+            for id in plan.release { enabled.remove(NativeAirPlayID.app(id)) }
+            for id in plan.remove { model.removed(id) }
+            let appeared = plan.changesRows ? adoptNativeRows() : []
+            for id in plan.add {
+                model.added(id)
+                sessions.append(now)
+            }
+            for off in plan.turnOff { turnOffNativeSpeaker(NativeAirPlayID.app(off.id)) }
+            autoConnect(appeared)
+        }
+        mutating func turnOffNativeSpeaker(_ id: String) {
+            guard enabled.contains(id) else { return }
+            enabled.remove(id)
+            syncNativeSpeakers()
+        }
+        mutating func autoConnect(_ ids: [String]) {
+            let hits = ids.filter { marked.contains($0) }
+            guard !hits.isEmpty else { return }
+            enabled.formUnion(hits)
+            syncNativeSpeakers()   // applyAirPlaySelection while streaming
+        }
+        mutating func nativeOutcome(_ outcome: NativeAirPlayOutcome?) {
             switch outcome {
-            case .turnOff(let id, _)?: enabled.remove(id)
-            case .startPairing?, .prompt?: pairings.append(t)
+            case .turnOff(let id, _)?: turnOffNativeSpeaker(id)
+            case .playingChanged?: refreshNativeRows()
             default: break
             }
         }
-        func sync(at t: Int) {
-            let plan = model.plan(streaming: true, enabled: enabled)
-            for id in plan.remove { model.removed(id) }
-            for id in plan.add {
-                model.added(id)
-                sessions.append(t)
-            }
-            for off in plan.turnOff { enabled.remove(NativeAirPlayID.app(off.id)) }
-        }
-        func refresh(at t: Int) {
-            let rows = model.rows(enabled: enabled)
-            let joinable = model.joinable(rows, after: Set(known), stopped: false)
-            for id in everyTime.turnsOff(model.askingEveryTime(rows), enabled: enabled) { enabled.remove(id) }
-            known = rows
-            sync(at: t)
-            enabled.formUnion(joinable.filter { marked.contains($0) })
-            sync(at: t)
-        }
+    }
+    // Each launch: what reaches the app at which second, the second the
+    // every-time flag is known, and the sessions that may start before it
+    // (the receiver was listed as open).
+    let launches: [(name: String, steps: [(Int, Step)], flagAt: Int, sessions: Int)] = [
+        ("listed asking", [(2, .listed(tv(.needsPin, everyTime: true)))], 2, 0),
+        ("open first, flag on a later listing", [(2, .listed(tv(.available, everyTime: false))),
+                                                 (10, .listed(tv(.available, everyTime: true)))], 10, 1),
+        ("listed able to play and asking", [(2, .listed(tv(.available, everyTime: true)))], 2, 0),
+        ("open over AirPlay 1, then asking over AirPlay 2", [(2, .listed(tv(.available, everyTime: false))),
+                                                             (3, .sender(.state(id: "TV", .retrying, retryMs: 10_000))),
+                                                             (3, .listed(tv(.needsPin, everyTime: true)))], 3, 1),
+    ]
+    for launch in launches {
+        var app = App()
+        var listedYet = false
+        var inSenderAfterFlag: [Int] = []
         for t in 0...15 {
+            app.now = t
             for (at, step) in launch.steps where at == t {
                 switch step {
-                case .listed(let receiver):
-                    outcome(model.apply(listedYet ? .changed(receiver) : .appeared(receiver)), at: t)
+                case .listed(let receiver):   // nativeReceiverChanged
+                    app.model.apply(listedYet ? .changed(receiver) : .appeared(receiver))
                     listedYet = true
-                    refresh(at: t)
-                case .sender(let event):
-                    outcome(model.apply(event), at: t)
-                    refresh(at: t)
+                    app.refreshNativeRows()
+                case .sender(let event):   // nativeSpeakerEvent
+                    let outcome = app.model.apply(event)
+                    app.nativeOutcome(outcome)
                 }
             }
-            sync(at: t)   // the reconcile timer
-            if t >= launch.flagAt, model.states["TV"] != nil { inSenderAfterFlag.append(t) }
+            // reconcileNativeAirPlay, here every second (the app: at launch, on wake, every 30 s).
+            app.syncNativeSpeakers()
+            if t >= launch.flagAt, app.model.states["TV"] != nil { inSenderAfterFlag.append(t) }
         }
-        check(sessions.count == launch.sessions && sessions.allSatisfy { $0 < launch.flagAt }
-                && pairings.isEmpty && inSenderAfterFlag.isEmpty && !enabled.contains("native:TV")
-                && model.plan(streaming: true, enabled: enabled).add.isEmpty,
-              "every time at launch (\(launch.name)): on from the last run, auto-connect on, it stays off and nothing pairs for 15 s",
-              "sessions \(sessions), pairings \(pairings), in the sender \(inSenderAfterFlag), on \(enabled)")
+        check(app.sessions.count == launch.sessions && app.sessions.allSatisfy { $0 < launch.flagAt }
+                && inSenderAfterFlag.isEmpty && !app.enabled.contains("native:TV")
+                && app.model.plan(streaming: true, enabled: app.enabled).add.isEmpty,
+              "every time at launch (\(launch.name)): on from the last run, auto-connect on, it goes off once it asks and no session starts for 15 s",
+              "sessions \(app.sessions), in the sender \(inSenderAfterFlag), on \(app.enabled)")
     }
 }
 
