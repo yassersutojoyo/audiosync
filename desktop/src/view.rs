@@ -1547,6 +1547,7 @@ impl App {
             .set_connected_virtual_hidden(only_virtual_outputs_hidden(&connected, lists));
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
+        self.main.set_airplay_searching(state.airplay_searching);
         self.flyout.set_airplay_searching(state.airplay_searching);
         self.main.set_cast_list(cast_list(state.cast_list));
         self.main.set_cast_by_address(state.cast_by_address);
@@ -5999,6 +6000,20 @@ mod tests {
             "closing applied it"
         );
         assert!(app.ui.borrow().sync_open.is_empty());
+    }
+
+    /// While AirPlay discovery has listed nothing yet, the main window's
+    /// empty Connected Speakers list says it looks, as the flyout does.
+    #[test]
+    fn the_main_window_and_the_flyout_both_look_while_airplay_searches() {
+        let mut backend = MockBackend::new();
+        backend.set_airplay_searching(true);
+        let app = app_over(backend);
+        assert!(app.main.get_airplay_searching());
+        assert!(app.flyout.get_airplay_searching());
+
+        let app = app_over(MockBackend::new());
+        assert!(!app.main.get_airplay_searching());
     }
 
     #[test]

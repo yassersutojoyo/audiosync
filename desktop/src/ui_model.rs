@@ -818,7 +818,7 @@ pub struct AppState {
     /// speaker list says to check the network and Windows Firewall.
     pub airplay_none_found: bool,
     /// AirPlay discovery runs and has listed no speaker yet, short of
-    /// `airplay_none_found`: the flyout says it is looking.
+    /// `airplay_none_found`: the main window and the flyout say they look.
     pub airplay_searching: bool,
     /// What a session does when the app it captures quits (spec S227).
     pub when_source_quits: WhenSourceQuits,
@@ -1795,6 +1795,12 @@ impl MockBackend {
     #[cfg(test)]
     pub fn set_airplay_none_found(&mut self, on: bool) {
         self.state.airplay_none_found = on;
+    }
+
+    /// AirPlay discovery runs and has listed no speaker yet.
+    #[cfg(test)]
+    pub fn set_airplay_searching(&mut self, on: bool) {
+        self.state.airplay_searching = on;
     }
 
     /// Keeps only the example speakers `keep` accepts, and the zones.
