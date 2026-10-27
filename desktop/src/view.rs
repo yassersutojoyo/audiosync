@@ -1612,10 +1612,7 @@ impl App {
                         };
                         if let Some(note) = state.zone_note(zone, row) {
                             built.zone_note = zone_note(&strings, note);
-                            built.zone_dimmed = matches!(
-                                note,
-                                ui_model::ZoneNote::InTarget(_) | ui_model::ZoneNote::NotFound
-                            );
+                            built.zone_dimmed = zone_row_dimmed(row, note);
                         }
                         built
                     })
@@ -4313,6 +4310,16 @@ fn missing_item(strings: &Strings<'_>, state: &AppState, zone_id: &str, id: &str
 }
 
 /// The words of a zone member's note.
+/// Whether a zone member's row is dimmed: as on the Mac, one that can't
+/// play with its zone, whether it is listed or not.
+fn zone_row_dimmed(row: ui_model::ZoneRow<'_>, note: ui_model::ZoneNote<'_>) -> bool {
+    matches!(row, ui_model::ZoneRow::NotFound(_))
+        || matches!(
+            note,
+            ui_model::ZoneNote::InTarget(_) | ui_model::ZoneNote::NeedsAirPlay2
+        )
+}
+
 fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedString {
     match note {
         ui_model::ZoneNote::NeedsAirPlay2 => strings.get_needs_airplay2(),
@@ -8015,6 +8022,15 @@ mod tests {
             state.zone_note(&zone, ui_model::ZoneRow::Listed(pair)),
             Some(ui_model::ZoneNote::NeedsAirPlay2)
         );
+        // One look for the note, listed or not.
+        assert!(zone_row_dimmed(
+            ui_model::ZoneRow::Listed(pair),
+            ui_model::ZoneNote::NeedsAirPlay2
+        ));
+        assert!(zone_row_dimmed(
+            ui_model::ZoneRow::NotFound("airplay:theater:4C2D"),
+            ui_model::ZoneNote::NeedsAirPlay2
+        ));
         for speaker in &mut state.speakers {
             if speaker.id != "cc:attic" {
                 speaker.enabled = false;

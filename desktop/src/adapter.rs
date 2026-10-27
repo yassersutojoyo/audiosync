@@ -563,6 +563,12 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The AirPlay 2 flag of this launch (spec S312): the AirPlay 2 path is
     /// on whatever the switch says.
     airplay2_auto: bool,
+    /// Whether the sender's AirPlay 2 path is on this launch: the switch as
+    /// saved at launch, or `AUDIOSYNC_AIRPLAY2`.
+    airplay2_at_launch: bool,
+    /// `AUDIOSYNC_AIRPLAY2`, which turns the sender's AirPlay 2 path on with
+    /// the switch off.
+    airplay2_switch_env: Option<String>,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,
     /// The microphone calibration running, or letting its cut-off sweep
@@ -679,6 +685,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ptp_taken: None,
             view: ViewSettings::default(),
             airplay2_auto: crate::audio::airplay::airplay2_auto_on(),
+            airplay2_at_launch: false,
+            airplay2_switch_env: crate::audio::airplay::airplay2_switch_env(),
             when_source_quits: WhenSourceQuits::Stop,
             calibration_run: None,
             calibration: calibration::Status::default(),
@@ -829,6 +837,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             last_update_check: saved.last_update_check,
             update_record: saved.update_record.clone(),
         };
+        self.airplay2_at_launch = crate::audio::airplay::airplay2_on(
+            saved.airplay2_experimental,
+            self.airplay2_switch_env.as_deref(),
+        );
         self.saved = saved;
     }
 
@@ -1983,35 +1995,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay2_playing_elsewhere: state.running
                 && elsewhere(SpeakerKind::AirPlay2).any(|speaker| speaker.waiting.is_none()),
         };
-        let members: Vec<(SpeakerKey, bool, zones::Member)> = zone
-            .members
-            .iter()
-            .filter_map(|text| {
-                let key = SpeakerKey::parse(text)?;
-                let listed = state.speaker(text);
-                let kind = match (&key, listed.map(|speaker| speaker.kind)) {
-                    (SpeakerKey::Local(_), _) => MemberKind::Local,
-                    (SpeakerKey::Cast(_), _) => MemberKind::Cast,
-                    (SpeakerKey::AirPlay(_), Some(SpeakerKind::AirPlay2)) => MemberKind::AirPlay2,
-                    (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
-                    (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
-                };
-                let on = listed.is_some_and(|speaker| speaker.enabled);
-                let member = zones::Member {
-                    kind,
-                    listed: listed.is_some() && !keep_off.contains(text),
-                    on,
-                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
-                    needs_airplay2: listed.is_none()
-                        && !self.view.airplay2_experimental
-                        && !self.airplay2_auto
-                        && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
-                    in_target: matches!(&key, SpeakerKey::AirPlay(id)
-                        if self.audio.airplay_holding_target(id).is_some()),
-                };
-                Some((key, on, member))
-            })
-            .collect();
+        let members = self.zone_member_facts(&state, &zone, keep_off);
         let facts: Vec<zones::Member> = members.iter().map(|(_, _, member)| *member).collect();
         let plan = zones::click_plan(&facts, situation);
         let turn_on = match plan.action {
@@ -2052,6 +2036,49 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.stop_if_idle();
         }
         self.take_events();
+    }
+
+    /// Whether `key` is a stereo pair or home theater this launch can't play:
+    /// the sender's AirPlay 2 path stays as it was at launch.
+    fn needs_airplay2(&self, key: &SpeakerKey) -> bool {
+        !self.airplay2_at_launch
+            && !self.airplay2_auto
+            && matches!(key, SpeakerKey::AirPlay(id) if is_airplay_target(id))
+    }
+
+    /// Each member of `zone` as the click plan sees it, with whether it is
+    /// on; the members in `keep_off` count as not found.
+    fn zone_member_facts(
+        &self,
+        state: &AppState,
+        zone: &Zone,
+        keep_off: &[String],
+    ) -> Vec<(SpeakerKey, bool, zones::Member)> {
+        zone.members
+            .iter()
+            .filter_map(|text| {
+                let key = SpeakerKey::parse(text)?;
+                let listed = state.speaker(text);
+                let kind = match (&key, listed.map(|speaker| speaker.kind)) {
+                    (SpeakerKey::Local(_), _) => MemberKind::Local,
+                    (SpeakerKey::Cast(_), _) => MemberKind::Cast,
+                    (SpeakerKey::AirPlay(_), Some(SpeakerKind::AirPlay2)) => MemberKind::AirPlay2,
+                    (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
+                    (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
+                };
+                let on = listed.is_some_and(|speaker| speaker.enabled);
+                let member = zones::Member {
+                    kind,
+                    listed: listed.is_some() && !keep_off.contains(text),
+                    on,
+                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                    needs_airplay2: listed.is_none() && self.needs_airplay2(&key),
+                    in_target: matches!(&key, SpeakerKey::AirPlay(id)
+                        if self.audio.airplay_holding_target(id).is_some()),
+                };
+                Some((key, on, member))
+            })
+            .collect()
     }
 
     fn post_pair_first(&mut self, key: &SpeakerKey, name: &str) {
@@ -2117,11 +2144,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
                 busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
-                needs_airplay2: listed.is_none()
-                    && hidden.is_none()
-                    && !self.view.airplay2_experimental
-                    && !self.airplay2_auto
-                    && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
+                needs_airplay2: listed.is_none() && hidden.is_none() && self.needs_airplay2(&key),
                 in_target,
                 fixed_volume: listed
                     .and_then(|speaker| speaker.cast.as_ref())
@@ -2844,6 +2867,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     id: key.clone(),
                     name: self.custom_names.shown(key, last),
                     kind,
+                    needs_airplay2: SpeakerKey::parse(key)
+                        .is_some_and(|key| self.needs_airplay2(&key)),
                 }
             })
             .collect()
@@ -12096,6 +12121,142 @@ mod tests {
                 "Evening",
                 &[("Left", PresetLeftOff::InTarget("Living Room".to_owned()))]
             )]
+        );
+    }
+
+    /// The switch applies at the next launch (as on the Mac), so a stereo
+    /// pair still needs AirPlay 2 after it is saved on.
+    // covers: S265
+    #[test]
+    fn a_stereo_pair_needs_airplay2_until_the_switch_saved_on_is_relaunched() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(false);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                ("ap:pair:5f0c".to_owned(), None),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        let reasons = |adapter: &AudioAdapter<MockBackend>| -> Vec<PresetLeftOff> {
+            preset_notices(adapter)
+                .into_iter()
+                .flat_map(|notice| match notice {
+                    NoticeMessage::PresetLeftOff { left_off, .. } => {
+                        left_off.into_iter().map(|(_, reason)| reason).collect()
+                    }
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+
+        adapter.recall_preset("preset:1");
+        assert_eq!(reasons(&adapter), [PresetLeftOff::NeedsAirPlay2]);
+
+        let mut view = adapter.view_settings();
+        view.airplay2_experimental = true;
+        adapter.set_view_settings(view);
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            reasons(&adapter),
+            [PresetLeftOff::NeedsAirPlay2],
+            "the sender keeps the launch value until the next launch"
+        );
+    }
+
+    /// The zone side of the test above: the click plan still sees the pair
+    /// needing AirPlay 2 until the next launch.
+    // covers: S265
+    #[test]
+    fn a_zone_stereo_pair_needs_airplay2_until_the_switch_saved_on_is_relaunched() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(false);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[ap(&left), "ap:pair:5f0c".to_owned()]);
+        let id = "zone:1";
+        let check = |adapter: &AudioAdapter<MockBackend>| {
+            let state = adapter.snapshot();
+            let zone = adapter.zones.get(id).expect("the zone").clone();
+            let facts = adapter.zone_member_facts(&state, &zone, &[]);
+            let (_, _, pair_member) = facts
+                .iter()
+                .find(|(key, _, _)| key.to_string() == "ap:pair:5f0c")
+                .expect("the pair is a member");
+            assert!(pair_member.needs_airplay2);
+        };
+        check(&adapter);
+
+        let mut view = adapter.view_settings();
+        view.airplay2_experimental = true;
+        adapter.set_view_settings(view);
+        check(&adapter);
+    }
+
+    /// `AUDIOSYNC_AIRPLAY2` turns the sender's AirPlay 2 path on with the
+    /// switch off, so a pair it can't find is not found, not short of AirPlay 2.
+    // covers: S265
+    #[test]
+    fn with_the_airplay2_variable_set_a_stereo_pair_does_not_need_airplay2() {
+        let (mut adapter, _, _) = airplay2_adapter(false);
+        adapter.airplay2_switch_env = Some("1".to_owned());
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                ("ap:pair:5f0c".to_owned(), None),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("pair:5f0c", PresetLeftOff::NotFound)]
+            )]
+        );
+    }
+
+    /// As on the Mac, a stereo pair a zone holds while AirPlay 2 is off says
+    /// it needs AirPlay 2, not that it isn't found.
+    // covers: S246
+    #[test]
+    fn a_zone_stereo_pair_the_sender_cant_list_says_it_needs_airplay2() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(false);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.add_zone("Lounge", &["ap:pair:5f0c".to_owned(), key(HEADPHONES)]);
+        let state = adapter.snapshot();
+        let zone = &state.zones[0];
+        let notes: Vec<_> = state
+            .zone_rows(zone)
+            .into_iter()
+            .map(|row| state.zone_note(zone, row))
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                Some(ui_model::ZoneNote::NeedsAirPlay2),
+                Some(ui_model::ZoneNote::NotFound)
+            ]
         );
     }
 

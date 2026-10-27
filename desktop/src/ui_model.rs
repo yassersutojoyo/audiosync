@@ -275,6 +275,9 @@ pub struct AbsentMember {
     /// this run; empty when neither is known.
     pub name: String,
     pub kind: SpeakerKind,
+    /// A stereo pair or home theater this launch can't play, since AirPlay 2
+    /// is off.
+    pub needs_airplay2: bool,
 }
 
 /// A row under a zone's header (spec S245): every member but the hidden ones,
@@ -1148,7 +1151,18 @@ impl AppState {
     /// another member on: the click plan switches on one Cast member at most.
     pub fn zone_note<'a>(&self, zone: &Zone, row: ZoneRow<'a>) -> Option<ZoneNote<'a>> {
         let speaker = match row {
-            ZoneRow::NotFound(_) => return Some(ZoneNote::NotFound),
+            ZoneRow::NotFound(id) => {
+                return Some(
+                    if self
+                        .absent_member(id)
+                        .is_some_and(|member| member.needs_airplay2)
+                    {
+                        ZoneNote::NeedsAirPlay2
+                    } else {
+                        ZoneNote::NotFound
+                    },
+                );
+            }
             ZoneRow::Listed(speaker) => speaker,
         };
         if speaker.group.is_some() && speaker.availability == Availability::AirPlay2NotYet {
@@ -2053,6 +2067,7 @@ impl MockBackend {
             id: "airplay:theater:4C2D".into(),
             name: "Home Theater".into(),
             kind: SpeakerKind::AirPlay2,
+            needs_airplay2: false,
         });
         state.notices.push(Notice {
             id: 1,
@@ -2125,6 +2140,7 @@ impl MockBackend {
                 id: "airplay:patio".into(),
                 name: "Patio".into(),
                 kind: SpeakerKind::AirPlay,
+                needs_airplay2: false,
             });
             mock.zones_mut(|zones| {
                 add_zone(zones, "zone:outdoors", "Outdoors", &["airplay:patio"])
