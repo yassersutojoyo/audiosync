@@ -918,6 +918,12 @@ impl CastSpeakers {
         }
     }
 
+    /// Whether a device is on, listed or not: one that left the network
+    /// still refuses another (spec C2).
+    pub fn is_on(&self) -> bool {
+        self.enabled.is_some()
+    }
+
     /// Whether a device is on and either listed or in a session: then local
     /// outputs wait for it by [`CastSpeakers::anchor`].
     pub fn chosen(&self) -> bool {

@@ -4609,6 +4609,32 @@ do {
           "zones: the speaker lists keep only the speakers in no zone, in their order")
     check(ZoneLayout.zoneless(["lc:usb"], key: { $0 }, zoned: zoned).isEmpty,
           "zones: a list whose speakers are all in zones is empty")
+    check(ZoneLayout.zoned(["lc:built-in", "lc:usb", "ap:native:den", "cc:kitchen"], key: { $0 }, zoned: zoned)
+            == ["lc:usb", "ap:native:den"],
+          "zones: a zone member keeps a compact row in its own section, in the section's order")
+
+    func onlyThis(_ key: String, _ members: [ZoneLayout.Member]) -> [String] {
+        ZoneLayout.onlyThis(key, members: members).map { "\($0.key) \($0.on ? "on" : "off")" }
+    }
+    let memberUSB = ZoneLayout.Member(key: "lc:usb", listed: true, on: false, cast: false)
+    let memberDen = ZoneLayout.Member(key: "ap:native:den", listed: true, on: true, cast: false)
+    let memberGone = ZoneLayout.Member(key: "ap:native:gone", listed: false, on: true, cast: false)
+    let memberAttic = ZoneLayout.Member(key: "cc:attic", listed: true, on: true, cast: true)
+    let memberHall = ZoneLayout.Member(key: "cc:hall", listed: true, on: false, cast: true)
+    check(onlyThis("lc:usb", [memberUSB, memberDen, memberGone]) == ["lc:usb on", "ap:native:den off"],
+          "zones: Only This Speaker turns it on first, then the other present members off")
+    check(onlyThis("ap:native:den", [memberUSB, memberDen, memberAttic]) == ["cc:attic off"],
+          "zones: Only This Speaker on a member that plays only turns the others off")
+    check(onlyThis("cc:hall", [memberHall, memberDen, memberAttic]) == ["cc:attic off", "cc:hall on", "ap:native:den off"],
+          "zones: Only This Speaker frees the Cast place before a Cast member comes on")
+    check(onlyThis("ap:native:gone", [memberGone, memberDen]).isEmpty,
+          "zones: Only This Speaker does nothing for a member that isn't listed")
+    let hallBusy = ZoneLayout.Member(key: "cc:hall", listed: true, on: false, cast: true, busy: true)
+    check(onlyThis("cc:hall", [hallBusy, memberDen, memberAttic]).isEmpty,
+          "zones: Only This Speaker switches nothing for a Cast member that can't start now")
+    let atticBusy = ZoneLayout.Member(key: "cc:attic", listed: true, on: true, cast: true, busy: true)
+    check(onlyThis("cc:attic", [atticBusy, memberDen]) == ["ap:native:den off"],
+          "zones: Only This Speaker on a Cast member already playing still turns the others off")
 
     let living = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb", "ap:native:den"], volume: 80)
     let kitchen = SpeakerZone(id: "z2", name: "Kitchen", members: ["cc:kitchen"], volume: 100)
@@ -4868,13 +4894,114 @@ do {
           "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
 
     let window = CGRect(x: 1000, y: 543, width: 306, height: 386)
-let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))
-check(grown == CGRect(x: 1000, y: 474, width: 306, height: 455),
-      "menu bar panel: a taller panel grows its window downward, its top edge under the icon where it was")
-let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
-check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
-      "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
-let closeAsked = PopoverCloseRequest.answer
+    let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))
+    check(grown == CGRect(x: 1000, y: 474, width: 306, height: 455),
+          "menu bar panel: a taller panel grows its window downward, its top edge under the icon where it was")
+    let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
+    check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
+          "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
+    var rest = PanelRest(frame: window, content: CGSize(width: 280, height: 359))
+    let unfolded = rest.move(to: CGSize(width: 280, height: 428))
+    let folded = rest.move(to: CGSize(width: 280, height: 359))
+    check(unfolded == grown && folded == window && rest.frame == window,
+          "menu bar panel: a fold that starts while the unfold still runs aims from the rest frame, back to the exact frame")
+    var many = PanelRest(frame: window, content: CGSize(width: 280, height: 359))
+    let tops = (0..<50).map { many.move(to: CGSize(width: 280, height: 359 + CGFloat($0 % 7) * 28.5)).maxY }
+    check(tops.allSatisfy { $0 == window.maxY },
+          "menu bar panel: no run of folds and unfolds moves the top edge under the icon")
+    let fold = PanelFold(reduceMotion: false), stillFold = PanelFold(reduceMotion: true)
+    check(fold.moves && fold.duration == 0.2 && !stillFold.moves && stillFold.duration == 0,
+          "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once")
+
+    // The panel's own shadow while it grows in or shrinks away (PanelShadow).
+    let body = CGRect(x: 0, y: 0, width: 306, height: 400), tip = CGPoint(x: 153, y: 412)
+    let outline = PanelShadow.outline(body: body, tip: tip)
+    check(outline.contains(CGPoint(x: 153, y: 200)) && outline.contains(CGPoint(x: 153, y: 410))
+            && !outline.contains(CGPoint(x: 0.5, y: 399.5)) && !outline.contains(CGPoint(x: 100, y: 405)),
+          "menu bar panel shadow: its shape is the rounded body with the arrow up to the icon, not the window's rectangle")
+    let room = body.insetBy(dx: -30, dy: -30)
+    let outside = PanelShadow.outside(outline, in: room)
+    check(!outside.contains(CGPoint(x: 153, y: 200), using: .evenOdd) && !outside.contains(CGPoint(x: 153, y: 410), using: .evenOdd)
+            && outside.contains(CGPoint(x: -10, y: 200), using: .evenOdd)
+            && outside.contains(CGPoint(x: 0.5, y: 399.5), using: .evenOdd),
+          "menu bar panel shadow: it shows only outside the panel, never darkening the translucent panel")
+    let light = PanelShadow.style(dark: false), dark = PanelShadow.style(dark: true)
+    check(dark.opacity > light.opacity && light.opacity > 0 && dark.opacity <= 1 && light.offsetY < 0
+            && light.margin >= light.radius * 2 + abs(light.offsetY) && dark.margin >= dark.radius * 2 + abs(dark.offsetY),
+          "menu bar panel shadow: darker in the dark theme, falling downward, with room to spread in")
+    let barSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    check(barSource.components(separatedBy: ".invalidateShadow()").count - 1 == 1
+            && barSource.components(separatedBy: "hasShadow = on").count - 1 == 1,
+          "menu bar panel source: the system shadow is switched in one place and recomputed once, never per frame")
+    check(barSource.contains("grow(own.panel, about: tip)") && barSource.contains("shrink(own.panel, about: tip)")
+            && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
+          "menu bar panel source: the own shadow scales with the panel, in a window under it")
+    let resizeBody = barSource.components(separatedBy: "private func animateResize(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(resizeBody.contains("dropOwnShadow()") && resizeBody.contains("setShadow(window, true)"),
+          "menu bar panel source: a resize hands the shadow back to the system, so the own one never keeps an old size")
+    let ownBody = barSource.components(separatedBy: "private func ownShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(ownBody.contains("window.effectiveAppearance.bestMatch") && !ownBody.contains("NSApp.effectiveAppearance"),
+          "menu bar panel source: the own shadow takes the panel window's theme")
+    let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(foldBody.contains("animateResize(") && !foldBody.contains("resizeLater(")
+            && foldBody.contains(".easeInOut(duration: motion.duration)") && foldBody.contains("name: .easeInEaseOut"),
+          "menu bar panel source: fold() starts the resize itself, not through the gathered step, on the rows' ease-in-out curve")
+    let rowsSource = bar.components(separatedBy: "private var speakerRows: some View {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(rowsSource.contains(".transition(.opacity)") && !bar.contains(".opacity.animation("),
+          "menu bar panel source: a zone's rows fade only inside the fold's animation, so a speaker joining or leaving a zone, or a Reduce Motion fold, shows at once")
+    let zoneArea = CGRect(x: 0, y: 0, width: 294, height: 84)
+    check(PanelFold.clip(zoneArea, moving: true) == zoneArea
+            && PanelFold.clip(zoneArea, moving: false).contains(zoneArea.insetBy(dx: -6, dy: -6)),
+          "menu bar panel: while a fold moves, a zone's rows stay inside its own edge; at rest nothing is cut, focus rings included")
+    let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
+          "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
+    let ownShadowBody = bar.components(separatedBy: "private func ownShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let dropBody = bar.components(separatedBy: "private func dropOwnShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(ownShadowBody.contains("standInBackground(") && dropBody.contains("restoreBackground("),
+          "menu bar panel source: while the panel scales, its background is a stand-in that scales with it, handed back to the system's with the shadow")
+    final class Pane {
+        let name: String, background: Bool, children: [Pane]
+        init(_ name: String, background: Bool = false, _ children: [Pane] = []) {
+            self.name = name; self.background = background; self.children = children
+        }
+    }
+    let content = Pane("content", background: true, [Pane("row blur", background: true)])
+    let tree = Pane("theme frame", [Pane("popover frame", background: true,
+                                         [Pane("blur", background: true), Pane("content view", [content]),
+                                          Pane("stand-in", background: true)])])
+    let hidden = PanelBackdrop.hidden(in: tree, children: { $0.children }, isContent: { $0 === content },
+                                      isStandIn: { $0.name == "stand-in" }, isBackground: { $0.background })
+    check(hidden.map(\.name) == ["blur"],
+          "menu bar panel: the stand-in hides only background views beside the content, never one holding it, its own rows or itself",
+          "\(hidden.map(\.name))")
+    let blurLayer = NSObject(), contentLayer = NSObject(), standInLayer = NSObject()
+    let material = PanelBackdrop.material(in: [blurLayer, contentLayer, standInLayer], keeping: [contentLayer, standInLayer])
+    check(material.count == 1 && material.first === blurLayer,
+          "menu bar panel: in a background view that holds the content, only the layers no subview owns are its material")
+    let openBody = bar.components(separatedBy: "private func animateOpen(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(!bar.contains("panel resize layers") && openBody.contains("ownShadow(window)")
+            && (openBody.range(of: "ownShadow(window)")?.lowerBound ?? openBody.endIndex)
+                < (openBody.range(of: "grow(layer")?.lowerBound ?? openBody.startIndex),
+          "menu bar panel source: the panel grows only once its background can scale with it; otherwise it fades in at full size")
+
+    // The open panel moved by AppKit (another display, a status item shifting).
+    let shifted = window.offsetBy(dx: -40, dy: -24)
+    let afresh = PanelRest.next(rest, stepRunning: false, window: shifted, content: CGSize(width: 280, height: 359))
+    check(afresh == PanelRest(frame: shifted, content: CGSize(width: 280, height: 359)),
+          "menu bar panel: with no resize running, a fold aims from where the window is now, so it never snaps back")
+    let midStep = PanelRest.next(rest, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 428))
+    check(midStep == rest && PanelRest.next(nil, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 359)) == afresh,
+          "menu bar panel: while a resize runs, a fold aims from the rest frame, not the half-grown window")
+    let closeAsked = PopoverCloseRequest.answer
     check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
           "menu bar panel: an open panel the popover wants closed shrinks away its own way")
     // A press on the icon mid-grow starts the close, and the popover asks
@@ -4928,6 +5055,25 @@ let closeAsked = PopoverCloseRequest.answer
             && !sizing([.show, .didShow, .willClose, .show, .didClose]).followsContent
             && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
           "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
+    var fading = sizing([.show, .didShow, .willClose])
+    check(fading.show(onScreen: true) && fading.finishOpen() && fading == .shown,
+          "menu bar panel: reopened while its close fade still shows it, the open finishes now though AppKit sends no new didShow")
+    check(!fading.finishOpen() && fading == .shown,
+          "menu bar panel: a late didShow after the reopen finished brings no second refresh")
+    // The panel's show() finishes a reopen itself, since AppKit sends no didShow then.
+    let menuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let showBody = menuBar.components(separatedBy: "    func show() {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    func inShow(_ needle: String) -> Int { showBody.components(separatedBy: needle).count - 1 }
+    check(!showBody.isEmpty && inShow("let finishNow = host.sizing.show(onScreen: popover.isShown)") == 1
+          && inShow("if finishNow { finishOpenWhenQuiet() }") == 1,
+          "menu bar panel: show() finishes the open at once when it reopens a panel still on screen")
+    var first = PanelSizing.closed
+    check(!first.show(onScreen: false) && first == .opening && first.finishOpen() && first == .shown,
+          "menu bar panel: a first open waits for AppKit's didShow to finish")
+    var closingAgain = sizing([.show, .didShow, .willClose])
+    check(!closingAgain.finishOpen() && closingAgain == .closing,
+          "menu bar panel: a didShow left from an earlier open doesn't end a close")
 
     var own = PanelQuiet()
     own.began(.open, at: 40)
@@ -4979,8 +5125,10 @@ do {
     let fresh = store.load()
     check(fresh == AppSettings() && fresh.source == .system && fresh.master == 100 && fresh.defaultDelayMs == 2000
             && fresh.enabledAirPlay.isEmpty && fresh.enabledLocal.isEmpty && fresh.groups.isEmpty
-            && !fresh.showVirtualDevices && fresh.appearance == .system && fresh.whenSourceQuits == .stop,
+            && !fresh.showVirtualDevices && fresh.appearance == .system,
           "settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms)")
+    check(fresh.whenSourceQuits == .system,
+          "settings: Switch to All System Audio When the Source App Quits is on when nothing is stored (S227)")
     check(!fresh.airPlay2, "settings: AirPlay 2 is off when nothing is stored (P2)")
 
     var wanted = AppSettings()
@@ -4995,7 +5143,7 @@ do {
     wanted.autoConnect = ["ap:airplay-2"]
     wanted.showVirtualDevices = true
     wanted.appearance = .dark
-    wanted.whenSourceQuits = .system
+    wanted.whenSourceQuits = .stop
     wanted.airPlay2 = true
     store.save(source: wanted.source)
     store.save(ids: wanted.enabledAirPlay, forKey: Keys.enabledAirPlay)
@@ -5011,6 +5159,8 @@ do {
     store.save(whenSourceQuits: wanted.whenSourceQuits)
     store.save(airPlay2: wanted.airPlay2)
     check(store.load() == wanted, "settings: every saved setting comes back unchanged")
+    check(stored.values[Keys.whenSourceQuits] as? String == "stop" && store.load().whenSourceQuits == .stop,
+          "settings: Switch to All System Audio When the Source App Quits turned off stays off (S227)")
     check(stored.values[Keys.airPlay2] as? Bool == true, "settings: the AirPlay 2 switch is stored as a Bool")
     store.save(airPlay2: false)
     check(!store.load().airPlay2, "settings: AirPlay 2 switched off again reads back off")
@@ -5377,6 +5527,15 @@ do {
     check(stillListed == nil && gone == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
               && back == nil && rename.target == nil,
           "speaker rename: a speaker gone mid-rename applies its typing, and its rename doesn't open again when it returns")
+
+    var zoned = SpeakerRename()
+    _ = zoned.start(deskTarget, name: "USB Audio", in: .inZones)
+    check(zoned.isOpen("usb-uid", in: .inZones) && !zoned.isOpen("usb-uid", in: .row) && !zoned.isOpen("hp-1", in: .inZones),
+          "speaker rename: a rename started in the In zones row shows its field there only, not under the zone too")
+    zoned.text = "Desk"
+    let fromRow = zoned.start(deskTarget, name: "USB Audio")
+    check(fromRow == nil && zoned.isOpen("usb-uid", in: .row) && !zoned.isOpen("usb-uid", in: .inZones) && zoned.text == "Desk",
+          "speaker rename: starting it again from the row under the zone moves the field there and keeps the typing")
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
@@ -6696,10 +6855,11 @@ do {
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
           "source quit: the same quit reported again (the capture, then macOS) acts once (S227 f)")
-    check(WhenSourceQuits(defaultsValue: nil) == .stop && WhenSourceQuits(defaultsValue: "stop") == .stop
-            && WhenSourceQuits(defaultsValue: "System") == .stop && WhenSourceQuits(defaultsValue: "switch") == .stop
-            && WhenSourceQuits(defaultsValue: "system") == .system,
-          "source quit: the setting reads stop unless it says system (S227)")
+    check(WhenSourceQuits(defaultsValue: nil) == .system && WhenSourceQuits(defaultsValue: "system") == .system,
+          "source quit: nothing stored reads as system, the Mac's default (S227)")
+    check(WhenSourceQuits(defaultsValue: "stop") == .stop && WhenSourceQuits(defaultsValue: "System") == .stop
+            && WhenSourceQuits(defaultsValue: "switch") == .stop,
+          "source quit: a stored stop, or a value this copy doesn't know, reads as stop (S227)")
     let t = UIStrings()
     let switched = t.sourceSwitchedToSystem(name: "Music", started: true)
     let notStarted = t.sourceSwitchedToSystem(name: "Music", started: false)
@@ -7650,6 +7810,13 @@ do {
     check(takenOver.apply(.ended(attempt: 3, .takenOver)) == .turnedOff(kitchen, problem: .takenOver)
             && takenOver.enabled == nil && takenOver.attempt == nil && takenOver.anchorMs == nil,
           "cast: another app casting turns the speaker off with a notice")
+    check(takenOver.cantStartNow(kitchen) && !m.cantStartNow(kitchen) && !takenOver.cantStartNow(den),
+          "cast: one another app took over can't start from a zone click or Only This Speaker (S246)")
+    check(takenOver.turnOn(kitchen) == nil && !takenOver.cantStartNow(kitchen),
+          "cast: turning it on with its own switch tries it again")
+    var offline = CastModel()
+    offline.apply(.appeared(CastDevice(id: den, name: "Den", offline: true), offsetMs: nil))
+    check(offline.cantStartNow(den), "cast: an offline speaker can't start now either")
     var stopped = m
     check(stopped.turnOff(kitchen) && stopped.plan(streaming: true) == .stop, "cast: turning it off stops its session")
     stopped.stopSent()
@@ -8244,6 +8411,10 @@ do {
 do {
     let t = UIStrings()
     let pieces = GuideLayout.pieces(of: t.helpText, anchor: t.guideArtAnchor)
+    let guideWords = t.helpText.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    check(guideWords.contains("the button with its zone's name goes to the zone")
+            && !guideWords.contains("after its own goes to the zone"),
+          "guide, zones: a zoned speaker's short row names the button that goes to its zone")
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",
@@ -9378,7 +9549,7 @@ do {
           "setup: the Local Network row gives the full System Settings path")
 }
 
-// MARK: Zone header routing table in the main window (ZoneHeaderHit)
+// MARK: Zone header routing table in the main window and the menu bar panel (ZoneHeaderHit)
 do {
     let expected: [(ZoneHeaderHit.Area, ZoneHeaderHit.Action, String)] = [
         (.name, .fold, "a click on the zone name folds or unfolds the members"),
@@ -9393,6 +9564,172 @@ do {
     }
     check(ZoneHeaderHit.Area.allCases.filter { ZoneHeaderHit.action(for: $0) == .toggleZone } == [.zoneIcon],
           "zone header routing table: only the round zone icon switches the zone, so folding leaves it on")
+    check(ZoneHeaderHit.action(for: .zoneIcon, nonePresent: true) == .fold,
+          "zone header routing table: with none of its speakers present, the greyed icon folds the zone")
+    check(ZoneHeaderHit.Area.allCases.allSatisfy { ZoneHeaderHit.action(for: $0, nonePresent: true) != .toggleZone },
+          "zone header routing table: with none of its speakers present, no click switches the zone")
+
+    // The panel's header routes every click through the table above.
+    let header = (try? String(contentsOfFile: "Sources/AudioSync/PanelZoneHeader.swift", encoding: .utf8)) ?? ""
+    func occurrences(_ needle: String) -> Int { header.components(separatedBy: needle).count - 1 }
+    check(occurrences("ZoneHeaderHit.action(for: area, nonePresent: nonePresent)") == 1
+          && occurrences("hit(.chevron)") == 1 && occurrences("hit(.zoneIcon)") == 1 && occurrences("hit(.name)") == 1,
+          "panel zone header: the arrow, the icon and the name each route through ZoneHeaderHit")
+    check(occurrences("model.actions.toggleZone") == 1 && occurrences("disclosure.toggle") == 1
+          && occurrences(".disabled(") == 0,
+          "panel zone header: nothing switches or folds the zone outside the table, and no part is disabled")
+
+    // The main window's zone card routes the same way, so its greyed icon folds too.
+    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let card = window.components(separatedBy: "private struct ZoneCard").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    func inCard(_ needle: String) -> Int { card.components(separatedBy: needle).count - 1 }
+    check(!card.isEmpty && inCard("ZoneHeaderHit.action(for: area, nonePresent: nonePresent)") == 1
+          && inCard(".disabled(zone.present") == 0,
+          "main window zone header: the greyed icon folds through ZoneHeaderHit instead of being disabled")
+    check(inCard(".accessibilityHidden(nonePresent)") == 1
+          && inCard(".accessibilityValue(nonePresent ? model.countText(of: zone) : \"\")") == 1,
+          "main window zone header: VoiceOver skips the greyed icon and the fold button carries the count")
+    // Go to Zone lands on a part VoiceOver can reach: the greyed icon is hidden from it.
+    check(ZoneHeaderHit.goToZoneFocus(nonePresent: false) == .zoneIcon,
+          "Go to Zone: with a speaker of the zone present, the focus lands on the zone's round icon")
+    check(ZoneHeaderHit.goToZoneFocus(nonePresent: true) == .chevron,
+          "Go to Zone: with none of the zone's speakers present, the focus lands on the arrow, not the hidden icon")
+    check(inCard("focused = ZoneHeaderHit.goToZoneFocus(nonePresent: nonePresent)") == 1
+          && inCard(".focused($focused, equals: .chevron)") == 1 && inCard(".focused($focused, equals: .zoneIcon)") == 1,
+          "main window zone header: Go to Zone focuses the part ZoneHeaderHit.goToZoneFocus names")
+}
+
+// MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
+do {
+    let zones: [(id: String, members: [String])] = [("living", ["tv", "sonos"]), ("kitchen", ["pod"]), ("empty", [])]
+    func rows(_ collapsed: Set<String>) -> Int {
+        ZoneLayout.panelRows(zones, id: { $0.id }, members: { $0.members.count }, collapsed: collapsed)
+    }
+    check(rows([]) == 6, "panel zone rows: unfolded, each zone shows its header and every member", "\(rows([]))")
+    check(rows(["living"]) == 4, "panel zone rows: a folded zone keeps its header and drops its members",
+          "\(rows(["living"]))")
+    check(rows(["living", "kitchen", "empty"]) == 3, "panel zone rows: all folded, only the headers stay",
+          "\(rows(["living", "kitchen", "empty"]))")
+    check(rows(["gone"]) == 6, "panel zone rows: a folded zone that no longer exists changes nothing")
+    check(ZoneLayout.shownMembers(zones[0].members, folded: false) == ["tv", "sonos"],
+          "panel zone members: an unfolded zone lists its members in order")
+    check(ZoneLayout.shownMembers(zones[0].members, folded: true).isEmpty,
+          "panel zone members: a folded zone lists none")
+}
+
+// MARK: Zone folding is per view; double-clicks rename zones and zoned speakers
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    let window = read("Sources/AudioSync/MainWindow.swift")
+    let menuBar = read("Sources/AudioSync/MenuBar.swift")
+    let render = read("scripts/screenshots/render.swift")
+    let ownFold = "@StateObject private var zoneDisclosure = ZoneDisclosure()"
+    check(!window.isEmpty && !menuBar.isEmpty && count(window, ownFold) == 1 && count(menuBar, ownFold) == 1,
+          "zone folding: the main window and the menu bar panel each keep their own fold state")
+    check(count(menuBar, "let zoneDisclosure") == 0 && count(window, "model.zoneDisclosure") == 0
+            && count(menuBar, "model.zoneDisclosure") == 0 && count(render, "zoneDisclosure") == 0,
+          "zone folding: nothing hands one view's fold state to the other")
+
+    let card = window.components(separatedBy: "private struct ZoneCard").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(card, "TapGesture(count: 2).onEnded { model.actions.renameZone(zone.id) }") == 1
+            && count(card, ".exclusively(before: TapGesture().onEnded { hit(.name) })") == 1,
+          "main window zone header: a double-click on the name renames the zone, a single click still folds it")
+
+    let compact = window.components(separatedBy: "private struct ZoneMemberCompactRow").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(compact, "TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) }") == 1
+            && count(compact, "SpeakerNameField(") == 1
+            && count(compact, ".accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }") == 1,
+          "In zones row: a double-click on the name renames the speaker in place, VoiceOver has the Rename action")
+    let row = window.components(separatedBy: "struct SpeakerRow: View").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(row, "SpeakerNameField(") == 1 && count(row, "TapGesture(count: 2).onEnded { model.startRename(speaker) }") == 1,
+          "speaker row: a zone's member rows and every other row rename through the same field")
+}
+
+// MARK: Zone members in the main window: one box per zone, label and separators on the name column
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    func part(_ text: String, after marker: String) -> String {
+        text.components(separatedBy: marker).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
+    }
+    let window = read("Sources/AudioSync/MainWindow.swift")
+
+    check(ZoneLook.nameColumn == 54, "zone look: names start 54 pt into a card's rows", "\(ZoneLook.nameColumn)")
+    check(ZoneLook.compactRowHeight == 36 && ZoneLook.compactPaddingY == 6 && ZoneLook.compactBadge == 24,
+          "zone look: an In zones row is 36 pt, a 24 pt badge with 6 pt above and below", "\(ZoneLook.compactRowHeight)")
+    check(ZoneLook.groupRadius == 9 && ZoneLook.groupFill == 0.05 && ZoneLook.groupBorderWidth == 0.5,
+          "zone look: the member box is teal 5% with a 0.5 pt teal edge and corner 9")
+    check(ZoneLook.chipHeight == 18 && ZoneLook.chipPaddingX == 7 && ZoneLook.chipFill == 0.12,
+          "zone look: the zone chip is an 18 pt teal 12% capsule with 7 pt sides")
+
+    let groups = ZoneLayout.byZone(["a", "b", "c", "d", "gone"]) { ["a": "z2", "b": "z1", "c": "z2", "d": "z1"][$0] }
+    check(groups.map(\.zone) == ["z2", "z1"] && groups.map(\.rows) == [["a", "c"], ["b", "d"]],
+          "zone look: In zones rows box by zone, zones in first-row order, a row without a zone left out",
+          "\(groups.map { ($0.zone, $0.rows) })")
+
+    let zoned = part(window, after: "private func zonedRows(")
+    check(count(zoned, "model.text.inZones.uppercased()") == 1 && count(zoned, ".accessibilityLabel(model.text.inZones)") == 1
+            && count(zoned, ".padding(.leading, ZoneLook.nameColumn)\n            .padding(.trailing") == 1
+            && count(zoned, "if divided { Divider() }") == 0
+            && count(zoned, "ZoneMemberGroup {") == 1,
+          "In zones label: in capitals on the name column with its line as the separator, rows in a zone box")
+    check(count(window, "padding(.leading, 52)") == 0 && count(window, "Divider().padding(.leading, ZoneLook.nameColumn)") == 4,
+          "zone look: every row separator starts at the name column")
+    let compact = part(window, after: "private struct ZoneMemberCompactRow")
+    check(count(compact, "opacity(0.08)") == 0 && count(compact, ".padding(.vertical, ZoneLook.compactPaddingY)") == 1
+            && count(compact, "Capsule().fill(accent.opacity(ZoneLook.chipFill))") == 1
+            && count(compact, ".accessibilityLabel(t.goToZoneLabel(zone.name))") == 1,
+          "In zones row: no box of its own, and its Go to Zone chip keeps its VoiceOver label")
+    let card = part(window, after: "private struct ZoneCard")
+    check(count(card, "ZoneMemberGroup {") == 1 && count(card, "grouped: true") == 1,
+          "zone card: its member rows sit in one zone box instead of a box each")
+
+    // The chip's teal text sits on the chip, on the member box, on the card.
+    typealias RGBA = (r: Double, g: Double, b: Double, a: Double)
+    func over(_ top: RGBA, _ bottom: RGBA) -> RGBA {
+        (top.r * top.a + bottom.r * (1 - top.a), top.g * top.a + bottom.g * (1 - top.a),
+         top.b * top.a + bottom.b * (1 - top.a), 1)
+    }
+    func luminance(_ c: RGBA) -> Double {
+        func channel(_ v: Double) -> Double { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+    func ratio(_ a: RGBA, _ b: RGBA) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    func rgb(_ c: BrandRGB, _ a: Double = 1) -> RGBA { (c.red, c.green, c.blue, a) }
+    var worstChip = Double.infinity, worstSecondary = Double.infinity
+    for (dark, cards) in [(false, [BrandTokens.Light.surface]), (true, [BrandTokens.Dark.background, BrandTokens.Dark.surface])] {
+        let teal = dark ? BrandTokens.Dark.teal : BrandTokens.Light.teal
+        let ink: RGBA = dark ? (1, 1, 1, 1) : (0, 0, 0, 1)
+        for card in cards {
+            let box = over(rgb(teal, ZoneLook.groupFill), rgb(card))
+            let chip = over(rgb(teal, ZoneLook.chipFill), box)
+            worstChip = min(worstChip, ratio(rgb(dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText), chip))
+            let secondary = over((ink.r, ink.g, ink.b, BrandTokens.Opacity.secondaryText * 0.85), box)
+            worstSecondary = min(worstSecondary, ratio(secondary, box))
+        }
+    }
+    check(worstChip >= 4.5 && worstSecondary >= 4.5,
+          "zone look: the chip's text and a member's secondary text keep 4.5:1 in the zone box, both themes",
+          String(format: "chip %.2f, secondary %.2f", worstChip, worstSecondary))
+}
+
+// MARK: About panel shows the version without the build number (AboutPanel.options)
+do {
+    let options = AboutPanel.options(credits: NSAttributedString(string: "credits"), copyright: "copyright",
+                                     info: ["CFBundleShortVersionString": "0.7.1", "CFBundleVersion": "11"])
+    check(options[.applicationVersion] as? String == "0.7.1", "about: the version line is the short version",
+          String(describing: options[.applicationVersion]))
+    check(options[.version] as? String == "", "about: no build number in parentheses",
+          String(describing: options[.version]))
+    check(options[.credits] is NSAttributedString, "about: the license credits stay")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

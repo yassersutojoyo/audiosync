@@ -49,9 +49,6 @@ enum StatusItemClick: Equatable {
             && pointer.y > itemFrame.minY && pointer.y <= itemFrame.maxY
     }
 
-    /// `closingPress` is when the press on the icon that last closed the
-    /// panel came, if one did; `latestPress` is when the latest press came,
-    /// on the same clock (system uptime).
     /// Whether a press came while the panel still fades out (`closeEndsAt`,
     /// system uptime): it is ignored, as Outlook ignores one, rather than
     /// reopening the panel once the close is over.
@@ -59,6 +56,9 @@ enum StatusItemClick: Equatable {
         closeEndsAt.map { press < $0 } ?? false
     }
 
+    /// `closingPress` is when the press on the icon that last closed the
+    /// panel came, if one did; `latestPress` is when the latest press came,
+    /// on the same clock (system uptime).
     static func action(panelVisible: Bool, closingPress: TimeInterval?, latestPress: TimeInterval) -> StatusItemClick {
         if panelVisible { return .close }
         if let closingPress, abs(latestPress - closingPress) < samePress { return .stayClosed }
@@ -94,6 +94,21 @@ enum PanelSizing: Equatable {
     enum Event { case show, didShow, willClose, didClose }
 
     var followsContent: Bool { self == .shown }
+
+    /// One `show()`; true when the open finishes now. AppKit sends no didShow
+    /// to a popover still on screen, as one reopened while its close fade
+    /// runs, so the show stands in for it.
+    mutating func show(onScreen: Bool) -> Bool {
+        self = after(.show)
+        return onScreen
+    }
+
+    /// Ends the open once; false when it already ended or the panel moved on.
+    mutating func finishOpen() -> Bool {
+        guard self == .opening else { return false }
+        self = after(.didShow)
+        return true
+    }
 
     func after(_ event: Event) -> PanelSizing {
         switch (self, event) {
@@ -212,6 +227,134 @@ struct PanelResize: Equatable {
     static func windowFrame(_ frame: CGRect, content: CGSize, to size: CGSize) -> CGRect {
         let dw = size.width - content.width, dh = size.height - content.height
         return CGRect(x: frame.minX - dw / 2, y: frame.minY - dh, width: frame.width + dw, height: frame.height + dh)
+    }
+}
+
+/// The open panel's window frame for each content size, worked out from the
+/// frame the popover itself gave it once the open was over. A resize that
+/// starts while another runs aims from there too, never from the half-grown
+/// window, so the top edge under the icon never drifts.
+struct PanelRest: Equatable {
+    private(set) var frame: CGRect
+    private(set) var content: CGSize
+
+    init(frame: CGRect, content: CGSize) {
+        self.frame = frame
+        self.content = content
+    }
+
+    /// Where the next resize aims from: the window as it is when no step
+    /// runs, as AppKit may have moved the open panel since; else the rest.
+    static func next(_ rest: PanelRest?, stepRunning: Bool, window: CGRect, content: CGSize) -> PanelRest {
+        guard stepRunning, let rest else { return PanelRest(frame: window, content: content) }
+        return rest
+    }
+
+    /// The frame for content of `size`, which becomes the new rest.
+    mutating func move(to size: CGSize) -> CGRect {
+        frame = PanelResize.windowFrame(frame, content: content, to: size)
+        content = size
+        return frame
+    }
+}
+
+/// The shadow AudioSync draws around the menu bar panel while it grows in or
+/// shrinks away, so it scales with the panel: the system's own shadow keeps
+/// the window's full size. It stands in for the system's only during the
+/// motion, so its values aim at the system's; they are estimates until
+/// compared with it on the Mac.
+struct PanelShadow: Equatable {
+    var radius: CGFloat
+    var opacity: Double
+    /// Up is positive, as in AppKit.
+    var offsetY: CGFloat
+
+    static func style(dark: Bool) -> PanelShadow {
+        PanelShadow(radius: 14, opacity: dark ? 0.5 : 0.25, offsetY: -5)
+    }
+
+    /// Room around the window for the shadow to spread into.
+    var margin: CGFloat { (radius * 2 + abs(offsetY)).rounded(.up) }
+
+    static let cornerRadius: CGFloat = 10
+    /// The arrow's base for its height.
+    static let arrowWidthRatio: CGFloat = 2.2
+
+    /// The panel's outline: its rounded body, and the arrow over it up to `tip`.
+    static func outline(body: CGRect, tip: CGPoint) -> CGPath {
+        let path = CGMutablePath()
+        path.addRoundedRect(in: body, cornerWidth: cornerRadius, cornerHeight: cornerRadius)
+        let height = tip.y - body.maxY
+        guard height > 0 else { return path }
+        let half = height * arrowWidthRatio / 2
+        path.move(to: CGPoint(x: tip.x - half, y: body.maxY))
+        path.addLine(to: tip)
+        path.addLine(to: CGPoint(x: tip.x + half, y: body.maxY))
+        path.closeSubpath()
+        return path
+    }
+
+    /// Where the shadow may show, filled even-odd: inside `bounds` but
+    /// outside the outline, since under the translucent panel it would darken it.
+    static func outside(_ outline: CGPath, in bounds: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        path.addPath(outline)
+        return path
+    }
+}
+
+/// How a zone folds or unfolds in the menu bar panel: the rows fade, the
+/// arrow turns and the panel resizes as one motion that starts with the
+/// click, on one ease-in-out curve. With Reduce Motion it all changes at once.
+struct PanelFold: Equatable {
+    static let duration: TimeInterval = 0.2
+
+    /// How long the panel's resize and the rows' movement take; 0 is at once.
+    var duration: TimeInterval
+
+    init(reduceMotion: Bool) { duration = reduceMotion ? 0 : Self.duration }
+
+    var moves: Bool { duration > 0 }
+
+    /// What a zone shows of itself: while a fold moves, only its own moving
+    /// area, so the rows below never slide over its fading rows; at rest
+    /// room to spare, so focus rings aren't cut.
+    static func clip(_ rect: CGRect, moving: Bool) -> CGRect {
+        moving ? rect : rect.insetBy(dx: -40, dy: -40)
+    }
+}
+
+/// Which parts of the popover's own background the panel's stand-in hides
+/// while the panel scales. A background view that holds the panel's content
+/// (the popover's frame) stays, or the content and arrow would go with it;
+/// of such a view only its material layers are hidden.
+enum PanelBackdrop {
+    static func hidden<Node>(in node: Node, children: (Node) -> [Node], isContent: (Node) -> Bool,
+                             isStandIn: (Node) -> Bool, isBackground: (Node) -> Bool) -> [Node] {
+        walk(node, children: children, isContent: isContent, isStandIn: isStandIn, isBackground: isBackground).hidden
+    }
+
+    /// The sublayers of a view's layer that no subview owns.
+    static func material<Layer: AnyObject>(in sublayers: [Layer], keeping owned: [Layer]) -> [Layer] {
+        sublayers.filter { layer in !owned.contains { $0 === layer } }
+    }
+
+    private static func walk<Node>(_ node: Node, children: (Node) -> [Node], isContent: (Node) -> Bool,
+                                   isStandIn: (Node) -> Bool,
+                                   isBackground: (Node) -> Bool) -> (hidden: [Node], holdsContent: Bool) {
+        if isContent(node) { return ([], true) }
+        if isStandIn(node) { return ([], false) }
+        var hidden: [Node] = []
+        var holdsContent = false
+        for child in children(node) {
+            let below = walk(child, children: children, isContent: isContent, isStandIn: isStandIn,
+                             isBackground: isBackground)
+            hidden += below.hidden
+            holdsContent = holdsContent || below.holdsContent
+        }
+        if isBackground(node) && !holdsContent { hidden.insert(node, at: 0) }
+        return (hidden, holdsContent)
     }
 }
 

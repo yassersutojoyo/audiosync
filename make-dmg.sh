@@ -54,16 +54,28 @@ LAYOUT_NOTE=""
 
 die() { echo "❌ $*" >&2; exit 1; }
 
-# Detach a mounted image. Spotlight or Finder can hold a fresh mount for a
-# moment, so a failed detach is tried once more with -force.
+# Detach a mounted image. Finder or Spotlight can hold a fresh mount for a few
+# seconds, so a busy volume gets plain retries first: -force pulls it from under
+# them, and macOS then shows "Disk Not Ejected Properly".
 detach() {
-  hdiutil detach -quiet "$1" 2>/dev/null || { sleep 2; hdiutil detach -force -quiet "$1"; }
+  local try=1
+  until hdiutil detach -quiet "$1" 2>/dev/null; do
+    if [ "$try" -ge 5 ]; then
+      echo "⚠️  $1 is still busy after $try tries; detaching it with -force" >&2
+      hdiutil detach -force -quiet "$1"
+      return
+    fi
+    try=$((try + 1))
+    sleep 2
+  done
 }
 
 # Undo whatever is still in place when the script ends, after a failure too:
 # the layout and check mounts, and the work folder with the staging folder and
 # the read-write image.
 cleanup() {
+  # A second signal during the detach retries would end this trap halfway.
+  trap '' INT TERM HUP
   if [ -n "$LAYOUT_MOUNT" ]; then
     detach "$LAYOUT_MOUNT" || true
   fi
@@ -78,6 +90,10 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+# Ctrl-C or a kill still detaches what is mounted, through the EXIT trap.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # A relative link target in README.md, as a regular expression (ERE): an
 # optional "./" or "/" (\1), the path (\2) and an optional #anchor (\3).
@@ -204,7 +220,8 @@ APPLESCRIPT
 }
 
 # Write the image with the Finder window layout: a read-write image, mounted
-# where Finder sees it and laid out, then compressed into IMAGE. On failure
+# where Finder sees it and laid out, then compressed into IMAGE. That mount
+# can't take -nobrowse: Finder only scripts volumes it shows. On failure
 # LAYOUT_NOTE says why; a mount left behind stays in LAYOUT_MOUNT.
 lay_out_image() {
   local image="$1" bundle="$2" rw="$WORK/layout.dmg" size attached
@@ -225,7 +242,7 @@ lay_out_image() {
   LAYOUT_MOUNT="$(printf '%s\n' "$attached" | awk -F '\t' '$NF ~ /^\/Volumes\// { sub(/ +$/, "", $NF); print $NF }')"
   if [ -z "$LAYOUT_MOUNT" ]; then
     # No volume path to detach by, so detach the whole disk from the first line.
-    hdiutil detach -quiet "$(printf '%s\n' "$attached" | awk 'NR == 1 { print $1 }')" || true
+    detach "$(printf '%s\n' "$attached" | awk 'NR == 1 { print $1 }')" || true
     LAYOUT_NOTE="the read-write image mounted at an unknown place"
     return 1
   fi

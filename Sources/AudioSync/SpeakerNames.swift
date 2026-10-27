@@ -78,18 +78,31 @@ struct SpeakerRename: Equatable {
         let key, system, typed: String
     }
 
+    /// The row that shows the name field. A speaker in a zone has two in the
+    /// main window: its row under the zone and its In zones row.
+    enum Place: Equatable {
+        case row, inZones
+    }
+
     private(set) var target: Target?
+    private(set) var place = Place.row
     var text = ""
 
-    /// Starts renaming `next`, showing `name`. A rename open on another
-    /// speaker ends first and is handed back; the same speaker again keeps
-    /// its typing.
-    mutating func start(_ next: Target, name: String) -> Apply? {
+    /// Starts renaming `next` in its row at `place`, showing `name`. A rename
+    /// open on another speaker ends first and is handed back; the same
+    /// speaker again keeps its typing, in the row it was started from last.
+    mutating func start(_ next: Target, name: String, in place: Place = .row) -> Apply? {
+        self.place = place
         guard target?.id != next.id else { return nil }
         let open = finish()
         target = next
         text = name
         return open
+    }
+
+    /// Whether the speaker `id`'s row at `place` shows the name field.
+    func isOpen(_ id: String, in place: Place) -> Bool {
+        target?.id == id && self.place == place
     }
 
     /// Return or the focus leaving: the speaker `id`'s rename ends and is

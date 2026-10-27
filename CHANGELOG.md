@@ -27,9 +27,32 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - With AirPlay 2 on, a speaker that offers AirPlay 1 and AirPlay 2 and turns AirPlay 1 down now gets the AirPlay 2 PIN prompt. On the Mac and on Windows.
 - With AirPlay 2 on, a pairing step that never gets an answer no longer leaves the speaker on Connecting. It fails and tries again like any other failed start. On the Mac and on Windows.
 - On Windows, an AirPlay speaker that was on at launch and asks for a PIN or password goes off with a notice, instead of reading On while nothing plays.
-- On Windows, a stereo pair or home theater group in a zone that needs AirPlay 2 says Needs AirPlay 2 (Experimental) and is dimmed, as on the Mac.
 - On the Mac, while macOS asks for microphone access for a new input, picking the source that's already playing cancels the switch.
 - On Windows, pasting something that isn't a whole number, such as "1,5", into a delay box no longer leaves just its digits behind ("15"), which Enter then applied. The paste is ignored and the box keeps what it showed, as on the Mac.
+
+## [0.7.1] - 2026-10-27
+
+### Changed
+
+- In the Mac's menu bar panel and the Windows tray flyout, a zone works like its header in the main window: the round icon switches the zone on or off, and the arrow, the name or the space around them shows or hides the zone's speakers. Before, a click on the name switched the whole zone in the panel and anywhere on the row did in the flyout, and the speakers were always listed. On Windows, showing or hiding a zone's speakers in the main window does the same in the flyout, and the other way round; on the Mac, the main window and the menu bar panel each show or hide them on their own.
+- On the Mac, while none of a zone's speakers is found, its greyed round icon shows or hides the zone's speakers, in the main window and the menu bar panel, as on Windows. Before, it did nothing.
+- A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Its switch there turns only that speaker on or off, and the zone's other speakers stay as they are; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
+- Go to Zone puts the keyboard focus on the zone's round icon, or on its arrow while none of the zone's speakers is found, so VoiceOver always reads where the focus lands. On the Mac.
+- Only This Speaker, in a speaker's menu under its zone, plays this speaker and turns off the zone's other speakers that are on; speakers you hid stay as they are. When this one is a Google Cast speaker that's offline or that another app took over, nothing switches. Nobody leaves the zone. On the Mac and on Windows.
+- On the Mac, double-click a zone's name in the main window to rename it, as you already could with a speaker's name. A single click on the name still shows or hides the zone's speakers.
+- On the Mac, double-click the name of a speaker in a zone to rename it in its short row under "In zones", as you already could in its row under the zone.
+- On the Mac, a zone's speakers sit in one tinted box in the main window, under the zone and under "IN ZONES", with thin lines between them instead of a box around each speaker that plays. The short rows are a little taller, and the link to the zone after a speaker's name is now a small button with the zone's icon and name. The "IN ZONES" label and the lines between rows start where the speaker names do.
+- On the Mac, Switch to All System Audio When the Source App Quits is now on unless you turned it off. When the app you capture quits, AudioSync keeps playing all system audio instead of stopping.
+- About AudioSync shows just the version number, on the Mac and on Windows. The Mac no longer adds the build number in parentheses, and Windows no longer lists the audio core's version under it.
+
+### Fixed
+
+- On Windows, while none of a zone's speakers is found, Tab reaches the zone's arrow, in the main window and the tray flyout, and Space or Enter shows or hides its speakers; Go to Zone puts the focus there, and Narrator reads on it that none of them was found, as on the Mac. Before, the keyboard couldn't fold that zone and Go to Zone landed on its … button. A one-speaker zone now reads "1 of 1 speaker on".
+- On Windows, a stereo pair or home theater in a zone that can't play while AirPlay 2 is off says under the zone that it needs AirPlay 2, as on the Mac, instead of saying it wasn't found. Every zone row that needs AirPlay 2 is dimmed, as on the Mac.
+- On Windows, a Google Cast speaker that is off in a zone says "Stayed off, since one Cast speaker plays at a time" only while another Cast speaker is on, as on the Mac. Before, it said so whenever any other speaker in the zone was on, such as the PC's own speakers.
+- On the Mac, a zone click or a preset leaves a Google Cast speaker that another app took over off, as on Windows. Before, AudioSync took it back from that app.
+- Opening the Mac's menu bar panel again while it's still fading out no longer leaves it stuck at its old size: it grows and shrinks with its content again.
+- The Mac's menu bar panel no longer shows a second, full-size box behind it while it opens or closes; its background and shadow grow with it. Showing or hiding a zone's speakers in the panel resizes it in one motion, and the rows below no longer slide over the ones fading out.
 
 ## [0.7.0] - 2026-10-27
 
@@ -357,6 +380,8 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.1
 [0.7.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.0
 [0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.5.0
