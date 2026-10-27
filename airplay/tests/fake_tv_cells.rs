@@ -5,7 +5,8 @@ mod cells;
 
 use std::time::Duration;
 
-use cells::{Cell, Pause, Status, db_for_row, row_for_db};
+use audiosync_airplay::error::ErrorKind;
+use cells::{Cell, PasswordStep, Pause, Status, db_for_row, row_for_db};
 
 #[test]
 fn rows_map_to_the_default_line_and_back() {
@@ -122,6 +123,62 @@ fn d1_passes_only_with_a_pin_at_every_switch_on() {
         Status::Fail,
         "one switch-on proves nothing"
     );
+}
+
+#[test]
+fn pw_cells_pass_on_the_password_path_and_fail_off_it() {
+    let none = PasswordStep {
+        error: Some(ErrorKind::PasswordRequired),
+        ..PasswordStep::default()
+    };
+    let wrong = PasswordStep {
+        error: Some(ErrorKind::WrongPassword),
+        pair_setups: 2,
+        started: 1,
+        ..PasswordStep::default()
+    };
+    let right = PasswordStep {
+        playing: true,
+        paired: true,
+        pair_setups: 3,
+        started: 1,
+        done: 1,
+        verifies: 2,
+        ..PasswordStep::default()
+    };
+    let again = PasswordStep {
+        playing: true,
+        verifies: 2,
+        ..PasswordStep::default()
+    };
+    let cells = cells::pw(none, wrong, right, again);
+    for cell in &cells {
+        assert_eq!(cell.status, Status::Pass, "{}", cell.line());
+    }
+    assert_eq!(
+        cells[0].line(),
+        "PW.none   PASS    error PasswordRequired, 0 pair-setup (0 M1, 0 M5), 0 pin-start, 0 pair-verify"
+    );
+
+    let pin = PasswordStep {
+        pin_starts: 1,
+        ..right
+    };
+    let paired_again = PasswordStep {
+        pair_setups: 3,
+        ..again
+    };
+    let no_prompt = PasswordStep {
+        error: None,
+        playing: true,
+        ..none
+    };
+    let cells = cells::pw(no_prompt, right, pin, paired_again);
+    for cell in &cells {
+        assert_eq!(cell.status, Status::Fail, "{}", cell.line());
+    }
+    assert!(cells[2].value.ends_with("a PIN pairing was started"));
+    assert!(cells[3].value.ends_with("paired again"));
 }
 
 #[test]

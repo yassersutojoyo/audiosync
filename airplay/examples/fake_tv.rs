@@ -9,13 +9,17 @@
 //! ```text
 //! cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--name <text>]
 //!     [--deviceid <XX:XX:XX:XX:XX:XX>] [--port <n>] [--pin every|once]
-//!     [--code <digits>] [--summary]
+//!     [--code <digits>] [--password <text>] [--summary]
 //! ```
 //!
 //! Two copies run side by side when each has its own `--deviceid`, since a
 //! sender keys a speaker by it; a copy with another id also gets its own
 //! default name and mDNS host, and the port is free (0, printed at start)
 //! unless `--port` names one.
+//!
+//! `--password` sets status flags bit 7 and pairs with the password in
+//! place of a PIN, a pairing kept across connections; it excludes `--pin`
+//! and `--code`.
 //!
 //! Every request line and its answer status goes to stdout; with `--summary`
 //! only one plain line per event a dry-run sheet judges, with its running
@@ -58,6 +62,7 @@ struct Options {
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut name = None;
+    let (mut pin_given, mut password_given) = (false, false);
     let mut options = Options {
         name: String::new(),
         device_id: DEVICE_ID,
@@ -76,6 +81,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--deviceid" => options.device_id = television::parse_device_id(&value()?)?,
             "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
             "--pin" => {
+                pin_given = true;
                 options.pin = match value()?.as_str() {
                     "every" => Pin::EveryTime,
                     "once" => Pin::Once,
@@ -87,10 +93,23 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
                 if code.is_empty() || !code.bytes().all(|b| b.is_ascii_digit()) {
                     return Err("--code takes digits".to_owned());
                 }
+                pin_given = true;
                 options.code = code;
+            }
+            "--password" => {
+                let password = value()?;
+                if password.is_empty() {
+                    return Err("--password takes a non-empty text".to_owned());
+                }
+                password_given = true;
+                options.pin = Pin::Password;
+                options.code = password;
             }
             other => return Err(format!("unknown argument {other}")),
         }
+    }
+    if pin_given && password_given {
+        return Err("--password excludes --pin and --code".to_owned());
     }
     options.name = name.unwrap_or_else(|| television::default_name(options.device_id));
     Ok(options)
@@ -297,6 +316,11 @@ fn main() -> ExitCode {
             stamp(start),
             options.code
         ),
+        Pin::Password => println!(
+            "{} pairing: password {}, kept after pairing",
+            stamp(start),
+            options.code
+        ),
     }
     println!(
         "{} stdin: vol <dB> moves the level, quit stops",
@@ -310,7 +334,7 @@ fn main() -> ExitCode {
     let stop = Arc::new(AtomicBool::new(false));
     let summary = options
         .summary
-        .then(|| Arc::new(Mutex::new(Summary::default())));
+        .then(|| Arc::new(Mutex::new(Summary::new(options.pin == Pin::Password))));
     let logger = {
         let (server, stop, summary) = (server.clone(), stop.clone(), summary.clone());
         thread::spawn(move || log_requests(&server, start, &stop, summary.as_deref()))

@@ -32,9 +32,18 @@ pub struct Summary {
     unanswered: Option<(f64, f64)>,
     /// The level `vol` set, until the app has read it once.
     unread: Option<f64>,
+    /// The television pairs with a password, not a PIN.
+    password: bool,
 }
 
 impl Summary {
+    pub fn new(password: bool) -> Summary {
+        Summary {
+            password,
+            ..Summary::default()
+        }
+    }
+
     pub fn connection(&mut self, at: f64) -> String {
         self.line(at, "connection", " opened")
     }
@@ -66,11 +75,16 @@ impl Summary {
             Method::Post if request.uri == "/pair-setup" => {
                 let items = untlv(&request.body);
                 let transient = item(&items, 19).is_some();
+                let (started, done) = if self.password {
+                    ("password pairing started", "password pairing done")
+                } else {
+                    ("PIN pairing started", "PIN pairing done")
+                };
                 match item(&items, 6).and_then(|state| state.first().copied()) {
                     Some(1) if transient => self.line(at, "pairing without PIN", &refused),
-                    Some(1) => self.line(at, "PIN pairing started", &refused),
-                    // The sender sends M5 only after the PIN proof was accepted.
-                    Some(5) => self.line(at, "PIN pairing done", &refused),
+                    Some(1) => self.line(at, started, &refused),
+                    // The sender sends M5 only after the code's proof was accepted.
+                    Some(5) => self.line(at, done, &refused),
                     _ => return None,
                 }
             }

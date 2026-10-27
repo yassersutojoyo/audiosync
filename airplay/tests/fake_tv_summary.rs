@@ -53,6 +53,22 @@ fn pairing_counts_starts_and_completions() {
 }
 
 #[test]
+fn a_password_television_names_its_pairings_after_the_password() {
+    let mut summary = Summary::new(true);
+    let lines: Vec<Option<String>> = vec![
+        summary.request(1.0, &pair_setup(1, false), 200, None),
+        summary.request(2.0, &pair_setup(5, false), 200, None),
+    ];
+    assert_eq!(
+        lines,
+        vec![
+            Some("[    1.000] password pairing started #1".to_owned()),
+            Some("[    2.000] password pairing done #1".to_owned()),
+        ]
+    );
+}
+
+#[test]
 fn stream_requests_get_one_line_each_with_a_running_count() {
     let mut summary = Summary::default();
     let stream = plist(dict(&[("streams", Value::Array(Vec::new()))]));
