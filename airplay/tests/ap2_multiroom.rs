@@ -155,8 +155,8 @@ fn ap2_one_ptp_timeline() {
         );
     }
 
-    // P206: an Announce that outranks the sender is named once per
-    // message; one that doesn't, never.
+    // P206: a receiver that keeps announcing a grandmaster ahead of the
+    // sender is named once; one that doesn't outrank, never.
     let own = sent_to(&sent, FIRST, MessageType::Announce)[0].clone();
     joined.handle_message(
         &announce_with_priority(&own, 1),
@@ -164,19 +164,27 @@ fn ap2_one_ptp_timeline() {
         join_at,
     );
     assert_eq!(joined.poll_outranked(), None);
-    joined.handle_message(
-        &announce_with_priority(&own, -1),
-        SocketAddr::new(FIRST, 320),
-        join_at,
-    );
+    for (second, sequence_id) in [(0u64, 7u16), (1, 8), (2, 9)] {
+        let mut better = announce_with_priority(&own, -1);
+        better[30..32].copy_from_slice(&sequence_id.to_be_bytes());
+        joined.handle_message(
+            &better,
+            SocketAddr::new(FIRST, 320),
+            join_at + Duration::from_secs(second),
+        );
+    }
     assert_eq!(joined.poll_outranked(), Some(FIRST));
     assert_eq!(joined.poll_outranked(), None);
     let stranger = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 99));
-    joined.handle_message(
-        &announce_with_priority(&own, -1),
-        SocketAddr::new(stranger, 320),
-        join_at,
-    );
+    for (second, sequence_id) in [(3u64, 1u16), (4, 2)] {
+        let mut better = announce_with_priority(&own, -1);
+        better[30..32].copy_from_slice(&sequence_id.to_be_bytes());
+        joined.handle_message(
+            &better,
+            SocketAddr::new(stranger, 320),
+            join_at + Duration::from_secs(second),
+        );
+    }
     assert_eq!(joined.poll_outranked(), None, "only served receivers count");
 }
 
