@@ -5362,6 +5362,15 @@ do {
           "settings: unreadable groups, IDs or appearance fall back to the defaults; an AirPlay own volume above 100 stays (S290)")
     stored.values = [Keys.master: 130]
     check(store.load().master == 100, "settings: a master above 100 is clamped")
+    // covers: S212 (unreadable groups fall back to their defaults, one group or member at a time)
+    stored.values = [Keys.groups: Data(#"""
+        [{"id":"g1","name":"A","members":["lc:a",7]},{"id":"g2","members":["lc:b"]},"junk",{"id":"g3","name":"C","members":["lc:c"]}]
+        """#.utf8)]
+    let oneBadGroup = store.load().groups
+    check(oneBadGroup == [SpeakerGroup(id: "g1", name: "A", members: ["lc:a"]),
+                          SpeakerGroup(id: "g3", name: "C", members: ["lc:c"])],
+          "settings: a stored group value that can't be read loses only that member, or its group, never the others",
+          "\(oneBadGroup)")
 
     stored.values = [Keys.legacyLocalGains: ["a": 3.49, "b": 150.0, "c": Double.nan] as [String: Any],
                      Keys.legacyDelayMs: 1500.0]
