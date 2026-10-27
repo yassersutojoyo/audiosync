@@ -5938,6 +5938,18 @@ mod tests {
     }
 
     #[test]
+    fn a_zone_name_is_cut_to_sixty_characters_like_a_speakers() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_zone("Office").unwrap();
+        adapter.rename_zone("zone:1", &format!(" {}\n", "a".repeat(65)));
+        let name = adapter.snapshot().zones[0].name.clone();
+        assert_eq!(name, "a".repeat(crate::speaker_names::MAX_NAME_CHARS));
+        adapter.rename_zone("zone:1", "Den\nStudy");
+        assert_eq!(adapter.snapshot().zones[0].name, "Den Study");
+    }
+
+    #[test]
     fn a_speaker_moves_between_zones_from_its_menu() {
         let mut adapter = adapter();
         turn_on(&mut adapter, HEADPHONES);
