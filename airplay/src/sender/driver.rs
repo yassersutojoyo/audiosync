@@ -1784,8 +1784,18 @@ impl Driver {
             let Some(speaker) = self.speakers.get_mut(&key) else {
                 continue;
             };
-            if matches!(speaker.phase, Phase::Queued { .. }) && !speaker.told_connecting {
+            if let Phase::Queued { ap2 } = speaker.phase
+                && !speaker.told_connecting
+            {
                 speaker.told_connecting = true;
+                // The planned path goes before Connecting (P214); the turn
+                // reports the path the session actually takes.
+                let path = if ap2 {
+                    ProtocolPath::AirPlay2
+                } else {
+                    ProtocolPath::AirPlay1
+                };
+                self.emit_speaker(&key, SpeakerEvent::Path(path));
                 self.emit_speaker(&key, SpeakerEvent::State(SpeakerState::Connecting));
             }
         }
@@ -1804,7 +1814,7 @@ impl Driver {
             return false;
         }
         // Reported unannounced, never Connecting while it waits (P215, P224).
-        if !self.homekit_paired(key) && self.lapsed(key) {
+        if self.still_unannounced(key) {
             self.unannounce(key);
             return false;
         }
@@ -1901,6 +1911,29 @@ impl Driver {
             (preferred && !fallback)
                 || (device.verdict.airplay2 && self.target_on_airplay2(speaker))
         })
+    }
+
+    /// Whether the speaker's records give it no path, so a start would end
+    /// unannounced at once (P215).
+    fn still_unannounced(&mut self, key: &DeviceKey) -> bool {
+        if self.homekit_paired(key) {
+            return false;
+        }
+        if self.lapsed(key) {
+            return true;
+        }
+        if self.plans_ap2(key) {
+            return false;
+        }
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return false;
+        };
+        if let Some(device) = self.directory.device(key) {
+            speaker.device = device.clone();
+        }
+        let has_credentials = speaker.options.credentials.is_some();
+        super::plan_with(&speaker.device, has_credentials, self.airplay2)
+            .is_err_and(|kind| self.unannounced(key, kind))
     }
 
     /// Discovery saw the speaker and lists none of its records now (P215).

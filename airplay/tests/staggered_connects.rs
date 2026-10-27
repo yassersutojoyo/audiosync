@@ -221,7 +221,10 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
         first_state_at(&mut events, &sender, key, SpeakerState::Connecting, LONG)
             .unwrap_or_else(|| panic!("{key:?} Connecting: {:?}", events.of(key)));
         assert_eq!(
-            events.of(key).first(),
+            events
+                .of(key)
+                .iter()
+                .find(|event| matches!(event, SpeakerEvent::State(_))),
             Some(&SpeakerEvent::State(SpeakerState::Connecting))
         );
     }
