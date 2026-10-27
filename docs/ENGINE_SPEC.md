@@ -1725,6 +1725,7 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | the_thresholds_leave_room_on_both_sides | S233, S234 |
 | the_signal_is_a_quiet_faded_sweep_that_sounds_the_same_at_any_rate | S233 |
 | the_signal_and_the_estimate_cross_the_boundary | S232, S233 |
+| a_recording_is_measured_across_the_boundary | S234 |
 
 ### Calibrate All Speakers: core (`cargo test` in `core/`)
 

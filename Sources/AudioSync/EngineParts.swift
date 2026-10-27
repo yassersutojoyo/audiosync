@@ -66,7 +66,7 @@ struct EngineParts {
         // recordings start on different writers lines up.
         write(block, frames: frames,
               ticks: gate.blockStartTicks(callbackNow: now, callbackFrames: callbackFrames ?? offset + frames,
-                                          offset: offset))
+                                          offset: offset), filled: false)
         gate.leave()
     }
 
@@ -76,13 +76,13 @@ struct EngineParts {
     @discardableResult
     func fill(_ block: UnsafeMutablePointer<Float>, frames: Int, ticks: UInt64) -> Bool {
         guard gate.enter() else { return false }
-        write(block, frames: frames, ticks: ticks)
+        write(block, frames: frames, ticks: ticks, filled: true)
         gate.leave()
         return true
     }
 
     @inline(__always)
-    private func write(_ block: UnsafeMutablePointer<Float>, frames: Int, ticks: UInt64) {
+    private func write(_ block: UnsafeMutablePointer<Float>, frames: Int, ticks: UInt64, filled: Bool) {
         equalizer.process(block, frames: frames)
         if CalibrationTap.isActive {
             CalibrationTap.fadeMusic(block, frames: frames)
@@ -90,7 +90,7 @@ struct EngineParts {
             if target != .local { ring.write(interleaved: block, frames: frames) }
             if target != .airPlay { NativeAirPlayTap.write(block, frames: frames) }
             if target != .cast { CastTap.write(block, frames: frames) }
-            CalibrationTap.addSignal(block, frames: frames, at: ticks)
+            CalibrationTap.addSignal(block, frames: frames, at: ticks, filled: filled)
             switch target {
             case .local: ring.write(interleaved: block, frames: frames)
             case .airPlay: NativeAirPlayTap.write(block, frames: frames)

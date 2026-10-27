@@ -621,6 +621,10 @@ final class CalibrateAllRun {
                                                             firstFrameNs: clock.nanoseconds(ticks: first), rate: mic.rate)
                 else { return end(.failed(.noMicrophone)) }
                 let frames = step.window_frames
+                DebugTrace.log("[AudioSync] calibrate all: row \(step.row) sweep \(step.sweep) in on the "
+                    + "\(CalibrationTap.playedOnFill ? "silence fill" : "tap block") at ticks \(ticks), "
+                    + "lagFrames \(start), mic firstFrameTicks \(first) timestamp valid \(mic.firstFrameStamped), "
+                    + "delays now: \(app.calibrateAllContext(taking: [speakers[0].id, speakers[step.row].id], zone: zone).delays)")
                 stage = .recording(step, mic, start: start, frames: frames,
                                    deadlineNs: now + seconds(Double(frames) / Double(mic.rate) + 2))
             } else if now >= asked + seconds(1.5) {
@@ -631,6 +635,8 @@ final class CalibrateAllRun {
             guard mic.framesRecorded >= start + frames || now >= deadline else { return }
             mic.stop()
             let samples = mic.recording(from: start, count: frames)
+            CalibrationFlow.logArrival("calibrate all: row \(step.row) sweep \(step.sweep)", recording: samples,
+                                       rate: mic.rate)
             DebugTrace.log("[AudioSync] calibrate all: row \(step.row) sweep \(step.sweep) recorded, "
                 + "\(samples.count) of \(frames) frames at \(mic.rate) Hz from frame \(start)")
             stage = .analyzing
