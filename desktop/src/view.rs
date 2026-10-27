@@ -6653,7 +6653,9 @@ mod tests {
 
         app.main.invoke_sync_toggled("local:desk".into());
         assert!(app.ui.borrow().sync_open.is_empty());
-        field.set_double_click(1200);
+        // 700 ms is past Slint's fixed 500 ms; the 3 s setting leaves a slow
+        // runner more than 2 s before the second click lands.
+        field.set_double_click(3000);
         click(window, x, y);
         std::thread::sleep(std::time::Duration::from_millis(700));
         draw_frames();
