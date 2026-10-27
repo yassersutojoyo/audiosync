@@ -106,8 +106,8 @@ extension SpeakerZone {
         name = try container.decode(String.self, forKey: .name)
         members = try container.decodeLossyList(String.self, forKey: .members)
         volume = container.decodeNumberOrNaN(forKey: .volume)
-        memberNames = (try? container.decodeIfPresent([String: LossyDecoded<String>].self, forKey: .memberNames))?
-            .compactMapValues(\.value)
+        let names = try? container.decodeIfPresent([String: LossyDecoded<String>].self, forKey: .memberNames)
+        memberNames = names?.compactMapValues(\.value)
     }
 }
 
