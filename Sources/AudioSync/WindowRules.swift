@@ -258,6 +258,52 @@ struct PanelRest: Equatable {
     }
 }
 
+/// The shadow AudioSync draws around the menu bar panel while it grows in or
+/// shrinks away, so it scales with the panel: the system's own shadow keeps
+/// the window's full size. It stands in for the system's only during the
+/// motion, so its values aim at the system's; they are estimates until
+/// compared with it on the Mac.
+struct PanelShadow: Equatable {
+    var radius: CGFloat
+    var opacity: Double
+    /// Up is positive, as in AppKit.
+    var offsetY: CGFloat
+
+    static func style(dark: Bool) -> PanelShadow {
+        PanelShadow(radius: 14, opacity: dark ? 0.5 : 0.25, offsetY: -5)
+    }
+
+    /// Room around the window for the shadow to spread into.
+    var margin: CGFloat { (radius * 2 + abs(offsetY)).rounded(.up) }
+
+    static let cornerRadius: CGFloat = 10
+    /// The arrow's base for its height.
+    static let arrowWidthRatio: CGFloat = 2.2
+
+    /// The panel's outline: its rounded body, and the arrow over it up to `tip`.
+    static func outline(body: CGRect, tip: CGPoint) -> CGPath {
+        let path = CGMutablePath()
+        path.addRoundedRect(in: body, cornerWidth: cornerRadius, cornerHeight: cornerRadius)
+        let height = tip.y - body.maxY
+        guard height > 0 else { return path }
+        let half = height * arrowWidthRatio / 2
+        path.move(to: CGPoint(x: tip.x - half, y: body.maxY))
+        path.addLine(to: tip)
+        path.addLine(to: CGPoint(x: tip.x + half, y: body.maxY))
+        path.closeSubpath()
+        return path
+    }
+
+    /// Where the shadow may show, filled even-odd: inside `bounds` but
+    /// outside the outline, since under the translucent panel it would darken it.
+    static func outside(_ outline: CGPath, in bounds: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        path.addPath(outline)
+        return path
+    }
+}
+
 /// How a zone folds or unfolds in the menu bar panel: the rows fade, the
 /// arrow turns and the panel resizes as one motion that starts with the
 /// click, on one ease-in-out curve. With Reduce Motion it all changes at once.

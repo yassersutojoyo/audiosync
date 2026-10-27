@@ -4808,6 +4808,30 @@ do {
     let fold = PanelFold(reduceMotion: false), stillFold = PanelFold(reduceMotion: true)
     check(fold.moves && fold.duration == 0.2 && !stillFold.moves && stillFold.duration == 0,
           "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once")
+
+    // The panel's own shadow while it grows in or shrinks away (PanelShadow).
+    let body = CGRect(x: 0, y: 0, width: 306, height: 400), tip = CGPoint(x: 153, y: 412)
+    let outline = PanelShadow.outline(body: body, tip: tip)
+    check(outline.contains(CGPoint(x: 153, y: 200)) && outline.contains(CGPoint(x: 153, y: 410))
+            && !outline.contains(CGPoint(x: 0.5, y: 399.5)) && !outline.contains(CGPoint(x: 100, y: 405)),
+          "menu bar panel shadow: its shape is the rounded body with the arrow up to the icon, not the window's rectangle")
+    let room = body.insetBy(dx: -30, dy: -30)
+    let outside = PanelShadow.outside(outline, in: room)
+    check(!outside.contains(CGPoint(x: 153, y: 200), using: .evenOdd) && !outside.contains(CGPoint(x: 153, y: 410), using: .evenOdd)
+            && outside.contains(CGPoint(x: -10, y: 200), using: .evenOdd)
+            && outside.contains(CGPoint(x: 0.5, y: 399.5), using: .evenOdd),
+          "menu bar panel shadow: it shows only outside the panel, never darkening the translucent panel")
+    let light = PanelShadow.style(dark: false), dark = PanelShadow.style(dark: true)
+    check(dark.opacity > light.opacity && light.opacity > 0 && dark.opacity <= 1 && light.offsetY < 0
+            && light.margin >= light.radius * 2 + abs(light.offsetY) && dark.margin >= dark.radius * 2 + abs(dark.offsetY),
+          "menu bar panel shadow: darker in the dark theme, falling downward, with room to spread in")
+    let barSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    check(barSource.components(separatedBy: ".invalidateShadow()").count - 1 == 1
+            && barSource.components(separatedBy: "hasShadow = on").count - 1 == 1,
+          "menu bar panel source: the system shadow is switched in one place and recomputed once, never per frame")
+    check(barSource.contains("grow(own.panel, about: tip)") && barSource.contains("shrink(own.panel, about: tip)")
+            && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
+          "menu bar panel source: the own shadow scales with the panel, in a window under it")
     let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
