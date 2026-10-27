@@ -15,7 +15,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On Windows, a stereo pair or home theater in a zone that can't play while AirPlay 2 is off says under the zone that it needs AirPlay 2, as on the Mac, instead of saying it wasn't found. Every zone row that needs AirPlay 2 is dimmed, as on the Mac.
-- On Windows, a Google Cast speaker that is off in a zone says "Stayed off, since one Cast speaker plays at a time" only while another Cast speaker plays, as on the Mac. Before, it said so whenever any other speaker in the zone was on, such as the PC's own speakers.
+- On Windows, a Google Cast speaker that is off in a zone says "Stayed off, since one Cast speaker plays at a time" only while another Cast speaker is on, as on the Mac. Before, it said so whenever any other speaker in the zone was on, such as the PC's own speakers.
 - On the Mac, a zone click or a preset leaves a Google Cast speaker that another app took over off, as on Windows. Before, AudioSync took it back from that app.
 - Opening the Mac's menu bar panel again while it's still fading out no longer leaves it stuck at its old size: it grows and shrinks with its content again.
 
