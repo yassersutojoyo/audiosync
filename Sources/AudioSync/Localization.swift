@@ -1506,8 +1506,8 @@ struct UIStrings {
         - Zones: turn on the speakers you want, then choose 'New Zone from Active
           Speakers' in the gear menu. A speaker is in one zone at a time. It
           shows under its zone and keeps a short row under This Mac or
-          Connected Speakers: click its round button there to play it by
-          itself, or the link after its name to go to its zone. Click the
+          Connected Speakers: its round button there turns only that speaker
+          on or off, and the link after its name goes to its zone. Click the
           zone's round icon to switch its speakers at once; a click elsewhere
           on its header shows or hides them. To play one speaker of a zone
           alone, choose Only This Speaker from its ⋯ button under the zone;

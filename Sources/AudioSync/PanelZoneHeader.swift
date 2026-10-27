@@ -36,6 +36,7 @@ struct PanelZoneHeader: View {
             .foregroundStyle(Brand.secondaryText)
             // The name button carries the same action and label.
             .accessibilityHidden(true)
+            .focusable(false)
             .help(foldTitle)
 
             Button { hit(.zoneIcon) } label: {
@@ -46,6 +47,7 @@ struct PanelZoneHeader: View {
             .opacity(nonePresent ? 0.45 : 1)
             // With nothing to switch, the name button speaks for the row.
             .accessibilityHidden(nonePresent)
+            .focusable(!nonePresent)
             .accessibilityLabel(t.zoneLabel(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))

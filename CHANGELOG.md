@@ -10,11 +10,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, while none of a zone's speakers is here, its greyed round icon shows or hides the zone's speakers, in the main window and the menu bar panel, as on Windows. Before, it did nothing.
 - A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Its switch there turns only that speaker on or off, and the zone's other speakers stay as they are; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
 - Go to Zone puts the keyboard focus on the zone's round icon, or on its arrow while none of the zone's speakers is here, so VoiceOver always reads where the focus lands. On the Mac.
-- Only This Speaker, in a speaker's menu under its zone, plays this speaker and turns off the zone's other speakers that are on. Speakers you hid stay as they are, and when this one is a Google Cast speaker that's offline or in use by another app, nothing switches. Nobody leaves the zone. On the Mac and on Windows.
+- Only This Speaker, in a speaker's menu under its zone, plays this speaker and turns off the zone's other speakers that are on; speakers you hid stay as they are. When this one is a Google Cast speaker that's offline or that another app took over, nothing switches. Nobody leaves the zone. On the Mac and on Windows.
 
 ### Fixed
 
 - On Windows, a stereo pair or home theater in a zone that can't play while AirPlay 2 is off says under the zone that it needs AirPlay 2, as on the Mac, instead of saying it wasn't found. Every zone row that needs AirPlay 2 is dimmed, as on the Mac.
+- On the Mac, a zone click or a preset leaves a Google Cast speaker that another app took over off, as on Windows. Before, AudioSync took it back from that app.
 - Opening the Mac's menu bar panel again while it's still fading out no longer leaves it stuck at its old size: it grows and shrinks with its content again.
 
 ## [0.7.0] - 2026-10-27
