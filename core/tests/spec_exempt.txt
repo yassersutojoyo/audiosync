@@ -2,6 +2,7 @@
 # so no test in core/ can cover them. One per line: the clause ID, a space, the
 # reason. tests/spec_coverage.rs fails if a clause listed here gains a
 # `// covers:` test, so keep this list honest and short.
+# A clause retired or superseded as a whole needs no line; one may stay as a record.
 S6 Architecture overview only; each component it names has its own clauses.
 S10 Mac host only: the process tap leaves AudioSync's own process out; its logic suite checks it for app sources, mixes and their taps.
 S11 Mac host only: the Core Audio process objects that make up an app source; its logic suite checks it.
@@ -13,9 +14,6 @@ S67 Frames a real output device renders per second; the --hardware engine suite 
 S72 Retired in part with the bundled engine: what stands, re-applying every active local output's gain on a master change, is the host's; the gain itself is S71's; the Mac logic suite checks the host's part.
 S73 Retired with the bundled engine: an AirPlay speaker's own volume as the engine reported it; the core's engine_volume and adopt_reported_volume went too.
 S74 Retired with the bundled engine: its coalesced volume writes; the core's LatestValues went too.
-S77 Superseded by S175 and S178: offsets and the AirPlay delay replaced the absolute delay per output; its tests now cover S124, S178 and S179.
-S78 Superseded by S176: hold-backs replaced the delay that applied only while an AirPlay speaker was chosen.
-S80 Superseded by S177: re-timing replaced the switch of every local delay to 0; its test now covers S79's flip.
 S82 Retired with the bundled engine: its working folder layout and creating the pipe before it launched; the FIFO feed got the path.
 S83 Retired with the FIFO feed: the pipe's wire format.
 S84 Retired with the FIFO feed: its interface.
@@ -75,7 +73,6 @@ S200 Hosts only: VoiceOver and Narrator labels of the hint and its fix button; t
 S202 Hosts only: re-reads when a device goes away, comes back or its row is switched on again; the Mac logic suite and the Windows tests check it.
 S203 Retired with the FIFO feed: the live edge after a stall of the pipe.
 S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.
-S210 Superseded by S246: groups became zones; GroupSummary and its logic-suite checks went with them.
 S211 Mac host only: the source picker's entries; its logic suite checks it.
 S212 Mac host only: settings kept in the user defaults; its logic suite checks it.
 S213 Mac host only: notes on choices older builds read; its logic suite checks it.
