@@ -7588,6 +7588,7 @@ mod tests {
     fn a_cast_member_off_beside_a_local_speaker_has_no_note() {
         let mut backend = MockBackend::zones_preview();
         backend.add_zone("zone:pc", "PC", &["local:speakers", "cc:attic"]);
+        backend.retain_speakers(|s| s.id != "cc:porch");
         let app = app_over(backend);
         let state = app.snapshot();
         let zone = state.zones.iter().find(|z| z.id == "zone:pc").unwrap();
