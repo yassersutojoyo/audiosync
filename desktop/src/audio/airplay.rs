@@ -263,6 +263,11 @@ pub fn airplay2_on(saved: bool, env: Option<&str>) -> bool {
     saved || airplay2_switch(env)
 }
 
+/// `AUDIOSYNC_AIRPLAY2` as this launch reads it, for [`airplay2_on`].
+pub fn airplay2_switch_env() -> Option<String> {
+    std::env::var(AIRPLAY2_SWITCH_ENV).ok()
+}
+
 /// Whether AirPlay 2 is automatic per receiver for this launch (S312): the
 /// build's flag, or `AUDIOSYNC_AIRPLAY2_AUTO`.
 pub fn airplay2_auto_on() -> bool {

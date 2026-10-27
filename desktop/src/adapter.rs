@@ -565,6 +565,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The AirPlay 2 switch as saved at launch, which the sender keeps until
     /// the next launch.
     airplay2_at_launch: bool,
+    /// `AUDIOSYNC_AIRPLAY2`, which turns the sender's AirPlay 2 path on with
+    /// the switch off.
+    airplay2_switch_env: Option<String>,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,
     /// The microphone calibration running, or letting its cut-off sweep
@@ -682,6 +685,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             view: ViewSettings::default(),
             airplay2_auto: crate::audio::airplay::airplay2_auto_on(),
             airplay2_at_launch: false,
+            airplay2_switch_env: crate::audio::airplay::airplay2_switch_env(),
             when_source_quits: WhenSourceQuits::Stop,
             calibration_run: None,
             calibration: calibration::Status::default(),
@@ -11807,6 +11811,32 @@ mod tests {
         view.airplay2_experimental = true;
         adapter.set_view_settings(view);
         check(&adapter);
+    }
+
+    /// `AUDIOSYNC_AIRPLAY2` turns the sender's AirPlay 2 path on with the
+    /// switch off, so a pair it can't find is not found, not short of AirPlay 2.
+    // covers: S265
+    #[test]
+    fn with_the_airplay2_variable_set_a_stereo_pair_does_not_need_airplay2() {
+        let (mut adapter, _, _) = airplay2_adapter(false);
+        adapter.airplay2_switch_env = Some("1".to_owned());
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                ("ap:pair:5f0c".to_owned(), None),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("pair:5f0c", PresetLeftOff::NotFound)]
+            )]
+        );
     }
 
     // covers: S265, S266
