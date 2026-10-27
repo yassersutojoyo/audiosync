@@ -37,6 +37,7 @@ use crate::latency::ReportedLatency;
 use crate::metadata::Metadata;
 use crate::pairing::{self, LegacyVerifier, Pairing, PairingEvent, PairingState};
 use crate::reconnect::Backoff;
+use crate::rtp::SyncPacket;
 use crate::sdp::Codec;
 use crate::secret::Secret;
 use crate::session::{Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT};
@@ -1440,6 +1441,28 @@ impl Driver {
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Stopped));
     }
 
+    fn traced(&self, key: &DeviceKey) -> bool {
+        self.speakers
+            .get(key)
+            .is_some_and(|speaker| speaker.options.trace_timing)
+    }
+
+    /// What an AirPlay 1 sync packet states: the sender's side of P102, which
+    /// a receiver's output can't show.
+    fn trace_sync(&self, key: &DeviceKey, bytes: &[u8]) {
+        if !self.traced(key) {
+            return;
+        }
+        if let Some(sync) = SyncPacket::parse(bytes) {
+            let at = self.stream.clock().seconds_of(sync.time);
+            let line = format!(
+                "sync rtp_heard={} at_s={at:.9} next_rtp={}",
+                sync.rtp_heard, sync.next_rtp
+            );
+            self.emit_speaker(key, SpeakerEvent::Trace(line));
+        }
+    }
+
     fn transmit(&mut self, transmit: Transmit, now: Instant) {
         let Some(key) = self.stream_ids.get(&transmit.speaker).cloned() else {
             return;
@@ -1450,6 +1473,9 @@ impl Driver {
             .is_some_and(|speaker| matches!(speaker.phase, Phase::Ap2(_)))
         {
             return self.ap2_transmit(&key, transmit, now);
+        }
+        if transmit.kind == stream::PacketKind::Sync {
+            self.trace_sync(&key, &transmit.bytes);
         }
         let Some(active) = self.active(&key) else {
             return;
@@ -1483,10 +1509,21 @@ impl Driver {
                     self.stream.flush_answered(speaker);
                 }
             }
-            StreamEvent::FirstSound { speaker, .. } => {
+            StreamEvent::FirstSound {
+                speaker,
+                packet,
+                rtptime,
+                at,
+            } => {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
                     return;
                 };
+                if self.traced(&key) {
+                    let at = self.stream.clock().seconds(at);
+                    let line =
+                        format!("first_sound packet={packet} rtptime={rtptime} at_s={at:.6}");
+                    self.emit_speaker(&key, SpeakerEvent::Trace(line));
+                }
                 if let Some(latency) = self.stream.speaker_latency(speaker) {
                     self.emit_speaker(&key, SpeakerEvent::Latency(latency));
                 }

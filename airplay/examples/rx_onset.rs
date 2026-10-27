@@ -13,8 +13,8 @@
 //!
 //! Stops when every stream ends or after `--seconds` (60 by default), then
 //! prints one `stream` and one `onset` line per stream and click, one `pair`
-//! line per click both streams heard, and a last line `SYNC PASS` or
-//! `SYNC FAIL`. Exits 0 on PASS, 1 on FAIL, 2 on bad arguments. Development
+//! line per click both streams heard, and a last line `PIPE PASS` or
+//! `PIPE FAIL`. Exits 0 on PASS, 1 on FAIL, 2 on bad arguments. Development
 //! only.
 //!
 //! A receiver writing to a pipe isn't paced exactly in real time and the
@@ -262,7 +262,7 @@ fn main() -> ExitCode {
             },
         );
         println!(
-            "SYNC {} {reference_path} vs {path}: {first}; {} (limit {} frames)",
+            "PIPE {} {reference_path} vs {path}: {first}; {} (limit {} frames)",
             if judged.pass { "PASS" } else { "FAIL" },
             judged.reason,
             audiosync_airplay::audio::PACKET_FRAMES,
