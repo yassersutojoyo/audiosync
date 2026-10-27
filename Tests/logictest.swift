@@ -4813,9 +4813,20 @@ do {
         .components(separatedBy: "\n    }\n").first ?? ""
     check(foldBody.contains("animateResize(") && !foldBody.contains("resizeLater(")
             && foldBody.contains(".easeInOut(duration: motion.duration)") && foldBody.contains("name: .easeInEaseOut"),
-          "menu bar panel: a fold resizes the panel in the click's turn, on the rows' ease-in-out curve")
-    check(bar.contains(".transition(.opacity.animation(.easeInOut(duration: PanelFold.duration)))"),
-          "menu bar panel: a zone's rows fade in and out with the fold, Reduce Motion included")
+          "menu bar panel source: fold() starts the resize itself, not through the gathered step, on the rows' ease-in-out curve")
+    let rowsSource = bar.components(separatedBy: "private var speakerRows: some View {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(rowsSource.contains(".transition(.opacity)") && !bar.contains(".opacity.animation("),
+          "menu bar panel source: a zone's rows fade only inside the fold's animation, so a speaker joining or leaving a zone, or a Reduce Motion fold, shows at once")
+
+    // The open panel moved by AppKit (another display, a status item shifting).
+    let moved = window.offsetBy(dx: -40, dy: -24)
+    let afresh = PanelRest.next(rest, stepRunning: false, window: moved, content: CGSize(width: 280, height: 359))
+    check(afresh == PanelRest(frame: moved, content: CGSize(width: 280, height: 359)),
+          "menu bar panel: with no resize running, a fold aims from where the window is now, so it never snaps back")
+    let midStep = PanelRest.next(rest, stepRunning: true, window: moved, content: CGSize(width: 280, height: 428))
+    check(midStep == rest && PanelRest.next(nil, stepRunning: true, window: moved, content: CGSize(width: 280, height: 359)) == afresh,
+          "menu bar panel: while a resize runs, a fold aims from the rest frame, not the half-grown window")
     let closeAsked = PopoverCloseRequest.answer
     check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
           "menu bar panel: an open panel the popover wants closed shrinks away its own way")
