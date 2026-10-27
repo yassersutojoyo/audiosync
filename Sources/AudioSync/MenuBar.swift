@@ -759,6 +759,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard presented || popover.isShown else { return }
         finishClose(lasting: 0)
         closing += 1
+        popover.animates = false   // a resize may have left it on
         popover.close()
     }
 
