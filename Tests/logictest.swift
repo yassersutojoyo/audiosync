@@ -4722,6 +4722,24 @@ do {
     check(duringClose(30 + shrink / 2, 30 + shrink) && !duringClose(30 + shrink + 0.01, 30 + shrink),
           "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
 
+    let window = CGRect(x: 1000, y: 543, width: 306, height: 386)
+let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))
+check(grown == CGRect(x: 1000, y: 474, width: 306, height: 455),
+      "menu bar panel: a taller panel grows its window downward, its top edge under the icon where it was")
+let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
+check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
+      "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
+let closeAsked = PopoverCloseRequest.answer
+    check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
+          "menu bar panel: an open panel the popover wants closed shrinks away its own way")
+    // A press on the icon mid-grow starts the close, and the popover asks
+    // again about 40 ms later as its window loses key.
+    check(closeAsked(false, false, 30.04, 30 + shrink) == .wait,
+          "menu bar panel: the popover asking again while the panel fades out waits for the fade, so it doesn't vanish at once")
+    check(closeAsked(false, false, 30 + shrink + 0.01, 30 + shrink) == .allow && closeAsked(false, false, 30, nil) == .allow
+            && closeAsked(true, false, 30.04, 30 + shrink) == .allow,
+          "menu bar panel: once the fade is over, or with the popover's own animation, the popover may close")
+
     let grow = PanelMotion.open(reduceMotion: false), shrinkBack = PanelMotion.close(reduceMotion: false)
     check(grow.scale >= 0.9 && grow.scale < 1 && grow.settles >= 0.25 && grow.settles <= 0.3,
           "menu bar panel: it grows out of the icon and settles in about a quarter second")
@@ -4739,14 +4757,6 @@ do {
           "menu bar panel: deferred work waits exactly for the panel's own motion")
     check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
           "menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point")
-
-    let midFade = PanelMotion.easedOut(grow.duration / 2, over: grow.duration)
-    check(PanelMotion.easedOut(0, over: grow.duration) < 1e-6 && PanelMotion.easedOut(grow.duration, over: grow.duration) == 1
-            && midFade > 0.5 && midFade < 1,
-          "menu bar panel: a close during the fade-in fades out from how far the fade had come, not from full")
-    check(PanelMotion.easedOut(0.04, over: 0.18) < PanelMotion.easedOut(0.08, over: 0.18)
-            && PanelMotion.easedOut(0.08, over: 0.18) < PanelMotion.easedOut(0.12, over: 0.18),
-          "menu bar panel: the fade level only rises")
 
     var resize = PanelResize()
     let tall = CGSize(width: 306, height: 455), taller = CGSize(width: 306, height: 478)

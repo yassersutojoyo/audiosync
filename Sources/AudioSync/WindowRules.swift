@@ -66,6 +66,24 @@ enum StatusItemClick: Equatable {
     }
 }
 
+/// What the menu bar panel does when its popover asks to close, as a
+/// transient popover does on a click outside or when its window loses key.
+/// With the panel's own motion the popover never closes itself: an open
+/// panel starts its own close instead, and one that already fades out
+/// (until `closeEndsAt`, system uptime) stays until that fade closes it.
+enum PopoverCloseRequest: Equatable {
+    case allow
+    case closeOurWay
+    case wait
+
+    static func answer(systemAnimation: Bool, presented: Bool, now: TimeInterval,
+                       closeEndsAt: TimeInterval?) -> PopoverCloseRequest {
+        if systemAnimation { return .allow }
+        if presented { return .closeOurWay }
+        return StatusItemClick.pressDuringClose(now, closeEndsAt) ? .wait : .allow
+    }
+}
+
 /// When the menu bar panel's popover follows its content's size. NSPopover
 /// animates a size change on top of its own open or close animation, which
 /// stutters, so a change waits until the popover is fully shown and is
@@ -93,6 +111,9 @@ enum PanelSizing: Equatable {
 /// ends on a timer, often with the panel open, which must not grow then.
 enum CastAddRow: Equatable {
     case none, reserved, shown
+
+    /// How long the row takes to fade into the room kept for it.
+    static let fadeIn: TimeInterval = 0.15
 
     static func state(canAdd: Bool, list: CastListState) -> CastAddRow {
         guard canAdd else { return .none }
@@ -150,21 +171,6 @@ struct PanelMotion: Equatable {
         return max(duration, (-log(Self.tail) - log((1 - ratio * ratio).squareRoot())) / decay)
     }
 
-    /// How far a fade has come `elapsed` seconds into it, on the ease-out
-    /// curve Core Animation uses (control points 0, 0 and 0.58, 1).
-    static func easedOut(_ elapsed: TimeInterval, over duration: TimeInterval) -> Double {
-        guard duration > 0, elapsed < duration else { return 1 }
-        let target = max(0, elapsed / duration)
-        var low = 0.0, high = 1.0
-        for _ in 0..<30 {
-            let t = (low + high) / 2
-            let x = 3 * (1 - t) * t * t * 0.58 + t * t * t
-            if x < target { low = t } else { high = t }
-        }
-        let t = (low + high) / 2
-        return 3 * (1 - t) * t * t + t * t * t
-    }
-
     /// The shift that keeps `anchor` (measured from the layer's anchor point)
     /// in place while the layer scales by `scale`.
     static func pin(_ anchor: CGPoint, scale: Double) -> CGPoint {
@@ -198,6 +204,14 @@ struct PanelResize: Equatable {
         pending = nil
         self.due = nil
         return size
+    }
+
+    /// The popover's window frame for content of `size`, its top edge (under
+    /// the icon) and its middle where they are. The popover itself would set
+    /// it in one frame.
+    static func windowFrame(_ frame: CGRect, content: CGSize, to size: CGSize) -> CGRect {
+        let dw = size.width - content.width, dh = size.height - content.height
+        return CGRect(x: frame.minX - dw / 2, y: frame.minY - dh, width: frame.width + dw, height: frame.height + dh)
     }
 }
 

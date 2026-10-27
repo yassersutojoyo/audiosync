@@ -605,9 +605,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Bumped by every show and close, so a close animation that ends after
     /// the panel was reopened or already closed leaves it alone.
     private var closing = 0
-    /// When the latest open's fade began and how long it runs, for a close that cuts it short.
-    private var fadeIn: (start: TimeInterval, duration: TimeInterval)?
     private var resize = PanelResize()
+    /// When the running resize step ends (system uptime).
+    private var resizeEndsAt: TimeInterval?
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -730,7 +730,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // `popoverDidShow`.
         host.view.needsLayout = true
         host.view.layoutSubtreeIfNeeded()
-        let size = host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
+        let size = host.sizeThatFits(in: PanelTopLayout.measuring)
         host.setSize(size)
         popover.contentSize = size
         let measured = Self.uptime
@@ -789,8 +789,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             layer.add(shrink, forKey: Self.motionKey)
         }
         window.ignoresMouseEvents = true
-        window.alphaValue = fadeIn.map { PanelMotion.easedOut(Self.uptime - $0.start, over: $0.duration) } ?? 1
-        fadeIn = nil
+        // A fade-in still running has already set the window's alpha this far.
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = motion.duration
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -809,9 +808,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private static let motionKey = "panelMotion"
 
     func popoverShouldClose(_ popover: NSPopover) -> Bool {
-        guard presented, !PanelSwitches.systemAnimation else { return true }
-        dismiss()
-        return false
+        switch PopoverCloseRequest.answer(systemAnimation: PanelSwitches.systemAnimation, presented: presented,
+                                          now: Self.uptime, closeEndsAt: closeEndsAt) {
+        case .allow: return true
+        case .closeOurWay: dismiss(); return false
+        case .wait: return false
+        }
     }
 
     func popoverWillClose(_ notification: Notification) { finishClose(lasting: systemClose) }
@@ -847,7 +849,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let target = panelLayer(window)
         target?.0.removeAnimation(forKey: Self.motionKey)
         window.alphaValue = 0
-        fadeIn = (Self.uptime, motion.duration)
         if motion.grows, case let (layer, anchor)? = target {
             let grow = CASpringAnimation(keyPath: "transform")
             grow.mass = PanelMotion.mass
@@ -883,7 +884,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             guard let self, self.host.sizing.followsContent, self.quietQueue.quiet.wait(at: Self.uptime) == 0 else { return }
             DebugTrace.log(String(format: "[AudioSync] panel quiet: SwiftUI pass %.1f ms", (Self.uptime - refreshed) * 1000))
             // The final size even if SwiftUI reported no new preferred size.
-            self.resizeLater(self.host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000)))
+            self.resizeLater(self.host.sizeThatFits(in: PanelTopLayout.measuring))
         }
     }
 
@@ -892,7 +893,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func resizeLater(_ size: NSSize) {
         guard presented, size.width > 0, size.height > 0 else { return }
         let now = Self.uptime
-        let due = resize.changed(to: size, at: now, settled: quietQueue.quiet.busyUntil)
+        // A step still running finishes before the next one starts.
+        let due = resize.changed(to: size, at: now, settled: max(quietQueue.quiet.busyUntil, resizeEndsAt ?? 0))
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due - now)) { [weak self] in self?.applyResize() }
     }
 
@@ -900,16 +902,41 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard presented, let size = resize.take(at: Self.uptime), size != popover.contentSize else { return }
         DebugTrace.log(String(format: "[AudioSync] panel resize: %.0fx%.0f to %.0fx%.0f",
                               popover.contentSize.width, popover.contentSize.height, size.width, size.height))
-        let normal = popover.animates
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = reduceMotion ? 0 : PanelResize.duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            popover.animates = !reduceMotion
+        // The popover resizes its window, not the content in it. The content
+        // keeps its top edge (`autoresizingMask`) and is never shorter than
+        // the window while it grows or shrinks, so the panel's backing fills it.
+        let view = host.view
+        view.autoresizingMask = [.minYMargin]
+        guard let window = view.window, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            setHeight(size.height)
             popover.contentSize = size
+            return
+        }
+        setHeight(max(view.frame.height, size.height))
+        let frame = PanelResize.windowFrame(window.frame, content: popover.contentSize, to: size)
+        resizeEndsAt = Self.uptime + PanelResize.duration
+        let session = closing
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = PanelResize.duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().setFrame(frame, display: true)
         }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated { self?.popover.animates = normal }
+            MainActor.assumeIsolated {
+                guard let self, self.closing == session else { return }
+                // Already this size on screen; the popover only learns it.
+                let normal = self.popover.animates
+                self.popover.animates = false
+                self.popover.contentSize = size
+                self.popover.animates = normal
+                self.setHeight(size.height)
+            }
         })
+    }
+
+    /// Sets the content's height, its top edge staying where it is.
+    private func setHeight(_ height: CGFloat) {
+        let frame = host.view.frame
+        host.view.frame = NSRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height)
     }
 
     func popoverDidClose(_ notification: Notification) {
@@ -1033,35 +1060,62 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 }
 
-/// The panel's hosting controller. While `sizing` holds, the content's new
-/// size waits and goes to `resized` once the popover is fully shown; one that
-/// comes while it closes is dropped, and the next open measures afresh. The
+/// The panel's hosting controller. Once the popover is fully shown, the
+/// content's new size goes to `resized`; while it opens or closes a change
+/// is dropped, as the end of the open and the next open measure afresh. The
 /// popover never hears a size of its own accord, so it can't snap to one.
 final class PanelHost: NSHostingController<MenuBarView> {
     var resized: (NSSize) -> Void = { _ in }
-    var sizing = PanelSizing.closed {
-        didSet {
-            // SwiftUI's own size updates stay off until the open is over, so nothing resizes mid-animation.
-            sizingOptions = sizing.followsContent ? [.preferredContentSize] : []
-            guard sizing.followsContent, let waiting else { return }
-            self.waiting = nil
-            resized(waiting)
-        }
-    }
-    private var waiting: NSSize?
+    var sizing = PanelSizing.closed
+    /// The content's size as last measured, so a layout pass that changes
+    /// nothing reports nothing.
+    private var measured: NSSize?
 
-    override var preferredContentSize: NSSize {
-        get { super.preferredContentSize }
-        set {
-            if sizing.followsContent { resized(newValue) } else { waiting = newValue }
-        }
+    // SwiftUI's own size updates (`sizingOptions`) stay off for good: the
+    // popover reads them straight from the controller and takes them in one
+    // frame. A change shows up here as a layout pass instead.
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard sizing.followsContent else { return }
+        let size = sizeThatFits(in: PanelTopLayout.measuring)
+        guard size != measured else { return }
+        measured = size
+        resized(size)
     }
 
     /// The size measured just before the popover shows.
     func setSize(_ size: NSSize) {
-        waiting = nil
-        super.preferredContentSize = size
+        measured = size
+        preferredContentSize = size
     }
+}
+
+/// The panel's content held at the top of the popover. Content that grew
+/// while the popover is still at its old size runs off the bottom edge
+/// until the animated resize reveals it, instead of being centered with its
+/// header cut off. Measured with an unbounded height, it reports the
+/// content's own height; laid out in the popover, it fills it.
+struct PanelTopLayout: Layout {
+    /// The height to measure the panel with.
+    static let measuring = CGSize(width: 10_000, height: CGFloat.infinity)
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let content = subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) ?? .zero
+        guard let height = proposal.height, height.isFinite else { return content }
+        return CGSize(width: content.width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            let size = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+            subview.place(at: CGPoint(x: bounds.minX, y: bounds.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: size.height))
+        }
+    }
+}
+
+extension View {
+    func pinnedToTop() -> some View { PanelTopLayout { self } }
 }
 
 /// The panel's popover. Escape closes it, as it closes a menu.
@@ -1132,6 +1186,7 @@ struct MenuBarView: View {
                 .help(t.castAddBody)
                 .accessibilityHint(t.castAddBody)
                 .opacity(shown ? 1 : 0)
+                .animation(.easeOut(duration: CastAddRow.fadeIn), value: shown)
                 .disabled(!shown)
                 .accessibilityHidden(!shown)
             }
@@ -1156,6 +1211,7 @@ struct MenuBarView: View {
         }
         .padding(BrandTokens.Spacing.panelPadding)
         .frame(width: 280)
+        .pinnedToTop()
         // Over the popover's material; the popover rounds it and draws the edge.
         .background(Brand.panelBacking.ignoresSafeArea())
         .tint(accent)
