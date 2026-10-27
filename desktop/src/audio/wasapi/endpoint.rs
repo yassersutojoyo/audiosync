@@ -36,6 +36,7 @@ use super::com::{
 };
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
+use crate::audio::clock_probe::{ClockProbe, ClockQueue, ProbeSampler};
 use crate::audio::controller::RendererHandle;
 use crate::audio::outputs::{
     RenderFormat, StreamSetup, period_frames, render_buffer_hns, render_format,
@@ -68,6 +69,8 @@ pub struct EndpointRenderer {
     thread: Worker,
     /// How the render thread set up its stream.
     setup: StreamSetup,
+    /// The clock-queue probe, only with the debug log on.
+    probe: Option<Arc<ClockProbe>>,
 }
 
 impl RendererHandle for EndpointRenderer {
@@ -86,6 +89,10 @@ impl RendererHandle for EndpointRenderer {
 
     fn setup(&self) -> Option<StreamSetup> {
         Some(self.setup)
+    }
+
+    fn clock_queue(&self) -> Option<ClockQueue> {
+        self.probe.as_ref()?.take()
     }
 }
 
@@ -111,18 +118,20 @@ pub(super) fn start(
     let stop = Arc::new(Event::manual_reset()?);
     let abort = Arc::new(AtomicBool::new(false));
     let ended = Arc::new(AtomicBool::new(false));
+    let probe = ClockProbe::from_env();
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let abort = Arc::clone(&abort);
         let ended = Arc::clone(&ended);
         let control = control.clone();
+        let probe = probe.clone();
         spawn_worker("audiosync-output", move |ready| {
             let signals = Signals {
                 stop: &stop,
                 abort: &abort,
                 ended: &ended,
             };
-            run(&id, reader, &control, gain, &signals, ready);
+            run(&id, reader, &control, gain, probe, &signals, ready);
         })?
     };
     Ok(EndpointRenderer {
@@ -132,6 +141,7 @@ pub(super) fn start(
         control,
         thread,
         setup,
+        probe,
     })
 }
 
@@ -151,6 +161,7 @@ fn run(
     reader: Reader,
     control: &RendererControl,
     gain: Arc<SharedGain>,
+    probe: Option<Arc<ClockProbe>>,
     signals: &Signals,
     ready: Ready<StreamSetup>,
 ) {
@@ -170,6 +181,7 @@ fn run(
             Err(error) => return ready.fail(error),
         };
     pipeline.set_period_frames(stream.period_frames);
+    let mut sampler = probe.map(|probe| ProbeSampler::new(probe, stream.format.rate));
     if let Err(error) = prefill_silence(&stream) {
         return ready.fail(error);
     }
@@ -189,7 +201,7 @@ fn run(
         let _ = unsafe { stream.client.Stop() };
         return;
     }
-    let lost = render_loop(&stream, &mut pipeline, signals);
+    let lost = render_loop(&stream, &mut pipeline, sampler.as_mut(), signals);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
     if lost {
@@ -326,8 +338,15 @@ fn prefill_silence(stream: &RenderStream) -> Result<(), BackendError> {
 /// Real-time: waits for the device's event, then fills the free part of the
 /// buffer. When the device hasn't asked for [`WAIT_MS`], it does the same:
 /// the padding call fails once Windows invalidated the stream, which ends the
-/// loop as lost. Never allocates, locks or logs.
-fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, signals: &Signals) -> bool {
+/// loop as lost. Never allocates, locks or logs. With a `sampler`, it
+/// samples the clock queue at the probe times, counted in frames written
+/// past the silent prefill.
+fn render_loop(
+    stream: &RenderStream,
+    pipeline: &mut RenderPipeline,
+    mut sampler: Option<&mut ProbeSampler>,
+    signals: &Signals,
+) -> bool {
     let both = [signals.stop.raw(), stream.event.raw()];
     let device_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
     let channels = pipeline.channels();
@@ -401,6 +420,12 @@ fn render_loop(stream: &RenderStream, pipeline: &mut RenderPipeline, signals: &S
                 return true;
             }
             written_total += u64::from(available);
+            if let Some(sampler) = sampler.as_deref_mut() {
+                let elapsed = written_total - u64::from(stream.buffer_frames);
+                if sampler.is_due(elapsed) {
+                    sampler.record(elapsed, clock_queued(stream, written_total));
+                }
+            }
         }
         if let Some(written) = stopping.as_mut() {
             *written = written.saturating_add(available);
@@ -483,6 +508,7 @@ mod tests {
                 },
                 buffer_frames: 480,
             },
+            probe: None,
         };
         let answers = thread::spawn(move || {
             thread::sleep(HANG);

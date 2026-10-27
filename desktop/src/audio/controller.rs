@@ -81,6 +81,7 @@ use super::capture::{
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
+use super::clock_probe::{ClockQueue, describe_clock_queue};
 use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
@@ -197,6 +198,12 @@ pub trait RendererHandle {
 
     /// How its stream is set up, for the debug log, when known.
     fn setup(&self) -> Option<StreamSetup>;
+
+    /// How much its stream held that the device hadn't played at each
+    /// probe time, for the debug log: once, when every sample is in.
+    fn clock_queue(&self) -> Option<ClockQueue> {
+        None
+    }
 }
 
 /// The platform calls the backend makes.
@@ -1405,6 +1412,23 @@ impl<D: Driver> Controller<D> {
                     waited.as_millis()
                 )
             });
+        }
+    }
+
+    /// Logs each playing output's clock queue once its probe has every
+    /// sample.
+    fn log_clock_queues(&mut self) {
+        if !self.log.enabled() {
+            return;
+        }
+        let Some(session) = &self.session else {
+            return;
+        };
+        for (id, playing) in &session.outputs {
+            if let Some(queue) = playing.handle.clock_queue() {
+                let name = self.names.get(id).map_or(id.as_str(), String::as_str);
+                self.log.log(|| describe_clock_queue(name, &queue));
+            }
         }
     }
 
@@ -2742,6 +2766,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.device_volumes.tick();
         self.log_session_lead();
+        self.log_clock_queues();
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);

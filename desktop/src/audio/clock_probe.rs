@@ -54,9 +54,22 @@ impl ClockProbe {
 
     /// The samples once every one is in, the first time only.
     pub fn take(&self) -> Option<ClockQueue> {
-        let _ = &self.samples;
-        let _ = &self.taken;
-        None
+        let mut queue = [None; PROBE_SECONDS.len()];
+        for (slot, sample) in queue.iter_mut().zip(&self.samples) {
+            match sample.load(Ordering::Acquire) {
+                UNSET => return None,
+                NO_CLOCK => {}
+                ms => *slot = Some(ms),
+            }
+        }
+        (!self.taken.swap(true, Ordering::AcqRel)).then_some(queue)
+    }
+}
+
+#[cfg(any(windows, test))]
+impl Default for ClockProbe {
+    fn default() -> ClockProbe {
+        ClockProbe::new()
     }
 }
 
@@ -83,21 +96,36 @@ impl ProbeSampler {
 
     /// Whether `elapsed` frames since the start reach the next sample time.
     pub fn is_due(&self, elapsed: u64) -> bool {
-        let _ = (elapsed, self.rate, self.next);
-        false
+        PROBE_SECONDS
+            .get(self.next)
+            .is_some_and(|&seconds| elapsed >= u64::from(seconds) * self.rate)
     }
 
     /// Records `queued` frames (`None` without a clock reading) for every
     /// sample time `elapsed` frames since the start reach.
     pub fn record(&mut self, elapsed: u64, queued: Option<u64>) {
-        let _ = (elapsed, queued, &self.probe);
+        let value = queued.map_or(NO_CLOCK, |frames| {
+            let ms = frames.saturating_mul(1000) / self.rate.max(1);
+            u32::try_from(ms).unwrap_or(NO_CLOCK - 1).min(NO_CLOCK - 1)
+        });
+        while self.is_due(elapsed) {
+            self.probe.samples[self.next].store(value, Ordering::Release);
+            self.next += 1;
+        }
     }
 }
 
 /// The debug-log line for the output named `name`.
 pub fn describe_clock_queue(name: &str, samples: &ClockQueue) -> String {
-    let _ = (name, samples);
-    String::new()
+    let parts: Vec<String> = PROBE_SECONDS
+        .iter()
+        .zip(samples)
+        .map(|(seconds, sample)| match sample {
+            Some(ms) => format!("{seconds}s {ms} ms"),
+            None => format!("{seconds}s no clock"),
+        })
+        .collect();
+    format!("output \"{name}\" clock queue: {}", parts.join(", "))
 }
 
 #[cfg(test)]
