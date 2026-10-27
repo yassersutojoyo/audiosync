@@ -8760,6 +8760,27 @@ do {
     _ = plainStart.begin(origin: .user)
     plainStart.supersedeSwitch()
     check(plainStart.answer() == .user, "microphone: a later pick leaves a plain start's answer alone")
+    // covers: S141 (a pick that goes back to the old source answers the switch waiting on the prompt)
+    var repick = MicrophoneRequestGate()
+    _ = repick.begin(origin: .user, switching: toInput)
+    repick.repicked(source: .system, pair: 0)
+    let repickedSwitch = repick.switching
+    check(repickedSwitch == nil && repick.answer() == nil,
+          "microphone: picking the source that plays again drops the switch waiting on the prompt (S141)",
+          "\(String(describing: repickedSwitch))")
+    var repickPair = MicrophoneRequestGate()
+    _ = repickPair.begin(origin: .user, switching: .inputPair(uid: "a", from: 0, to: 1))
+    repickPair.repicked(source: .input(uid: "a"), pair: 0)
+    check(repickPair.switching == nil && repickPair.answer() == nil,
+          "microphone: picking the channel pair that plays again drops the pair switch waiting on the prompt (S141)")
+    var otherPick = MicrophoneRequestGate()
+    _ = otherPick.begin(origin: .user, switching: toInput)
+    otherPick.repicked(source: .input(uid: "b"), pair: 0)
+    var plainRepick = MicrophoneRequestGate()
+    _ = plainRepick.begin(origin: .user)
+    plainRepick.repicked(source: .system, pair: 0)
+    check(otherPick.switching == toInput && plainRepick.answer() == .user,
+          "microphone: a pick of a capture the switch doesn't leave, or with no switch waiting, changes nothing")
 }
 
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)
