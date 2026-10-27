@@ -274,7 +274,7 @@ mod tests {
     use super::*;
     use std::ptr;
 
-    // covers: S77, S124
+    // covers: S124
     #[test]
     fn delay_inputs_are_sanitized() {
         let mut out = -1.0;
