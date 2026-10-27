@@ -1884,7 +1884,16 @@ impl Driver {
         }
         // Reported unannounced, never Connecting while it waits (P215, P224).
         if self.still_unannounced(key) {
+            let held = self.speakers.get_mut(key).is_some_and(|speaker| {
+                let held = speaker.holds_ap2();
+                speaker.ap2_retry = false;
+                held
+            });
             self.unannounce(key);
+            // Its retry's place goes on, as at any end before its session (P169).
+            if held {
+                self.wake_ap2_waiter(now);
+            }
             return false;
         }
         let ap2 = self.plans_ap2(key);
