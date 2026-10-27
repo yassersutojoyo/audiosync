@@ -2,7 +2,35 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [0.7.0] - unreleased
+## [Unreleased]
+
+### Added
+
+- With AirPlay 2 on, several AirPlay 2 speakers play at once, up to 16. A speaker past that limit stays on, and its row says "Waiting: too many AirPlay 2 speakers" until another one stops. On the Mac and on Windows.
+- With AirPlay 2 on, a speaker that needs PTP timing while AudioSync plays to AirPlay 2 speakers on another network stays on, its row says "Waiting: AirPlay 2 speakers on another network", and it starts once those speakers are off. On the Mac and on Windows.
+- An AirPlay speaker that's on but has left the network waits for it to come back instead of retrying, and its row says "Not on the network right now, plays once it's back". A stereo pair keeps a member that left and names it as missing. On the Mac and on Windows.
+- On Windows, AudioSync updates itself in release builds. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, checks at launch. Download and Install fetches the update, checks its signature and installs it, and Restart Now opens the new version. If the new version doesn't start within 15 seconds, or Windows security blocks the file, AudioSync puts the old version back and offers the release page, and that version isn't offered again at launch.
+- With AirPlay 2 on, AudioSync remembers per speaker whether it plays with PTP or NTP timing, so the next launch starts with the timing that worked. It's forgotten when the speaker's software changes, when the speaker turns that timing down, and with Forget Pairing. On the Mac and on Windows.
+- For testing, `AUDIOSYNC_AIRPLAY2_AUTO=1` plays AirPlay 2 speakers over AirPlay 2 without the switch, which then reads Prefer AirPlay 2 and only decides the path of a speaker that offers both AirPlay 1 and AirPlay 2. While 16 AirPlay 2 speakers already play, or AirPlay 2 waits for PTP on another network, such a speaker plays over AirPlay 1 and its row says AirPlay. On the Mac and on Windows.
+
+### Changed
+
+- A Google Cast speaker that ends the stream on its own gets it again each time, and only a second end within 10 minutes of the one before ends the session. Before, the second end in a session always ended it.
+- When several AirPlay speakers start together, they connect one after another, half a second apart, and a pairing's key exchange no longer holds up the sound of a speaker that's already playing. On the Mac and on Windows.
+- The notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, on the Mac and on Windows.
+- On Windows, AirPlay audio keeps its timing better while the PC is busy, since AudioSync asks Windows to treat its AirPlay sending as audio work.
+
+### Fixed
+
+- A local speaker whose sound starts late catches up in one step within its first 3 seconds, instead of playing late or drifting into place. On the Mac and on Windows.
+- With AirPlay 2 on, a paired speaker that also announces it asks for a PIN plays with its stored pairing. Only a speaker that turns the pairing down asks for the PIN again. On the Mac and on Windows.
+- With AirPlay 2 on, a speaker that offers AirPlay 1 and AirPlay 2 and turns AirPlay 1 down now gets the AirPlay 2 PIN prompt. On the Mac and on Windows.
+- With AirPlay 2 on, a pairing step that never gets an answer no longer leaves the speaker on Connecting. It fails and tries again like any other failed start. On the Mac and on Windows.
+- On Windows, an AirPlay speaker that was on at launch and asks for a PIN or password goes off with a notice, instead of reading On while nothing plays.
+- On Windows, a stereo pair or home theater group in a zone that needs AirPlay 2 says Needs AirPlay 2 (Experimental) and is dimmed, as on the Mac.
+- On the Mac, while macOS asks for microphone access for a new input, picking the source that's already playing cancels the switch.
+
+## [0.7.0] - 2026-10-27
 
 ### Added
 
