@@ -4724,6 +4724,20 @@ do {
             && !sizing([.show, .didShow, .willClose, .show, .didClose]).followsContent
             && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
           "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
+
+    func near(_ a: TimeInterval, _ b: TimeInterval) -> Bool { abs(a - b) < 1e-9 }
+    var quiet = PanelQuiet()
+    check(quiet.wait(at: 5) == 0, "menu bar panel: with no animation, deferred work runs at once")
+    quiet.began(.open, at: 10)
+    check(near(quiet.wait(at: 10.2), 0.4) && quiet.wait(at: 10.6) == 0,
+          "menu bar panel: work after an open waits until its bounce has settled")
+    quiet.began(.close, at: 10.1)
+    check(near(quiet.wait(at: 10.3), 0.3), "menu bar panel: a close during the open's bounce never shortens the wait")
+    quiet.began(.close, at: 11)
+    check(near(quiet.wait(at: 11.1), 0.15) && quiet.wait(at: 11.25) == 0,
+          "menu bar panel: work after a close waits until it has faded out")
+    quiet.began(.open, at: 11.2)
+    check(near(quiet.wait(at: 11.3), 0.5), "menu bar panel: a quick reopen pushes waiting work past its own bounce")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
