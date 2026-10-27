@@ -897,6 +897,7 @@ pub mod tests {
         );
     }
 
+    // covers: S293
     #[test]
     fn only_a_release_build_on_windows_checks() {
         assert!(!enabled());
@@ -1034,6 +1035,7 @@ pub mod tests {
         assert!(std::fs::read(&exe).unwrap().ends_with(b"new exe"));
     }
 
+    // covers: S305
     #[test]
     fn turning_the_switch_off_stops_the_launch_check_not_the_manual_one() {
         let (mut updater, fetch) = updater("switch-off");
@@ -1049,6 +1051,7 @@ pub mod tests {
         ));
     }
 
+    // covers: S302, S306
     #[test]
     fn a_failed_install_reports_and_try_again_retries() {
         let (mut updater, _) = updater("try-again");

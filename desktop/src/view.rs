@@ -7414,6 +7414,7 @@ mod tests {
         }
     }
 
+    // covers: S308 (every updater notice's text comes from strings.slint)
     #[test]
     fn the_updater_texts() {
         use ui_model::UpdaterNotice as N;
