@@ -2886,4 +2886,71 @@ mod tests {
             assert!(Settings::from_json(text).is_err(), "{text}");
         }
     }
+
+    // covers: S245 (a zone volume that isn't a number is the default), S212
+    #[test]
+    fn a_zone_with_an_unreadable_volume_member_or_name_keeps_the_rest() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true,
+            "speaker_zones": [
+                {"id": "z1", "name": "Den", "members": ["lc:desk", 5, "ap:far"], "volume": "x",
+                 "member_names": {"lc:desk": "Desk", "ap:far": 9}},
+                {"id": "z2", "name": 4, "members": ["lc:hall"], "volume": null}
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            read.speaker_zones,
+            [
+                SavedZone {
+                    id: "z1".to_owned(),
+                    name: "Den".to_owned(),
+                    members: vec!["lc:desk".to_owned(), "ap:far".to_owned()],
+                    volume: DEFAULT_ZONE_VOLUME,
+                    member_names: BTreeMap::from([("lc:desk".to_owned(), "Desk".to_owned())]),
+                },
+                SavedZone {
+                    id: "z2".to_owned(),
+                    members: vec!["lc:hall".to_owned()],
+                    ..SavedZone::default()
+                },
+            ]
+        );
+    }
+
+    // covers: S251 (an own volume that isn't a number is none, a master that isn't one is 100)
+    #[test]
+    fn a_preset_with_an_unreadable_volume_or_gain_keeps_the_rest() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true, "speaker_presets_migrated": true,
+            "speaker_presets": [
+                {"id": "p1", "name": "Evening",
+                 "members": [{"key": "lc:desk", "volume": "x"}, {"key": 5}, {"key": "ap:far", "volume": 30}],
+                 "zones": [{"id": "z1", "volume": "loud"}, 3],
+                 "master_volume": null, "gains_db": [1, null, 0, 0, 0, 0, 0, 0, 0, "x"]}
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            read.speaker_presets,
+            [SavedPreset {
+                id: "p1".to_owned(),
+                name: "Evening".to_owned(),
+                members: vec![
+                    SavedPresetMember {
+                        key: "lc:desk".to_owned(),
+                        volume: None,
+                    },
+                    SavedPresetMember {
+                        key: "ap:far".to_owned(),
+                        volume: Some(30.0),
+                    },
+                ],
+                zones: vec![SavedPresetZone {
+                    id: "z1".to_owned(),
+                    volume: DEFAULT_ZONE_VOLUME,
+                }],
+                master_volume: 100.0,
+                gains_db: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            }]
+        );
+    }
 }
