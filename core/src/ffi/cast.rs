@@ -252,6 +252,9 @@ pub struct AscCastEvent {
     pub drift_ms: f64,
     /// Diagnostics: audio waiting in the sender's queue (C64).
     pub queued_ms: f64,
+    /// Diagnostics: silent frames sent since the `LOAD` because the input
+    /// ran dry (C52, C78).
+    pub underrun_frames: u64,
     /// Diagnostics: the drift is over 250 ms; the host may offer Resync.
     pub resync_offered: bool,
     pub relaunched: bool,
@@ -303,6 +306,7 @@ struct Pending {
     step: f64,
     drift_ms: f64,
     queued_ms: f64,
+    underrun_frames: u64,
     resync_offered: bool,
     relaunched: bool,
     detail: String,
@@ -324,6 +328,7 @@ impl Pending {
             step: 0.0,
             drift_ms: 0.0,
             queued_ms: 0.0,
+            underrun_frames: 0,
             resync_offered: false,
             relaunched: false,
             detail: String::new(),
@@ -972,6 +977,7 @@ impl AscCast {
             step: pending.step,
             drift_ms: pending.drift_ms,
             queued_ms: pending.queued_ms,
+            underrun_frames: pending.underrun_frames,
             resync_offered: pending.resync_offered,
             relaunched: pending.relaunched,
             detail: self.event_strings[1].as_ptr(),
@@ -986,6 +992,7 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             let mut pending = Pending::new(CAST_EVENT_DIAGNOSTICS);
             pending.drift_ms = millis(diagnostics.drift);
             pending.queued_ms = millis(diagnostics.queued);
+            pending.underrun_frames = diagnostics.underrun_frames;
             pending.resync_offered = diagnostics.resync_offered;
             pending.detail = format!("{diagnostics:?}");
             pending
@@ -2181,6 +2188,7 @@ mod tests {
             step: 0.0,
             drift_ms: 0.0,
             queued_ms: 0.0,
+            underrun_frames: 0,
             resync_offered: false,
             relaunched: false,
             detail: ptr::null(),
@@ -2247,6 +2255,32 @@ mod tests {
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_cast_destroy(&mut handle) };
         assert!(handle.is_null());
+    }
+
+    /// The Mac's Cast debug line reads the underrun silence from here (C78).
+    #[test]
+    fn a_diagnostics_event_carries_the_sessions_underrun_count() {
+        let handle = create();
+        let diagnostics = audiosync_cast::session::Diagnostics {
+            sent: Duration::from_secs(12),
+            queued: Duration::from_millis(250),
+            current_time: None,
+            player_state: None,
+            frames_dropped: 0,
+            rebuffers: 0,
+            drift: Duration::from_millis(40),
+            resync_offered: false,
+            underrun_frames: 4_800,
+        };
+        let pending = session_event(SessionEvent::Diagnostics(diagnostics), |_| {});
+        inside(handle).events.push_back(pending);
+        let mut event = blank_event();
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_cast_next_event(handle, &mut event) });
+        assert_eq!(event.kind, CAST_EVENT_DIAGNOSTICS);
+        assert_eq!(event.underrun_frames, 4_800);
+        assert_eq!((event.drift_ms, event.queued_ms), (40.0, 250.0));
+        destroy(handle);
     }
 
     #[test]

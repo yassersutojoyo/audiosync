@@ -8262,6 +8262,47 @@ do {
           "cast: a format fallback event copies the format")
     raw.kind = 999
     check(CastEvent(raw) == nil, "cast: an unknown event kind is skipped")
+    do {
+        // The core's underrun count runs from the stream's LOAD; the line shows what changed since the last one.
+        var underruns = CastUnderruns()
+        func diagnostics(_ attempt: UInt64, _ total: UInt64) -> String {
+            var event = AscCastEvent()
+            event.kind = ASC_CAST_EVENT_DIAGNOSTICS
+            event.attempt = attempt
+            event.drift_ms = 40
+            event.queued_ms = 250
+            event.underrun_frames = total
+            guard case .note(_, let line)? = CastEvent(event, members: { [] }, underruns: &underruns) else { return "" }
+            return line
+        }
+        func lifecycle(_ kind: Int32, _ attempt: UInt64) {
+            var event = AscCastEvent()
+            event.kind = kind
+            event.attempt = attempt
+            _ = CastEvent(event, members: { [] }, underruns: &underruns)
+        }
+        let first = diagnostics(7, 960)
+        check(first == "drift 40 ms, queued 250 ms, underrun silence 960 frames since the previous line",
+              "cast diagnostics: the first line shows the underrun silence counted so far", first)
+        let quiet = diagnostics(7, 960)
+        let more = diagnostics(7, 2_880)
+        check(quiet.hasSuffix("silence 0 frames since the previous line")
+                && more.hasSuffix("silence 1920 frames since the previous line"),
+              "cast diagnostics: later lines show only the new underrun silence", quiet + " | " + more)
+        check(diagnostics(8, 480).hasSuffix("silence 480 frames since the previous line"),
+              "cast diagnostics: each attempt keeps its own count")
+        lifecycle(ASC_CAST_EVENT_PLAYING, 7)
+        let reloaded = diagnostics(7, 3_000)
+        check(reloaded.hasSuffix("silence 3000 frames since the previous line"),
+              "cast diagnostics: a new LOAD (playing again) counts from 0", reloaded)
+        let restarted = diagnostics(7, 100)
+        check(restarted.hasSuffix("silence 100 frames since the previous line"),
+              "cast diagnostics: a count that went down was restarted, so all of it is new", restarted)
+        lifecycle(ASC_CAST_EVENT_ENDED, 8)
+        let after = diagnostics(8, 480)
+        check(after.hasSuffix("silence 480 frames since the previous line"),
+              "cast diagnostics: an ended attempt's count is dropped", after)
+    }
     let change: CastDeviceChange? = kitchen.withCString { id in
         "Kitchen".withCString { name in
             "Nest Audio".withCString { model in
