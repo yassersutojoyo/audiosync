@@ -2637,4 +2637,169 @@ mod tests {
         file.save(&Settings::default()).expect("saved again");
         assert!(!folder.join("settings.newer.json").exists());
     }
+
+    /// `fields`, beside a master of 40, read; the master shows the rest of
+    /// the file was kept.
+    fn read_beside_a_kept_master(fields: &str) -> Settings {
+        let text = format!(r#"{{"version": 3, "master_volume": 40, {fields}}}"#);
+        let (settings, _) =
+            Settings::from_json(&text).unwrap_or_else(|why| panic!("{fields}: {why}"));
+        assert_eq!(settings.master_volume, 40.0, "{fields}");
+        settings
+    }
+
+    // covers: S212 (a value that isn't a number costs only that value; unreadable groups, IDs and the equalizer fall back to their defaults)
+    #[test]
+    fn an_unreadable_value_in_any_field_costs_only_that_value() {
+        let outputs = read_beside_a_kept_master(
+            r#""outputs": {"desk": {"enabled": "yes", "volume": 30}, "gone": null, "odd": 7},
+               "airplay": {"far": {"enabled": null, "delay_ms": 300}}"#,
+        );
+        assert_eq!(
+            outputs.outputs,
+            BTreeMap::from([(
+                "desk".to_owned(),
+                SavedSpeaker {
+                    volume: 30.0,
+                    ..SavedSpeaker::default()
+                }
+            )])
+        );
+        assert_eq!(outputs.airplay["far"].delay_ms, 300.0);
+        for whole in [r#""outputs": null"#, r#""airplay": 5"#] {
+            read_beside_a_kept_master(whole);
+        }
+
+        for equalizer in [
+            r#"{"enabled": true, "preamp_db": -3, "gains_db": [1, null]}"#,
+            r#"{"enabled": "on", "preamp_db": -3, "gains_db": [1]}"#,
+            r#"{"enabled": true, "preamp_db": "loud", "gains_db": [1]}"#,
+            "null",
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""equalizer": {equalizer}"#));
+            assert_eq!(read.equalizer, SavedEqualizer::default(), "{equalizer}");
+        }
+
+        for groups in [
+            r#"[{"id": "g", "name": "G", "members": ["lc:a", 5]}]"#,
+            r#""none""#,
+            "null",
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""groups": {groups}"#));
+            assert!(read.groups.is_empty(), "{groups}");
+        }
+
+        for window in [
+            r#"{"x": 100.5, "y": 0, "width": 800, "height": 600}"#,
+            r#"{"x": 9999999999, "y": 0, "width": 800, "height": 600}"#,
+            r#"{"x": 0, "y": 0, "height": 600}"#,
+            "7",
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""window": {window}"#));
+            assert_eq!(read.window, None, "{window}");
+        }
+
+        for (remote, kept) in [
+            (
+                r#"{"on": true, "port": 70000}"#,
+                RemoteSettings {
+                    on: true,
+                    ..RemoteSettings::default()
+                },
+            ),
+            (
+                r#"{"on": true, "port": -1}"#,
+                RemoteSettings {
+                    on: true,
+                    ..RemoteSettings::default()
+                },
+            ),
+            (
+                r#"{"on": true, "port": 2048.5}"#,
+                RemoteSettings {
+                    on: true,
+                    ..RemoteSettings::default()
+                },
+            ),
+            (
+                r#"{"on": "yes", "port": 2048}"#,
+                RemoteSettings {
+                    on: false,
+                    port: 2048,
+                },
+            ),
+            ("null", RemoteSettings::default()),
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""remote": {remote}"#));
+            assert_eq!(read.remote, kept, "{remote}");
+        }
+
+        let ids = read_beside_a_kept_master(
+            r#""auto_connect": ["lc:desk", 5, null], "cast_addresses": ["192.0.2.10:8010", 7]"#,
+        );
+        assert_eq!(ids.auto_connect, BTreeSet::from(["lc:desk".to_owned()]));
+        assert_eq!(ids.cast_addresses, vec!["192.0.2.10:8010".to_owned()]);
+        for whole in [r#""auto_connect": "lc:desk""#, r#""cast_addresses": null"#] {
+            read_beside_a_kept_master(whole);
+        }
+
+        for source in [
+            r#"{"kind": "playlist"}"#,
+            r#"{"kind": "app", "executable": 5}"#,
+            "null",
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""source": {source}"#));
+            assert_eq!(read.source, SavedSource::System, "{source}");
+        }
+        let input = read_beside_a_kept_master(r#""input_device": {"id": 5, "name": "Mic"}"#);
+        assert_eq!(input.input_device, None);
+        let mix = read_beside_a_kept_master(
+            r#""source_mix": {"mode": "shuffle", "apps": [{"executable": "a.exe"}]}"#,
+        );
+        assert_eq!(mix.source_mix, None);
+        let mix = read_beside_a_kept_master(
+            r#""source_mix": {"mode": "all_except", "apps": [{"executable": "a.exe"}, 5, {"executable": 6}]}"#,
+        );
+        assert_eq!(
+            mix.source_mix,
+            Some(SavedMix {
+                mode: MixMode::AllExcept,
+                apps: vec![SavedMixApp {
+                    executable: "a.exe".to_owned(),
+                    name: String::new(),
+                }],
+            })
+        );
+
+        let flags = read_beside_a_kept_master(
+            r#""speaker_zones_migrated": "yes", "speaker_presets_migrated": null,
+               "show_virtual_devices": 1, "airplay2_experimental": "on",
+               "check_updates_automatically": "no", "when_source_quits": 5,
+               "last_update_check": -5"#,
+        );
+        assert!(flags.speaker_zones_migrated);
+        assert!(flags.speaker_presets_migrated);
+        assert!(!flags.show_virtual_devices);
+        assert!(!flags.airplay2_experimental);
+        assert!(flags.check_updates_automatically);
+        assert_eq!(
+            flags.when_source_quits,
+            Settings::default().when_source_quits
+        );
+        assert_eq!(flags.last_update_check, None);
+        let late = read_beside_a_kept_master(r#""last_update_check": 1.5"#);
+        assert_eq!(late.last_update_check, None);
+    }
+
+    // covers: S212 (a file that isn't settings at all still gives the defaults)
+    #[test]
+    fn a_file_that_isnt_json_or_has_no_readable_version_is_still_refused() {
+        for text in [
+            "not json",
+            r#"{"version": "x", "master_volume": 40}"#,
+            "null",
+        ] {
+            assert!(Settings::from_json(text).is_err(), "{text}");
+        }
+    }
 }
