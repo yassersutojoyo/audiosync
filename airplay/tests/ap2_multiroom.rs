@@ -30,7 +30,7 @@ fn drain(service: &mut PtpService) -> Vec<PtpTransmit> {
     let mut sent = Vec::new();
     while let Some(transmit) = service.poll_transmit() {
         if transmit.kind == MessageType::Sync {
-            service.sync_sent_to(transmit.sequence_id, transmit.to.ip(), Instant::now());
+            service.sync_sent_to(transmit.sequence_id, transmit.to, Instant::now());
         }
         sent.push(transmit);
     }
@@ -173,7 +173,7 @@ fn ap2_one_ptp_timeline() {
             join_at + Duration::from_secs(second),
         );
     }
-    assert_eq!(joined.poll_outranked(), Some(FIRST));
+    assert_eq!(joined.poll_outranked(), Some(SocketAddr::new(FIRST, 0)));
     assert_eq!(joined.poll_outranked(), None);
     let stranger = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 99));
     for (second, sequence_id) in [(3u64, 1u16), (4, 2)] {
@@ -253,7 +253,7 @@ fn ap2_a_brief_mastership_claim_is_no_other_grandmaster() {
     for (n, ms) in [(4u16, 20_000u64), (5, 21_000), (6, 22_000)] {
         service.handle_message(&receiver_announce(rx, 127, 6, n), from, at(ms));
     }
-    assert_eq!(service.poll_outranked(), Some(FIRST));
+    assert_eq!(service.poll_outranked(), Some(SocketAddr::new(FIRST, 0)));
     assert_eq!(service.poll_outranked(), None);
 }
 
@@ -272,13 +272,13 @@ fn ap2_a_new_session_at_a_warned_address_is_warned_again() {
     let at = |ms: u64| origin + Duration::from_millis(ms);
     service.handle_message(&receiver_announce(rx, 127, 6, 0), from, at(1000));
     service.handle_message(&receiver_announce(rx, 127, 6, 1), from, at(2000));
-    assert_eq!(service.poll_outranked(), Some(FIRST));
+    assert_eq!(service.poll_outranked(), Some(SocketAddr::new(FIRST, 0)));
 
-    service.stop_peer(FIRST);
+    service.stop_peer(SocketAddr::new(FIRST, 7000));
     service.start(SocketAddr::new(FIRST, 7002), at(2500));
     service.handle_message(&receiver_announce(rx, 127, 6, 2), from, at(3000));
     service.handle_message(&receiver_announce(rx, 127, 6, 3), from, at(4000));
-    assert_eq!(service.poll_outranked(), Some(FIRST));
+    assert_eq!(service.poll_outranked(), Some(SocketAddr::new(FIRST, 0)));
 }
 
 fn scope_of(address: SocketAddr) -> u32 {
@@ -321,6 +321,10 @@ fn ap2_one_link_local_address_on_two_interfaces_is_two_peers() {
             "scope {scope}"
         );
     }
+
+    service.stop_peer(on(4));
+    let left = SocketAddr::V6(SocketAddrV6::new(link_local, 0, 0, 9));
+    assert_eq!(service.peers(), &[left]);
 }
 
 fn ptp_config(peers: Vec<IpAddr>) -> Ap2Config {

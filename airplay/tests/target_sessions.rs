@@ -1607,16 +1607,16 @@ fn the_ptp_service_serves_every_member_until_the_last_leaves() {
     for peer in [a, b] {
         assert!(to.iter().any(|(_, ip)| *ip == peer), "{to:?}");
     }
-    service.sync_sent_to(0, b, now);
+    service.sync_sent_to(0, SocketAddr::new(b, 0), now);
     let follow = service.poll_transmit().expect("a Follow_Up");
     assert_eq!(follow.to.ip(), b);
-    service.stop_peer(a);
+    service.stop_peer(SocketAddr::new(a, 0));
     assert_eq!(service.peers(), &[SocketAddr::new(b, 0)]);
     service.handle_timeout(now + Duration::from_secs(2));
     while let Some(transmit) = service.poll_transmit() {
         assert_eq!(transmit.to.ip(), b);
     }
-    service.stop_peer(b);
+    service.stop_peer(SocketAddr::new(b, 0));
     assert!(service.peers().is_empty());
     assert_eq!(service.poll_timeout(), None);
 }
