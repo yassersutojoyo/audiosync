@@ -351,6 +351,17 @@ fn a_manual_address_works_without_txt_until_a_browse_finds_its_id() {
     assert_eq!(list.entries().len(), 1);
 }
 
+// Partly C18: no record vouches for a device added by address, so it is
+// listed offline until a check reaches it.
+#[test]
+fn a_manual_address_is_listed_offline_until_a_check_reaches_it() {
+    let mut list = DeviceList::new();
+    let address = SocketAddr::new(v4(10), 8009);
+    list.add_manual(address);
+    let entry = list.get(DeviceKey::Manual(address)).expect("listed");
+    assert!(!entry.online, "nothing has reached it yet");
+}
+
 // covers: C18
 #[test]
 fn a_manual_address_no_browse_found_can_be_taken_back() {
