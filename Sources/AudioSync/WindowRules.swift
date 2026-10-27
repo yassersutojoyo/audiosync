@@ -103,6 +103,30 @@ struct PanelQuiet: Equatable {
     func wait(at now: TimeInterval) -> TimeInterval { max(0, busyUntil - now) }
 }
 
+/// Work waiting for `PanelQuiet`, at most one per label.
+struct QuietQueue: Equatable {
+    var quiet = PanelQuiet()
+    private(set) var waiting = Set<String>()
+
+    enum Step: Equatable {
+        case wait(TimeInterval)
+        case run
+    }
+
+    /// False when work under `label` already waits: the new request is dropped.
+    mutating func enqueue(_ label: String) -> Bool { waiting.insert(label).inserted }
+
+    /// Waiting work under `label`, checked at `now`: it waits on while an
+    /// open or close animates (one may have begun since it last checked),
+    /// else it runs and leaves the queue.
+    mutating func step(_ label: String, at now: TimeInterval) -> Step {
+        let wait = quiet.wait(at: now)
+        if wait > 0 { return .wait(wait) }
+        waiting.remove(label)
+        return .run
+    }
+}
+
 /// How strongly a scrolling column fades at its top and bottom edges, from 0
 /// (nothing hidden past that edge) to 1 (at least the fade's height hidden).
 struct ScrollEdgeFades: Equatable {

@@ -4738,6 +4738,22 @@ do {
           "menu bar panel: work after a close waits until it has faded out")
     quiet.began(.open, at: 11.2)
     check(near(quiet.wait(at: 11.3), 0.5), "menu bar panel: a quick reopen pushes waiting work past its own bounce")
+
+    var queue = QuietQueue()
+    queue.quiet.began(.open, at: 20)
+    check(queue.enqueue("refresh") && !queue.enqueue("refresh") && queue.enqueue("rebuild"),
+          "menu bar panel: a second request under a label already waiting is dropped")
+    var firstWait: TimeInterval = 0
+    if case .wait(let wait) = queue.step("refresh", at: 20.2) { firstWait = wait }
+    check(near(firstWait, 0.4), "menu bar panel: waiting work waits out the open's bounce", "\(firstWait)")
+    queue.quiet.began(.close, at: 20.5)
+    var secondWait: TimeInterval = 0
+    if case .wait(let wait) = queue.step("refresh", at: 20.6) { secondWait = wait }
+    check(near(secondWait, 0.15), "menu bar panel: a close begun meanwhile makes waiting work wait again", "\(secondWait)")
+    check(queue.step("refresh", at: 20.75) == .run && queue.waiting == ["rebuild"],
+          "menu bar panel: once quiet, the waiting work runs and leaves the queue")
+    check(queue.enqueue("refresh") && !queue.enqueue("rebuild"),
+          "menu bar panel: a label can wait again once its work ran; one still waiting stays deduplicated")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)

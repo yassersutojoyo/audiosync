@@ -590,8 +590,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var closingPress: TimeInterval?
     private var running = false
     private var noticeCount = 0
-    private var quiet = PanelQuiet()
-    private var waitingWork = Set<String>()
+    private var quietQueue = QuietQueue()
     /// The rows were last built before the panel's latest close.
     private var rowsStale = false
     private var noticeWatch: AnyCancellable?
@@ -692,7 +691,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func show() {
         guard !presented, let button = statusItem.button, let item = button.window else { return }
-        quiet.began(.open, at: Self.uptime)
+        quietQueue.quiet.began(.open, at: Self.uptime)
         host.sizing = host.sizing.after(.show)
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
         // The status item's own screen, not the one with keyboard focus.
@@ -746,11 +745,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard host.sizing.followsContent else { return }
         let size = host.preferredContentSize
         if size.width > 0, size.height > 0, size != popover.contentSize { popover.contentSize = size }
-        if rowsStale { prepareNextOpen() }   // reopened before the rebuild after the close ran
         model.actions.refreshExternalState()
         let refreshed = Self.uptime
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.host.sizing.followsContent, self.quiet.wait(at: Self.uptime) == 0 else { return }
+            guard let self, self.host.sizing.followsContent, self.quietQueue.quiet.wait(at: Self.uptime) == 0 else { return }
             DebugTrace.log(String(format: "[AudioSync] panel quiet: SwiftUI pass %.1f ms", (Self.uptime - refreshed) * 1000))
             // The final size even if the popover missed the content's new preferred size.
             let fit = self.host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
@@ -769,11 +767,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     private static var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
-    /// Runs `work` once no open or close of the panel animates (`PanelQuiet`),
-    /// checking again after each wait, since another may have begun. Work
-    /// under a label that is already waiting is dropped.
+    /// Runs `work` once no open or close of the panel animates (`QuietQueue`).
     func whenQuiet(_ label: String, after delay: TimeInterval = 0, _ work: @escaping () -> Void) {
-        guard waitingWork.insert(label).inserted else { return }
+        guard quietQueue.enqueue(label) else { return }
         runWhenQuiet(label, queued: Self.uptime, delay: delay, work)
     }
 
@@ -781,9 +777,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                               _ work: @escaping () -> Void) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
-            let wait = self.quiet.wait(at: Self.uptime)
-            if wait > 0 { return self.runWhenQuiet(label, queued: queued, delay: wait, work) }
-            self.waitingWork.remove(label)
+            if case .wait(let wait) = self.quietQueue.step(label, at: Self.uptime) {
+                return self.runWhenQuiet(label, queued: queued, delay: wait, work)
+            }
             let start = Self.uptime
             work()
             DebugTrace.log(String(format: "[AudioSync] panel quiet: %@ ran %.0f ms after it was queued, took %.1f ms",
@@ -809,8 +805,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     /// Rebuilds the rows (a row the pointer was over when the panel closed
-    /// never got a hover exit) and lays them out: after a close, so the next
-    /// click shows the panel without that work, or once a quick reopen settled.
+    /// never got a hover exit) and lays them out after a close, so the next
+    /// click shows the panel without that work. A panel reopened first keeps
+    /// its rows: rebuilt in view, they would lose their scroll and open menus.
     private func prepareNextOpen() {
         rowsStale = false
         model.panelSession += 1
@@ -822,7 +819,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func finishClose() {
         guard presented else { return }
         presented = false
-        quiet.began(.close, at: Self.uptime)
+        quietQueue.quiet.began(.close, at: Self.uptime)
         DebugTrace.log("[AudioSync] panel close began")
         rowsStale = true
         host.sizing = host.sizing.after(.willClose)
