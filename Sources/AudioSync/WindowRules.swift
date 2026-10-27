@@ -52,6 +52,13 @@ enum StatusItemClick: Equatable {
     /// `closingPress` is when the press on the icon that last closed the
     /// panel came, if one did; `latestPress` is when the latest press came,
     /// on the same clock (system uptime).
+    /// Whether a press came while the panel still fades out (`closeEndsAt`,
+    /// system uptime): it is ignored, as Outlook ignores one, rather than
+    /// reopening the panel once the close is over.
+    static func pressDuringClose(_ press: TimeInterval, _ closeEndsAt: TimeInterval?) -> Bool {
+        closeEndsAt.map { press < $0 } ?? false
+    }
+
     static func action(panelVisible: Bool, closingPress: TimeInterval?, latestPress: TimeInterval) -> StatusItemClick {
         if panelVisible { return .close }
         if let closingPress, abs(latestPress - closingPress) < samePress { return .stayClosed }

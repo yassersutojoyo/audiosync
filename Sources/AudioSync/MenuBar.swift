@@ -571,6 +571,36 @@ final class SyncDraft: ObservableObject {
 
 // MARK: - Status item and panel
 
+/// A/B switches for the panel's animation, compared on the Mac. A normal run
+/// gets each default; with AUDIOSYNC_DEBUG=1, `defaults write <bundle ID>
+/// <key> -bool YES|NO` overrides one, read at launch.
+enum PanelSwitches {
+    /// Take key once the open has settled, the controls drawn active meanwhile.
+    static let keyAfterOpen = flag("PanelKeyAfterOpen", normal: false)
+    static let ignorePressWhileClosing = flag("PanelIgnorePressWhileClosing", normal: true)
+    /// No main-window refresh while the panel shows or within a second of its close.
+    static let skipWindowRefresh = flag("PanelSkipWindowRefresh", normal: false)
+    /// The popover's blurred material drawn inactive (no blur behind it).
+    static let noMaterial = flag("PanelNoMaterial", normal: false)
+    /// The popover's size set only at show and after the open settled.
+    static let fixedSize = flag("PanelFixedSize", normal: false)
+    /// No system animation; the panel fades in on its own and closes at once.
+    static let ownAnimation = flag("PanelOwnAnimation", normal: false)
+
+    static let windowRefreshLabel = "window refresh"
+
+    static var summary: String {
+        "keyAfterOpen=\(keyAfterOpen) ignorePressWhileClosing=\(ignorePressWhileClosing) "
+            + "skipWindowRefresh=\(skipWindowRefresh) noMaterial=\(noMaterial) fixedSize=\(fixedSize) "
+            + "ownAnimation=\(ownAnimation)"
+    }
+
+    private static func flag(_ key: String, normal: Bool) -> Bool {
+        guard DebugTrace.enabled, UserDefaults.standard.object(forKey: key) != nil else { return normal }
+        return UserDefaults.standard.bool(forKey: key)
+    }
+}
+
 /// The status item and its compact panel, an AppKit popover hanging from the
 /// icon: the system draws its arrow, edge and shadow and animates it in and
 /// out. It never activates AudioSync, so opening it doesn't pull the main
@@ -593,6 +623,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var quietQueue = QuietQueue()
     /// The rows were last built before the panel's latest close.
     private var rowsStale = false
+    /// When the latest close's fade ends (system uptime).
+    private var closeEndsAt: TimeInterval?
+    /// When the latest close began (system uptime).
+    private var closeBegan: TimeInterval = -.infinity
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -606,7 +640,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         super.init()
         // The popover follows the content's size, animating as it changes,
         // except while it animates in or out (`PanelHost`).
-        host.sizingOptions = [.preferredContentSize]
+        host.sizingOptions = PanelSwitches.fixedSize ? [] : [.preferredContentSize]
         popover.contentViewController = host
         popover.behavior = .transient
         popover.delegate = self
@@ -617,7 +651,16 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
         refreshIcon()
         // @Published delivers the new value before the property is set.
-        model.whenPanelQuiet = { [weak self] label, work in self?.whenQuiet(label, work) }
+        model.whenPanelQuiet = { [weak self] label, work in
+            guard let self else { return }
+            if label == PanelSwitches.windowRefreshLabel, PanelSwitches.skipWindowRefresh,
+               self.presented || Self.uptime - self.closeBegan < 1 {
+                DebugTrace.log("[AudioSync] panel quiet: \(label) skipped, the panel is open or just closed")
+                return
+            }
+            self.whenQuiet(label, work)
+        }
+        DebugTrace.log("[AudioSync] panel switches: \(PanelSwitches.summary)")
         noticeWatch = model.$notices.sink { [weak self] list in
             guard let self, list.count != self.noticeCount else { return }
             self.noticeCount = list.count
@@ -676,7 +719,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                                             latestPress: Self.latestPress)
         closingPress = nil
         switch action {
-        case .open: show()
+        case .open:
+            let press = byMouse ? Self.latestPress : Self.uptime
+            if PanelSwitches.ignorePressWhileClosing, StatusItemClick.pressDuringClose(press, closeEndsAt) {
+                DebugTrace.log("[AudioSync] status item click: ignored, the panel is still closing")
+            } else {
+                show()
+            }
         case .close: close(); closingPress = nil   // this click closed it; the next one opens it
         case .stayClosed: DebugTrace.log("[AudioSync] status item click: the press already closed the panel")
         }
@@ -696,10 +745,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
         // The status item's own screen, not the one with keyboard focus.
         model.panelRoom = item.frame.minY - Self.arrowRoom - screen.minY
-        let refreshStart = ProcessInfo.processInfo.systemUptime
+        let start = Self.uptime
         model.actions.refreshModel()
-        let refreshMs = (ProcessInfo.processInfo.systemUptime - refreshStart) * 1000
-        DebugTrace.log("[AudioSync] panel show: model refresh \(String(format: "%.1f ms", refreshMs))")
+        let refreshed = Self.uptime
         // The app's appearance, not the menu bar's, which follows the wallpaper.
         popover.appearance = NSApp.effectiveAppearance
         // Open at once, at the final size. The rows were rebuilt and laid out
@@ -711,13 +759,31 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let size = host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
         host.setSize(size)
         popover.contentSize = size
+        let measured = Self.uptime
         presented = true
-        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        popover.animates = !reduceMotion && !PanelSwitches.ownAnimation
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if let window = host.view.window {
+            if PanelSwitches.noMaterial { Self.effectViews(in: window.contentView?.superview).forEach { $0.state = .inactive } }
+            if PanelSwitches.ownAnimation, !reduceMotion {
+                window.alphaValue = 0
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.15
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    window.animator().alphaValue = 1
+                }
+            }
+        }
+        let shown = Self.uptime
         // At once: a control draws in its accent color only in the key window.
-        takeKey()
+        if !PanelSwitches.keyAfterOpen { takeKey() }
         DispatchQueue.main.async { button.highlight(true) }
         watchForOutsideClicks()
+        DebugTrace.log(String(format: "[AudioSync] panel show: %.0f ms after the press; model refresh %.1f ms, "
+                              + "layout %.1f ms, popover %.1f ms, rest %.1f ms",
+                              (start - Self.latestPress) * 1000, (refreshed - start) * 1000,
+                              (measured - refreshed) * 1000, (shown - measured) * 1000, (Self.uptime - shown) * 1000))
     }
 
     /// Closes the panel, animating out. Escape, ⌘W, a click elsewhere and
@@ -745,6 +811,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard host.sizing.followsContent else { return }
         let size = host.preferredContentSize
         if size.width > 0, size.height > 0, size != popover.contentSize { popover.contentSize = size }
+        if PanelSwitches.keyAfterOpen { takeKey() }
         model.actions.refreshExternalState()
         let refreshed = Self.uptime
         DispatchQueue.main.async { [weak self] in
@@ -766,6 +833,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private static var uptime: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    private static func effectViews(in view: NSView?) -> [NSVisualEffectView] {
+        guard let view else { return [] }
+        if let effect = view as? NSVisualEffectView { return [effect] }
+        return view.subviews.flatMap { effectViews(in: $0) }
+    }
 
     /// Runs `work` once no open or close of the panel animates (`QuietQueue`).
     func whenQuiet(_ label: String, after delay: TimeInterval = 0, _ work: @escaping () -> Void) {
@@ -819,7 +892,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func finishClose() {
         guard presented else { return }
         presented = false
-        quietQueue.quiet.began(.close, at: Self.uptime)
+        closeBegan = Self.uptime
+        quietQueue.quiet.began(.close, at: closeBegan)
+        closeEndsAt = popover.animates ? closeBegan + PanelQuiet.duration(.close) : closeBegan
         DebugTrace.log("[AudioSync] panel close began")
         rowsStale = true
         host.sizing = host.sizing.after(.willClose)
@@ -909,6 +984,16 @@ final class MenuBarPopover: NSPopover {
 
 private let accent = Brand.teal
 
+/// The controls drawn as in the key window before the panel takes key
+/// (`PanelSwitches.keyAfterOpen`).
+private struct ActiveLook: ViewModifier {
+    let on: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if on { content.environment(\.controlActiveState, .key) } else { content }
+    }
+}
+
 /// The compact controls behind the menu bar icon: power, source, volume and
 /// on/off for each speaker. Everything else lives in the main window.
 struct MenuBarView: View {
@@ -991,6 +1076,7 @@ struct MenuBarView: View {
         // Over the popover's material; the popover rounds it and draws the edge.
         .background(Brand.panelBacking.ignoresSafeArea())
         .tint(accent)
+        .modifier(ActiveLook(on: PanelSwitches.keyAfterOpen))
     }
 
     private func header(_ t: UIStrings) -> some View {
