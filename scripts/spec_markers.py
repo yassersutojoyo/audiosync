@@ -3,7 +3,8 @@
 
 The core, cast and airplay crates check their own markers in their
 spec_coverage tests. This covers the rest: tracked Rust and Swift files
-outside those crates (desktop/, remote/, Tests/, Sources/). The letter picks
+outside those crates (desktop/, remote/, Tests/, Sources/), and shell scripts,
+whose marker is `# covers:`. The letter picks
 the spec: S is docs/ENGINE_SPEC.md, P is docs/AIRPLAY_SPEC.md, C is
 docs/CAST_SPEC.md. A withdrawn or retired clause counts as missing (one
 retired in part does not). Each ID may carry a note in parentheses, and a
@@ -23,6 +24,7 @@ import subprocess
 import sys
 
 MARKER = "// covers:"
+SHELL_MARKER = "# covers:"
 SPECS = {"S": "ENGINE_SPEC.md", "P": "AIRPLAY_SPEC.md", "C": "CAST_SPEC.md"}
 CRATES_WITH_OWN_CHECK = ("core/", "cast/", "airplay/")
 _ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
@@ -32,7 +34,11 @@ _WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|retired(?! in part))", re.IGNORECAS
 
 
 def in_scope(path):
-    return path.endswith((".rs", ".swift")) and not path.startswith(CRATES_WITH_OWN_CHECK)
+    return path.endswith((".rs", ".swift", ".sh")) and not path.startswith(CRATES_WITH_OWN_CHECK)
+
+
+def marker_for(path):
+    return SHELL_MARKER if path.endswith(".sh") else MARKER
 
 
 def marker_ids(body):
@@ -65,12 +71,13 @@ def spec_ids(text):
 
 
 def problems_in(path, text, known):
+    marker = marker_for(path)
     found = []
     for number, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
-        if not stripped.startswith(MARKER):
+        if not stripped.startswith(marker):
             continue
-        ids = marker_ids(stripped[len(MARKER):])
+        ids = marker_ids(stripped[len(marker):])
         if ids is None:
             found.append(f"{path}:{number}: malformed marker: {stripped}")
             continue
@@ -119,6 +126,10 @@ def self_test():
     want = ["a.rs:2: S3 is not a clause of ENGINE_SPEC.md"]
     if got != want:
         failures.append(f"problems_in: expected {want}, got {got}")
+    got = problems_in("t.sh", "# covers: S1, S3\n// covers: S3\n", {"S1"})
+    want = ["t.sh:1: S3 is not a clause of ENGINE_SPEC.md"]
+    if got != want:
+        failures.append(f"problems_in (shell): expected {want}, got {got}")
     scope = {
         "desktop/src/view.rs": True,
         "Tests/logictest.swift": True,
@@ -127,13 +138,15 @@ def self_test():
         "cast/src/lib.rs": False,
         "airplay/src/transport.rs": False,
         "desktop/README.md": False,
+        "Tests/shellchecktest.sh": True,
+        "core/ffi/build.sh": False,
     }
     for path, want in scope.items():
         if in_scope(path) != want:
             failures.append(f"scope of {path}: expected {want}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
-    cases = len(ids) + 2 + len(scope)
+    cases = len(ids) + 3 + len(scope)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
     return 1 if failures else 0
 
@@ -156,7 +169,8 @@ def main(argv):
             continue
         with open(os.path.join(root, path), encoding="utf-8") as f:
             text = f.read()
-        markers += sum(1 for line in text.splitlines() if line.strip().startswith(MARKER))
+        marker = marker_for(path)
+        markers += sum(1 for line in text.splitlines() if line.strip().startswith(marker))
         found += problems_in(path, text, known)
     for problem in found:
         print(problem)
