@@ -270,10 +270,16 @@ pub struct SavedGroup {
 #[serde(default)]
 pub struct SavedZone {
     pub id: String,
+    #[serde(deserialize_with = "or_default")]
     pub name: String,
+    #[serde(deserialize_with = "strings_that_read")]
     pub members: Vec<String>,
+    #[serde(deserialize_with = "number_or_nan")]
     pub volume: f64,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "names_that_are_text"
+    )]
     pub member_names: BTreeMap<String, String>,
 }
 
@@ -307,6 +313,7 @@ impl From<Zone> for SavedZone {
 #[serde(default)]
 pub struct SavedPresetMember {
     pub key: String,
+    #[serde(deserialize_with = "or_default")]
     pub volume: Option<f64>,
 }
 
@@ -315,6 +322,7 @@ pub struct SavedPresetMember {
 #[serde(default)]
 pub struct SavedPresetZone {
     pub id: String,
+    #[serde(deserialize_with = "number_or_nan")]
     pub volume: f64,
 }
 
@@ -334,12 +342,17 @@ impl Default for SavedPresetZone {
 #[serde(default)]
 pub struct SavedPreset {
     pub id: String,
+    #[serde(deserialize_with = "or_default")]
     pub name: String,
+    #[serde(deserialize_with = "entries_that_read")]
     pub members: Vec<SavedPresetMember>,
+    #[serde(deserialize_with = "entries_that_read")]
     pub zones: Vec<SavedPresetZone>,
+    #[serde(deserialize_with = "number_or_nan")]
     pub master_volume: f64,
     /// Band 0 (32 Hz) to band 9 (16 kHz), in dB; an entry without ten is
-    /// skipped when read.
+    /// skipped when read, and a gain that isn't a number reads as 0 dB.
+    #[serde(deserialize_with = "ten_gains")]
     pub gains_db: [f64; BAND_COUNT],
 }
 
@@ -410,6 +423,24 @@ impl SavedPreset {
             gains_db: self.gains_db,
         }
     }
+}
+
+/// A preset's ten stored gains; a gain that isn't a number is 0 dB, as in
+/// a saved curve, and another count leaves the preset unreadable.
+fn ten_gains<'de, D>(deserializer: D) -> Result<[f64; BAND_COUNT], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let stored = value
+        .as_array()
+        .filter(|gains| gains.len() == BAND_COUNT)
+        .ok_or_else(|| serde::de::Error::custom("a preset keeps ten gains"))?;
+    let mut gains_db = [0.0; BAND_COUNT];
+    for (gain, stored) in gains_db.iter_mut().zip(stored) {
+        *gain = stored.as_f64().unwrap_or(0.0);
+    }
+    Ok(gains_db)
 }
 
 /// A stored list read leniently: an entry that doesn't read is skipped, and
@@ -1727,6 +1758,7 @@ mod tests {
                 ("z1", vec!["cc:attic", "lc:desk"], 100.0),
                 ("z2", vec![], 0.0),
                 ("z3", vec!["ap:kitchen"], 100.0),
+                ("z4", vec![], 100.0),
             ]
         );
         assert!(Settings::default().speaker_zones_migrated);
