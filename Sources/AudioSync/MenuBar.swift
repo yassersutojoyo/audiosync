@@ -1219,8 +1219,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard presented, size.width > 0, size.height > 0 else { return }
         let now = Self.uptime
         // A step still running finishes before the next one starts.
-        let due = resize.changed(to: size, at: now, settled: max(quietQueue.quiet.busyUntil, resizeEndsAt ?? 0),
-                                 from: rest?.content ?? popover.contentSize)
+        let due = resize.changed(to: size, at: now, settled: max(quietQueue.quiet.busyUntil, resizeEndsAt ?? 0))
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due - now)) { [weak self] in self?.applyResize() }
     }
 
