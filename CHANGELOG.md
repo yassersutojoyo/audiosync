@@ -10,6 +10,11 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Its switch there turns only that speaker on or off, and the zone's other speakers stay as they are; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
 - Only This Speaker, in a speaker's menu under its zone, turns the zone's other speakers off and plays this one. Nobody leaves the zone.
 
+### Fixed
+
+- On Windows, a stereo pair or home theater in a zone that can't play while AirPlay 2 is off says under the zone that it needs AirPlay 2, as on the Mac, instead of saying it wasn't found. Every zone row that needs AirPlay 2 is dimmed, as on the Mac.
+- Opening the Mac's menu bar panel again while it's still fading out no longer leaves it stuck at its old size: it grows and shrinks with its content again.
+
 ## [0.7.0] - 2026-10-27
 
 ### Added
