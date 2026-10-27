@@ -7844,6 +7844,15 @@ mod tests {
             app.ui.borrow().airplay_delay_draft.draft.is_none(),
             "a focus loss after it has nothing to apply"
         );
+
+        // Another value saved meanwhile shows whether the focus loss applies 20000 a second time.
+        app.update(|b| b.set_airplay_delay(500.0));
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(
+            app.snapshot().airplay_delay_ms,
+            Some(500.0),
+            "a focus loss after Return applies nothing"
+        );
     }
 
     #[test]
