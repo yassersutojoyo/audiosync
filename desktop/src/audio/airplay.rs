@@ -793,7 +793,8 @@ const VOLUME_TOLERANCE_DB: f64 = 0.5;
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
 /// How long a slider that started editing holds its row with no move: a
-/// screen reader's set never sends the release (S271).
+/// screen reader's set never sends the release (S271). It mirrors
+/// [`VOLUME_SETTLE`], a design value, not a measurement.
 const DRAG_IDLE: Duration = Duration::from_secs(3);
 
 /// The address a receiver announces first, AirPlay service before RAOP.
@@ -821,7 +822,7 @@ struct VolumeRead {
     /// row only while [`VolumeRead::held`] (S271).
     dragging: bool,
     /// When the volume was last set (its own, the master or a calibration)
-    /// or the slider started editing.
+    /// or the held slider last moved.
     set_at: Instant,
     /// It turned a read down, or its AirPlay 2 reads stopped (P184): it
     /// isn't asked again.
@@ -850,6 +851,13 @@ impl VolumeRead {
     /// editing and moved within [`DRAG_IDLE`] (S271).
     fn held(&self, now: Instant) -> bool {
         self.dragging && now.saturating_duration_since(self.set_at) < DRAG_IDLE
+    }
+
+    /// The held slider moved without a set, so its hold restarts.
+    fn moved(&mut self, now: Instant) {
+        if self.dragging {
+            self.set_at = now;
+        }
     }
 
     /// The volume was set: an answer to a read asked before is old.
@@ -2572,6 +2580,10 @@ impl AirPlaySpeakers {
     pub fn move_row(&mut self, id: &str, row: f64) {
         let (zone, master) = (self.zone(id), self.master);
         let Some(moved) = row_move(row, zone, master) else {
+            // Nothing is sent, but the move still keeps the slider's hold.
+            if let Some(added) = self.added.get_mut(id) {
+                added.read.moved(Instant::now());
+            }
             return;
         };
         let entry = self.entry(id);
