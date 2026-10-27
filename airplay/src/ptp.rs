@@ -2,13 +2,13 @@
 //! the sender is the unicast grandmaster of every AirPlay 2 receiver that
 //! takes PTP, on one timeline (P205), sending each Announce once a
 //! second and a two-step Sync with its Follow_Up eight times a second, and
-//! answering their Delay_Req; a served receiver whose Announce outranks the
-//! sender is reported (P206). Every
+//! answering their Delay_Req; a served receiver that qualifies as a foreign
+//! master ahead of the sender is reported (P206). Every
 //! timestamp is the sender clock read as PTP time (P163). Message layouts
 //! follow IEEE 1588-2008 version 2.
 
 use std::collections::VecDeque;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use crate::clock::{PtpTime, SenderClock};
@@ -150,6 +150,9 @@ struct Schedule {
     sync_seq: u16,
     /// Sessions at this address; tests run several receivers on loopback.
     sessions: usize,
+    /// This receiver's claim to a better grandmaster, until it qualifies
+    /// or is withdrawn (P206).
+    claim: Option<Claim>,
 }
 
 /// The PTP service: one per sender, the grandmaster of every AirPlay 2
@@ -161,12 +164,12 @@ pub struct PtpService {
     identity: [u8; 8],
     remote_ports: PtpPorts,
     /// The receivers it serves while their PTP sessions run (P167, P205),
-    /// with the scope of a link-local address (P17); the port is unused.
+    /// as `peer_key` makes them (P227).
     peers: Vec<SocketAddr>,
     schedules: Vec<Schedule>,
     transmits: VecDeque<PtpTransmit>,
     /// Served receivers whose Announce named a better grandmaster (P206).
-    outranked: VecDeque<IpAddr>,
+    outranked: VecDeque<SocketAddr>,
 }
 
 impl PtpService {
@@ -200,15 +203,8 @@ impl PtpService {
     /// Announce goes at once and its Sync every 125 ms from now on, with
     /// sequenceIds from 0; no other receiver's schedule moves (P205).
     pub fn start(&mut self, peer: SocketAddr, now: Instant) {
-        let peer = match peer.ip().to_canonical() {
-            IpAddr::V6(_) => {
-                let mut scoped = peer;
-                scoped.set_port(0);
-                scoped
-            }
-            ip => SocketAddr::new(ip, 0),
-        };
-        if let Some(index) = self.peers.iter().position(|known| known.ip() == peer.ip()) {
+        let peer = peer_key(peer);
+        if let Some(index) = self.position(peer) {
             self.schedules[index].sessions += 1;
             return;
         }
@@ -219,6 +215,7 @@ impl PtpService {
             announce_seq: 0,
             sync_seq: 0,
             sessions: 1,
+            claim: None,
         });
         self.serve(self.peers.len() - 1, now);
     }
@@ -232,19 +229,21 @@ impl PtpService {
     }
 
     /// One receiver's session ended; the others are still served as before.
-    pub fn stop_peer(&mut self, peer: IpAddr) {
-        let peer = peer.to_canonical();
-        let Some(index) = self.peers.iter().position(|known| known.ip() == peer) else {
+    pub fn stop_peer(&mut self, peer: SocketAddr) {
+        let Some(index) = self.position(peer) else {
             return;
         };
         let schedule = &mut self.schedules[index];
+        // A session opened at this address later gets a warning of its own.
+        schedule.claim = None;
         schedule.sessions = schedule.sessions.saturating_sub(1);
         if schedule.sessions > 0 {
             return;
         }
         self.peers.remove(index);
         self.schedules.remove(index);
-        self.transmits.retain(|transmit| transmit.to.ip() != peer);
+        self.transmits
+            .retain(|transmit| !same_peer(transmit.to, peer));
         if self.peers.is_empty() {
             self.stop();
         }
@@ -261,9 +260,9 @@ impl PtpService {
         self.transmits.pop_front()
     }
 
-    /// A served receiver whose Announce ranked its grandmaster ahead of the
-    /// sender's, once per such Announce (P206).
-    pub fn poll_outranked(&mut self) -> Option<IpAddr> {
+    /// A served receiver that became a qualified foreign master whose
+    /// grandmaster ranks ahead of the sender's, once per claim (P206).
+    pub fn poll_outranked(&mut self) -> Option<SocketAddr> {
         self.outranked.pop_front()
     }
 
@@ -298,18 +297,18 @@ impl PtpService {
     /// The Sync with `sequence_id` left at `sent`: its Follow_Up carries
     /// that time (P161). For the first receiver served.
     pub fn sync_sent(&mut self, sequence_id: u16, sent: Instant) {
-        if let Some(peer) = self.peer() {
+        if let Some(&peer) = self.peers.first() {
             self.sync_sent_to(sequence_id, peer, sent);
         }
     }
 
     /// The Sync with `sequence_id` left for `peer` at `sent`: that
     /// receiver's Follow_Up carries the time.
-    pub fn sync_sent_to(&mut self, sequence_id: u16, peer: IpAddr, sent: Instant) {
-        let peer = peer.to_canonical();
-        let Some(&peer) = self.peers.iter().find(|known| known.ip() == peer) else {
+    pub fn sync_sent_to(&mut self, sequence_id: u16, peer: SocketAddr, sent: Instant) {
+        let Some(index) = self.position(peer) else {
             return;
         };
+        let peer = self.peers[index];
         let bytes = self.follow_up(sequence_id, self.clock.ptp(sent));
         self.queue(MessageType::FollowUp, peer, sequence_id, bytes);
     }
@@ -319,17 +318,15 @@ impl PtpService {
     /// (P162), and an Announce from one is only compared with the sender's
     /// (P206); everything else changes nothing.
     pub fn handle_message(&mut self, bytes: &[u8], source: SocketAddr, received: Instant) {
-        let Some(peer) = self
-            .peers
-            .iter()
-            .find(|peer| crate::transport::from_receiver(source, peer.ip()))
-            .map(SocketAddr::ip)
-        else {
+        let Some(index) = self.peers.iter().position(|peer| {
+            crate::transport::from_receiver(source, peer.ip()) && scope(source) == scope(*peer)
+        }) else {
             return;
         };
         if let Some(foreign) = ForeignAnnounce::parse(bytes) {
-            if foreign.outranks(&self.own_dataset()) {
-                self.outranked.push_back(peer);
+            let own = self.own_dataset();
+            if qualifies(&mut self.schedules[index].claim, &foreign, &own, received) {
+                self.outranked.push_back(self.peers[index]);
             }
             return;
         }
@@ -355,6 +352,10 @@ impl PtpService {
             sequence_id: request.sequence_id,
             bytes: out,
         });
+    }
+
+    fn position(&self, peer: SocketAddr) -> Option<usize> {
+        self.peers.iter().position(|&known| same_peer(known, peer))
     }
 
     fn queue(&mut self, kind: MessageType, peer: SocketAddr, sequence_id: u16, bytes: Vec<u8>) {
@@ -471,6 +472,29 @@ impl PtpService {
     }
 }
 
+/// The interface scope that tells two receivers at one IPv6 link-local
+/// address apart (P227, RFC 4007); no other address has one here.
+fn scope(address: SocketAddr) -> u32 {
+    match address {
+        SocketAddr::V6(v6) if v6.ip().is_unicast_link_local() => v6.scope_id(),
+        _ => 0,
+    }
+}
+
+/// A served receiver as the service keeps it: its canonical address with
+/// port 0, and the scope of a link-local one (P17, P227).
+fn peer_key(peer: SocketAddr) -> SocketAddr {
+    match peer.ip().to_canonical() {
+        IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, 0, 0, scope(peer))),
+        ip => SocketAddr::new(ip, 0),
+    }
+}
+
+/// Whether `a` and `b` are one receiver, whatever their ports (P227).
+pub fn same_peer(a: SocketAddr, b: SocketAddr) -> bool {
+    a.ip().to_canonical() == b.ip().to_canonical() && scope(a) == scope(b)
+}
+
 /// The next time on a schedule of `interval` from `due` that is after
 /// `now`.
 fn next_after(due: Instant, interval: Duration, now: Instant) -> Instant {
@@ -533,12 +557,78 @@ struct Dataset {
 /// The grandmaster another clock's Announce names.
 struct ForeignAnnounce {
     grandmaster: Dataset,
+    sequence_id: u16,
+    interval: Duration,
+    steps_removed: u16,
+}
+
+/// FOREIGN_MASTER_TIME_WINDOW, in announce intervals (IEEE 1588-2008
+/// 9.3.2.4).
+const FOREIGN_MASTER_WINDOW: u32 = 4;
+
+/// A served receiver's Announces naming one grandmaster ahead of the
+/// sender's: the last one counted toward FOREIGN_MASTER_THRESHOLD (2).
+#[derive(Debug, Clone, Copy)]
+struct Claim {
+    grandmaster: [u8; 8],
+    sequence_id: u16,
+    counted_at: Instant,
+    interval: Duration,
+    told: bool,
+}
+
+/// Whether `foreign`, from a served receiver, makes it a qualified foreign
+/// master that outranks `own` for the first time (P206, IEEE 1588-2008
+/// 9.3.2.5): a second Announce naming the same grandmaster, with a new
+/// sequenceId, within 4 announce intervals of the last one counted. One
+/// sooner than 70 % of an interval is the same claim (7.7.2 lets intervals
+/// vary by 30 %); one that doesn't outrank withdraws the claim.
+fn qualifies(
+    claim: &mut Option<Claim>,
+    foreign: &ForeignAnnounce,
+    own: &Dataset,
+    received: Instant,
+) -> bool {
+    if foreign.steps_removed >= 255 {
+        return false;
+    }
+    if !foreign.outranks(own) {
+        *claim = None;
+        return false;
+    }
+    let fresh = Claim {
+        grandmaster: foreign.grandmaster.identity,
+        sequence_id: foreign.sequence_id,
+        counted_at: received,
+        interval: foreign.interval,
+        told: false,
+    };
+    let Some(known) = claim
+        .as_mut()
+        .filter(|known| known.grandmaster == fresh.grandmaster)
+    else {
+        *claim = Some(fresh);
+        return false;
+    };
+    if known.told || known.sequence_id == foreign.sequence_id {
+        return false;
+    }
+    let since = received.saturating_duration_since(known.counted_at);
+    if since < known.interval * 7 / 10 {
+        return false;
+    }
+    if since > known.interval * FOREIGN_MASTER_WINDOW {
+        *known = fresh;
+        return false;
+    }
+    known.told = true;
+    true
 }
 
 impl ForeignAnnounce {
-    /// Header, originTimestamp, currentUtcOffset, a reserved byte, then
-    /// the grandmaster fields up to its identity.
-    const BYTES: usize = HEADER_BYTES + TIMESTAMP_BYTES + 3 + 14;
+    /// Header, originTimestamp, currentUtcOffset, a reserved byte, the
+    /// grandmaster fields up to its identity, then stepsRemoved.
+    const BYTES: usize = HEADER_BYTES + TIMESTAMP_BYTES + 3 + 16;
 
     fn parse(bytes: &[u8]) -> Option<ForeignAnnounce> {
         if bytes.len() < Self::BYTES
@@ -550,6 +640,13 @@ impl ForeignAnnounce {
         let body = &bytes[HEADER_BYTES + TIMESTAMP_BYTES + 3..];
         let mut identity = [0u8; 8];
         identity.copy_from_slice(&body[6..14]);
+        // logMessageInterval; 0x7F (unspecified) or anything outside
+        // 1/16 s to 16 s counts as the sender's own interval.
+        let interval = match bytes[33] as i8 {
+            log @ 0..=4 => Duration::from_secs(1 << log),
+            log @ -4..=-1 => Duration::from_nanos(1_000_000_000 >> -log),
+            _ => ANNOUNCE_INTERVAL,
+        };
         Some(ForeignAnnounce {
             grandmaster: Dataset {
                 priority1: body[0],
@@ -559,6 +656,9 @@ impl ForeignAnnounce {
                 priority2: body[5],
                 identity,
             },
+            sequence_id: u16::from_be_bytes([bytes[30], bytes[31]]),
+            interval,
+            steps_removed: u16::from_be_bytes([body[14], body[15]]),
         })
     }
 

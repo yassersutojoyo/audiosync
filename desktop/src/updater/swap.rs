@@ -368,7 +368,7 @@ mod tests {
         assert!(log.iter().all(|(_, code)| *code == 0), "{log:?}");
     }
 
-    // covers: S301, S302
+    // covers: S301
     #[test]
     fn a_leftover_new_is_deleted_before_the_exclusive_create() {
         let (dir, exe, _) = install("leftover-new");
@@ -392,7 +392,7 @@ mod tests {
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
     }
 
-    // covers: S302
+    // covers: S301, S302
     #[test]
     fn a_failed_second_rename_restores_the_bak() {
         let (dir, exe, notices) = install("second-rename");
@@ -471,7 +471,6 @@ mod tests {
         assert!(!dir.join("audiosync.exe.bak").exists());
     }
 
-    // covers: S302
     #[test]
     fn a_disk_full_copy_deletes_every_partial_file() {
         struct Full;

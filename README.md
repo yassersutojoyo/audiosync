@@ -35,7 +35,7 @@ AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay s
 
 ## New in 0.7
 
-The Windows parts are in the preview build, which isn't out yet.
+The Windows parts are in the Windows preview, out since 0.7.1.
 
 - Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
 - Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
@@ -81,6 +81,8 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 ## Install
 
 - Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs macOS 15 or later.
+- The disk image is about 5.9 MB, and the installed app takes about 18 MB.
+- Besides its settings, AudioSync keeps a few small files: your AirPlay pairings, its AirPlay 2 identity, a timing cache per AirPlay 2 speaker, and the remote and Cast devices it knows. Your audio is never written to disk.
 - The first launch takes one extra step, because AudioSync isn't notarized. When macOS says it can't verify the app, click Done, then go to System Settings → Privacy & Security, click Open Anyway and confirm with your password. After that it opens like any other app. Only Apple's paid Developer Program would remove that step, and I'm not in it.
 - Or, from Terminal: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash`. It downloads the latest release's zip, checks it against the release's SHA-256 checksums, puts AudioSync in Applications and opens it. A copy downloaded by curl isn't flagged as downloaded, so macOS doesn't ask for the extra step. Run it again to update.
 - Each release lists SHA-256 checksums. The app finds new versions itself (Check for Updates… in the AudioSync menu). Coming from 0.6 or older, replace the app by hand once.
@@ -108,7 +110,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 
 ## Windows
 
-A Windows 11 version (x64 and ARM64) is on the way, with the same Rust engine and its own AirPlay sender. Not released yet. CI builds it, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
+A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
 
 ## Linux
 

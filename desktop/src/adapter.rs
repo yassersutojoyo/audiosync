@@ -4011,6 +4011,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             when_source_quits: self.when_source_quits,
             cast_list: self.cast_list(),
             cast_by_address: self.audio.cast_discovery() != CastDiscovery::Off,
+            cast_on: self.audio.cast_on(),
             calibration: CalibrationState {
                 speaker_id: self.calibration.id.as_deref().map(speaker_key),
                 phase: self.calibration.phase,
@@ -4171,6 +4172,46 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         } else {
             self.stop_if_idle();
         }
+        self.take_events();
+    }
+
+    /// Each switch as the member's own would make it, streaming started or
+    /// stopped once at the end (S162): a Cast member going off for another
+    /// would otherwise end the session the next one starts again.
+    fn only_this_speaker(&mut self, id: &str) {
+        let state = self.snapshot();
+        let steps = state.only_this_steps(id);
+        let turns_on = steps.iter().any(|(step, on)| step == id && *on);
+        // Another app took it: the others would go off for nothing, and its
+        // notice already says why.
+        if turns_on
+            && matches!(SpeakerKey::parse(id), Some(SpeakerKey::Cast(cast_id))
+                if self.cast_taken_over(&cast_id))
+        {
+            self.log
+                .log(|| format!("only {id}: another app has it, nothing switches"));
+            return;
+        }
+        if steps.is_empty() {
+            return;
+        }
+        self.log.log(|| {
+            let name = state
+                .speaker(id)
+                .map_or(id, |speaker| speaker.name.as_str());
+            format!("the user chose only {name} in its zone")
+        });
+        for (step, on) in &steps {
+            let Some(key) = SpeakerKey::parse(step) else {
+                continue;
+            };
+            self.unwatch(step);
+            self.switch_zone_member(&key, *on);
+        }
+        if turns_on {
+            self.start_if_switched_on();
+        }
+        self.stop_if_idle();
         self.take_events();
     }
 
@@ -4431,7 +4472,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn rename_zone(&mut self, id: &str, name: &str) {
-        self.zones.rename(id, name);
+        self.zones
+            .rename(id, &crate::speaker_names::normalized(name));
     }
 
     fn delete_zone(&mut self, id: &str) {
@@ -4829,7 +4871,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }
             Err(failure) => {
                 self.calibrate_all.phase = match (failure, name) {
-                    (Failure::NotPlaying, Some(name)) => AllPhase::CannotMeasureAgain(name),
+                    (Failure::NotPlaying(missing), Some(name)) => {
+                        AllPhase::CannotMeasureAgain(name, missing)
+                    }
                     (failure, _) => AllPhase::Failed(failure),
                 };
                 self.calibrate_all.endings += 1;
@@ -5839,6 +5883,97 @@ mod tests {
         );
     }
 
+    // covers: S112 (the controller's equivalents: start, stop, the running source, frames captured,
+    // attach and detach, gain, delay, the equalizer, a lost output and both interruption kinds)
+    #[test]
+    fn every_engine_control_and_both_reports_go_through_the_backend() {
+        let mut adapter = adapter();
+        assert!(adapter.audio.running_source().is_none());
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.audio.running_source().is_some(), "started");
+        assert_eq!(adapter.audio.frames_captured(), 0);
+        adapter.audio_mut().feed_capture(480);
+        assert_eq!(adapter.audio.frames_captured(), 480);
+
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS], "attached");
+        adapter.set_master_volume(50.0);
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.set_speaker_delay(&key(SPEAKERS), 120.0);
+        let params = adapter.audio.playing_params(SPEAKERS).unwrap();
+        assert_eq!(params.gain, output_gain(30.0, 50.0) as f32);
+        assert_eq!(params.delay_frames, 5_760, "120 ms at 48 kHz");
+        adapter.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 6.0,
+            ..EqSettings::default()
+        });
+        let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        let fed = adapter.audio_mut().feed_capture_level(4, 0.25);
+        assert!(fed.iter().all(|s| (s - raised).abs() < 1e-4), "{fed:?}");
+
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        assert_eq!(playing(&adapter), [SPEAKERS], "detached");
+        adapter.set_running(false);
+        assert!(adapter.audio.running_source().is_none(), "stopped");
+        assert!(playing(&adapter).is_empty());
+        adapter.set_running(true);
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        adapter.poll();
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert!(messages(&adapter).contains(&lost), "output gone");
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+
+        // A capture Windows rebuilds, as a format change does on the Mac.
+        let built = adapter.audio.driver().captures_started().len();
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        for _ in 0..3 {
+            adapter.poll();
+        }
+        assert!(adapter.snapshot().running, "streaming stays on");
+        assert_eq!(adapter.audio.driver().captures_started().len(), built + 1);
+        // A source lost for good.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert!(messages(&adapter).contains(&NoticeMessage::CaptureLost));
+    }
+
+    // covers: S113 (on Windows the UI thread owns the adapter and polls it: what the audio side
+    // reports reaches the UI only through that poll)
+    #[test]
+    fn what_the_audio_side_reports_waits_for_the_ui_threads_poll() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        assert!(messages(&adapter).is_empty());
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS], "no poll yet");
+        assert!(adapter.poll());
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        assert!(adapter.snapshot().running, "no poll yet");
+        assert!(adapter.poll());
+        assert!(!adapter.snapshot().running);
+        assert!(messages(&adapter).contains(&NoticeMessage::CaptureLost));
+    }
+
     #[test]
     fn a_zone_switches_its_present_members_together() {
         let mut adapter = adapter();
@@ -5894,6 +6029,18 @@ mod tests {
         assert_eq!(names, ["Office", "Study"], "a blank name keeps the old one");
         adapter.delete_zone("zone:1");
         assert_eq!(adapter.snapshot().zones.len(), 1);
+    }
+
+    #[test]
+    fn a_zone_name_is_cut_to_sixty_characters_like_a_speakers() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_zone("Office").unwrap();
+        adapter.rename_zone("zone:1", &format!(" {}\n", "a".repeat(65)));
+        let name = adapter.snapshot().zones[0].name.clone();
+        assert_eq!(name, "a".repeat(crate::speaker_names::MAX_NAME_CHARS));
+        adapter.rename_zone("zone:1", "Den\nStudy");
+        assert_eq!(adapter.snapshot().zones[0].name, "Den Study");
     }
 
     #[test]
@@ -9801,7 +9948,9 @@ mod tests {
         );
         assert_eq!(
             state.calibration.phase,
-            calibration::Phase::Failed(calibration::Failure::NotPlaying)
+            calibration::Phase::Failed(calibration::Failure::NotPlaying(
+                calibration::Missing::STREAMING
+            ))
         );
         assert!(!state.calibration.busy);
         // Streaming, but the mock has no microphone: refused before the
@@ -10134,7 +10283,10 @@ mod tests {
         );
         assert_eq!(
             adapter.snapshot().calibrate_all.blocked,
-            Some(Failure::NotPlaying)
+            Some(Failure::NotPlaying(calibration::Missing {
+                reference: !enabled(&adapter, "builtin"),
+                ..calibration::Missing::STREAMING
+            }))
         );
         turn_on(&mut adapter, "builtin");
         assert_eq!(
@@ -11572,6 +11724,56 @@ mod tests {
 
     // covers: S246
     #[test]
+    fn a_zone_members_own_row_keeps_one_cast_speaker_at_a_time() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN), cc(CAST_LIVING), key(SPEAKERS)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        assert!(messages(&adapter).contains(&cast_cant_play("Living Room", UiCastProblem::Busy)));
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.only_this_speaker(&cc(CAST_LIVING));
+        let state = adapter.snapshot();
+        assert!(state.running, "streaming goes on");
+        assert!(state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert_eq!(state.zones[0].members.len(), 3, "nobody leaves the zone");
+    }
+
+    // covers: S162, S246
+    #[test]
+    fn only_this_speaker_between_cast_members_never_stops_streaming() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN), cc(CAST_LIVING)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert!(adapter.snapshot().running);
+        let captures = adapter.audio.driver().captures_started().len();
+
+        adapter.only_this_speaker(&cc(CAST_LIVING));
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert!(state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert_eq!(
+            adapter.audio.driver().captures_started().len(),
+            captures,
+            "streaming never stopped in between"
+        );
+    }
+
+    // covers: S246
+    #[test]
     fn a_zone_click_turns_on_its_present_members_and_one_cast_speaker() {
         let (mut adapter, _fake) = cast_adapter();
         adapter.restore(Settings {
@@ -12259,6 +12461,38 @@ mod tests {
                 Some(ui_model::ZoneNote::NeedsAirPlay2),
                 Some(ui_model::ZoneNote::NotFound)
             ]
+        );
+    }
+
+    /// As on the Mac, the Cast note reads the Cast speaker that is on, not
+    /// the listed rows: one that left the network while streaming is off
+    /// still refuses the zone's Cast member, so the member keeps its note.
+    // covers: S246
+    #[test]
+    fn a_cast_member_kept_off_by_an_unlisted_cast_speaker_keeps_its_note() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_LIVING)]);
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_running(false);
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        assert!(state.speaker(&cc(CAST_KITCHEN)).is_none());
+        let zone = state.zones[0].clone();
+        adapter.toggle_zone(&zone.id);
+        let state = adapter.snapshot();
+        let living = state
+            .speaker(&cc(CAST_LIVING))
+            .expect("Living Room is listed");
+        assert!(
+            !living.enabled,
+            "Kitchen is still on, so Living Room is refused"
+        );
+        assert_eq!(
+            state.zone_note(&zone, ui_model::ZoneRow::Listed(living)),
+            Some(ui_model::ZoneNote::CastStayedOff)
         );
     }
 

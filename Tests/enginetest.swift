@@ -41,10 +41,10 @@ let producer = Thread {
 producer.start()
 Thread.sleep(forTimeInterval: 3.5)   // build up history beyond the largest delay tested
 
+// covers: S60, S61, S66, S67 (on every listed output device, at gain 0)
 let devices = AudioDevices().allOutputDevices().filter { !$0.uid.isEmpty && !$0.name.contains("Aggregate") }
 check(!devices.isEmpty, "found output devices", devices.map(\.name).joined(separator: ", "))
 
-// covers: S61
 for dev in devices {
     guard let r = parts.makeRenderer(captureRate: rate) else {
         check(false, "\(dev.name): output can be made")
@@ -76,11 +76,9 @@ for dev in devices {
           "\(states) over \(r.fadeFrames) frames, first callback \(firstCallbackFrames) frames")
 
     Thread.sleep(forTimeInterval: 0.7)
-    // covers: S67
     let rendered = r.framesRendered.load(ordering: .relaxed)
     check(rendered > 24000, "\(dev.name): renders audio", "\(rendered) frames in 1 s")
 
-    // covers: S66
     // Lag ≈ delay − one device buffer, ± one producer chunk; each change
     // fades out and back in (S187) and lands exactly (S46).
     for ms in [2000.0, 500.0, 3000.0, 150.0] {
@@ -126,8 +124,8 @@ for dev in devices {
     check(fadeStates.last == .closed && renderedWhileFading >= Int64(r.fadeFrames) && (playedFirst || beyondCap),
           "\(dev.name): stop fades out before the output stops", fadeDetail)
 
-    // S186: a switch-off the way the session makes it returns once the fade
-    // has played, never later than 500 ms after the request.
+    // covers: S186 (a switch-off the way the session makes it returns once the fade
+    // has played, never later than 500 ms after the request)
     do {
         try r.start(on: dev.id, captureRate: rate, delayMs: 150)
         r.setGain(linear: 0)

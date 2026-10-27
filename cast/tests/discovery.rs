@@ -2,10 +2,13 @@
 //! crate's own types, injected through a channel, become devices and one
 //! list keyed by `id`. No test browses the real network.
 
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use audiosync_cast::discovery::mdns::{MdnsBrowser, browse_event};
+use audiosync_cast::discovery::reach::{CHECK_INTERVAL, Reachability, connects};
 use audiosync_cast::discovery::{
     BrowseEvent, CastDevice, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
     SERVICE_TYPE, ServiceRecord, Skipped, Txt,
@@ -349,6 +352,190 @@ fn a_manual_address_works_without_txt_until_a_browse_finds_its_id() {
     assert!(list.get(DeviceKey::Id(id)).is_some());
     assert_eq!(list.remove_manual(address), None, "found, it stays");
     assert_eq!(list.entries().len(), 1);
+}
+
+// covers: C18
+// No record vouches for a device added by address, so it is listed
+// offline until a check reaches it.
+#[test]
+fn a_manual_address_is_listed_offline_until_a_check_reaches_it() {
+    let mut list = DeviceList::new();
+    let address = SocketAddr::new(v4(10), 8009);
+    list.add_manual(address);
+    let entry = list.get(DeviceKey::Manual(address)).expect("listed");
+    assert!(!entry.online, "nothing has reached it yet");
+
+    let key = DeviceKey::Manual(address);
+    assert_eq!(
+        list.set_reachable(address, true),
+        Some(ListEvent::Updated(key))
+    );
+    assert!(list.get(key).expect("listed").online);
+    assert_eq!(list.set_reachable(address, true), None, "no change");
+    assert_eq!(
+        list.set_reachable(address, false),
+        Some(ListEvent::Updated(key))
+    );
+    assert!(!list.get(key).expect("listed").online);
+    let other = SocketAddr::new(v4(11), 8009);
+    assert_eq!(list.set_reachable(other, true), None, "not listed");
+}
+
+// covers: C17, C18
+// A session's own health decides while it runs, and a device added by
+// address stays listed when its session ends.
+#[test]
+fn a_session_holds_the_reachability_of_a_manual_address() {
+    let mut list = DeviceList::new();
+    let address = SocketAddr::new(v4(10), 8009);
+    let key = DeviceKey::Manual(address);
+    list.add_manual(address);
+    list.set_in_session(key, true);
+    assert_eq!(list.set_reachable(address, true), None);
+    list.set_in_session(key, false);
+    let entry = list.get(key).expect("still listed");
+    assert!(!entry.online);
+}
+
+/// Polls `reach` until a check changed `list`, for checks that answer on
+/// their own threads.
+fn poll_until_changed(reach: &mut Reachability, list: &mut DeviceList) -> Vec<ListEvent> {
+    for _ in 0..400 {
+        let events = reach.poll(list, Instant::now());
+        if !events.is_empty() {
+            return events;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("no check changed the list");
+}
+
+static STALE_PROBES: AtomicUsize = AtomicUsize::new(0);
+static STALE_ANSWER: AtomicBool = AtomicBool::new(true);
+
+// covers: C17, C18
+// A check that started before a session opened and ended says nothing
+// about the device now; it is dropped, and a fresh one runs at once.
+#[test]
+fn a_check_older_than_the_last_session_is_dropped_and_run_again() {
+    fn answers(_: SocketAddr) -> bool {
+        let reached = STALE_ANSWER.load(Ordering::SeqCst);
+        STALE_PROBES.fetch_add(1, Ordering::SeqCst);
+        reached
+    }
+    let mut list = DeviceList::new();
+    let address = SocketAddr::new(v4(10), 8009);
+    let key = DeviceKey::Manual(address);
+    list.add_manual(address);
+    let mut reach = Reachability::new(answers);
+    let now = Instant::now();
+    assert!(reach.poll(&mut list, now).is_empty());
+    for _ in 0..400 {
+        if STALE_PROBES.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        STALE_PROBES.load(Ordering::SeqCst),
+        1,
+        "the first check ran"
+    );
+
+    // A short session to a dead device opens and ends while that check
+    // reports a device that answered.
+    list.set_in_session(key, true);
+    list.set_in_session(key, false);
+    STALE_ANSWER.store(false, Ordering::SeqCst);
+    for _ in 0..400 {
+        reach.poll(&mut list, now);
+        assert!(
+            !list.get(key).expect("listed").online,
+            "the stale answer is dropped"
+        );
+        if STALE_PROBES.load(Ordering::SeqCst) == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        STALE_PROBES.load(Ordering::SeqCst),
+        2,
+        "checked again at once, not after the interval"
+    );
+    for _ in 0..20 {
+        reach.poll(&mut list, now);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!list.get(key).expect("listed").online);
+}
+
+static PROBES: AtomicUsize = AtomicUsize::new(0);
+
+// covers: C18
+// A device added by address is checked at once and again on the
+// interval, and goes offline when a check fails.
+#[test]
+fn a_manual_address_is_checked_at_once_and_again_on_the_interval() {
+    fn answers(address: SocketAddr) -> bool {
+        PROBES.fetch_add(1, Ordering::SeqCst);
+        address.port() == 8009
+    }
+    let mut list = DeviceList::new();
+    let on = SocketAddr::new(v4(10), 8009);
+    let off = SocketAddr::new(v4(12), 8010);
+    list.add_manual(on);
+    list.add_manual(off);
+    let mut reach = Reachability::new(answers);
+    assert_eq!(
+        poll_until_changed(&mut reach, &mut list),
+        [ListEvent::Updated(DeviceKey::Manual(on))]
+    );
+    assert!(list.get(DeviceKey::Manual(on)).expect("listed").online);
+    assert!(!list.get(DeviceKey::Manual(off)).expect("listed").online);
+    for _ in 0..40 {
+        reach.poll(&mut list, Instant::now());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        PROBES.load(Ordering::SeqCst),
+        2,
+        "nothing more before the interval"
+    );
+
+    let later = Instant::now() + CHECK_INTERVAL + Duration::from_secs(1);
+    reach.poll(&mut list, later);
+    for _ in 0..400 {
+        if PROBES.load(Ordering::SeqCst) == 4 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(PROBES.load(Ordering::SeqCst), 4, "both checked again");
+
+    // The device stops answering.
+    fn silent(_: SocketAddr) -> bool {
+        false
+    }
+    let mut reach = Reachability::new(silent);
+    assert_eq!(
+        poll_until_changed(&mut reach, &mut list),
+        [ListEvent::Updated(DeviceKey::Manual(on))]
+    );
+    assert!(!list.get(DeviceKey::Manual(on)).expect("listed").online);
+}
+
+// covers: C18
+#[test]
+fn the_live_check_reaches_a_listening_port_only() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback port");
+    let open = listener.local_addr().expect("its address");
+    assert!(connects(open));
+    let closed = {
+        let spare = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback port");
+        spare.local_addr().expect("its address")
+    };
+    assert!(!connects(closed));
 }
 
 // covers: C18

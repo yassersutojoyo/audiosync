@@ -42,7 +42,7 @@ enum CalibrateAllBlocker: Error, Equatable {
     /// The Mac's built-in speakers aren't listed.
     case noReference
     /// Streaming is off, or the built-in speakers aren't playing.
-    case notPlaying
+    case notPlaying(CalibrationMissing)
     /// Only the built-in speakers play.
     case noOtherSpeaker
     /// Every other speaker that plays sits out: headphones or virtual outputs.
@@ -210,7 +210,7 @@ enum CalibrateAllLine: Equatable {
     case changedSinceMeasured
     /// Measure Again couldn't start: streaming, the reference or the row's
     /// speaker is off.
-    case cannotMeasureAgain(name: String)
+    case cannotMeasureAgain(name: String, missing: CalibrationMissing)
     case applied
     case undone
 }
@@ -282,6 +282,8 @@ enum CalibrateAllFlow {
     struct Inputs {
         var streaming: Bool
         var reference: String?
+        /// The reference's switch is on, for what to name while streaming is off.
+        var referenceOn = true
         /// Local outputs switched on and playing, the reference included, in
         /// the window's order.
         var localOutputs: [(id: String, name: String)]
@@ -322,7 +324,9 @@ enum CalibrateAllFlow {
     static func plan(_ inputs: Inputs) -> Result<[CalibrateAllSpeaker], CalibrateAllBlocker> {
         guard let reference = inputs.reference else { return .failure(.noReference) }
         guard inputs.streaming, let first = inputs.localOutputs.first(where: { $0.id == reference }) else {
-            return .failure(.notPlaying)
+            var missing: CalibrationMissing = inputs.streaming ? .reference : .streaming
+            if !inputs.streaming, !inputs.referenceOn { missing.insert(.reference) }
+            return .failure(.notPlaying(missing))
         }
         func local(_ id: String, _ name: String, offset: Double?) -> CalibrateAllSpeaker {
             let holdBack = inputs.holdBacks[id].flatMap { $0.isFinite ? max(0, $0) : nil } ?? 0
@@ -396,8 +400,8 @@ enum CalibrateAllFlow {
     static func startFailure(_ blocker: CalibrateAllBlocker, zone: String?) -> CalibrationFailure? {
         switch blocker {
         case .noReference: .noReference
-        case .notPlaying: .notPlaying
-        case .noOtherSpeaker: zone.map { CalibrationFailure.nothingToMeasure(zone: $0) } ?? .notPlaying
+        case .notPlaying(let missing): .notPlaying(missing)
+        case .noOtherSpeaker: zone.map { CalibrationFailure.nothingToMeasure(zone: $0) } ?? .notPlaying(.speaker)
         case .onlyLeftOut, .referenceHeadphones, .busy: nil
         }
     }

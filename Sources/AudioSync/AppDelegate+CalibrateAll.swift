@@ -107,7 +107,12 @@ extension AppDelegate {
             ? (try? calibrateAllPlan().get())?.first(where: { $0.id == speaker.id && $0.kind == speaker.kind })
             : speaker
         guard engine.isRunning, taking.allSatisfy(playing.contains), let now else {
-            appModel.calibrateAll.line = .cannotMeasureAgain(name: speaker.name)
+            let missing = CalibrationMissing.of(streaming: engine.isRunning, speaker: speaker.id,
+                                                reference: taking[0], playing: playing,
+                                                switchedOn: calibrateAllContext(taking: taking).switchedOn)
+            // Empty when both play but the plan has no row for the speaker now.
+            appModel.calibrateAll.line = .cannotMeasureAgain(name: speaker.name,
+                                                             missing: missing.isEmpty ? .speaker : missing)
             return
         }
         speaker = now
@@ -356,7 +361,8 @@ extension AppDelegate {
             if let reason = calibrationLeftOut(output.id) { leftOut[output.id] = reason }
         }
         return CalibrateAllFlow.Inputs(
-            streaming: engine.isRunning, reference: localReference, localOutputs: localOutputs,
+            streaming: engine.isRunning, reference: localReference,
+            referenceOn: localReference.map(enabledLocal.contains) ?? false, localOutputs: localOutputs,
             localOffsets: localOffsetMs, holdBacks: localHoldBacks, cast: cast,
             airPlay: appModel.airplay.filter { playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
             airPlayDelayMs: airPlayLatencyMs, airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),
@@ -621,6 +627,11 @@ final class CalibrateAllRun {
                                                             firstFrameNs: clock.nanoseconds(ticks: first), rate: mic.rate)
                 else { return end(.failed(.noMicrophone)) }
                 let frames = step.window_frames
+                DebugTrace.log("[AudioSync] calibrate all: row \(step.row) sweep \(step.sweep) in on the "
+                    + "\(CalibrationTap.playedOnFill ? "silence fill" : "tap block") at ticks \(ticks), "
+                    + "lagFrames \(start), mic firstFrameTicks \(first) timestamp valid \(mic.firstFrameStamped), "
+                    + "delays now: \(app.calibrateAllContext(taking: [speakers[0].id, speakers[step.row].id], zone: zone).delays); "
+                    + "\(app.engine.driftNote(uid: speakers[0].id)); \(app.engine.driftNote(uid: speakers[step.row].id))")
                 stage = .recording(step, mic, start: start, frames: frames,
                                    deadlineNs: now + seconds(Double(frames) / Double(mic.rate) + 2))
             } else if now >= asked + seconds(1.5) {
@@ -631,6 +642,8 @@ final class CalibrateAllRun {
             guard mic.framesRecorded >= start + frames || now >= deadline else { return }
             mic.stop()
             let samples = mic.recording(from: start, count: frames)
+            CalibrationFlow.logArrival("calibrate all: row \(step.row) sweep \(step.sweep)", recording: samples,
+                                       rate: mic.rate)
             DebugTrace.log("[AudioSync] calibrate all: row \(step.row) sweep \(step.sweep) recorded, "
                 + "\(samples.count) of \(frames) frames at \(mic.rate) Hz from frame \(start)")
             stage = .analyzing

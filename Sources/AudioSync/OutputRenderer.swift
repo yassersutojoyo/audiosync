@@ -135,6 +135,9 @@ final class OutputRenderer: FadingOutput {
     /// its latest read, in capture-rate frames (S56).
     var lagFrames: Int64 { target?.renderer.lagFrames ?? 0 }
 
+    /// The newest delay asked for, in capture-rate frames.
+    var newestDelayFrames: Int64 { delayFrames.load(ordering: .relaxed) }
+
     /// The reader's diagnostic counters (S158).
     var counters: CoreDelayReader.Counters { target?.renderer.counters ?? CoreDelayReader.Counters() }
 
@@ -147,6 +150,8 @@ final class OutputRenderer: FadingOutput {
     /// How late callbacks came against the earliest ones (S209).
     var lateMaxMs: Double { target?.renderer.lateMaxMs ?? 0 }
     var lateCallbacks: Int64 { target?.renderer.lateCallbacks ?? 0 }
+    /// The device's IO overloads since the latest start (S229).
+    var ioOverloads: Int64 { target?.overloads.load(ordering: .relaxed) ?? 0 }
 
     /// The latest start's counters and the observer's values (S229), for the
     /// debug log; main thread.
@@ -154,7 +159,7 @@ final class OutputRenderer: FadingOutput {
         let observed = OutputObservation(
             leastSlackMs: target?.renderer.leastSlackMs, floorDropMs: target?.renderer.floorDropMs ?? 0,
             shortageFrames: target?.renderer.shortageFrames ?? 0,
-            overloads: target?.overloads.load(ordering: .relaxed) ?? 0,
+            overloads: ioOverloads,
             timeSteps: target?.renderer.timeSteps ?? 0, bluetoothOutputs: bluetoothOutputs,
             rejectedLatencyNs: target?.renderer.rejectedLatencyNs, latencyNs: latencyNs)
         return "\(framesRendered.load(ordering: .relaxed)) frames rendered, \(counters), "

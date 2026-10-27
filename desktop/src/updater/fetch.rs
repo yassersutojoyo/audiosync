@@ -387,7 +387,7 @@ pub mod tests {
         }
     }
 
-    // covers: S294 (all but the WinHTTP stack itself)
+    // covers: S294
     #[test]
     fn the_feed_is_https_only_with_its_size_and_time_limits() {
         assert_eq!(

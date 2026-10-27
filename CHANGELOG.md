@@ -19,17 +19,51 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - When several AirPlay speakers start together, they connect one after another, half a second apart, and a pairing's key exchange no longer holds up the sound of a speaker that's already playing. On the Mac and on Windows.
 - The notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, on the Mac and on Windows.
 - On Windows, AirPlay audio keeps its timing better while the PC is busy, since AudioSync asks Windows to treat its AirPlay sending as audio work.
+- On the Mac, double-clicking a zone's name in the main window or choosing Rename… from its menu now edits the name in place, like a speaker's, instead of opening the Rename Zone dialog: Return keeps the new name, Escape the old one.
+- On Windows, a zone is renamed in place like a speaker: double-click its name, press F2 or choose Rename…, type, then press Enter. A speaker in its row under In zones renames the same way. No dialog opens.
+- A zone's menu item now says Rename…, as a speaker's does, and a zone name is cut to 60 characters with line breaks turned into spaces, as a speaker name is. On the Mac and on Windows.
 
 ### Fixed
 
+- A Google Cast speaker added by address that doesn't answer, for example because it's switched off, no longer counts as online, and it plays once it answers again. AudioSync checks it every 15 seconds. On the Mac and on Windows.
+- On Windows, when another program resizes the main window past the screen, it now stops at the largest size Windows gives any window, instead of growing taller than the screen.
 - A local speaker whose sound starts late catches up in one step within its first 3 seconds, instead of playing late or drifting into place. On the Mac and on Windows.
+- Calibration times a speaker by the sound that reaches the microphone first, so a louder reflection off a wall no longer makes it read late, and a knock or hiss just before the test sound isn't taken for it. On the Mac and on Windows.
+- When calibration can't start, its message names only what's off instead of asking for all of it. Calibrate All and Measure Again say it the same way. On the Mac and on Windows.
 - With AirPlay 2 on, a paired speaker that also announces it asks for a PIN plays with its stored pairing. Only a speaker that turns the pairing down asks for the PIN again. On the Mac and on Windows.
 - With AirPlay 2 on, a speaker that offers AirPlay 1 and AirPlay 2 and turns AirPlay 1 down now gets the AirPlay 2 PIN prompt. On the Mac and on Windows.
 - With AirPlay 2 on, a pairing step that never gets an answer no longer leaves the speaker on Connecting. It fails and tries again like any other failed start. On the Mac and on Windows.
 - On Windows, an AirPlay speaker that was on at launch and asks for a PIN or password goes off with a notice, instead of reading On while nothing plays.
-- On Windows, a stereo pair or home theater group in a zone that needs AirPlay 2 says Needs AirPlay 2 (Experimental) and is dimmed, as on the Mac.
 - On the Mac, while macOS asks for microphone access for a new input, picking the source that's already playing cancels the switch.
 - On Windows, pasting something that isn't a whole number, such as "1,5", into a delay box no longer leaves just its digits behind ("15"), which Enter then applied. The paste is ignored and the box keeps what it showed, as on the Mac.
+- On the Mac, the menu bar panel's separator lines and edges stay sharp while it opens. Before, they blurred as the panel grew and snapped sharp at the end. It now unfolds from its arrow at its own size instead of scaling up.
+- On the Mac, the menu bar panel's first open after launch grows in from the menu bar like every open after it. Before, that first one just faded in at full size.
+- On the Mac, while none of a zone's speakers is found, Tab in the main window skips the zone's greyed round icon and stops on its arrow, which shows or hides the zone's speakers, as in the menu bar panel. Before, the focus stopped on the icon, which VoiceOver doesn't read.
+- On the Mac, while an AirPlay problem is showing, the "no speakers found" note asks you to check Local Network access only once macOS has refused it, not while AudioSync merely can't tell yet.
+
+## [0.7.1] - 2026-10-27
+
+### Changed
+
+- In the Mac's menu bar panel and the Windows tray flyout, a zone works like its header in the main window: the round icon switches the zone on or off, and the arrow, the name or the space around them shows or hides the zone's speakers. Before, a click on the name switched the whole zone in the panel and anywhere on the row did in the flyout, and the speakers were always listed. On Windows, showing or hiding a zone's speakers in the main window does the same in the flyout, and the other way round; on the Mac, the main window and the menu bar panel each show or hide them on their own.
+- On the Mac, while none of a zone's speakers is found, its greyed round icon shows or hides the zone's speakers, in the main window and the menu bar panel, as on Windows. Before, it did nothing.
+- A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Its switch there turns only that speaker on or off, and the zone's other speakers stay as they are; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
+- Go to Zone puts the keyboard focus on the zone's round icon, or on its arrow while none of the zone's speakers is found, so VoiceOver always reads where the focus lands. On the Mac.
+- Only This Speaker, in a speaker's menu under its zone, plays this speaker and turns off the zone's other speakers that are on; speakers you hid stay as they are. When this one is a Google Cast speaker that's offline or that another app took over, nothing switches. Nobody leaves the zone. On the Mac and on Windows.
+- On the Mac, double-click a zone's name in the main window to rename it, as you already could with a speaker's name. A single click on the name still shows or hides the zone's speakers.
+- On the Mac, double-click the name of a speaker in a zone to rename it in its short row under "In zones", as you already could in its row under the zone.
+- On the Mac, a zone's speakers sit in one tinted box in the main window, under the zone and under "IN ZONES", with thin lines between them instead of a box around each speaker that plays. The short rows are a little taller, and the link to the zone after a speaker's name is now a small button with the zone's icon and name. The "IN ZONES" label and the lines between rows start where the speaker names do.
+- On the Mac, Switch to All System Audio When the Source App Quits is now on unless you turned it off. When the app you capture quits, AudioSync keeps playing all system audio instead of stopping.
+- About AudioSync shows just the version number, on the Mac and on Windows. The Mac no longer adds the build number in parentheses, and Windows no longer lists the audio core's version under it.
+
+### Fixed
+
+- On Windows, while none of a zone's speakers is found, Tab reaches the zone's arrow, in the main window and the tray flyout, and Space or Enter shows or hides its speakers; Go to Zone puts the focus there, and Narrator reads on it that none of them was found, as on the Mac. Before, the keyboard couldn't fold that zone and Go to Zone landed on its … button. A one-speaker zone now reads "1 of 1 speaker on".
+- On Windows, a stereo pair or home theater in a zone that can't play while AirPlay 2 is off says under the zone that it needs AirPlay 2, as on the Mac, instead of saying it wasn't found. Every zone row that needs AirPlay 2 is dimmed, as on the Mac.
+- On Windows, a Google Cast speaker that is off in a zone says "Stayed off, since one Cast speaker plays at a time" only while another Cast speaker is on, as on the Mac. Before, it said so whenever any other speaker in the zone was on, such as the PC's own speakers.
+- On the Mac, a zone click or a preset leaves a Google Cast speaker that another app took over off, as on Windows. Before, AudioSync took it back from that app.
+- Opening the Mac's menu bar panel again while it's still fading out no longer leaves it stuck at its old size: it grows and shrinks with its content again.
+- The Mac's menu bar panel no longer shows a second, full-size box behind it while it opens or closes; its background and shadow grow with it. Showing or hiding a zone's speakers in the panel resizes it in one motion, and the rows below no longer slide over the ones fading out.
 
 ## [0.7.0] - 2026-10-27
 
@@ -72,7 +106,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AirPlay speakers start from the latency they report, on the Mac and on Windows, so they line up with each other before you calibrate, and Calibrate All counts it when it listens for an AirPlay speaker. While a speaker is playing, AudioSync doesn't move the shared AirPlay delay under it.
 - A zone remembers the name of each of its speakers, so one that isn't around shows under its last name, also after a restart, on the Mac and on Windows.
 - Forget Password in a speaker's menu, when AudioSync holds a password for it, on the Mac and on Windows. The speaker asks for the password the next time you turn it on.
-- On the Mac, the first time a feature needs a macOS permission (Local Network, audio capture, the microphone or Automation), AudioSync says why before macOS asks, and you can choose Not Now. If you said no, the notice has a button that opens the right pane in System Settings, and the rest of the app keeps working.
+- On the Mac, the first time a feature needs a macOS permission (Local Network, audio capture, the microphone or Automation), AudioSync says why before macOS asks, and you can choose Not Now. If you said no, the notice has a button that opens the right pane in System Settings, and the rest of the app keeps working. If you update from an earlier version, Now Playing reads Spotify and Music right away, as before, and macOS asks for Automation itself if it still needs to.
 - On the Mac, a Permissions window opens once on a first install and asks for Local Network and audio capture together, so streaming doesn't stop later to ask. Each row shows where that permission stands and links to System Settings if it's refused. The microphone and Automation wait until you use them. Skip for Now closes it, and AudioSync > Set Up Permissions… opens it again.
 
 ### Changed
@@ -128,6 +162,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Quitting no longer waits on a Cast device that stopped reading.
 - On the Mac, the menu bar panel keeps its text readable over any window behind it, light or dark.
 - On the Mac, the menu bar panel now opens as a popover from the icon, with a little arrow pointing at it. It grows out of the icon and shrinks back into it, and a second click on the icon closes it again, like other menu bar items. On recent macOS that second click opened the panel right back up.
+- On the Mac, a Bluetooth speaker turned on within 3 seconds of connecting no longer plays late for the whole stream. AudioSync restarts it once, quietly, 2 seconds after it starts.
+- On the Mac, the menu bar panel no longer stutters when it opens or closes, also on a quick second open or when you close it while it's still opening. A notice that comes or goes while the panel is open resizes it smoothly, and with Reduce Motion on the panel only fades.
 - On the Mac, the Calibrate All list scrolls when you have many speakers, so Apply and Close stay on screen.
 - On the Mac, a local speaker that can't start because the source's sample rate is higher than AudioSync can hold now says so, instead of blaming another app or the format.
 - On the Mac, a Google Cast offset you set by hand, or with Apply or Undo in Calibrate All, stays put. Before, a late update from the speaker could put the old offset back.
@@ -156,11 +192,11 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - After streaming starts with every speaker off, a speaker that goes off before it ever plays, such as one that asks for a code every time, no longer stops streaming: AudioSync waits for the next one. Once a speaker has played, turning the last one off still stops streaming. On the Mac and on Windows.
 - An AirPlay speaker that turns the connection down before any pairing starts goes off with a notice that says it didn't accept the connection, instead of one that asks for a PIN or code. On the Mac and on Windows.
 - An AirPlay speaker that's retrying when its receiver leaves the network stops retrying along with its row, and its retrying notice goes away. It stays on and joins again once the receiver is back. On the Mac and on Windows.
-- On the Mac and on Windows, a zone's header works like a speaker row: only its round icon switches the zone on or off, and a click anywhere else on the header, its name, count, arrow and the space around its volume and ⋯ button included, shows or hides the zone's speakers. Before, a click on the name switched the whole zone, and parts of the header did nothing.
+- In the main window, on the Mac and on Windows, a zone's header works like a speaker row: only its round icon switches the zone on or off, and a click anywhere else on the header, its name, count, arrow and the space around its volume and ⋯ button included, shows or hides the zone's speakers. Before, a click on the name switched the whole zone, and parts of the header did nothing.
 
 ### Windows and Linux (preview, not released yet)
 
-- The first release with the Windows 11 version, for x64 and ARM64 PCs, is still to come. It isn't code-signed, so SmartScreen may warn the first time you open it. It has the changes above and in 0.6.0 too, except where an entry says "On the Mac". Google Cast speakers play on Windows as well, "Switch to All System Audio When the Source App Quits" is in the File menu, the Guide's diagrams have descriptions for Narrator, and a click on the empty space of an open delay panel closes it.
+- The first release with the Windows 11 version, for x64 and ARM64 PCs, is still to come. It isn't code-signed, so SmartScreen may warn the first time you open it. It has the changes above and in 0.6.0 too, except the entries about the Mac. Google Cast speakers play on Windows as well, "Switch to All System Audio When the Source App Quits" is in the File menu, the Guide's diagrams have descriptions for Narrator, and a click on the empty space of an open delay panel closes it.
 - You can rename a speaker: double-click its name, or right-click it or use its … button and choose Rename. Press Enter to keep the new name or Escape to cancel; a click outside the field keeps it too. The name stays after a restart and shows in the notification area flyout, in notices and in the AirPlay code and password dialogs. Leave it empty to go back to the device's own name, which the name's tooltip keeps showing while it's renamed.
 - A renamed speaker shows its device's own name under the new one, in the main window and the notification area flyout, and a double-click on the name goes by the double-click speed set in Windows.
 - A Now Playing card in the main window follows what Windows reports as playing, with the track, artist and artwork, and Previous Track, play or pause and Next Track buttons.
@@ -355,6 +391,8 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.1
 [0.7.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.0
 [0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.5.0

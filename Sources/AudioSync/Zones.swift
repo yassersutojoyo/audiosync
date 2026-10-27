@@ -152,6 +152,14 @@ enum ZoneEdit {
         return out
     }
 
+    /// Zone `id` named `typed`, cleaned as a speaker name is; a blank name keeps the current one.
+    static func renaming(_ id: String, to typed: String, in zones: [SpeakerZone]) -> [SpeakerZone] {
+        guard let index = zones.firstIndex(where: { $0.id == id }) else { return zones }
+        var out = zones
+        out[index].name = GroupName.afterRename(typed: SpeakerNames.clean(typed), current: zones[index].name)
+        return out
+    }
+
     /// `zones` with a new zone of `members` after them, at volume 100; each
     /// member leaves the zone that held it.
     static func adding(id: String, name: String, members: [String], to zones: [SpeakerZone]) -> [SpeakerZone] {
@@ -260,6 +268,58 @@ enum ZoneLayout {
         speakers.filter { !zoned.contains(key($0)) }
     }
 
+    /// The speakers of `speakers` whose key is in a zone, order kept: their
+    /// compact rows follow the section's full rows.
+    static func zoned<T>(_ speakers: [T], key: (T) -> String, zoned: Set<String>) -> [T] {
+        speakers.filter { zoned.contains(key($0)) }
+    }
+
+    struct ZoneGroup<T>: Identifiable {
+        let zone: String
+        let rows: [T]
+        var id: String { zone }
+    }
+
+    /// The compact rows split into one group box per zone, zones in the order
+    /// of their first row, rows in their own order. A row whose zone is gone
+    /// is left out.
+    static func byZone<T>(_ speakers: [T], zone: (T) -> String?) -> [ZoneGroup<T>] {
+        var order: [String] = []
+        var rows: [String: [T]] = [:]
+        for speaker in speakers {
+            guard let id = zone(speaker) else { continue }
+            if rows[id] == nil { order.append(id) }
+            rows[id, default: []].append(speaker)
+        }
+        return order.map { ZoneGroup(zone: $0, rows: rows[$0] ?? []) }
+    }
+
+    /// A zone member as Only This Speaker sees it.
+    struct Member {
+        let key: String
+        let listed, on, cast: Bool
+        /// A Cast speaker offline or taken over by another app: it can't start now.
+        var busy = false
+    }
+
+    /// The switches Only This Speaker makes for member `key`, in order: it
+    /// comes on unless it is, and every other listed member that is on goes
+    /// off. Another Cast member goes off before it comes on, since one Cast
+    /// speaker plays at a time; the rest after, so streaming never stops in
+    /// between. Nobody leaves the zone. A Cast member that can't start now
+    /// switches nothing: the others would go off for nothing.
+    static func onlyThis(_ key: String, members: [Member]) -> [(key: String, on: Bool)] {
+        guard let this = members.first(where: { $0.key == key }), this.listed else { return [] }
+        if this.cast && this.busy && !this.on { return [] }
+        let others = members.filter { $0.key != key && $0.listed && $0.on }
+        var steps: [(key: String, on: Bool)] = []
+        if !this.on && !this.cast { steps.append((key: key, on: true)) }
+        for member in others where member.cast { steps.append((key: member.key, on: false)) }
+        if !this.on && this.cast { steps.append((key: key, on: true)) }
+        for member in others where !member.cast { steps.append((key: member.key, on: false)) }
+        return steps
+    }
+
     /// A zone header's count, `total` being its members that aren't hidden
     /// (rows and count agree): "No speakers", "None of 3 found" while none is
     /// present, else "2 of 3 on" with ", 1 waiting" when one waits.
@@ -268,11 +328,25 @@ enum ZoneLayout {
         if present == 0 { return text.zoneNoneHere(total) }
         return text.zoneCount(on: on, of: total) + (waiting > 0 ? text.zoneWaiting(waiting) : "")
     }
+
+    /// The menu bar panel's rows for `zones`: a header each, plus the members
+    /// of every zone not in `collapsed`.
+    static func panelRows<Z>(_ zones: [Z], id: (Z) -> String, members: (Z) -> Int,
+                             collapsed: Set<String>) -> Int {
+        zones.reduce(0) { $0 + 1 + (collapsed.contains(id($1)) ? 0 : members($1)) }
+    }
+
+    /// The member rows a zone shows: none while it is folded.
+    static func shownMembers<M>(_ members: [M], folded: Bool) -> [M] {
+        folded ? [] : members
+    }
 }
 
-/// What a click on each part of a zone's header in the main window does.
+/// What a click on each part of a zone's header does, in the main window and
+/// in the menu bar panel (which has no count line, slider or menu).
 /// Folding never switches the zone: only its round icon does, and the slider
-/// and the options menu keep their clicks to themselves.
+/// and the options menu keep their clicks to themselves. While none of the
+/// zone's speakers is present, the greyed icon folds, as on Windows.
 enum ZoneHeaderHit {
     enum Area: CaseIterable {
         case chevron, name, count, blank, zoneIcon, slider, menu
@@ -282,11 +356,47 @@ enum ZoneHeaderHit {
         case fold, toggleZone, none
     }
 
-    static func action(for area: Area) -> Action {
+    static func action(for area: Area, nonePresent: Bool = false) -> Action {
         switch area {
         case .chevron, .name, .count, .blank: return .fold
-        case .zoneIcon: return .toggleZone
+        case .zoneIcon: return nonePresent ? .fold : .toggleZone
         case .slider, .menu: return .none
         }
     }
+
+    /// Where Go to Zone puts the keyboard focus: the round icon, or the arrow
+    /// while none of the zone's speakers is present and VoiceOver skips the icon.
+    static func goToZoneFocus(nonePresent: Bool) -> Area {
+        nonePresent ? .chevron : .zoneIcon
+    }
+}
+
+/// How the main window draws zone members: one tinted box around a zone's
+/// rows, and the In zones label and the separators on the name column.
+enum ZoneLook {
+    /// A full row's switch; a compact row's smaller badge sits in a column
+    /// this wide, so every name starts at `nameColumn`.
+    static let badgeColumn: CGFloat = 32
+    static let badgeGap: CGFloat = 12
+    static let nameColumn = BrandTokens.Spacing.rowPaddingX + badgeColumn + badgeGap
+
+    static let compactBadge: CGFloat = 24
+    static let compactPaddingY: CGFloat = 6
+    static var compactRowHeight: CGFloat { compactBadge + 2 * compactPaddingY }
+
+    static let groupFill = 0.05
+    static let groupBorder = 0.35
+    static let groupBorderWidth: CGFloat = 0.5
+    static let groupRadius = BrandTokens.Radius.row
+    /// Between two zones' boxes in one section.
+    static let groupGap: CGFloat = 4
+
+    static let labelTop: CGFloat = 9
+    static let labelBottom: CGFloat = 5
+    static let labelLineGap: CGFloat = 8
+
+    /// The Go to Zone chip after a compact row's name.
+    static let chipHeight: CGFloat = 18
+    static let chipPaddingX: CGFloat = 7
+    static let chipFill = 0.12
 }

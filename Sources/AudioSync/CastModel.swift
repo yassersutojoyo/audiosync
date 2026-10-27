@@ -218,12 +218,21 @@ enum CastEvent: Equatable {
     /// `asc_cast_next_event`; `members` reads the playing group's list for a
     /// members event. Nil for a kind this build doesn't know.
     init?(_ raw: AscCastEvent, members: () -> [CastMember] = { [] }) {
+        var underruns = CastUnderruns()
+        self.init(raw, members: members, underruns: &underruns)
+    }
+
+    /// As above; `underruns` keeps each attempt's last underrun count, so a
+    /// diagnostics line shows what changed since the previous one.
+    init?(_ raw: AscCastEvent, members: () -> [CastMember], underruns: inout CastUnderruns) {
         let a = raw.attempt
         let detail = raw.detail.map { String(cString: $0) } ?? ""
         let error = CastError(raw.error)
         switch raw.kind {
         case ASC_CAST_EVENT_STARTED: self = .started(attempt: a, format: raw.format)
-        case ASC_CAST_EVENT_PLAYING: self = .playing(attempt: a)
+        case ASC_CAST_EVENT_PLAYING:
+            underruns.forget(a)
+            self = .playing(attempt: a)
         case ASC_CAST_EVENT_CONNECT_FAILED: self = .connectFailed(attempt: a, error: error, retryMs: raw.retry_ms)
         case ASC_CAST_EVENT_RECOVERING: self = .recovering(attempt: a)
         case ASC_CAST_EVENT_RECOVERED: self = .recovered(attempt: a)
@@ -240,11 +249,14 @@ enum CastEvent: Equatable {
             case ASC_CAST_END_DESELECTED: end = .deselected
             default: end = .failed(error)
             }
+            underruns.forget(a)
             self = .ended(attempt: a, end)
         case ASC_CAST_EVENT_REBUFFERING: self = .note(attempt: a, "the device ran dry")
         case ASC_CAST_EVENT_FORMAT_FALLBACK: self = .formatFallback(attempt: a, format: raw.format)
         case ASC_CAST_EVENT_DIAGNOSTICS:
-            self = .note(attempt: a, String(format: "drift %.0f ms, queued %.0f ms", raw.drift_ms, raw.queued_ms))
+            let silence = underruns.since(attempt: a, total: raw.underrun_frames)
+            self = .note(attempt: a, String(format: "drift %.0f ms, queued %.0f ms", raw.drift_ms, raw.queued_ms)
+                + ", underrun silence \(silence) frames since the previous line")
         case ASC_CAST_EVENT_STREAM: self = .note(attempt: a, "stream: " + detail)
         case ASC_CAST_EVENT_MEMBERS: self = .members(attempt: a, members())
         case ASC_CAST_EVENT_GROUP_LOG: self = .groupLog(detail)
@@ -253,6 +265,24 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_FAILED: self = .failed(detail: detail)
         default: return nil
         }
+    }
+}
+
+/// The underrun silence each attempt reported last. The core counts it from
+/// the stream's `LOAD`, which a playing event marks, so that event resets it.
+struct CastUnderruns {
+    private var last: [UInt64: UInt64] = [:]
+
+    /// The frames `attempt` counted since its previous report; a count that
+    /// went down was restarted, so all of it is new.
+    mutating func since(attempt: UInt64, total: UInt64) -> UInt64 {
+        let before = last[attempt] ?? 0
+        last[attempt] = total
+        return total >= before ? total - before : total
+    }
+
+    mutating func forget(_ attempt: UInt64) {
+        last[attempt] = nil
     }
 }
 
@@ -398,6 +428,8 @@ struct CastModel {
     /// Devices added by hand that the user removed: a change the sender
     /// queued before it dropped one doesn't bring the row back.
     private(set) var removedManual: Set<String> = []
+    /// Devices another app took over, until the user turns one on again.
+    private(set) var takenOver: Set<String> = []
 
     /// The devices listed, by name.
     var rows: [String] {
@@ -446,12 +478,17 @@ struct CastModel {
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
 
+    /// Offline or taken over by another app: a zone click and Only This
+    /// Speaker leave it off (S246).
+    func cantStartNow(_ id: String) -> Bool { devices[id]?.offline == true || takenOver.contains(id) }
+
     /// A browse found the device added by address as `old` under its `id`
     /// (C18), and the sender moved its session there: what the app holds
     /// about it moves too, so it stays on and playing, and Remove still
     /// forgets its address.
     private mutating func identified(_ old: String, as new: String) {
         if let address = manualAddresses.removeValue(forKey: old) { manualAddresses[new] = address }
+        if takenOver.remove(old) != nil { takenOver.insert(new) }
         if enabled == old { enabled = new }
         if starting == old { starting = new }
         if let current = attempt, current.device == old {
@@ -503,6 +540,7 @@ struct CastModel {
     mutating func turnOn(_ id: String) -> CastProblem? {
         if let other = enabled, other != id { return .busy }
         enabled = id
+        takenOver.remove(id)
         return nil
     }
 
@@ -605,6 +643,7 @@ struct CastModel {
             unanswered = []
             members = nil
             if enabled == id { enabled = nil }
+            if end == .takenOver { takenOver.insert(id) }
             return .turnedOff(id, problem: end.problem)
         case .commandFailed, .note, .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil

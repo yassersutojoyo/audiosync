@@ -277,6 +277,10 @@ pub struct SpeakerOptions {
     /// The host keeps a debug log: an AirPlay 2 session reports
     /// [`SpeakerEvent::Trace`] lines and reads the receiver's volume once.
     pub trace: bool,
+    /// A sync check: [`SpeakerEvent::Trace`] lines with the speaker's first
+    /// packet and, on the AirPlay 1 path, what each sync packet states, about
+    /// one a second, too many for a debug log.
+    pub trace_timing: bool,
 }
 
 impl SpeakerOptions {
@@ -291,6 +295,7 @@ impl SpeakerOptions {
             homekit_credentials: None,
             timing: None,
             trace: false,
+            trace_timing: false,
         }
     }
 }
@@ -385,6 +390,8 @@ impl fmt::Debug for SpeakerOptions {
                 &self.homekit_credentials.as_ref().map(|_| "<hidden>"),
             )
             .field("timing", &self.timing)
+            .field("trace", &self.trace)
+            .field("trace_timing", &self.trace_timing)
             .finish()
     }
 }

@@ -32,7 +32,7 @@ mod cast_address;
 mod password;
 
 use crate::audio::backend::AirPlayGroupKind;
-use crate::audio::calibration::{self, Failure, Phase, Step, Which};
+use crate::audio::calibration::{self, Failure, Missing, Phase, Step, Which};
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
@@ -67,8 +67,6 @@ enum DialogPurpose {
     NewZone,
     /// New Zone… in a speaker's menu, by speaker ID.
     NewZoneWith(String),
-    /// Rename Zone…, by zone ID.
-    Rename(String),
     /// Only a message (no name field), e.g. why a zone can't be made yet.
     Message,
     /// Save as Preset….
@@ -79,6 +77,16 @@ enum DialogPurpose {
     SaveCurve,
     /// Rename in the equalizer, for the saved curve at this index.
     RenameCurve(usize),
+}
+
+/// Where a name is edited: a speaker's full row (in its section or under
+/// its zone), its In zones row, or a zone's header.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RenamePlace {
+    #[default]
+    Row,
+    InZones,
+    Zone,
 }
 
 /// UI state the backend doesn't keep: which sync controls are open, what is
@@ -92,6 +100,8 @@ struct UiState {
     /// The speaker whose name is being edited in its row, and what is typed
     /// there; one at a time (spec S228).
     rename: Option<(String, String)>,
+    /// Where the open rename's field shows.
+    rename_place: RenamePlace,
     /// The open rename's field has had the focus; only then does the focus
     /// moving to another control apply the name.
     rename_focused: bool,
@@ -222,6 +232,9 @@ struct Models {
     mix_apps: Rc<VecModel<MixAppItem>>,
     this_pc: Rc<VecModel<SpeakerItem>>,
     connected: Rc<VecModel<SpeakerItem>>,
+    /// The compact rows of the speakers in a zone, under their own section.
+    this_pc_zoned: Rc<VecModel<SpeakerItem>>,
+    connected_zoned: Rc<VecModel<SpeakerItem>>,
     /// The flyout's speakers in no zone.
     all_speakers: Rc<VecModel<SpeakerItem>>,
     zones: Rc<VecModel<ZoneItem>>,
@@ -258,6 +271,12 @@ fn zone_shape(lengths: impl Iterator<Item = usize>) -> u64 {
     lengths.fold(1, |shape, length| {
         shape.wrapping_mul(31).wrapping_add(length as u64 + 1)
     })
+}
+
+/// How many member rows a zone lists under its header: none while its
+/// speakers are hidden, so folding a zone counts as removing them.
+fn listed_members(expanded: bool, members: usize) -> usize {
+    if expanded { members } else { 0 }
 }
 
 /// How many notices the main window lists, newest first.
@@ -441,6 +460,8 @@ struct MainFocus {
     speaker: Option<(SharedString, RowPart)>,
     /// A zone header's control: the zone id and the header's part.
     zone: Option<(SharedString, RowPart)>,
+    /// An In zones row's control: the speaker id and the row's part.
+    in_zones: Option<(SharedString, RowPart)>,
     /// Another main-window control: the streaming switch, the source, the
     /// transport, the master volume, the equalizer or calibration card or
     /// the AirPlay delay.
@@ -515,6 +536,16 @@ fn first_row(new: &MainLists) -> MainFocusTarget {
 }
 
 impl MainFocus {
+    /// Whether the name field of `id` in `place` has the focus.
+    fn holds_name(&self, place: RenamePlace, id: &str) -> bool {
+        let slot = match place {
+            RenamePlace::Row => &self.speaker,
+            RenamePlace::InZones => &self.in_zones,
+            RenamePlace::Zone => &self.zone,
+        };
+        matches!(slot, Some((held, RowPart::Name)) if held.as_str() == id)
+    }
+
     /// Where the focus goes when the lists change from `old` to `new`, if a
     /// rebuilt list (its length changed, [`sync_model`]) had it.
     fn target(&self, old: &MainLists, new: &MainLists) -> Option<MainFocusTarget> {
@@ -760,6 +791,25 @@ fn apply_rename_left(app: &Weak<App>) {
     }
 }
 
+/// Asks the row or zone header where a name is edited to take the keyboard
+/// focus on `part`.
+fn focus_row(main: &MainWindow, place: RenamePlace, id: SharedString, part: RowPart) {
+    match place {
+        RenamePlace::Row => {
+            main.set_focus_speaker_part(part);
+            main.set_focus_speaker_id(id);
+        }
+        RenamePlace::InZones => {
+            main.set_focus_in_zones_part(part);
+            main.set_focus_in_zones_id(id);
+        }
+        RenamePlace::Zone => {
+            main.set_focus_zone_part(part);
+            main.set_focus_zone_id(id);
+        }
+    }
+}
+
 /// Sets the main window's size as soon as its native window exists, checking
 /// every 20 ms up to `tries` times, then maximizes it when `maximized` (a
 /// size set on a maximized window would restore it to normal).
@@ -862,6 +912,8 @@ impl App {
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
+            this_pc_zoned: Rc::new(VecModel::default()),
+            connected_zoned: Rc::new(VecModel::default()),
             connected: Rc::new(VecModel::default()),
             all_speakers: Rc::new(VecModel::default()),
             zones: Rc::new(VecModel::default()),
@@ -1471,6 +1523,10 @@ impl App {
         self.main.set_mix_apps(ModelRc::from(m.mix_apps.clone()));
         self.main.set_this_pc(ModelRc::from(m.this_pc.clone()));
         self.main.set_connected(ModelRc::from(m.connected.clone()));
+        self.main
+            .set_this_pc_zoned(ModelRc::from(m.this_pc_zoned.clone()));
+        self.main
+            .set_connected_zoned(ModelRc::from(m.connected_zoned.clone()));
         self.main.set_zones(ModelRc::from(m.zones.clone()));
         self.main.set_notices(ModelRc::from(m.notices.clone()));
         self.main
@@ -1499,20 +1555,24 @@ impl App {
         self.guide
             .set_steps(ModelRc::from(self.guide_steps.clone()));
         self.about.set_version(env!("CARGO_PKG_VERSION").into());
-        self.about.set_core_version(audiosync_core::VERSION.into());
     }
 
     /// Reads a snapshot and shows it in every window.
     pub fn refresh(&self) {
         // A speaker that went mid-rename takes its name along; back, it
-        // shows that name, its field closed.
+        // shows that name, its field closed. A deleted zone's field just
+        // goes.
         let gone = {
             let mut ui = self.ui.borrow_mut();
             let open = ui.rename.as_ref().map(|(id, _)| id.clone());
+            let zone = ui.rename_place == RenamePlace::Zone;
+            let snapshot = self.backend.borrow().snapshot();
             match open {
-                Some(id) if self.backend.borrow().snapshot().speaker(&id).is_none() => {
-                    ui.rename.take()
+                Some(id) if zone && !snapshot.zones.iter().any(|z| z.id == id) => {
+                    ui.rename = None;
+                    None
                 }
+                Some(id) if !zone && snapshot.speaker(&id).is_none() => ui.rename.take(),
                 _ => None,
             }
         };
@@ -1562,7 +1622,11 @@ impl App {
                 ui_model::MAX_DELAY_MS,
                 format_offset_ms,
             );
-            if let Some((_, text)) = ui.rename.as_ref().filter(|(id, _)| *id == speaker.id) {
+            if let Some((_, text)) = ui
+                .rename
+                .as_ref()
+                .filter(|(id, _)| *id == speaker.id && ui.rename_place != RenamePlace::Zone)
+            {
                 row.renaming = true;
                 row.name_text = text.as_str().into();
             }
@@ -1575,30 +1639,42 @@ impl App {
             row.availability = with_switch(row.availability, ui.airplay2_experimental);
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
-            let zone = state.zone_of(&speaker.id);
-            row.zone_id = zone.map_or_else(SharedString::default, |zone| zone.id.as_str().into());
+            if let Some(zone) = state.zone_of(&speaker.id) {
+                row.zone_id = zone.id.as_str().into();
+                row.zone_name = zone.name.as_str().into();
+                if let Some(note) = state.zone_note(zone, ui_model::ZoneRow::Listed(speaker)) {
+                    row.zone_note = zone_note(&strings, note);
+                }
+            }
             row
         };
         let (this_pc, connected) = state.layout();
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
         let connected_virtual_hidden = only_virtual_outputs_hidden(&connected, lists);
         let listed = |s: &&ui_model::Speaker| lists(s);
-        // A speaker in a zone is listed under it instead (spec S245).
-        let zoned = |s: &&ui_model::Speaker| state.zone_of(&s.id).is_some();
-        let this_pc: Vec<&ui_model::Speaker> = this_pc.into_iter().filter(listed).collect();
-        let connected: Vec<&ui_model::Speaker> = connected.into_iter().filter(listed).collect();
-        let this_pc_all_in_zones = !this_pc.is_empty() && this_pc.iter().all(zoned);
-        let connected_all_in_zones = !connected.is_empty() && connected.iter().all(zoned);
-        let this_pc: Vec<SpeakerItem> = this_pc
-            .into_iter()
-            .filter(|s| !zoned(s))
-            .map(|s| item(s, false))
+        // A speaker in a zone shows under it, and keeps a compact row in its
+        // own section after the full rows.
+        let (this_pc, this_pc_zoned) =
+            state.split_zoned(this_pc.into_iter().filter(listed).collect());
+        let (connected, connected_zoned) =
+            state.split_zoned(connected.into_iter().filter(listed).collect());
+        // A zoned speaker's name field shows in the row it was asked from.
+        let in_zones = ui.rename_place == RenamePlace::InZones;
+        let compact = |s: &ui_model::Speaker, show_kind: bool| {
+            let mut row = item(s, show_kind);
+            row.renaming &= in_zones;
+            row
+        };
+        let this_pc_zoned: Vec<SpeakerItem> = this_pc_zoned
+            .iter()
+            .map(|(s, _)| compact(s, false))
             .collect();
-        let connected: Vec<SpeakerItem> = connected
-            .into_iter()
-            .filter(|s| !zoned(s))
-            .map(|s| item(s, true))
+        let connected_zoned: Vec<SpeakerItem> = connected_zoned
+            .iter()
+            .map(|(s, _)| compact(s, true))
             .collect();
+        let this_pc: Vec<SpeakerItem> = this_pc.into_iter().map(|s| item(s, false)).collect();
+        let connected: Vec<SpeakerItem> = connected.into_iter().map(|s| item(s, true)).collect();
         let zones: Vec<ZoneRowsBuilt> = state
             .zones
             .iter()
@@ -1617,6 +1693,7 @@ impl App {
                             built.zone_note = zone_note(&strings, note);
                             built.zone_dimmed = zone_row_dimmed(row, note);
                         }
+                        built.renaming &= !in_zones;
                         built
                     })
                     .collect();
@@ -1630,6 +1707,10 @@ impl App {
                     })
                     .collect();
                 let counts = state.zone_counts(zone);
+                let renaming = ui
+                    .rename
+                    .as_ref()
+                    .filter(|(id, _)| *id == zone.id && ui.rename_place == RenamePlace::Zone);
                 ZoneRowsBuilt {
                     item: ZoneItem {
                         id: zone.id.as_str().into(),
@@ -1642,6 +1723,10 @@ impl App {
                         volume: zone.volume as f32,
                         expanded: !ui.collapsed.contains(&zone.id),
                         can_calibrate: state.offers_zone_run(zone),
+                        renaming: renaming.is_some(),
+                        name_text: renaming
+                            .map(|(_, text)| text.as_str().into())
+                            .unwrap_or_default(),
                         ..ZoneItem::default()
                     },
                     members,
@@ -1662,8 +1747,6 @@ impl App {
         drop(ui);
         self.main
             .set_connected_virtual_hidden(connected_virtual_hidden);
-        self.main.set_this_pc_all_in_zones(this_pc_all_in_zones);
-        self.main.set_connected_all_in_zones(connected_all_in_zones);
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_airplay_searching(state.airplay_searching);
@@ -1788,7 +1871,11 @@ impl App {
             listed_notices: flyout_notices.len(),
             zones: zones.len(),
             speakers: flyout_speakers.len(),
-            zone_members: zone_shape(zones.iter().map(|zone| zone.members.len())),
+            zone_members: zone_shape(
+                zones
+                    .iter()
+                    .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
+            ),
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
@@ -1836,6 +1923,8 @@ impl App {
         }
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
+        sync_model(&m.this_pc_zoned, this_pc_zoned);
+        sync_model(&m.connected_zoned, connected_zoned);
         sync_model(&m.all_speakers, flyout_speakers);
         self.sync_zones(zones);
         sync_model(&m.notices, main_notices);
@@ -1999,12 +2088,14 @@ impl App {
         sync_model(&m.zones, items);
     }
 
-    /// The shape of the zones' member lists the windows show now.
+    /// The shape of the zones' member lists the flyout shows now.
     fn zone_shape_shown(&self) -> u64 {
         let kept = self.models.zone_models.borrow();
         zone_shape(self.models.zones.iter().map(|zone| {
-            kept.get(zone.id.as_str())
-                .map_or(0, |models| models.members.row_count())
+            let members = kept
+                .get(zone.id.as_str())
+                .map_or(0, |models| models.members.row_count());
+            listed_members(zone.expanded, members)
         }))
     }
 
@@ -2204,7 +2295,13 @@ impl App {
         main.global::<NameField>()
             .set_double_click(crate::platform::double_click_ms());
         let w = weak.clone();
-        main.on_speaker_rename_requested(move |id| with_app(&w, |app| app.start_rename(&id)));
+        main.on_speaker_rename_requested(move |id| {
+            with_app(&w, |app| app.start_rename(&id, RenamePlace::Row))
+        });
+        let w = weak.clone();
+        main.on_speaker_in_zones_rename_requested(move |id| {
+            with_app(&w, |app| app.start_rename(&id, RenamePlace::InZones))
+        });
         let w = weak.clone();
         main.on_speaker_rename_edited(move |id, text| {
             with_app(&w, |app| app.edit_rename(&id, &text))
@@ -2312,7 +2409,15 @@ impl App {
         main.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
         let w = weak.clone();
         main.on_zone_expanded_changed(move |id, open| {
-            with_app(&w, |app| app.set_zone_expanded(&id, open))
+            with_app(&w, |app| {
+                // A click on the header of the zone being renamed only
+                // applies the name, as on a speaker's row.
+                if app.renaming(&id, RenamePlace::Zone) {
+                    app.blank_click();
+                } else {
+                    app.set_zone_expanded(&id, open);
+                }
+            })
         });
         let w = weak.clone();
         main.on_zone_volume_changed(move |id, volume| {
@@ -2321,7 +2426,15 @@ impl App {
             })
         });
         let w = weak.clone();
-        main.on_zone_rename_requested(move |id| with_app(&w, |app| app.ask_rename_zone(&id)));
+        main.on_zone_rename_requested(move |id| {
+            with_app(&w, |app| app.start_rename(&id, RenamePlace::Zone))
+        });
+        let w = weak.clone();
+        main.on_zone_rename_edited(move |id, text| with_app(&w, |app| app.edit_rename(&id, &text)));
+        let w = weak.clone();
+        main.on_zone_rename_committed(move |id| with_app(&w, |app| app.end_rename_in(&id, true)));
+        let w = weak.clone();
+        main.on_zone_rename_cancelled(move |id| with_app(&w, |app| app.end_rename_in(&id, false)));
         let w = weak.clone();
         main.on_zone_deleted(move |id| with_app(&w, |app| app.delete_zone(&id)));
         let w = weak.clone();
@@ -2370,6 +2483,10 @@ impl App {
         let w = weak.clone();
         main.on_speaker_remove_from_zone_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.remove_from_zone(&id)))
+        });
+        let w = weak.clone();
+        main.on_speaker_only_this_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.only_this_speaker(&id)))
         });
         let w = weak.clone();
         main.on_refresh_devices(move || with_app(&w, |app| app.update(|b| b.refresh_devices())));
@@ -2432,6 +2549,13 @@ impl App {
         main.on_zone_focus_changed(move |id, part| {
             with_app(&w, |app| {
                 note_row_focus(&mut app.main_focus.borrow_mut().zone, id, part);
+            });
+            apply_rename_left(&w);
+        });
+        let w = weak.clone();
+        main.on_in_zones_focus_changed(move |id, part| {
+            with_app(&w, |app| {
+                note_row_focus(&mut app.main_focus.borrow_mut().in_zones, id, part);
             });
             apply_rename_left(&w);
         });
@@ -2502,6 +2626,10 @@ impl App {
         flyout.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
         flyout.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
+        let w = weak.clone();
+        flyout.on_zone_expanded_changed(move |id, open| {
+            with_app(&w, |app| app.set_zone_expanded(&id, open))
+        });
         let w = weak.clone();
         flyout.on_preset_recall_requested(move |id| with_app(&w, |app| app.recall_preset(&id)));
         let w = weak.clone();
@@ -3320,24 +3448,31 @@ impl App {
         }
     }
 
-    /// Rename… in a speaker's menu, or a double-click on its name: its row
-    /// shows a name field with the focus. A rename open in another row
-    /// applies first; one open in this row keeps its typing.
-    fn start_rename(&self, id: &str) {
-        let open = self
-            .ui
-            .borrow()
-            .rename
-            .as_ref()
-            .map(|(open, _)| open.clone());
-        if open.as_deref() != Some(id) {
+    /// Rename… in a speaker's or zone's menu, F2, or a double-click on a
+    /// name: that row or zone header shows a name field with the focus. A
+    /// rename open elsewhere applies first; one open in this place keeps its
+    /// typing.
+    fn start_rename(&self, id: &str, place: RenamePlace) {
+        if !self.renaming(id, place) {
             self.end_rename(true);
-            let Some(name) = self.snapshot().speaker(id).map(|s| s.name.clone()) else {
+            let state = self.snapshot();
+            let name = match place {
+                RenamePlace::Zone => state
+                    .zones
+                    .iter()
+                    .find(|z| z.id == id)
+                    .map(|z| z.name.clone()),
+                RenamePlace::Row | RenamePlace::InZones => {
+                    state.speaker(id).map(|s| s.name.clone())
+                }
+            };
+            let Some(name) = name else {
                 return;
             };
             {
                 let mut ui = self.ui.borrow_mut();
                 ui.rename = Some((id.to_owned(), name));
+                ui.rename_place = place;
                 ui.rename_focused = false;
             }
             // The field takes the focus; a control that went while it had
@@ -3351,10 +3486,15 @@ impl App {
         let id = SharedString::from(id);
         Timer::single_shot(Duration::ZERO, move || {
             if let Some(main) = main.upgrade() {
-                main.set_focus_speaker_part(RowPart::Name);
-                main.set_focus_speaker_id(id);
+                focus_row(&main, place, id, RowPart::Name);
             }
         });
+    }
+
+    /// Whether `id`'s name is being edited in `place`.
+    fn renaming(&self, id: &str, place: RenamePlace) -> bool {
+        let ui = self.ui.borrow();
+        ui.rename_place == place && matches!(&ui.rename, Some((open, _)) if open == id)
     }
 
     fn edit_rename(&self, id: &str, text: &str) {
@@ -3375,44 +3515,45 @@ impl App {
         }
     }
 
-    /// Ends the rename open in a row, if any: Enter, the field losing the
-    /// focus or a click outside it applies the name (`apply`), Escape keeps
-    /// the old one. The
-    /// keyboard focus, when it was in the field, goes to the row's toggle,
-    /// which Narrator reads with the name.
+    /// Ends the rename open in a row or zone header, if any: Enter, the
+    /// field losing the focus or a click outside it applies the name
+    /// (`apply`), Escape keeps the old one. The keyboard focus, when it was
+    /// in the field, goes to the row's or header's toggle, which Narrator
+    /// reads with the name.
     fn end_rename(&self, apply: bool) {
         let Some((id, text)) = self.ui.borrow_mut().rename.take() else {
             return;
         };
-        self.ui.borrow_mut().rename_focused = false;
-        let focused = matches!(
-            &self.main_focus.borrow().speaker,
-            Some((focused, RowPart::Name)) if focused.as_str() == id
-        );
-        if apply {
-            self.update(|b| b.rename_speaker(&id, &text));
-        } else {
-            self.refresh();
+        let place = {
+            let mut ui = self.ui.borrow_mut();
+            ui.rename_focused = false;
+            std::mem::take(&mut ui.rename_place)
+        };
+        let focused = self.main_focus.borrow().holds_name(place, &id);
+        match (apply, place) {
+            (true, RenamePlace::Zone) => self.update(|b| b.rename_zone(&id, &text)),
+            (true, _) => self.update(|b| b.rename_speaker(&id, &text)),
+            (false, _) => self.refresh(),
         }
         if focused {
-            self.main.set_focus_speaker_part(RowPart::Toggle);
-            self.main.set_focus_speaker_id(id.as_str().into());
+            focus_row(&self.main, place, id.as_str().into(), RowPart::Toggle);
         }
     }
 
-    /// The speaker whose rename to apply, once the focus has left its name
-    /// field for another control, as on the Mac. Losing the focus to another
-    /// window or a popup, which give it back, applies nothing.
+    /// The speaker or zone whose rename to apply, once the focus has left
+    /// its name field for another control, as on the Mac. Losing the focus
+    /// to another window or a popup, which give it back, applies nothing.
     fn focus_left_rename(&self) -> Option<String> {
         let mut ui = self.ui.borrow_mut();
         let id = ui.rename.as_ref()?.0.clone();
         let focus = self.main_focus.borrow();
-        if matches!(&focus.speaker, Some((held, RowPart::Name)) if *held == id) {
+        if focus.holds_name(ui.rename_place, &id) {
             ui.rename_focused = true;
             return None;
         }
         let elsewhere = focus.speaker.is_some()
             || focus.zone.is_some()
+            || focus.in_zones.is_some()
             || focus.notice.is_some()
             || focus.dismiss_all
             || focus.control.is_some();
@@ -3545,24 +3686,6 @@ impl App {
         dialog.set_name(SharedString::new());
         dialog.set_show_field(true);
         dialog.set_confirm_label(strings.get_create());
-    }
-
-    fn ask_rename_zone(&self, id: &str) {
-        let state = self.snapshot();
-        let Some(zone) = state.zones.iter().find(|z| z.id == id) else {
-            return;
-        };
-        let strings = self.strings();
-        let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::Rename(id.to_string());
-        dialog.set_heading(strings.get_rename_zone_title());
-        dialog.set_message(strings.invoke_rename_message(zone.name.as_str().into()));
-        dialog.set_placeholder(SharedString::new());
-        dialog.set_field_label(strings.get_new_zone_field_label());
-        dialog.set_name(zone.name.as_str().into());
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_rename());
-        self.open_dialog();
     }
 
     fn ask_save_curve(&self) {
@@ -3832,7 +3955,6 @@ impl App {
                 let name = self.new_zone_name(name);
                 self.update(|b| b.new_zone_with(&id, &name));
             }
-            DialogPurpose::Rename(id) => self.update(|b| b.rename_zone(&id, name)),
             DialogPurpose::Message => {}
             DialogPurpose::SavePreset => self.save_preset(name),
             DialogPurpose::RenamePreset(id) => self.update(|b| b.rename_preset(&id, name)),
@@ -4279,6 +4401,7 @@ pub fn speaker_item(
         cast_group_note: SharedString::default(),
         group_note: SharedString::default(),
         zone_id: SharedString::default(),
+        zone_name: SharedString::default(),
         zone_movable: speaker.in_target.is_none(),
         // Needs the zone: set by the caller (`App::refresh`).
         zone_note: SharedString::default(),
@@ -4312,7 +4435,6 @@ fn missing_item(strings: &Strings<'_>, state: &AppState, zone_id: &str, id: &str
     }
 }
 
-/// The words of a zone member's note.
 /// Whether a zone member's row is dimmed: as on the Mac, one that can't
 /// play with its zone, whether it is listed or not.
 fn zone_row_dimmed(row: ui_model::ZoneRow<'_>, note: ui_model::ZoneNote<'_>) -> bool {
@@ -4323,6 +4445,7 @@ fn zone_row_dimmed(row: ui_model::ZoneRow<'_>, note: ui_model::ZoneNote<'_>) -> 
         )
 }
 
+/// The words of a zone member's note.
 fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedString {
     match note {
         ui_model::ZoneNote::NeedsAirPlay2 => strings.get_needs_airplay2(),
@@ -4398,6 +4521,55 @@ fn is_calibratable(speaker: &ui_model::Speaker) -> bool {
         )
 }
 
+/// What a calibration needs that is off, in the order streaming, `speaker`,
+/// the reference; all three when `missing` names none.
+fn calibration_needs(
+    strings: &Strings<'_>,
+    reference: &str,
+    missing: Missing,
+    speaker: SharedString,
+) -> SharedString {
+    let missing = if missing.is_empty() {
+        Missing::ALL
+    } else {
+        missing
+    };
+    let reference = if reference.is_empty() {
+        strings.get_calibration_own_speakers()
+    } else {
+        reference.into()
+    };
+    strings.invoke_calibration_needs(
+        missing.streaming,
+        if missing.speaker {
+            speaker
+        } else {
+            SharedString::default()
+        },
+        if missing.reference {
+            reference
+        } else {
+            SharedString::default()
+        },
+    )
+}
+
+/// Why a calibration of one speaker, or of all of them, can't start.
+fn calibration_turn_on(strings: &Strings<'_>, reference: &str, missing: Missing) -> SharedString {
+    let missing = if missing.is_empty() {
+        Missing::ALL
+    } else {
+        missing
+    };
+    let needs = calibration_needs(
+        strings,
+        reference,
+        missing,
+        strings.get_calibration_this_speaker(),
+    );
+    strings.invoke_calibration_turn_on(needs, missing.speaker)
+}
+
 /// The line under a speaker's Calibrate button: what its calibration does,
 /// how it ended, or why one can't start; empty when there is nothing to say.
 fn calibration_status(
@@ -4415,15 +4587,14 @@ fn calibration_status(
         Phase::Idle
     };
     match shown {
-        Phase::Idle => match calibration::unavailable(
+        Phase::Idle => calibration::unavailable(
             state.running,
             state.reference_name.is_some(),
             speaker.enabled,
-        ) {
-            Some(Failure::NoReference) => strings.get_calibration_no_reference(),
-            Some(_) => strings.get_calibration_turn_on(),
-            None => SharedString::default(),
-        },
+        )
+        .map_or_else(SharedString::default, |failure| {
+            calibration_failure(strings, reference, failure)
+        }),
         Phase::Running(Step::Preparing) => strings.get_calibration_preparing(),
         Phase::Running(Step::Measuring(Which::Reference)) => {
             strings.invoke_calibration_listening(reference.into())
@@ -4525,9 +4696,9 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             strings.invoke_calibrate_all_stopped(calibration_failure(strings, reference, *failure))
         }
         AllPhase::Stale => strings.get_calibrate_all_stale(),
-        AllPhase::CannotMeasureAgain(name) => {
-            strings.invoke_calibrate_all_cannot_again(reference.into(), name.as_str().into())
-        }
+        AllPhase::CannotMeasureAgain(name, missing) => strings.invoke_calibrate_all_cannot_again(
+            calibration_needs(strings, reference, *missing, name.as_str().into()),
+        ),
         AllPhase::Idle if all.other_running => strings.get_calibrate_all_busy(),
         AllPhase::Idle => match all.blocked {
             Some(Failure::NoReference) => strings.get_calibration_no_reference(),
@@ -4535,13 +4706,13 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
                 strings.invoke_calibrate_all_nothing(reference.into())
             }
             Some(Failure::OnlyLeftOut) => strings.get_calibrate_all_only_left_out(),
-            Some(_) => strings.invoke_calibrate_all_turn_on(reference.into()),
+            Some(failure) => calibration_failure(strings, reference, failure),
             None => strings.invoke_calibrate_all_hint(reference.into()),
         },
     };
     let failed = matches!(
         all.phase,
-        AllPhase::Failed(_) | AllPhase::Stale | AllPhase::CannotMeasureAgain(_)
+        AllPhase::Failed(_) | AllPhase::Stale | AllPhase::CannotMeasureAgain(..)
     );
     let sheet = all.sheet.as_ref();
     let outcome = sheet.map_or_else(SharedString::default, |sheet| {
@@ -4775,7 +4946,7 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
     };
     match failure {
         Failure::NoReference => strings.get_calibration_no_reference(),
-        Failure::NotPlaying => strings.invoke_calibration_not_playing(reference.into()),
+        Failure::NotPlaying(missing) => calibration_turn_on(strings, reference, missing),
         Failure::MicrophoneDenied => strings.get_calibration_microphone_denied(),
         Failure::NoMicrophone => strings.get_calibration_no_microphone(),
         Failure::UnsupportedRate => strings.get_calibration_unsupported_rate(),
@@ -5842,9 +6013,10 @@ mod tests {
         );
         let desk = row_of(&app, "local:desk");
         assert!(!desk.calibration_enabled, "streaming is off");
-        assert_eq!(
-            desk.calibration_status,
-            app.strings().get_calibration_turn_on()
+        assert!(
+            desk.calibration_status.starts_with("Turn on streaming"),
+            "{}",
+            desk.calibration_status
         );
 
         let mut backend = MockBackend::new();
@@ -5870,6 +6042,166 @@ mod tests {
         };
         let line = calibration_status(&app.strings(), &state, &speaker);
         assert!(line.contains("412"), "{line}");
+    }
+
+    #[test]
+    fn a_calibration_that_cannot_start_names_only_what_is_off() {
+        fn switch(state: &mut AppState, streaming: bool, desk: bool, reference: bool) {
+            state.running = streaming;
+            for speaker in &mut state.speakers {
+                match speaker.id.as_str() {
+                    "local:desk" => speaker.enabled = desk,
+                    "local:speakers" => speaker.enabled = reference,
+                    _ => {}
+                }
+            }
+        }
+        fn engine(session: Option<u64>, playing: &[&str]) -> calibration::Engine {
+            calibration::Engine {
+                session,
+                playing: playing.iter().map(|id| id.to_string()).collect(),
+                reference: Some("builtin".into()),
+                ..Default::default()
+            }
+        }
+        fn lineup(session: Option<u64>, ids: &[&str]) -> crate::audio::calibrate_all::Lineup {
+            crate::audio::calibrate_all::Lineup {
+                session,
+                reference: Some("builtin".into()),
+                members: ids
+                    .iter()
+                    .map(|id| crate::audio::calibrate_all::Member {
+                        id: id.to_string(),
+                        class: audiosync_core::calibrate_all::Class::Local,
+                        offset_ms: Some(0.0),
+                        latency_ms: 2500.0,
+                    })
+                    .collect(),
+                ..Default::default()
+            }
+        }
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.reference_name = Some("Speakers".into());
+        let row = |state: &AppState| {
+            let desk = state.speaker("local:desk").unwrap().clone();
+            calibration_status(&strings, state, &desk).to_string()
+        };
+        let mut rows = Vec::new();
+        for (streaming, desk, reference) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+            (false, false, true),
+            (false, true, false),
+            (false, false, false),
+        ] {
+            switch(&mut state, streaming, desk, reference);
+            rows.push(row(&state));
+        }
+        assert_eq!(
+            rows,
+            [
+                "Turn on streaming to calibrate.",
+                "Turn on this speaker to calibrate it.",
+                // The button stays enabled while the reference is off; the press names it.
+                "",
+                "Turn on streaming and this speaker to calibrate it.",
+                "Turn on streaming to calibrate.",
+                "Turn on streaming and this speaker to calibrate it.",
+            ],
+            "the line under the button"
+        );
+
+        let pressed: Vec<String> = [
+            engine(None, &["builtin", "usb"]),
+            engine(Some(1), &["builtin"]),
+            engine(Some(1), &["usb"]),
+            engine(Some(1), &[]),
+        ]
+        .iter()
+        .map(|engine| {
+            let failure = calibration::blocker(engine, "usb").expect("it can't start");
+            calibration_failure(&strings, "Speakers", failure).to_string()
+        })
+        .collect();
+        assert_eq!(
+            pressed,
+            [
+                "Turn on streaming to calibrate.",
+                "Turn on this speaker to calibrate it.",
+                "Turn on Speakers to calibrate.",
+                "Turn on this speaker and Speakers to calibrate it.",
+            ],
+            "the press"
+        );
+
+        let none = std::collections::BTreeSet::new();
+        let all: Vec<String> = [lineup(None, &["builtin", "usb"]), lineup(Some(1), &["usb"])]
+            .iter()
+            .map(|lineup| {
+                let mut state = app.snapshot();
+                state.reference_name = Some("Speakers".into());
+                state.calibrate_all.phase = AllPhase::Idle;
+                state.calibrate_all.other_running = false;
+                state.calibrate_all.blocked = crate::audio::calibrate_all::blocked(lineup, &none);
+                calibrate_all_card(&strings, &state).status.to_string()
+            })
+            .collect();
+        assert_eq!(
+            all,
+            [
+                "Turn on streaming to calibrate.",
+                "Turn on Speakers to calibrate."
+            ],
+            "Calibrate All"
+        );
+
+        let mut both = lineup(None, &[]);
+        both.reference_off = true;
+        assert_eq!(
+            crate::audio::calibrate_all::blocked(&both, &none)
+                .map(|failure| { calibration_failure(&strings, "", failure).to_string() }),
+            Some("Turn on streaming and the PC's own speakers to calibrate.".to_owned()),
+            "Calibrate All, without a reference name"
+        );
+
+        let again: Vec<String> = [
+            Missing::STREAMING,
+            Missing::SPEAKER,
+            Missing::REFERENCE,
+            Missing {
+                reference: true,
+                ..Missing::STREAMING
+            },
+            Missing {
+                speaker: true,
+                ..Missing::STREAMING
+            },
+            Missing::ALL,
+        ]
+        .into_iter()
+        .map(|missing| {
+            let mut state = app.snapshot();
+            state.reference_name = Some("Speakers".into());
+            state.calibrate_all.other_running = false;
+            state.calibrate_all.phase = AllPhase::CannotMeasureAgain("Den".into(), missing);
+            calibrate_all_card(&strings, &state).status.to_string()
+        })
+        .collect();
+        assert_eq!(
+            again,
+            [
+                "Turn on streaming to measure it again.",
+                "Turn on Den to measure it again.",
+                "Turn on Speakers to measure it again.",
+                "Turn on streaming and Speakers to measure it again.",
+                "Turn on streaming and Den to measure it again.",
+                "Turn on streaming, Den and Speakers to measure it again.",
+            ],
+            "Measure Again"
+        );
     }
 
     #[test]
@@ -6049,7 +6381,7 @@ mod tests {
         assert_eq!(card.status, strings.get_calibrate_all_busy());
 
         state.calibrate_all.other_running = false;
-        state.calibrate_all.phase = AllPhase::CannotMeasureAgain("Den".into());
+        state.calibrate_all.phase = AllPhase::CannotMeasureAgain("Den".into(), Missing::SPEAKER);
         let card = calibrate_all_card(&strings, &state);
         assert!(card.status.contains("Den"), "{}", card.status);
         assert!(
@@ -7042,6 +7374,165 @@ mod tests {
         assert!(app.ui.borrow().sync_open.is_empty());
     }
 
+    /// Double-clicks around the main window's right column, 12 px apart,
+    /// until `found` says the double-click did what the test looks for;
+    /// each try is undone, the zones preview put back.
+    fn double_click_point(app: &App, found: impl Fn(&App) -> bool) -> (f32, f32) {
+        let window = app.main.window();
+        for x in (380..=440).step_by(12) {
+            for y in (200..=716).step_by(12) {
+                let (x, y) = (x as f32, y as f32);
+                click(window, x, y);
+                click(window, x, y);
+                let hit = found(app);
+                let _ = app.zone_dialog.hide();
+                app.blank_click();
+                *app.backend.borrow_mut() = Box::new(MockBackend::zones_preview());
+                {
+                    let mut ui = app.ui.borrow_mut();
+                    ui.sync_open.clear();
+                    ui.collapsed.clear();
+                }
+                app.refresh();
+                draw_frames();
+                if hit {
+                    return (x, y);
+                }
+            }
+        }
+        panic!("no double-click there does it");
+    }
+
+    fn in_zones_row(app: &App, id: &str) -> SpeakerItem {
+        app.models
+            .this_pc_zoned
+            .iter()
+            .chain(app.models.connected_zoned.iter())
+            .find(|s| s.id == id)
+            .expect("the speaker has an In zones row")
+    }
+
+    fn zone_member_row(app: &App, id: &str) -> SpeakerItem {
+        app.models
+            .zones
+            .iter()
+            .flat_map(|zone| zone.members.iter().collect::<Vec<_>>())
+            .find(|s| s.id == id)
+            .expect("the speaker has a row under its zone")
+    }
+
+    fn zone_name(app: &App, id: &str) -> String {
+        let state = app.snapshot();
+        state
+            .zones
+            .iter()
+            .find(|z| z.id == id)
+            .unwrap()
+            .name
+            .clone()
+    }
+
+    #[test]
+    fn a_double_click_on_a_zone_name_renames_it_in_its_header_and_a_single_one_folds_it() {
+        let app = app_over(MockBackend::zones_preview());
+        draw_frames();
+        let window = app.main.window();
+        let (x, y) = double_click_point(&app, |app| {
+            press(app.main.window(), "Q");
+            press(app.main.window(), Key::Return);
+            zone_name(app, "zone:living") == "Q"
+        });
+        click(window, x, y);
+        click(window, x, y);
+        assert!(
+            !app.zone_dialog.window().is_visible(),
+            "the name is edited in the header, not in a dialog"
+        );
+        for key in ["D", "e", "n"] {
+            press(window, key);
+        }
+        press(window, Key::Return);
+        assert_eq!(zone_name(&app, "zone:living"), "Den");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        draw_frames();
+        assert!(
+            !app.ui.borrow().collapsed.contains("zone:living"),
+            "the double-click doesn't fold the zone"
+        );
+
+        press(window, Key::F2);
+        press(window, "X");
+        press(window, Key::Escape);
+        assert_eq!(
+            zone_name(&app, "zone:living"),
+            "Den",
+            "F2 on the zone's switch renames in place too; Escape keeps the name"
+        );
+        assert!(!app.zone_dialog.window().is_visible());
+
+        click(window, x, y);
+        assert!(
+            !app.ui.borrow().collapsed.contains("zone:living"),
+            "one click waits for a second"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        draw_frames();
+        assert!(
+            app.ui.borrow().collapsed.contains("zone:living"),
+            "then folds the zone"
+        );
+    }
+
+    #[test]
+    fn a_double_click_on_an_in_zones_name_renames_the_speaker_in_that_row() {
+        let app = app_over(MockBackend::zones_preview());
+        draw_frames();
+        let window = app.main.window();
+        scroll(window, 650.0, 400.0, -3000.0);
+        // In its In zones row only: a double-click on its row under Upstairs
+        // renames it there.
+        let renames_bedroom = |app: &App| {
+            in_zones_row(app, "airplay:bedroom").renaming
+                && !zone_member_row(app, "airplay:bedroom").renaming
+        };
+        let (x, y) = double_click_point(&app, renames_bedroom);
+        click(window, x, y);
+        click(window, x, y);
+        let row = in_zones_row(&app, "airplay:bedroom");
+        assert!(
+            row.renaming && row.name_text == "Bedroom",
+            "the double-click renames it in its In zones row"
+        );
+        assert!(
+            !zone_member_row(&app, "airplay:bedroom").renaming,
+            "and not under its zone as well"
+        );
+
+        for key in ["N", "o", "o", "k"] {
+            press(window, key);
+        }
+        press(window, Key::Return);
+        assert_eq!(name_of(&app, "airplay:bedroom"), "Nook");
+        assert!(!in_zones_row(&app, "airplay:bedroom").renaming);
+
+        press(window, Key::F2);
+        assert!(
+            in_zones_row(&app, "airplay:bedroom").renaming,
+            "the focus went back to the row's switch, where F2 renames"
+        );
+        press(window, Key::Escape);
+        assert!(!in_zones_row(&app, "airplay:bedroom").renaming);
+        assert_eq!(name_of(&app, "airplay:bedroom"), "Nook");
+
+        app.main
+            .invoke_speaker_rename_requested("airplay:bedroom".into());
+        assert!(zone_member_row(&app, "airplay:bedroom").renaming);
+        assert!(
+            !in_zones_row(&app, "airplay:bedroom").renaming,
+            "a rename under the zone stays there"
+        );
+    }
+
     #[test]
     fn a_renamed_row_shows_its_device_name_under_the_new_one() {
         let app = app_over(MockBackend::new());
@@ -7414,6 +7905,7 @@ mod tests {
         }
     }
 
+    // covers: S308 (its words; Tests/updatertexttest.sh checks how the .slint files use them)
     #[test]
     fn the_updater_texts() {
         use ui_model::UpdaterNotice as N;
@@ -7559,6 +8051,64 @@ mod tests {
         );
         // Local and test builds have no updater, so its menu items stay hidden.
         assert!(!app.main.get_updater_available());
+    }
+
+    // covers: S308
+    /// Tab reaches each button of the updater's notice, Space or Enter
+    /// presses it, and the notice reports its focus.
+    #[test]
+    fn the_updater_notice_buttons_take_tab_then_space_or_enter() {
+        let app = main_window_over(MockBackend::new());
+        let item = notice_item(
+            &app.strings(),
+            &ui_model::Notice {
+                id: UPDATER_NOTICE_ID,
+                subject: "update".to_owned(),
+                message: NoticeMessage::Update(ui_model::UpdaterNotice::Available {
+                    new: "0.9.0".to_owned(),
+                    running: "0.8.0".to_owned(),
+                    last: None,
+                }),
+                time: String::new(),
+            },
+        );
+        assert_eq!(
+            item.update_buttons.iter().collect::<Vec<_>>(),
+            [UpdateButton::Download, UpdateButton::NotNow]
+        );
+        let id = item.id;
+        // The test's own handlers: the app's would refresh the notices away.
+        let pressed = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&pressed);
+        app.main
+            .on_notice_update_button_pressed(move |button| log.borrow_mut().push(button));
+        let focused = Rc::new(Cell::new(false));
+        let seen = Rc::clone(&focused);
+        app.main.on_notice_focus_changed(move |notice, now| {
+            if notice == id {
+                seen.set(now);
+            }
+        });
+        app.main
+            .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![item]))));
+        draw_frames();
+        let window = app.main.window();
+        let mut steps = 0;
+        while !focused.get() {
+            assert!(steps < 60, "Tab never reached the updater's notice");
+            tab(window, 1);
+            steps += 1;
+        }
+        press(window, " ");
+        assert_eq!(*pressed.borrow(), [UpdateButton::Download], "Space");
+        tab(window, 1);
+        assert!(focused.get(), "Not Now is the next stop");
+        press(window, Key::Return);
+        assert_eq!(
+            *pressed.borrow(),
+            [UpdateButton::Download, UpdateButton::NotNow],
+            "Enter"
+        );
     }
 
     #[test]
@@ -8099,7 +8649,22 @@ mod tests {
             "airplay:left"
         );
         assert_eq!(m.zones.row_data(2).unwrap().total, 0, "Office is empty");
-        assert!(!app.main.get_this_pc_all_in_zones());
+        let compact = ids(&m.connected_zoned);
+        assert!(
+            compact.iter().any(|id| id == "airplay:kitchen"),
+            "{compact:?}"
+        );
+        assert!(
+            compact.iter().all(|id| zoned.contains(&id.as_str())),
+            "only zone members get a compact row"
+        );
+        let kitchen = m
+            .connected_zoned
+            .iter()
+            .find(|row| row.id == "airplay:kitchen")
+            .unwrap();
+        assert_eq!(kitchen.zone_name, "Living Room");
+        assert_eq!(kitchen.zone_id, "zone:living");
     }
 
     // covers: S245 (a zone's rows and its count agree; a hidden member has
@@ -8192,6 +8757,27 @@ mod tests {
         );
     }
 
+    /// As on the Mac, the Cast note needs a Cast speaker on: a zone of the
+    /// PC's speakers and a Cast speaker that is off has no note.
+    // covers: S246
+    #[test]
+    fn a_cast_member_off_beside_a_local_speaker_has_no_note() {
+        let mut backend = MockBackend::zones_preview();
+        backend.add_zone("zone:pc", "PC", &["local:speakers", "cc:attic"]);
+        backend.retain_speakers(|s| s.id != "cc:porch");
+        let app = app_over(backend);
+        let state = app.snapshot();
+        let zone = state.zones.iter().find(|z| z.id == "zone:pc").unwrap();
+        assert!(state.speaker("local:speakers").unwrap().enabled);
+        let attic = state.speaker("cc:attic").unwrap();
+        assert!(!attic.enabled);
+        assert_eq!(
+            state.zone_note(zone, ui_model::ZoneRow::Listed(attic)),
+            None,
+            "no Cast speaker is on, so nothing kept this one off"
+        );
+    }
+
     #[test]
     fn a_zone_header_counts_its_speakers() {
         let app = app_over(MockBackend::new());
@@ -8206,10 +8792,46 @@ mod tests {
             strings.invoke_zone_value(2, 5, 1),
             "2 of 5 speakers on, 1 waiting"
         );
+        assert_eq!(strings.invoke_zone_value(1, 1, 0), "1 of 1 speaker on");
+        assert_eq!(
+            strings.invoke_zone_value(1, 1, 1),
+            "1 of 1 speaker on, 1 waiting"
+        );
         assert_eq!(
             strings.invoke_zone_label("Living Room".into()),
             "Living Room, zone"
         );
+    }
+
+    #[test]
+    fn go_to_zone_with_no_member_found_lands_on_the_arrow_which_folds_it() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:garage", "Garage", &["airplay:not-here"]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        let expanded = || {
+            app.models
+                .zones
+                .iter()
+                .find(|zone| zone.id == "zone:garage")
+                .expect("the zone is listed")
+                .expanded
+        };
+        assert!(expanded());
+
+        app.main.set_focus_zone_part(RowPart::Toggle);
+        app.main.set_focus_zone_id("zone:garage".into());
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().zone,
+            Some(("zone:garage".into(), RowPart::Toggle)),
+            "the arrow stands in for the toggle, which has nothing to switch"
+        );
+        press(app.main.window(), " ");
+        assert!(!expanded(), "Space folded the zone");
+        press(app.main.window(), Key::Return);
+        assert!(expanded(), "Enter unfolded it");
     }
 
     #[test]
@@ -8234,6 +8856,13 @@ mod tests {
         main.invoke_zone_expanded_changed("zone:office".into(), false);
         assert!(!app.models.zones.row_data(2).unwrap().expanded);
         main.invoke_zone_expanded_changed("zone:office".into(), true);
+        assert!(app.models.zones.row_data(2).unwrap().expanded);
+        // The flyout folds the same zone the main window does, until AudioSync quits.
+        app.flyout
+            .invoke_zone_expanded_changed("zone:office".into(), false);
+        assert!(!app.models.zones.row_data(2).unwrap().expanded);
+        app.flyout
+            .invoke_zone_expanded_changed("zone:office".into(), true);
         assert!(app.models.zones.row_data(2).unwrap().expanded);
 
         main.invoke_speaker_remove_from_zone_requested("local:speakers".into());
@@ -8261,12 +8890,70 @@ mod tests {
     }
 
     #[test]
-    fn a_zone_is_renamed_from_its_menu() {
+    fn a_zone_is_renamed_from_its_menu_in_its_header_like_a_speaker() {
         let app = app_over(MockBackend::zones_preview());
+        let office = || app.models.zones.row_data(2).unwrap();
         app.main.invoke_zone_rename_requested("zone:office".into());
-        assert_eq!(app.zone_dialog.get_name(), "Office");
-        app.confirm_dialog("Study");
-        assert_eq!(app.models.zones.row_data(2).unwrap().name, "Study");
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(office().renaming && office().name_text == "Office");
+        slint::platform::update_timers_and_animations();
+        assert_eq!(app.main.get_focus_zone_part(), RowPart::Name);
+
+        app.main
+            .invoke_zone_rename_edited("zone:office".into(), "Study".into());
+        app.main.invoke_zone_rename_committed("zone:office".into());
+        assert_eq!(office().name, "Study");
+        assert!(!office().renaming);
+
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        app.main
+            .invoke_zone_rename_edited("zone:office".into(), "Den".into());
+        app.main.invoke_zone_rename_cancelled("zone:office".into());
+        assert_eq!(office().name, "Study", "Escape keeps the name");
+
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        app.main
+            .invoke_zone_rename_edited("zone:office".into(), "  ".into());
+        app.main.invoke_zone_rename_committed("zone:office".into());
+        assert_eq!(office().name, "Study", "a blank name keeps it too");
+
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        app.main
+            .invoke_speaker_rename_requested("airplay:living".into());
+        assert_eq!(office().name, "Study");
+        assert!(
+            !office().renaming,
+            "a speaker's rename closes the zone's field"
+        );
+        assert!(row_of(&app, "airplay:living").renaming);
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        assert!(!row_of(&app, "airplay:living").renaming, "and back");
+        assert!(office().renaming);
+
+        app.main.invoke_zone_deleted("zone:office".into());
+        assert!(
+            app.ui.borrow().rename.is_none(),
+            "a deleted zone's field goes"
+        );
+    }
+
+    #[test]
+    fn the_zone_name_field_stops_at_sixty_characters_while_typing() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        draw_frames();
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        draw_frames();
+        for _ in 0..65 {
+            press(app.main.window(), "a");
+        }
+        let sixty = "a".repeat(60);
+        assert_eq!(
+            app.ui.borrow().rename,
+            Some(("zone:office".to_owned(), sixty.clone()))
+        );
+        press(app.main.window(), Key::Return);
+        assert_eq!(app.models.zones.row_data(2).unwrap().name.as_str(), sixty);
     }
 
     #[test]
@@ -8502,6 +9189,37 @@ mod tests {
         assert!(
             FLYOUT.removed_by(member_moved).speakers,
             "a zone's member rows are rebuilt"
+        );
+    }
+
+    #[test]
+    fn folding_a_zone_in_the_flyout_removes_its_member_rows() {
+        assert_eq!(listed_members(true, 3), 3);
+        assert_eq!(listed_members(false, 3), 0);
+        let open = FlyoutCounts {
+            zone_members: zone_shape([listed_members(true, 2)].into_iter()),
+            ..FLYOUT
+        };
+        let folded = FlyoutCounts {
+            zone_members: zone_shape([listed_members(false, 2)].into_iter()),
+            ..FLYOUT
+        };
+        assert!(
+            open.removed_by(folded).speakers,
+            "a member that had the focus gives it back"
+        );
+        let empty_open = FlyoutCounts {
+            zone_members: zone_shape([listed_members(true, 0)].into_iter()),
+            ..FLYOUT
+        };
+        let empty_folded = FlyoutCounts {
+            zone_members: zone_shape([listed_members(false, 0)].into_iter()),
+            ..FLYOUT
+        };
+        assert_eq!(
+            empty_open.removed_by(empty_folded),
+            FlyoutParts::default(),
+            "an empty zone has no rows to remove"
         );
     }
 
@@ -8930,9 +9648,7 @@ mod tests {
         eq_window.invoke_save_curve();
         app.zone_dialog.invoke_cancelled();
         let speaker = app.snapshot().speakers[0].id.clone();
-        app.update(|b| b.new_zone_with(&speaker, "Living"));
-        let zone = app.snapshot().zones[0].id.clone();
-        app.ask_rename_zone(&zone);
+        app.ask_new_zone_with(&speaker);
         assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
         app.zone_dialog.invoke_cancelled();
 
@@ -9761,6 +10477,14 @@ mod tests {
             "No presets yet. Turn on the speakers you want, set the volumes and the curve, \
              then save them as a preset."
         );
+    }
+
+    #[test]
+    fn a_zone_menu_says_rename_as_a_speaker_menu_does() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(strings.get_rename_zone(), "Rename…");
+        assert_eq!(strings.get_rename_zone(), strings.get_rename_speaker());
     }
 
     // covers: S261

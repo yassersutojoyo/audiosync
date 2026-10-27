@@ -529,7 +529,6 @@ pub mod tests {
         install(env, update, &|_| {}, &AtomicBool::new(false))
     }
 
-    // covers: S296, S298, S301
     #[test]
     fn the_fake_appcast_end_to_end_through_a_memory_fetch() {
         let f = fixture(
@@ -615,7 +614,8 @@ pub mod tests {
         port
     }
 
-    // covers: S294 (redirects followed), S299
+    // covers: S307 (what WinHTTP downloads and the swap installs carries no mark; whether
+    // SmartScreen prompts at the relaunch is checked by hand)
     #[test]
     fn the_fake_appcast_on_loopback() {
         if std::env::var_os("CI").is_none() {
@@ -669,6 +669,9 @@ pub mod tests {
         assert!(matches!(run(&happy.env, &update), Installed::Done(_)));
         let exe = fs::read(happy.env.install_dir.join(archive::EXE_NAME)).unwrap();
         assert!(exe.ends_with(b"served exe"));
+        assert!(!marked_from_the_web(
+            &happy.env.install_dir.join(archive::EXE_NAME)
+        ));
         assert_eq!(
             fs::read(happy.env.install_dir.join("audiosync.exe.bak")).unwrap(),
             b"old exe"
@@ -770,7 +773,7 @@ pub mod tests {
         );
     }
 
-    // covers: S298, S302
+    // covers: S298
     #[test]
     fn a_disk_full_write_deletes_every_partial_file() {
         struct Full;
@@ -1086,20 +1089,26 @@ pub mod tests {
         assert!(!f.env.install_dir.join("audiosync.exe.new").exists());
     }
 
+    /// Whether `path` carries a Mark of the Web, a `Zone.Identifier` stream.
+    fn marked_from_the_web(path: &Path) -> bool {
+        assert!(path.exists(), "{}", path.display());
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        match fs::File::open(PathBuf::from(stream)) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => panic!("{}: {error}", path.display()),
+        }
+    }
+
     // covers: S315
     #[test]
     fn the_updater_writes_no_zone_identifier_stream() {
         let f = fixture("zone", false, Arc::new(RealFiles), DebugLog::default());
         let update = update_of(&f.env);
         assert!(matches!(run(&f.env, &update), Installed::Done(_)));
-        let exe = f.env.install_dir.join(archive::EXE_NAME);
-        assert!(exe.exists());
-        let mut stream = exe.into_os_string();
-        stream.push(":Zone.Identifier");
-        let opened = fs::File::open(PathBuf::from(stream));
-        assert_eq!(
-            opened.map(drop).map_err(|e| e.kind()),
-            Err(io::ErrorKind::NotFound)
-        );
+        assert!(!marked_from_the_web(
+            &f.env.install_dir.join(archive::EXE_NAME)
+        ));
     }
 }
