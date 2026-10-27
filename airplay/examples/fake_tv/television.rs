@@ -1,5 +1,5 @@
 //! The fake television `fake_tv` serves and `fake_tv_cells` drives: the
-//! test fake's Samsung profile with the identity and PIN mode it
+//! test fake's Samsung profile with the identity and lock mode it
 //! advertises. Each example uses part of it.
 
 #![allow(dead_code)]
@@ -26,12 +26,18 @@ const FLAGS_PLAIN: u64 = 0x4;
 const FLAGS_PIN_EVERY_TIME: u64 = 0x4c;
 /// Bit 9: a PIN the first time only.
 const FLAGS_PIN_ONCE: u64 = 0x244;
+/// Bit 7: a password, kept as a pairing after the first connection. A
+/// password receiver adds `pw` to its `_raop._tcp` TXT only, which this
+/// AirPlay 2 only television does not advertise.
+const FLAGS_PASSWORD: u64 = 0x84;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Pin {
     None,
     EveryTime,
     Once,
+    /// The code is a password: the SRP code of a pairing that lasts.
+    Password,
 }
 
 pub fn status_flags(pin: Pin) -> u64 {
@@ -39,6 +45,7 @@ pub fn status_flags(pin: Pin) -> u64 {
         Pin::None => FLAGS_PLAIN,
         Pin::EveryTime => FLAGS_PIN_EVERY_TIME,
         Pin::Once => FLAGS_PIN_ONCE,
+        Pin::Password => FLAGS_PASSWORD,
     }
 }
 

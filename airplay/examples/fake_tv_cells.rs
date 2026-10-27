@@ -4,7 +4,7 @@
 //! a cell that needs the app, a player or the real television prints
 //! MANUAL with its step. The sender plays the host's part: it asks for the
 //! level once a second, pauses and resumes, sends track info, and enters
-//! the PIN. Exits 1 when a cell fails. Development only.
+//! the PIN or the password. Exits 1 when a cell fails. Development only.
 //!
 //! ```text
 //! cargo run -p audiosync-airplay --example fake_tv_cells -- [--pause-minutes <n>]
@@ -31,16 +31,18 @@ use std::time::{Duration, Instant};
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
+use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::PairingEvent;
 use audiosync_airplay::rtsp::Method;
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     NowPlaying, Progress, Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions,
     SpeakerState,
 };
 use audiosync_airplay::volume::{MIN_DB, Volume, parse_reported};
 
-use cells::{Cell, Pause, Status};
+use cells::{Cell, PasswordStep, Pause, Status};
 use common::ap2::Ap2Server;
 use common::hap::{item, untlv};
 use common::net::{Events, HostAudio, free_ptp_ports, recv_queued};
@@ -48,6 +50,7 @@ use television::{Pin, television};
 
 const NAME: &str = "AudioSync Test TV";
 const CODE: &str = "4821";
+const PASSWORD: &str = "guest room";
 const LONG: Duration = Duration::from_secs(15);
 /// The host asks a playing speaker for its level once a second (S291).
 const ASK_EVERY: Duration = Duration::from_secs(1);
@@ -82,10 +85,11 @@ impl Tv {
         socket
             .set_read_timeout(Some(Duration::from_millis(200)))
             .expect("a read timeout");
+        let code = if pin == Pin::Password { PASSWORD } else { CODE };
         let mut fake = television(
             NAME,
             pin,
-            CODE,
+            code,
             television::FEATURES_METADATA,
             television::DEVICE_ID,
         );
@@ -283,6 +287,18 @@ impl Host {
             .count()
     }
 
+    fn events_since(&self, key: &DeviceKey, since: Instant) -> Vec<SpeakerEvent> {
+        self.events
+            .seen
+            .iter()
+            .filter(|(at, _)| *at >= since)
+            .filter_map(|(_, event)| match event {
+                SenderEvent::Speaker { key: k, event } if k == key => Some(event.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn reports_since(&self, key: &DeviceKey, since: Instant) -> Vec<(Duration, f64)> {
         self.events
             .seen
@@ -439,6 +455,76 @@ fn d1(tv: &Tv, host: &mut Host) -> Cell {
     )
 }
 
+/// Adds the password television with `password` or `credentials`, waits
+/// until it plays or fails, and removes it again.
+fn password_step(
+    tv: &Tv,
+    host: &mut Host,
+    password: Option<&str>,
+    credentials: Option<HomeKitCredentials>,
+) -> (PasswordStep, Option<HomeKitCredentials>) {
+    let device = tv.device();
+    let key = device.key.clone();
+    let (setups, verifies, pin_starts) = (
+        tv.count("POST /pair-setup"),
+        tv.count("POST /pair-verify"),
+        tv.count("POST /pair-pin-start"),
+    );
+    let (started, done) = tv.pin_pairings();
+    let since = Instant::now();
+    let mut options = SpeakerOptions::new(volume_for_row(20));
+    options.password = password.map(|text| Secret::new(text.to_owned()));
+    options.homekit_credentials = credentials;
+    host.sender.add_speaker(device, options);
+    let ended = |event: &SpeakerEvent| {
+        matches!(
+            event,
+            SpeakerEvent::State(SpeakerState::Playing | SpeakerState::Failed)
+        )
+    };
+    host.run_until(None, LONG, |host| {
+        host.events_since(&key, since).iter().any(ended)
+    });
+    host.sender.remove_speaker(&key);
+    let stopped =
+        |event: &SpeakerEvent| matches!(event, SpeakerEvent::State(SpeakerState::Stopped));
+    host.run_until(None, LONG, |host| {
+        host.events_since(&key, since).iter().any(stopped)
+    });
+    let events = host.events_since(&key, since);
+    let paired = events.iter().find_map(|event| match event {
+        SpeakerEvent::HomeKitPaired(credentials) => Some(credentials.clone()),
+        _ => None,
+    });
+    let (started_now, done_now) = tv.pin_pairings();
+    let step = PasswordStep {
+        error: events.iter().find_map(|event| match event {
+            SpeakerEvent::Error(error) => Some(error.error.kind),
+            _ => None,
+        }),
+        playing: events
+            .iter()
+            .any(|event| matches!(event, SpeakerEvent::State(SpeakerState::Playing))),
+        paired: paired.is_some(),
+        pair_setups: tv.count("POST /pair-setup") - setups,
+        started: started_now - started,
+        done: done_now - done,
+        pin_starts: tv.count("POST /pair-pin-start") - pin_starts,
+        verifies: tv.count("POST /pair-verify") - verifies,
+    };
+    (step, paired)
+}
+
+/// The password cells: no password, a wrong one, the right one, then the
+/// stored credentials alone.
+fn pw(tv: &Tv, host: &mut Host) -> [Cell; 4] {
+    let (none, _) = password_step(tv, host, None, None);
+    let (wrong, _) = password_step(tv, host, Some("wrong"), None);
+    let (right, credentials) = password_step(tv, host, Some(PASSWORD), None);
+    let (again, _) = password_step(tv, host, None, credentials);
+    cells::pw(none, wrong, right, again)
+}
+
 /// Pauses for `hold`, resumes, and counts what the television was sent
 /// from the pause on.
 fn pause_once(tv: &Tv, host: &mut Host, key: &DeviceKey, hold: Duration) -> Pause {
@@ -574,6 +660,13 @@ fn main() -> ExitCode {
     let tv = Tv::start(Pin::EveryTime);
     let mut host = Host::start();
     report.show(&d1(&tv, &mut host));
+    host.sender.shutdown();
+
+    let tv = Tv::start(Pin::Password);
+    let mut host = Host::start();
+    for cell in pw(&tv, &mut host) {
+        report.show(&cell);
+    }
     host.sender.shutdown();
 
     let tv = Tv::start(Pin::None);
