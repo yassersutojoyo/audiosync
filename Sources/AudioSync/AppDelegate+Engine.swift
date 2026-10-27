@@ -93,6 +93,7 @@ extension AppDelegate {
         }
         clearNotices([Notice.start, Notice.source])   // streaming did start, from a working source
         midRebuild = false
+        everyTimeGuard.streamStarted()
         sessionHadSpeaker = hasSpeaker || (continuing && sessionHadSpeaker)
         session += 1
         nativeCaptureStarted()   // a new capture is an underrun to AudioSync's own sender, never a FLUSH (P143)

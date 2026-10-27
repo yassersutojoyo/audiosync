@@ -85,14 +85,25 @@ struct EveryTimeGuard: Equatable {
     mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
                               asking: [String], enabled: Set<String>,
                               awaitingUser: Set<String> = []) -> [NativeAirPlayPlan.TurnOff] {
-        guard cause.endsStream(streaming: streaming, midRebuild: midRebuild) else { return [] }
+        guard cause.endsStream(streaming: streaming, midRebuild: midRebuild) else {
+            // After the stream ended, a failed sender still takes the pairings that outlived it.
+            guard cause == .senderFailed else { return [] }
+            let off = outlived.intersection(enabled).sorted()
+            byHand.subtract(outlived)
+            outlived.removeAll()
+            return off.map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+        }
         // A failed sender took its pairings and prompts with it.
         byHand.formIntersection(cause == .senderFailed ? Set<String>() : awaitingUser)
         outlived = byHand
         return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
     }
 
-    mutating func streamStarted() {}
+    /// A new stream started: a pairing that outlived the last one now
+    /// belongs to it, so its failure says what it says while streaming.
+    mutating func streamStarted() {
+        outlived.removeAll()
+    }
 
     /// The speaker `id` paired: a later failure is its own again.
     mutating func paired(_ id: String) {
