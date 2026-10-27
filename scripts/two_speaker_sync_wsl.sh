@@ -11,7 +11,9 @@
 # difference within one frame. SENDER proves what the sender put on the
 # wire; it does not prove the receivers play on time. That is the PIPE line
 # (to a few packets on a stdout receiver) and the real-device row. The check
-# passes on SENDER PASS and drift PASS; PIPE is information only.
+# passes on SENDER PASS and drift PASS; PIPE is information only, and so is
+# rx_pair's latency line per receiver: the stated play time's excess over L
+# beside the Audio-Latency the receiver reported (P203).
 #
 #   scripts/two_speaker_sync_wsl.sh --receiver <binary> [--seconds <n>]
 #       [--delays <ms>,<ms>] [--host <address>] [--ports <port>,<port>]

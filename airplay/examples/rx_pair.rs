@@ -12,7 +12,9 @@
 //! per receiver after the first: PASS when every click sent with 3 s of the
 //! run left has a stated time on each receiver, and those times differ by
 //! the delay difference within one frame (P102). Exits 3 when that line
-//! fails and every receiver played.
+//! fails and every receiver played. A `latency` line per receiver then shows
+//! how far its first stated click lies past c(n) + d_s + L beside the
+//! `Audio-Latency` it reported (P203); it informs and never fails the run.
 //!
 //! ```text
 //! cargo run --release -p audiosync-airplay --example rx_pair -- \
@@ -93,6 +95,8 @@ struct Outcome {
     played: bool,
     state: Option<SpeakerState>,
     first_sound: Option<f64>,
+    /// The `Audio-Latency` of its RECORD answer, in frames (P110, P196).
+    receiver_latency_frames: Option<u32>,
     errors: Vec<String>,
     warnings: usize,
     /// Sender clock seconds when it first reached Playing.
@@ -352,6 +356,50 @@ fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey,
     pass
 }
 
+/// Prints, per receiver, how far its first stated click play time lies past
+/// c(n) + d_s + L, next to the `Audio-Latency` it reported (P203). Information
+/// only: it never fails the run.
+fn latency_lines(
+    args: &Args,
+    order: &[DeviceKey],
+    outcomes: &BTreeMap<DeviceKey, Outcome>,
+    sender: &Sender,
+) {
+    let clock = sender.clock();
+    let latency_ms = sender.latency().as_secs_f64() * 1000.0;
+    for (rx, key) in args.receivers.iter().zip(order) {
+        let outcome = &outcomes[key];
+        let clicks = outcome.wire.clicks();
+        let judged = clicks.iter().enumerate().find_map(|(index, click)| {
+            let play = click.play?;
+            let arrival = sender.arrival_time(click.frame as i64)?;
+            let excess = play - clock.seconds(arrival) - rx.delay.as_secs_f64();
+            Some((index + 1, excess * 1000.0 - latency_ms))
+        });
+        let reported = outcome.receiver_latency_frames;
+        let reported_ms = reported.map(|frames| f64::from(frames) / RATE * 1000.0);
+        let excess = judged.map_or("none".to_owned(), |(click, ms)| {
+            format!("{ms:.3} ms on click {click}")
+        });
+        let audio_latency = reported.map_or("none".to_owned(), |frames| {
+            format!(
+                "{frames} frames ({:.3} ms)",
+                f64::from(frames) / RATE * 1000.0
+            )
+        });
+        let gap = judged
+            .zip(reported_ms)
+            .map_or("none".to_owned(), |((_, ms), r)| {
+                format!("{:.3} ms", ms - r)
+            });
+        println!(
+            "latency {} delay_ms={}: stated play past c(n) + d_s + L (L = {latency_ms:.3} ms) by {excess}; Audio-Latency {audio_latency}; excess minus Audio-Latency {gap} (information only, P203)",
+            rx.address,
+            rx.delay.as_millis(),
+        );
+    }
+}
+
 fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(args) => args,
@@ -427,6 +475,7 @@ fn main() -> ExitCode {
                     }
                     SpeakerEvent::Latency(latency) => {
                         outcome.first_sound = Some(clock.seconds(latency.first_sound));
+                        outcome.receiver_latency_frames = latency.receiver_latency_frames;
                     }
                     SpeakerEvent::Error(error) => {
                         eprintln!("{address}: error {:?}", error.error);
@@ -462,6 +511,9 @@ fn main() -> ExitCode {
         println!("{}", summary(rx, outcome, counters, ok));
     }
     let sender_failed = args.source == Source::Click && !sender_check(&args, &order, &outcomes);
+    if args.source == Source::Click {
+        latency_lines(&args, &order, &outcomes, &sender);
+    }
     stop.store(true, Ordering::Relaxed);
     let _ = audio.join();
     sender.shutdown();
