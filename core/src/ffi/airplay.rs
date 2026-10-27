@@ -3790,13 +3790,15 @@ pub unsafe extern "C" fn asc_airplay_forget_pairing(
             airplay.pump();
             let homekit = airplay.forget_homekit(id);
             airplay.credentials_turned_down.remove(id);
-            if !airplay.store.contains(id) && !homekit {
-                return false;
-            }
-            // Forgotten for this handle even when the file can't be written.
+            let paired = airplay.store.contains(id) || homekit;
+            // Also when it isn't paired, so a copy kept aside that holds it
+            // goes; forgotten for this handle even when the file can't be
+            // written.
             let _ = airplay.store.remove(id);
-            airplay.relist(id);
-            true
+            if paired {
+                airplay.relist(id);
+            }
+            paired
         })
     }
 }
