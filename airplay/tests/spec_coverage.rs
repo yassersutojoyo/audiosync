@@ -66,10 +66,28 @@ fn clauses(spec: &str) -> Vec<Clause> {
     found
 }
 
-/// The rule of `scripts/spec_markers.py`: only the words right after the ID
+/// The rule of `scripts/spec_markers.py` and the core check: only the words
+/// right after the ID, or after an italic title such as `*Engine restart.*`,
 /// count, since a live clause may mention withdrawn things later on.
 fn opens_withdrawn(after_id: &str) -> bool {
-    let words = after_id
+    let body = after_id.trim_start();
+    opens_with_withdrawn_word(body) || opens_with_withdrawn_word(after_title(body))
+}
+
+/// The text after a leading italic title that ends with a period, or the whole
+/// text when it has none.
+fn after_title(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix('*') else {
+        return text;
+    };
+    match rest.split_once('*') {
+        Some((title, after)) if title.len() > 1 && title.ends_with('.') => after.trim_start(),
+        _ => text,
+    }
+}
+
+fn opens_with_withdrawn_word(text: &str) -> bool {
+    let words = text
         .trim_start()
         .trim_start_matches(['*', '('])
         .to_ascii_lowercase();
@@ -280,10 +298,16 @@ fn a_withdrawn_retired_or_superseded_clause_needs_no_marker_but_a_live_one_does(
                 - **P4** *Retired with the bundled engine; kept as a record.*\n\
                 - **P5** *Retired in part with the bundled engine*: the rest holds.\n\
                 - **P6** (Superseded by P3.) The old rule.\n\
-                - **P7** *Superseded in part by P3*: the rest holds.\n";
+                - **P7** *Superseded in part by P3*: the rest holds.\n\
+                - **P8** *Engine restart.* *Retired with the bundled engine.*\n\
+                - **P9** *Network loss, as tested.* *Retired in part*: the hint stands.\n";
     let live = live_numbers(spec);
-    assert_eq!(live, BTreeSet::from([1, 3, 5, 7]));
-    let covered = BTreeMap::from([(1, vec!["a.rs".to_owned()]), (5, vec!["b.rs".to_owned()])]);
+    assert_eq!(live, BTreeSet::from([1, 3, 5, 7, 9]));
+    let covered = BTreeMap::from([
+        (1, vec!["a.rs".to_owned()]),
+        (5, vec!["b.rs".to_owned()]),
+        (9, vec!["b.rs".to_owned()]),
+    ]);
     let pending = BTreeMap::from([(7, "a later stage".to_owned())]);
     assert_eq!(missing(&live, &covered, &pending), vec![3]);
 }

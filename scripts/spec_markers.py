@@ -65,9 +65,24 @@ def spec_ids(text):
     found = set()
     for line in text.splitlines():
         match = _CLAUSE.match(line)
-        if match and not _WITHDRAWN.match(match.group(2)):
+        if match and not _withdrawn(match.group(2)):
             found.add(match.group(1))
     return found
+
+
+def _withdrawn(after_id):
+    """Same rule as core/tests/spec_coverage.rs: the opening may follow a title."""
+    body = after_id.lstrip()
+    return bool(_WITHDRAWN.match(body) or _WITHDRAWN.match(_after_title(body)))
+
+
+def _after_title(text):
+    """The text after a leading italic title that ends with a period, or all of it."""
+    if text.startswith("*"):
+        title, closed, after = text[1:].partition("*")
+        if closed and len(title) > 1 and title.endswith("."):
+            return after.lstrip()
+    return text
 
 
 def problems_in(path, text, known):
@@ -123,6 +138,13 @@ def self_test():
     )
     if spec_ids(spec) != {"S1", "S2", "S4", "S6", "S8"}:
         failures.append(f"spec_ids: got {sorted(spec_ids(spec))}")
+    titled = {
+        "- **S9** *Engine restart.* *Retired with the bundled engine.*": set(),
+        "- **S9** *Network loss, as tested.* *Retired in part*: the hint stands.": {"S9"},
+    }
+    for line, want in titled.items():
+        if spec_ids(line) != want:
+            failures.append(f"spec_ids({line!r}): expected {want}, got {spec_ids(line)}")
     text = "// covers: S1\n    // covers: S2, S3\n/// What it covers: x\n//covers:S1\n"
     got = problems_in("a.rs", text, {"S1", "S2"})
     want = ["a.rs:2: S3 is not a clause of ENGINE_SPEC.md"]
@@ -153,7 +175,7 @@ def self_test():
             failures.append(f"scope of {path}: expected {want}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
-    cases = len(ids) + 4 + len(scope)
+    cases = len(ids) + 4 + len(titled) + len(scope)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
     return 1 if failures else 0
 
