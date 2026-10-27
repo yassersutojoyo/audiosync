@@ -1268,9 +1268,65 @@ impl Settings {
             };
         Ok((
             clamped.with_zones_migrated().with_presets_migrated(),
-            Loaded::Read { version, adjusted },
+            Loaded::Read {
+                version,
+                adjusted,
+                unreadable: unreadable_fields(text),
+            },
         ))
     }
+}
+
+/// The fields of `text` whose value the lenient reader replaced with the
+/// default, in [`Settings`] order. Entries skipped inside a list or map
+/// that reads count toward `adjusted` instead.
+fn unreadable_fields(text: &str) -> Vec<&'static str> {
+    use serde_json::Value;
+    fn reads<T: serde::de::DeserializeOwned>(value: &Value) -> bool {
+        T::deserialize(value).is_ok()
+    }
+    fn is_appearance(value: &Value) -> bool {
+        matches!(value.as_str(), Some("system" | "light" | "dark"))
+    }
+    // The two migration marks are left out: one that isn't a bool reads as
+    // set on purpose (spec S248, S254), so nothing falls back.
+    type Reads = fn(&Value) -> bool;
+    const FIELDS: &[(&str, Reads)] = &[
+        ("source", reads::<SavedSource>),
+        ("input_device", reads::<Option<SavedInput>>),
+        ("input_pairs", Value::is_object),
+        ("source_mix", reads::<Option<SavedMix>>),
+        ("master_volume", Value::is_number),
+        ("outputs", Value::is_object),
+        ("airplay", Value::is_object),
+        ("auto_connect", Value::is_array),
+        ("speaker_names", Value::is_object),
+        ("hidden_speakers", Value::is_array),
+        ("groups", Value::is_array),
+        ("speaker_zones", Value::is_array),
+        ("speaker_presets", Value::is_array),
+        ("equalizer", reads::<SavedEqualizer>),
+        ("equalizer_curves", Value::is_array),
+        ("show_virtual_devices", Value::is_boolean),
+        ("appearance", is_appearance),
+        ("window", reads::<Option<WindowFrame>>),
+        ("airplay_adjustment_ms", Value::is_number),
+        ("when_source_quits", Value::is_string),
+        ("remote", reads::<RemoteSettings>),
+        ("cast_addresses", Value::is_array),
+        ("airplay2_experimental", Value::is_boolean),
+        ("check_updates_automatically", Value::is_boolean),
+        ("last_update_check", reads::<Option<u64>>),
+        ("update_record", reads::<Option<UpdateRecord>>),
+    ];
+    let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    FIELDS
+        .iter()
+        .filter(|(name, reads)| stored.get(*name).is_some_and(|value| !reads(value)))
+        .map(|(name, _)| *name)
+        .collect()
 }
 
 /// What reading the file found, for the debug log.
@@ -1279,8 +1335,13 @@ pub enum Loaded {
     /// There is no file yet.
     NoFile,
     /// The file was read, written in format `version`; `adjusted` when
-    /// values out of range were clamped or unusable entries dropped.
-    Read { version: u32, adjusted: bool },
+    /// values out of range were clamped or unusable entries dropped, and
+    /// `unreadable` names the fields that fell back to their defaults.
+    Read {
+        version: u32,
+        adjusted: bool,
+        unreadable: Vec<&'static str>,
+    },
     /// The file was ignored, and why.
     Ignored(String),
 }
@@ -1289,7 +1350,9 @@ impl fmt::Display for Loaded {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Loaded::NoFile => write!(f, "no file yet, the defaults apply"),
-            Loaded::Read { version, adjusted } => {
+            Loaded::Read {
+                version, adjusted, ..
+            } => {
                 write!(f, "read (format version {version}")?;
                 if *version < VERSION {
                     write!(f, ", older than this build's {VERSION}")?;
@@ -1695,7 +1758,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 2,
-                adjusted: false
+                adjusted: false,
+                unreadable: Vec::new(),
             }
         );
         assert_eq!(read.version, VERSION);
@@ -1959,7 +2023,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: VERSION,
-                adjusted: false
+                adjusted: false,
+                unreadable: Vec::new(),
             }
         );
     }
@@ -1976,6 +2041,87 @@ mod tests {
             ["speaker.local", "192.0.2.10:8010"]
         );
         assert!(Settings::default().cast_addresses.is_empty());
+    }
+
+    #[test]
+    fn a_field_that_does_not_read_is_named_and_falls_back_alone() {
+        let (read, found) = Settings::from_json(
+            r#"{"version": 3, "master_volume": "loud", "show_virtual_devices": true}"#,
+        )
+        .expect("read");
+        assert_eq!(read.master_volume, Settings::default().master_volume);
+        assert!(read.show_virtual_devices);
+        assert!(
+            matches!(&found, Loaded::Read { unreadable, .. } if unreadable == &["master_volume"]),
+            "{found:?}"
+        );
+        let (_, clean) = Settings::from_json(&sample().to_json()).expect("read");
+        assert!(
+            matches!(&clean, Loaded::Read { unreadable, .. } if unreadable.is_empty()),
+            "{clean:?}"
+        );
+    }
+
+    #[test]
+    fn every_stored_field_is_named_when_it_does_not_read() {
+        // The fields left out of the file while empty are set too, so each
+        // one is checked.
+        let every_field = Settings {
+            input_device: Some(SavedInput {
+                id: "input".to_owned(),
+                name: "Input".to_owned(),
+            }),
+            input_pairs: BTreeMap::from([("input".to_owned(), 2)]),
+            source_mix: Some(SavedMix {
+                mode: MixMode::AllExcept,
+                apps: vec![SavedMixApp {
+                    executable: "player.exe".to_owned(),
+                    name: "Player".to_owned(),
+                }],
+            }),
+            hidden_speakers: vec![SavedHidden {
+                key: "output:hidden".to_owned(),
+                name: "Hidden".to_owned(),
+                kind: "output".to_owned(),
+            }],
+            equalizer_curves: vec![SavedCurve {
+                name: "Curve".to_owned(),
+                gains_db: vec![1.0; BAND_COUNT],
+            }],
+            update_record: Some(UpdateRecord {
+                version: "9.9.9".to_owned(),
+                reason: crate::ui_model::UpdateRecordReason::Blocked,
+            }),
+            ..sample()
+        };
+        let serde_json::Value::Object(stored) =
+            serde_json::from_str(&every_field.to_json()).expect("an object")
+        else {
+            panic!("the settings are an object");
+        };
+        let optional = [
+            "input_device",
+            "input_pairs",
+            "source_mix",
+            "hidden_speakers",
+            "equalizer_curves",
+            "update_record",
+        ];
+        for name in optional {
+            assert!(stored.contains_key(name), "{name} is stored");
+        }
+        let marks = [
+            "version",
+            "speaker_zones_migrated",
+            "speaker_presets_migrated",
+        ];
+        for name in stored.keys().filter(|name| !marks.contains(&name.as_str())) {
+            let named = ["\"x\"", "7.5"].iter().any(|wrong| {
+                let text = format!(r#"{{"version": 3, "{name}": {wrong}}}"#);
+                unreadable_fields(&text) == [name.as_str()]
+            });
+            assert!(named, "{name} is never named as unreadable");
+        }
     }
 
     #[test]
@@ -2118,7 +2264,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 0,
-                adjusted: false
+                adjusted: false,
+                unreadable: Vec::new(),
             }
         );
         assert!(found.to_string().contains("older than"), "{found}");
@@ -2233,7 +2380,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 2,
-                adjusted: true
+                adjusted: true,
+                unreadable: Vec::new(),
             }
         );
         assert!(!Settings::default().to_json().contains("input_device"));
@@ -2267,7 +2415,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 2,
-                adjusted: true
+                adjusted: true,
+                unreadable: Vec::new(),
             }
         );
         let (read, _) = Settings::from_json(r#"{"version": 2, "input_pairs": [1]}"#).expect("read");
@@ -2306,7 +2455,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 1,
-                adjusted: true
+                adjusted: true,
+                unreadable: Vec::new(),
             }
         );
         assert_eq!(settings.source, SavedSource::System);
@@ -2412,7 +2562,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 2,
-                adjusted: true
+                adjusted: true,
+                unreadable: Vec::new(),
             }
         );
         assert_eq!(settings.outputs["late"].delay_ms, -250.0);
