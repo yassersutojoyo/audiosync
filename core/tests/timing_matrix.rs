@@ -17,17 +17,21 @@
 //! Invariants, from 2 s on unless said otherwise:
 //! - I1: no read runs dry.
 //! - I2: no drift skip or silence at any time, the start included.
-//! - I3: S206's slow-down makes up no shortage. A late-first output's I1
-//!   and I3 count from 1 s after its callbacks came on time.
+//! - I3: S206's slow-down makes up no shortage, unless the output's wander
+//!   brings its callbacks earlier faster than S207's trim can carry it later
+//!   (S209), which runs its lead's slack down. A late-first output's I1 and
+//!   I3 count from 1 s after its callbacks came on time.
 //! - I4: over the last quarter, any two outputs' mean delays, less their
 //!   latencies and hold-backs, lie within a capture block plus 2 ms.
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
 //! - I6: an output without wander whose clock is at least 20 ppm off is
 //!   trimmed with its clock by 9/10 of what it gained, against it by at most
 //!   16 frames, on a slow clock plus what the anchor floor falls toward its
-//!   stray stamps (S209 moves it later by that); a late-first output from
-//!   its start window's end plus one ANCHOR_FALL_MS, its late start made up
-//!   by a start step (S320).
+//!   stray stamps (S209 moves it later by that), which may come off what it
+//!   trims with the clock instead, on a fast clock plus what stray stamps on
+//!   late callbacks, which read as on time, move the trim; a late-first
+//!   output from its start window's end plus one ANCHOR_FALL_MS, its late
+//!   start made up by a start step (S320).
 //! - I7: with AirPlay chosen, the session lead stays 0 and no output
 //!   re-times; a start step anchors through a resync and re-times nothing.
 //! - I8 (stall cases only): a device that consumes nothing for 50 to 200 ms
@@ -50,7 +54,10 @@ use std::time::Instant;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl};
+use audiosync_core::render::{
+    ANCHOR_FALL_MS, Renderer, RendererControl, TRACK_CALLBACKS, TRACK_MS, TRIM_DEAD_ZONE_FRAMES,
+    TRIM_SHARE,
+};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 use proptest::prelude::*;
@@ -576,6 +583,9 @@ struct Output {
     stalls: Vec<(f64, f64)>,
     rng: u64,
     strays_left: u8,
+    /// How much later than its stamps said its stray-stamped callbacks came,
+    /// up to each stray, in ms.
+    misread_ms: f64,
     mac: bool,
     /// Windows: frames written, the prefilled silence included, and how
     /// much later than its wakes the device plays after its stalls and
@@ -708,7 +718,7 @@ fn write_block(writer: &mut RingWriter, samples: &mut [f32], first: u64, at: f64
 /// Capture frames by which the anchor floor falls toward a device's two
 /// stray stamps, `1 - e^(-t / ANCHOR_FALL_MS)` of the gap at each (S209):
 /// the output is to move later by as much, so on a slow clock the trim
-/// carries it there against the clock.
+/// carries it there against the clock or by trimming that much less with it.
 fn stray_fall_frames(d: &Device) -> u64 {
     let Some((_, ms)) = d.strays else {
         return 0;
@@ -717,6 +727,37 @@ fn stray_fall_frames(d: &Device) -> u64 {
     let kept = (-span_ms / f64::from(ANCHOR_FALL_MS)).exp();
     let fall_ms = ms * (1.0 - kept * kept);
     (fall_ms * f64::from(CAPTURE_RATE) / 1000.0).ceil() as u64
+}
+
+/// Whether a device's wander brings its callbacks earlier faster than S207's
+/// trim, at most a [`TRIM_SHARE`]th of a callback's reads and at least one
+/// frame, can carry it later toward the falling anchor floor (S209), less
+/// what a fast clock takes of that trim: its lead's slack then runs down
+/// and S206's slow-down makes up the rest.
+fn wander_outruns_trim(d: &Device) -> bool {
+    if d.wander_ms == 0.0 {
+        return false;
+    }
+    let need = (d.callback as u64 * u64::from(CAPTURE_RATE)).div_ceil(u64::from(d.rate));
+    let most = (need / TRIM_SHARE as u64).max(1) as f64;
+    let callbacks_per_s = f64::from(d.rate) / d.callback as f64;
+    let trim_ms_per_s =
+        most * callbacks_per_s * 1000.0 / f64::from(CAPTURE_RATE) - d.ppm.max(0.0) * 1e-3;
+    2.0 * d.wander_ms / d.wander_s > trim_ms_per_s
+}
+
+/// Capture frames S207's trim may make against a fast clock for stray
+/// stamps on late callbacks, `misread_ms` of them in all: a stamp early on a
+/// callback that came late reads as that much less late, which the renderer
+/// cannot tell from a callback that was, so its fill counts the lesser of
+/// the two in capture too many. Each fill moves the running average by its
+/// share, and the trim follows what lies beyond the dead zone.
+fn misread_frames(d: &Device, misread_ms: f64) -> u64 {
+    let track = (f64::from(d.rate) * f64::from(TRACK_MS) / 1000.0)
+        .max((TRACK_CALLBACKS * d.callback) as f64);
+    let share = 1.0 - (-(d.callback as f64) / track).exp();
+    let moved = share * misread_ms * f64::from(CAPTURE_RATE) / 1000.0;
+    (moved - TRIM_DEAD_ZONE_FRAMES).max(0.0).ceil() as u64
 }
 
 fn simulate(case: &Case) -> Outcome {
@@ -767,6 +808,7 @@ fn simulate(case: &Case) -> Outcome {
                 stalls,
                 rng: d.seed | 1,
                 strays_left: 2,
+                misread_ms: 0.0,
                 written: if mac { 0 } else { d.callback as u64 * 2 },
                 mac,
                 played_shift: 0.0,
@@ -863,6 +905,7 @@ fn simulate(case: &Case) -> Outcome {
             {
                 o.strays_left -= 1;
                 early_ms += ms;
+                o.misread_ms += ms.min((pull_at - o.nominal(o.pulls)) * 1000.0);
             }
             let stamped = output_at + early_ms / 1000.0;
             o.renderer
@@ -989,7 +1032,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         if !case.is_stall() {
             own[0] = dry > 0;
             own[1] = corrections > 0;
-            own[2] = shortage > 0;
+            own[2] = shortage > 0 && !wander_outruns_trim(d);
             own[4] = o.tail.count == 0 || spread > STEADY_MS;
             if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {
                 let judged_s = case.seconds - o.trim_judged_from;
@@ -1000,12 +1043,16 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
                 } else {
                     (sped, slowed)
                 };
-                let carried = if d.ppm < 0.0 { stray_fall_frames(d) } else { 0 };
-                own[5] = (with as f64) < gained * TRIM_WITH_SHARE
-                    || against > TRIM_AGAINST_FRAMES + carried;
+                let (carried, misread) = if d.ppm < 0.0 {
+                    (stray_fall_frames(d), 0)
+                } else {
+                    (0, misread_frames(d, o.misread_ms))
+                };
+                own[5] = ((with + carried) as f64) < gained * TRIM_WITH_SHARE
+                    || against > TRIM_AGAINST_FRAMES + carried + misread;
                 trim = format!(
-                    " trim with {with} of {gained:.0} against {against} of {}",
-                    TRIM_AGAINST_FRAMES + carried
+                    " trim with {with} (+{carried}) of {gained:.0} against {against} of {}",
+                    TRIM_AGAINST_FRAMES + carried + misread
                 );
             }
             // A start step anchors through a resync, but re-times nothing (S318).
