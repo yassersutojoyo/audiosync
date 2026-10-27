@@ -7774,6 +7774,31 @@ mod tests {
         );
     }
 
+    // covers: S223
+    #[test]
+    fn an_every_time_speaker_whose_pin_prompt_outlives_the_stream_turns_on_once_paired() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().pin_prompt.is_some(),
+            "the prompt waits for its PIN"
+        );
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "the user's pairing turns it on"
+        );
+    }
+
     // covers: S223, P182
     #[test]
     fn an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_the_sender_fails() {
