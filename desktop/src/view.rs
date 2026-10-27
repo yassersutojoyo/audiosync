@@ -7414,6 +7414,7 @@ mod tests {
         }
     }
 
+    // covers: S308 (its words; Tests/updatertexttest.sh checks how the .slint files use them)
     #[test]
     fn the_updater_texts() {
         use ui_model::UpdaterNotice as N;
