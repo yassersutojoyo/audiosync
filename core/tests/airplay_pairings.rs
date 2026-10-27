@@ -1,5 +1,6 @@
 //! The Mac's store of AirPlay pairing credentials (`airplay_pairings`):
-//! a round trip through the file, a corrupt or newer file ignored, the
+//! a round trip through the file, a bad entry skipped alone, a corrupt or
+//! newer file ignored, a file with something unusable kept aside, the
 //! file for its owner only, and no secret in anything printable.
 
 use std::fs;
@@ -86,7 +87,6 @@ fn a_corrupt_file_is_ignored_and_replaced_by_the_next_pairing() {
         b"not a pairings file".to_vec(),
         MAGIC.to_vec(),
         [good.clone(), vec![5, 0, b'a']].concat(),
-        [good.clone(), vec![1, 0, b'a', 3, 0, 1, 2, 3]].concat(),
         [MAGIC.to_vec(), vec![0]].concat(),
     ];
     for bytes in cases {
@@ -152,8 +152,7 @@ fn a_bad_entry_loses_only_itself_and_the_file_is_kept_aside_before_the_next_writ
     fs::write(&path, &bytes).expect("written");
 
     let (mut store, loaded) = PairingStore::open(path.clone());
-    assert!(!matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
-    assert_eq!(store.len(), 2, "{store:?}");
+    assert_eq!(loaded, Loaded::Receivers(2));
     assert_eq!(
         store.get("02005E005301"),
         Some(&first),
