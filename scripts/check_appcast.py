@@ -22,10 +22,17 @@ a Windows zip and the signature Sparkle's sign_update made over it, adds its
 item next to the Mac item in APPCAST, then checks the result. --strays fails
 on Windows-looking zips in a folder that aren't named as the script expects.
 
+--assets checks an uploaded release: every zip among the release's asset
+names needs an appcast item, and every item's zip must be attached. The
+names come as arguments or, with --assets-file, from a file holding the
+output of `gh release view TAG --json assets` or one name per line.
+
 Usage:
     scripts/check_appcast.py APPCAST VERSION [ZIP...]
     scripts/check_appcast.py APPCAST VERSION ZIP... --add ZIP SIGNATURE [--add ZIP SIGNATURE]
     scripts/check_appcast.py --strays FOLDER VERSION
+    scripts/check_appcast.py --assets APPCAST VERSION NAME...
+    scripts/check_appcast.py --assets APPCAST VERSION --assets-file FILE
     scripts/check_appcast.py --self-test
 """
 
@@ -183,6 +190,48 @@ def check(appcast, version, zips):
         if count != want:
             reason = "with Windows zips given" if given_windows else "without Windows zips"
             problems.append(f"{count} {arch} items; expected {want} {reason}")
+    return problems
+
+
+def read_asset_names(path):
+    """Asset names from `gh release view TAG --json assets` output, or one per line; - is stdin."""
+    if path == "-":
+        text = sys.stdin.read()
+    else:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    if text.lstrip().startswith(("{", "[")):
+        listed = json.loads(text)
+        if isinstance(listed, dict):
+            listed = listed.get("assets", [])
+        return [entry["name"] if isinstance(entry, dict) else str(entry) for entry in listed]
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def asset_problems(appcast, version, assets):
+    """One line per release zip without an appcast item, and per item whose zip is not attached."""
+    version = version[1:] if version.startswith("v") else version
+    try:
+        root = ET.parse(appcast).getroot()
+    except (OSError, ET.ParseError) as error:
+        return [f"{appcast}: not a readable appcast ({error})"]
+    url_prefix = f"releases/download/v{version}/"
+    item_zips = set()
+    problems = []
+    for number, item in enumerate(root.iter("item"), 1):
+        for enclosure in item.findall("enclosure"):
+            url = enclosure.get("url", "")
+            name = url.rpartition("/")[2]
+            item_zips.add(name)
+            if name not in assets:
+                problems.append(f"item {number}: url {url!r} names {name}, which is not attached "
+                                f"to the v{version} release")
+            elif not url.endswith(url_prefix + name):
+                problems.append(f"item {number}: url {url!r} does not end in {url_prefix}{name}")
+    for name in sorted(assets):
+        if name.endswith(".zip") and name not in item_zips:
+            problems.append(f"{name} is attached but has no appcast item, so "
+                            f"{'Windows' if zip_os(name) != 'macos' else 'Mac'} users never see this release")
     return problems
 
 
@@ -470,6 +519,11 @@ def main(argv):
                         help="add a Windows zip's item, signed by sign_update, before the check")
     parser.add_argument("--strays", nargs=2, metavar=("FOLDER", "VERSION"),
                         help="fail on Windows-looking zips in FOLDER that aren't named for VERSION")
+    parser.add_argument("--assets", action="store_true",
+                        help="compare the release's asset names (instead of ZIPs) with the appcast items")
+    parser.add_argument("--assets-file", metavar="FILE",
+                        help="with --assets: read the names from FILE (gh release view --json "
+                             "assets output, or one per line; - is stdin)")
     parser.add_argument("appcast", nargs="?", help="the release's appcast.xml")
     parser.add_argument("version", nargs="?", help="the release version, such as 0.8.0 or v0.8.0")
     parser.add_argument("zips", nargs="*", help="the release's zips (Mac and Windows)")
@@ -486,6 +540,24 @@ def main(argv):
         return 1 if strays else 0
     if not args.appcast or not args.version:
         parser.error("APPCAST and VERSION are required")
+    if args.assets_file and not args.assets:
+        parser.error("--assets-file needs --assets")
+    if args.assets:
+        if args.add:
+            parser.error("--assets checks an uploaded release; it takes no --add")
+        names = list(args.zips)
+        if args.assets_file:
+            try:
+                names += read_asset_names(args.assets_file)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                print(f"{args.assets_file}: not a list of asset names ({error})")
+                return 1
+        if not names:
+            parser.error("--assets needs the asset names, as arguments or with --assets-file")
+        problems = asset_problems(args.appcast, args.version, set(names))
+        for problem in problems:
+            print(problem)
+        return 1 if problems else 0
     if args.add:
         try:
             with open(args.appcast, encoding="utf-8") as f:
