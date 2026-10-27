@@ -55,9 +55,10 @@ impl DebugLog {
     /// nothing otherwise: `audiosync-debug.log` in the temporary folder, or
     /// on Linux `debug.log` in the state folder (the temporary folder only
     /// when that can't be made, which the log's first line then says).
-    pub fn from_env() -> DebugLog {
+    /// A `relaunched` start keeps what the file holds (spec S309).
+    pub fn from_env(relaunched: bool) -> DebugLog {
         let (path, warning) = env_path();
-        let log = DebugLog::at_launch(path, false);
+        let log = DebugLog::at_launch(path, relaunched);
         if let Some(warning) = warning {
             log.log(|| warning);
         }
@@ -74,9 +75,14 @@ impl DebugLog {
         DebugLog::open(env_path().0, MAX_BYTES, false)
     }
 
-    /// The launch log at `path`.
-    fn at_launch(path: Option<PathBuf>, _relaunched: bool) -> DebugLog {
-        DebugLog::new(path)
+    /// The launch log at `path`, emptied unless the old copy relaunched this
+    /// one after an update, whose lines (the signature check among them) stay.
+    fn at_launch(path: Option<PathBuf>, relaunched: bool) -> DebugLog {
+        if relaunched {
+            DebugLog::open(path, MAX_BYTES, false)
+        } else {
+            DebugLog::new(path)
+        }
     }
 
     /// A log written to `path`, emptied first, or one that writes nothing
@@ -522,7 +528,10 @@ mod tests {
         assert!(relaunched.flush(TEST_FLUSH));
         assert_eq!(
             read_messages(&path),
-            ["updater: signature of 0.7.2 verified", "the relaunched copy"]
+            [
+                "updater: signature of 0.7.2 verified",
+                "the relaunched copy"
+            ]
         );
         let plain = DebugLog::at_launch(Some(path.clone()), false);
         plain.log(|| "a plain start".to_owned());
