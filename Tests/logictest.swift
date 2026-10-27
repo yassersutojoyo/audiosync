@@ -8803,7 +8803,7 @@ do {
     defer { try? FileManager.default.removeItem(at: dir) }
     let url = CastMemoryFile.file(in: dir)
     check(url.lastPathComponent == "cast-devices.json" && url.deletingLastPathComponent().lastPathComponent == "AudioSync"
-            && CastMemoryFile.load(from: url) == nil, "cast memory: in AudioSync's folder, nothing before a save")
+            && CastMemoryStore(url: url).json == nil, "cast memory: in AudioSync's folder, nothing before a save")
     let id = "0123456789abcdef0123456789abcdef"
     var first = asc_cast_create(nil)
     check(first != nil && asc_cast_offset_ms(first, id) == -1 && asc_cast_set_offset(first, id, 1234.4)
@@ -8812,7 +8812,7 @@ do {
     asc_cast_destroy(&first)
     var saved = false
     if let json { saved = (try? CastMemoryFile.save(json, to: url)) != nil }
-    let loaded = CastMemoryFile.load(from: url)
+    let loaded = CastMemoryStore(url: url).json
     check(saved && loaded == json && first == nil, "cast memory: the JSON is written and read back whole")
     var second = asc_cast_create(loaded)
     check(asc_cast_offset_ms(second, id) == 1234, "cast memory: a new sender starts with the stored offset")
@@ -8843,7 +8843,7 @@ do {
     let mode = copy.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.posixPermissions] as? Int }
     check(copies().count == 1 && copy.flatMap { try? Data(contentsOf: $0) } == damaged
             && kept??.lastPathComponent == copy?.lastPathComponent && mode == 0o600
-            && CastMemoryFile.load(from: url) == "{}",
+            && CastMemoryStore(url: url).json == "{}",
           "cast memory: a file that doesn't read is kept aside, whole and owner-only, before it is saved over",
           "\(copies()) mode \(mode.map { String($0, radix: 8) } ?? "nil")")
     let second = try? store.save("{\"a\":1}")

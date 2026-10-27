@@ -895,12 +895,6 @@ enum CastMemoryFile {
             .appendingPathComponent(fileName)
     }
 
-    /// The stored JSON, or nil when there is none or it isn't text.
-    static func load(from url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
     /// Writes through a temporary file, so a crash mid-write leaves the
     /// previous memory whole.
     static func save(_ json: String, to url: URL) throws {
