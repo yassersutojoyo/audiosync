@@ -12659,6 +12659,34 @@ mod tests {
     }
 
     #[test]
+    fn a_cast_speakers_file_that_didnt_read_is_kept_aside_once_before_it_is_saved_over() {
+        let (mut adapter, _fake) = cast_adapter();
+        let folder = test_dir("cast-memory-ignored");
+        let file = folder.join("cast-speakers.json");
+        std::fs::write(&file, b"{ not json").expect("written");
+        adapter.set_cast_file(Some(file.clone()));
+        adapter.poll();
+        adapter.save_settings();
+        let kept = || crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
+        assert!(kept().is_empty(), "opening it keeps nothing aside");
+        assert_eq!(std::fs::read(&file).expect("the file"), b"{ not json");
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.save_settings();
+        assert_eq!(kept(), [b"{ not json".to_vec()]);
+        let saved = std::fs::read_to_string(&file).expect("the file is written");
+        assert_eq!(
+            DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
+            Some(std::time::Duration::from_millis(250))
+        );
+
+        std::fs::write(&file, b"not json either").expect("written");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 300.0);
+        adapter.save_settings();
+        assert_eq!(kept().len(), 1, "one copy a run");
+    }
+
+    #[test]
     fn a_refused_cast_speakers_notice_stays_while_the_other_starts_playing() {
         let (mut adapter, fake) = cast_adapter();
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);

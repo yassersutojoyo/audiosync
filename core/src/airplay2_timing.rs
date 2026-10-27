@@ -232,4 +232,44 @@ mod tests {
         assert_eq!(fs::read(&path).expect("the file"), newer, "left as it is");
         let _ = fs::remove_file(&path);
     }
+
+    fn push_entry(bytes: &mut Vec<u8>, id: &[u8], entry: &[u8]) {
+        for field in [id, entry] {
+            let len = u16::try_from(field.len()).expect("a short field");
+            bytes.extend_from_slice(&len.to_le_bytes());
+            bytes.extend_from_slice(field);
+        }
+    }
+
+    #[test]
+    fn a_bad_or_repeated_entry_costs_only_itself() {
+        let path = scratch("bad-entry.dat");
+        let mut bytes = MAGIC.to_vec();
+        bytes.push(VERSION);
+        push_entry(&mut bytes, b"A1", &entry(Timing::Ptp, "366.0").to_bytes());
+        push_entry(&mut bytes, b"B2", b"not an entry");
+        push_entry(&mut bytes, b"", &entry(Timing::Ptp, "366.0").to_bytes());
+        push_entry(
+            &mut bytes,
+            &[0xff, 0xfe],
+            &entry(Timing::Ptp, "366.0").to_bytes(),
+        );
+        push_entry(&mut bytes, b"A1", &entry(Timing::Ntp, "1.0").to_bytes());
+        push_entry(&mut bytes, b"C3", &entry(Timing::Ntp, "377.1").to_bytes());
+        fs::write(&path, &bytes).expect("written");
+        let store = TimingStore::open(path.clone());
+        assert_eq!(store.get("A1"), Some(&entry(Timing::Ptp, "366.0")));
+        assert_eq!(store.get("B2"), None);
+        assert_eq!(store.get("C3"), Some(&entry(Timing::Ntp, "377.1")));
+
+        bytes.extend_from_slice(&[9, 0, b'D']);
+        fs::write(&path, &bytes).expect("written");
+        let store = TimingStore::open(path.clone());
+        assert_eq!(
+            store.get("C3"),
+            Some(&entry(Timing::Ntp, "377.1")),
+            "a cut tail costs only the tail"
+        );
+        let _ = fs::remove_file(&path);
+    }
 }
