@@ -6,7 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
-- In the menu bar panel on the Mac, a zone works like its header in the main window: only the round icon switches the zone on or off, and the name or the arrow next to it shows or hides the zone's speakers. Before, a click on the name switched the whole zone.
+- In the Mac's menu bar panel, a zone works like its header in the main window: the round icon switches the zone on or off, and the arrow, the name or the space around them shows or hides the zone's speakers. Before, a click on the name switched the whole zone, and its speakers were always listed.
 
 ## [0.7.0] - 2026-10-27
 
