@@ -336,7 +336,7 @@ fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey,
             .first()
             .map_or("none".to_owned(), |diff| format!("{:.3}", diff * 1000.0));
         println!(
-            "SENDER {} {} vs {}: stated play times differ by {first} ms on the first click, expected {:.0} ms; worst error {worst:.2} frames over {} of {expected} clicks (limit 1 frame); not judged: {}",
+            "SENDER {} {} vs {}: stated play times differ by {first} ms on the first judged click, expected {:.0} ms; worst error {worst:.2} frames over {} of {expected} clicks (limit 1 frame); not judged: {}",
             if ok { "PASS" } else { "FAIL" },
             reference.address,
             rx.address,
