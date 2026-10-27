@@ -592,6 +592,18 @@ struct UIStrings {
         "\(name) didn't accept the connection, so it's off. Turn it on again to try once more."
     }
 
+    /// A native speaker turned off because it asks for a PIN or password;
+    /// nil for every other reason. `unasked`: it turned the session down
+    /// before asking for either.
+    func nativeAirPlayAsksForCode(name: String, reason: NativeTurnOff, unasked: Bool) -> String? {
+        switch reason {
+        case .needsCode where unasked: return nativeAirPlayNotAccepted(name: name)
+        case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin)
+        case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword)
+        default: return nil
+        }
+    }
+
     /// A PIN pairing ended without pairing, for another reason than a wrong
     /// PIN (which asks again).
     func nativeAirPlayPairingFailed(name: String) -> String {
