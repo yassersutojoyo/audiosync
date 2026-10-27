@@ -7817,6 +7817,42 @@ mod tests {
         );
     }
 
+    // covers: S223
+    #[test]
+    fn an_every_time_speaker_whose_password_prompt_waits_in_line_turns_on_once_paired() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let study = airplay2_every_time_tv(11, "Study");
+        fake.appear(&study);
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        for tv in [&study, &den] {
+            adapter.set_speaker_enabled(&ap(tv), true);
+            fake.pairing(
+                tv,
+                PairingEvent::Failed {
+                    error: SessionError::new(ErrorKind::PasswordRequired),
+                    wrong_pin: false,
+                },
+            );
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().password_prompt.unwrap().name, "Study");
+
+        adapter.set_running(false);
+        adapter.poll();
+        let id = ap(&den);
+        adapter.submit_password(&id, "hunter2");
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "the prompt waiting behind another one still counts"
+        );
+    }
+
     // covers: S223, P182
     #[test]
     fn an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_the_sender_fails() {
