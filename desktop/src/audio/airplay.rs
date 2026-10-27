@@ -2497,8 +2497,6 @@ impl AirPlaySpeakers {
         !askers.is_empty()
     }
 
-    /// The password prompt to show: the oldest one waiting, while no PIN
-    /// prompt is open, so one dialog asks at a time.
     /// The speakers whose pairing runs or whose password prompt waits, shown
     /// or queued, with the target a member's prompt switches on.
     pub fn waiting_for_user(&self) -> BTreeSet<String> {
@@ -2510,6 +2508,8 @@ impl AirPlaySpeakers {
         waiting
     }
 
+    /// The password prompt to show: the oldest one waiting, while no PIN
+    /// prompt is open, so one dialog asks at a time.
     pub fn password_prompt(&self) -> Option<AirPlayPasswordPrompt> {
         if self.pin_prompt().is_some() {
             return None;
