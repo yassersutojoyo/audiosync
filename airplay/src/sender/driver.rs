@@ -1814,6 +1814,11 @@ impl Driver {
             };
             if connecting && kind != StartKind::OpenConnection {
                 self.connects.connected(now);
+                if let Turn::Session(key) = &turn
+                    && let Some(speaker) = self.speakers.get(key)
+                {
+                    speaker.counters.count_connect_start(now);
+                }
             }
         }
     }

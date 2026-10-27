@@ -6,6 +6,7 @@
 mod common;
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,7 @@ use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::sender::{
     Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
+use audiosync_airplay::stream::SpeakerCounters;
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2};
@@ -25,14 +27,18 @@ use common::net::{
 
 const LONG: Duration = Duration::from_secs(15);
 const SPACING: Duration = Duration::from_millis(500);
-/// An accept follows its connect, and the two clocks are read at different
-/// moments (P225).
+/// The sender and the test read the time at different moments (P225).
 const UNDER: Duration = Duration::from_millis(50);
 /// Half a turn, so a connect can't pass for the next one (P225).
 const OVER: Duration = Duration::from_millis(250);
 /// The largest gap between two audio packets of a playing receiver: the cap
 /// on M (P84).
 const MAX_GAP: Duration = Duration::from_millis(100);
+/// How far a fake receiver's accept may trail the connect start the sender
+/// recorded, the connect timeout of P134: the fake logs an accept on a
+/// thread that a loaded machine schedules seconds late (2.5 s seen), so the
+/// spacing is judged on the starts.
+const ACCEPT_LAG: Duration = Duration::from_secs(5);
 const FRAME: f64 = 1.0 / 44_100.0;
 
 const PCM_TXT: &[&str] = &[
@@ -81,7 +87,8 @@ fn options() -> SpeakerOptions {
     SpeakerOptions::new(Volume::Db(-20.0))
 }
 
-/// A receiver of either kind, for the accept times.
+/// A receiver of either kind, for the accept times that confirm the
+/// connect starts.
 enum Fake<'a> {
     One(&'a NetReceiver),
     Two(&'a Ap2Server),
@@ -111,19 +118,43 @@ fn ms(from: Instant, to: Instant) -> i128 {
     }
 }
 
-/// Each accept at least 450 ms after the one before it, and the k-th
+/// The `n`-th connect start of each speaker, once each has made exactly
+/// `n` (P222).
+fn connect_starts(counters: &[&SpeakerCounters], n: u64) -> Vec<Instant> {
+    counters
+        .iter()
+        .enumerate()
+        .map(|(k, counters)| {
+            assert_eq!(counters.connect_starts(), n, "speaker {k}");
+            counters.last_connect_start().expect("a connect start")
+        })
+        .collect()
+}
+
+/// Each connect start at least 450 ms after the one before it, and the k-th
 /// within 0.5 s × k + 250 ms of the first (P225).
-fn assert_in_turn(accepts: &[Instant]) {
-    let first = accepts[0];
-    let offsets: Vec<i128> = accepts.iter().map(|at| ms(first, *at)).collect();
-    for k in 1..accepts.len() {
+fn assert_in_turn(starts: &[Instant]) {
+    let first = starts[0];
+    let offsets: Vec<i128> = starts.iter().map(|at| ms(first, *at)).collect();
+    for k in 1..starts.len() {
         assert!(
-            accepts[k] >= accepts[k - 1] + SPACING - UNDER,
-            "accept {k} too soon after the one before: {offsets:?} ms"
+            starts[k] >= starts[k - 1] + SPACING - UNDER,
+            "connect {k} too soon after the one before: {offsets:?} ms"
         );
         assert!(
-            accepts[k] <= first + SPACING * k as u32 + OVER,
-            "accept {k} late: {offsets:?} ms"
+            starts[k] <= first + SPACING * k as u32 + OVER,
+            "connect {k} late: {offsets:?} ms"
+        );
+    }
+}
+
+/// Each receiver accepted the connection whose start the sender recorded.
+fn assert_accepted(starts: &[Instant], accepts: &[Instant]) {
+    for (k, (start, accept)) in starts.iter().zip(accepts).enumerate() {
+        assert!(
+            *accept >= *start && *accept <= *start + ACCEPT_LAG,
+            "accept {k} {} ms after its connect start",
+            ms(*start, *accept)
         );
     }
 }
@@ -170,7 +201,7 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
 
     let p = playing.device(30, PCM_TXT);
     let p_key = p.key.clone();
-    sender.add_speaker(p, options());
+    let p_counters = sender.add_speaker(p, options());
     assert!(first_state_at(&mut events, &sender, &p_key, SpeakerState::Playing, LONG).is_some());
     thread::sleep(Duration::from_secs(1));
     let requests_before = session_requests(&playing);
@@ -183,15 +214,19 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
     devices.push(airplay2_only(&airplay2, 36));
     let keys: Vec<DeviceKey> = devices.iter().map(|device| device.key.clone()).collect();
     let asked = Instant::now();
-    for device in devices {
-        sender.add_speaker(device, options());
-    }
+    let counters: Vec<Arc<SpeakerCounters>> = devices
+        .into_iter()
+        .map(|device| sender.add_speaker(device, options()))
+        .collect();
 
-    // Every one is Connecting from the call, waiting or not (P224).
-    for key in &keys {
-        let at = first_state_at(&mut events, &sender, key, SpeakerState::Connecting, OVER)
+    // Every one is Connecting from the call, waiting or not (P224): a
+    // waiting one is told before its turn comes.
+    for (k, key) in keys.iter().enumerate() {
+        first_state_at(&mut events, &sender, key, SpeakerState::Connecting, LONG)
             .unwrap_or_else(|| panic!("{key:?} Connecting: {:?}", events.of(key)));
-        assert!(at <= asked + OVER);
+        if k > 0 {
+            assert_eq!(counters[k].connect_starts(), 0, "{key:?} told at its turn");
+        }
         assert_eq!(
             events.of(key).first(),
             Some(&SpeakerEvent::State(SpeakerState::Connecting))
@@ -202,8 +237,11 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
     fakes.push(Fake::Two(&airplay2));
     assert!(wait_until(LONG, || first_accepts(&fakes).is_some()));
     let accepts = first_accepts(&fakes).expect("every receiver connected");
-    assert!(accepts[0] <= asked + OVER, "the first waits for nothing");
-    assert_in_turn(&accepts);
+    let counters: Vec<&SpeakerCounters> = counters.iter().map(Arc::as_ref).collect();
+    let starts = connect_starts(&counters, 1);
+    assert!(starts[0] <= asked + OVER, "the first waits for nothing");
+    assert_in_turn(&starts);
+    assert_accepted(&starts, &accepts);
 
     for key in &keys {
         assert!(
@@ -229,10 +267,11 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
         for pair in burst.windows(2) {
             assert!(
                 pair[1].duration_since(pair[0]) <= MAX_GAP,
-                "a gap of {:?} from {} ms after the call; accepts at {:?} ms",
+                "a gap of {:?} from {} ms after the call; connects at {:?} ms; {} packets sent late",
                 pair[1].duration_since(pair[0]),
                 ms(asked, pair[0]),
-                accepts.iter().map(|at| ms(asked, *at)).collect::<Vec<_>>()
+                starts.iter().map(|at| ms(asked, *at)).collect::<Vec<_>>(),
+                p_counters.late_packets()
             );
         }
     }
@@ -243,7 +282,11 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
         0.0,
     );
     assert!(common >= 20, "{common}");
-    assert!(error <= FRAME, "{error}");
+    assert!(
+        error <= FRAME,
+        "{error}; {} packets sent late",
+        p_counters.late_packets()
+    );
     let errors: Vec<SpeakerEvent> = events
         .of(&p_key)
         .into_iter()
@@ -277,21 +320,29 @@ fn a_silent_receiver_holds_no_one_and_a_removed_start_opens_no_connection() {
         .map(|(k, receiver)| receiver.device(40 + k as u8, PCM_TXT))
         .collect();
     let keys: Vec<DeviceKey> = devices.iter().map(|device| device.key.clone()).collect();
-    for device in devices {
-        sender.add_speaker(device, options());
-    }
+    let counters: Vec<Arc<SpeakerCounters>> = devices
+        .into_iter()
+        .map(|device| sender.add_speaker(device, options()))
+        .collect();
 
     // The third connects in its turn while the second waits for an answer.
-    assert!(wait_until(LONG, || !receivers[2]
-        .log()
-        .connections
-        .is_empty()));
+    assert!(wait_until(LONG, || counters[2].connect_starts() > 0));
     sender.remove_speaker(&keys[3]);
-    assert!(wait_until(LONG, || !receivers[4]
+    assert!(wait_until(LONG, || counters[4].connect_starts() > 0));
+    let connected = [0, 1, 2, 4];
+    assert!(wait_until(LONG, || connected.iter().all(|k| !receivers
+        [*k]
         .log()
         .connections
-        .is_empty()));
-    let first = |k: usize| receivers[k].log().connections[0];
+        .is_empty())));
+    let started: Vec<&SpeakerCounters> = connected.iter().map(|k| &*counters[*k]).collect();
+    let starts = connect_starts(&started, 1);
+    let accepts: Vec<Instant> = connected
+        .iter()
+        .map(|k| receivers[*k].log().connections[0])
+        .collect();
+    assert_accepted(&starts, &accepts);
+    let first = |k: usize| starts[connected.iter().position(|c| *c == k).expect("connected")];
     assert_in_turn(&[first(0), first(1), first(2)]);
 
     // The removed start is Stopped with no connection; the next one keeps
@@ -301,6 +352,7 @@ fn a_silent_receiver_holds_no_one_and_a_removed_start_opens_no_connection() {
         "{:?}",
         events.of(&keys[3])
     );
+    assert_eq!(counters[3].connect_starts(), 0);
     assert!(receivers[3].log().connections.is_empty());
     assert_in_turn(&[first(0), first(1), first(2), first(4)]);
     assert!(first(4) >= first(2) + SPACING - UNDER);
@@ -326,32 +378,44 @@ fn a_queued_airplay2_start_keeps_the_one_place() {
     devices.push(airplay2_only(&first_ap2, 53));
     devices.push(airplay2_only(&second_ap2, 54));
     let (a_key, b_key) = (devices[3].key.clone(), devices[4].key.clone());
-    let asked = Instant::now();
-    for device in devices {
-        sender.add_speaker(device, options());
-    }
+    let counters: Vec<Arc<SpeakerCounters>> = devices
+        .into_iter()
+        .map(|device| sender.add_speaker(device, options()))
+        .collect();
 
-    let connecting = first_state_at(&mut events, &sender, &a_key, SpeakerState::Connecting, OVER);
-    assert!(connecting.is_some_and(|at| at <= asked + OVER));
-    let refused = events.wait_for(&sender, OVER, |event| {
+    let connecting = first_state_at(&mut events, &sender, &a_key, SpeakerState::Connecting, LONG);
+    assert!(connecting.is_some());
+    assert_eq!(
+        counters[3].connect_starts(),
+        0,
+        "told Connecting at its turn"
+    );
+    let refused = events.wait_for(&sender, LONG, |event| {
         matches!(event, SenderEvent::Speaker { key, event: SpeakerEvent::Error(error) }
             if *key == b_key
                 && error.error.kind
                     == ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session))
     });
     assert!(refused.is_some(), "{:?}", events.of(&b_key));
-    let refused_at = Instant::now();
+    assert_eq!(
+        counters[3].connect_starts(),
+        0,
+        "refused while the first still waits"
+    );
 
     assert!(wait_until(LONG, || !first_ap2
         .fake()
         .connected_at
         .is_empty()));
-    let first = airplay1[0].log().connections[0];
-    let a_connect = first_ap2.fake().connected_at[0];
-    assert!(
-        refused_at < a_connect,
-        "refused while the first still waits"
+    let starts = connect_starts(&[&counters[0], &counters[3]], 1);
+    assert_accepted(
+        &starts,
+        &[
+            airplay1[0].log().connections[0],
+            first_ap2.fake().connected_at[0],
+        ],
     );
+    let (first, a_connect) = (starts[0], starts[1]);
     assert!(a_connect >= first + SPACING * 3 - UNDER);
     assert!(a_connect <= first + SPACING * 3 + OVER);
     assert!(
@@ -359,6 +423,7 @@ fn a_queued_airplay2_start_keeps_the_one_place() {
         "{:?}",
         events.of(&a_key)
     );
+    assert_eq!(counters[4].connect_starts(), 0);
     assert_eq!(second_ap2.fake().connections, 0);
 }
 
@@ -378,9 +443,10 @@ fn a_click_while_retries_wait_connects_first() {
         .map(|(k, receiver)| receiver.device(60 + k as u8, PCM_TXT))
         .collect();
     let keys: Vec<DeviceKey> = devices.iter().map(|device| device.key.clone()).collect();
-    for device in devices {
-        sender.add_speaker(device, options());
-    }
+    let counters: Vec<Arc<SpeakerCounters>> = devices
+        .into_iter()
+        .map(|device| sender.add_speaker(device, options()))
+        .collect();
     for key in &keys {
         assert!(first_state_at(&mut events, &sender, key, SpeakerState::Playing, LONG).is_some());
     }
@@ -389,24 +455,30 @@ fn a_click_while_retries_wait_connects_first() {
     for receiver in &lost {
         receiver.kill();
     }
-    let second_accept = |receiver: &NetReceiver| receiver.log().connections.get(1).copied();
-    assert!(wait_until(LONG, || lost
+    let second_start = |counters: &SpeakerCounters| {
+        (counters.connect_starts() == 2)
+            .then(|| counters.last_connect_start())
+            .flatten()
+    };
+    assert!(wait_until(LONG, || counters
         .iter()
-        .any(|r| second_accept(r).is_some())));
-    let r0 = lost
+        .any(|c| second_start(c).is_some())));
+    let r0 = counters
         .iter()
-        .filter_map(second_accept)
+        .filter_map(|c| second_start(c))
         .min()
         .expect("a retry connected");
     thread::sleep((r0 + Duration::from_millis(200)).saturating_duration_since(Instant::now()));
     let click = clicked.device(63, PCM_TXT);
     let click_key = click.key.clone();
-    sender.add_speaker(click, options());
+    let click_counters = sender.add_speaker(click, options());
 
+    let second_accept = |receiver: &NetReceiver| receiver.log().connections.get(1).copied();
     assert!(wait_until(LONG, || {
         lost.iter().all(|r| second_accept(r).is_some()) && !clicked.log().connections.is_empty()
     }));
-    let click_at = clicked.log().connections[0];
+    let click_at = connect_starts(&[&click_counters], 1)[0];
+    assert_accepted(&[click_at], &[clicked.log().connections[0]]);
     assert!(
         click_at >= r0 + SPACING - UNDER && click_at <= r0 + SPACING + OVER,
         "the click connected {} ms after the first retry",
@@ -416,10 +488,17 @@ fn a_click_while_retries_wait_connects_first() {
     // The two retries left connect after it, 0.5 s apart, in the order
     // they fell due.
     events.drain(&sender);
+    let retried: Vec<&SpeakerCounters> = counters.iter().map(Arc::as_ref).collect();
+    let starts = connect_starts(&retried, 2);
+    let accepts: Vec<Instant> = lost
+        .iter()
+        .map(|r| second_accept(r).expect("reconnected"))
+        .collect();
+    assert_accepted(&starts, &accepts);
     let mut retries: Vec<(Instant, Instant)> = keys
         .iter()
-        .zip(&lost)
-        .map(|(key, receiver)| {
+        .zip(&starts)
+        .map(|(key, start)| {
             let due = events
                 .of(key)
                 .into_iter()
@@ -428,7 +507,7 @@ fn a_click_while_retries_wait_connects_first() {
                     _ => None,
                 })
                 .expect("a retry");
-            (due, second_accept(receiver).expect("reconnected"))
+            (due, *start)
         })
         .collect();
     retries.sort_by_key(|(due, _)| *due);
