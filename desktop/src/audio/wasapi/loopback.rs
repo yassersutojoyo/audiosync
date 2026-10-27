@@ -93,7 +93,8 @@ pub struct LoopbackCapture {
     /// The HRESULT that ended the capture, once `ended` is set.
     failure: Arc<AtomicI32>,
     ended: Arc<AtomicBool>,
-    /// The frames Windows delivered, the discontinuities and the gap fill.
+    /// The frames Windows delivered, the discontinuities, silent packets,
+    /// gap fill and zero holes.
     counters: Arc<CaptureCounters>,
     thread: Worker,
     /// The captured apps, to notice when they quit; empty when one can't be
@@ -309,7 +310,9 @@ fn run(
         Err(error) => return ready.fail(error),
     };
     let mut converter = match CaptureConverter::new(stream.format, writer, equalizer, feeds) {
-        Ok(converter) => converter.reading(stream.pair),
+        Ok(converter) => converter
+            .reading(stream.pair)
+            .counting(Arc::clone(counters)),
         Err(error) => return ready.fail(error),
     };
     let _task = ProAudioTask::join();
@@ -724,6 +727,9 @@ fn drain(
         }
         let skip = skip.min(count);
         let silent = data.is_null() || flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
+        if silent {
+            counters.count_silent_packet();
+        }
         let bytes: &[u8] = if silent {
             &[]
         } else {
@@ -970,7 +976,7 @@ fn run_mix(
     ready: Ready<CaptureAttempt>,
 ) {
     let mut converter = match CaptureConverter::new(MIX_FORMAT, writer, equalizer, feeds) {
-        Ok(converter) => converter,
+        Ok(converter) => converter.counting(Arc::clone(counters)),
         Err(error) => return ready.fail(error),
     };
     let mut frequency = 0_i64;
@@ -1062,7 +1068,9 @@ fn mix_loop(
     let mut planned = [0_u32; MAX_MIX_APPS];
     let mut wanted = lanes.held(&mut planned);
     let (mut before, mut after) = ([0_u32; MAX_MIX_APPS], [0_u32; MAX_MIX_APPS]);
-    let mut sink = |stereo: &[f32], frames: usize| converter.push(as_bytes(stereo), frames, false);
+    let mut sink = |stereo: &[f32], frames: usize, filled: &[bool]| {
+        converter.push_mixed(as_bytes(stereo), frames, filled);
+    };
     let mut handed = |lane| {
         // A full mailbox means the opener is stuck; this one is freed here.
         if let Err(lane) = MixShare::post(&share.retired, lane) {
