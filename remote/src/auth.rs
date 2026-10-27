@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -261,6 +261,9 @@ pub struct TokenStore {
     /// The file as read differs from the store: no last-seen times, idle
     /// devices or times ahead of the clock.
     rewrite: bool,
+    /// The file as read, when a device in it didn't: copied aside by the
+    /// first save that writes over it, never by a read alone.
+    damaged: Option<Arc<[u8]>>,
 }
 
 /// Why the paired-device file was not read at start, or not all of it.
@@ -271,12 +274,8 @@ pub enum LoadProblem {
     /// The store starts empty.
     NotInFormat,
     /// `skipped` devices didn't read and pair again; the others are kept.
-    /// The file was copied to `kept` before anything replaces it; with
-    /// `None` the copy failed and the file isn't written this run.
-    Skipped {
-        skipped: usize,
-        kept: Option<PathBuf>,
-    },
+    /// The first save copies the file aside before it writes over it.
+    Skipped { skipped: usize },
 }
 
 /// The devices as one change left them, for [`DeviceFile::save`].
@@ -286,13 +285,22 @@ pub struct Snapshot {
     path: Option<PathBuf>,
     devices: Vec<(TokenHash, u64)>,
     generation: u64,
+    /// The damaged file as read, to keep aside before writing over it.
+    keep_first: Option<Arc<[u8]>>,
 }
 
 /// Writes snapshots to the paired-device file one at a time; one older
 /// than the last written is skipped, so the file never goes back.
 #[derive(Debug, Default)]
 pub struct DeviceFile {
-    written: Mutex<u64>,
+    written: Mutex<Written>,
+}
+
+#[derive(Debug, Default)]
+struct Written {
+    generation: u64,
+    /// The damaged file was kept aside, so later writes needn't again.
+    kept_aside: bool,
 }
 
 impl DeviceFile {
@@ -301,15 +309,22 @@ impl DeviceFile {
             return Ok(());
         };
         let mut written = self.written.lock().unwrap_or_else(PoisonError::into_inner);
-        if snapshot.generation <= *written {
+        if snapshot.generation <= written.generation {
             return Ok(());
+        }
+        if let Some(bytes) = snapshot.keep_first.as_deref()
+            && !written.kept_aside
+        {
+            // While the copy fails, the damaged file is not written over.
+            keep_aside(path, bytes, unix_seconds(SystemTime::now()))?;
+            written.kept_aside = true;
         }
         let hashes: Vec<String> = snapshot.devices.iter().map(|(hash, _)| hex(hash)).collect();
         let seen: Vec<u64> = snapshot.devices.iter().map(|(_, seen)| *seen).collect();
         // "seen" sits beside "devices" so a reader of the older layout still counts them.
         let text = json!({ "version": FILE_VERSION, "devices": hashes, "seen": seen }).to_string();
         write_replacing(path, text.as_bytes())?;
-        *written = snapshot.generation;
+        written.generation = snapshot.generation;
         Ok(())
     }
 }
@@ -330,6 +345,7 @@ impl TokenStore {
             devices: Vec::new(),
             generation: 0,
             rewrite: false,
+            damaged: None,
         };
         let Some(path) = store.path.clone() else {
             return (store, None);
@@ -350,12 +366,9 @@ impl TokenStore {
                             .any(|device| device.seen != device.seen_saved);
                     store.devices = devices;
                     (skipped > 0).then(|| {
-                        let kept = keep_aside(&path, &bytes, now).ok();
-                        if kept.is_none() {
-                            store.path = None;
-                        }
+                        store.damaged = Some(Arc::from(bytes));
                         store.rewrite = true;
-                        LoadProblem::Skipped { skipped, kept }
+                        LoadProblem::Skipped { skipped }
                     })
                 }
                 None => Some(LoadProblem::NotInFormat),
@@ -460,9 +473,11 @@ impl TokenStore {
         (self.devices.len() != before).then(|| self.snapshot())
     }
 
-    /// Forgets every device.
+    /// Forgets every device; a damaged file is not kept aside, since the
+    /// user asked to forget what it holds.
     pub fn clear(&mut self) -> Snapshot {
         self.devices.clear();
+        self.damaged = None;
         self.snapshot()
     }
 
@@ -479,6 +494,7 @@ impl TokenStore {
                 .map(|device| (device.hash, device.seen))
                 .collect(),
             generation: self.generation,
+            keep_first: self.damaged.clone(),
         }
     }
 }
@@ -1121,6 +1137,13 @@ mod tests {
         }
         assert!(copies_kept_aside(&path).is_empty());
         assert_eq!(fs::read(&path).unwrap(), text.into_bytes());
+
+        // Forget every device, from the window while the remote is off:
+        // what the user asked to forget isn't kept in a copy.
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), day_zero());
+        DeviceFile::default().save(store.clear()).unwrap();
+        assert!(copies_kept_aside(&path).is_empty());
+        assert!(TokenStore::open_at(Some(path), day_zero()).0.is_empty());
     }
 
     #[test]
@@ -1181,13 +1204,7 @@ mod tests {
         fs::write(&path, b"{\"version\": 1, \"devices\": [\"zz\"]}").unwrap();
         let (store, problem) = TokenStore::open(Some(path));
         assert!(store.is_empty());
-        assert!(matches!(
-            problem,
-            Some(LoadProblem::Skipped {
-                skipped: 1,
-                kept: Some(_)
-            })
-        ));
+        assert!(matches!(problem, Some(LoadProblem::Skipped { skipped: 1 })));
     }
 
     #[test]

@@ -248,11 +248,9 @@ pub enum ServerEvent {
     /// The paired-device file couldn't be read at start; no device is paired.
     DevicesNotRead(String),
     /// Some devices in the paired-device file didn't read and pair again;
-    /// the file was kept aside under this name, or couldn't be (`None`) and
-    /// isn't written until the app quits.
+    /// the first save copies the file aside before writing over it.
     DevicesPartlyRead {
         skipped: usize,
-        kept: Option<String>,
     },
     /// Accepting a connection failed.
     AcceptFailed(String),
@@ -305,18 +303,12 @@ impl fmt::Display for ServerEvent {
                     "remote: the paired devices were not read, starting with none: {error}"
                 )
             }
-            ServerEvent::DevicesPartlyRead { skipped, kept } => match kept {
-                Some(kept) => write!(
-                    f,
-                    "remote: {skipped} paired devices didn't read and pair again; \
-                     the file was kept as {kept}"
-                ),
-                None => write!(
-                    f,
-                    "remote: {skipped} paired devices didn't read and pair again; \
-                     the file couldn't be kept aside, so it isn't written until AudioSync quits"
-                ),
-            },
+            ServerEvent::DevicesPartlyRead { skipped } => write!(
+                f,
+                "remote: {skipped} paired devices didn't read and pair again; \
+                 the file is copied aside before it is written again, \
+                 and isn't written while that copy fails"
+            ),
             ServerEvent::AcceptFailed(error) => write!(f, "remote: accepting failed: {error}"),
             ServerEvent::ConnectionPanicked => f.write_str("remote: a connection ended in a panic"),
             ServerEvent::PairingCode(code) => {
@@ -635,12 +627,8 @@ impl RemoteServer {
                     "not in the expected format".to_owned(),
                 ));
             }
-            Some(LoadProblem::Skipped { skipped, kept }) => {
-                let kept = kept.and_then(|kept| {
-                    kept.file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                });
-                shared.report(ServerEvent::DevicesPartlyRead { skipped, kept });
+            Some(LoadProblem::Skipped { skipped }) => {
+                shared.report(ServerEvent::DevicesPartlyRead { skipped });
             }
             None => {}
         }
