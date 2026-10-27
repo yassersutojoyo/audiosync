@@ -57,7 +57,7 @@ impl DebugLog {
     /// when that can't be made, which the log's first line then says).
     pub fn from_env() -> DebugLog {
         let (path, warning) = env_path();
-        let log = DebugLog::new(path);
+        let log = DebugLog::at_launch(path, false);
         if let Some(warning) = warning {
             log.log(|| warning);
         }
@@ -72,6 +72,11 @@ impl DebugLog {
     )]
     pub fn appending_from_env() -> DebugLog {
         DebugLog::open(env_path().0, MAX_BYTES, false)
+    }
+
+    /// The launch log at `path`.
+    fn at_launch(path: Option<PathBuf>, _relaunched: bool) -> DebugLog {
+        DebugLog::new(path)
     }
 
     /// A log written to `path`, emptied first, or one that writes nothing
@@ -502,6 +507,27 @@ mod tests {
         log.log(|| "this launch".to_owned());
         assert!(log.flush(TEST_FLUSH));
         assert_eq!(read_messages(&path), ["this launch"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_relaunched_start_keeps_the_log_and_a_plain_start_empties_it() {
+        let dir = test_dir("log-relaunch");
+        let path = dir.join(FILE_NAME);
+        let old = DebugLog::new(Some(path.clone()));
+        old.log(|| "updater: signature of 0.7.2 verified".to_owned());
+        assert!(old.flush(TEST_FLUSH));
+        let relaunched = DebugLog::at_launch(Some(path.clone()), true);
+        relaunched.log(|| "the relaunched copy".to_owned());
+        assert!(relaunched.flush(TEST_FLUSH));
+        assert_eq!(
+            read_messages(&path),
+            ["updater: signature of 0.7.2 verified", "the relaunched copy"]
+        );
+        let plain = DebugLog::at_launch(Some(path.clone()), false);
+        plain.log(|| "a plain start".to_owned());
+        assert!(plain.flush(TEST_FLUSH));
+        assert_eq!(read_messages(&path), ["a plain start"]);
         let _ = fs::remove_dir_all(dir);
     }
 
