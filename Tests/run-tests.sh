@@ -218,6 +218,18 @@ else
   echo "PASSED"
 fi
 
+echo "▶ the whole system's switch marks its early stop as a rebuild"
+# covers: S223 (the logic suite proves a stop marked so ends the stream; this proves switchToSystem marks it)
+switch_system=$(awk '/^    private func switchToSystem/ { f = 1 } f { print } f && /^    }$/ { exit }' \
+  "$SRC/AppDelegate+Engine.swift")
+if [ "$(grep -c 'engine\.stop()' <<< "$switch_system")" -ne 1 ] \
+    || ! grep -B1 -E '^ +engine\.stop\(\)$' <<< "$switch_system" | grep -qE '^ +midRebuild = true( |$)'; then
+  echo "FAIL: switchToSystem stops the engine without setting midRebuild = true on the line before"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ cargo lookup (Tests/cargolookuptest.sh)"
 Tests/cargolookuptest.sh || status=1
 
