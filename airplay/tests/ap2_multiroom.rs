@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::ap2::{Ap2Config, Ap2Event, PtpPeer, Timing};
@@ -279,6 +279,48 @@ fn ap2_a_new_session_at_a_warned_address_is_warned_again() {
     service.handle_message(&receiver_announce(rx, 127, 6, 2), from, at(3000));
     service.handle_message(&receiver_announce(rx, 127, 6, 3), from, at(4000));
     assert_eq!(service.poll_outranked(), Some(FIRST));
+}
+
+fn scope_of(address: SocketAddr) -> u32 {
+    match address {
+        SocketAddr::V6(v6) => v6.scope_id(),
+        SocketAddr::V4(_) => 0,
+    }
+}
+
+fn count_to_scope(sent: &[PtpTransmit], scope: u32, kind: MessageType) -> usize {
+    sent.iter()
+        .filter(|transmit| transmit.kind == kind && scope_of(transmit.to) == scope)
+        .count()
+}
+
+// One link-local address on two interfaces is two receivers (RFC 4007
+// zones), each served on its own schedule with its own scope.
+// covers: P227
+#[test]
+fn ap2_one_link_local_address_on_two_interfaces_is_two_peers() {
+    let link_local = Ipv6Addr::new(0xFE80, 0, 0, 0, 0x0215, 0x5DFF, 0xFEED, 0x0171);
+    let on = |scope: u32| SocketAddr::V6(SocketAddrV6::new(link_local, 7000, 0, scope));
+    let origin = Instant::now();
+    let mut service = PtpService::new(SenderClock::new(origin), IDENTITY, PtpPorts::default());
+    service.start(on(4), origin);
+    service.start(on(9), origin);
+    assert_eq!(service.peers().len(), 2, "{:?}", service.peers());
+
+    let sent = run(&mut service, origin, Duration::from_millis(1100));
+    for scope in [4, 9] {
+        let syncs = count_to_scope(&sent, scope, MessageType::Sync);
+        assert!(
+            count_to_scope(&sent, scope, MessageType::Announce) >= 2,
+            "scope {scope}"
+        );
+        assert!(syncs >= 8, "scope {scope}: {syncs} Syncs");
+        assert_eq!(
+            count_to_scope(&sent, scope, MessageType::FollowUp),
+            syncs,
+            "scope {scope}"
+        );
+    }
 }
 
 fn ptp_config(peers: Vec<IpAddr>) -> Ap2Config {
