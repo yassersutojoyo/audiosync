@@ -162,9 +162,12 @@ struct TypedDelay {
 }
 
 impl TypedDelay {
-    /// Keeps what the field takes of `text` (`ui_model::delay_field_text`).
+    /// Keeps `text` if the field takes it (`ui_model::delay_field_text`);
+    /// otherwise the field goes back to what it showed before.
     fn edit(&mut self, text: &str, shown: Option<f64>) {
-        self.draft = Some((ui_model::delay_field_text(text), shown));
+        if let Some(text) = ui_model::delay_field_text(text) {
+            self.draft = Some((text.to_string(), shown));
+        }
     }
 
     /// The text the field shows instead of `shown`, the applied value.
@@ -5446,7 +5449,7 @@ mod tests {
         assert!(!pending(), "Escape clears it");
 
         app.main
-            .invoke_delay_edited("local:desk".into(), "abc".into());
+            .invoke_delay_edited("local:desk".into(), "+".into());
         assert!(pending(), "unreadable text is a draft");
         app.main.invoke_delay_committed("local:desk".into());
         assert!(!pending(), "Enter on unreadable text restores the value");
@@ -6189,8 +6192,10 @@ mod tests {
     fn a_delay_field_takes_only_digits_and_marks_a_number_out_of_range() {
         let app = app_over(MockBackend::new());
         app.main.invoke_sync_toggled("local:desk".into());
-        app.main
-            .invoke_delay_edited("local:desk".into(), "1a2".into());
+        for typed in ["1", "1a", "12"] {
+            app.main
+                .invoke_delay_edited("local:desk".into(), typed.into());
+        }
         assert_eq!(desk_delay_text(&app), "12", "the letter was dropped");
         assert_eq!(desk_row(&app).delay_range_hint, "");
 
