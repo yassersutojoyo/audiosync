@@ -9,8 +9,3 @@ C20 AES-CBC-SHA suites for older devices: the fake device's TLS server is rustls
 # Timing: hardware.
 C74 Latency of seconds: hardware, G7.
 C75 Growing latency: hardware, G7 (partly done: drops and rebuffers are counted, C79).
-C77 Measured-offset output: hardware, G7 (partly done: OUTPUT_SYNC says measured offset, DeviceMemory stores the offset per device id and changes it only on the host's request, and the Mac and Windows apps set it from the speaker's delay control, say it is set by ear, keep it between runs and hold their local and AirPlay speakers, or the Cast feed, back so both play at the longer of L and the offset; the offset per model and format and its drift wait for the measurements of G7).
-
-# Host side.
-C106 Discovery drain cap: the desktop app applies it, and its test a_discovery_burst_beyond_the_cap_waits_for_the_next_tick (desktop/src/audio/cast.rs) covers it; this check reads only the cast crate.
-C77a Starting guess for a Cast speaker's wait: the host applies it, and its tests a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format (core/tests/calibrate_all.rs) and only_a_cast_speaker_without_an_offset_waits_for_the_unknown_start_guess (desktop/src/audio/calibrate_all.rs) cover it; this check reads only the cast crate.

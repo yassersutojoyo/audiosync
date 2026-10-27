@@ -2,7 +2,9 @@
 //! by at least one `// covers: C20, C26` line in `cast/src` or
 //! `cast/tests`, or is listed in `cast/tests/spec_pending.txt` with a
 //! one-line reason because a later stage implements it (the stream server,
-//! media, volume, timing, recovery, the host). A clause is covered
+//! media, volume, timing, recovery, the host), or in
+//! `cast/tests/spec_exempt.txt` because only the host applies it and the
+//! host's own tests cover it. A clause is covered
 //! only when everything it asks of the sender is implemented and tested; a
 //! test for part of a pending clause says so in a plain comment instead of a
 //! marker. The pending list may only shrink: a clause that gains a marker
@@ -170,9 +172,21 @@ fn core_markers() -> (BTreeMap<Id, Vec<String>>, Vec<String>) {
 
 /// The pending list: clause ID to reason; and every malformed line.
 fn pending() -> (BTreeMap<Id, String>, Vec<String>) {
-    let text = fs::read_to_string(crate_dir().join("tests").join("spec_pending.txt"))
-        .expect("tests/spec_pending.txt is readable");
-    let mut pending = BTreeMap::new();
+    clause_list("spec_pending.txt")
+}
+
+/// The exempt list: clause ID to the host test that covers it; and every
+/// malformed line.
+fn exemptions() -> (BTreeMap<Id, String>, Vec<String>) {
+    clause_list("spec_exempt.txt")
+}
+
+/// A clause list in `tests/` (`C<n> <reason>` per line, `#` comments):
+/// clause ID to reason; and every malformed line.
+fn clause_list(file: &str) -> (BTreeMap<Id, String>, Vec<String>) {
+    let text = fs::read_to_string(crate_dir().join("tests").join(file))
+        .unwrap_or_else(|error| panic!("tests/{file}: {error}"));
+    let mut listed = BTreeMap::new();
     let mut malformed = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -182,10 +196,7 @@ fn pending() -> (BTreeMap<Id, String>, Vec<String>) {
         let (id, reason) = line.split_once(' ').unwrap_or((line, ""));
         match clause_id(id) {
             Some(id_parsed) if !reason.trim().is_empty() => {
-                if pending
-                    .insert(id_parsed, reason.trim().to_owned())
-                    .is_some()
-                {
+                if listed.insert(id_parsed, reason.trim().to_owned()).is_some() {
                     malformed.push(format!("line {}: {id} is listed twice", index + 1));
                 }
             }
@@ -195,7 +206,7 @@ fn pending() -> (BTreeMap<Id, String>, Vec<String>) {
             )),
         }
     }
-    (pending, malformed)
+    (listed, malformed)
 }
 
 fn spec_ids() -> BTreeSet<Id> {
@@ -414,35 +425,78 @@ fn the_pending_list_is_well_formed_and_names_spec_clauses() {
         "pending clauses the spec doesn't have: {}",
         list(unknown)
     );
+    let (exempt, _) = exemptions();
+    let both: Vec<Id> = pending
+        .keys()
+        .copied()
+        .filter(|id| exempt.contains_key(id))
+        .collect();
+    assert!(
+        both.is_empty(),
+        "clauses both exempt and pending (a clause is either the host's or still to be built): {}",
+        list(both)
+    );
 }
 
 #[test]
-fn every_clause_is_covered_or_pending() {
+fn the_exempt_list_is_well_formed_and_names_spec_clauses() {
+    let (exempt, malformed) = exemptions();
+    assert!(
+        malformed.is_empty(),
+        "tests/spec_exempt.txt:\n{}",
+        malformed.join("\n")
+    );
+    let known = spec_ids();
+    let unknown: Vec<Id> = exempt
+        .keys()
+        .copied()
+        .filter(|id| !known.contains(id))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "exempt clauses the spec doesn't have: {}",
+        list(unknown)
+    );
+}
+
+#[test]
+fn every_clause_is_covered_exempt_or_pending() {
     let known = spec_ids();
     let (covered, _) = covers();
+    let (exempt, _) = exemptions();
     let (pending, _) = pending();
     let missing: Vec<Id> = known
         .iter()
         .copied()
-        .filter(|id| !covered.contains_key(id) && !pending.contains_key(id))
+        .filter(|id| {
+            !covered.contains_key(id) && !exempt.contains_key(id) && !pending.contains_key(id)
+        })
         .collect();
-    let stale: Vec<Id> = pending
+    let stale_exempt: Vec<Id> = exempt
+        .keys()
+        .copied()
+        .filter(|id| covered.contains_key(id))
+        .collect();
+    let stale_pending: Vec<Id> = pending
         .keys()
         .copied()
         .filter(|id| covered.contains_key(id))
         .collect();
     println!(
-        "{} clauses: {} covered, {} pending, {} missing",
+        "{} clauses: {} covered, {} exempt, {} pending, {} missing",
         known.len(),
         known.iter().filter(|id| covered.contains_key(id)).count(),
+        exempt.len(),
         pending.len(),
         missing.len()
     );
     assert!(
-        missing.is_empty() && stale.is_empty(),
-        "clauses neither covered nor pending (add a `// covers:` test, or a line in tests/spec_pending.txt for a later stage): {}\n\
+        missing.is_empty() && stale_exempt.is_empty() && stale_pending.is_empty(),
+        "clauses neither covered, exempt nor pending (add a `// covers:` test; if only the host applies it, a line in tests/spec_exempt.txt naming the host's test; for a later stage, a line in tests/spec_pending.txt): {}\n\
+         exempt clauses that are covered after all (remove them from tests/spec_exempt.txt): {}\n\
          pending clauses that are covered now (remove them from tests/spec_pending.txt): {}",
         list(missing),
-        list(stale)
+        list(stale_exempt),
+        list(stale_pending)
     );
 }
