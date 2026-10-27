@@ -558,6 +558,24 @@ mod tests {
     }
 
     #[test]
+    fn an_append_to_a_full_log_adds_nothing() {
+        let dir = test_dir("log-limit-append");
+        let path = dir.join(FILE_NAME);
+        let full = DebugLog::with_limit(Some(path.clone()), 200);
+        for n in 0..20 {
+            full.log(|| format!("line {n:02} of the old copy"));
+        }
+        assert!(full.flush(TEST_FLUSH));
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(before.len() >= 200, "{} bytes", before.len());
+        let appended = DebugLog::open(Some(path.clone()), 200, false);
+        appended.log(|| "the relaunched copy".to_owned());
+        assert!(appended.flush(TEST_FLUSH));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn the_log_stops_growing_at_its_limit() {
         let dir = test_dir("log-limit");
         let path = dir.join(FILE_NAME);
