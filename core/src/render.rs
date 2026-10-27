@@ -2513,6 +2513,134 @@ mod tests {
         assert_eq!((seen.steps, seen.counters.resyncs), (0, 0));
     }
 
+    /// What [`noisy_start`] saw: its start steps and the latest callback,
+    /// in seconds, that made one; the lowest and highest delay it played
+    /// from `judged_from_s` on, in ms; and its counters.
+    struct NoisyStart {
+        steps: u64,
+        last_step_s: f64,
+        delay_ms: (f64, f64),
+        counters: ReaderCounters,
+    }
+
+    /// 0 to 8 ms for each of 1000 callbacks, from a seeded xorshift.
+    fn jitter_draws() -> Vec<u64> {
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        (0..1000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x % 8_000_001
+            })
+            .collect()
+    }
+
+    /// A 48 kHz output with 480-frame callbacks, held back 100 ms, for 10
+    /// s: callback `call` comes `late(call)` ns after its on-time point,
+    /// and the capture writes a 480-frame ramp block every 10 ms on its
+    /// own clock (S321 "What the tests show").
+    fn noisy_start(late: impl Fn(usize) -> u64, judged_from_s: f64) -> NoisyStart {
+        let ring = Ring::for_rate(48_000).unwrap();
+        let mut writer = ring.writer().unwrap();
+        let reader = Reader::new(ring, 48_000);
+        let control = RendererControl::new(&reader);
+        let gain = Arc::new(SharedGain::new(1.0));
+        let mut renderer = Renderer::new(reader, &control, gain, 48_000, 48_000, 2).unwrap();
+        control.set_delay_frames(4800);
+        let mut out = vec![0.0f32; 480 * 2];
+        let (mut written, mut block_ns) = (0u64, 10_000_000u64);
+        let mut seen = NoisyStart {
+            steps: 0,
+            last_step_s: f64::NAN,
+            delay_ms: (f64::INFINITY, f64::NEG_INFINITY),
+            counters: ReaderCounters::default(),
+        };
+        for call in 0..1000usize {
+            let due = 11_000_000 + call as u64 * 10_000_000;
+            let now = due + late(call);
+            while block_ns <= now {
+                let block: Vec<f32> = (written..written + 480)
+                    .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+                    .collect();
+                writer.write_at(&block, 480, block_ns);
+                written += 480;
+                block_ns += 10_000_000;
+            }
+            renderer.render_timed_at(&mut out, due + 20_000_000, now);
+            let at_s = call as f64 / 100.0;
+            if control.start_steps() > seen.steps {
+                seen.steps = control.start_steps();
+                seen.last_step_s = at_s;
+            }
+            if at_s >= judged_from_s && renderer.fade_state() == FadeState::Open {
+                let captured_ms = f64::from(out[0]) * 4_000_000.0 / 48.0;
+                let delay = (due + 20_000_000) as f64 / 1e6 - captured_ms;
+                seen.delay_ms.0 = seen.delay_ms.0.min(delay);
+                seen.delay_ms.1 = seen.delay_ms.1.max(delay);
+            }
+        }
+        seen.counters = control.counters();
+        seen
+    }
+
+    /// How far apart two delay ranges lie at most, in ms.
+    fn apart_ms(a: (f64, f64), b: (f64, f64)) -> f64 {
+        (a.1 - b.0).abs().max((b.1 - a.0).abs())
+    }
+
+    fn assert_one_step_on_its_twin(seen: &NoisyStart, twin: &NoisyStart, name: &str) {
+        let c = seen.counters;
+        assert_eq!(seen.steps, 1, "{name}: steps");
+        assert!(
+            seen.last_step_s < 3.0,
+            "{name}: a step at {} s",
+            seen.last_step_s
+        );
+        assert_eq!((c.drift_skips, c.drift_silences), (0, 0), "{name}: {c:?}");
+        let apart = apart_ms(seen.delay_ms, twin.delay_ms);
+        assert!(
+            apart <= 2.0,
+            "{name}: {:.2?} ms against its twin's {:.2?}",
+            seen.delay_ms,
+            twin.delay_ms
+        );
+    }
+
+    // covers: S321, S322
+    #[test]
+    fn a_jittery_late_start_steps_once_and_lands_on_its_twin() {
+        let draws = jitter_draws();
+        let late = |call: usize| if call < 100 { 45_000_000 } else { 0 } + draws[call];
+        let seen = noisy_start(late, 7.0);
+        let twin = noisy_start(|call| draws[call], 7.0);
+        assert_eq!(twin.steps, 0);
+        assert_one_step_on_its_twin(&seen, &twin, "jitter");
+    }
+
+    // covers: S321, S322
+    #[test]
+    fn a_gradual_return_to_time_steps_once_and_lands_on_its_twin() {
+        // 45 ms late for 1 s, then 1 ms earlier each callback.
+        let late =
+            |call: usize| 45_000_000u64.saturating_sub(call.saturating_sub(99) as u64 * 1_000_000);
+        let seen = noisy_start(late, 5.0);
+        let twin = noisy_start(|_| 0, 5.0);
+        assert_eq!(twin.steps, 0);
+        assert_one_step_on_its_twin(&seen, &twin, "gradual");
+    }
+
+    // covers: S321
+    #[test]
+    fn wander_and_a_late_start_past_the_window_make_no_start_step() {
+        let draws = jitter_draws();
+        // 1 ms a second earlier over the first 3 s.
+        let wander = |call: usize| 3_000_000u64.saturating_sub(call as u64 * 100_000) + draws[call];
+        assert_eq!(noisy_start(wander, 10.0).steps, 0);
+        let too_late = |call: usize| if call < 290 { 45_000_000 } else { 0 } + draws[call];
+        assert_eq!(noisy_start(too_late, 10.0).steps, 0);
+    }
+
     /// The delay, in ms, of an output held back 100 ms whose callbacks come
     /// `phase_ns` after each 480-frame block, measured 2 s in.
     fn delay_at_phase(phase_ns: u64) -> f64 {

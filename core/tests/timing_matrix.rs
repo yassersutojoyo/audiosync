@@ -50,7 +50,7 @@ use std::time::Instant;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl, START_STEP_GAP_NS};
+use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 use proptest::prelude::*;
@@ -1383,21 +1383,13 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
             })
             .collect();
         let own = moves[0];
-        // A start step lands on the run's highest value, which the restart
-        // rule lets lie up to START_STEP_GAP_NS above where the callbacks
-        // settle (S318); cases f2, f6 and f20 end 2.3 to 3.6 ms short.
-        let own_slack = if seen.start_steps[0] > 0 {
-            ALIGN_SLACK_MS + START_STEP_GAP_NS as f64 / 1e6
-        } else {
-            ALIGN_SLACK_MS
-        };
         let others = moves[1..]
             .iter()
             .fold(0.0f64, |most, by| most.max(by.abs()));
         // One time constant leaves 1/e of the fall, so 2 s leave 0.4 of it at most.
         let ok = fall.drop_ms >= 0.8 * ms
             && after >= -0.4 * ms
-            && own.abs() <= own_slack
+            && own.abs() <= ALIGN_SLACK_MS
             && others <= ALIGN_SLACK_MS
             && !seen.fails.iter().any(|&f| f);
         failed += usize::from(!ok);
