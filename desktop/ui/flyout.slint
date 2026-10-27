@@ -182,7 +182,7 @@ component FlyoutRow inherits HorizontalLayout {
 // toggle switches the zone, and a click anywhere else on the row, the name
 // and the arrow included, shows or hides its speakers. Left and Right on the
 // toggle do that from the keyboard, so the arrow stays out of the Tab order
-// until no member is found and the toggle is off.
+// until no member is found.
 component FlyoutZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
