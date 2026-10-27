@@ -7567,6 +7567,13 @@ do {
     check(takenOver.apply(.ended(attempt: 3, .takenOver)) == .turnedOff(kitchen, problem: .takenOver)
             && takenOver.enabled == nil && takenOver.attempt == nil && takenOver.anchorMs == nil,
           "cast: another app casting turns the speaker off with a notice")
+    check(takenOver.cantStartNow(kitchen) && !m.cantStartNow(kitchen) && !takenOver.cantStartNow(den),
+          "cast: one another app took over can't start from a zone click or Only This Speaker (S246)")
+    check(takenOver.turnOn(kitchen) == nil && !takenOver.cantStartNow(kitchen),
+          "cast: turning it on with its own switch tries it again")
+    var offline = CastModel()
+    offline.apply(.appeared(CastDevice(id: den, name: "Den", offline: true), offsetMs: nil))
+    check(offline.cantStartNow(den), "cast: an offline speaker can't start now either")
     var stopped = m
     check(stopped.turnOff(kitchen) && stopped.plan(streaming: true) == .stop, "cast: turning it off stops its session")
     stopped.stopSent()
