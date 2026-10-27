@@ -128,8 +128,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker that turns the connection down before any pairing starts goes off with a notice that says it didn't accept the connection, instead of one that asks for a PIN or code. On the Mac and on Windows.
 - An AirPlay speaker that's retrying when its receiver leaves the network stops retrying along with its row, and its retrying notice goes away. It stays on and joins again once the receiver is back. On the Mac and on Windows.
 - On the Mac and on Windows, a zone's header works like a speaker row: only its round icon switches the zone on or off, and a click anywhere else on the header, its name, count, arrow and the space around its volume and ⋯ button included, shows or hides the zone's speakers. Before, a click on the name switched the whole zone, and parts of the header did nothing.
-- On the Mac, the menu bar panel opens and closes smoothly, also when you open it again right after closing it. Before, it could stutter or jump in size while it animated.
-- On the Mac, the volume slider in the menu bar panel shows its color as soon as the panel opens.
+- On the Mac, the menu bar panel opens and closes smoothly, also when you open it again right after closing it. Before, it could stutter while it animated.
 
 ### Windows and Linux (preview, not released yet)
 
