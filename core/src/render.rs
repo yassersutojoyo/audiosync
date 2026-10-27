@@ -2661,9 +2661,9 @@ mod tests {
         let seen = noisy_start(late, 7.0);
         let twin = noisy_start(|call| draws[call], 7.0);
         assert_eq!(twin.steps, 0);
-        // The twin anchored on a callback of its own jitter, so S321 allows
-        // a capture block plus 2 ms; they lie 2.1 ms apart.
-        assert_one_step_on_its_twin(&seen, &twin, 10.0 + 2.0, "jitter");
+        // The twin anchored on its first callbacks and their jitter, so S321
+        // allows 1 ms past I4's 2 ms; they lie 2.1 ms apart.
+        assert_one_step_on_its_twin(&seen, &twin, 2.0 + 1.0, "jitter");
     }
 
     // covers: S321, S322
