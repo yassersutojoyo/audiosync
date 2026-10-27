@@ -4514,7 +4514,13 @@ do {
 do {
     // AppDelegate needs AppKit's whole app to build, so the suite reads its source for the two calls the
     // checks above drive through the recorder.
-    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    // A commented-out call must not count as the call.
+    func read(_ path: String) -> String {
+        let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
     func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
     func body(_ text: String, after marker: String, until end: String = "\n    }\n") -> String {
         text.components(separatedBy: marker).dropFirst().first?.components(separatedBy: end).first ?? ""
