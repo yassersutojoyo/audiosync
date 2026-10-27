@@ -2738,7 +2738,7 @@ mod tests {
         let latency = Arc::new(AtomicU32::new(0));
         let free = || {
             let [event, general] = [(); 2].map(|()| {
-                UdpSocket::bind("0.0.0.0:0")
+                UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
                     .and_then(|socket| Ok((socket.local_addr()?.port(), socket)))
                     .expect("a free port")
             });
