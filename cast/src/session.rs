@@ -198,7 +198,7 @@ pub struct SessionConfig {
     /// server answers its members too (C103).
     pub group: Option<GroupRecords>,
     /// Where every connect records the device's certificate fingerprint
-    /// (C21); `None` records nothing.
+    /// (C21) once the start succeeded; `None`, or a group, records nothing.
     pub fingerprints: Option<Fingerprints>,
 }
 
@@ -393,10 +393,6 @@ impl CastSession {
                 ));
             }
         };
-        let certificate = config
-            .fingerprints
-            .as_ref()
-            .and_then(|fingerprints| fingerprints.record(&client));
         if group.is_some() {
             client.request_members();
         }
@@ -457,7 +453,7 @@ impl CastSession {
             load,
             media_session_id: None,
             selected,
-            events: certificate.into_iter().collect(),
+            events: VecDeque::new(),
             recovery_sink: None,
             recovering: false,
             ended: false,
@@ -479,11 +475,21 @@ impl CastSession {
             group,
             members: MemberList::new(),
             group_types_logged: LoggedTypes::default(),
-            fingerprints: config.fingerprints,
+            fingerprints: None,
         };
         if let Err(error) = session.load_with_fallback() {
             session.teardown(teardown_budget(&session.quitting));
             return Err(error.into());
+        }
+        // Recorded only once the start succeeded, as a failed one drops its
+        // events; a group's leader may hand over to another device (C97).
+        session.fingerprints = config.fingerprints.filter(|_| session.group.is_none());
+        if let Some(event) = session
+            .fingerprints
+            .as_ref()
+            .and_then(|fingerprints| fingerprints.record(&session.client))
+        {
+            session.events.push_front(event);
         }
         Ok(session)
     }
