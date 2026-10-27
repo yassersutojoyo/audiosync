@@ -6,7 +6,6 @@
 // Each example includes this file and uses only its own half.
 #![allow(dead_code)]
 
-use std::collections::VecDeque;
 use std::time::Duration;
 
 use audiosync_airplay::audio::PACKET_FRAMES;
@@ -29,8 +28,8 @@ pub const CLICK_LEVEL: f32 = 0.5;
 pub const DEFAULT_THRESHOLD: i32 = 400;
 /// Quiet frames after a click before the detector takes a new onset.
 pub const REARM_FRAMES: u64 = 44_100;
-/// Chunks whose last frame lies this close to an onset time it.
-pub const WINDOW_FRAMES: u64 = 2_205;
+/// Reads this far either side of the first and last onset feed the timeline.
+pub const FIT_MARGIN_FRAMES: u64 = 44_100;
 
 /// One `--rx` value: `host:port[,ap1|ap2][,delay=<ms>]`.
 #[derive(Debug, PartialEq)]
@@ -85,20 +84,75 @@ pub fn click_sample(n: u64) -> f32 {
 pub struct Onset {
     /// Frame index in the stream, from its first byte.
     pub frame: u64,
-    /// When the frame came out of the receiver, on the reader's clock.
+    /// When the frame plays on the receiver's timeline, on the reader's clock.
     pub seconds: f64,
 }
 
+/// A receiver's play timeline on the reader's clock: frame f plays at
+/// `anchor + f * (1 / RATE + slope)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Timeline {
+    pub anchor: f64,
+    pub slope: f64,
+    pub reads: usize,
+}
+
+impl Timeline {
+    pub fn seconds(&self, frame: u64) -> f64 {
+        self.anchor + frame as f64 * (1.0 / RATE + self.slope)
+    }
+
+    pub fn frames_per_s(&self) -> f64 {
+        1.0 / (1.0 / RATE + self.slope)
+    }
+}
+
+/// Fits the timeline to reads given as (frames read so far, arrival minus
+/// those frames at RATE), in frame order.
+// A read arrives when its last frame plays or later, never earlier, so the
+// line under every read that is highest at their mean frame fits best.
+pub fn fit_timeline(reads: &[(u64, f64)]) -> Option<Timeline> {
+    let mut hull: Vec<(f64, f64)> = Vec::new();
+    for &(end, offset) in reads {
+        let point = (end as f64, offset);
+        while let [.., o, a] = hull[..] {
+            let turn = (a.0 - o.0) * (point.1 - o.1) - (a.1 - o.1) * (point.0 - o.0);
+            if turn > 0.0 {
+                break;
+            }
+            hull.pop();
+        }
+        hull.push(point);
+    }
+    let first = *hull.first()?;
+    let mean = reads.iter().map(|&(end, _)| end as f64).sum::<f64>() / reads.len() as f64;
+    let (left, right) = hull
+        .windows(2)
+        .find(|edge| edge[1].0 >= mean)
+        .map_or((first, first), |edge| (edge[0], edge[1]));
+    let slope = if right.0 > left.0 {
+        (right.1 - left.1) / (right.0 - left.0)
+    } else {
+        0.0
+    };
+    Some(Timeline {
+        anchor: left.1 - slope * left.0,
+        slope,
+        reads: reads.len(),
+    })
+}
+
 /// Finds click onsets in one receiver's 16-bit little-endian stereo PCM and
-/// times them by when the bytes arrived.
+/// times them on the receiver's play timeline, fitted to when reads arrived.
 pub struct Detector {
     threshold: i32,
     frames: u64,
     carry: Vec<u8>,
     last_loud: Option<u64>,
-    /// (frames read so far, arrival seconds) per read.
-    chunks: VecDeque<(u64, f64)>,
-    pending: VecDeque<u64>,
+    /// (frames read so far, arrival minus those frames at RATE) per read.
+    reads: Vec<(u64, f64)>,
+    onset_frames: Vec<u64>,
+    timeline: Option<Timeline>,
     onsets: Vec<Onset>,
 }
 
@@ -109,8 +163,9 @@ impl Detector {
             frames: 0,
             carry: Vec::new(),
             last_loud: None,
-            chunks: VecDeque::new(),
-            pending: VecDeque::new(),
+            reads: Vec::new(),
+            onset_frames: Vec::new(),
+            timeline: None,
             onsets: Vec::new(),
         }
     }
@@ -119,8 +174,13 @@ impl Detector {
         self.frames
     }
 
+    /// Empty until `finish` times them.
     pub fn onsets(&self) -> &[Onset] {
         &self.onsets
+    }
+
+    pub fn timeline(&self) -> Option<Timeline> {
+        self.timeline
     }
 
     /// One read's bytes, which may split a frame, and when the read returned.
@@ -135,7 +195,7 @@ impl Detector {
                     .last_loud
                     .is_none_or(|last| self.frames - last > REARM_FRAMES);
                 if rearmed {
-                    self.pending.push_back(self.frames);
+                    self.onset_frames.push(self.frames);
                 }
                 self.last_loud = Some(self.frames);
             }
@@ -143,54 +203,37 @@ impl Detector {
         }
         self.carry.drain(..whole);
         if whole > 0 {
-            self.chunks.push_back((self.frames, arrival));
-        }
-        while let Some(&onset) = self.pending.front() {
-            if onset + WINDOW_FRAMES > self.frames {
-                break;
-            }
-            self.pending.pop_front();
-            self.settle(onset);
-        }
-        let keep_from = self.frames.saturating_sub(2 * WINDOW_FRAMES);
-        let oldest = self.pending.front().map_or(keep_from, |&p| {
-            keep_from.min(p.saturating_sub(WINDOW_FRAMES))
-        });
-        while self.chunks.len() > 1 && self.chunks[0].0 < oldest {
-            self.chunks.pop_front();
+            self.reads
+                .push((self.frames, arrival - self.frames as f64 / RATE));
         }
     }
 
-    /// Times the onsets still waiting for their window, at the end of input.
+    /// At the end of input: fits the timeline to the reads around the onsets,
+    /// which leaves out the receiver's start-up flush and its stop, and times
+    /// every onset on it.
     pub fn finish(&mut self) {
-        while let Some(onset) = self.pending.pop_front() {
-            self.settle(onset);
-        }
-    }
-
-    // A paced writer's bytes arrive at their write time or later, never
-    // earlier, so the least delayed nearby read gives the best time.
-    fn settle(&mut self, onset: u64) {
-        let estimate = |&(end, arrival): &(u64, f64)| arrival - (end as f64 - onset as f64) / RATE;
-        let near = self
-            .chunks
-            .iter()
-            .filter(|(end, _)| end.abs_diff(onset) <= WINDOW_FRAMES)
-            .map(estimate)
-            .fold(f64::INFINITY, f64::min);
-        let seconds = if near.is_finite() {
-            near
-        } else {
-            // One read larger than the window: the read that carried it.
-            self.chunks
-                .iter()
-                .find(|(end, _)| *end > onset)
-                .map_or(f64::NAN, estimate)
+        let span = match (self.onset_frames.first(), self.onset_frames.last()) {
+            (Some(&first), Some(&last)) => {
+                first.saturating_sub(FIT_MARGIN_FRAMES)..=last + FIT_MARGIN_FRAMES
+            }
+            _ => 0..=u64::MAX,
         };
-        self.onsets.push(Onset {
-            frame: onset,
-            seconds,
-        });
+        let near: Vec<(u64, f64)> = self
+            .reads
+            .iter()
+            .copied()
+            .filter(|(end, _)| span.contains(end))
+            .collect();
+        self.timeline = fit_timeline(if near.len() >= 2 { &near } else { &self.reads });
+        let timeline = self.timeline;
+        self.onsets = self
+            .onset_frames
+            .iter()
+            .map(|&frame| Onset {
+                frame,
+                seconds: timeline.map_or(f64::NAN, |line| line.seconds(frame)),
+            })
+            .collect();
     }
 }
 
@@ -202,20 +245,26 @@ pub struct Pair {
     pub diff_s: f64,
     pub expected_s: f64,
     pub error_frames: f64,
+    /// The other stream's onset frame minus the reference's.
+    pub frame_diff: i64,
     pub pass: bool,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Verdict {
     pub pairs: Vec<Pair>,
+    /// Largest minus smallest `frame_diff`: how far the streams drifted.
+    pub drift_frames: u64,
+    pub drift_pass: bool,
     pub pass: bool,
     pub reason: String,
 }
 
-/// P102 on the two streams: the k-th onset of each is the k-th click, and
-/// their time difference must equal the delay difference within one packet.
-/// The last click of the later speaker may fall after the end of the run, so
-/// only the clicks both streams heard are compared.
+/// P102 on the two streams: the k-th onset of each is the k-th click; their
+/// time difference must equal the delay difference within one packet, and
+/// their frame offset must stay the same within one packet. The last click
+/// of the later speaker may fall after the end of the run, so only the
+/// clicks both streams heard are compared.
 pub fn verdict(reference: (&[Onset], Duration), other: (&[Onset], Duration)) -> Verdict {
     let expected_s = other.1.as_secs_f64() - reference.1.as_secs_f64();
     let pairs: Vec<Pair> = reference
@@ -233,10 +282,17 @@ pub fn verdict(reference: (&[Onset], Duration), other: (&[Onset], Duration)) -> 
                 diff_s,
                 expected_s,
                 error_frames,
+                frame_diff: b.frame as i64 - a.frame as i64,
                 pass: error_frames.abs() <= PACKET_FRAMES as f64,
             }
         })
         .collect();
+    let diffs = pairs.iter().map(|pair| pair.frame_diff);
+    let drift_frames = match (diffs.clone().min(), diffs.max()) {
+        (Some(low), Some(high)) => high.abs_diff(low),
+        _ => 0,
+    };
+    let drift_pass = drift_frames <= PACKET_FRAMES;
     let failed = pairs.iter().filter(|pair| !pair.pass).count();
     let (pass, reason) = if pairs.is_empty() {
         (false, "a receiver gave no onset".to_owned())
@@ -248,11 +304,18 @@ pub fn verdict(reference: (&[Onset], Duration), other: (&[Onset], Duration)) -> 
                 pairs.len()
             ),
         )
+    } else if !drift_pass {
+        (
+            false,
+            format!("the streams drifted {drift_frames} frames apart"),
+        )
     } else {
         (true, format!("{} clicks within one packet", pairs.len()))
     };
     Verdict {
         pairs,
+        drift_frames,
+        drift_pass,
         pass,
         reason,
     }

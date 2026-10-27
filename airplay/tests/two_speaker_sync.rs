@@ -11,7 +11,7 @@ use std::time::Duration;
 use audiosync_airplay::discovery::ProtocolPath;
 use sync_check::{
     CLICK_FIRST_FRAME, CLICK_FRAMES, CLICK_PERIOD_FRAMES, DEFAULT_THRESHOLD, Detector, Onset, RATE,
-    click_sample, parse_rx_spec, verdict,
+    click_sample, fit_timeline, parse_rx_spec, verdict,
 };
 
 const PACKET: usize = 352;
@@ -271,4 +271,28 @@ fn the_verdict_fails_streams_that_drift_apart_by_more_than_a_packet() {
     // A constant frame offset, however large, is no drift.
     let steady = onsets_at(&[99_411, 275_811, 452_211], &times);
     assert!(verdict((&a, Duration::ZERO), (&steady, half)).pass);
+}
+
+#[test]
+fn the_timeline_follows_a_receiver_that_plays_off_rate() {
+    // 200 ppm fast, reads every 1024 frames up to 30 ms late.
+    let rate = RATE * 1.000_2;
+    let reads: Vec<(u64, f64)> = (1..=1_300u64)
+        .map(|i| {
+            let end = i * 1_024;
+            let late = ((i * 13) % 7) as f64 * 0.005;
+            (end, 3.0 + end as f64 / rate + late - end as f64 / RATE)
+        })
+        .collect();
+    let line = fit_timeline(&reads).unwrap();
+    assert!((line.frames_per_s() - rate).abs() < 0.05, "{line:?}");
+    for frame in [0u64, 600_000, 1_300_000] {
+        let truth = 3.0 + frame as f64 / rate;
+        assert!((line.seconds(frame) - truth).abs() < 0.000_1, "{frame}");
+    }
+    assert_eq!(fit_timeline(&[]), None);
+    assert_eq!(
+        fit_timeline(&[(500, 2.0)]).unwrap().seconds(500),
+        2.0 + 500.0 / RATE
+    );
 }

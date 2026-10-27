@@ -15,6 +15,12 @@
 //! line per click both streams heard, and a last line `SYNC PASS` or
 //! `SYNC FAIL`. Exits 0 on PASS, 1 on FAIL, 2 on bad arguments. Development
 //! only.
+//!
+//! A receiver writing to a pipe isn't paced exactly in real time and the
+//! reads come back late by varying amounts, so each onset is timed on a line
+//! fitted under all of its stream's reads (the receiver's play timeline), not
+//! by the read that carried it. A `drift` line per stream pair checks the
+//! onsets' frame offset holds within one packet across the clicks.
 
 #[path = "rx_pair/sync_check.rs"]
 mod sync_check;
@@ -171,8 +177,19 @@ fn main() -> ExitCode {
             }
             _ => "none".to_owned(),
         };
+        let timeline = detector.timeline().map_or_else(
+            || "none".to_owned(),
+            |line| {
+                format!(
+                    "anchor_s={:.6} play_frames_per_s={:.1} fit_reads={}",
+                    line.anchor,
+                    line.frames_per_s(),
+                    line.reads
+                )
+            },
+        );
         println!(
-            "stream {} delay_ms={} frames={} frames_per_s={rate} nominal={RATE} onsets={}",
+            "stream {} delay_ms={} frames={} frames_per_s={rate} nominal={RATE} onsets={} timeline {timeline}",
             stream.path,
             stream.delay.as_millis(),
             detector.frames(),
@@ -200,16 +217,24 @@ fn main() -> ExitCode {
         let judged = verdict((reference_onsets, *reference_delay), (onsets, *delay));
         for pair in &judged.pairs {
             println!(
-                "pair {} {reference_path} t_s={:.6} {path} t_s={:.6} diff_ms={:.2} expected_ms={:.0} error_frames={:.0} {}",
+                "pair {} {reference_path} t_s={:.6} {path} t_s={:.6} diff_ms={:.2} expected_ms={:.0} error_frames={:.0} frame_diff={} {}",
                 pair.index,
                 pair.reference,
                 pair.other,
                 pair.diff_s * 1000.0,
                 pair.expected_s * 1000.0,
                 pair.error_frames,
+                pair.frame_diff,
                 if pair.pass { "PASS" } else { "FAIL" },
             );
         }
+        println!(
+            "drift {reference_path} vs {path}: frame_diff spread {} frames over {} clicks (limit {} frames) {}",
+            judged.drift_frames,
+            judged.pairs.len(),
+            audiosync_airplay::audio::PACKET_FRAMES,
+            if judged.drift_pass { "PASS" } else { "FAIL" },
+        );
         let first = judged.pairs.first().map_or_else(
             || "no onsets to compare".to_owned(),
             |pair| {

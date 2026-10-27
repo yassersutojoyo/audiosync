@@ -3,9 +3,11 @@
 # starts two AirPlay 1 test receivers that write their PCM into FIFOs
 # instead of a sound device, plays a click every 4 s to both through the
 # airplay example rx_pair with a delay per speaker, and lets the example
-# rx_onset time each click in each stream on one clock. Prints one pair
-# line per click and SYNC PASS when the onset difference equals the delay
-# difference within one packet (352 frames), SYNC FAIL otherwise.
+# rx_onset time each click on each receiver's play timeline, on one clock.
+# Prints one pair line per click, a drift line, and SYNC PASS when the
+# onset difference equals the delay difference within one packet (352
+# frames) and the streams' frame offset holds within one packet, SYNC FAIL
+# otherwise.
 #
 #   scripts/two_speaker_sync_wsl.sh --receiver <binary> [--seconds <n>]
 #       [--delays <ms>,<ms>] [--host <address>] [--ports <port>,<port>]
