@@ -472,10 +472,6 @@ export global Strings {
         return @tr("Version {}", version);
     }
 
-    public pure function core-version(version: string) -> string {
-        return @tr("Audio core {}", version);
-    }
-
     // A window or dialog that failed to open; `detail` is the system's reason.
     public pure function window-failed(detail: string) -> string {
         return @tr("AudioSync couldn't open a window: {}", detail);

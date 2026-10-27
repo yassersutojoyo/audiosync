@@ -1476,7 +1476,6 @@ impl App {
         self.guide
             .set_steps(ModelRc::from(self.guide_steps.clone()));
         self.about.set_version(env!("CARGO_PKG_VERSION").into());
-        self.about.set_core_version(audiosync_core::VERSION.into());
     }
 
     /// Reads a snapshot and shows it in every window.
