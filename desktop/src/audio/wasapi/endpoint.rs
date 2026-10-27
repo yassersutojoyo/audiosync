@@ -421,7 +421,7 @@ fn render_loop(
             }
             written_total += u64::from(available);
             if let Some(sampler) = sampler.as_deref_mut() {
-                let elapsed = written_total - u64::from(stream.buffer_frames);
+                let elapsed = ProbeSampler::elapsed(written_total, stream.buffer_frames);
                 if sampler.is_due(elapsed) {
                     sampler.record(elapsed, clock_queued(stream, written_total));
                 }

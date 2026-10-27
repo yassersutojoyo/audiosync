@@ -94,6 +94,12 @@ impl ProbeSampler {
         }
     }
 
+    /// The frames written since the prefill, given `written_total` frames
+    /// written so far, the `buffer_frames` prefill included.
+    pub fn elapsed(written_total: u64, buffer_frames: u32) -> u64 {
+        written_total.saturating_sub(u64::from(buffer_frames))
+    }
+
     /// Whether `elapsed` frames since the start reach the next sample time.
     pub fn is_due(&self, elapsed: u64) -> bool {
         PROBE_SECONDS
@@ -137,6 +143,15 @@ mod tests {
     fn sampler() -> (ProbeSampler, Arc<ClockProbe>) {
         let probe = Arc::new(ClockProbe::new());
         (ProbeSampler::new(Arc::clone(&probe), RATE), probe)
+    }
+
+    #[test]
+    fn elapsed_counts_only_the_frames_written_after_the_prefill() {
+        assert_eq!(ProbeSampler::elapsed(9_600, 9_600), 0);
+        assert_eq!(ProbeSampler::elapsed(9_600 + 480, 9_600), 480);
+        assert_eq!(ProbeSampler::elapsed(9_600 + 48_000, 9_600), 48_000);
+        assert_eq!(ProbeSampler::elapsed(100, 9_600), 0, "no underflow");
+        assert_eq!(ProbeSampler::elapsed(0, u32::MAX), 0, "no underflow");
     }
 
     #[test]
