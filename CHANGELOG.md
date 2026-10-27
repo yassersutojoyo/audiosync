@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Fixed
+
+- On the Mac, the menu bar panel's first open after launch grows in from the menu bar like every open after it. Before, that first one just faded in at full size.
+
 ## [0.7.1] - 2026-10-27
 
 ### Changed
