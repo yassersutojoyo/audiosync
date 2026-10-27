@@ -225,8 +225,10 @@ struct Models {
     /// The compact rows of the speakers in a zone, under their own section.
     this_pc_zoned: Rc<VecModel<SpeakerItem>>,
     connected_zoned: Rc<VecModel<SpeakerItem>>,
-    /// The flyout's speakers in no zone.
-    all_speakers: Rc<VecModel<SpeakerItem>>,
+    /// The flyout's speakers in no zone: this PC's, under the volume, and
+    /// the connected ones, after the zones.
+    flyout_this_pc: Rc<VecModel<SpeakerItem>>,
+    flyout_connected: Rc<VecModel<SpeakerItem>>,
     zones: Rc<VecModel<ZoneItem>>,
     /// Each zone's rows by zone ID, kept between refreshes so an unchanged
     /// zone's item compares equal and its rows aren't rebuilt.
@@ -408,13 +410,15 @@ impl FlyoutParts {
 }
 
 /// What the tray flyout shows: how many notices there are and how many of
-/// them it lists, how many zones and speakers in no zone, and the shape of
-/// the zones' member lists ([`zone_shape`]).
+/// them it lists, how many zones, how many of this PC's and connected
+/// speakers in no zone, and the shape of the zones' member lists
+/// ([`zone_shape`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
     listed_notices: usize,
     zones: usize,
+    this_pc: usize,
     speakers: usize,
     zone_members: u64,
 }
@@ -433,7 +437,9 @@ impl FlyoutCounts {
             notices: self.listed_notices != next.listed_notices,
             more_notices: self.shows_more_notices() && !next.shows_more_notices(),
             zones: self.zones != next.zones,
-            speakers: self.speakers != next.speakers || self.zone_members != next.zone_members,
+            speakers: self.this_pc != next.this_pc
+                || self.speakers != next.speakers
+                || self.zone_members != next.zone_members,
         }
     }
 }
@@ -874,7 +880,8 @@ impl App {
             this_pc_zoned: Rc::new(VecModel::default()),
             connected_zoned: Rc::new(VecModel::default()),
             connected: Rc::new(VecModel::default()),
-            all_speakers: Rc::new(VecModel::default()),
+            flyout_this_pc: Rc::new(VecModel::default()),
+            flyout_connected: Rc::new(VecModel::default()),
             zones: Rc::new(VecModel::default()),
             zone_models: RefCell::default(),
             notices: Rc::new(VecModel::default()),
@@ -1500,7 +1507,9 @@ impl App {
         self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
-            .set_speakers(ModelRc::from(m.all_speakers.clone()));
+            .set_this_pc(ModelRc::from(m.flyout_this_pc.clone()));
+        self.flyout
+            .set_speakers(ModelRc::from(m.flyout_connected.clone()));
         self.flyout.set_zones(ModelRc::from(m.zones.clone()));
         self.flyout
             .set_notices(ModelRc::from(m.flyout_notices.clone()));
@@ -1697,9 +1706,9 @@ impl App {
             .set_can_save_preset(state.presets.len() < MAX_PRESETS);
         self.flyout
             .set_current_preset(current_preset_name(&state).into());
-        let flyout_speakers: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
-        let all: Vec<SpeakerItem> = flyout_speakers
+        let all: Vec<SpeakerItem> = this_pc
             .iter()
+            .chain(&connected)
             .cloned()
             .chain(zones.iter().flat_map(|zone| zone.members.iter().cloned()))
             .collect();
@@ -1793,14 +1802,16 @@ impl App {
             notices: usize::try_from(self.flyout.get_notice_count()).unwrap_or(0),
             listed_notices: m.flyout_notices.row_count(),
             zones: m.zones.row_count(),
-            speakers: m.all_speakers.row_count(),
+            this_pc: m.flyout_this_pc.row_count(),
+            speakers: m.flyout_connected.row_count(),
             zone_members: self.zone_shape_shown(),
         };
         let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
             notices: notices.len(),
             listed_notices: flyout_notices.len(),
             zones: zones.len(),
-            speakers: flyout_speakers.len(),
+            this_pc: this_pc.len(),
+            speakers: connected.len(),
             zone_members: zone_shape(
                 zones
                     .iter()
@@ -1851,11 +1862,12 @@ impl App {
         if became_mix {
             self.main.set_mix_open(true);
         }
+        sync_model(&m.flyout_this_pc, this_pc.clone());
+        sync_model(&m.flyout_connected, connected.clone());
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
         sync_model(&m.this_pc_zoned, this_pc_zoned);
         sync_model(&m.connected_zoned, connected_zoned);
-        sync_model(&m.all_speakers, flyout_speakers);
         self.sync_zones(zones);
         sync_model(&m.notices, main_notices);
         sync_model(&m.flyout_notices, flyout_notices);
@@ -5640,8 +5652,9 @@ mod tests {
         let app = app_over(backend);
         let listed = || {
             app.models
-                .all_speakers
+                .flyout_this_pc
                 .iter()
+                .chain(app.models.flyout_connected.iter())
                 .any(|s| s.id == "local:cable")
         };
         assert!(!app.ui.borrow().show_virtual, "Show Virtual Devices is off");
@@ -5684,8 +5697,9 @@ mod tests {
         let app = app_over(backend);
         let row = |id: &str| {
             app.models
-                .all_speakers
+                .flyout_this_pc
                 .iter()
+                .chain(app.models.flyout_connected.iter())
                 .find(|s| s.id == id)
                 .expect("listed")
         };
@@ -5749,8 +5763,9 @@ mod tests {
     /// The desk's row.
     fn desk_row(app: &App) -> SpeakerItem {
         app.models
-            .all_speakers
+            .flyout_this_pc
             .iter()
+            .chain(app.models.flyout_connected.iter())
             .chain(app.models.this_pc.iter())
             .chain(app.models.connected.iter())
             .find(|s| s.id == "local:desk")
@@ -7111,8 +7126,9 @@ mod tests {
         );
         let flyout_row = app
             .flyout
-            .get_speakers()
+            .get_this_pc()
             .iter()
+            .chain(app.flyout.get_speakers().iter())
             .find(|s| s.id == "local:desk")
             .unwrap();
         assert_eq!(
@@ -8102,8 +8118,8 @@ mod tests {
         assert!(ids(&m.this_pc).iter().any(|id| id == "local:speakers"));
         assert!(ids(&m.connected).iter().any(|id| id == "airplay:living"));
         assert_eq!(
-            ids(&m.all_speakers),
-            [ids(&m.this_pc), ids(&m.connected)].concat()
+            [ids(&m.flyout_this_pc), ids(&m.flyout_connected)],
+            [ids(&m.this_pc), ids(&m.connected)]
         );
         let living = m.zones.row_data(0).unwrap();
         assert_eq!(
@@ -8584,12 +8600,13 @@ mod tests {
         assert_eq!(model.iter().collect::<Vec<_>>(), [4]);
     }
 
-    /// The flyout with two notices (it lists the newest), one zone and
-    /// three speakers.
+    /// The flyout with two notices (it lists the newest), one zone, one
+    /// speaker of this PC's and three connected ones.
     const FLYOUT: FlyoutCounts = FlyoutCounts {
         notices: 2,
         listed_notices: 1,
         zones: 1,
+        this_pc: 1,
         speakers: 3,
         zone_members: 1,
     };
@@ -8607,6 +8624,14 @@ mod tests {
                 speakers: true,
                 ..FlyoutParts::default()
             }
+        );
+        let headphones_unplugged = FlyoutCounts {
+            this_pc: 0,
+            ..FLYOUT
+        };
+        assert!(
+            FLYOUT.removed_by(headphones_unplugged).speakers,
+            "this PC's rows are speaker rows too"
         );
         let zone_added = FlyoutCounts { zones: 2, ..FLYOUT };
         assert!(FLYOUT.removed_by(zone_added).zones, "rows are rebuilt");

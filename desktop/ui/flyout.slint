@@ -344,6 +344,8 @@ export component TrayFlyout inherits Window {
     // AirPlay speaker; empty hides it.
     in property <string> live-input-hint;
     in property <float> master-volume;
+    // The speakers in no zone: this PC's, then the connected ones.
+    in property <[SpeakerItem]> this-pc;
     in property <[SpeakerItem]> speakers;
     in property <[ZoneItem]> zones;
     in property <[PresetItem]> presets;
@@ -572,11 +574,36 @@ export component TrayFlyout inherits Window {
                 }
             }
 
-            VolumeSlider {
-                volume: root.master-volume;
-                label: Strings.master-volume;
-                changed(value) => {
-                    root.master-volume-changed(value);
+            // This PC's speakers sit with the volume, above the divider, as
+            // in the Mac panel; the zones and connected speakers come after.
+            VerticalLayout {
+                spacing: 2px;
+
+                VolumeSlider {
+                    volume: root.master-volume;
+                    label: Strings.master-volume;
+                    changed(value) => {
+                        root.master-volume-changed(value);
+                    }
+                }
+
+                if root.this-pc.length > 0: VerticalLayout {
+                    for speaker in root.this-pc: FlyoutRow {
+                        glyph: Glyphs.speaker(speaker.kind);
+                        name: speaker.name;
+                        label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                        description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                        system-name: speaker.system-name;
+                        state: speaker.state;
+                        device-volume: speaker.device-volume;
+
+                        toggled => {
+                            root.speaker-toggled(speaker.id);
+                        }
+                        focus-changed(focused) => {
+                            root.speaker-focused = focused;
+                        }
+                    }
                 }
             }
 
@@ -588,7 +615,7 @@ export component TrayFlyout inherits Window {
 
             // "No speakers found" waits for 20 seconds of AirPlay discovery;
             // until then it says it looks, as the main window's note does.
-            if root.zones.length == 0 && root.speakers.length == 0 && (root.all-hidden || root.airplay-none-found || root.airplay-searching): SecondaryText {
+            if root.zones.length == 0 && root.speakers.length == 0 && root.this-pc.length == 0 && (root.all-hidden || root.airplay-none-found || root.airplay-searching): SecondaryText {
                 text: root.all-hidden ? Strings.flyout-all-hidden : root.airplay-none-found ? Strings.no-speakers : Strings.looking-for-speakers;
             }
 
