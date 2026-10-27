@@ -587,6 +587,22 @@ final class SyncDraft: ObservableObject {
 /// in place of the panel's (`PanelMotion`), to compare the two. Read at launch.
 enum PanelSwitches {
     static let systemAnimation = DebugTrace.enabled && UserDefaults.standard.bool(forKey: "PanelSystemAnimation")
+
+    /// `PanelShadowHold` keeps AudioSync's own shadow after the open, in place
+    /// of the system's, to compare the two at rest (until the panel resizes).
+    static let holdOwnShadow = DebugTrace.enabled && UserDefaults.standard.bool(forKey: "PanelShadowHold")
+
+    /// The own shadow's values, or with the debug log on, those set with
+    /// `defaults write <bundle ID> PanelShadowRadius|PanelShadowOpacity|PanelShadowOffsetY -float <n>`.
+    static func shadow(dark: Bool) -> PanelShadow {
+        var style = PanelShadow.style(dark: dark)
+        guard DebugTrace.enabled else { return style }
+        let defaults = UserDefaults.standard
+        if let radius = defaults.object(forKey: "PanelShadowRadius") as? Double { style.radius = CGFloat(radius) }
+        if let opacity = defaults.object(forKey: "PanelShadowOpacity") as? Double { style.opacity = opacity }
+        if let offset = defaults.object(forKey: "PanelShadowOffsetY") as? Double { style.offsetY = CGFloat(offset) }
+        return style
+    }
 }
 
 /// The status item and its compact panel, an AppKit popover hanging from the
@@ -624,6 +640,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Where the open panel's window sits for its content size, once the open is over.
     private var rest: PanelRest?
     private var moveWatch: NSObjectProtocol?
+    private var shadowWindow: PanelShadowWindow?
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -782,6 +799,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         closing += 1
         popover.animates = false   // a resize may have left it on
         popover.close()
+        dropOwnShadow()
     }
 
     /// Closes the panel the way a person asked: the icon, Escape, ⌘W, a click
@@ -798,18 +816,24 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         finishClose(lasting: motion.duration)
         closing += 1
         let ticket = closing
+        var shadow: PanelShadowWindow?
         if motion.grows, case let (layer, anchor)? = panelLayer(window) {
-            // The system's shadow keeps the full size while the panel shrinks.
-            setShadow(window, false)
-            let shrink = CABasicAnimation(keyPath: "transform")
             // From where a grow still running has got to, not from full size.
-            shrink.fromValue = NSValue(caTransform3D: layer.presentation()?.transform ?? layer.transform)
-            shrink.toValue = NSValue(caTransform3D: Self.scaled(motion.scale, about: anchor))
-            shrink.duration = motion.duration
-            shrink.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            shrink.fillMode = .forwards
-            shrink.isRemovedOnCompletion = false
-            layer.add(shrink, forKey: Self.motionKey)
+            func shrink(_ layer: CALayer, about anchor: CGPoint) {
+                let shrink = CABasicAnimation(keyPath: "transform")
+                shrink.fromValue = NSValue(caTransform3D: layer.presentation()?.transform ?? layer.transform)
+                shrink.toValue = NSValue(caTransform3D: Self.scaled(motion.scale, about: anchor))
+                shrink.duration = motion.duration
+                shrink.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                shrink.fillMode = .forwards
+                shrink.isRemovedOnCompletion = false
+                layer.add(shrink, forKey: Self.motionKey)
+            }
+            shrink(layer, about: anchor)
+            if case let (own, tip)? = ownShadow(window) {
+                shadow = own
+                shrink(own.panel, about: tip)
+            }
         }
         window.ignoresMouseEvents = true
         // A fade-in still running has already set the window's alpha this far.
@@ -817,11 +841,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             context.duration = motion.duration
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             window.animator().alphaValue = 0
+            shadow?.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.closing == ticket else { return }
                 self.popover.animates = false   // a resize may have left it on
                 self.popover.close()
+                self.dropOwnShadow()
             }
         })
     }
@@ -871,32 +897,41 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard let window = host.view.window else { return }
         let target = panelLayer(window)
         target?.0.removeAnimation(forKey: Self.motionKey)
+        dropOwnShadow()
         window.alphaValue = 0
-        // The system draws the shadow at the window's full size from the first
-        // frame, a second box around the growing panel; it comes back once grown.
-        let grows = motion.grows && target != nil
-        setShadow(window, !grows)
-        if grows {
-            let ticket = closing
-            DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
-                guard let self, let window, self.closing == ticket else { return }
-                self.setShadow(window, true)
-            }
-        }
+        var shadow: PanelShadowWindow?
         if motion.grows, case let (layer, anchor)? = target {
-            let grow = CASpringAnimation(keyPath: "transform")
-            grow.mass = PanelMotion.mass
-            grow.stiffness = motion.stiffness
-            grow.damping = motion.damping
-            grow.fromValue = NSValue(caTransform3D: Self.scaled(motion.scale, about: anchor))
-            grow.toValue = NSValue(caTransform3D: CATransform3DIdentity)
-            grow.duration = motion.settles
-            layer.add(grow, forKey: Self.motionKey)
+            func grow(_ layer: CALayer, about anchor: CGPoint) {
+                let grow = CASpringAnimation(keyPath: "transform")
+                grow.mass = PanelMotion.mass
+                grow.stiffness = motion.stiffness
+                grow.damping = motion.damping
+                grow.fromValue = NSValue(caTransform3D: Self.scaled(motion.scale, about: anchor))
+                grow.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+                grow.duration = motion.settles
+                layer.add(grow, forKey: Self.motionKey)
+            }
+            grow(layer, about: anchor)
+            if case let (own, tip)? = ownShadow(window) {
+                shadow = own
+                grow(own.panel, about: tip)
+                let ticket = closing
+                DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
+                    guard let self, let window, self.closing == ticket, !PanelSwitches.holdOwnShadow else { return }
+                    self.setShadow(window, true)
+                    self.dropOwnShadow()
+                }
+            } else {
+                setShadow(window, true)
+            }
+        } else {
+            setShadow(window, true)
         }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = motion.duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             window.animator().alphaValue = 1
+            shadow?.animator().alphaValue = 1
         }
     }
 
@@ -904,6 +939,40 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard window.hasShadow != on else { return }
         window.hasShadow = on
         if on { window.invalidateShadow() }
+    }
+
+    /// Puts AudioSync's shadow under the panel in place of the system's, which
+    /// would keep the window's full size while the panel scales. It returns
+    /// the shadow and the arrow's tip in its panel layer; nil when the
+    /// panel's shape can't be found, and the system's shadow stays.
+    private func ownShadow(_ window: NSWindow) -> (PanelShadowWindow, CGPoint)? {
+        guard let content = window.contentView, let frame = content.superview,
+              let button = statusItem.button, let item = button.window else { return nil }
+        let edge = frame.convert(frame.bounds, to: nil)
+        let body = content.convert(content.bounds, to: nil).intersection(edge)
+        guard !body.isEmpty else { return nil }
+        let icon = item.convertToScreen(button.convert(button.bounds, to: nil))
+        let tip = CGPoint(x: window.convertPoint(fromScreen: NSPoint(x: icon.midX, y: window.frame.maxY)).x, y: edge.maxY)
+        let shadow = shadowWindow ?? PanelShadowWindow.make()
+        shadowWindow = shadow
+        if shadow.parent !== window {
+            let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let style = PanelSwitches.shadow(dark: dark)
+            shadow.place(around: window, outline: PanelShadow.outline(body: body, tip: tip), style: style)
+            shadow.alphaValue = window.alphaValue
+            window.addChildWindow(shadow, ordered: .below)
+            DebugTrace.log(String(format: "[AudioSync] panel shadow: own, radius %.1f, opacity %.2f, offset %.1f, "
+                                  + "body %.0fx%.0f, arrow %.1f pt", style.radius, style.opacity, style.offsetY,
+                                  body.width, body.height, edge.maxY - body.maxY))
+        }
+        setShadow(window, false)
+        return (shadow, tip)
+    }
+
+    private func dropOwnShadow() {
+        guard let shadow = shadowWindow else { return }
+        shadow.parent?.removeChildWindow(shadow)
+        shadow.orderOut(nil)
     }
 
     /// The panel may still be growing in after this notice. The
@@ -1039,6 +1108,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         host.sizing = host.sizing.after(.didClose)
+        dropOwnShadow()
         // A moment later, so a quick reopen right after the close doesn't wait for it.
         whenQuiet("close rebuild", after: 0.3) { [weak self] in
             guard let self, !self.presented, self.rowsStale else { return }
@@ -1218,6 +1288,59 @@ struct PanelTopLayout: Layout {
 
 extension View {
     func pinnedToTop() -> some View { PanelTopLayout { self } }
+}
+
+/// The panel's shadow while it grows in or shrinks away (`PanelShadow`): a
+/// window under the popover's that never takes clicks.
+final class PanelShadowWindow: NSWindow {
+    /// The panel's shape, in the popover window's coordinates; it scales like the panel.
+    let panel = CALayer()
+    private let caster = CALayer()
+    private let outside = CAShapeLayer()
+
+    static func make() -> PanelShadowWindow {
+        let window = PanelShadowWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.isReleasedWhenClosed = false
+        let view = NSView()
+        view.wantsLayer = true
+        window.contentView = view
+        window.panel.anchorPoint = .zero
+        window.panel.addSublayer(window.caster)
+        window.outside.fillRule = .evenOdd
+        // On the panel layer, the mask scales with the shadow.
+        window.panel.mask = window.outside
+        view.layer?.addSublayer(window.panel)
+        return window
+    }
+
+    /// Lays the shadow around `window`, at full size; `outline` is in that window's coordinates.
+    func place(around window: NSWindow, outline: CGPath, style: PanelShadow) {
+        let margin = style.margin
+        level = window.level
+        collectionBehavior = window.collectionBehavior
+        appearance = window.appearance
+        setFrame(window.frame.insetBy(dx: -margin, dy: -margin), display: false)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panel.removeAllAnimations()
+        panel.transform = CATransform3DIdentity
+        panel.frame = CGRect(origin: CGPoint(x: margin, y: margin), size: window.frame.size)
+        caster.frame = panel.bounds
+        caster.shadowPath = outline
+        caster.shadowColor = NSColor.black.cgColor
+        caster.shadowOpacity = Float(style.opacity)
+        caster.shadowRadius = style.radius
+        caster.shadowOffset = CGSize(width: 0, height: style.offsetY)
+        let room = panel.bounds.insetBy(dx: -margin, dy: -margin)
+        var shift = CGAffineTransform(translationX: margin, y: margin)
+        outside.frame = room
+        outside.path = PanelShadow.outside(outline.copy(using: &shift) ?? outline, in: CGRect(origin: .zero, size: room.size))
+        CATransaction.commit()
+    }
 }
 
 /// The panel's popover. Escape closes it, as it closes a menu.

@@ -4829,7 +4829,8 @@ do {
     check(barSource.components(separatedBy: ".invalidateShadow()").count - 1 == 1
             && barSource.components(separatedBy: "hasShadow = on").count - 1 == 1,
           "menu bar panel source: the system shadow is switched in one place and recomputed once, never per frame")
-    check(barSource.contains("shadow.panel.add(") && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
+    check(barSource.contains("grow(own.panel, about: tip)") && barSource.contains("shrink(own.panel, about: tip)")
+            && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
           "menu bar panel source: the own shadow scales with the panel, in a window under it")
     let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
