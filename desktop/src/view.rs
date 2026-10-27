@@ -7373,6 +7373,31 @@ mod tests {
         }
     }
 
+    // covers: S181 (other input is ignored and the stored value shows again)
+    #[test]
+    fn a_paste_holding_anything_but_a_signed_whole_number_is_blocked_whole() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_sync_toggled("local:desk".into());
+        for pasted in ["1,5", "12a", "1.5", "\u{2212}2x"] {
+            app.main
+                .invoke_delay_edited("local:desk".into(), pasted.into());
+            assert_eq!(desk_delay_text(&app), "+120", "{pasted:?}: no digits kept");
+            assert!(!desk_row(&app).delay_pending, "{pasted:?} leaves no draft");
+            app.main.invoke_delay_committed("local:desk".into());
+            assert_eq!(delay_of(&app, "local:desk"), Some(120.0), "{pasted:?}");
+        }
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "3".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "31,5".into());
+        assert_eq!(desk_delay_text(&app), "3", "the typing before it stays");
+
+        let airplay = app.main.get_airplay_delay_text();
+        app.main.invoke_airplay_delay_edited("1,5".into());
+        assert_eq!(app.main.get_airplay_delay_text(), airplay);
+    }
+
     // covers: S199 (the Windows app writes "13%" in every locale)
     #[test]
     fn the_device_volume_percent_reads_n_percent_without_a_space_in_every_locale() {
