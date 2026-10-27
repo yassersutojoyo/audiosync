@@ -3941,16 +3941,20 @@ impl App {
                 flyout.set_body_cut(cut);
             }
         };
-        set_list_cut(0.0);
-        set_body_cut(0.0);
+        let cut = flyout.get_list_cut() > 0.0 || flyout.get_body_cut() > 0.0;
         let mut height = flyout.get_fit_height();
-        if height > room {
-            set_list_cut(height - room);
+        if !flyout_fit_holds(height, room, cut) {
+            set_list_cut(0.0);
+            set_body_cut(0.0);
             height = flyout.get_fit_height();
-        }
-        if height > room {
-            set_body_cut(height - room);
-            height = flyout.get_fit_height();
+            if height > room {
+                set_list_cut(height - room);
+                height = flyout.get_fit_height();
+            }
+            if height > room {
+                set_body_cut(height - room);
+                height = flyout.get_fit_height();
+            }
         }
         let height = height.min(room);
         let window = flyout.window();
@@ -3959,6 +3963,17 @@ impl App {
             window.set_size(slint::LogicalSize::new(size.width, height));
         }
         height
+    }
+}
+
+/// Whether the flyout's cuts still fit its content in `room`, so the
+/// refresh every 500 ms makes no layout pass: with a cut it fills the room
+/// exactly, without one it fits.
+fn flyout_fit_holds(fit: f32, room: f32, cut: bool) -> bool {
+    if cut {
+        (fit - room).abs() < 0.5
+    } else {
+        fit <= room
     }
 }
 
@@ -8152,6 +8167,37 @@ mod tests {
         let bottom = flyout.get_footer_bottom();
         assert!(bottom + 16.0 <= room, "buttons end at {bottom} in {room}");
         assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
+    }
+
+    /// The refresh refits the flyout every 500 ms: a cut that still fits
+    /// stays, and a change in content or room starts over.
+    #[test]
+    fn the_flyout_keeps_its_cuts_while_they_still_fit() {
+        assert!(flyout_fit_holds(300.0, 300.0, true), "cut, fills the room");
+        assert!(flyout_fit_holds(300.2, 300.0, true), "rounding");
+        assert!(!flyout_fit_holds(340.0, 300.0, true), "the content grew");
+        assert!(
+            !flyout_fit_holds(260.0, 300.0, true),
+            "it shrank or the room grew"
+        );
+        assert!(flyout_fit_holds(260.0, 300.0, false), "no cut, fits");
+        assert!(!flyout_fit_holds(340.0, 300.0, false), "no cut, too tall");
+
+        let app = app_over(MockBackend::zones_preview());
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        flyout
+            .window()
+            .set_size(slint::LogicalSize::new(340.0, 400.0));
+        let room = app.fit_flyout(1000.0) - 40.0;
+        assert_eq!(app.fit_flyout(room), room);
+        let cuts = (flyout.get_list_cut(), flyout.get_body_cut());
+        assert!(cuts.0 > 0.0, "the list is cut");
+        app.refresh();
+        draw_frames();
+        assert_eq!(app.fit_flyout(room), room);
+        assert_eq!((flyout.get_list_cut(), flyout.get_body_cut()), cuts);
     }
 
     /// A flyout with two notices, presets and an input's channel pairs, on a
