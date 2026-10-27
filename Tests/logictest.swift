@@ -4863,6 +4863,31 @@ do {
         .components(separatedBy: "\n    }\n").first ?? ""
     check(ownShadowBody.contains("standInBackground(") && dropBody.contains("restoreBackground("),
           "menu bar panel source: while the panel scales, its background is a stand-in that scales with it, handed back to the system's with the shadow")
+    final class Pane {
+        let name: String, background: Bool, children: [Pane]
+        init(_ name: String, background: Bool = false, _ children: [Pane] = []) {
+            self.name = name; self.background = background; self.children = children
+        }
+    }
+    let content = Pane("content", background: true, [Pane("row blur", background: true)])
+    let tree = Pane("theme frame", [Pane("popover frame", background: true,
+                                         [Pane("blur", background: true), Pane("content view", [content]),
+                                          Pane("stand-in", background: true)])])
+    let hidden = PanelBackdrop.hidden(in: tree, children: { $0.children }, isContent: { $0 === content },
+                                      isStandIn: { $0.name == "stand-in" }, isBackground: { $0.background })
+    check(hidden.map(\.name) == ["blur"],
+          "menu bar panel: the stand-in hides only background views beside the content, never one holding it, its own rows or itself",
+          "\(hidden.map(\.name))")
+    let blurLayer = NSObject(), contentLayer = NSObject(), standInLayer = NSObject()
+    let material = PanelBackdrop.material(in: [blurLayer, contentLayer, standInLayer], keeping: [contentLayer, standInLayer])
+    check(material.count == 1 && material.first === blurLayer,
+          "menu bar panel: in a background view that holds the content, only the layers no subview owns are its material")
+    let openBody = bar.components(separatedBy: "private func animateOpen(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(!bar.contains("panel resize layers") && openBody.contains("ownShadow(window)")
+            && (openBody.range(of: "ownShadow(window)")?.lowerBound ?? openBody.endIndex)
+                < (openBody.range(of: "grow(layer")?.lowerBound ?? openBody.startIndex),
+          "menu bar panel source: the panel grows only once its background can scale with it; otherwise it fades in at full size")
 
     // The open panel moved by AppKit (another display, a status item shifting).
     let moved = window.offsetBy(dx: -40, dy: -24)
