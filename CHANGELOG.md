@@ -6,6 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, the menu bar panel's separator lines and edges stay sharp while it opens. Before, they blurred as the panel grew and snapped sharp at the end. It now unfolds from its arrow at its own size instead of scaling up.
 - On the Mac, the menu bar panel's first open after launch grows in from the menu bar like every open after it. Before, that first one just faded in at full size.
 
 ## [0.7.1] - 2026-10-27
