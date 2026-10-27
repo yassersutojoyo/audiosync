@@ -7839,6 +7839,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
+    // covers: S292
     #[test]
     fn the_debug_log_names_what_resumed_a_pause() {
         let path = crate::debug_log::test_dir("airplay-resume-cause").join("log.txt");
@@ -7885,6 +7886,54 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [], "the app shows paused");
         read(&mut airplay, spotify(true), at + STALE_READING * 2);
         assert_eq!(pause_calls(&fake), [Call::Resume]);
+    }
+
+    // covers: S292
+    #[test]
+    fn the_debug_log_names_a_button_remote_capture_or_stop_resume() {
+        let path = crate::debug_log::test_dir("airplay-resume-causes").join("log.txt");
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
+        let t0 = Instant::now();
+        read(&mut airplay, spotify(true), t0);
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        airplay.play_pause_pressed("Spotify.exe", false, t0);
+
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        read(&mut airplay, spotify(false), t0);
+        remote(&fake, &kitchen, RemoteCommand::Play);
+        airplay.poll();
+
+        read(&mut airplay, spotify(true), t0);
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        airplay.capture_started();
+
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        airplay.set_streaming(false);
+        assert_eq!(
+            pause_calls(&fake),
+            (0..4)
+                .flat_map(|_| [Call::Pause, Call::Resume])
+                .collect::<Vec<_>>(),
+            "every pause resumed"
+        );
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let causes: Vec<String> = crate::debug_log::read_messages(&path)
+            .into_iter()
+            .filter(|message| message.contains("resumed after a pause"))
+            .collect();
+        let expected = [
+            "(app button)",
+            "(speaker remote)",
+            "(new capture)",
+            "(streaming stopped)",
+        ];
+        assert_eq!(causes.len(), expected.len(), "{causes:?}");
+        for (line, cause) in causes.iter().zip(expected) {
+            assert!(line.ends_with(cause), "{causes:?}");
+        }
     }
 
     // covers: P213

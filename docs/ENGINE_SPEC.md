@@ -1517,6 +1517,7 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | hold_backs_follow_the_offsets_of_the_outputs_taking_part | S174, S176 |
 | an_airplay_speaker_chosen_adds_the_sender_latency_on_top | S176, S178 |
 | live_input_waits_for_an_airplay_speaker_like_any_source | S176, S177, S244 |
+| live_input_waits_for_a_cast_speaker_and_a_source_switch_re_times_nothing | S176, S177, S244 |
 | the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency | S178 |
 | the_airplay_adjustment_moves_l | S178 |
 | the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l | S178, S181 |
@@ -1657,6 +1658,7 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 |---|---|
 | a_converting_output_at_hold_back_0_never_runs_dry_after_its_start | S206 |
 | a_late_wake_raises_the_lead_for_its_own_fill_only | S206 |
+| each_callback_reads_on_the_stamps_clock_so_the_trim_follows_the_capture (`desktop/src/audio/render.rs`) | S207, S226 |
 | a_packet_written_in_pieces_is_one_block_for_the_outputs_lead (`desktop/src/audio/capture.rs`) | S206 |
 | each_packet_and_gap_fill_is_stamped_as_its_block_closes (`desktop/src/audio/capture.rs`) | S207 |
 | a_period_in_frames_is_rounded_up (`desktop/src/audio/outputs.rs`) | S206 |
@@ -1971,6 +1973,8 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | airplay_latency_follows_a_report_and_a_speaker_leaving | S280 |
 | airplay_latency_covers_every_member_of_a_target | S280 |
 | a_new_airplay_latency_retimes_the_local_outputs_and_keeps_the_adjustment | S281, S178, S177 |
+| a_new_airplay_latency_beside_a_cast_speaker_waits_for_the_longer_of_the_two | S281 |
+| a_raise_during_the_inserted_silence_lengthens_it_and_a_later_one_inserts_more (`desktop/src/audio/render.rs`) | S281 |
 | a_reported_latency_is_the_speakers_starting_estimate (one speaker at 220 ms: d′ = d_s, L = L_s + 220 + A; two at 220 and 50 ms: the second gets d_s + 170) | S283 |
 | a_receiver_reporting_nothing_starts_at_zero_without_a_warning | S283, S282 |
 | the_estimate_waits_while_an_airplay_speaker_sounds (a joiner at 300 ms with E = 220 plays 80 ms late until the stream is empty) | S283 |
@@ -2007,6 +2011,8 @@ Windows (`desktop/src/audio/explicit_pause.rs` unless named):
 | sound_never_pauses | S292 |
 | clearing_resumes_only_a_paused_stream | S292 |
 | only_a_session_that_plays_or_pauses_has_a_player_state (`now_playing.rs`) | S292 |
+| the_debug_log_names_what_resumed_a_pause (`airplay.rs`) | S292 |
+| the_debug_log_names_a_button_remote_capture_or_stop_resume (`airplay.rs`) | S292 |
 
 The Mac (logic suite):
 
