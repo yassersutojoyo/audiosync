@@ -4890,12 +4890,12 @@ do {
           "menu bar panel source: the panel grows only once its background can scale with it; otherwise it fades in at full size")
 
     // The open panel moved by AppKit (another display, a status item shifting).
-    let moved = window.offsetBy(dx: -40, dy: -24)
-    let afresh = PanelRest.next(rest, stepRunning: false, window: moved, content: CGSize(width: 280, height: 359))
-    check(afresh == PanelRest(frame: moved, content: CGSize(width: 280, height: 359)),
+    let shifted = window.offsetBy(dx: -40, dy: -24)
+    let afresh = PanelRest.next(rest, stepRunning: false, window: shifted, content: CGSize(width: 280, height: 359))
+    check(afresh == PanelRest(frame: shifted, content: CGSize(width: 280, height: 359)),
           "menu bar panel: with no resize running, a fold aims from where the window is now, so it never snaps back")
-    let midStep = PanelRest.next(rest, stepRunning: true, window: moved, content: CGSize(width: 280, height: 428))
-    check(midStep == rest && PanelRest.next(nil, stepRunning: true, window: moved, content: CGSize(width: 280, height: 359)) == afresh,
+    let midStep = PanelRest.next(rest, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 428))
+    check(midStep == rest && PanelRest.next(nil, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 359)) == afresh,
           "menu bar panel: while a resize runs, a fold aims from the rest frame, not the half-grown window")
     let closeAsked = PopoverCloseRequest.answer
     check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
