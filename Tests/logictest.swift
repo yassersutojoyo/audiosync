@@ -9052,6 +9052,12 @@ do {
           "permissions: after an update, a permission macOS can't report is not explained again")
     check(upgraded.step(.microphone, state: .notAsked, userAction: true) == .explain,
           "permissions: after an update, a permission macOS reports as unasked is still explained")
+    // An update from 0.6.0 held Spotify's reading with no card shown, so Now Playing vanished.
+    check(upgraded.mayRaiseAutomationPrompt,
+          "permissions: after an update, Now Playing reads the players an earlier version read, with no explanation first")
+    check(!PermissionAsks(explained: [], usedBefore: false).mayRaiseAutomationPrompt
+            && PermissionAsks(explained: ["automation"], usedBefore: false).mayRaiseAutomationPrompt,
+          "permissions: on a fresh install Now Playing waits for Continue on the Automation explanation")
 
     var asks = PermissionAsks(explained: [], usedBefore: false)
     check(asks.offer == nil, "permissions: nothing is offered before a feature needs it")

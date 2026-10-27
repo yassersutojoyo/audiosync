@@ -28,7 +28,7 @@ extension AppDelegate {
         nowPlaying.onAutomationDenied = { [weak self] bundleID, denied in
             self?.automationChanged(bundleID, denied: denied)
         }
-        nowPlaying.mayRaisePrompt = permissions.step(.automation, state: .notAsked, userAction: false) == .go
+        nowPlaying.mayRaisePrompt = permissions.mayRaiseAutomationPrompt
         nowPlaying.onPromptHeld = { [weak self] in
             _ = self?.permissionAllows(.automation, state: .notAsked, origin: .automatic)
         }
@@ -171,7 +171,9 @@ extension AppDelegate {
     private func showPermissionOffer() {
         // The setup window asks for these itself while it is open.
         let offer = setupWindow?.isOpen == true ? nil : permissions.offer
-        if appModel.permissionOffer != offer { appModel.permissionOffer = offer }
+        guard appModel.permissionOffer != offer else { return }
+        DebugTrace.log("Permission card: \(offer?.rawValue ?? "none")")
+        appModel.permissionOffer = offer
     }
 
     // MARK: - Permission setup window
