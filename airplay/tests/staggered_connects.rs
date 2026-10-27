@@ -181,6 +181,16 @@ fn copy(receiver: &NetReceiver) -> Log {
     }
 }
 
+/// The log without first-flagged syncs, so play times come from the shared
+/// sync points (P94) where P102 holds (P225 c): a joiner's first sync states
+/// c(n) off that grid (P97), and a 44 100 Hz extrapolation from it drifts
+/// from the playing speaker's by R̂'s offset from nominal (P101).
+fn from_shared_syncs(receiver: &NetReceiver) -> Log {
+    let mut log = copy(receiver);
+    log.syncs.retain(|(_, _, sync)| !sync.first);
+    log
+}
+
 fn session_requests(receiver: &NetReceiver) -> usize {
     let log = receiver.log();
     ["FLUSH", "SETUP", "TEARDOWN"]
@@ -278,11 +288,18 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
         }
     }
     assert_eq!(session_requests(&playing), requests_before);
-    let (error, common) = step_error(
-        &play_times(&copy(&playing), &clock),
-        &play_times(&copy(&airplay1[4]), &clock),
-        0.0,
-    );
+    let deadline = Instant::now() + LONG;
+    let (error, common) = loop {
+        let (error, common) = step_error(
+            &play_times(&from_shared_syncs(&playing), &clock),
+            &play_times(&from_shared_syncs(&airplay1[4]), &clock),
+            0.0,
+        );
+        if common >= 20 || Instant::now() >= deadline {
+            break (error, common);
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
     assert!(common >= 20, "{common}");
     assert!(
         error <= FRAME,
