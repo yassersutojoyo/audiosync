@@ -12,8 +12,9 @@
 # generate_keys); the key never leaves the keychain.
 #
 # It runs generate_appcast as a copy named "AudioSync Release Signing", so the
-# keychain prompt should name AudioSync (not yet confirmed on a Mac). The copy keeps Sparkle's signature; docs/DEVELOPMENT.md ("Signing")
-# says why, and why to click Allow rather than Always Allow.
+# keychain prompt should name AudioSync (not yet confirmed on a Mac). The copy
+# keeps Sparkle's signature; docs/DEVELOPMENT.md ("Signing") says why, and why
+# to click Allow rather than Always Allow.
 #
 # When AudioSync-VERSION-windows-x64.zip and -arm64.zip sit next to ZIP, each
 # gets its own item, signed by Sparkle's sign_update (run under the same name)
