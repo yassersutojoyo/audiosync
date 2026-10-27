@@ -1656,7 +1656,6 @@ impl App {
             .airplay_delay_draft
             .text(state.airplay_delay_ms)
             .map(str::to_owned);
-        let check_updates_automatically = ui.check_updates_automatically;
         // No window call while `ui` is borrowed: showing a dialog runs Slint's
         // pending change handlers, and the focus ones borrow `ui` mutably (UI
         // Automation focuses and toggles in one turn).
