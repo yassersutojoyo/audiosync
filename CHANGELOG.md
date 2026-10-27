@@ -24,6 +24,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a Google Cast speaker that is off in a zone says "Stayed off, since one Cast speaker plays at a time" only while another Cast speaker is on, as on the Mac. Before, it said so whenever any other speaker in the zone was on, such as the PC's own speakers.
 - On the Mac, a zone click or a preset leaves a Google Cast speaker that another app took over off, as on Windows. Before, AudioSync took it back from that app.
 - Opening the Mac's menu bar panel again while it's still fading out no longer leaves it stuck at its old size: it grows and shrinks with its content again.
+- The Mac's menu bar panel no longer shows a second, full-size box behind it while it opens or closes; its background and shadow grow with it. Showing or hiding a zone's speakers in the panel resizes it in one motion, and the rows below no longer slide over the ones fading out.
 
 ## [0.7.0] - 2026-10-27
 
