@@ -73,6 +73,10 @@ final class StreamEngine {
     private var fadeTimer: DispatchSourceTimer?
     /// Set by `deinit`, which finishes what fades itself.
     private var tearingDown = false
+    /// With the debug log on, the 5 s status line's timer and the counts it
+    /// last printed, so each line shows what changed since.
+    private var statusTimer: DispatchSourceTimer?
+    private var statusLast: (tally: SessionTally, at: TimeInterval)?
 
     init() {
         capture.onInterrupted = { [weak self] reason in self?.handleInterruption(reason) }
@@ -83,6 +87,7 @@ final class StreamEngine {
         stop()
         retirement.finishAll()
         fadeTimer?.cancel()
+        statusTimer?.cancel()
     }
 
     /// Some frame this session captured was not silent; false while stopped.
@@ -149,7 +154,42 @@ final class StreamEngine {
         DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
         if DebugTrace.enabled {
             DispatchQueue.global(qos: .utility).async { DebugTrace.log("[AudioSync] network: \(WiFiNote.current())") }
+            startStatusLine()
         }
+    }
+
+    /// Logs every 5 s what capture and each local output counted since the
+    /// previous line, so a dropout shows when it happened. Reads the
+    /// counters on the main queue; the IO threads only bump them.
+    private func startStatusLine() {
+        statusTimer?.cancel()
+        statusLast = (tally(), ProcessInfo.processInfo.systemUptime)
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .milliseconds(100))
+        timer.setEventHandler { [weak self] in
+            guard let self, self.isRunning, let last = self.statusLast else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            let current = self.tally()
+            DebugTrace.log("[AudioSync] " + SessionTally.statusText(since: last.tally, now: current,
+                                                                    seconds: now - last.at))
+            self.statusLast = (current, now)
+        }
+        timer.resume()
+        statusTimer = timer
+    }
+
+    private func stopStatusLine() {
+        statusTimer?.cancel()
+        statusTimer = nil
+        statusLast = nil
+    }
+
+    private func tally() -> SessionTally {
+        SessionTally(capture: capture.counts ?? CaptureCounts(), outputs: renderers.mapValues { renderer in
+            let counted = renderer.counters
+            return SessionTally.Output(starvedRenders: counted.starvedRenders, starvedFrames: counted.starvedFrames,
+                                       lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads)
+        })
     }
 
     /// The largest sample magnitude captured since the last call (1 is full
@@ -176,6 +216,7 @@ final class StreamEngine {
             return
         }
         holdCalibrationTime(false)
+        stopStatusLine()
         isRunning = false
         self.parts = nil
         let leaving = renderers.keys.sorted().compactMap { uid in renderers[uid].map { (uid: uid, renderer: $0) } }
@@ -393,5 +434,56 @@ extension WiFiNote {
         let channel = interface.wlanChannel()
         return text(poweredOn: interface.powerOn(), band: channel.map { $0.channelBand.rawValue },
                     channel: channel?.channelNumber, rssi: interface.rssiValue())
+    }
+}
+
+/// Capture's counts so far in a session.
+struct CaptureCounts: Equatable {
+    var callbacks: UInt64 = 0
+    var frames: UInt64 = 0
+    var silentCallbacks: UInt64 = 0
+}
+
+/// What the periodic debug line reads: capture's counts and each local
+/// output's, keyed by device UID only to match outputs between two lines.
+struct SessionTally: Equatable {
+    struct Output: Equatable {
+        var starvedRenders: Int64 = 0
+        var starvedFrames: Int64 = 0
+        var lateCallbacks: Int64 = 0
+        var overloads: Int64 = 0
+    }
+
+    var capture = CaptureCounts()
+    var outputs: [String: Output] = [:]
+
+    /// The status line for `seconds` from `old` to `new`, in counts only:
+    /// outputs are numbered in UID order, so no device name reaches the log.
+    static func statusText(since old: SessionTally, now new: SessionTally, seconds: Double) -> String {
+        let frames = change(new.capture.frames, since: old.capture.frames)
+        let rate = seconds > 0 ? Double(frames) / seconds : 0
+        let callbacks = change(new.capture.callbacks, since: old.capture.callbacks)
+        let silent = change(new.capture.silentCallbacks, since: old.capture.silentCallbacks)
+        var text = "status over " + String(format: "%.1f", seconds) + " s: capture \(frames) frames ("
+        text += String(format: "%.0f", rate) + " frames/s), \(callbacks) callbacks, \(silent) without usable channels"
+        let uids = new.outputs.keys.sorted()
+        if uids.isEmpty { return text + "; no local outputs" }
+        for (index, uid) in uids.enumerated() {
+            let now = new.outputs[uid] ?? Output()
+            let before = old.outputs[uid] ?? Output()
+            let starved = change(now.starvedRenders, since: before.starvedRenders)
+            let starvedFrames = change(now.starvedFrames, since: before.starvedFrames)
+            let late = change(now.lateCallbacks, since: before.lateCallbacks)
+            let overloads = change(now.overloads, since: before.overloads)
+            text += "; output \(index + 1): starved \(starved) (\(starvedFrames) frames), "
+            text += "late callbacks \(late), IO overloads \(overloads)"
+        }
+        return text
+    }
+
+    /// A count that went down was restarted (a renderer's new start), so
+    /// all of it is new.
+    static func change<T: BinaryInteger>(_ new: T, since old: T) -> T {
+        new >= old ? new - old : new
     }
 }

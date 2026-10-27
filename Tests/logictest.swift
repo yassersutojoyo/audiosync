@@ -6077,6 +6077,30 @@ do {
           "observer: Wi-Fi switched off says so")
 }
 
+// MARK: Status line — what capture and each output counted since the previous 5 s line (SessionTally, S229)
+do {
+    typealias Out = SessionTally.Output
+    let old = SessionTally(capture: CaptureCounts(callbacks: 1_000, frames: 512_000, silentCallbacks: 4),
+                           outputs: ["BT-AA:BB": Out(starvedRenders: 2, starvedFrames: 900, lateCallbacks: 7, overloads: 1),
+                                     "Built-in": Out(starvedRenders: 5, starvedFrames: 2_000, lateCallbacks: 3, overloads: 0)])
+    let new = SessionTally(capture: CaptureCounts(callbacks: 1_500, frames: 752_000, silentCallbacks: 4),
+                           outputs: ["BT-AA:BB": Out(starvedRenders: 3, starvedFrames: 1_412, lateCallbacks: 7, overloads: 2),
+                                     "Built-in": Out(starvedRenders: 1, starvedFrames: 480, lateCallbacks: 0, overloads: 0),
+                                     "USB": Out(starvedRenders: 0, starvedFrames: 0, lateCallbacks: 1, overloads: 0)])
+    let line = SessionTally.statusText(since: old, now: new, seconds: 5.0)
+    check(line == "status over 5.0 s: capture 240000 frames (48000 frames/s), 500 callbacks, 0 without usable channels"
+              + "; output 1: starved 1 (512 frames), late callbacks 0, IO overloads 1"
+              + "; output 2: starved 1 (480 frames), late callbacks 0, IO overloads 0"
+              + "; output 3: starved 0 (0 frames), late callbacks 1, IO overloads 0",
+          "status line: deltas since the last line; a restarted count is all new, a new output counts from 0", line)
+    check(!line.contains("BT-AA") && !line.contains("Built-in") && !line.contains("USB"),
+          "status line: outputs are numbered, never named", line)
+    let idle = SessionTally.statusText(since: new, now: SessionTally(capture: new.capture), seconds: 0)
+    check(idle == "status over 0.0 s: capture 0 frames (0 frames/s), 0 callbacks, 0 without usable channels"
+              + "; no local outputs",
+          "status line: no time passed gives a rate of 0, and no outputs say so", idle)
+}
+
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
 // covers: S186 (the Mac's stop order)
 
