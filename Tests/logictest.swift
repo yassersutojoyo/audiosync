@@ -9821,6 +9821,9 @@ do {
         defaults.removeObject(forKey: AppSettings.Keys.master)
         check(updated.usedBefore && PermissionAsks.load(defaults).usedBefore,
               "permissions: an update from a version without explanations is recognized once and remembered")
+        defaults.set(["microphone", 7] as [Any], forKey: PermissionAsks.defaultsKey)
+        check(PermissionAsks.load(defaults).stored == ["microphone"],
+              "permissions: a stored entry that isn't a name is dropped alone")
         defaults.removePersistentDomain(forName: suite)
     } else {
         check(false, "permissions: a test defaults suite opens")
